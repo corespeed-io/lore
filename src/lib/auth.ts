@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config";
 
 export function checkAuth(
   headers: Headers,

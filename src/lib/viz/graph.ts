@@ -1,5 +1,5 @@
 import * as d3 from "d3";
-import type { GraphData, GraphLink } from "../types.js";
+import type { GraphData, GraphLink } from "../types";
 
 export function degrees(links: GraphLink[]): Record<string, number> {
   const d: Record<string, number> = {};

@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.js";
+import { loadConfig } from "./config";
 
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_brain_identity",

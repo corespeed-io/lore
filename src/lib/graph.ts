@@ -1,6 +1,6 @@
-import { loadConfig } from "./config.js";
-import { callTool } from "./gbrain.js";
-import type { GraphData, GraphNode, PageHit } from "./types.js";
+import { loadConfig } from "./config";
+import { callTool } from "./gbrain";
+import type { GraphData, GraphNode, PageHit } from "./types";
 
 const WIKILINK = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const TTL_MS = 600_000;
