@@ -1,0 +1,19 @@
+:root {
+  --bg: #0f1115;
+  --fg: #e6e8eb;
+  --mut: #8b929c;
+  --line: #23272f;
+  --acc: #7aa2f7;
+  --card: #161922;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px / 1.6 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
