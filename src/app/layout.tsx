@@ -1,6 +1,10 @@
 import "./globals.css";
+import { loadConfig } from "@/lib/config";
 
-export const metadata = { title: "Lore" };
+export function generateMetadata() {
+  const { appTitle } = loadConfig();
+  return { title: appTitle };
+}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

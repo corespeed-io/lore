@@ -4,27 +4,21 @@ import type { GraphData } from "@/lib/types";
 import { mountGraph } from "@/lib/viz/graph";
 import { useEffect, useRef } from "react";
 
-const BRAND_COLORS = {
-  person: "#7F77DD",
-  company: "#D85A30",
-  product: "#1D9E75",
-  concept: "#888780",
-};
-
 interface GraphViewProps {
   data: GraphData;
   onOpen: (slug: string) => void;
+  brandColors: Record<string, string>;
 }
 
-export function GraphView({ data, onOpen }: GraphViewProps) {
+export function GraphView({ data, onOpen, brandColors }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !data.nodes.length) return;
-    const instance = mountGraph(el, data, { colors: BRAND_COLORS, onOpen });
+    const instance = mountGraph(el, data, { colors: brandColors, onOpen });
     return () => instance.destroy();
-  }, [data, onOpen]);
+  }, [data, onOpen, brandColors]);
 
   return (
     <div id="view" className="graph" ref={containerRef} style={{ height: "calc(100vh - 57px)" }}>

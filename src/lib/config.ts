@@ -11,9 +11,10 @@ export interface Config {
 }
 
 const DEFAULT_SEEDS = [
-  "CoreSpeed HaaS founders team product strategy moat ICP",
-  "Sarea connectors gateway billing customers interviews open risks",
-  "competitors Composio SupaBird Viktor GTM mentor playbook voice",
+  "overview getting started",
+  "architecture design decisions",
+  "people team roles",
+  "projects products",
 ];
 
 const DEFAULT_COLORS = {
