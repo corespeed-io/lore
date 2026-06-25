@@ -13,6 +13,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_tags",
   "traverse_graph",
   "get_recent_salience",
+  "get_ingest_log",
   "code_def",
   "code_refs",
   "code_callers",

@@ -156,24 +156,30 @@ header.topbar {
   padding: 28px 24px;
 }
 
-/* ── Stat cards row ─────────────────────────────────────────────────────────── */
-.stat-cards {
+/* ── Top band: all summary cards in one row ─────────────────────────────────── */
+.top-band {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 10px;
-  margin-bottom: 24px;
+  grid-template-columns: 0.7fr 0.7fr 1.3fr 1.3fr;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 16px;
 }
 
 @media (max-width: 900px) {
-  .stat-cards {
-    grid-template-columns: repeat(3, 1fr);
+  .top-band {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 560px) {
-  .stat-cards {
-    grid-template-columns: repeat(2, 1fr);
+  .top-band {
+    grid-template-columns: 1fr;
   }
+}
+
+/* stat cards drop their own grid and become direct items of .top-band */
+.stat-cards {
+  display: contents;
 }
 
 .stat-card {
@@ -211,27 +217,15 @@ header.topbar {
   line-height: 1;
 }
 
-/* ── Overview grid ──────────────────────────────────────────────────────────── */
-.overview-grid {
-  display: grid;
-  grid-template-columns: 1.7fr 1fr;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-@media (max-width: 800px) {
-  .overview-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ── Graph panel (dark surface) ─────────────────────────────────────────────── */
+/* ── Graph panel (full-width hero) ──────────────────────────────────────────── */
 .graph-panel {
-  background: var(--surface-dark);
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
   border-radius: 16px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  margin-bottom: 16px;
 }
 
 .graph-panel-header {
@@ -244,27 +238,20 @@ header.topbar {
   font-weight: 600;
   font-size: 18px;
   letter-spacing: -0.3px;
-  color: var(--on-dark);
+  color: var(--ink);
   margin: 0 0 2px;
 }
 
 .graph-panel-caption {
   font-size: 12px;
-  color: var(--on-dark-soft);
+  color: var(--muted);
 }
 
 .graph-panel-body {
   flex: 1;
   position: relative;
   overflow: hidden;
-  min-height: 360px;
-}
-
-/* ── Right column cards ─────────────────────────────────────────────────────── */
-.right-col {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  min-height: 460px;
 }
 
 .panel-card {
@@ -497,7 +484,7 @@ header.topbar {
   position: relative;
   overflow: hidden;
   height: calc(100vh - 56px);
-  background: var(--surface-dark);
+  background: var(--surface-soft);
 }
 
 .graph-fullscreen svg {
@@ -512,8 +499,9 @@ header.topbar {
   position: absolute;
   z-index: 2;
   font-size: 12px;
-  color: var(--on-dark-soft);
-  background: rgba(24, 23, 21, 0.6);
+  color: var(--muted);
+  background: rgba(250, 249, 245, 0.8);
+  border: 1px solid var(--hairline);
   padding: 5px 10px;
   border-radius: 7px;
 }

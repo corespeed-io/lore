@@ -81,6 +81,7 @@ export function App({ appTitle, brandColors }: AppProps) {
   const [graph, setGraph] = useState<GraphStore | null>(null);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [graphError, setGraphError] = useState<string | null>(null);
+  const [graphLoaded, setGraphLoaded] = useState(false);
 
   // Overview detail panel state
   const [overviewDetail, setOverviewDetail] = useState<PageState | null>(null);
@@ -235,6 +236,8 @@ export function App({ appTitle, brandColors }: AppProps) {
         setGraphData(g);
       } catch (e) {
         setGraphError((e as Error).message ?? String(e));
+      } finally {
+        setGraphLoaded(true);
       }
     }
     loadGraph();
@@ -292,11 +295,15 @@ export function App({ appTitle, brandColors }: AppProps) {
             onOpen={(slug) => goToSlug(slug, graph, "graph")}
             onGraph={() => setGraphPage(null)}
           />
-        ) : graphData.nodes.length === 0 && !graphError ? (
+        ) : !graphLoaded ? (
           <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
         ) : graphError ? (
           <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
             Graph error: {graphError}
+          </div>
+        ) : graphData.nodes.length === 0 ? (
+          <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+            No graph data. Check GBRAIN_MCP_URL / GBRAIN_TOKEN.
           </div>
         ) : (
           <GraphView data={graphData} onOpen={onOpenGraph} brandColors={brandColors} />

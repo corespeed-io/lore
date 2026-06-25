@@ -86,35 +86,26 @@ export function Overview({
 
   return (
     <div className="page-wrap">
-      <StatCards
-        nodeCount={graphData.nodes.length}
-        linkCount={graphData.links.length}
-        byCounts={byCounts}
-      />
+      <div className="top-band">
+        <StatCards nodeCount={graphData.nodes.length} linkCount={graphData.links.length} />
+        <Breakdown byCounts={byCounts} total={graphData.nodes.length} />
+        <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
+      </div>
 
-      <div className="overview-grid">
-        <div className="graph-panel">
-          <div className="graph-panel-header">
-            <h2 className="graph-panel-title">Knowledge graph</h2>
-            <p className="graph-panel-caption">
-              {graphData.nodes.length} nodes · {graphData.links.length} links · drag · hover · click
-            </p>
-          </div>
-          {graphError ? (
-            <div style={{ padding: "20px", color: "var(--on-dark-soft)" }}>
-              Graph error: {graphError}
-            </div>
-          ) : graphData.nodes.length === 0 ? (
-            <div style={{ padding: "20px", color: "var(--on-dark-soft)" }}>Loading graph…</div>
-          ) : (
-            <GraphPanelContent data={graphData} brandColors={brandColors} onOpen={onOpen} />
-          )}
+      <div className="graph-panel">
+        <div className="graph-panel-header">
+          <h2 className="graph-panel-title">Knowledge graph</h2>
+          <p className="graph-panel-caption">
+            {graphData.nodes.length} nodes · {graphData.links.length} links · drag · hover · click
+          </p>
         </div>
-
-        <div className="right-col">
-          <Breakdown byCounts={byCounts} total={graphData.nodes.length} />
-          <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
-        </div>
+        {graphError ? (
+          <div style={{ padding: "20px", color: "var(--muted)" }}>Graph error: {graphError}</div>
+        ) : graphData.nodes.length === 0 ? (
+          <div style={{ padding: "20px", color: "var(--muted)" }}>Loading graph…</div>
+        ) : (
+          <GraphPanelContent data={graphData} brandColors={brandColors} onOpen={onOpen} />
+        )}
       </div>
 
       <DetailPanel page={detailPage} onOpen={onOpen} />
