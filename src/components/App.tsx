@@ -2,12 +2,13 @@
 
 import { GraphView } from "@/components/GraphView";
 import { Header } from "@/components/Header";
+import { Overview } from "@/components/Overview";
 import { PageView } from "@/components/PageView";
 import { SearchResults } from "@/components/SearchResults";
 import type { GraphData, PageHit } from "@/lib/types";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type View = "graph" | "list" | "search" | "page";
+type Tab = "overview" | "graph" | "search";
 
 interface GraphStore {
   nodes: GraphData["nodes"];
@@ -24,20 +25,13 @@ interface PageState {
   neighbors: { slug: string; title: string }[];
 }
 
-interface ListState {
-  items: PageHit[];
-  kind: "list" | "search";
-  status: string;
-}
-
 interface AppProps {
   appTitle: string;
   brandColors: Record<string, string>;
 }
 
-// ── Pure helpers (no React deps) ────────────────────────────────────────────
+// ── Pure helpers ──────────────────────────────────────────────────────────────
 
-// POST /api/call and parse the result text as JSON (or return raw string).
 async function apiCall(tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const r = await fetch("/api/call", {
     method: "POST",
@@ -57,7 +51,6 @@ async function apiCall(tool: string, args: Record<string, unknown> = {}): Promis
   }
 }
 
-// Build byId + adjacency from raw GraphData.
 function buildGraph(g: GraphData): GraphStore {
   const byId: GraphStore["byId"] = {};
   const adj: GraphStore["adj"] = {};
@@ -74,7 +67,6 @@ function buildGraph(g: GraphData): GraphStore {
   return { nodes: g.nodes, links: g.links, byId, adj };
 }
 
-// Graph-derived neighbor list for a slug.
 function graphNeighbors(g: GraphStore | null, slug: string): { slug: string; title: string }[] {
   if (!g?.adj[slug]) return [];
   return [...g.adj[slug]]
@@ -82,23 +74,29 @@ function graphNeighbors(g: GraphStore | null, slug: string): { slug: string; tit
     .map((s) => ({ slug: s, title: g.byId[s]?.label ?? s }));
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export function App({ appTitle, brandColors }: AppProps) {
-  const [view, setView] = useState<View>("graph");
+  const [tab, setTab] = useState<Tab>("overview");
   const [graph, setGraph] = useState<GraphStore | null>(null);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [graphError, setGraphError] = useState<string | null>(null);
-  const [pageState, setPageState] = useState<PageState | null>(null);
-  const [listState, setListState] = useState<ListState | null>(null);
-  const [status, setStatus] = useState<string>("loading graph…");
-  const searchRef = useRef<HTMLInputElement>(null);
 
-  // Stable ref so graph-click callbacks don't re-mount the force sim on each nav.
+  // Overview detail panel state
+  const [overviewDetail, setOverviewDetail] = useState<PageState | null>(null);
+
+  // Graph-tab page state (full-screen page view from clicking a graph node)
+  const [graphPage, setGraphPage] = useState<PageState | null>(null);
+
+  // Search tab state
+  const [searchItems, setSearchItems] = useState<PageHit[]>([]);
+  const [searchKind, setSearchKind] = useState<"list" | "search">("search");
+
+  const searchRef = useRef<HTMLInputElement>(null);
   const graphRef = useRef<GraphStore | null>(null);
   graphRef.current = graph;
 
-  // Set state to show a page (title/type/slug/body/neighbors).
+  // Resolve and display a page (shared)
   const showPage = useCallback(
     (
       title: string,
@@ -106,37 +104,41 @@ export function App({ appTitle, brandColors }: AppProps) {
       slug: string,
       body: string,
       neighbors: { slug: string; title: string }[],
+      target: "overview" | "graph",
     ) => {
-      setView("page");
-      setPageState({ title, type, slug, body, neighbors });
-      setStatus(slug);
-      window.scrollTo(0, 0);
+      const state: PageState = { title, type, slug, body, neighbors };
+      if (target === "overview") {
+        setOverviewDetail(state);
+        window.scrollTo(0, 0);
+      } else {
+        setGraphPage(state);
+        setTab("graph");
+        window.scrollTo(0, 0);
+      }
     },
     [],
   );
 
-  // Open a page from the graph cache if it has body text, otherwise fetch.
-  // Defined via ref to break the circular dep with openPage.
-  const openPageRef = useRef<((slug: string, g: GraphStore | null) => Promise<void>) | undefined>(
-    undefined,
-  );
+  // Ref to break circular deps
+  const openPageRef = useRef<
+    | ((slug: string, g: GraphStore | null, target: "overview" | "graph") => Promise<void>)
+    | undefined
+  >(undefined);
 
   const openGraphNode = useCallback(
-    (slug: string, g: GraphStore | null) => {
+    (slug: string, g: GraphStore | null, target: "overview" | "graph") => {
       const n = g?.byId[slug];
       if (n?.text) {
-        showPage(n.label, n.type, slug, n.text, graphNeighbors(g, slug));
+        showPage(n.label, n.type, slug, n.text, graphNeighbors(g, slug), target);
         return;
       }
-      // No cached body — fall through to network fetch.
-      openPageRef.current?.(slug, g);
+      openPageRef.current?.(slug, g, target);
     },
     [showPage],
   );
 
   const openPage = useCallback(
-    async (slug: string, g: GraphStore | null) => {
-      setStatus(slug);
+    async (slug: string, g: GraphStore | null, target: "overview" | "graph") => {
       try {
         const page = (await apiCall("get_page", { slug, fuzzy: true })) as {
           title?: string;
@@ -159,10 +161,9 @@ export function App({ appTitle, brandColors }: AppProps) {
           page.slug,
           page.compiled_truth ?? page.body ?? "",
           bl,
+          target,
         );
       } catch (e) {
-        // Canon fallback: get_page only resolves the caller's source. For canon
-        // pages use federated query + graph edges (same logic as reference impl).
         try {
           const stem = (slug.split("/").pop() ?? slug).replace(/-/g, " ");
           const res = (await apiCall("query", { query: stem })) as PageHit[];
@@ -177,53 +178,52 @@ export function App({ appTitle, brandColors }: AppProps) {
               hit.slug,
               hit.chunk_text ?? "",
               graphNeighbors(g, hit.slug),
+              target,
             );
             return;
           }
         } catch (_) {
-          // Ignore canon fallback error; fall through to not-found.
+          // ignore fallback error
         }
         const msg = (e as Error).message ?? "";
         const notFound = /not_found/.test(msg);
-        setView("page");
-        setPageState({
-          title: notFound ? "Page not found" : "Couldn't load page",
-          type: "",
-          slug,
-          body: "",
-          neighbors: [],
-        });
-        setStatus(slug);
+        showPage(notFound ? "Page not found" : "Couldn't load page", "", slug, "", [], target);
       }
     },
     [showPage],
   );
 
-  // Wire the ref so openGraphNode can call openPage without a circular dep.
   openPageRef.current = openPage;
 
   const goToSlug = useCallback(
-    (slug: string, g: GraphStore | null) => {
+    (slug: string, g: GraphStore | null, target: "overview" | "graph") => {
       if (!slug) return;
       if (g?.byId[slug]) {
-        openGraphNode(slug, g);
+        openGraphNode(slug, g, target);
       } else {
-        openPage(slug, g);
+        openPage(slug, g, target);
       }
     },
     [openGraphNode, openPage],
   );
 
-  // Stable onOpen for GraphView — reads graph state from ref so the D3 sim is
-  // never destroyed when the user navigates away and back.
-  const onOpen = useCallback(
+  // onOpen from overview graph panel → opens in detail panel
+  const onOpenOverview = useCallback(
     (slug: string) => {
-      goToSlug(slug, graphRef.current);
+      goToSlug(slug, graphRef.current, "overview");
     },
     [goToSlug],
   );
 
-  // Load graph on mount — graph is the default view.
+  // onOpen from full-screen graph tab → shows page in graph tab
+  const onOpenGraph = useCallback(
+    (slug: string) => {
+      goToSlug(slug, graphRef.current, "graph");
+    },
+    [goToSlug],
+  );
+
+  // Load graph on mount
   useEffect(() => {
     async function loadGraph() {
       try {
@@ -233,102 +233,80 @@ export function App({ appTitle, brandColors }: AppProps) {
         const store = buildGraph(g);
         setGraph(store);
         setGraphData(g);
-        setStatus(`knowledge graph — ${g.nodes.length} nodes · ${g.links.length} links`);
       } catch (e) {
         setGraphError((e as Error).message ?? String(e));
-        setStatus("graph error");
       }
     }
     loadGraph();
   }, []);
 
-  function showGraph() {
-    if (searchRef.current) searchRef.current.value = "";
-    setView("graph");
-    const g = graphRef.current;
-    setStatus(
-      g ? `knowledge graph — ${g.nodes.length} nodes · ${g.links.length} links` : "knowledge graph",
-    );
-    window.scrollTo(0, 0);
-  }
-
-  async function home() {
-    if (searchRef.current) searchRef.current.value = "";
-    setStatus("recent pages");
-    try {
-      const items = (await apiCall("list_pages", { limit: 60 })) as PageHit[];
-      setView("list");
-      setListState({ items, kind: "list", status: "recent pages" });
-    } catch (e) {
-      setStatus(`error: ${(e as Error).message}`);
-    }
-  }
-
-  async function search(q: string) {
-    setStatus(`results for "${q}"`);
+  async function handleSearch(q: string) {
+    if (searchRef.current) searchRef.current.value = q;
     try {
       const items = (await apiCall("query", { query: q })) as PageHit[];
-      setView("search");
-      setListState({ items, kind: "search", status: `results for "${q}"` });
-    } catch (e) {
-      setStatus(`error: ${(e as Error).message}`);
+      setSearchItems(items);
+      setSearchKind("search");
+    } catch (_) {
+      setSearchItems([]);
     }
+    setTab("search");
   }
 
-  const isGraphMode = view === "graph";
+  function handleTabChange(t: Tab) {
+    if (t === "graph") {
+      // Clear graph page when switching back to graph tab
+      setGraphPage(null);
+    }
+    setTab(t);
+  }
 
   return (
     <>
-      {isGraphMode && (
-        // Suppress global scroll + main padding while graph is fullscreen.
-        <style>
-          {"body { overflow: hidden; } main { max-width: none !important; padding: 0 !important; }"}
-        </style>
-      )}
       <Header
         title={appTitle}
-        onHome={home}
-        onSearch={search}
-        onGraph={showGraph}
+        activeTab={tab}
+        onTabChange={handleTabChange}
+        onSearch={handleSearch}
         searchRef={searchRef}
       />
-      {view !== "graph" && (
-        <div id="status" style={{ color: "var(--mut)", padding: "6px 20px", fontSize: "13px" }}>
-          {status}
-        </div>
-      )}
-      {view === "graph" && (
-        <main style={{ maxWidth: "none", padding: 0 }}>
-          {graphError ? (
-            <div className="mut" style={{ padding: "20px" }}>
-              graph error: {graphError}
-            </div>
-          ) : graphData.nodes.length === 0 ? (
-            <div className="mut" style={{ padding: "20px" }}>
-              loading graph…
-            </div>
-          ) : (
-            <GraphView data={graphData} onOpen={onOpen} brandColors={brandColors} />
-          )}
-        </main>
-      )}
-      {(view === "list" || view === "search") && listState && (
-        <SearchResults
-          items={listState.items}
-          kind={listState.kind}
-          onOpen={(slug) => goToSlug(slug, graph)}
+
+      {tab === "overview" && (
+        <Overview
+          graphData={graphData}
+          graphError={graphError}
+          brandColors={brandColors}
+          detailPage={overviewDetail}
+          onOpen={onOpenOverview}
         />
       )}
-      {view === "page" && pageState && (
-        <PageView
-          title={pageState.title}
-          type={pageState.type}
-          slug={pageState.slug}
-          body={pageState.body}
-          neighbors={pageState.neighbors}
-          inGraph={!!graph?.byId[pageState.slug]}
-          onOpen={(slug) => goToSlug(slug, graph)}
-          onGraph={showGraph}
+
+      {tab === "graph" &&
+        (graphPage ? (
+          <PageView
+            title={graphPage.title}
+            type={graphPage.type}
+            slug={graphPage.slug}
+            body={graphPage.body}
+            neighbors={graphPage.neighbors}
+            inGraph={!!graph?.byId[graphPage.slug]}
+            onOpen={(slug) => goToSlug(slug, graph, "graph")}
+            onGraph={() => setGraphPage(null)}
+          />
+        ) : graphData.nodes.length === 0 && !graphError ? (
+          <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
+        ) : graphError ? (
+          <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+            Graph error: {graphError}
+          </div>
+        ) : (
+          <GraphView data={graphData} onOpen={onOpenGraph} brandColors={brandColors} />
+        ))}
+
+      {tab === "search" && (
+        <SearchResults
+          items={searchItems}
+          kind={searchKind}
+          onOpen={(slug) => goToSlug(slug, graph, "graph")}
         />
       )}
     </>

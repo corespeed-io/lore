@@ -25,7 +25,9 @@ export function mountGraph(
   const deg = degrees(data.links);
   // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
   for (const n of nodes) (n as any).r = 6 + Math.min(18, (deg[n.id] ?? 0) * 1.5);
-  const linkColor = "rgba(138,146,156,0.22)";
+  const linkColor = "#3a3733";
+  const nodeStroke = "#181715";
+  const labelFill = "#faf9f5";
   const svg = d3.select(el).append("svg").attr("width", W).attr("height", H);
   const link = svg.append("g").attr("stroke", linkColor).selectAll("line").data(links).join("line");
   const node = svg
@@ -36,7 +38,7 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .attr("r", (d: any) => d.r)
     .attr("fill", (d) => C[d.type] ?? C.concept)
-    .attr("stroke", "#0f1115")
+    .attr("stroke", nodeStroke)
     .attr("stroke-width", 1.5)
     .style("cursor", "pointer");
   const label = svg
@@ -46,13 +48,13 @@ export function mountGraph(
     .join("text")
     .text((d) => d.label)
     .attr("font-size", 11)
-    .attr("fill", "#e6e8eb")
+    .attr("fill", labelFill)
     .attr("text-anchor", "middle")
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .attr("dy", (d: any) => -d.r - 4)
     .style("pointer-events", "none")
     .style("paint-order", "stroke")
-    .style("stroke", "#0f1115")
+    .style("stroke", nodeStroke)
     .style("stroke-width", "3px")
     .attr("opacity", (d) => ((deg[d.id] ?? 0) >= 3 ? 1 : 0));
   const adj: Record<string, Set<string>> = {};

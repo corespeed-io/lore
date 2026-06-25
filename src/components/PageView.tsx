@@ -29,12 +29,9 @@ export function PageView({
   onOpen,
   onGraph,
 }: PageViewProps) {
-  // Strip leading # heading from body (same as reference: replace(/^#\s+.*\r?\n+/, ''))
   const bodyHtml = renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""));
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  // Set innerHTML directly to avoid biome lint/security/noDangerouslySetInnerHtml.
-  // renderMarkdown HTML-escapes all user content before returning — this is safe.
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.innerHTML = bodyHtml;
   }, [bodyHtml]);
@@ -60,39 +57,55 @@ export function PageView({
   }
 
   return (
-    <main>
-      {inGraph && (
-        <div style={{ marginBottom: "8px" }}>
-          <button className="navlink" type="button" onClick={onGraph}>
-            ← graph
-          </button>
-        </div>
-      )}
-      <h2 style={{ margin: "0.2em 0" }}>
-        {esc(title || slug)}
-        {type && <span className="badge">{type}</span>}
-      </h2>
-      <div className="s mut" style={{ fontFamily: "ui-monospace,monospace", marginBottom: "8px" }}>
-        {slug}
-      </div>
-      <div ref={bodyRef} className="body" onClick={handleBodyClick} onKeyDown={handleBodyKeyDown} />
-      {neighbors.length > 0 && (
-        <div className="backlinks">
-          <h4>{neighbors.length} linked</h4>
-          {neighbors.map((n) => (
+    <div className="page-wrap">
+      <div className="detail-panel">
+        {inGraph && (
+          <div style={{ marginBottom: "14px" }}>
             <button
-              key={n.slug}
-              className="row"
               type="button"
-              onClick={() => onOpen(n.slug)}
-              style={{ width: "100%", textAlign: "left", font: "inherit" }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--muted)",
+                font: "13px/1 var(--font-inter, ui-sans-serif, sans-serif)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+              onClick={onGraph}
             >
-              <div className="t">{n.title || n.slug}</div>
-              <div className="s">{n.slug}</div>
+              ← Graph
             </button>
-          ))}
+          </div>
+        )}
+        <h2 className="detail-title">{esc(title || slug)}</h2>
+        <div className="detail-meta">
+          {type && <span className="type-badge">{type}</span>}
+          <span className="detail-slug">{slug}</span>
         </div>
-      )}
-    </main>
+        <div
+          ref={bodyRef}
+          className="detail-body"
+          onClick={handleBodyClick}
+          onKeyDown={handleBodyKeyDown}
+        />
+        {neighbors.length > 0 && (
+          <div className="detail-neighbors">
+            <p className="detail-neighbors-label">{neighbors.length} linked</p>
+            <div>
+              {neighbors.map((n) => (
+                <button
+                  key={n.slug}
+                  type="button"
+                  className="detail-neighbor-btn"
+                  onClick={() => onOpen(n.slug)}
+                >
+                  {n.title || n.slug}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

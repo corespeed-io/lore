@@ -21,22 +21,22 @@ export function GraphView({ data, onOpen, brandColors }: GraphViewProps) {
   }, [data, onOpen, brandColors]);
 
   return (
-    <div id="view" className="graph" ref={containerRef} style={{ height: "calc(100vh - 57px)" }}>
+    <div ref={containerRef} className="graph-fullscreen">
       <div className="glegend">
         <span>
-          <span className="dot" style={{ background: "#7F77DD" }} />
+          <span className="dot" style={{ background: "#e8a55a" }} />
           person
         </span>
         <span>
-          <span className="dot" style={{ background: "#D85A30" }} />
+          <span className="dot" style={{ background: "#cc785c" }} />
           company
         </span>
         <span>
-          <span className="dot" style={{ background: "#1D9E75" }} />
+          <span className="dot" style={{ background: "#5db8a6" }} />
           product
         </span>
         <span>
-          <span className="dot" style={{ background: "#888780" }} />
+          <span className="dot" style={{ background: "#8e8b82" }} />
           concept
         </span>
       </div>
