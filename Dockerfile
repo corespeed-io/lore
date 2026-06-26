@@ -8,9 +8,9 @@ RUN npm run build
 
 FROM node:20-slim AS run
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000
+ENV NODE_ENV=production PORT=8080
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
-EXPOSE 3000
+EXPOSE 8080
 CMD ["node", "server.js"]

@@ -33,7 +33,7 @@ Open http://localhost:3000.
 
 ```bash
 docker build -t lore .
-docker run -p 3000:3000 --env-file .env lore
+docker run -p 3000:8080 --env-file .env lore
 ```
 
 ### Deploy to Vercel
