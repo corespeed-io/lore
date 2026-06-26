@@ -1,6 +1,6 @@
 # Lore
 
-A Next.js data-visualization app powered by gbrain, the knowledge graph indexing engine. Query your codebase, docs, or private knowledge base—and explore the connected concepts as an interactive graph.
+Lore is CoreSpeed's open-source Next.js data-visualization app for gbrain, the knowledge graph indexing engine. Query your codebase, docs, or private knowledge base—and explore the connected concepts as an interactive graph.
 
 ## Features
 

@@ -18,10 +18,10 @@ const DEFAULT_SEEDS = [
 ];
 
 const DEFAULT_COLORS = {
-  person: "#7F77DD",
-  company: "#D85A30",
-  product: "#1D9E75",
-  concept: "#888780",
+  person: "#0070f3",
+  company: "#7928ca",
+  product: "#50e3c2",
+  concept: "#8f8f8f",
 };
 
 type Env = Record<string, string | undefined>;

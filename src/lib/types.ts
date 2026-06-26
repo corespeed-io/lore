@@ -17,4 +17,19 @@ export interface PageHit {
   title?: string;
   type?: string;
   chunk_text?: string;
+  score?: number;
+  evidence?: string;
+  updated_at?: string;
+}
+export interface SourceInfo {
+  id: string;
+  name: string;
+  page_count: number;
+}
+export interface SalientPage {
+  slug: string;
+  title: string;
+  type: string;
+  updated_at: string;
+  source_id?: string;
 }

@@ -1,29 +1,29 @@
 import "./globals.css";
 import { loadConfig } from "@/lib/config";
-import { Cormorant_Garamond, Inter } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 
-const cormorant = Cormorant_Garamond({
+const geist = Geist({
   subsets: ["latin"],
-  weight: ["500", "600"],
-  variable: "--font-cormorant",
+  weight: ["400", "500", "600"],
+  variable: "--font-geist",
   display: "swap",
 });
 
-const inter = Inter({
+const geistMono = Geist_Mono({
   subsets: ["latin"],
   weight: ["400", "500"],
-  variable: "--font-inter",
+  variable: "--font-geist-mono",
   display: "swap",
 });
 
 export function generateMetadata() {
   const { appTitle } = loadConfig();
-  return { title: appTitle };
+  return { title: `Lore — ${appTitle}` };
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${cormorant.variable} ${inter.variable}`}>
+    <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
       <body>{children}</body>
     </html>
   );

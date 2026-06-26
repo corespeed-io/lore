@@ -14,6 +14,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "traverse_graph",
   "get_recent_salience",
   "get_ingest_log",
+  "sources_list",
   "code_def",
   "code_refs",
   "code_callers",

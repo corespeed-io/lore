@@ -1,9 +1,19 @@
 {
   "name": "lore",
   "version": "0.1.0",
+  "description": "CoreSpeed's open-source web UI for browsing a gbrain knowledge graph.",
   "private": false,
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/corespeed-io/lore#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/corespeed-io/lore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/corespeed-io/lore/issues"
+  },
+  "keywords": ["gbrain", "knowledge-graph", "nextjs", "d3", "visualization"],
   "scripts": {
     "dev": "next dev",
     "build": "next build",

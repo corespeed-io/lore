@@ -1,23 +1,33 @@
 "use client";
 
+type Tab = "overview" | "graph" | "search";
+
 interface StatCardsProps {
   nodeCount: number;
   linkCount: number;
+  sourceCount: number;
+  onNavigate: (tab: Tab) => void;
 }
 
-export function StatCards({ nodeCount, linkCount }: StatCardsProps) {
-  const cards = [
-    { label: "Pages", value: nodeCount },
-    { label: "Links", value: linkCount },
+export function StatCards({ nodeCount, linkCount, sourceCount, onNavigate }: StatCardsProps) {
+  const cards: { label: string; value: number; target: Tab }[] = [
+    { label: "Pages", value: nodeCount, target: "search" },
+    { label: "Links", value: linkCount, target: "graph" },
+    { label: "Sources", value: sourceCount, target: "search" },
   ];
 
   return (
     <div className="stat-cards">
       {cards.map((c) => (
-        <div key={c.label} className="stat-card">
+        <button
+          key={c.label}
+          type="button"
+          className="stat-card stat-card-btn"
+          onClick={() => onNavigate(c.target)}
+        >
           <div className="stat-card-label">{c.label}</div>
           <div className="stat-card-number">{c.value}</div>
-        </div>
+        </button>
       ))}
     </div>
   );

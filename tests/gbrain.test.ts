@@ -15,7 +15,15 @@ test("allowlist excludes every write/admin tool", () => {
 });
 
 test("allowlist includes the read tools the UI needs", () => {
-  for (const t of ["list_pages", "get_page", "search", "query", "get_backlinks"])
+  for (const t of [
+    "list_pages",
+    "get_page",
+    "search",
+    "query",
+    "get_backlinks",
+    "sources_list",
+    "get_recent_salience",
+  ])
     expect(READ_ONLY_TOOLS.has(t)).toBe(true);
 });
 

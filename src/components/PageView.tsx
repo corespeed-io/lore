@@ -1,9 +1,9 @@
 "use client";
 
-import { esc, renderMarkdown } from "@/lib/markdown";
-import { useEffect, useRef } from "react";
+import { renderMarkdown } from "@/lib/markdown";
+import { useEffect, useMemo, useRef } from "react";
 
-interface Neighbor {
+interface PageLink {
   slug: string;
   title: string;
 }
@@ -13,10 +13,55 @@ interface PageViewProps {
   type?: string;
   slug: string;
   body: string;
-  neighbors: Neighbor[];
-  inGraph: boolean;
+  backlinks: PageLink[];
+  outgoing: PageLink[];
+  related: PageLink[];
+  backLabel: string;
+  onBack: () => void;
   onOpen: (slug: string) => void;
-  onGraph: () => void;
+  onLocalGraph: (slug: string) => void;
+}
+
+function linkKey(link: PageLink, i: number): string {
+  return `${link.slug}-${i}`;
+}
+
+function LinkSection({
+  title,
+  links,
+  empty,
+  onOpen,
+}: {
+  title: string;
+  links: PageLink[];
+  empty: string;
+  onOpen: (slug: string) => void;
+}) {
+  return (
+    <section className="context-section">
+      <div className="context-heading">
+        <h3>{title}</h3>
+        <span>{links.length}</span>
+      </div>
+      {links.length ? (
+        <div className="context-link-list">
+          {links.map((link, i) => (
+            <button
+              key={linkKey(link, i)}
+              type="button"
+              className="context-link"
+              onClick={() => onOpen(link.slug)}
+            >
+              <span className="context-link-title">{link.title || link.slug}</span>
+              <span className="context-link-slug">{link.slug}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="context-empty">{empty}</p>
+      )}
+    </section>
+  );
 }
 
 export function PageView({
@@ -24,16 +69,39 @@ export function PageView({
   type,
   slug,
   body,
-  neighbors,
-  inGraph,
+  backlinks,
+  outgoing,
+  related,
+  backLabel,
+  onBack,
   onOpen,
-  onGraph,
+  onLocalGraph,
 }: PageViewProps) {
   const bodyHtml = renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""));
   const bodyRef = useRef<HTMLDivElement>(null);
+  const hasGraphContext = related.length > 0;
+  const relatedOnly = useMemo(() => {
+    const seen = new Set([
+      slug,
+      ...backlinks.map((link) => link.slug),
+      ...outgoing.map((link) => link.slug),
+    ]);
+    const unique: PageLink[] = [];
+    for (const link of related) {
+      if (!link.slug || seen.has(link.slug)) continue;
+      seen.add(link.slug);
+      unique.push(link);
+    }
+    return unique;
+  }, [backlinks, outgoing, related, slug]);
 
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.innerHTML = bodyHtml;
+    if (!bodyRef.current) return;
+    bodyRef.current.innerHTML = bodyHtml;
+    for (const link of bodyRef.current.querySelectorAll<HTMLAnchorElement>("a.wl")) {
+      link.setAttribute("role", "button");
+      link.tabIndex = 0;
+    }
   }, [bodyHtml]);
 
   function handleBodyClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -57,54 +125,82 @@ export function PageView({
   }
 
   return (
-    <div className="page-wrap">
-      <div className="detail-panel">
-        {inGraph && (
-          <div style={{ marginBottom: "14px" }}>
-            <button
-              type="button"
-              style={{
-                background: "none",
-                border: "none",
-                color: "var(--muted)",
-                font: "13px/1 var(--font-inter, ui-sans-serif, sans-serif)",
-                cursor: "pointer",
-                padding: 0,
-              }}
-              onClick={onGraph}
-            >
-              ← Graph
-            </button>
+    <div className="page-wrap page-wrap-wide">
+      <button type="button" className="back-link" onClick={onBack}>
+        ← {backLabel}
+      </button>
+      <div className="page-detail-grid">
+        <article className="detail-panel">
+          <h1 className="detail-title">{title || slug}</h1>
+          <div className="detail-meta">
+            {type && <span className="type-badge">{type}</span>}
+            <span className="detail-slug">{slug}</span>
           </div>
-        )}
-        <h2 className="detail-title">{esc(title || slug)}</h2>
-        <div className="detail-meta">
-          {type && <span className="type-badge">{type}</span>}
-          <span className="detail-slug">{slug}</span>
-        </div>
-        <div
-          ref={bodyRef}
-          className="detail-body"
-          onClick={handleBodyClick}
-          onKeyDown={handleBodyKeyDown}
-        />
-        {neighbors.length > 0 && (
-          <div className="detail-neighbors">
-            <p className="detail-neighbors-label">{neighbors.length} linked</p>
-            <div>
-              {neighbors.map((n) => (
-                <button
-                  key={n.slug}
-                  type="button"
-                  className="detail-neighbor-btn"
-                  onClick={() => onOpen(n.slug)}
-                >
-                  {n.title || n.slug}
-                </button>
-              ))}
+          {body.trim() ? (
+            <div
+              ref={bodyRef}
+              className="detail-body"
+              onClick={handleBodyClick}
+              onKeyDown={handleBodyKeyDown}
+            />
+          ) : (
+            <p className="detail-placeholder">No body available</p>
+          )}
+        </article>
+
+        <aside className="page-context" aria-label="Page context">
+          <section className="context-section context-section-first">
+            <div className="context-heading">
+              <h3>Properties</h3>
             </div>
-          </div>
-        )}
+            <dl className="property-list">
+              <div className="property-row">
+                <dt>Type</dt>
+                <dd>{type || "unknown"}</dd>
+              </div>
+              <div className="property-row">
+                <dt>Slug</dt>
+                <dd>{slug}</dd>
+              </div>
+              <div className="property-row">
+                <dt>Links</dt>
+                <dd>
+                  {backlinks.length} in / {outgoing.length} out
+                </dd>
+              </div>
+              {hasGraphContext && (
+                <div className="property-row">
+                  <dt>Graph</dt>
+                  <dd>
+                    <button
+                      type="button"
+                      className="property-action"
+                      onClick={() => onLocalGraph(slug)}
+                    >
+                      Open local graph
+                    </button>
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </section>
+
+          <LinkSection title="Backlinks" links={backlinks} empty="No backlinks" onOpen={onOpen} />
+          <LinkSection
+            title="Outgoing"
+            links={outgoing}
+            empty="No outgoing links"
+            onOpen={onOpen}
+          />
+          {relatedOnly.length > 0 && (
+            <LinkSection
+              title="Related"
+              links={relatedOnly}
+              empty="No extra graph neighbors"
+              onOpen={onOpen}
+            />
+          )}
+        </aside>
       </div>
     </div>
   );

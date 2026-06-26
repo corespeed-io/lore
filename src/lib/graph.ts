@@ -12,6 +12,12 @@ export function parseWikilinks(text: string): string[] {
   return out;
 }
 
+// mem0-migrated pages carry a content-hash as their title (e.g. "7416e83d").
+// They're real memories but meaningless as graph labels — drop them from the viz.
+export function isHashTitle(label: string): boolean {
+  return /^[0-9a-f]{6,}$/i.test(label.trim());
+}
+
 export function nodeType(slug: string, given?: string): string {
   if (slug.startsWith("people/")) return "person";
   if (slug.startsWith("companies/")) return "company";
@@ -62,12 +68,21 @@ export async function buildGraph(): Promise<GraphData> {
       edges.add([slug, tgt].sort().join("|"));
     }
   }
+  // Keep the graph meaningful: drop hash-titled mem0 imports, then drop isolated
+  // nodes (no links — scattered specks). Both stay findable via Search; they just
+  // don't belong in a connection graph.
+  const titled = new Map([...nodes].filter(([, n]) => !isHashTitle(n.label)));
+  const linkPairs = [...edges]
+    .map((e) => e.split("|") as [string, string])
+    .filter(([s, t]) => titled.has(s) && titled.has(t));
+  const linked = new Set<string>();
+  for (const [s, t] of linkPairs) {
+    linked.add(s);
+    linked.add(t);
+  }
   const data: GraphData = {
-    nodes: [...nodes.values()],
-    links: [...edges].map((e) => {
-      const [source, target] = e.split("|");
-      return { source, target };
-    }),
+    nodes: [...titled.values()].filter((n) => linked.has(n.id)),
+    links: linkPairs.map(([source, target]) => ({ source, target })),
   };
   cache = { data, at: Date.now() };
   return data;

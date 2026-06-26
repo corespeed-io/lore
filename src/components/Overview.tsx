@@ -1,27 +1,22 @@
 "use client";
 
+import { ActivityChart } from "@/components/ActivityChart";
 import { Breakdown } from "@/components/Breakdown";
-import { DetailPanel } from "@/components/DetailPanel";
+import { RecentActivity } from "@/components/RecentActivity";
+import { Sources } from "@/components/Sources";
 import { StatCards } from "@/components/StatCards";
 import { TopHubs } from "@/components/TopHubs";
-import type { GraphData } from "@/lib/types";
-import { mountGraph } from "@/lib/viz/graph";
-import { useEffect, useRef } from "react";
-
-interface PageState {
-  title: string;
-  type: string;
-  slug: string;
-  body: string;
-  neighbors: { slug: string; title: string }[];
-}
+import { apiCall } from "@/lib/api";
+import type { GraphData, PageHit, SalientPage, SourceInfo } from "@/lib/types";
+import { useEffect, useState } from "react";
 
 interface OverviewProps {
+  appTitle: string;
   graphData: GraphData;
-  graphError: string | null;
-  brandColors: Record<string, string>;
-  detailPage: PageState | null;
+  allPages: PageHit[];
   onOpen: (slug: string) => void;
+  onType: (type: string) => void;
+  onNavigate: (tab: "overview" | "graph" | "search") => void;
 }
 
 function countByType(nodes: GraphData["nodes"]) {
@@ -33,82 +28,63 @@ function countByType(nodes: GraphData["nodes"]) {
   return counts;
 }
 
-function GraphPanelContent({
-  data,
-  brandColors,
-  onOpen,
-}: {
-  data: GraphData;
-  brandColors: Record<string, string>;
-  onOpen: (slug: string) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !data.nodes.length) return;
-    const instance = mountGraph(el, data, { colors: brandColors, onOpen });
-    return () => instance.destroy();
-  }, [data, brandColors, onOpen]);
-
-  return (
-    <div ref={containerRef} className="graph-panel-body">
-      <div className="glegend">
-        <span>
-          <span className="dot" style={{ background: "#e8a55a" }} />
-          person
-        </span>
-        <span>
-          <span className="dot" style={{ background: "#cc785c" }} />
-          company
-        </span>
-        <span>
-          <span className="dot" style={{ background: "#5db8a6" }} />
-          product
-        </span>
-        <span>
-          <span className="dot" style={{ background: "#8e8b82" }} />
-          concept
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function Overview({
+  appTitle,
   graphData,
-  graphError,
-  brandColors,
-  detailPage,
+  allPages,
   onOpen,
+  onType,
+  onNavigate,
 }: OverviewProps) {
   const byCounts = countByType(graphData.nodes);
+  const [sources, setSources] = useState<SourceInfo[]>([]);
+  const [salient, setSalient] = useState<SalientPage[]>([]);
+
+  useEffect(() => {
+    apiCall("sources_list")
+      .then((d) => {
+        const list = ((d as { sources?: SourceInfo[] })?.sources ?? []).filter(
+          (s) => s.page_count > 0,
+        );
+        setSources(list.sort((a, b) => b.page_count - a.page_count));
+      })
+      .catch(() => {});
+    apiCall("get_recent_salience", { days: 30, limit: 5 })
+      .then((d) => setSalient(Array.isArray(d) ? (d as SalientPage[]) : []))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="page-wrap">
-      <div className="top-band">
-        <StatCards nodeCount={graphData.nodes.length} linkCount={graphData.links.length} />
-        <Breakdown byCounts={byCounts} total={graphData.nodes.length} />
-        <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
-      </div>
-
-      <div className="graph-panel">
-        <div className="graph-panel-header">
-          <h2 className="graph-panel-title">Knowledge graph</h2>
-          <p className="graph-panel-caption">
-            {graphData.nodes.length} nodes · {graphData.links.length} links · drag · hover · click
+      <div className="hero">
+        <div className="hero-mesh" />
+        <div className="hero-inner">
+          <p className="hero-eyebrow">Team brain</p>
+          <h1 className="hero-title">{appTitle}</h1>
+          <p className="hero-sub">
+            {graphData.nodes.length} pages and {graphData.links.length} links across{" "}
+            {sources.length} sources, mapped into one searchable knowledge graph.
           </p>
         </div>
-        {graphError ? (
-          <div style={{ padding: "20px", color: "var(--muted)" }}>Graph error: {graphError}</div>
-        ) : graphData.nodes.length === 0 ? (
-          <div style={{ padding: "20px", color: "var(--muted)" }}>Loading graph…</div>
-        ) : (
-          <GraphPanelContent data={graphData} brandColors={brandColors} onOpen={onOpen} />
-        )}
       </div>
 
-      <DetailPanel page={detailPage} onOpen={onOpen} />
+      <div className="stat-row">
+        <StatCards
+          nodeCount={graphData.nodes.length}
+          linkCount={graphData.links.length}
+          sourceCount={sources.length}
+          onNavigate={onNavigate}
+        />
+      </div>
+
+      <ActivityChart pages={allPages} />
+
+      <div className="panel-grid">
+        <Breakdown byCounts={byCounts} total={graphData.nodes.length} onType={onType} />
+        <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
+        <Sources sources={sources} />
+        <RecentActivity items={salient} onOpen={onOpen} />
+      </div>
     </div>
   );
 }
