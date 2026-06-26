@@ -57,10 +57,13 @@ typecheck + lint + test + build must pass (this is what CI runs).
   → resolves via gbrain → sets `openPage`. The page overlays the current tab; the
   back-button label is `TAB_LABELS[tab]` and back just clears `openPage`. Opening a
   page never switches tabs, so `tab` IS the origin. Don't reintroduce per-tab page state.
-- `src/app/api/graph/route.ts` + `src/lib/graph.ts` — `/api/graph` crawls gbrain
-  (seed queries, fanned out in parallel → wikilink expansion) into `{nodes, links}`,
-  10-min cached. **Drops hash-titled mem0 imports and isolated nodes** (`isHashTitle`)
-  so the graph stays meaningful. Slug == node id.
+- `src/app/api/graph/route.ts` + `src/lib/graph.ts` — `/api/graph` seeds a page
+  set from the seed queries, then reads gbrain's **actual link graph**
+  (`get_links` + `get_backlinks` per seed page, fanned out in parallel, capped at
+  `EXPAND_CAP`) into `{nodes, links}`, 10-min cached. Edges come from gbrain's
+  typed/mentions/manual links — **not** a regex over the search snippet, which
+  missed every link outside the matched chunk. **Drops hash-titled mem0 imports and
+  isolated nodes** (`isHashTitle`) so the graph stays meaningful. Slug == node id.
 - `src/app/api/call/route.ts` + `src/lib/gbrain.ts` — `/api/call` proxies a gbrain
   MCP tool, gated by `READ_ONLY_TOOLS` (the security boundary — see Security). It
   validates `tool` is a string and clamps unbounded args (`limit`/`depth`/…). Client

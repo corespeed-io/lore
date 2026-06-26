@@ -1,51 +1,38 @@
 import { expect, test, vi } from "vitest";
-import {
-  buildGraph,
-  clearGraphCache,
-  isHashTitle,
-  nodeType,
-  parseWikilinks,
-} from "../src/lib/graph.js";
+import { buildGraph, clearGraphCache, isHashTitle, nodeType } from "../src/lib/graph.js";
 
-// Stub gbrain so buildGraph crawls a fixed fixture instead of a live brain.
+// Stub gbrain so buildGraph reads a fixed fixture instead of a live brain.
+// `query` seeds the page set (titles/types); `get_links`/`get_backlinks` return
+// the REAL edge rows the build now relies on (shape: {from_slug, to_slug}).
 vi.mock("../src/lib/gbrain.js", async (orig) => {
   const real = await orig<typeof import("../src/lib/gbrain.js")>();
-  const PAGES = [
-    {
-      slug: "companies/corespeed",
-      title: "CoreSpeed",
-      type: "company",
-      chunk_text: "[[people/hao-su]]",
-    },
-    {
-      slug: "people/hao-su",
-      title: "Hao Su",
-      type: "person",
-      chunk_text: "[[companies/corespeed]]",
-    },
-    // hash-titled — and it *does* link to corespeed, so only the hash filter can drop it
-    {
-      slug: "concepts/7416e83d",
-      title: "7416e83d",
-      type: "concept",
-      chunk_text: "[[companies/corespeed]]",
-    },
-    // isolated — a real title but no wikilinks either way
-    { slug: "concepts/orphan", title: "Orphan", type: "concept", chunk_text: "no links" },
+  const SEEDS = [
+    { slug: "companies/corespeed", title: "CoreSpeed", type: "company" },
+    { slug: "people/hao-su", title: "Hao Su", type: "person" },
+    // a seed with no edges either way → must be dropped as isolated
+    { slug: "concepts/orphan", title: "Orphan", type: "concept" },
   ];
+  const LINKS: Record<string, { from_slug: string; to_slug: string }[]> = {
+    "companies/corespeed": [
+      // a `mentions`/typed edge the old chunk-text scan would have missed
+      { from_slug: "companies/corespeed", to_slug: "people/hao-su" },
+      // a target that was never itself a seed → pendant node, slug-derived label
+      { from_slug: "companies/corespeed", to_slug: "entities/haas" },
+      // hash-titled target → dropped even though it's linked
+      { from_slug: "companies/corespeed", to_slug: "concepts/7416e83d" },
+    ],
+    // reciprocal edge → must dedupe to a single undirected link
+    "people/hao-su": [{ from_slug: "people/hao-su", to_slug: "companies/corespeed" }],
+  };
   return {
     ...real,
-    callTool: vi.fn(async () => ({ isError: false, text: JSON.stringify(PAGES) })),
+    callTool: vi.fn(async (tool: string, args: { slug?: string }) => {
+      if (tool === "query") return { isError: false, text: JSON.stringify(SEEDS) };
+      if (tool === "get_links")
+        return { isError: false, text: JSON.stringify(LINKS[args.slug ?? ""] ?? []) };
+      return { isError: false, text: "[]" }; // get_backlinks etc.
+    }),
   };
-});
-
-test("parseWikilinks extracts slugs from [[slug]] and [[slug|label]]", () => {
-  const t = "see [[people/hao-su|Hao]] and [[entities/haas]] and [[people/hao-su]]";
-  expect(parseWikilinks(t)).toEqual(["people/hao-su", "entities/haas", "people/hao-su"]);
-});
-
-test("parseWikilinks returns [] when none", () => {
-  expect(parseWikilinks("no links here")).toEqual([]);
 });
 
 test("isHashTitle flags content-hash labels but not real titles", () => {
@@ -64,15 +51,19 @@ test("nodeType infers from slug prefix, then falls back to given, then concept",
   expect(nodeType("gtm/x")).toBe("concept");
 });
 
-test("buildGraph keeps linked+titled nodes, drops hash-titled and isolated ones", async () => {
+test("buildGraph builds from the real link graph: pendant targets in, hash + isolated out", async () => {
   clearGraphCache();
   const g = await buildGraph();
   const ids = g.nodes.map((n) => n.id).sort();
-  // corespeed <-> hao-su are mutually linked + real titles → both survive, one edge
-  expect(ids).toEqual(["companies/corespeed", "people/hao-su"]);
-  expect(g.links).toHaveLength(1);
-  // hash-titled node is dropped even though it linked to corespeed
+  // corespeed <-> hao-su (reciprocal → one edge) plus the pendant entities/haas
+  expect(ids).toEqual(["companies/corespeed", "entities/haas", "people/hao-su"]);
+  // reciprocal edge deduped; corespeed-haas kept → 2 undirected links
+  expect(g.links).toHaveLength(2);
+  // a non-seed link target still becomes a node, labeled + typed from its slug
+  const haas = g.nodes.find((n) => n.id === "entities/haas");
+  expect(haas).toMatchObject({ label: "haas", type: "product" });
+  // hash-titled target dropped even though it was linked
   expect(ids).not.toContain("concepts/7416e83d");
-  // isolated node (no wikilinks) is dropped
+  // seed with no edges dropped as isolated
   expect(ids).not.toContain("concepts/orphan");
 });
