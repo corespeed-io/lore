@@ -16,4 +16,6 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 EXPOSE 8080
+# Drop root — standalone output is world-readable and the server binds :8080 (>1024).
+USER node
 CMD ["node", "server.js"]
