@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 
 export function generateMetadata() {
   const { appTitle } = loadConfig();
-  return { title: `Lore — ${appTitle}`, icons: { icon: "/lore-mark.svg" } };
+  return { title: `Lore — ${appTitle}`, icons: { icon: "/favicon.svg" } };
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
