@@ -1428,7 +1428,7 @@ body {
   padding: 1px 7px;
 }
 
-/* ── Activity chart (cumulative memory growth) ──────────────────────────────── */
+/* ── Activity chart (daily activity bars) ───────────────────────────────────── */
 .chart-card {
   margin-bottom: 16px;
 }
@@ -1440,17 +1440,9 @@ body {
   margin-top: 4px;
 }
 
-.chart-area {
+.chart-bar {
   fill: var(--ink);
-  opacity: 0.06;
-}
-
-.chart-line {
-  fill: none;
-  stroke: var(--ink);
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
-  stroke-linejoin: round;
+  opacity: 0.82;
 }
 
 .chart-axis {
