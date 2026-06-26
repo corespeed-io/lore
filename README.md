@@ -1,6 +1,13 @@
 # Lore
 
+[![CI](https://github.com/corespeed-io/lore/actions/workflows/ci.yml/badge.svg)](https://github.com/corespeed-io/lore/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Lore is CoreSpeed's open-source Next.js data-visualization app for gbrain, the knowledge graph indexing engine. Query your codebase, docs, or private knowledge base—and explore the connected concepts as an interactive graph.
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/corespeed-io/lore&env=GBRAIN_MCP_URL,GBRAIN_TOKEN)
+
+> **Working with an AI coding agent?** Read [AGENTS.md](./AGENTS.md) — the single source of truth for agent instructions (Claude Code, Codex, Cursor, Gemini, Copilot all read it).
 
 ## Features
 

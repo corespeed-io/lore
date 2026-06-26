@@ -5,6 +5,7 @@
   "private": false,
   "license": "MIT",
   "type": "module",
+  "engines": { "node": ">=20" },
   "homepage": "https://github.com/corespeed-io/lore#readme",
   "repository": {
     "type": "git",

@@ -1,5 +1,7 @@
 # Contributing to Lore
 
+> **Using an AI coding agent?** [AGENTS.md](./AGENTS.md) is the single source of truth for agent instructions. `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md` are thin pointers to it — **edit only AGENTS.md** so the tools never drift.
+
 ## Development setup
 
 ```bash
@@ -94,9 +96,7 @@ feat: add timeline visualization module
 
 The following items are deferred post-v1:
 
-1. **Cloudflare Access JWT verification** — `proxy` auth mode currently only checks that the `Cf-Access-Jwt-Assertion` header is present. Full JWT signature verification (JWKS validation + `aud`/`iss` claims) is a follow-up (see `src/lib/auth.ts`).
-
-2. **Timing-safe password comparison** — `password` auth mode currently uses strict equality (`===`). Should use `crypto.timingSafeEqual` to mitigate timing attacks (see `src/lib/auth.ts`).
+1. **Timing-safe password comparison** — `password` auth mode compares with strict equality (`===`). A constant-time compare would mitigate timing attacks (see `src/lib/auth.ts`). Note `password` mode isn't the recommended deployment posture — prefer `proxy` (Cloudflare Access), whose JWT is fully verified.
 
 ## Questions?
 
