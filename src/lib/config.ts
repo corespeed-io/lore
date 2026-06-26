@@ -9,6 +9,9 @@ export interface Config {
   uiPassword: string;
   accessTeamDomain: string;
   accessAud: string;
+  // "none" auth is fail-open. Require explicit opt-in so a deploy that forgets
+  // to set AUTH_MODE doesn't silently serve a private brain to the internet.
+  allowInsecure: boolean;
 }
 
 const DEFAULT_SEEDS = [
@@ -44,5 +47,6 @@ export function loadConfig(env: Env = process.env): Config {
     uiPassword: env.UI_PASSWORD ?? "",
     accessTeamDomain: env.ACCESS_TEAM_DOMAIN ?? "",
     accessAud: env.ACCESS_AUD ?? "",
+    allowInsecure: env.ALLOW_INSECURE === "1" || env.ALLOW_INSECURE === "true",
   };
 }

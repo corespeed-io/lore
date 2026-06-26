@@ -1,3 +1,6 @@
+// Compiler-enforced: this module reads GBRAIN_TOKEN and must never reach the
+// client bundle. Importing it from a Client Component is a build error.
+import "server-only";
 import { loadConfig } from "./config";
 
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
