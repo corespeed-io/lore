@@ -87,9 +87,11 @@ typecheck + lint + test + build must pass (this is what CI runs).
 - **Read-only is the contract.** `READ_ONLY_TOOLS` in `src/lib/gbrain.ts` is
   server-enforced (checked before the upstream fetch) and is the security boundary.
   Never add a mutating tool to it; never add a route that writes to gbrain.
-- **`GBRAIN_TOKEN` is server-only.** It's used only in `gbrain.ts` (guarded by
-  `import "server-only"`). Never expose it to the client, never `NEXT_PUBLIC_*` it,
-  never commit `.env`.
+- **Credentials are server-only.** `gbrain.ts` (guarded by `import "server-only"`)
+  is the only place they're read. Prefer a read-only OAuth client via
+  `GBRAIN_CLIENT_ID`/`GBRAIN_CLIENT_SECRET` (the server mints short-lived
+  client_credentials tokens, so a leak can't write); `GBRAIN_TOKEN` is the static
+  fallback. Never expose either to the client, never `NEXT_PUBLIC_*`, never commit `.env`.
 - **Auth** lives in `middleware.ts` → `src/lib/auth.ts`. `AUTH_MODE=proxy` verifies
   the Cloudflare Access JWT with jose (signature against the team JWKS, `aud` ==
   `ACCESS_AUD`, issuer == team domain, exp). `password` = HTTP Basic. `none` denies
