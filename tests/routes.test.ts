@@ -39,3 +39,32 @@ test("GET /api/health is ok", async () => {
   const res = await GET();
   expect((await res.json()).status).toBe("ok");
 });
+
+test("POST /api/call clamps an oversized limit before reaching gbrain", async () => {
+  const { POST } = await import("../src/app/api/call/route.js");
+  const gbrain = await import("../src/lib/gbrain.js");
+  await POST(
+    new Request("http://x/api/call", {
+      method: "POST",
+      body: JSON.stringify({ tool: "list_pages", args: { limit: 1_000_000 } }),
+    }),
+  );
+  // MAX is 200 — hand-known from the route, not computed by the code under test.
+  // biome-ignore lint/suspicious/noExplicitAny: reaching into the vi mock
+  const lastArgs = (gbrain.callTool as any).mock.calls.at(-1)[1];
+  expect(lastArgs.limit).toBe(200);
+});
+
+test("POST /api/call rejects a missing/non-string tool with 400", async () => {
+  const { POST } = await import("../src/app/api/call/route.js");
+  const res = await POST(
+    new Request("http://x/api/call", { method: "POST", body: JSON.stringify({ args: {} }) }),
+  );
+  expect(res.status).toBe(400);
+});
+
+test("POST /api/call rejects an unparseable body with 400", async () => {
+  const { POST } = await import("../src/app/api/call/route.js");
+  const res = await POST(new Request("http://x/api/call", { method: "POST", body: "not json" }));
+  expect(res.status).toBe(400);
+});
