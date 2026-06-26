@@ -41,7 +41,7 @@ export async function middleware(req: NextRequest) {
   const r = await checkAuth(req.headers, req.cookies);
   if (!r.ok) {
     return json(
-      r.status === 401 ? "auth required" : "Cloudflare Access required",
+      r.detail ?? (r.status === 401 ? "auth required" : "forbidden"),
       r.status ?? 403,
       r.wwwAuthenticate ? { "WWW-Authenticate": "Basic" } : {},
     );

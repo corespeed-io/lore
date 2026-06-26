@@ -30,6 +30,22 @@ test("none mode allows only with explicit ALLOW_INSECURE", async () => {
   expect((await checkAuth(new Headers(), cookies())).ok).toBe(true);
 });
 
+test("none-mode 403 explains the real cause (AUTH_MODE / ALLOW_INSECURE)", async () => {
+  process.env.AUTH_MODE = "none";
+  const r = await checkAuth(new Headers(), cookies());
+  expect(r.ok).toBe(false);
+  expect(r.detail).toMatch(/ALLOW_INSECURE/);
+  expect(r.detail).not.toMatch(/Cloudflare/); // no more misleading "Cloudflare Access required"
+});
+
+test("password mode with no UI_PASSWORD fails closed and says so", async () => {
+  process.env.AUTH_MODE = "password";
+  const r = await checkAuth(new Headers(), cookies());
+  expect(r.ok).toBe(false);
+  expect(r.status).toBe(403);
+  expect(r.detail).toMatch(/UI_PASSWORD/);
+});
+
 test("password mode rejects without basic auth", async () => {
   process.env.AUTH_MODE = "password";
   process.env.UI_PASSWORD = "secret";

@@ -52,13 +52,15 @@ Explore the hosted demo, then point Lore at your own gbrain:
 
 ```bash
 git clone https://github.com/corespeed-io/lore.git && cd lore
-cp .env.example .env        # set GBRAIN_MCP_URL + GBRAIN_TOKEN; for local dev: AUTH_MODE=none + ALLOW_INSECURE=1
+cp .env.example .env        # set GBRAIN_MCP_URL + GBRAIN_TOKEN — auth is off for local dev by default
 npm install && npm run dev  # → http://localhost:3000
 ```
 
 ## Deploy your own
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/corespeed-io/lore&env=GBRAIN_MCP_URL,GBRAIN_TOKEN)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/corespeed-io/lore&env=GBRAIN_MCP_URL,GBRAIN_TOKEN,AUTH_MODE,ALLOW_INSECURE&envDescription=Point%20at%20your%20gbrain%2C%20then%20choose%20an%20auth%20mode&envLink=https://github.com/corespeed-io/lore/blob/main/.env.example)
+
+> **Lore [fails closed](#configuration).** A fresh deploy returns `403` until you set `AUTH_MODE` — `proxy` (Cloudflare Access) or `password`, or `none` **with** `ALLOW_INSECURE=1`. It will not serve a private brain by accident.
 
 Lore is a standard Next.js standalone app, so it also runs on **Railway** (Dockerfile auto-detected) or any container host:
 
