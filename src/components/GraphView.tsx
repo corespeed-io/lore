@@ -277,7 +277,7 @@ export function GraphView({
         </div>
       </div>
       {selectedNode && selectedSummary && (
-        <aside className="graph-node-preview" aria-live="polite">
+        <aside key={selectedNode.id} className="graph-node-preview" aria-live="polite">
           <div className="graph-node-preview-head">
             <span className="type-badge">{selectedNode.type}</span>
             <span className="graph-node-preview-count">{selectedSummary.links.length} links</span>
@@ -291,7 +291,15 @@ export function GraphView({
           {selectedSummary.related.length > 0 && (
             <div className="graph-node-preview-related">
               {selectedSummary.related.map((node) => (
-                <span key={node.id}>{node.label}</span>
+                <button
+                  key={node.id}
+                  type="button"
+                  className="graph-node-preview-related-item"
+                  onClick={() => setSelectedId(node.id)}
+                  title={`Jump to ${node.label}`}
+                >
+                  {node.label}
+                </button>
               ))}
             </div>
           )}
