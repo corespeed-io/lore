@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Browse your knowledge graph in the browser.</strong><br/>
-  A fast, read-only force-directed graph explorer, dashboard, and full-text search for <strong>gbrain</strong>.
+  Lore is the read-only <strong>frontend</strong> for a <strong>gbrain</strong> knowledge brain — force-directed graph, dashboard, and full-text search. Bring your own gbrain backend.
 </p>
 
 <p align="center">
