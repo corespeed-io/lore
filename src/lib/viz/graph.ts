@@ -484,7 +484,8 @@ export function mountGraph(
     .scaleExtent([0.2, 4])
     // biome-ignore lint/suspicious/noExplicitAny: d3 zoom event
     .filter((event: any) => {
-      if (event.type === "wheel") return !event.ctrlKey;
+      // Wheel is handled by the smooth listener below (animated, not per-tick).
+      if (event.type === "wheel") return false;
       if (event.button) return false;
       // pan only from empty space; let node-drag own pointer-downs on circles
       return !(event.target as Element)?.closest?.("circle");
@@ -492,6 +493,16 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: d3 zoom event
     .on("zoom", (event: any) => view.attr("transform", event.transform));
   svg.call(zoom).on("dblclick.zoom", null);
+
+  // Smooth wheel zoom: animate each step toward the cursor over a short
+  // interruptible transition, so rapid notches glide instead of stepping.
+  svg.on("wheel.smooth", (event: WheelEvent) => {
+    if (event.ctrlKey) return; // let the browser pinch-zoom the page
+    event.preventDefault();
+    const factor = 2 ** (-event.deltaY * 0.002);
+    const p = d3.pointer(event, svg.node());
+    svg.transition("zoom").duration(140).ease(d3.easeCubicOut).call(zoom.scaleBy, factor, p);
+  });
 
   function fitView() {
     if (!nodes.length) return;
