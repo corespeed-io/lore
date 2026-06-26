@@ -1,145 +1,116 @@
-# Lore
+<h1 align="center">✳&nbsp;&nbsp;Lore</h1>
 
-[![CI](https://github.com/corespeed-io/lore/actions/workflows/ci.yml/badge.svg)](https://github.com/corespeed-io/lore/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<p align="center">
+  <strong>Browse your knowledge graph in the browser.</strong><br/>
+  A fast, read-only force-directed graph explorer, dashboard, and full-text search for <strong>gbrain</strong>.
+</p>
 
-Lore is CoreSpeed's open-source Next.js data-visualization app for gbrain, the knowledge graph indexing engine. Query your codebase, docs, or private knowledge base—and explore the connected concepts as an interactive graph.
+<p align="center">
+  <a href="https://github.com/corespeed-io/lore/actions/workflows/ci.yml"><img src="https://github.com/corespeed-io/lore/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white" alt="Next.js 15">
+  <img src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white" alt="TypeScript">
+  <a href="https://gbrain.c7d.dev"><img src="https://img.shields.io/badge/live%20demo-gbrain.c7d.dev-1d9e75" alt="Live demo"></a>
+</p>
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/corespeed-io/lore&env=GBRAIN_MCP_URL,GBRAIN_TOKEN)
+<p align="center">
+  <a href="https://gbrain.c7d.dev"><b>▶&nbsp; Live demo</b></a> &nbsp;·&nbsp;
+  <a href="#quickstart">Quickstart</a> &nbsp;·&nbsp;
+  <a href="#deploy-your-own">Deploy</a> &nbsp;·&nbsp;
+  <a href="#configuration">Configure</a> &nbsp;·&nbsp;
+  <a href=".github/CONTRIBUTING.md">Contribute</a>
+</p>
 
-> **Working with an AI coding agent?** Read [AGENTS.md](./AGENTS.md) — the single source of truth for agent instructions (Claude Code, Codex, Cursor, Gemini, Copilot all read it).
+<p align="center">
+  <img src="docs/graph.png" alt="Lore — a force-directed graph of a gbrain knowledge base" width="820">
+</p>
+
+## What is Lore?
+
+Lore is a **read-only** web UI for exploring a **gbrain** knowledge brain — your team's people, products, docs, and the decisions that connect them. It reads gbrain over MCP and renders a force-directed graph, a dashboard, and hybrid full-text search, so you can *see* and walk your knowledge instead of grepping it. It never writes.
 
 ## Features
 
-- **Interactive graph visualization** — d3-powered node-link diagrams showing entity relationships
-- **Full-text search** — query your gbrain MCP server and browse results
-- **Pluggable viz modules** — add custom visualizations (page hits, entity types, timelines, etc.)
-- **Flexible auth** — none, HTTP Basic password, or Cloudflare Access proxy mode
-- **Docker & cloud-ready** — standalone container, runs on Vercel, Railway, or your infra
+- **Force-directed graph** — d3 node-link view with smooth zoom/pan, click-to-filter by type, and connection-walking from any node.
+- **Dashboard** — pages, links, sources, daily activity, top hubs, and recent memories at a glance.
+- **Hybrid search** — title + content search over your gbrain, as you type.
+- **Pluggable viz modules** — drop in a new `src/lib/viz/<name>.ts` to add a visualization.
+- **Fail-closed auth** — none (dev), HTTP Basic, or Cloudflare Access (JWT-verified). Read-only by design.
+- **Deploy anywhere** — standalone Docker image; one-click to Vercel or Railway.
+
+<p align="center">
+  <img src="docs/dashboard.png" alt="Lore dashboard — counts, activity, top hubs and sources" width="820">
+</p>
+
+## Try it live
+
+Explore the hosted demo, then point Lore at your own gbrain:
+
+<p align="center"><a href="https://gbrain.c7d.dev"><b>▶&nbsp; gbrain.c7d.dev</b></a></p>
 
 ## Quickstart
 
-### Local development
-
 ```bash
-# Copy env template and fill in your gbrain credentials
-cp .env.example .env
-
-# Set these required variables:
-# GBRAIN_MCP_URL=https://your-gbrain.example/mcp
-# GBRAIN_TOKEN=gbrain_at_xxx
-# (AUTH_MODE=none is fine for dev)
-
-npm install
-npm run dev
+git clone https://github.com/corespeed-io/lore.git && cd lore
+cp .env.example .env        # set GBRAIN_MCP_URL + GBRAIN_TOKEN; for local dev: AUTH_MODE=none + ALLOW_INSECURE=1
+npm install && npm run dev  # → http://localhost:3000
 ```
 
-Open http://localhost:3000.
+## Deploy your own
 
-### Docker
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/corespeed-io/lore&env=GBRAIN_MCP_URL,GBRAIN_TOKEN)
+
+Lore is a standard Next.js standalone app, so it also runs on **Railway** (Dockerfile auto-detected) or any container host:
 
 ```bash
-docker build -t lore .
-docker run -p 3000:8080 --env-file .env lore
+docker build -t lore . && docker run -p 3000:8080 --env-file .env lore
 ```
-
-### Deploy to Vercel
-
-1. Push this repo to GitHub.
-2. Create a Vercel project pointing to the repo.
-3. Set environment variables: `GBRAIN_MCP_URL`, `GBRAIN_TOKEN`, `APP_TITLE` (optional), auth vars (optional).
-4. Deploy.
-
-### Deploy to Railway
-
-1. Create a Railway project.
-2. Connect your GitHub repo or upload the source.
-3. Set environment variables (same as Vercel).
-4. Railway auto-detects the Dockerfile and deploys.
 
 ## Configuration
 
-### Environment variables
+Config is entirely environment-driven — see [`.env.example`](.env.example) for the full list.
 
-| Variable | Type | Required | Notes |
-|----------|------|----------|-------|
-| `GBRAIN_MCP_URL` | string | yes | Full URL to your gbrain MCP server endpoint |
-| `GBRAIN_TOKEN` | string | yes | Server-only token; never exposed to browser |
-| `APP_TITLE` | string | no | Page title; defaults to "gbrain" |
-| `SEED_QUERIES` | string | no | Pipe-separated queries (e.g., `"topic one \|\| topic two"`); if unset, uses built-in defaults |
-| `BRAND_COLORS` | JSON | no | Color map for entity types (e.g., `{"person":"#7F77DD","company":"#D85A30"}`); uses defaults if absent |
-| `AUTH_MODE` | string | no | Authentication strategy; see table below; defaults to `"none"` |
-| `UI_PASSWORD` | string | no | Password for `AUTH_MODE=password`; if unset, auth is disabled |
-| `ACCESS_TEAM_DOMAIN` | string | no | Cloudflare Access team domain for `AUTH_MODE=proxy` |
-| `ACCESS_AUD` | string | no | Cloudflare Access audience tag for `AUTH_MODE=proxy` |
+| Variable | Required | Notes |
+|---|---|---|
+| `GBRAIN_MCP_URL` | yes | Your gbrain MCP server endpoint |
+| `GBRAIN_TOKEN` | \* | Static bearer (server-only, never sent to the browser) |
+| `GBRAIN_CLIENT_ID` / `GBRAIN_CLIENT_SECRET` | \* | **Preferred**: a read-only OAuth client — Lore mints short-lived tokens |
+| `APP_TITLE` / `APP_SUBTITLE` | no | Hero branding, per deployment |
+| `AUTH_MODE` | no | `none` · `password` · `proxy` (Cloudflare Access). Defaults to `none` |
+| `ALLOW_INSECURE` | no | Required to actually run with `AUTH_MODE=none` (auth fails closed otherwise) |
+| `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | for proxy | Cloudflare Access team domain + audience |
 
-### AUTH_MODE
+\* Provide **either** `GBRAIN_TOKEN` **or** a client id/secret. A **read-only** client is recommended so a leaked credential can't write.
 
-| Mode | Use case | Config |
-|------|----------|--------|
-| `none` | No authentication | No env vars needed |
-| `password` | Simple HTTP Basic | Set `UI_PASSWORD` to a secret |
-| `proxy` | Cloudflare Access | Set both `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` |
+**Auth fails closed.** `none` is honored only when `ALLOW_INSECURE=1` is also set; `proxy` verifies the Cloudflare Access JWT (signature, audience, issuer, expiry) and denies if it's misconfigured. Never expose the origin with `AUTH_MODE=none` to the internet.
 
-**Security note:** `proxy` mode requires BOTH `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` to be set—otherwise it falls open.
+## Extending — add a visualization module
+
+```typescript
+// src/lib/viz/<name>.ts
+export function mount<Name>(element: HTMLElement, data: GraphData, options: VizOptions): void {
+  // render with d3, canvas, or the DOM
+}
+```
+
+Mount it from `src/components/GraphView.tsx` and add a test in `tests/`.
 
 ## Development
 
-### Commands
-
 ```bash
-npm run dev        # Start local dev server (localhost:3000, hot reload)
-npm run build      # Build for production
-npm start          # Run production build locally
-npm run lint       # Check code style with Biome
-npm run format     # Auto-format code with Biome
-npm run typecheck  # Type-check with TypeScript
-npm test           # Run tests with Vitest
+npm run dev        # dev server (hot reload)
+npm run typecheck  # tsc --noEmit
+npm run lint       # biome
+npm test           # vitest
+npm run build      # production build
 ```
 
-### Project structure
+Working with an AI coding agent? **[`AGENTS.md`](AGENTS.md)** is the single source of truth — Claude Code, Codex, Cursor, Gemini, and Copilot all read it.
 
-```
-src/
-├── app/               # Next.js app router
-│   ├── layout.tsx     # Root layout + metadata
-│   ├── page.tsx       # Search & graph UI
-│   └── api/           # API routes
-│       ├── graph      # Graph JSON endpoint
-│       ├── call       # MCP tool invocation
-│       └── health     # Health check
-├── components/        # React components
-│   ├── GraphView      # d3 visualization
-│   ├── PageView       # Markdown rendering
-│   └── ...
-├── lib/
-│   ├── types.ts       # Shared types (GraphNode, GraphLink, etc.)
-│   ├── config.ts      # Config loading from env
-│   ├── auth.ts        # Auth middleware
-│   ├── gbrain.ts      # MCP client
-│   ├── graph.ts       # Graph construction logic
-│   ├── markdown.ts    # Markdown parsing
-│   └── viz/
-│       ├── graph.ts   # Graph viz module
-│       └── ...        # Other viz modules
-└── ...
-```
+## Contributing
 
-## Adding a visualization module
+Issues, ideas, and PRs are welcome — start with [CONTRIBUTING.md](.github/CONTRIBUTING.md) or open a [discussion](https://github.com/corespeed-io/lore/discussions). Built and maintained by [CoreSpeed](https://github.com/corespeed-io).
 
-1. Create `src/lib/viz/<name>.ts` exporting a render function:
-   ```typescript
-   export function mount<Name>(element: HTMLElement, data: GraphData, options: VizOptions): void {
-     // Use d3, canvas, or DOM APIs to visualize data
-   }
-   ```
+## License
 
-2. Import and mount in `src/components/GraphView.tsx`.
-
-3. Run tests: `npm test`.
-
-## Support
-
-- **gbrain docs** — https://github.com/corespeed-io/gbrain
-- **Next.js docs** — https://nextjs.org/docs
-- **d3 docs** — https://d3js.org
+[MIT](LICENSE) © CoreSpeed
