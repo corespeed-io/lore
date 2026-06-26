@@ -38,6 +38,19 @@ const DEFAULT_COLORS = {
   concept: "#8f8f8f",
 };
 
+// BRAND_COLORS is operator-supplied and parsed on the Edge auth hot path
+// (loadConfig runs inside middleware on every request). A malformed value must
+// degrade to defaults, never throw — otherwise one bad theming env 500s the
+// entire site, with a stack that points here rather than at the env var.
+function parseBrandColors(raw: string | undefined): Record<string, string> {
+  if (!raw) return DEFAULT_COLORS;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return DEFAULT_COLORS;
+  }
+}
+
 type Env = Record<string, string | undefined>;
 
 export function loadConfig(env: Env = process.env): Config {
@@ -57,7 +70,7 @@ export function loadConfig(env: Env = process.env): Config {
     seedQueries: seeds.length ? seeds : DEFAULT_SEEDS,
     appTitle: env.APP_TITLE ?? "gbrain",
     appSubtitle: env.APP_SUBTITLE ?? "A searchable knowledge graph of your team's memory.",
-    brandColors: env.BRAND_COLORS ? JSON.parse(env.BRAND_COLORS) : DEFAULT_COLORS,
+    brandColors: parseBrandColors(env.BRAND_COLORS),
     authMode: mode === "password" || mode === "proxy" ? mode : "none",
     uiPassword: env.UI_PASSWORD ?? "",
     accessTeamDomain: env.ACCESS_TEAM_DOMAIN ?? "",
