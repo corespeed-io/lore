@@ -123,6 +123,28 @@ export function GraphView({
   const hasActiveFilter = hasQuery || hasResettableFocus || Boolean(selectedNode);
   const handleSelect = useCallback((slug: string | null) => setSelectedId(slug), []);
 
+  // Clear the selection on an empty-canvas click or Escape. Native listeners (not
+  // a JSX onClick) so the canvas stays a non-interactive element for a11y; node
+  // clicks stopPropagation in the d3 layer so they never reach this container.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest(".graph-node-preview, .graph-controls, .graph-search, .glegend")) return;
+      setSelectedId(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelectedId(null);
+    };
+    el.addEventListener("click", onClick);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      el.removeEventListener("click", onClick);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !data.nodes.length) return;
