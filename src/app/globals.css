@@ -262,14 +262,6 @@ body {
   margin: 0;
 }
 
-.hero-sub {
-  font-size: 15px;
-  line-height: 22px;
-  color: var(--body);
-  margin: 12px 0 0;
-  max-width: 520px;
-}
-
 /* ── Stat row ───────────────────────────────────────────────────────────────── */
 .stat-row {
   display: grid;

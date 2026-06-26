@@ -13,7 +13,6 @@ import { useEffect, useState } from "react";
 interface OverviewProps {
   appTitle: string;
   graphData: GraphData;
-  graphLoaded: boolean;
   allPages: PageHit[];
   onOpen: (slug: string) => void;
   onType: (type: string) => void;
@@ -32,7 +31,6 @@ function countByType(nodes: GraphData["nodes"]) {
 export function Overview({
   appTitle,
   graphData,
-  graphLoaded,
   allPages,
   onOpen,
   onType,
@@ -63,13 +61,6 @@ export function Overview({
         <div className="hero-inner">
           <p className="hero-eyebrow">Team brain</p>
           <h1 className="hero-title">{appTitle}</h1>
-          <p className="hero-sub">
-            {!graphLoaded
-              ? "Mapping your team's memory into one searchable knowledge graph."
-              : graphData.nodes.length === 0
-                ? "No memories indexed yet — check the gbrain connection."
-                : `${graphData.nodes.length} pages and ${graphData.links.length} links across ${sources.length} sources, mapped into one searchable knowledge graph.`}
-          </p>
         </div>
       </div>
 
