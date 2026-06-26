@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 
 interface OverviewProps {
   appTitle: string;
+  appSubtitle: string;
   graphData: GraphData;
   allPages: PageHit[];
   onOpen: (slug: string) => void;
@@ -30,6 +31,7 @@ function countByType(nodes: GraphData["nodes"]) {
 
 export function Overview({
   appTitle,
+  appSubtitle,
   graphData,
   allPages,
   onOpen,
@@ -61,6 +63,7 @@ export function Overview({
         <div className="hero-inner">
           <p className="hero-eyebrow">Team brain</p>
           <h1 className="hero-title">{appTitle}</h1>
+          {appSubtitle && <p className="hero-sub">{appSubtitle}</p>}
         </div>
       </div>
 
