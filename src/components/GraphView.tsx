@@ -95,6 +95,14 @@ function selectedNodeSummary(data: GraphData, selectedNode: GraphNode) {
   return { incoming, links, outgoing, related };
 }
 
+// Legend dot colors mirror the default brand palette (config DEFAULT_COLORS).
+const LEGEND_TYPES: { type: string; color: string }[] = [
+  { type: "person", color: "#0070f3" },
+  { type: "company", color: "#7928ca" },
+  { type: "product", color: "#50e3c2" },
+  { type: "concept", color: "#8f8f8f" },
+];
+
 export function GraphView({
   data,
   focusSlug,
@@ -107,6 +115,7 @@ export function GraphView({
   const instanceRef = useRef<GraphInstance | null>(null);
   const [q, setQ] = useState("");
   const [contentIds, setContentIds] = useState<Set<string>>(new Set());
+  const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const localFocus = useMemo(() => focusSet(data, focusSlug), [data, focusSlug]);
@@ -120,7 +129,8 @@ export function GraphView({
   );
   const hasQuery = q.trim().length > 0;
   const hasResettableFocus = Boolean(localFocus && onResetFilter);
-  const hasActiveFilter = hasQuery || hasResettableFocus || Boolean(selectedNode);
+  const hasActiveFilter =
+    hasQuery || hasResettableFocus || Boolean(selectedNode) || Boolean(typeFilter);
   const handleSelect = useCallback((slug: string | null) => setSelectedId(slug), []);
 
   // Clear the selection on an empty-canvas click or Escape. Native listeners (not
@@ -186,17 +196,23 @@ export function GraphView({
     return () => clearTimeout(t);
   }, [q, data.nodes]);
 
-  // Title (instant substring) ∪ content matches → highlight set.
+  // Highlight set = (title ∪ content search, or focus) ∩ the legend type filter.
+  // null means "everything lit". Search/focus/type-filter all feed one highlight.
   useEffect(() => {
     const query = q.trim().toLowerCase();
-    if (!query) {
-      instanceRef.current?.highlight(localFocus);
-      return;
+    let base: Set<string> | null;
+    if (query) {
+      base = new Set(contentIds);
+      for (const n of data.nodes) if (n.label?.toLowerCase().includes(query)) base.add(n.id);
+    } else {
+      base = localFocus;
     }
-    const ids = new Set(contentIds);
-    for (const n of data.nodes) if (n.label?.toLowerCase().includes(query)) ids.add(n.id);
-    instanceRef.current?.highlight(ids);
-  }, [q, contentIds, data.nodes, localFocus]);
+    if (typeFilter) {
+      const ofType = data.nodes.filter((n) => n.type === typeFilter).map((n) => n.id);
+      base = base ? new Set(ofType.filter((id) => base?.has(id))) : new Set(ofType);
+    }
+    instanceRef.current?.highlight(base);
+  }, [q, contentIds, data.nodes, localFocus, typeFilter]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -206,29 +222,27 @@ export function GraphView({
   function resetFilter() {
     setQ("");
     setContentIds(new Set());
+    setTypeFilter(null);
     setSelectedId(null);
     onResetFilter?.();
   }
 
   return (
     <div ref={containerRef} className={`graph-fullscreen${className ? ` ${className}` : ""}`}>
-      <div className="glegend">
-        <span>
-          <span className="dot" style={{ background: "#0070f3" }} />
-          person
-        </span>
-        <span>
-          <span className="dot" style={{ background: "#7928ca" }} />
-          company
-        </span>
-        <span>
-          <span className="dot" style={{ background: "#50e3c2" }} />
-          product
-        </span>
-        <span>
-          <span className="dot" style={{ background: "#8f8f8f" }} />
-          concept
-        </span>
+      <div className={`glegend${typeFilter ? " glegend-filtering" : ""}`}>
+        {LEGEND_TYPES.map(({ type, color }) => (
+          <button
+            key={type}
+            type="button"
+            className="glegend-item"
+            aria-pressed={typeFilter === type}
+            title={typeFilter === type ? `Show all (clear ${type} filter)` : `Filter to ${type}`}
+            onClick={() => setTypeFilter((cur) => (cur === type ? null : type))}
+          >
+            <span className="dot" style={{ background: color }} />
+            {type}
+          </button>
+        ))}
       </div>
       <input
         className="graph-search"

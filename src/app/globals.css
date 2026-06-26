@@ -895,6 +895,35 @@ body {
   flex-wrap: wrap;
 }
 
+.glegend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  margin: -2px 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.12s, color 0.12s;
+}
+
+.glegend-item:hover {
+  color: var(--ink);
+}
+
+.glegend-item[aria-pressed="true"] {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Active type filter: dim the non-selected legend items to echo the graph. */
+.glegend-filtering .glegend-item:not([aria-pressed="true"]) {
+  opacity: 0.45;
+}
+
 .graph-controls {
   position: absolute;
   z-index: 2;
