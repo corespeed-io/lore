@@ -1,6 +1,6 @@
 # Contributing to Lore
 
-> **Using an AI coding agent?** [AGENTS.md](./AGENTS.md) is the single source of truth for agent instructions. `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md` are thin pointers to it — **edit only AGENTS.md** so the tools never drift.
+> **Using an AI coding agent?** [AGENTS.md](../AGENTS.md) is the single source of truth for agent instructions. `CLAUDE.md` and `.github/copilot-instructions.md` are thin pointers to it — **edit only AGENTS.md** so the tools never drift.
 
 ## Development setup
 
