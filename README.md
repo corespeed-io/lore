@@ -13,11 +13,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white" alt="Next.js 15">
   <img src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white" alt="TypeScript">
-  <a href="https://gbrain.c7d.dev"><img src="https://img.shields.io/badge/live%20demo-gbrain.c7d.dev-1d9e75" alt="Live demo"></a>
 </p>
 
 <p align="center">
-  <a href="https://gbrain.c7d.dev"><b>▶&nbsp; Live demo</b></a> &nbsp;·&nbsp;
   <a href="#quickstart">Quickstart</a> &nbsp;·&nbsp;
   <a href="#deploy-your-own">Deploy</a> &nbsp;·&nbsp;
   <a href="#configuration">Configure</a> &nbsp;·&nbsp;
@@ -44,12 +42,6 @@ Lore is a **read-only** web UI for exploring a **gbrain** knowledge brain — yo
 <p align="center">
   <img src="docs/dashboard.png" alt="Lore dashboard — counts, activity, top hubs and sources" width="820">
 </p>
-
-## Try it live
-
-Explore the hosted demo, then point Lore at your own gbrain:
-
-<p align="center"><a href="https://gbrain.c7d.dev"><b>▶&nbsp; gbrain.c7d.dev</b></a></p>
 
 ## Quickstart
 
