@@ -69,9 +69,30 @@ export function buildTokenRequest(cfg: ReturnType<typeof loadConfig>): TokenRequ
   return { url, headers, body: params.toString() };
 }
 
+// Decide how to authenticate to gbrain, failing LOUD on a half- or un-
+// configured setup instead of silently sending an empty Bearer (which yields a
+// confusing upstream 401 that looks like gbrain is down). Pure; exported for tests.
+export type Credential = { kind: "static"; token: string } | { kind: "oauth" };
+export function resolveCredential(cfg: ReturnType<typeof loadConfig>): Credential {
+  const hasId = Boolean(cfg.gbrainClientId);
+  const hasSecret = Boolean(cfg.gbrainClientSecret);
+  if (hasId !== hasSecret)
+    throw new Error(
+      "gbrain OAuth client half-configured: set BOTH GBRAIN_CLIENT_ID and GBRAIN_CLIENT_SECRET (or neither, to use GBRAIN_TOKEN)",
+    );
+  if (!hasId) {
+    if (!cfg.gbrainToken)
+      throw new Error(
+        "gbrain credentials missing: set GBRAIN_TOKEN, or GBRAIN_CLIENT_ID + GBRAIN_CLIENT_SECRET",
+      );
+    return { kind: "static", token: cfg.gbrainToken };
+  }
+  return { kind: "oauth" };
+}
+
 async function bearerToken(cfg: ReturnType<typeof loadConfig>): Promise<string> {
-  // No OAuth client configured → fall back to the static bearer (GBRAIN_TOKEN).
-  if (!cfg.gbrainClientId || !cfg.gbrainClientSecret) return cfg.gbrainToken;
+  const cred = resolveCredential(cfg);
+  if (cred.kind === "static") return cred.token;
   const now = Date.now();
   if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.value;
   const req = buildTokenRequest(cfg);
@@ -89,6 +110,7 @@ export async function callTool(
   if (!READ_ONLY_TOOLS.has(tool))
     throw new ToolNotAllowedError(`tool '${tool}' not allowed (read-only)`);
   const cfg = loadConfig();
+  if (!cfg.gbrainMcpUrl) throw new Error("GBRAIN_MCP_URL is not set");
   const res = await fetch(cfg.gbrainMcpUrl, {
     method: "POST",
     headers: {

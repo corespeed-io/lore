@@ -1,3 +1,7 @@
+// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file and ./config run
+// in the Edge runtime — use only Web APIs (atob, fetch, jose), never Node-only
+// ones (Buffer, node:*, fs). A Node API pulled in here poisons the middleware
+// bundle: it passes typecheck and breaks only at build/deploy.
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { loadConfig } from "./config";
 

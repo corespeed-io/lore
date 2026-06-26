@@ -13,10 +13,17 @@ const LIMITS: Record<string, { max: number; windowMs: number }> = {
   "/api/graph": { max: 60, windowMs: 60_000 },
 };
 const hits = new Map<string, { count: number; resetAt: number }>();
+// Cap the map so a stream of one-shot keys (distinct IPs/emails that never
+// recur) can't grow it without bound — buckets are only refreshed lazily on a
+// repeat hit, so without this they'd never be reclaimed.
+const MAX_KEYS = 10_000;
 
 function rateLimited(path: string, who: string, now: number): boolean {
   const rule = LIMITS[path];
   if (!rule) return false;
+  if (hits.size > MAX_KEYS) {
+    for (const [k, v] of hits) if (now > v.resetAt) hits.delete(k);
+  }
   const key = `${path}|${who}`;
   const cur = hits.get(key);
   if (!cur || now > cur.resetAt) {

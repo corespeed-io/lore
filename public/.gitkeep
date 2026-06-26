@@ -1,0 +1,2 @@
+# Keeps public/ in the repo so the Dockerfile's `COPY --from=build /app/public`
+# always has a source. Next serves any real assets placed here.
