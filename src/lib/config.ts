@@ -3,6 +3,7 @@ export interface Config {
   gbrainToken: string;
   seedQueries: string[];
   appTitle: string;
+  appSubtitle: string;
   brandColors: Record<string, string>;
   authMode: "none" | "password" | "proxy";
   uiPassword: string;
@@ -37,6 +38,7 @@ export function loadConfig(env: Env = process.env): Config {
     gbrainToken: env.GBRAIN_TOKEN ?? "",
     seedQueries: seeds.length ? seeds : DEFAULT_SEEDS,
     appTitle: env.APP_TITLE ?? "gbrain",
+    appSubtitle: env.APP_SUBTITLE ?? "A searchable knowledge graph of your team's memory.",
     brandColors: env.BRAND_COLORS ? JSON.parse(env.BRAND_COLORS) : DEFAULT_COLORS,
     authMode: mode === "password" || mode === "proxy" ? mode : "none",
     uiPassword: env.UI_PASSWORD ?? "",

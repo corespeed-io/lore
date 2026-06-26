@@ -144,6 +144,7 @@ interface PageState {
 
 interface AppProps {
   appTitle: string;
+  appSubtitle: string;
   brandColors: Record<string, string>;
 }
 
@@ -235,7 +236,7 @@ function normalizeBacklinks(raw: unknown, g: GraphStore | null): PageLink[] {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function App({ appTitle, brandColors }: AppProps) {
+export function App({ appTitle, appSubtitle, brandColors }: AppProps) {
   const [tab, setTab] = useState<Tab>("overview");
   const [graph, setGraph] = useState<GraphStore | null>(null);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
@@ -554,6 +555,7 @@ export function App({ appTitle, brandColors }: AppProps) {
             {tab === "overview" && (
               <Overview
                 appTitle={appTitle}
+                appSubtitle={appSubtitle}
                 graphData={graphData}
                 allPages={allPages}
                 onOpen={openMemory}

@@ -4,6 +4,7 @@ import { loadConfig } from "../src/lib/config.js";
 test("defaults are applied when env is empty", () => {
   const c = loadConfig({});
   expect(c.appTitle).toBe("gbrain");
+  expect(c.appSubtitle).toMatch(/knowledge graph/);
   expect(c.authMode).toBe("none");
   expect(c.seedQueries.length).toBeGreaterThan(0);
 });
