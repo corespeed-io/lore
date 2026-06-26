@@ -555,7 +555,6 @@ export function App({ appTitle, brandColors }: AppProps) {
               <Overview
                 appTitle={appTitle}
                 graphData={graphData}
-                graphLoaded={graphLoaded}
                 allPages={allPages}
                 onOpen={openMemory}
                 onType={drillType}
