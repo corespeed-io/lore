@@ -1,5 +1,7 @@
 "use client";
 
+import { TYPE_COLORS } from "@/lib/colors";
+
 interface BreakdownProps {
   byCounts: { person: number; company: number; product: number; concept: number };
   total: number;
@@ -7,10 +9,10 @@ interface BreakdownProps {
 }
 
 const TYPES: { key: keyof BreakdownProps["byCounts"]; color: string }[] = [
-  { key: "concept", color: "#8f8f8f" },
-  { key: "product", color: "#50e3c2" },
-  { key: "person", color: "#0070f3" },
-  { key: "company", color: "#7928ca" },
+  { key: "concept", color: TYPE_COLORS.concept },
+  { key: "product", color: TYPE_COLORS.product },
+  { key: "person", color: TYPE_COLORS.person },
+  { key: "company", color: TYPE_COLORS.company },
 ];
 
 export function Breakdown({ byCounts, onType }: BreakdownProps) {

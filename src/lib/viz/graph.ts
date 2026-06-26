@@ -1,4 +1,5 @@
 import * as d3 from "d3";
+import { TYPE_COLORS } from "../colors";
 import type { GraphData, GraphLink } from "../types";
 
 export function degrees(links: GraphLink[]): Record<string, number> {
@@ -47,11 +48,11 @@ export interface GraphInstance {
 export function mountGraph(
   el: HTMLElement,
   data: GraphData,
-  opts: { colors: Record<string, string>; onSelect: (slug: string | null) => void },
+  opts: { onSelect: (slug: string | null) => void },
 ): GraphInstance {
   let W = Math.max(320, el.clientWidth || 640);
   let H = Math.max(320, el.clientHeight || 460);
-  const C = opts.colors;
+  const C = TYPE_COLORS;
   const linkColor = "#ebebeb";
   const nodeStroke = "#ffffff";
   const labelFill = "#171717";

@@ -8,7 +8,6 @@ interface LocalGraphModalProps {
   data: GraphData;
   focusSlug: string;
   title: string;
-  brandColors: Record<string, string>;
   onClose: () => void;
   onOpen: (slug: string) => void;
   onOpenGraph: (slug: string) => void;
@@ -68,7 +67,6 @@ export function LocalGraphModal({
   data,
   focusSlug,
   title,
-  brandColors,
   onClose,
   onOpen,
   onOpenGraph,
@@ -135,7 +133,6 @@ export function LocalGraphModal({
               onClose();
               onOpen(slug);
             }}
-            brandColors={brandColors}
             className="graph-modal-graph"
           />
         </div>
