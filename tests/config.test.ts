@@ -23,14 +23,3 @@ test("token and url pass through", () => {
   expect(c.gbrainToken).toBe("t");
   expect(c.gbrainMcpUrl).toBe("http://x/mcp");
 });
-
-test("valid BRAND_COLORS is parsed", () => {
-  const c = loadConfig({ BRAND_COLORS: '{"person":"#abcdef"}' });
-  expect(c.brandColors.person).toBe("#abcdef");
-});
-
-test("malformed BRAND_COLORS falls back to defaults instead of throwing", () => {
-  // loadConfig runs on the Edge auth hot path — a bad theming env must not throw.
-  const c = loadConfig({ BRAND_COLORS: "{not valid json" });
-  expect(c.brandColors.person).toBe("#0070f3"); // DEFAULT_COLORS
-});

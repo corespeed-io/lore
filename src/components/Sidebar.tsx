@@ -95,7 +95,7 @@ export function Sidebar({ activeTab, onTabChange, onSearch, searchRef }: Sidebar
         style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
         onClick={() => onTabChange("overview")}
       >
-        <span className="wordmark-spike">✳</span>
+        <img className="wordmark-mark" src="/lore-mark.svg" alt="" width="24" height="24" />
         <span className="wordmark-title">{BRAND}</span>
       </button>
 

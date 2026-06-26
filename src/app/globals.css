@@ -129,10 +129,11 @@ body {
   padding: 4px 6px;
 }
 
-.wordmark-spike {
-  color: var(--ink);
-  font-size: 18px;
-  line-height: 1;
+.wordmark-mark {
+  width: 24px;
+  height: 24px;
+  display: block;
+  flex: 0 0 auto;
   user-select: none;
 }
 

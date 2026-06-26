@@ -42,7 +42,6 @@ interface PageState {
 interface AppProps {
   appTitle: string;
   appSubtitle: string;
-  brandColors: Record<string, string>;
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -133,7 +132,7 @@ function normalizeBacklinks(raw: unknown, g: GraphStore | null): PageLink[] {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function App({ appTitle, appSubtitle, brandColors }: AppProps) {
+export function App({ appTitle, appSubtitle }: AppProps) {
   const [tab, setTab] = useState<Tab>("overview");
   const [graph, setGraph] = useState<GraphStore | null>(null);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
@@ -478,7 +477,6 @@ export function App({ appTitle, appSubtitle, brandColors }: AppProps) {
                     data={graphData}
                     focusSlug={graphFocus}
                     onOpen={openMemory}
-                    brandColors={brandColors}
                     onResetFilter={resetGraphFilter}
                   />
                 ))}
@@ -502,7 +500,6 @@ export function App({ appTitle, appSubtitle, brandColors }: AppProps) {
           data={graphData}
           focusSlug={localGraphSlug}
           title={graph?.byId[localGraphSlug]?.label ?? humanizeSlug(localGraphSlug)}
-          brandColors={brandColors}
           onClose={() => setLocalGraphSlug(null)}
           onOpen={openMemory}
           onOpenGraph={openFocusedGraph}

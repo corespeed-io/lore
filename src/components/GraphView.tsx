@@ -1,6 +1,7 @@
 "use client";
 
 import { apiCall } from "@/lib/api";
+import { TYPE_COLORS } from "@/lib/colors";
 import type { GraphData, GraphNode, PageHit } from "@/lib/types";
 import { type GraphInstance, mountGraph } from "@/lib/viz/graph";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -9,7 +10,6 @@ interface GraphViewProps {
   data: GraphData;
   focusSlug?: string;
   onOpen: (slug: string) => void;
-  brandColors: Record<string, string>;
   className?: string;
   onResetFilter?: () => void;
 }
@@ -95,22 +95,15 @@ function selectedNodeSummary(data: GraphData, selectedNode: GraphNode) {
   return { incoming, links, outgoing, related };
 }
 
-// Legend dot colors mirror the default brand palette (config DEFAULT_COLORS).
+// Legend dots share the one type palette (src/lib/colors.ts).
 const LEGEND_TYPES: { type: string; color: string }[] = [
-  { type: "person", color: "#0070f3" },
-  { type: "company", color: "#7928ca" },
-  { type: "product", color: "#50e3c2" },
-  { type: "concept", color: "#8f8f8f" },
+  { type: "person", color: TYPE_COLORS.person },
+  { type: "company", color: TYPE_COLORS.company },
+  { type: "product", color: TYPE_COLORS.product },
+  { type: "concept", color: TYPE_COLORS.concept },
 ];
 
-export function GraphView({
-  data,
-  focusSlug,
-  onOpen,
-  brandColors,
-  className,
-  onResetFilter,
-}: GraphViewProps) {
+export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<GraphInstance | null>(null);
   const [q, setQ] = useState("");
@@ -158,14 +151,14 @@ export function GraphView({
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !data.nodes.length) return;
-    const instance = mountGraph(el, data, { colors: brandColors, onSelect: handleSelect });
+    const instance = mountGraph(el, data, { onSelect: handleSelect });
     instanceRef.current = instance;
     instance.select(selectedIdRef.current);
     return () => {
       instance.destroy();
       instanceRef.current = null;
     };
-  }, [data, handleSelect, brandColors]);
+  }, [data, handleSelect]);
 
   useEffect(() => {
     if (!selectedId) return;

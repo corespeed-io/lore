@@ -1,4 +1,7 @@
-<h1 align="center">✳&nbsp;&nbsp;Lore</h1>
+<h1 align="center">
+  <img src="public/lore-mark.svg" alt="" width="36" height="36"><br>
+  Lore
+</h1>
 
 <p align="center">
   <strong>Browse your knowledge graph in the browser.</strong><br/>
