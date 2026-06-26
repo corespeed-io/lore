@@ -34,15 +34,22 @@ export async function buildGraph(): Promise<GraphData> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
   const cfg = loadConfig();
   const pages = new Map<string, { title: string; type: string; text: string }>();
-  for (const q of cfg.seedQueries) {
-    let items: PageHit[] = [];
-    try {
-      const { text } = await callTool("query", { query: q, limit: 40 });
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) items = parsed;
-    } catch {
-      continue;
-    }
+  // Fan the seed queries out in parallel — each is an independent gbrain
+  // embedding+vector search (~1-2s). Sequentially they summed to ~6s on a cold
+  // cache; Promise.all collapses that to the slowest single query. Promise.all
+  // preserves input order, so the first-seen dedup below stays identical.
+  const seedResults = await Promise.all(
+    cfg.seedQueries.map(async (q): Promise<PageHit[]> => {
+      try {
+        const { text } = await callTool("query", { query: q, limit: 40 });
+        const parsed = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  for (const items of seedResults) {
     for (const it of items) {
       if (!it.slug || pages.has(it.slug)) continue;
       pages.set(it.slug, {
