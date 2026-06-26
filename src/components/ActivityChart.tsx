@@ -50,10 +50,6 @@ export function ActivityChart({ pages }: { pages: PageHit[] }) {
   const maxY = Math.max(...series.map((d) => d.count), 1);
   const slot = (W - 2 * padX) / n;
   const barW = Math.max(slot * 0.62, 1);
-  // "updates" (activity events), deliberately NOT "pages" — the page count lives
-  // in the hero/stat cards (graph nodes). Two different denominators on one
-  // dashboard read as a bug, so the chart speaks in activity, not page totals.
-  const total = dates.length;
 
   return (
     <div className="panel-card chart-card">
@@ -81,7 +77,6 @@ export function ActivityChart({ pages }: { pages: PageHit[] }) {
       </svg>
       <div className="chart-axis">
         <span>{fmt(series[0].label)}</span>
-        <span>{total} updates</span>
         <span>{fmt(series[n - 1].label)}</span>
       </div>
     </div>
