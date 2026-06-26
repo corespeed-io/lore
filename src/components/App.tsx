@@ -429,71 +429,73 @@ export function App({ appTitle, appSubtitle, brandColors }: AppProps) {
       />
 
       <main className="app-main">
-        {openPage ? (
-          <PageView
-            title={openPage.title}
-            type={openPage.type}
-            slug={openPage.slug}
-            body={openPage.body}
-            backlinks={openPage.backlinks}
-            outgoing={openPage.outgoing}
-            related={openPage.related}
-            backLabel={TAB_LABELS[tab]}
-            onBack={() => {
-              setOpenPage(null);
-              setLocalGraphSlug(null);
-              writeRoute(currentBaseRoute(), "replace");
-            }}
-            onOpen={openMemory}
-            onLocalGraph={setLocalGraphSlug}
-          />
-        ) : (
-          <>
-            {tab === "overview" && (
-              <Overview
-                appTitle={appTitle}
-                appSubtitle={appSubtitle}
-                graphData={graphData}
-                allPages={allPages}
-                onOpen={openMemory}
-                onType={drillType}
-                onNavigate={handleTabChange}
-              />
-            )}
-
-            {tab === "graph" &&
-              (!graphLoaded ? (
-                <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
-              ) : graphError ? (
-                <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                  Graph error: {graphError}
-                </div>
-              ) : graphData.nodes.length === 0 ? (
-                <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                  No graph data. Check GBRAIN_MCP_URL / GBRAIN_TOKEN.
-                </div>
-              ) : (
-                <GraphView
-                  data={graphData}
-                  focusSlug={graphFocus}
+        <div className="view-anim" key={openPage ? `page:${openPage.slug}` : `tab:${tab}`}>
+          {openPage ? (
+            <PageView
+              title={openPage.title}
+              type={openPage.type}
+              slug={openPage.slug}
+              body={openPage.body}
+              backlinks={openPage.backlinks}
+              outgoing={openPage.outgoing}
+              related={openPage.related}
+              backLabel={TAB_LABELS[tab]}
+              onBack={() => {
+                setOpenPage(null);
+                setLocalGraphSlug(null);
+                writeRoute(currentBaseRoute(), "replace");
+              }}
+              onOpen={openMemory}
+              onLocalGraph={setLocalGraphSlug}
+            />
+          ) : (
+            <>
+              {tab === "overview" && (
+                <Overview
+                  appTitle={appTitle}
+                  appSubtitle={appSubtitle}
+                  graphData={graphData}
+                  allPages={allPages}
                   onOpen={openMemory}
-                  brandColors={brandColors}
-                  onResetFilter={resetGraphFilter}
+                  onType={drillType}
+                  onNavigate={handleTabChange}
                 />
-              ))}
+              )}
 
-            {tab === "search" && (
-              <SearchResults
-                items={searchItems}
-                allPages={allPages}
-                query={searchQuery}
-                typeFilter={memoryType}
-                onTypeFilter={setMemoryType}
-                onOpen={openMemory}
-              />
-            )}
-          </>
-        )}
+              {tab === "graph" &&
+                (!graphLoaded ? (
+                  <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
+                ) : graphError ? (
+                  <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                    Graph error: {graphError}
+                  </div>
+                ) : graphData.nodes.length === 0 ? (
+                  <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                    No graph data. Check GBRAIN_MCP_URL / GBRAIN_TOKEN.
+                  </div>
+                ) : (
+                  <GraphView
+                    data={graphData}
+                    focusSlug={graphFocus}
+                    onOpen={openMemory}
+                    brandColors={brandColors}
+                    onResetFilter={resetGraphFilter}
+                  />
+                ))}
+
+              {tab === "search" && (
+                <SearchResults
+                  items={searchItems}
+                  allPages={allPages}
+                  query={searchQuery}
+                  typeFilter={memoryType}
+                  onTypeFilter={setMemoryType}
+                  onOpen={openMemory}
+                />
+              )}
+            </>
+          )}
+        </div>
       </main>
       {localGraphSlug && graphData.nodes.length > 0 && (
         <LocalGraphModal
