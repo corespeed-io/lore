@@ -42,21 +42,40 @@ export function parseMcp(body: string): unknown {
 // short-lived (~1h), so mint on demand and refresh ~1min before expiry.
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
+export interface TokenRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+// Pure: build the client_credentials token request for the configured client.
+// Supports both confidential auth methods so any gbrain OAuth client works:
+// client_secret_basic (creds in the Authorization header) or client_secret_post
+// (creds in the body). An optional scope narrows the request. Exported for tests.
+export function buildTokenRequest(cfg: ReturnType<typeof loadConfig>): TokenRequest {
+  const url = cfg.gbrainTokenUrl || new URL("/token", cfg.gbrainMcpUrl).toString();
+  const params = new URLSearchParams({ grant_type: "client_credentials" });
+  if (cfg.gbrainScope) params.set("scope", cfg.gbrainScope);
+  const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+  if (cfg.gbrainTokenAuthMethod === "basic") {
+    const cred = btoa(
+      `${encodeURIComponent(cfg.gbrainClientId)}:${encodeURIComponent(cfg.gbrainClientSecret)}`,
+    );
+    headers.Authorization = `Basic ${cred}`;
+  } else {
+    params.set("client_id", cfg.gbrainClientId);
+    params.set("client_secret", cfg.gbrainClientSecret);
+  }
+  return { url, headers, body: params.toString() };
+}
+
 async function bearerToken(cfg: ReturnType<typeof loadConfig>): Promise<string> {
   // No OAuth client configured → fall back to the static bearer (GBRAIN_TOKEN).
   if (!cfg.gbrainClientId || !cfg.gbrainClientSecret) return cfg.gbrainToken;
   const now = Date.now();
   if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.value;
-  const tokenUrl = cfg.gbrainTokenUrl || new URL("/token", cfg.gbrainMcpUrl).toString();
-  const res = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: cfg.gbrainClientId,
-      client_secret: cfg.gbrainClientSecret,
-    }),
-  });
+  const req = buildTokenRequest(cfg);
+  const res = await fetch(req.url, { method: "POST", headers: req.headers, body: req.body });
   if (!res.ok) throw new Error(`gbrain token ${res.status}`);
   const tok = (await res.json()) as { access_token: string; expires_in?: number };
   cachedToken = { value: tok.access_token, expiresAt: now + (tok.expires_in ?? 3600) * 1000 };

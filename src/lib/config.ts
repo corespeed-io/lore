@@ -7,6 +7,10 @@ export interface Config {
   gbrainClientId: string;
   gbrainClientSecret: string;
   gbrainTokenUrl: string;
+  // How to present client creds at the token endpoint, and an optional requested
+  // scope — so any gbrain OAuth client (post/basic, narrowed scope) can be used.
+  gbrainTokenAuthMethod: "post" | "basic";
+  gbrainScope: string;
   seedQueries: string[];
   appTitle: string;
   appSubtitle: string;
@@ -48,6 +52,8 @@ export function loadConfig(env: Env = process.env): Config {
     gbrainClientId: env.GBRAIN_CLIENT_ID ?? "",
     gbrainClientSecret: env.GBRAIN_CLIENT_SECRET ?? "",
     gbrainTokenUrl: env.GBRAIN_TOKEN_URL ?? "",
+    gbrainTokenAuthMethod: env.GBRAIN_TOKEN_AUTH_METHOD === "basic" ? "basic" : "post",
+    gbrainScope: env.GBRAIN_SCOPE ?? "",
     seedQueries: seeds.length ? seeds : DEFAULT_SEEDS,
     appTitle: env.APP_TITLE ?? "gbrain",
     appSubtitle: env.APP_SUBTITLE ?? "A searchable knowledge graph of your team's memory.",
