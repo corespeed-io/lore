@@ -1,10 +1,11 @@
 # AGENTS.md — Lore
 
 Orientation for AI coding agents (Claude Code, Codex, Cursor, Gemini, Copilot, …)
-working in this repo. **This file is the single source of truth.** `CLAUDE.md` and
-`.github/copilot-instructions.md` are thin pointers to it — edit *this* file, never
-copy content into them (copies drift and your AI behaves differently per tool).
-(Tools that read `AGENTS.md` natively — Codex, Cursor, Gemini CLI — use it directly.)
+working in this repo. **This file is the single source of truth.** `CLAUDE.md` is a
+symlink to it and `.github/copilot-instructions.md` points to it — only ever edit
+*this* file (no copies to drift). Codex, Cursor, and Gemini CLI read `AGENTS.md`
+natively. (On a Windows checkout without symlink support, `CLAUDE.md` may clone as a
+text stub — set `git config core.symlinks true`.)
 
 ## What this is
 
