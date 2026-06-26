@@ -6,3 +6,5 @@ node_modules
 *.tsbuildinfo
 .claude
 .gstack/
+.superpowers/
+AGENTS.md
