@@ -6,6 +6,7 @@ import {
   buildTokenRequest,
   callTool,
   parseMcp,
+  resolveCredential,
 } from "../src/lib/gbrain.js";
 
 const baseEnv = {
@@ -74,4 +75,33 @@ test("buildTokenRequest includes scope and honors GBRAIN_TOKEN_URL", () => {
   );
   expect(req.url).toBe("https://x/oauth/token");
   expect(new URLSearchParams(req.body).get("scope")).toBe("read");
+});
+
+test("resolveCredential: a full OAuth client mints (oauth)", () => {
+  expect(resolveCredential(loadConfig(baseEnv)).kind).toBe("oauth");
+});
+
+test("resolveCredential: GBRAIN_TOKEN alone uses the static bearer", () => {
+  expect(resolveCredential(loadConfig({ GBRAIN_TOKEN: "t" }))).toEqual({
+    kind: "static",
+    token: "t",
+  });
+});
+
+test("resolveCredential: a half-configured OAuth client throws, never falls back silently", () => {
+  expect(() => resolveCredential(loadConfig({ GBRAIN_CLIENT_ID: "cid" }))).toThrow(
+    /half-configured/,
+  );
+  expect(() => resolveCredential(loadConfig({ GBRAIN_CLIENT_SECRET: "csec" }))).toThrow(
+    /half-configured/,
+  );
+});
+
+test("resolveCredential: no credentials at all throws instead of an empty Bearer", () => {
+  expect(() => resolveCredential(loadConfig({}))).toThrow(/credentials missing/);
+});
+
+test("callTool fails clearly when GBRAIN_MCP_URL is unset", async () => {
+  delete process.env.GBRAIN_MCP_URL;
+  await expect(callTool("search", {})).rejects.toThrow(/GBRAIN_MCP_URL/);
 });

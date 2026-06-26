@@ -1,9 +1,11 @@
+# Build stage. Do NOT set NODE_ENV=production here — `npm ci` would then omit the
+# devDependencies (typescript, @types/*) that `next build` needs. Production env
+# is set only in the runner stage below.
 FROM node:20-slim AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN mkdir -p public
 RUN npm run build
 
 FROM node:20-slim AS run

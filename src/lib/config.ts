@@ -1,3 +1,5 @@
+// EDGE-RUNTIME MODULE. loadConfig() runs inside middleware (via auth.ts) on the
+// Edge runtime — keep this file free of Node-only APIs (Buffer, node:*, fs).
 export interface Config {
   gbrainMcpUrl: string;
   gbrainToken: string;

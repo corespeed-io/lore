@@ -3,6 +3,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+# Single replica assumed: middleware.ts rate-limits in per-process memory, not a
+# shared store — scaling to >1 replica multiplies the effective limit. Move to a
+# shared store (Redis) before raising replica count.
 healthcheckPath = "/api/health"
 healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
