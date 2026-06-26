@@ -1,6 +1,12 @@
 export interface Config {
   gbrainMcpUrl: string;
   gbrainToken: string;
+  // Preferred over gbrainToken: an OAuth2 client_credentials client (ideally
+  // read-only). When set, the server mints short-lived access tokens instead of
+  // sending a long-lived static bearer.
+  gbrainClientId: string;
+  gbrainClientSecret: string;
+  gbrainTokenUrl: string;
   seedQueries: string[];
   appTitle: string;
   appSubtitle: string;
@@ -39,6 +45,9 @@ export function loadConfig(env: Env = process.env): Config {
   return {
     gbrainMcpUrl: env.GBRAIN_MCP_URL ?? "",
     gbrainToken: env.GBRAIN_TOKEN ?? "",
+    gbrainClientId: env.GBRAIN_CLIENT_ID ?? "",
+    gbrainClientSecret: env.GBRAIN_CLIENT_SECRET ?? "",
+    gbrainTokenUrl: env.GBRAIN_TOKEN_URL ?? "",
     seedQueries: seeds.length ? seeds : DEFAULT_SEEDS,
     appTitle: env.APP_TITLE ?? "gbrain",
     appSubtitle: env.APP_SUBTITLE ?? "A searchable knowledge graph of your team's memory.",

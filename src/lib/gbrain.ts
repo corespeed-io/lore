@@ -38,6 +38,31 @@ export function parseMcp(body: string): unknown {
   return JSON.parse(body);
 }
 
+// Cached OAuth2 access token (client_credentials). gbrain access tokens are
+// short-lived (~1h), so mint on demand and refresh ~1min before expiry.
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+async function bearerToken(cfg: ReturnType<typeof loadConfig>): Promise<string> {
+  // No OAuth client configured → fall back to the static bearer (GBRAIN_TOKEN).
+  if (!cfg.gbrainClientId || !cfg.gbrainClientSecret) return cfg.gbrainToken;
+  const now = Date.now();
+  if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.value;
+  const tokenUrl = cfg.gbrainTokenUrl || new URL("/token", cfg.gbrainMcpUrl).toString();
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: cfg.gbrainClientId,
+      client_secret: cfg.gbrainClientSecret,
+    }),
+  });
+  if (!res.ok) throw new Error(`gbrain token ${res.status}`);
+  const tok = (await res.json()) as { access_token: string; expires_in?: number };
+  cachedToken = { value: tok.access_token, expiresAt: now + (tok.expires_in ?? 3600) * 1000 };
+  return cachedToken.value;
+}
+
 export async function callTool(
   tool: string,
   args: object,
@@ -48,7 +73,7 @@ export async function callTool(
   const res = await fetch(cfg.gbrainMcpUrl, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${cfg.gbrainToken}`,
+      Authorization: `Bearer ${await bearerToken(cfg)}`,
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
     },
