@@ -102,6 +102,6 @@ test("resolveCredential: no credentials at all throws instead of an empty Bearer
 });
 
 test("callTool fails clearly when GBRAIN_MCP_URL is unset", async () => {
-  delete process.env.GBRAIN_MCP_URL;
+  process.env.GBRAIN_MCP_URL = ""; // empty (falsy) without the `delete` operator biome flags
   await expect(callTool("search", {})).rejects.toThrow(/GBRAIN_MCP_URL/);
 });
