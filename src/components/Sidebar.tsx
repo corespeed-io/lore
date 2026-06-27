@@ -72,7 +72,11 @@ const ICONS: Partial<Record<Tab, React.ReactNode>> = {
       strokeWidth="1.5"
       aria-hidden="true"
     >
-      <path d="M2.5 4h11M2.5 8h11M2.5 12h7" strokeLinecap="round" />
+      <path
+        d="M5.3 3.2A3.3 3.3 0 0 0 2.5 6.5c0 .9.3 1.7.9 2.3-.2 1.8 1.1 3.2 2.8 3.2.8 0 1.5-.3 2-.8.6.5 1.3.8 2.1.8 1.7 0 3-1.4 2.8-3.2.6-.6.9-1.4.9-2.3a3.3 3.3 0 0 0-2.8-3.3A3.3 3.3 0 0 0 8.3 1.7a3.4 3.4 0 0 0-3 1.5Z"
+        strokeLinejoin="round"
+      />
+      <path d="M6 5.3h4.2M5.5 8h5.2M6.5 10.6h3.4" strokeLinecap="round" />
     </svg>
   ),
   requests: (

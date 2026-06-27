@@ -36,6 +36,23 @@ async function adminGet<T>(action: string, qs = "") {
   }
 }
 
+async function adminPost<T>(action: string, args: Record<string, unknown>) {
+  try {
+    const r = await fetch(`/api/admin/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+    });
+    if (!r.ok) {
+      const body = (await r.json().catch(() => ({}))) as { detail?: string };
+      return { data: null as T | null, status: r.status, error: body.detail ?? `HTTP ${r.status}` };
+    }
+    return { data: (await r.json()) as T, status: 200, error: null as string | null };
+  } catch (e) {
+    return { data: null as T | null, status: 0, error: e instanceof Error ? e.message : "error" };
+  }
+}
+
 function useAdmin<T>(
   action: string,
   qs = "",
@@ -388,9 +405,64 @@ export function AgentsPanel() {
   const agents = useAdmin<Agent[]>("agents");
   const [hideRevoked, setHideRevoked] = useState(true);
   const [sel, setSel] = useState<Agent | null>(null);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [createdKey, setCreatedKey] = useState<{ id: string; name: string; token: string } | null>(
+    null,
+  );
+  const [mutation, setMutation] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const all = Array.isArray(agents.data) ? agents.data : [];
   const { active, total } = agentCounts(all);
   const list = hideRevoked ? all.filter((a) => a.status !== "revoked") : all;
+  const isMutating = mutation !== null;
+
+  async function createApiKey(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const name = newKeyName.trim();
+    if (!name) return;
+    setMutation("create");
+    setMutationError(null);
+    setCopied(false);
+    const r = await adminPost<{ id: string; name: string; token: string }>("create-api-key", {
+      name,
+    });
+    setMutation(null);
+    if (r.error || !r.data) {
+      setMutationError(r.error ?? "Couldn't create API key");
+      return;
+    }
+    setCreatedKey(r.data);
+    setNewKeyName("");
+    agents.reload();
+  }
+
+  async function revokeApiKey(agent: Agent) {
+    if (agent.auth_type !== "api_key" || agent.status === "revoked") return;
+    if (!window.confirm(`Revoke API key "${agent.name}"? Existing clients using it will fail.`))
+      return;
+    setMutation(`revoke:${agent.name}`);
+    setMutationError(null);
+    const r = await adminPost<{ revoked: boolean }>("revoke-api-key", { name: agent.name });
+    setMutation(null);
+    if (r.error) {
+      setMutationError(r.error);
+      return;
+    }
+    if (sel?.name === agent.name) setSel(null);
+    agents.reload();
+  }
+
+  async function copyCreatedKey() {
+    if (!createdKey) return;
+    try {
+      await navigator.clipboard?.writeText(createdKey.token);
+      setCopied(true);
+    } catch {
+      setMutationError("Couldn't copy API key. Select the token and copy it manually.");
+    }
+  }
+
   return (
     <Panel
       title="Access"
@@ -418,6 +490,44 @@ export function AgentsPanel() {
             <p className="admin-muted">
               OAuth clients and API keys that can read or write this brain.
             </p>
+            <form className="admin-inline-form" onSubmit={createApiKey}>
+              <input
+                className="admin-input"
+                value={newKeyName}
+                onChange={(e) => setNewKeyName(e.target.value)}
+                placeholder="New API key name"
+                autoComplete="off"
+              />
+              <button
+                type="submit"
+                className="admin-btn"
+                disabled={isMutating || newKeyName.trim().length === 0}
+              >
+                {mutation === "create" ? "Creating..." : "+ API key"}
+              </button>
+            </form>
+            {mutationError && <p className="admin-error-note">{mutationError}</p>}
+            {createdKey && (
+              <div className="admin-secret-card" aria-live="polite">
+                <div>
+                  <p className="admin-card-label">One-time API key</p>
+                  <p className="admin-muted">Save this token now. gbrain will not show it again.</p>
+                </div>
+                <code>{createdKey.token}</code>
+                <div className="admin-secret-actions">
+                  <button type="button" className="admin-btn" onClick={copyCreatedKey}>
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn-ghost"
+                    onClick={() => setCreatedKey(null)}
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
             <table className="admin-table">
               <thead>
                 <tr>
@@ -428,6 +538,7 @@ export function AgentsPanel() {
                   <th>Today</th>
                   <th>Total</th>
                   <th>Last used</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -458,6 +569,20 @@ export function AgentsPanel() {
                     <td>{a.requests_today ?? "—"}</td>
                     <td>{a.total_requests ?? "—"}</td>
                     <td>{relativeTime(a.last_used_at)}</td>
+                    <td>
+                      {a.auth_type === "api_key" ? (
+                        <button
+                          type="button"
+                          className="admin-danger-btn"
+                          disabled={a.status === "revoked" || mutation === `revoke:${a.name}`}
+                          onClick={() => revokeApiKey(a)}
+                        >
+                          {mutation === `revoke:${a.name}` ? "Revoking..." : "Revoke"}
+                        </button>
+                      ) : (
+                        <span className="admin-muted-cell">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -493,6 +618,18 @@ export function AgentsPanel() {
                     <dt>last used</dt>
                     <dd>{relativeTime(sel.last_used_at)}</dd>
                   </dl>
+                  {sel.auth_type === "api_key" && (
+                    <div className="admin-drawer-actions">
+                      <button
+                        type="button"
+                        className="admin-danger-btn"
+                        disabled={sel.status === "revoked" || mutation === `revoke:${sel.name}`}
+                        onClick={() => revokeApiKey(sel)}
+                      >
+                        {mutation === `revoke:${sel.name}` ? "Revoking..." : "Revoke API key"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

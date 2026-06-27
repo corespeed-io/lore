@@ -2148,6 +2148,82 @@ a.ext {
   color: var(--ink);
   cursor: pointer;
 }
+.admin-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.admin-btn-ghost {
+  background: var(--canvas-elevated);
+  color: var(--muted);
+}
+.admin-inline-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+.admin-input {
+  width: min(360px, 100%);
+  min-width: 220px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  outline: none;
+}
+.admin-input:focus {
+  border-color: var(--muted);
+}
+.admin-error-note {
+  color: #e5484d;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.admin-secret-card {
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+  margin: 12px 0 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--canvas-elevated);
+  padding: 14px 16px;
+}
+.admin-secret-card code {
+  display: block;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--hairline-soft);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
+.admin-secret-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.admin-danger-btn {
+  border: 1px solid #f5c2c7;
+  border-radius: 6px;
+  background: #fff5f5;
+  color: #b42318;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+}
+.admin-danger-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .admin-x-cell {
   width: 24px;
 }
@@ -2310,4 +2386,9 @@ a.ext {
   margin: 0;
   color: var(--ink);
   overflow-wrap: anywhere;
+}
+.admin-drawer-actions {
+  margin-top: 18px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 14px;
 }
