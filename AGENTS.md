@@ -9,10 +9,19 @@ text stub — set `git config core.symlinks true`.)
 
 ## What this is
 
-**Lore** is the product — a read-only web UI for browsing a **gbrain** knowledge
-brain. `gbrain` is the backend engine (hybrid retrieval: vector + BM25 + RRF +
-rerank + a typed-edge graph). Lore **never writes** — it reads gbrain over MCP and
-renders a dashboard, a force-directed graph, a Memories browse, and hybrid search.
+**Lore** is the product — a **unified gbrain console** (one shell, not a read-only viewer).
+`gbrain` is the backend engine (hybrid retrieval: vector + BM25 + RRF + rerank + a typed-edge
+graph). One sidebar mixes two kinds of surface:
+
+- **Read surfaces** (always on, read-only, safe-by-default): Dashboard/overview, force-directed
+  graph, Memories browse, hybrid search. They call only `READ_ONLY_TOOLS`. This is the full
+  OSS default experience — no admin config required. (The old "Lore never writes" contract
+  now scopes to *these* surfaces, not the whole app.)
+- **Admin surfaces** (optional, OFF by default, fail-closed): Requests, Agents/clients/tokens,
+  Jobs Watch, Calibration — inspired by upstream gbrain's admin dashboard, and may perform
+  write/admin actions. They appear in the nav and work ONLY when admin mode is configured
+  (explicit env + admin credentials, server-gated behind a SEPARATE allowlist). Unconfigured ⇒
+  the admin nav is hidden and every `/api/admin/*` route 403s. See **Admin mode** under Security.
 
 Branding split: the app is **Lore** (sidebar wordmark, `<title>` prefix). The brain
 it views is named by `APP_TITLE` (hero title, e.g. "CoreSpeed Library") and described
@@ -88,14 +97,23 @@ typecheck + lint + test + build must pass (this is what CI runs).
 
 ## Security (it's a public repo serving a private brain — read this)
 
-- **Read-only is the contract.** `READ_ONLY_TOOLS` in `src/lib/gbrain.ts` is
-  server-enforced (checked before the upstream fetch) and is the security boundary.
-  Never add a mutating tool to it; never add a route that writes to gbrain.
-- **Credentials are server-only.** `gbrain.ts` (guarded by `import "server-only"`)
-  is the only place they're read. Prefer a read-only OAuth client via
-  `GBRAIN_CLIENT_ID`/`GBRAIN_CLIENT_SECRET` (the server mints short-lived
-  client_credentials tokens, so a leak can't write); `GBRAIN_TOKEN` is the static
-  fallback. Never expose either to the client, never `NEXT_PUBLIC_*`, never commit `.env`.
+- **Two server boundaries**, each enforced before the upstream call:
+  - **Viewer:** `READ_ONLY_TOOLS` in `src/lib/gbrain.ts` — the read-only allowlist.
+    Never add a mutating tool to it; the viewer can call nothing else.
+  - **Admin:** `ADMIN_ENDPOINTS` in `src/lib/admin.ts` — a SEPARATE explicit allowlist of
+    upstream gbrain `/admin/api/*` endpoints. Keep the two lists separate; never merge
+    admin endpoints into `READ_ONLY_TOOLS`.
+- **Admin mode is off + fail-closed by default.** `/api/admin/*` routes 403 unless
+  `adminEnabled(cfg)` holds: `ADMIN_MODE=1` **and** `ADMIN_GBRAIN_URL` **and**
+  `ADMIN_GBRAIN_TOKEN` are set — **and**, when `AUTH_MODE=none`, also `ADMIN_ALLOW_INSECURE=1`
+  (admin needs its own insecure opt-in even if the viewer is open locally). `/api/admin/status`
+  returns only `{enabled}` (no secrets) so the client can decide whether to show the Admin area.
+- **Credentials are server-only.** Read creds (`GBRAIN_TOKEN` / `GBRAIN_CLIENT_*`) live in
+  `gbrain.ts`; the admin bootstrap token (`ADMIN_GBRAIN_TOKEN`) lives in `admin.ts`. Both
+  guarded by `import "server-only"`. Never expose either to the client, never `NEXT_PUBLIC_*`,
+  never commit `.env`. Admin responses pass through `stripSecrets` so token/secret/`client_secret`
+  fields never reach the browser — except a create's **one-time** secret, which surfaces once and
+  the UI masks + treats as one-time sensitive output.
 - **Auth** lives in `middleware.ts` → `src/lib/auth.ts`. `AUTH_MODE=proxy` verifies
   the Cloudflare Access JWT with jose (signature against the team JWKS, `aud` ==
   `ACCESS_AUD`, issuer == team domain, exp). `password` = HTTP Basic. `none` denies

@@ -1,14 +1,14 @@
 "use client";
 
+import type { Tab } from "@/lib/route";
 import { useRef } from "react";
-
-type Tab = "overview" | "graph" | "search";
 
 interface SidebarProps {
   activeTab: Tab;
   onTabChange: (tab: Tab) => void;
   onSearch: (q: string) => void;
   searchRef?: React.RefObject<HTMLInputElement | null>;
+  adminEnabled: boolean;
 }
 
 // Product brand — the app is "Lore"; gbrain is the backend brain it views.
@@ -20,7 +20,32 @@ const NAV: { id: Tab; label: string }[] = [
   { id: "search", label: "Memories" },
 ];
 
-const ICONS: Record<Tab, React.ReactNode> = {
+// gbrain admin/observability sections — same shell, shown only when admin mode
+// is configured (server-gated; each section also fails closed on its own).
+const ADMIN_NAV: { id: Tab; label: string }[] = [
+  { id: "requests", label: "Requests" },
+  { id: "agents", label: "Agents" },
+  { id: "jobs", label: "Jobs" },
+  { id: "calibration", label: "Calibration" },
+];
+
+const GENERIC_ICON = (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    aria-hidden="true"
+  >
+    <rect x="2.5" y="3" width="11" height="2.2" rx="1" />
+    <rect x="2.5" y="7" width="11" height="2.2" rx="1" />
+    <rect x="2.5" y="11" width="7" height="2.2" rx="1" />
+  </svg>
+);
+
+const ICONS: Partial<Record<Tab, React.ReactNode>> = {
   overview: (
     <svg
       width="16"
@@ -68,7 +93,13 @@ const ICONS: Record<Tab, React.ReactNode> = {
   ),
 };
 
-export function Sidebar({ activeTab, onTabChange, onSearch, searchRef }: SidebarProps) {
+export function Sidebar({
+  activeTab,
+  onTabChange,
+  onSearch,
+  searchRef,
+  adminEnabled,
+}: SidebarProps) {
   const localRef = useRef<HTMLInputElement>(null);
   const inputRef = searchRef ?? localRef;
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,6 +152,23 @@ export function Sidebar({ activeTab, onTabChange, onSearch, searchRef }: Sidebar
             {n.label}
           </button>
         ))}
+        {adminEnabled && (
+          <>
+            <p className="nav-section">Admin</p>
+            {ADMIN_NAV.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                aria-current={activeTab === n.id ? "page" : undefined}
+                className={`nav-item${activeTab === n.id ? " nav-active" : ""}`}
+                onClick={() => onTabChange(n.id)}
+              >
+                <span className="nav-icon">{GENERIC_ICON}</span>
+                {n.label}
+              </button>
+            ))}
+          </>
+        )}
       </nav>
     </aside>
   );

@@ -6,6 +6,13 @@ import { Overview } from "@/components/Overview";
 import { PageView } from "@/components/PageView";
 import { SearchResults } from "@/components/SearchResults";
 import { Sidebar } from "@/components/Sidebar";
+import {
+  AdminDashboard,
+  AgentsPanel,
+  CalibrationPanel,
+  JobsPanel,
+  RequestLogPanel,
+} from "@/components/admin/panels";
 import { apiCall } from "@/lib/api";
 import { type RouteState, type Tab, parseRoute, routeUrl } from "@/lib/route";
 import type { GraphData, PageHit } from "@/lib/types";
@@ -15,6 +22,10 @@ const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
   graph: "Graph",
   search: "Memories",
+  requests: "Requests",
+  agents: "Agents",
+  jobs: "Jobs",
+  calibration: "Calibration",
 };
 
 interface GraphStore {
@@ -353,6 +364,17 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     await runSearch(query);
   }
 
+  // Whether the gbrain admin surfaces are configured server-side (no secrets in
+  // the response). Gates the admin nav (in Sidebar) + the admin summary on the
+  // dashboard. Each admin panel ALSO fails closed on its own.
+  const [adminEnabled, setAdminEnabled] = useState(false);
+  useEffect(() => {
+    fetch("/api/admin/status")
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d: { enabled?: boolean }) => setAdminEnabled(Boolean(d.enabled)))
+      .catch(() => {});
+  }, []);
+
   function handleTabChange(t: Tab) {
     setOpenPage(null); // any nav click leaves an open memory
     setLocalGraphSlug(null);
@@ -425,6 +447,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         onTabChange={handleTabChange}
         onSearch={handleSearch}
         searchRef={searchRef}
+        adminEnabled={adminEnabled}
       />
 
       <main className="app-main">
@@ -450,15 +473,22 @@ export function App({ appTitle, appSubtitle }: AppProps) {
           ) : (
             <>
               {tab === "overview" && (
-                <Overview
-                  appTitle={appTitle}
-                  appSubtitle={appSubtitle}
-                  graphData={graphData}
-                  allPages={allPages}
-                  onOpen={openMemory}
-                  onType={drillType}
-                  onNavigate={handleTabChange}
-                />
+                <>
+                  {adminEnabled && (
+                    <div className="admin-page">
+                      <AdminDashboard />
+                    </div>
+                  )}
+                  <Overview
+                    appTitle={appTitle}
+                    appSubtitle={appSubtitle}
+                    graphData={graphData}
+                    allPages={allPages}
+                    onOpen={openMemory}
+                    onType={drillType}
+                    onNavigate={handleTabChange}
+                  />
+                </>
               )}
 
               {tab === "graph" &&
@@ -493,6 +523,27 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   onTypeFilter={setMemoryType}
                   onOpen={openMemory}
                 />
+              )}
+
+              {tab === "requests" && (
+                <div className="admin-page">
+                  <RequestLogPanel />
+                </div>
+              )}
+              {tab === "agents" && (
+                <div className="admin-page">
+                  <AgentsPanel />
+                </div>
+              )}
+              {tab === "jobs" && (
+                <div className="admin-page">
+                  <JobsPanel />
+                </div>
+              )}
+              {tab === "calibration" && (
+                <div className="admin-page">
+                  <CalibrationPanel />
+                </div>
               )}
             </>
           )}
