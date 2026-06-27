@@ -466,11 +466,14 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
                 ) : graphError ? (
                   <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                    Graph error: {graphError}
+                    Couldn't reach gbrain — {graphError}. Check that <code>GBRAIN_MCP_URL</code>{" "}
+                    points at a running gbrain backend; the dashboard's Read API panel shows recent
+                    call status.
                   </div>
                 ) : graphData.nodes.length === 0 ? (
                   <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                    No graph data. Check GBRAIN_MCP_URL / GBRAIN_TOKEN.
+                    No linked pages in this brain yet. Lore graphs pages connected by gbrain links —
+                    add some, or confirm <code>GBRAIN_MCP_URL</code> on the dashboard.
                   </div>
                 ) : (
                   <GraphView

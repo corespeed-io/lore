@@ -1663,3 +1663,118 @@ a.ext {
     overflow-wrap: anywhere;
   }
 }
+
+/* ── Observability panels (Connection health / Recent requests / Read boundary) ── */
+.section-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 28px 0 12px;
+}
+
+.health-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.health-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.health-dot-connected {
+  background: #1d9e75;
+}
+.health-dot-degraded {
+  background: #e5484d;
+}
+.health-dot-idle {
+  background: var(--muted-soft);
+}
+.health-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.health-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.health-ok {
+  color: var(--muted);
+}
+.health-err {
+  color: #e5484d;
+}
+.health-last-err {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #e5484d;
+  overflow-wrap: anywhere;
+}
+
+.req-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.req-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.req-time {
+  color: var(--muted-soft);
+}
+.req-tool {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.req-latency {
+  color: var(--muted);
+  text-align: right;
+}
+.req-status-ok {
+  color: #1d9e75;
+}
+.req-status-err {
+  color: #e5484d;
+}
+.req-error {
+  grid-column: 1 / -1;
+  color: #e5484d;
+  overflow-wrap: anywhere;
+}
+
+.tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tool-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--hairline-soft);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 2px 7px;
+}

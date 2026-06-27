@@ -2,7 +2,10 @@
 
 import { ActivityChart } from "@/components/ActivityChart";
 import { Breakdown } from "@/components/Breakdown";
+import { ConnectionHealth } from "@/components/ConnectionHealth";
+import { ReadBoundary } from "@/components/ReadBoundary";
 import { RecentActivity } from "@/components/RecentActivity";
+import { RecentRequests } from "@/components/RecentRequests";
 import { Sources } from "@/components/Sources";
 import { StatCards } from "@/components/StatCards";
 import { TopHubs } from "@/components/TopHubs";
@@ -83,6 +86,13 @@ export function Overview({
         <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
         <Sources sources={sources} />
         <RecentActivity items={salient} onOpen={onOpen} />
+      </div>
+
+      <p className="section-eyebrow">Observability</p>
+      <div className="panel-grid">
+        <ConnectionHealth />
+        <RecentRequests />
+        <ReadBoundary />
       </div>
     </div>
   );
