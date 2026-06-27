@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import { ADMIN_ENDPOINTS, adminEnabled, stripSecrets } from "../src/lib/admin.js";
+import {
+  ADMIN_CHART_TYPES,
+  ADMIN_ENDPOINTS,
+  adminEnabled,
+  stripSecrets,
+} from "../src/lib/admin.js";
 import { READ_ONLY_TOOLS } from "../src/lib/gbrain.js";
 
 const base = {
@@ -50,4 +55,49 @@ test("stripSecrets redacts secret-ish fields recursively and never returns them"
   const json = JSON.stringify(out);
   expect(json).not.toContain("gbrain_at_abc");
   expect(json).not.toContain("shh");
+});
+
+test("stripSecrets keeps benign token_ttl / token_type / grant_types", () => {
+  const out = stripSecrets({
+    token_ttl: 3600,
+    token_type: "bearer",
+    grant_types: ["client_credentials"],
+    client_secret: "x",
+    access_token: "y",
+    // biome-ignore lint/suspicious/noExplicitAny: dynamic test shape
+  }) as any;
+  expect(out.token_ttl).toBe(3600);
+  expect(out.token_type).toBe("bearer");
+  expect(out.grant_types).toEqual(["client_credentials"]);
+  expect(out.client_secret).toBe("[redacted]");
+  expect(out.access_token).toBe("[redacted]");
+});
+
+test("chart-type allowlist is explicit — no arbitrary SVG passthrough", () => {
+  expect([...ADMIN_CHART_TYPES].sort()).toEqual([
+    "abandoned-threads",
+    "brier-trend",
+    "domain-bars",
+    "pattern-statements",
+  ]);
+  expect(ADMIN_CHART_TYPES.has("arbitrary")).toBe(false);
+  expect(ADMIN_CHART_TYPES.has("../../etc/passwd")).toBe(false);
+});
+
+test("admin allowlist covers the upstream admin API surface", () => {
+  for (const k of [
+    "stats",
+    "health",
+    "agents",
+    "requests",
+    "jobs",
+    "calibration",
+    "api-keys",
+    "create-api-key",
+    "revoke-api-key",
+    "revoke-client",
+    "update-client-ttl",
+    "sign-out-everywhere",
+  ])
+    expect(ADMIN_ENDPOINTS[k]).toBeDefined();
 });

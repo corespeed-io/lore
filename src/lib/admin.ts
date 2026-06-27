@@ -58,11 +58,26 @@ export const ADMIN_ENDPOINTS: Readonly<Record<string, AdminEndpoint>> = {
   "revoke-api-key": { method: "POST", path: "api-keys/revoke", destructive: true },
   "revoke-client": { method: "POST", path: "revoke-client", destructive: true },
   "update-client-ttl": { method: "POST", path: "update-client-ttl" },
+  "sign-out-everywhere": { method: "POST", path: "sign-out-everywhere", destructive: true },
 };
+
+// Calibration charts are server-rendered SVG (text/plain), proxied separately
+// from the JSON endpoints. Only these exact chart types may be requested — no
+// arbitrary SVG passthrough.
+export const ADMIN_CHART_TYPES: ReadonlySet<string> = new Set([
+  "brier-trend",
+  "pattern-statements",
+  "domain-bars",
+  "abandoned-threads",
+]);
 
 export class AdminNotAllowedError extends Error {}
 
-const SECRET_KEY = /(secret|token|password|bootstrap|apikey|api_key|credential)/i;
+// Redact secret-bearing fields by key name. Tuned to catch real secrets
+// (client_secret, access/refresh tokens, api keys, passwords, bootstrap) without
+// nuking benign fields like token_ttl / token_type / grant_types.
+const SECRET_KEY =
+  /(^secret$|_secret$|client_secret|^token$|_token$|access_token|refresh_token|password|bootstrap|api_?key|credential)/i;
 
 // Defensively redact secret-ish fields so a backend that over-returns can't leak
 // a token/secret to the browser. Applied to every admin response EXCEPT a
@@ -79,9 +94,32 @@ export function stripSecrets(value: unknown): unknown {
   return value;
 }
 
-// Server-only proxy to the gbrain admin API. Authenticates with the configured
-// bootstrap token as a Bearer (the cookie/login exchange upstream's bundled SPA
-// uses is same-origin only — see docs for the cross-origin contract).
+// gbrain's admin API authenticates with a session cookie minted by
+// POST /admin/login {token: <bootstrap>} — NOT a Bearer. We log in server-side
+// with the bootstrap token, cache the cookie, and re-auth on expiry. The
+// bootstrap token never leaves the server, and the cookie is server-held too.
+let adminCookie: { value: string; at: number } | null = null;
+const COOKIE_TTL_MS = 45 * 60 * 1000;
+
+async function adminLogin(a: AdminConfig): Promise<string> {
+  const res = await fetch(new URL("/admin/login", a.url), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: a.token }),
+  });
+  if (!res.ok) throw new Error(`admin login ${res.status}`);
+  const cookie = res.headers.get("set-cookie")?.split(";")[0];
+  if (!cookie) throw new Error("admin login returned no session cookie");
+  adminCookie = { value: cookie, at: Date.now() };
+  return cookie;
+}
+
+async function adminSession(a: AdminConfig): Promise<string> {
+  if (adminCookie && Date.now() - adminCookie.at < COOKIE_TTL_MS) return adminCookie.value;
+  return adminLogin(a);
+}
+
+// Server-only proxy to the gbrain admin API, authenticated by the login cookie.
 export async function adminFetch(
   action: string,
   args: Record<string, unknown> = {},
@@ -94,12 +132,34 @@ export async function adminFetch(
   if (ep.method === "GET") {
     for (const [k, v] of Object.entries(args)) if (v != null) url.searchParams.set(k, String(v));
   }
-  const res = await fetch(url, {
-    method: ep.method,
-    headers: { Authorization: `Bearer ${a.token}`, "Content-Type": "application/json" },
-    body: ep.method === "POST" ? JSON.stringify(args) : undefined,
-  });
+  const call = (cookie: string) =>
+    fetch(url, {
+      method: ep.method,
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: ep.method === "POST" ? JSON.stringify(args) : undefined,
+    });
+  let res = await call(await adminSession(a));
+  if (res.status === 401) {
+    adminCookie = null; // session expired → re-login once
+    res = await call(await adminSession(a));
+  }
   if (!res.ok) throw new Error(`admin backend ${res.status}`);
   const data = await res.json();
   return ep.oneTimeSecret ? data : stripSecrets(data);
+}
+
+// Proxy a calibration chart SVG (text/plain) — type-allowlisted, cookie-authed.
+export async function adminFetchChart(type: string, env: Env = process.env): Promise<string> {
+  if (!ADMIN_CHART_TYPES.has(type))
+    throw new AdminNotAllowedError(`chart type '${type}' not allowed`);
+  const a = adminConfig(env);
+  const url = new URL(`/admin/api/calibration/charts/${encodeURIComponent(type)}`, a.url);
+  const call = (cookie: string) => fetch(url, { headers: { Cookie: cookie } });
+  let res = await call(await adminSession(a));
+  if (res.status === 401) {
+    adminCookie = null;
+    res = await call(await adminSession(a));
+  }
+  if (!res.ok) throw new Error(`admin chart ${res.status}`);
+  return res.text();
 }

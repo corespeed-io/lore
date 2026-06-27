@@ -1977,3 +1977,189 @@ a.ext {
   color: var(--muted-soft);
   margin: 16px 10px 4px;
 }
+
+/* ── Admin v2 (request log / jobs / calibration / agents) ── */
+.admin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.admin-head .admin-h2 {
+  margin: 0;
+}
+.admin-select,
+.admin-btn {
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 5px 10px;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+.admin-x-cell {
+  width: 24px;
+}
+.admin-expand {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0;
+}
+.admin-row-detail td {
+  background: var(--hairline-soft);
+  padding: 10px 14px;
+}
+.admin-err-line {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.admin-muted-cell {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.admin-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.admin-jobs-queue {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.admin-details {
+  font-size: 12px;
+  color: var(--muted);
+}
+.admin-details summary {
+  cursor: pointer;
+}
+.admin-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.admin-chart {
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 12px;
+}
+.admin-chart img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.admin-chart figcaption {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  margin-top: 8px;
+}
+.admin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.admin-count {
+  color: var(--muted-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.admin-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--muted);
+}
+.admin-scope {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--hairline-soft);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-right: 4px;
+  color: var(--ink);
+}
+.admin-link-btn {
+  background: none;
+  border: none;
+  font: inherit;
+  color: #0070f3;
+  cursor: pointer;
+  padding: 0;
+}
+.admin-link-btn:hover {
+  text-decoration: underline;
+}
+.admin-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+.admin-drawer-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  border: none;
+  cursor: pointer;
+}
+.admin-drawer-body {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 380px;
+  max-width: 90vw;
+  background: #fff;
+  border-left: 1px solid var(--hairline);
+  padding: 24px;
+  overflow-y: auto;
+}
+.admin-drawer-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.admin-drawer-body h3 {
+  margin: 0 0 16px;
+}
+.admin-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 13px;
+}
+.admin-dl dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.admin-dl dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
