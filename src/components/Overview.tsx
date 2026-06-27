@@ -24,11 +24,11 @@ interface OverviewProps {
   onNavigate: (tab: "overview" | "graph" | "search") => void;
 }
 
-function countByType(nodes: GraphData["nodes"]) {
-  const counts = { person: 0, company: 0, product: 0, concept: 0 };
-  for (const n of nodes) {
-    const t = n.type as keyof typeof counts;
-    if (t in counts) counts[t]++;
+function countByType(items: Array<{ type?: string }>) {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const type = item.type?.trim() || "other";
+    counts[type] = (counts[type] ?? 0) + 1;
   }
   return counts;
 }
@@ -43,7 +43,7 @@ export function Overview({
   onType,
   onNavigate,
 }: OverviewProps) {
-  const byCounts = countByType(graphData.nodes);
+  const byCounts = countByType(allPages.length ? allPages : graphData.nodes);
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [salient, setSalient] = useState<SalientPage[]>([]);
   const visibleSlugs = new Set(allPages.map((p) => p.slug));
@@ -91,7 +91,7 @@ export function Overview({
       <ActivityChart pages={allPages} />
 
       <div className="panel-grid">
-        <Breakdown byCounts={byCounts} total={graphData.nodes.length} onType={onType} />
+        <Breakdown byCounts={byCounts} onType={onType} />
         <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
         <Sources sources={sources} />
         <RecentActivity items={recentItems} onOpen={onOpen} />
