@@ -3,13 +3,14 @@
 import { plain } from "@/lib/markdown";
 import type { PageHit } from "@/lib/types";
 
-const TYPE_CHIPS: [string, string][] = [
-  ["all", "All"],
-  ["person", "People"],
-  ["company", "Companies"],
-  ["product", "Products"],
-  ["concept", "Concepts"],
-];
+const TYPE_LABELS: Record<string, string> = {
+  person: "People",
+  company: "Companies",
+  product: "Products",
+  concept: "Concepts",
+  extract_receipt: "Extracts",
+};
+const TYPE_ORDER = ["person", "company", "product", "concept"];
 
 interface SearchResultsProps {
   items: PageHit[];
@@ -65,6 +66,10 @@ function shortDate(iso?: string): string {
     : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function typeLabel(type: string): string {
+  return TYPE_LABELS[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function SearchResults({
   items,
   allPages,
@@ -86,10 +91,31 @@ export function SearchResults({
     }
     const counts: Record<string, number> = {};
     for (const p of allPages) counts[p.type ?? "other"] = (counts[p.type ?? "other"] ?? 0) + 1;
-    const chips = TYPE_CHIPS.filter(([k]) => k === "all" || counts[k]);
+    const types = Object.keys(counts).sort((a, b) => {
+      const ai = TYPE_ORDER.indexOf(a);
+      const bi = TYPE_ORDER.indexOf(b);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      return a.localeCompare(b);
+    });
+    const chips: [string, string][] = [
+      ["all", "All"],
+      ...types.map((t): [string, string] => [t, typeLabel(t)]),
+    ];
     const shown = typeFilter === "all" ? allPages : allPages.filter((p) => p.type === typeFilter);
+    const maybeLimited = allPages.length >= 100;
     return (
       <div className="page-wrap">
+        <div className="memories-head">
+          <p>
+            Showing {shown.length}
+            {typeFilter !== "all" ? ` of ${allPages.length}` : ""} memories
+          </p>
+          {maybeLimited && (
+            <span>
+              Showing the first {allPages.length} returned by gbrain. Use search for older matches.
+            </span>
+          )}
+        </div>
         <div className="chip-row">
           {chips.map(([k, label]) => (
             <button

@@ -1676,6 +1676,27 @@ body {
 }
 
 /* ── Memories type-filter chips (category pills) ────────────────────────────── */
+.memories-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.memories-head p {
+  margin: 0;
+  color: var(--body);
+  font-weight: 500;
+}
+
+.memories-head span {
+  color: var(--muted-soft);
+  text-align: right;
+}
+
 .chip-row {
   display: flex;
   gap: 8px;
@@ -1790,6 +1811,15 @@ a.ext {
 
   .panel-card {
     padding: 18px;
+  }
+
+  .memories-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .memories-head span {
+    text-align: left;
   }
 
   .search-row-foot {

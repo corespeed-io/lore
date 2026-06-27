@@ -28,6 +28,10 @@ const TAB_LABELS: Record<Tab, string> = {
   calibration: "Calibration",
 };
 
+// gbrain's public list_pages operation currently caps at 100 and does not
+// expose offset through MCP, so the browse view treats that as the honest page.
+const PAGE_LIST_LIMIT = 100;
+
 interface GraphStore {
   nodes: GraphData["nodes"];
   links: GraphData["links"];
@@ -332,9 +336,9 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     });
   }, [graph, openPageSlug]);
 
-  // Load the full page list once → the Memories browse (default, no query).
+  // Load the page list once → the Memories browse (default, no query).
   useEffect(() => {
-    apiCall("list_pages", { limit: 200, sort: "updated_desc" })
+    apiCall("list_pages", { limit: PAGE_LIST_LIMIT, sort: "updated_desc" })
       .then((d) => setAllPages(Array.isArray(d) ? (d as PageHit[]) : []))
       .catch(() => {});
   }, []);

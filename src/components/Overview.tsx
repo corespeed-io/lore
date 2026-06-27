@@ -75,7 +75,7 @@ export function Overview({
       <div className={adminSummary ? "overview-summary has-admin" : "overview-summary"}>
         <div className="stat-row">
           <StatCards
-            nodeCount={graphData.nodes.length}
+            pageCount={allPages.length}
             linkCount={graphData.links.length}
             sourceCount={sources.length}
             onNavigate={onNavigate}

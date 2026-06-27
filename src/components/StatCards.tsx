@@ -3,15 +3,15 @@
 type Tab = "overview" | "graph" | "search";
 
 interface StatCardsProps {
-  nodeCount: number;
+  pageCount: number;
   linkCount: number;
   sourceCount: number;
   onNavigate: (tab: Tab) => void;
 }
 
-export function StatCards({ nodeCount, linkCount, sourceCount, onNavigate }: StatCardsProps) {
+export function StatCards({ pageCount, linkCount, sourceCount, onNavigate }: StatCardsProps) {
   const cards: { label: string; value: number; target: Tab }[] = [
-    { label: "Pages", value: nodeCount, target: "search" },
+    { label: "Pages", value: pageCount, target: "search" },
     { label: "Links", value: linkCount, target: "graph" },
     { label: "Sources", value: sourceCount, target: "search" },
   ];

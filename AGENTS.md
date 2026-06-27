@@ -91,7 +91,9 @@ typecheck + lint + test + build must pass (this is what CI runs).
 - `get_stats` / `get_health` / `get_status_snapshot` need **admin** scope → 403.
   Don't build on them. Dashboard counts derive from `/api/graph` + `list_pages`.
 - `list_pages` returns `{slug, title, type, updated_at}` — **no per-page source_id**,
-  so you can't filter the Memories list by source.
+  so you can't filter the Memories list by source. The public MCP operation also caps at
+  100 and does not expose `offset`; don't call the browse list "complete" unless gbrain
+  exposes real pagination first.
 - Search uses gbrain `search` (ranked chunks: `score`, `evidence`, `chunk_text`).
   `query` adds LLM multi-query expansion (slower) — `search` is right for as-you-type.
 
