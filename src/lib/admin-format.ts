@@ -42,14 +42,29 @@ export interface WatchSnapshot {
 }
 
 export interface CalibrationProfile {
+  id?: number;
+  source_id?: string;
   holder: string;
+  wave_version?: string;
+  generated_at?: string;
   updated_at?: string;
   published: boolean;
+  total_resolved?: number;
   brier: number | null;
+  accuracy?: number | null;
+  partial_rate?: number | null;
   grade_completion: number;
   pattern_statements: string[];
+  active_bias_tags?: string[];
   voice_gate_passed: boolean;
   voice_gate_attempts: number;
+  model_id?: string;
+}
+
+export interface CalibrationIssue {
+  key: "data" | "coverage" | "voice" | "patterns";
+  label: string;
+  detail: string;
 }
 
 // "just now" / "5m ago" / "3h ago" / "2d ago".
@@ -103,4 +118,54 @@ export function agentCounts(agents: Agent[]): { active: number; total: number } 
 
 export function scopeList(scope: string | undefined): string[] {
   return (scope ?? "").split(/[\s,]+/).filter(Boolean);
+}
+
+export function percent(value: number | null | undefined, digits = 0): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+export function decimal(value: number | null | undefined, digits = 3): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(digits);
+}
+
+export function calibrationGeneratedAt(profile: CalibrationProfile): string | undefined {
+  return profile.generated_at ?? profile.updated_at;
+}
+
+export function calibrationIssues(profile: CalibrationProfile): CalibrationIssue[] {
+  const issues: CalibrationIssue[] = [];
+  const resolved = profile.total_resolved ?? 0;
+  if (resolved < 5) {
+    issues.push({
+      key: "data",
+      label: "Data gate",
+      detail: `${resolved} resolved takes; need 5+`,
+    });
+  }
+  if (profile.grade_completion < 0.9) {
+    issues.push({
+      key: "coverage",
+      label: "Grade coverage",
+      detail: `${percent(profile.grade_completion)} graded this cycle`,
+    });
+  }
+  if (!profile.voice_gate_passed) {
+    issues.push({
+      key: "voice",
+      label: "Voice gate",
+      detail: `template fallback after ${profile.voice_gate_attempts} attempt${
+        profile.voice_gate_attempts === 1 ? "" : "s"
+      }`,
+    });
+  }
+  if (profile.pattern_statements.length === 0) {
+    issues.push({
+      key: "patterns",
+      label: "Patterns",
+      detail: "no pattern statements returned",
+    });
+  }
+  return issues;
 }

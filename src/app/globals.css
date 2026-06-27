@@ -2284,6 +2284,169 @@ a.ext {
 .admin-details summary {
   cursor: pointer;
 }
+.calibration-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.calibration-hero-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+  padding: 22px 24px;
+}
+.calibration-hero-panel h3 {
+  margin: 6px 0 8px;
+  color: var(--ink);
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.05;
+}
+.calibration-hero-panel p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.calibration-pill {
+  flex: 0 0 auto;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 9px;
+  text-transform: uppercase;
+}
+.calibration-pill-ok {
+  border-color: #b7ebc6;
+  background: #f0fff4;
+  color: #14843c;
+}
+.calibration-pill-warn {
+  border-color: #ffe5a3;
+  background: #fff9e8;
+  color: #8a5a00;
+}
+.calibration-pill-neutral {
+  background: var(--hairline-soft);
+  color: var(--muted);
+}
+.calibration-grid,
+.calibration-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.calibration-grid-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.calibration-card,
+.calibration-metric {
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+  padding: 16px 18px;
+}
+.calibration-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.calibration-card strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 600;
+}
+.calibration-card span,
+.calibration-card code {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.calibration-card code {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+.calibration-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.calibration-metric {
+  display: grid;
+  gap: 6px;
+}
+.calibration-metric span,
+.calibration-metric small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.calibration-metric strong {
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.calibration-gate {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.calibration-gate b,
+.calibration-gate small {
+  display: block;
+}
+.calibration-gate small {
+  color: var(--muted);
+  margin-top: 2px;
+}
+.calibration-dot-ok,
+.calibration-dot-warn {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-top: 5px;
+}
+.calibration-dot-ok {
+  background: #1a7f37;
+}
+.calibration-dot-warn {
+  background: #d29922;
+}
+.calibration-issues {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--hairline-soft);
+  padding-top: 10px;
+}
+.calibration-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.calibration-chip {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--hairline-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 7px;
+}
+.calibration-patterns {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
 .admin-charts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -2406,4 +2569,14 @@ a.ext {
   margin-top: 18px;
   border-top: 1px solid var(--hairline);
   padding-top: 14px;
+}
+@media (max-width: 900px) {
+  .calibration-grid,
+  .calibration-grid-two,
+  .calibration-metrics {
+    grid-template-columns: 1fr;
+  }
+  .calibration-hero-panel {
+    flex-direction: column;
+  }
 }

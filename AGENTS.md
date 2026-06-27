@@ -21,7 +21,9 @@ graph). One sidebar mixes two kinds of surface:
   (OAuth clients/API keys), Queue, Calibration — inspired by upstream gbrain's admin dashboard, and may perform
   write/admin actions. They appear in the nav and work ONLY when admin mode is configured
   (explicit env + admin credentials, server-gated behind a SEPARATE allowlist). Unconfigured ⇒
-  the admin nav is hidden and every `/api/admin/*` route 403s. See **Admin mode** under Security.
+  the admin nav is hidden and every `/api/admin/*` route 403s. Calibration is a read-only
+  profile/diagnostics view; regenerating a profile is still a host-side gbrain CLI action unless
+  upstream adds a dedicated admin HTTP endpoint. See **Admin mode** under Security.
 
 Branding split: the app is **Lore** (sidebar wordmark, `<title>` prefix). The brain
 it views is named by `APP_TITLE` (hero title, e.g. "CoreSpeed Library") and described

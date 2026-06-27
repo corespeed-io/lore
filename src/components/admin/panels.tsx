@@ -8,9 +8,13 @@ import {
   type WatchSnapshot,
   agentCounts,
   agentOptions,
+  calibrationGeneratedAt,
+  calibrationIssues,
+  decimal,
   dollars,
   formatParams,
   leasePressureColor,
+  percent,
   relativeTime,
   scopeList,
 } from "@/lib/admin-format";
@@ -361,30 +365,190 @@ const CHARTS = [
   { type: "abandoned-threads", label: "Abandoned threads" },
 ];
 
+function CalibrationMetric({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+}) {
+  return (
+    <div className="calibration-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {note && <small>{note}</small>}
+    </div>
+  );
+}
+
+function CalibrationGate({
+  label,
+  value,
+  ok,
+}: {
+  label: string;
+  value: string;
+  ok: boolean;
+}) {
+  return (
+    <div className="calibration-gate">
+      <span className={ok ? "calibration-dot-ok" : "calibration-dot-warn"} />
+      <div>
+        <b>{label}</b>
+        <small>{value}</small>
+      </div>
+    </div>
+  );
+}
+
 export function CalibrationPanel() {
   const cal = useAdmin<CalibrationProfile | null>("calibration");
   const p = cal.data;
+  const generated = p ? calibrationGeneratedAt(p) : undefined;
+  const issues = p ? calibrationIssues(p) : [];
+  const patterns = p?.pattern_statements ?? [];
+  const biasTags = p?.active_bias_tags ?? [];
   return (
-    <Panel title="Calibration" state={cal} needs="GET /admin/api/calibration/profile">
+    <Panel
+      title="Calibration"
+      state={cal}
+      needs="GET /admin/api/calibration/profile"
+      actions={
+        <button type="button" className="admin-btn" onClick={cal.reload}>
+          Refresh
+        </button>
+      }
+    >
       {() =>
         !p || !p.holder ? (
-          <div className="admin-empty">
-            <p className="admin-muted">
-              No calibration profile yet. Builds after 5+ resolved takes.
-            </p>
-            <pre className="admin-pre">gbrain dream --phase calibration_profile</pre>
+          <div className="calibration-shell">
+            <div className="calibration-hero-panel">
+              <div>
+                <p className="admin-card-label">Profile status</p>
+                <h3>Cold start</h3>
+                <p>
+                  Build the first profile after the brain has at least five resolved takes for the
+                  holder.
+                </p>
+              </div>
+              <span className="calibration-pill calibration-pill-warn">No profile</span>
+            </div>
+            <div className="calibration-grid">
+              <div className="calibration-card">
+                <p className="admin-card-label">Data gate</p>
+                <strong>5+ resolved takes</strong>
+                <span>
+                  Resolved takes are the scored hindsight examples calibration learns from.
+                </span>
+              </div>
+              <div className="calibration-card">
+                <p className="admin-card-label">Run on gbrain host</p>
+                <code>gbrain calibration --regenerate</code>
+                <span>
+                  Equivalent phase: <code>gbrain dream --phase calibration_profile</code>
+                </span>
+              </div>
+              <div className="calibration-card">
+                <p className="admin-card-label">Fallback loop</p>
+                <code>gbrain dream --phase propose_takes,grade_takes,calibration_profile</code>
+                <span>Use this when no takes have been proposed or graded yet.</span>
+              </div>
+            </div>
           </div>
         ) : (
-          <>
-            <p className="admin-muted">
-              Holder: <b>{p.holder}</b>
-              {p.updated_at ? ` · updated ${relativeTime(p.updated_at)}` : ""}
-              {p.published ? " · published" : ""}
-              {p.grade_completion < 0.9
-                ? ` · ~${Math.round(p.grade_completion * 100)}% graded`
-                : ""}
-              {!p.voice_gate_passed ? " · voice gate fell back to template" : ""}
-            </p>
+          <div className="calibration-shell">
+            <div className="calibration-hero-panel">
+              <div>
+                <p className="admin-card-label">Calibration profile</p>
+                <h3>{p.holder}</h3>
+                <p>
+                  {generated ? `Generated ${relativeTime(generated)}` : "Generated time unknown"}
+                  {p.source_id ? ` · source ${p.source_id}` : ""}
+                  {p.model_id ? ` · ${p.model_id}` : ""}
+                </p>
+              </div>
+              <span
+                className={`calibration-pill ${
+                  p.published ? "calibration-pill-ok" : "calibration-pill-neutral"
+                }`}
+              >
+                {p.published ? "Published" : "Private"}
+              </span>
+            </div>
+            <div className="calibration-metrics">
+              <CalibrationMetric
+                label="Resolved takes"
+                value={p.total_resolved != null ? String(p.total_resolved) : "—"}
+                note="profile sample"
+              />
+              <CalibrationMetric label="Brier" value={decimal(p.brier)} note="lower is better" />
+              <CalibrationMetric label="Accuracy" value={percent(p.accuracy, 1)} />
+              <CalibrationMetric label="Partial" value={percent(p.partial_rate, 1)} />
+              <CalibrationMetric label="Coverage" value={percent(p.grade_completion)} />
+            </div>
+            <div className="calibration-grid calibration-grid-two">
+              <div className="calibration-card">
+                <p className="admin-card-label">Quality gates</p>
+                <CalibrationGate
+                  label="Data threshold"
+                  value={`${p.total_resolved ?? 0} resolved takes`}
+                  ok={(p.total_resolved ?? 0) >= 5}
+                />
+                <CalibrationGate
+                  label="Grade coverage"
+                  value={`${percent(p.grade_completion)} graded`}
+                  ok={p.grade_completion >= 0.9}
+                />
+                <CalibrationGate
+                  label="Voice gate"
+                  value={
+                    p.voice_gate_passed
+                      ? `${p.voice_gate_attempts} attempt${p.voice_gate_attempts === 1 ? "" : "s"}`
+                      : `template fallback after ${p.voice_gate_attempts} attempt${
+                          p.voice_gate_attempts === 1 ? "" : "s"
+                        }`
+                  }
+                  ok={p.voice_gate_passed}
+                />
+                {issues.length > 0 && (
+                  <div className="calibration-issues">
+                    {issues.map((issue) => (
+                      <span key={issue.key}>
+                        {issue.label}: {issue.detail}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="calibration-card">
+                <p className="admin-card-label">Active bias tags</p>
+                {biasTags.length > 0 ? (
+                  <div className="calibration-chip-row">
+                    {biasTags.map((tag) => (
+                      <span key={tag} className="calibration-chip">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="admin-muted">No active tags on this profile.</p>
+                )}
+              </div>
+            </div>
+            <div className="calibration-card">
+              <p className="admin-card-label">Pattern statements</p>
+              {patterns.length > 0 ? (
+                <ol className="calibration-patterns">
+                  {patterns.map((statement, index) => (
+                    <li key={`${index}-${statement}`}>{statement}</li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="admin-muted">No pattern statements returned.</p>
+              )}
+            </div>
             <div className="admin-charts">
               {CHARTS.map((c) => (
                 <figure key={c.type} className="admin-chart">
@@ -394,7 +558,11 @@ export function CalibrationPanel() {
                 </figure>
               ))}
             </div>
-          </>
+            <details className="admin-details">
+              <summary>Raw profile</summary>
+              <pre className="admin-pre">{JSON.stringify(p, null, 2)}</pre>
+            </details>
+          </div>
         )
       }
     </Panel>

@@ -97,12 +97,20 @@ export const jobsSnapshot: WatchSnapshot = {
 
 export const calibrationEmpty: CalibrationProfile | null = null;
 export const calibrationProfile: CalibrationProfile = {
+  id: 12,
+  source_id: "default",
   holder: "team",
-  updated_at: ago(3_600_000),
+  generated_at: ago(3_600_000),
+  wave_version: "v0.36.1.0",
   published: true,
+  total_resolved: 18,
   brier: 0.18,
+  accuracy: 0.78,
+  partial_rate: 0.11,
   grade_completion: 0.7,
   pattern_statements: ["overconfident on timelines"],
+  active_bias_tags: ["timeline_overconfidence"],
   voice_gate_passed: false,
   voice_gate_attempts: 2,
+  model_id: "anthropic:claude-sonnet-4-6",
 };

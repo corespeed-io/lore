@@ -2,9 +2,13 @@ import { expect, test } from "vitest";
 import {
   agentCounts,
   agentOptions,
+  calibrationGeneratedAt,
+  calibrationIssues,
+  decimal,
   dollars,
   formatParams,
   leasePressureColor,
+  percent,
   relativeTime,
   scopeList,
 } from "../src/lib/admin-format.js";
@@ -52,6 +56,26 @@ test("agentCounts excludes revoked; scopeList splits space/comma", () => {
   expect(scopeList(undefined)).toEqual([]);
 });
 
+test("calibration formatting and health gates", () => {
+  expect(percent(0.782, 1)).toBe("78.2%");
+  expect(percent(null)).toBe("—");
+  expect(decimal(0.18333, 3)).toBe("0.183");
+  expect(decimal(undefined)).toBe("—");
+  expect(calibrationGeneratedAt(calibrationProfile)).toBe(calibrationProfile.generated_at);
+  expect(calibrationIssues(calibrationProfile)).toEqual([
+    {
+      key: "coverage",
+      label: "Grade coverage",
+      detail: "70% graded this cycle",
+    },
+    {
+      key: "voice",
+      label: "Voice gate",
+      detail: "template fallback after 2 attempts",
+    },
+  ]);
+});
+
 test("fixtures carry the upstream operational shapes", () => {
   // requests: { rows, total, page, pages }
   expect(requestsPage).toMatchObject({ total: 42, page: 1, pages: 3 });
@@ -63,4 +87,6 @@ test("fixtures carry the upstream operational shapes", () => {
   // calibration populated
   expect(calibrationProfile.holder).toBe("team");
   expect(calibrationProfile.voice_gate_passed).toBe(false);
+  expect(calibrationProfile.total_resolved).toBe(18);
+  expect(calibrationProfile.active_bias_tags).toEqual(["timeline_overconfidence"]);
 });
