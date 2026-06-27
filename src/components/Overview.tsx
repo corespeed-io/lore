@@ -46,6 +46,10 @@ export function Overview({
   const byCounts = countByType(graphData.nodes);
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [salient, setSalient] = useState<SalientPage[]>([]);
+  const visibleSlugs = new Set(allPages.map((p) => p.slug));
+  const recentItems = (
+    visibleSlugs.size ? salient.filter((p) => visibleSlugs.has(p.slug)) : salient
+  ).slice(0, 5);
 
   useEffect(() => {
     apiCall("sources_list")
@@ -56,7 +60,7 @@ export function Overview({
         setSources(list.sort((a, b) => b.page_count - a.page_count));
       })
       .catch(() => {});
-    apiCall("get_recent_salience", { days: 30, limit: 5 })
+    apiCall("get_recent_salience", { days: 30, limit: 10 })
       .then((d) => setSalient(Array.isArray(d) ? (d as SalientPage[]) : []))
       .catch(() => {});
   }, []);
@@ -90,7 +94,7 @@ export function Overview({
         <Breakdown byCounts={byCounts} total={graphData.nodes.length} onType={onType} />
         <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
         <Sources sources={sources} />
-        <RecentActivity items={salient} onOpen={onOpen} />
+        <RecentActivity items={recentItems} onOpen={onOpen} />
       </div>
 
       <p className="section-eyebrow">Observability</p>
