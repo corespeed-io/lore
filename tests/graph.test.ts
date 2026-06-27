@@ -7,22 +7,22 @@ import { buildGraph, clearGraphCache, isHashTitle, nodeType } from "../src/lib/g
 vi.mock("../src/lib/gbrain.js", async (orig) => {
   const real = await orig<typeof import("../src/lib/gbrain.js")>();
   const SEEDS = [
-    { slug: "companies/corespeed", title: "CoreSpeed", type: "company" },
-    { slug: "people/hao-su", title: "Hao Su", type: "person" },
+    { slug: "companies/acme", title: "Acme", type: "company" },
+    { slug: "people/ada", title: "Ada Lovelace", type: "person" },
     // a seed with no edges either way → must be dropped as isolated
     { slug: "concepts/orphan", title: "Orphan", type: "concept" },
   ];
   const LINKS: Record<string, { from_slug: string; to_slug: string }[]> = {
-    "companies/corespeed": [
+    "companies/acme": [
       // a `mentions`/typed edge the old chunk-text scan would have missed
-      { from_slug: "companies/corespeed", to_slug: "people/hao-su" },
+      { from_slug: "companies/acme", to_slug: "people/ada" },
       // a target that was never itself a seed → pendant node, slug-derived label
-      { from_slug: "companies/corespeed", to_slug: "entities/haas" },
+      { from_slug: "companies/acme", to_slug: "entities/widget" },
       // hash-titled target → dropped even though it's linked
-      { from_slug: "companies/corespeed", to_slug: "concepts/7416e83d" },
+      { from_slug: "companies/acme", to_slug: "concepts/7416e83d" },
     ],
     // reciprocal edge → must dedupe to a single undirected link
-    "people/hao-su": [{ from_slug: "people/hao-su", to_slug: "companies/corespeed" }],
+    "people/ada": [{ from_slug: "people/ada", to_slug: "companies/acme" }],
   };
   return {
     ...real,
@@ -55,13 +55,13 @@ test("buildGraph builds from the real link graph: pendant targets in, hash + iso
   clearGraphCache();
   const g = await buildGraph();
   const ids = g.nodes.map((n) => n.id).sort();
-  // corespeed <-> hao-su (reciprocal → one edge) plus the pendant entities/haas
-  expect(ids).toEqual(["companies/corespeed", "entities/haas", "people/hao-su"]);
-  // reciprocal edge deduped; corespeed-haas kept → 2 undirected links
+  // acme <-> ada (reciprocal → one edge) plus the pendant entities/widget
+  expect(ids).toEqual(["companies/acme", "entities/widget", "people/ada"]);
+  // reciprocal edge deduped; acme-widget kept → 2 undirected links
   expect(g.links).toHaveLength(2);
   // a non-seed link target still becomes a node, labeled + typed from its slug
-  const haas = g.nodes.find((n) => n.id === "entities/haas");
-  expect(haas).toMatchObject({ label: "haas", type: "product" });
+  const widget = g.nodes.find((n) => n.id === "entities/widget");
+  expect(widget).toMatchObject({ label: "widget", type: "product" });
   // hash-titled target dropped even though it was linked
   expect(ids).not.toContain("concepts/7416e83d");
   // seed with no edges dropped as isolated
