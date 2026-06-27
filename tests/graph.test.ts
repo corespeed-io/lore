@@ -9,8 +9,13 @@ vi.mock("../src/lib/gbrain.js", async (orig) => {
   const SEEDS = [
     { slug: "companies/acme", title: "Acme", type: "company" },
     { slug: "people/ada", title: "Ada Lovelace", type: "person" },
-    // a seed with no edges either way → must be dropped as isolated
+    // a seed with no edges either way → now remains as an isolated graph node
     { slug: "concepts/orphan", title: "Orphan", type: "concept" },
+  ];
+  const PAGES = [
+    ...SEEDS,
+    { slug: "extracts/receipt", title: "Receipt", type: "extract_receipt" },
+    { slug: "tech/hash-import", title: "904b1d36", type: "concept" },
   ];
   const LINKS: Record<string, { from_slug: string; to_slug: string }[]> = {
     "companies/acme": [
@@ -27,6 +32,7 @@ vi.mock("../src/lib/gbrain.js", async (orig) => {
   return {
     ...real,
     callTool: vi.fn(async (tool: string, args: { slug?: string }) => {
+      if (tool === "list_pages") return { isError: false, text: JSON.stringify(PAGES) };
       if (tool === "query") return { isError: false, text: JSON.stringify(SEEDS) };
       if (tool === "get_links")
         return { isError: false, text: JSON.stringify(LINKS[args.slug ?? ""] ?? []) };
@@ -48,22 +54,32 @@ test("nodeType infers from slug prefix, then falls back to given, then concept",
   expect(nodeType("companies/x")).toBe("company");
   expect(nodeType("entities/x")).toBe("product");
   expect(nodeType("gtm/x", "product")).toBe("product");
+  expect(nodeType("extracts/x", "extract_receipt")).toBe("extract_receipt");
   expect(nodeType("gtm/x")).toBe("concept");
 });
 
-test("buildGraph builds from the real link graph: pendant targets in, hash + isolated out", async () => {
+test("buildGraph builds from pages + the real link graph: isolated nodes stay in", async () => {
   clearGraphCache();
   const g = await buildGraph();
   const ids = g.nodes.map((n) => n.id).sort();
-  // acme <-> ada (reciprocal → one edge) plus the pendant entities/widget
-  expect(ids).toEqual(["companies/acme", "entities/widget", "people/ada"]);
+  // acme <-> ada (reciprocal → one edge), pendant entities/widget, plus isolated pages.
+  expect(ids).toEqual([
+    "companies/acme",
+    "concepts/orphan",
+    "entities/widget",
+    "extracts/receipt",
+    "people/ada",
+  ]);
   // reciprocal edge deduped; acme-widget kept → 2 undirected links
   expect(g.links).toHaveLength(2);
   // a non-seed link target still becomes a node, labeled + typed from its slug
   const widget = g.nodes.find((n) => n.id === "entities/widget");
   expect(widget).toMatchObject({ label: "widget", type: "product" });
+  // a legitimate no-edge page still becomes a graph node with its real backend type
+  const receipt = g.nodes.find((n) => n.id === "extracts/receipt");
+  expect(receipt).toMatchObject({ label: "Receipt", type: "extract_receipt" });
   // hash-titled target dropped even though it was linked
   expect(ids).not.toContain("concepts/7416e83d");
-  // seed with no edges dropped as isolated
-  expect(ids).not.toContain("concepts/orphan");
+  // hash-titled page-list import also dropped
+  expect(ids).not.toContain("tech/hash-import");
 });
