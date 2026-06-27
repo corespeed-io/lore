@@ -37,7 +37,7 @@ export interface WatchSnapshot {
   queue_health: { waiting: number; active: number; stalled: number };
   by_type: Array<{ name: string; total: number; completed: number; failed: number; dead: number }>;
   lease_pressure_1h: number;
-  top_errors: Array<{ message: string; count: number }>;
+  top_errors: Array<{ cluster?: string; message?: string; count: number }>;
   budget_owners: Array<{ owner_id: number; remaining_cents: number; total_spent_cents: number }>;
 }
 

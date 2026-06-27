@@ -91,7 +91,7 @@ export const jobsSnapshot: WatchSnapshot = {
   queue_health: { waiting: 0, active: 1, stalled: 2 },
   by_type: [{ name: "dream", total: 10, completed: 8, failed: 1, dead: 1 }],
   lease_pressure_1h: 7,
-  top_errors: [{ message: "lease timeout", count: 3 }],
+  top_errors: [{ cluster: "lease timeout", count: 3 }],
   budget_owners: [{ owner_id: 1, remaining_cents: 8000, total_spent_cents: 2000 }],
 };
 

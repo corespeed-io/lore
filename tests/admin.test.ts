@@ -59,6 +59,7 @@ test("stripSecrets redacts secret-ish fields recursively and never returns them"
 
 test("stripSecrets keeps benign token_ttl / token_type / grant_types", () => {
   const out = stripSecrets({
+    active_api_keys: 7,
     token_ttl: 3600,
     token_type: "bearer",
     grant_types: ["client_credentials"],
@@ -66,6 +67,7 @@ test("stripSecrets keeps benign token_ttl / token_type / grant_types", () => {
     access_token: "y",
     // biome-ignore lint/suspicious/noExplicitAny: dynamic test shape
   }) as any;
+  expect(out.active_api_keys).toBe(7);
   expect(out.token_ttl).toBe(3600);
   expect(out.token_type).toBe("bearer");
   expect(out.grant_types).toEqual(["client_credentials"]);

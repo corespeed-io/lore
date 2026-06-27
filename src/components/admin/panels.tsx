@@ -61,7 +61,7 @@ function Panel({
   actions,
   children,
 }: {
-  title: string;
+  title?: string;
   state: FetchState<unknown>;
   needs?: string;
   actions?: ReactNode;
@@ -69,10 +69,12 @@ function Panel({
 }) {
   return (
     <section className="admin-section">
-      <div className="admin-head">
-        <h2 className="admin-h2">{title}</h2>
-        {actions}
-      </div>
+      {(title || actions) && (
+        <div className="admin-head">
+          {title && <h2 className="admin-h2">{title}</h2>}
+          {actions}
+        </div>
+      )}
       {state.loading && !state.data ? (
         <p className="admin-muted">Loading…</p>
       ) : state.status === 403 ? (
@@ -99,33 +101,23 @@ function Panel({
 export function AdminDashboard() {
   const stats = useAdmin<Record<string, number>>("stats");
   const health = useAdmin<Record<string, number | string>>("health");
+  const metrics = [...Object.entries(stats.data ?? {}), ...Object.entries(health.data ?? {})];
   return (
-    <Panel title="Admin dashboard" state={stats} needs="GET /admin/api/stats">
+    <Panel state={stats} needs="GET /admin/api/stats">
       {() => (
-        <>
-          <div className="admin-cards">
-            {Object.entries(stats.data ?? {}).map(([k, v]) => (
-              <div key={k} className="admin-card">
-                <div className="admin-card-num">{String(v)}</div>
-                <div className="admin-card-label">{k.replace(/_/g, " ")}</div>
+        <div className="admin-overview-card">
+          <p className="admin-card-label">Operations</p>
+          <div className="admin-mini-grid">
+            {metrics.map(([k, v]) => (
+              <div key={k} className="admin-mini-metric">
+                <span>{k.replace(/_/g, " ")}</span>
+                <strong>{String(v)}</strong>
               </div>
             ))}
-            {Object.keys(stats.data ?? {}).length === 0 && (
-              <p className="admin-muted">No summary metrics returned.</p>
-            )}
+            {metrics.length === 0 && <p className="admin-muted">No summary metrics returned.</p>}
           </div>
-          {health.data && (
-            <div className="admin-health">
-              <p className="admin-card-label">Token health</p>
-              {Object.entries(health.data).map(([k, v]) => (
-                <div key={k} className="admin-health-row">
-                  <span>{k.replace(/_/g, " ")}</span>
-                  <span>{String(v)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
+          {health.loading && !health.data && <p className="admin-muted">Loading token health…</p>}
+        </div>
       )}
     </Panel>
   );
@@ -248,7 +240,7 @@ export function JobsPanel() {
   const s = jobs.data;
   return (
     <Panel
-      title="Jobs watch"
+      title="Queue"
       state={jobs}
       needs="GET /admin/api/jobs/watch"
       actions={
@@ -303,12 +295,15 @@ export function JobsPanel() {
             {(s.top_errors?.length ?? 0) > 0 && (
               <div className="admin-kv">
                 <p className="admin-card-label">Top errors</p>
-                {s.top_errors.slice(0, 5).map((e) => (
-                  <div key={e.message} className="admin-health-row">
-                    <span className="admin-err-line">{e.message}</span>
-                    <span>{e.count}</span>
-                  </div>
-                ))}
+                {s.top_errors.slice(0, 5).map((e) => {
+                  const label = e.cluster ?? e.message ?? "unknown error";
+                  return (
+                    <div key={label} className="admin-health-row">
+                      <span className="admin-err-line">{label}</span>
+                      <span>{e.count}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {(s.budget_owners?.length ?? 0) > 0 && (
@@ -398,7 +393,7 @@ export function AgentsPanel() {
   const list = hideRevoked ? all.filter((a) => a.status !== "revoked") : all;
   return (
     <Panel
-      title="Agents · clients · tokens"
+      title="Access"
       state={agents}
       needs="GET /admin/api/agents"
       actions={
@@ -417,9 +412,12 @@ export function AgentsPanel() {
     >
       {() =>
         list.length === 0 ? (
-          <p className="admin-muted">No agents.</p>
+          <p className="admin-muted">No clients or keys.</p>
         ) : (
           <>
+            <p className="admin-muted">
+              OAuth clients and API keys that can read or write this brain.
+            </p>
             <table className="admin-table">
               <thead>
                 <tr>
@@ -481,7 +479,7 @@ export function AgentsPanel() {
                     <dt>id</dt>
                     <dd className="admin-mono">{sel.id}</dd>
                     <dt>type</dt>
-                    <dd>{sel.auth_type ?? "—"}</dd>
+                    <dd>{sel.auth_type === "api_key" ? "API key" : "OAuth client"}</dd>
                     <dt>scopes</dt>
                     <dd>{scopeList(sel.scope).join(", ") || "—"}</dd>
                     <dt>status</dt>
@@ -495,10 +493,6 @@ export function AgentsPanel() {
                     <dt>last used</dt>
                     <dd>{relativeTime(sel.last_used_at)}</dd>
                   </dl>
-                  <p className="admin-needs">
-                    Create key / register client / revoke / config-export are wired in the admin
-                    proxy allowlist; their UI is deferred (see notes).
-                  </p>
                 </div>
               </div>
             )}

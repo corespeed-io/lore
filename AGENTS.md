@@ -17,8 +17,8 @@ graph). One sidebar mixes two kinds of surface:
   graph, Memories browse, hybrid search. They call only `READ_ONLY_TOOLS`. This is the full
   OSS default experience — no admin config required. (The old "Lore never writes" contract
   now scopes to *these* surfaces, not the whole app.)
-- **Admin surfaces** (optional, OFF by default, fail-closed): Requests, Agents/clients/tokens,
-  Jobs Watch, Calibration — inspired by upstream gbrain's admin dashboard, and may perform
+- **Admin surfaces** (optional, OFF by default, fail-closed): Requests, Access
+  (OAuth clients/API keys), Queue, Calibration — inspired by upstream gbrain's admin dashboard, and may perform
   write/admin actions. They appear in the nav and work ONLY when admin mode is configured
   (explicit env + admin credentials, server-gated behind a SEPARATE allowlist). Unconfigured ⇒
   the admin nav is hidden and every `/api/admin/*` route 403s. See **Admin mode** under Security.

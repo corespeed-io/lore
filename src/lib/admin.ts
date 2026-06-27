@@ -75,9 +75,9 @@ export class AdminNotAllowedError extends Error {}
 
 // Redact secret-bearing fields by key name. Tuned to catch real secrets
 // (client_secret, access/refresh tokens, api keys, passwords, bootstrap) without
-// nuking benign fields like token_ttl / token_type / grant_types.
+// nuking benign aggregate fields like token_ttl / active_api_keys.
 const SECRET_KEY =
-  /(^secret$|_secret$|client_secret|^token$|_token$|access_token|refresh_token|password|bootstrap|api_?key|credential)/i;
+  /(^secret$|_secret$|client_secret|^token$|_token$|access_token|refresh_token|password|bootstrap|credential|^api_?key$|_api_?key$|api_?key_secret|api_?key_token)/i;
 
 // Defensively redact secret-ish fields so a backend that over-returns can't leak
 // a token/secret to the browser. Applied to every admin response EXCEPT a

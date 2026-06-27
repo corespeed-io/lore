@@ -11,11 +11,13 @@ import { StatCards } from "@/components/StatCards";
 import { TopHubs } from "@/components/TopHubs";
 import { apiCall } from "@/lib/api";
 import type { GraphData, PageHit, SalientPage, SourceInfo } from "@/lib/types";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 interface OverviewProps {
   appTitle: string;
   appSubtitle: string;
+  adminSummary?: ReactNode;
   graphData: GraphData;
   allPages: PageHit[];
   onOpen: (slug: string) => void;
@@ -35,6 +37,7 @@ function countByType(nodes: GraphData["nodes"]) {
 export function Overview({
   appTitle,
   appSubtitle,
+  adminSummary,
   graphData,
   allPages,
   onOpen,
@@ -70,13 +73,16 @@ export function Overview({
         </div>
       </div>
 
-      <div className="stat-row">
-        <StatCards
-          nodeCount={graphData.nodes.length}
-          linkCount={graphData.links.length}
-          sourceCount={sources.length}
-          onNavigate={onNavigate}
-        />
+      <div className={adminSummary ? "overview-summary has-admin" : "overview-summary"}>
+        <div className="stat-row">
+          <StatCards
+            nodeCount={graphData.nodes.length}
+            linkCount={graphData.links.length}
+            sourceCount={sources.length}
+            onNavigate={onNavigate}
+          />
+        </div>
+        {adminSummary && <div className="overview-admin-summary">{adminSummary}</div>}
       </div>
 
       <ActivityChart pages={allPages} />

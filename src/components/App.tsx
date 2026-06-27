@@ -23,8 +23,8 @@ const TAB_LABELS: Record<Tab, string> = {
   graph: "Graph",
   search: "Memories",
   requests: "Requests",
-  agents: "Agents",
-  jobs: "Jobs",
+  agents: "Access",
+  jobs: "Queue",
   calibration: "Calibration",
 };
 
@@ -473,22 +473,16 @@ export function App({ appTitle, appSubtitle }: AppProps) {
           ) : (
             <>
               {tab === "overview" && (
-                <>
-                  {adminEnabled && (
-                    <div className="admin-page">
-                      <AdminDashboard />
-                    </div>
-                  )}
-                  <Overview
-                    appTitle={appTitle}
-                    appSubtitle={appSubtitle}
-                    graphData={graphData}
-                    allPages={allPages}
-                    onOpen={openMemory}
-                    onType={drillType}
-                    onNavigate={handleTabChange}
-                  />
-                </>
+                <Overview
+                  appTitle={appTitle}
+                  appSubtitle={appSubtitle}
+                  adminSummary={adminEnabled ? <AdminDashboard /> : null}
+                  graphData={graphData}
+                  allPages={allPages}
+                  onOpen={openMemory}
+                  onType={drillType}
+                  onNavigate={handleTabChange}
+                />
               )}
 
               {tab === "graph" &&
