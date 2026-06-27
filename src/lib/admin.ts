@@ -11,6 +11,7 @@ export interface AdminConfig {
   url: string; // upstream gbrain admin base, e.g. https://gbrain.example
   token: string; // admin bootstrap token (server-only)
   allowInsecure: boolean;
+  calibrationHolder: string; // which take-holder's profile the dashboard shows
 }
 
 export function adminConfig(env: Env = process.env): AdminConfig {
@@ -19,6 +20,12 @@ export function adminConfig(env: Env = process.env): AdminConfig {
     url: env.ADMIN_GBRAIN_URL ?? "",
     token: env.ADMIN_GBRAIN_TOKEN ?? "",
     allowInsecure: env.ADMIN_ALLOW_INSECURE === "1" || env.ADMIN_ALLOW_INSECURE === "true",
+    // gbrain's admin API defaults the calibration holder to `garry` (its
+    // personal-brain origin). This team brain holds its profile under `brain`
+    // (the take-extractor default; there is no people/garry here), so the
+    // dashboard would read an empty garry profile and show "Cold start".
+    // Override via ADMIN_CALIBRATION_HOLDER.
+    calibrationHolder: env.ADMIN_CALIBRATION_HOLDER ?? "brain",
   };
 }
 
@@ -171,6 +178,11 @@ export async function adminFetch(
   const url = new URL(`/admin/api/${ep.path}`, a.url);
   if (ep.method === "GET") {
     for (const [k, v] of Object.entries(args)) if (v != null) url.searchParams.set(k, String(v));
+    // Calibration profiles are per-holder; gbrain defaults to `garry`. Point it
+    // at this brain's holder unless the caller already specified one.
+    if (ep.path.startsWith("calibration/") && !url.searchParams.has("holder")) {
+      url.searchParams.set("holder", a.calibrationHolder);
+    }
   }
   const call = (cookie: string) =>
     fetch(url, {
@@ -195,6 +207,8 @@ export async function adminFetchChart(type: string, env: Env = process.env): Pro
     throw new AdminNotAllowedError(`chart type '${type}' not allowed`);
   const a = adminConfig(env);
   const url = new URL(`/admin/api/calibration/charts/${encodeURIComponent(type)}`, a.url);
+  // Same per-holder scoping as the profile endpoint (gbrain defaults to garry).
+  url.searchParams.set("holder", a.calibrationHolder);
   const call = (cookie: string) => fetch(url, { headers: { Cookie: cookie } });
   let res = await call(await adminSession(a));
   if (res.status === 401) {
