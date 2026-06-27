@@ -5,7 +5,7 @@
 
 <p align="center">
   <strong>Browse your knowledge graph in the browser.</strong><br/>
-  Lore is the read-only <strong>frontend</strong> for a <strong>gbrain</strong> knowledge brain — force-directed graph, dashboard, and full-text search. Bring your own gbrain backend.
+  Lore is the read-only <strong>frontend</strong> for a <strong>gbrain</strong> knowledge brain — force-directed graph, dashboard, and full-text search. Bring your own <a href="https://github.com/garrytan/gbrain">gbrain</a> backend.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ## What is Lore?
 
-Lore is a **read-only** web UI for exploring a **gbrain** knowledge brain — your team's people, products, docs, and the decisions that connect them. It reads gbrain over MCP and renders a force-directed graph, a dashboard, and hybrid full-text search, so you can *see* and walk your knowledge instead of grepping it. It never writes.
+Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/garrytan/gbrain)** knowledge brain — your team's people, products, docs, and the decisions that connect them. It reads gbrain over MCP and renders a force-directed graph, a dashboard, and hybrid full-text search, so you can *see* and walk your knowledge instead of grepping it. It never writes.
 
 ## Features
 
@@ -44,6 +44,8 @@ Lore is a **read-only** web UI for exploring a **gbrain** knowledge brain — yo
 </p>
 
 ## Quickstart
+
+> **Prerequisite:** a running [gbrain](https://github.com/garrytan/gbrain) backend — point `GBRAIN_MCP_URL` at its MCP endpoint.
 
 ```bash
 git clone https://github.com/corespeed-io/lore.git && cd lore

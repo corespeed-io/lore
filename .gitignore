@@ -5,6 +5,8 @@ node_modules
 *.log
 *.tsbuildinfo
 next-env.d.ts
+tmp/
+.DS_Store
 .claude
 .gstack/
 .superpowers/
