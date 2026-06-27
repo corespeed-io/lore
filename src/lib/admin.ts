@@ -80,8 +80,8 @@ const SECRET_KEY =
   /(^secret$|_secret$|client_secret|^token$|_token$|access_token|refresh_token|password|bootstrap|credential|^api_?key$|_api_?key$|api_?key_secret|api_?key_token)/i;
 
 // Defensively redact secret-ish fields so a backend that over-returns can't leak
-// a token/secret to the browser. Applied to every admin response EXCEPT a
-// create's one-time secret (which the UI surfaces once and masks).
+// a token/secret to the browser. Applied to every admin response (one-time
+// secrets are re-attached afterwards by redactAdminResponse — see below).
 export function stripSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripSecrets);
   if (value && typeof value === "object") {
@@ -92,6 +92,45 @@ export function stripSecrets(value: unknown): unknown {
     return out;
   }
   return value;
+}
+
+// Shape an admin response for the browser. Always strip secret-ish fields; for a
+// one-time-secret action (create-api-key) re-attach ONLY the `token` so it can be
+// shown once. Re-attaching just `token` — instead of returning the raw object —
+// means an over-returning backend can't smuggle a client_secret / refresh_token /
+// bootstrap alongside it. Pure; exported for tests.
+export function redactAdminResponse(data: unknown, oneTimeSecret: boolean): unknown {
+  const redacted = stripSecrets(data);
+  if (oneTimeSecret && data && typeof data === "object" && !Array.isArray(data)) {
+    const token = (data as Record<string, unknown>).token;
+    if (token != null && redacted && typeof redacted === "object")
+      return { ...(redacted as Record<string, unknown>), token };
+  }
+  return redacted;
+}
+
+// CSRF defense for mutating admin POSTs. Require a JSON content-type (an HTML form
+// can't send application/json, and a cross-origin JSON fetch needs a CORS preflight
+// we never grant) AND a same-origin Origin header (browsers always send Origin on
+// POST). Compares Origin's host to the Host header so it holds behind a proxy that
+// forwards Host. Returns a rejection, or null when the request is allowed. Pure.
+export function adminPostRejection(h: {
+  contentType: string | null;
+  origin: string | null;
+  host: string | null;
+}): { status: number; detail: string } | null {
+  if (!(h.contentType ?? "").toLowerCase().startsWith("application/json"))
+    return { status: 415, detail: "json required" };
+  let sameOrigin = false;
+  if (h.origin && h.host) {
+    try {
+      sameOrigin = new URL(h.origin).host === h.host;
+    } catch {
+      sameOrigin = false;
+    }
+  }
+  if (!sameOrigin) return { status: 403, detail: "cross-site admin POST denied" };
+  return null;
 }
 
 // gbrain's admin API authenticates with a session cookie minted by
@@ -125,6 +164,7 @@ export async function adminFetch(
   args: Record<string, unknown> = {},
   env: Env = process.env,
 ): Promise<unknown> {
+  if (!adminEnabled(env).ok) throw new AdminNotAllowedError("admin is disabled");
   const ep = ADMIN_ENDPOINTS[action];
   if (!ep) throw new AdminNotAllowedError(`admin action '${action}' not allowed`);
   const a = adminConfig(env);
@@ -145,11 +185,12 @@ export async function adminFetch(
   }
   if (!res.ok) throw new Error(`admin backend ${res.status}`);
   const data = await res.json();
-  return ep.oneTimeSecret ? data : stripSecrets(data);
+  return redactAdminResponse(data, Boolean(ep.oneTimeSecret));
 }
 
 // Proxy a calibration chart SVG (text/plain) — type-allowlisted, cookie-authed.
 export async function adminFetchChart(type: string, env: Env = process.env): Promise<string> {
+  if (!adminEnabled(env).ok) throw new AdminNotAllowedError("admin is disabled");
   if (!ADMIN_CHART_TYPES.has(type))
     throw new AdminNotAllowedError(`chart type '${type}' not allowed`);
   const a = adminConfig(env);

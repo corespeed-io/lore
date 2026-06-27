@@ -650,52 +650,52 @@ export function AgentsPanel() {
         </label>
       }
     >
-      {() =>
-        list.length === 0 ? (
-          <p className="admin-muted">No clients or keys.</p>
-        ) : (
-          <>
-            <p className="admin-muted">
-              OAuth clients and API keys that can read or write this brain.
-            </p>
-            <form className="admin-inline-form" onSubmit={createApiKey}>
-              <input
-                className="admin-input"
-                value={newKeyName}
-                onChange={(e) => setNewKeyName(e.target.value)}
-                placeholder="New API key name"
-                autoComplete="off"
-              />
-              <button
-                type="submit"
-                className="admin-btn"
-                disabled={isMutating || newKeyName.trim().length === 0}
-              >
-                {mutation === "create" ? "Creating..." : "+ API key"}
-              </button>
-            </form>
-            {mutationError && <p className="admin-error-note">{mutationError}</p>}
-            {createdKey && (
-              <div className="admin-secret-card" aria-live="polite">
-                <div>
-                  <p className="admin-card-label">One-time API key</p>
-                  <p className="admin-muted">Save this token now. gbrain will not show it again.</p>
-                </div>
-                <code>{createdKey.token}</code>
-                <div className="admin-secret-actions">
-                  <button type="button" className="admin-btn" onClick={copyCreatedKey}>
-                    {copied ? "Copied" : "Copy"}
-                  </button>
-                  <button
-                    type="button"
-                    className="admin-btn admin-btn-ghost"
-                    onClick={() => setCreatedKey(null)}
-                  >
-                    Done
-                  </button>
-                </div>
+      {() => (
+        <>
+          <p className="admin-muted">
+            OAuth clients and API keys that can read or write this brain.
+          </p>
+          <form className="admin-inline-form" onSubmit={createApiKey}>
+            <input
+              className="admin-input"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              placeholder="New API key name"
+              autoComplete="off"
+            />
+            <button
+              type="submit"
+              className="admin-btn"
+              disabled={isMutating || newKeyName.trim().length === 0}
+            >
+              {mutation === "create" ? "Creating..." : "+ API key"}
+            </button>
+          </form>
+          {mutationError && <p className="admin-error-note">{mutationError}</p>}
+          {createdKey && (
+            <div className="admin-secret-card" aria-live="polite">
+              <div>
+                <p className="admin-card-label">One-time API key</p>
+                <p className="admin-muted">Save this token now. gbrain will not show it again.</p>
               </div>
-            )}
+              <code>{createdKey.token}</code>
+              <div className="admin-secret-actions">
+                <button type="button" className="admin-btn" onClick={copyCreatedKey}>
+                  {copied ? "Copied" : "Copy"}
+                </button>
+                <button
+                  type="button"
+                  className="admin-btn admin-btn-ghost"
+                  onClick={() => setCreatedKey(null)}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+          {list.length === 0 ? (
+            <p className="admin-muted">No clients or keys yet — create one above.</p>
+          ) : (
             <table className="admin-table">
               <thead>
                 <tr>
@@ -755,55 +755,55 @@ export function AgentsPanel() {
                 ))}
               </tbody>
             </table>
-            {sel && (
-              <div className="admin-drawer">
-                <button
-                  type="button"
-                  className="admin-drawer-scrim"
-                  aria-label="Close"
-                  onClick={() => setSel(null)}
-                />
-                <div className="admin-drawer-body">
-                  <button type="button" className="admin-drawer-close" onClick={() => setSel(null)}>
-                    ×
-                  </button>
-                  <h3>{sel.name}</h3>
-                  <dl className="admin-dl">
-                    <dt>id</dt>
-                    <dd className="admin-mono">{sel.id}</dd>
-                    <dt>type</dt>
-                    <dd>{sel.auth_type === "api_key" ? "API key" : "OAuth client"}</dd>
-                    <dt>scopes</dt>
-                    <dd>{scopeList(sel.scope).join(", ") || "—"}</dd>
-                    <dt>status</dt>
-                    <dd>{sel.status ?? "active"}</dd>
-                    <dt>token ttl</dt>
-                    <dd>{sel.token_ttl ?? "default"}</dd>
-                    <dt>requests today</dt>
-                    <dd>{sel.requests_today ?? 0}</dd>
-                    <dt>total requests</dt>
-                    <dd>{sel.total_requests ?? 0}</dd>
-                    <dt>last used</dt>
-                    <dd>{relativeTime(sel.last_used_at)}</dd>
-                  </dl>
-                  {sel.auth_type === "api_key" && (
-                    <div className="admin-drawer-actions">
-                      <button
-                        type="button"
-                        className="admin-danger-btn"
-                        disabled={sel.status === "revoked" || mutation === `revoke:${sel.name}`}
-                        onClick={() => revokeApiKey(sel)}
-                      >
-                        {mutation === `revoke:${sel.name}` ? "Revoking..." : "Revoke API key"}
-                      </button>
-                    </div>
-                  )}
-                </div>
+          )}
+          {sel && (
+            <div className="admin-drawer">
+              <button
+                type="button"
+                className="admin-drawer-scrim"
+                aria-label="Close"
+                onClick={() => setSel(null)}
+              />
+              <div className="admin-drawer-body">
+                <button type="button" className="admin-drawer-close" onClick={() => setSel(null)}>
+                  ×
+                </button>
+                <h3>{sel.name}</h3>
+                <dl className="admin-dl">
+                  <dt>id</dt>
+                  <dd className="admin-mono">{sel.id}</dd>
+                  <dt>type</dt>
+                  <dd>{sel.auth_type === "api_key" ? "API key" : "OAuth client"}</dd>
+                  <dt>scopes</dt>
+                  <dd>{scopeList(sel.scope).join(", ") || "—"}</dd>
+                  <dt>status</dt>
+                  <dd>{sel.status ?? "active"}</dd>
+                  <dt>token ttl</dt>
+                  <dd>{sel.token_ttl ?? "default"}</dd>
+                  <dt>requests today</dt>
+                  <dd>{sel.requests_today ?? 0}</dd>
+                  <dt>total requests</dt>
+                  <dd>{sel.total_requests ?? 0}</dd>
+                  <dt>last used</dt>
+                  <dd>{relativeTime(sel.last_used_at)}</dd>
+                </dl>
+                {sel.auth_type === "api_key" && (
+                  <div className="admin-drawer-actions">
+                    <button
+                      type="button"
+                      className="admin-danger-btn"
+                      disabled={sel.status === "revoked" || mutation === `revoke:${sel.name}`}
+                      onClick={() => revokeApiKey(sel)}
+                    >
+                      {mutation === `revoke:${sel.name}` ? "Revoking..." : "Revoke API key"}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </>
-        )
-      }
+            </div>
+          )}
+        </>
+      )}
     </Panel>
   );
 }

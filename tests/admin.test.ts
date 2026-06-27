@@ -3,6 +3,8 @@ import {
   ADMIN_CHART_TYPES,
   ADMIN_ENDPOINTS,
   adminEnabled,
+  adminPostRejection,
+  redactAdminResponse,
   stripSecrets,
 } from "../src/lib/admin.js";
 import { READ_ONLY_TOOLS } from "../src/lib/gbrain.js";
@@ -73,6 +75,63 @@ test("stripSecrets keeps benign token_ttl / token_type / grant_types", () => {
   expect(out.grant_types).toEqual(["client_credentials"]);
   expect(out.client_secret).toBe("[redacted]");
   expect(out.access_token).toBe("[redacted]");
+});
+
+test("create-api-key surfaces ONLY the one-time token, redacting any other secret", () => {
+  const out = redactAdminResponse(
+    {
+      id: "k1",
+      name: "ci",
+      token: "gbrain_sk_live_xyz", // the one-time secret the UI must show once
+      client_secret: "leak",
+      refresh_token: "leak2",
+    },
+    true,
+    // biome-ignore lint/suspicious/noExplicitAny: test reads dynamic shape
+  ) as any;
+  expect(out.token).toBe("gbrain_sk_live_xyz"); // survives
+  expect(out.client_secret).toBe("[redacted]"); // everything else stripped
+  expect(out.refresh_token).toBe("[redacted]");
+  expect(out.id).toBe("k1");
+  expect(out.name).toBe("ci");
+});
+
+test("redactAdminResponse strips the token too when not a one-time-secret action", () => {
+  // biome-ignore lint/suspicious/noExplicitAny: dynamic test shape
+  const out = redactAdminResponse({ token: "secret" }, false) as any;
+  expect(out.token).toBe("[redacted]");
+});
+
+test("admin POST CSRF guard: requires JSON content-type AND same-origin", () => {
+  const lore = "lore.example";
+  // legit same-origin JSON request → allowed
+  expect(
+    adminPostRejection({
+      contentType: "application/json",
+      origin: "https://lore.example",
+      host: lore,
+    }),
+  ).toBeNull();
+  // HTML-form CSRF (urlencoded, no Origin a form can forge) → 415
+  expect(
+    adminPostRejection({
+      contentType: "application/x-www-form-urlencoded",
+      origin: null,
+      host: lore,
+    })?.status,
+  ).toBe(415);
+  // cross-site JSON → 403
+  expect(
+    adminPostRejection({
+      contentType: "application/json",
+      origin: "https://evil.example",
+      host: lore,
+    })?.status,
+  ).toBe(403);
+  // JSON but no Origin header → 403 (browsers send Origin on POST)
+  expect(
+    adminPostRejection({ contentType: "application/json", origin: null, host: lore })?.status,
+  ).toBe(403);
 });
 
 test("chart-type allowlist is explicit — no arbitrary SVG passthrough", () => {

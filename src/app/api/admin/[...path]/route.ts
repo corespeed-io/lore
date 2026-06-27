@@ -1,10 +1,20 @@
-import { ADMIN_ENDPOINTS, adminEnabled, adminFetch } from "@/lib/admin";
+import { ADMIN_ENDPOINTS, adminEnabled, adminFetch, adminPostRejection } from "@/lib/admin";
 import { NextResponse } from "next/server";
 
 // Fail-closed: admin must be explicitly enabled, or every action 403s.
 function gate(): NextResponse | null {
   const g = adminEnabled();
   return g.ok ? null : NextResponse.json({ detail: g.reason ?? "admin disabled" }, { status: 403 });
+}
+
+// CSRF guard for mutating POSTs: JSON content-type + same-origin (see admin.ts).
+function postGuard(req: Request): NextResponse | null {
+  const rej = adminPostRejection({
+    contentType: req.headers.get("content-type"),
+    origin: req.headers.get("origin"),
+    host: req.headers.get("host"),
+  });
+  return rej ? NextResponse.json({ detail: rej.detail }, { status: rej.status }) : null;
 }
 
 function resolve(path: string[] | undefined, method: "GET" | "POST") {
@@ -27,7 +37,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ path: string[] 
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ path: string[] }> }) {
-  const denied = gate();
+  const denied = gate() ?? postGuard(req);
   if (denied) return denied;
   const action = resolve((await ctx.params).path, "POST");
   if (!action) return NextResponse.json({ detail: "unknown admin action" }, { status: 404 });
