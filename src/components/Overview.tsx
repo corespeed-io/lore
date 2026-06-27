@@ -3,7 +3,6 @@
 import { ActivityChart } from "@/components/ActivityChart";
 import { Breakdown } from "@/components/Breakdown";
 import { ConnectionHealth } from "@/components/ConnectionHealth";
-import { ReadBoundary } from "@/components/ReadBoundary";
 import { RecentActivity } from "@/components/RecentActivity";
 import { RecentRequests } from "@/components/RecentRequests";
 import { Sources } from "@/components/Sources";
@@ -98,7 +97,6 @@ export function Overview({
       <div className="panel-grid">
         <ConnectionHealth />
         <RecentRequests />
-        <ReadBoundary />
       </div>
     </div>
   );

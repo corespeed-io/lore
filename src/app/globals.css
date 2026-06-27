@@ -1803,7 +1803,7 @@ a.ext {
   }
 }
 
-/* ── Observability panels (Connection health / Recent requests / Read boundary) ── */
+/* ── Observability panels (Connection health / Recent requests) ── */
 .section-eyebrow {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1901,21 +1901,6 @@ a.ext {
   grid-column: 1 / -1;
   color: #e5484d;
   overflow-wrap: anywhere;
-}
-
-.tool-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.tool-chip {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--hairline-soft);
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  padding: 2px 7px;
 }
 
 /* ── Admin console (optional area; same Geist light palette as the viewer) ── */
