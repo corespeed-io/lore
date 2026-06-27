@@ -1,13 +1,11 @@
 // The node-type palette — the single source of truth for type colors across the
-// graph, its legend, and the dashboard breakdown. Colors are intentionally NOT
-// customizable yet (no BRAND_COLORS env); this keeps one consistent palette.
-// Keep `--type-*` in src/app/globals.css in sync (CSS can't import this).
+// graph, its legend, and the dashboard breakdown. Unknown backend types get a
+// stable hash color, so the UI does not need a code change for every new type.
 export const TYPE_COLORS: Record<string, string> = {
   person: "#0070f3",
   company: "#7928ca",
   product: "#50e3c2",
   concept: "#8f8f8f",
-  extract_receipt: "#f5a623",
 };
 
 const FALLBACK_COLORS = ["#ff4d4d", "#00a67e", "#f81ce5", "#666666"];

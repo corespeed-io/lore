@@ -49,7 +49,8 @@ test("isHashTitle flags content-hash labels but not real titles", () => {
   expect(isHashTitle("Haas Mcp Converged 0622")).toBe(false);
 });
 
-test("nodeType infers from slug prefix, then falls back to given, then concept", () => {
+test("nodeType preserves backend type, then infers from slug prefix, then concept", () => {
+  expect(nodeType("people/x", "founder")).toBe("founder");
   expect(nodeType("people/x")).toBe("person");
   expect(nodeType("companies/x")).toBe("company");
   expect(nodeType("entities/x")).toBe("product");

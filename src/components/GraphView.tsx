@@ -2,6 +2,7 @@
 
 import { apiCall } from "@/lib/api";
 import { typeColor } from "@/lib/colors";
+import { typeSort } from "@/lib/type-display";
 import type { GraphData, GraphNode, PageHit } from "@/lib/types";
 import { type GraphInstance, mountGraph } from "@/lib/viz/graph";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -93,15 +94,6 @@ function selectedNodeSummary(data: GraphData, selectedNode: GraphNode) {
     .filter((node): node is GraphNode => Boolean(node))
     .slice(0, 5);
   return { incoming, links, outgoing, related };
-}
-
-const TYPE_ORDER = ["person", "company", "product", "concept"];
-
-function typeSort(a: string, b: string): number {
-  const ai = TYPE_ORDER.indexOf(a);
-  const bi = TYPE_ORDER.indexOf(b);
-  if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-  return a.localeCompare(b);
 }
 
 export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }: GraphViewProps) {

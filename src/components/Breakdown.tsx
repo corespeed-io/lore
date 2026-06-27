@@ -1,16 +1,11 @@
 "use client";
 
 import { typeColor } from "@/lib/colors";
+import { typeLabel, typeSort } from "@/lib/type-display";
 
 interface BreakdownProps {
   byCounts: Record<string, number>;
   onType: (type: string) => void;
-}
-
-const TYPE_ORDER = ["concept", "product", "person", "company"];
-
-function typeLabel(type: string): string {
-  return type.replace(/_/g, " ");
 }
 
 export function Breakdown({ byCounts, onType }: BreakdownProps) {
@@ -18,10 +13,7 @@ export function Breakdown({ byCounts, onType }: BreakdownProps) {
     .filter(([, count]) => count > 0)
     .sort(([a, av], [b, bv]) => {
       if (bv !== av) return bv - av;
-      const ai = TYPE_ORDER.indexOf(a);
-      const bi = TYPE_ORDER.indexOf(b);
-      if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      return a.localeCompare(b);
+      return typeSort(a, b);
     });
   const max = Math.max(...Object.values(byCounts), 1);
 

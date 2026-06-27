@@ -73,7 +73,9 @@ typecheck + lint + test + build must pass (this is what CI runs).
   typed/mentions/manual links — **not** a regex over the search snippet, which
   missed every link outside the matched chunk. **Drops hash-titled mem0 imports**
   (`isHashTitle`) but keeps legitimate isolated pages so the graph shows pages
-  that currently have no edges. Slug == node id.
+  that currently have no edges. Slug == node id. Node `type` is dynamic: preserve
+  gbrain's returned `type` string and only infer `person` / `company` / `product`
+  from slug prefixes when the backend did not return a type.
 - `src/app/api/call/route.ts` + `src/lib/gbrain.ts` — `/api/call` proxies a gbrain
   MCP tool, gated by `READ_ONLY_TOOLS` (the security boundary — see Security). It
   validates `tool` is a string and clamps unbounded args (`limit`/`depth`/…). Client

@@ -16,10 +16,10 @@ export function isHashTitle(label: string): boolean {
 }
 
 export function nodeType(slug: string, given?: string): string {
+  if (given?.trim()) return given.trim();
   if (slug.startsWith("people/")) return "person";
   if (slug.startsWith("companies/")) return "company";
   if (slug.startsWith("entities/")) return "product";
-  if (given?.trim()) return given.trim();
   return "concept";
 }
 

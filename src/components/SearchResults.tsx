@@ -1,16 +1,8 @@
 "use client";
 
 import { plain } from "@/lib/markdown";
+import { typeLabel, typeSort } from "@/lib/type-display";
 import type { PageHit } from "@/lib/types";
-
-const TYPE_LABELS: Record<string, string> = {
-  person: "People",
-  company: "Companies",
-  product: "Products",
-  concept: "Concepts",
-  extract_receipt: "Extracts",
-};
-const TYPE_ORDER = ["person", "company", "product", "concept"];
 
 interface SearchResultsProps {
   items: PageHit[];
@@ -66,10 +58,6 @@ function shortDate(iso?: string): string {
     : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function typeLabel(type: string): string {
-  return TYPE_LABELS[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 export function SearchResults({
   items,
   allPages,
@@ -91,12 +79,7 @@ export function SearchResults({
     }
     const counts: Record<string, number> = {};
     for (const p of allPages) counts[p.type ?? "other"] = (counts[p.type ?? "other"] ?? 0) + 1;
-    const types = Object.keys(counts).sort((a, b) => {
-      const ai = TYPE_ORDER.indexOf(a);
-      const bi = TYPE_ORDER.indexOf(b);
-      if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-      return a.localeCompare(b);
-    });
+    const types = Object.keys(counts).sort(typeSort);
     const chips: [string, string][] = [
       ["all", "All"],
       ...types.map((t): [string, string] => [t, typeLabel(t)]),
