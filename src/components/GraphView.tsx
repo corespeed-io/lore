@@ -1,7 +1,8 @@
 "use client";
 
 import { apiCall } from "@/lib/api";
-import { TYPE_COLORS } from "@/lib/colors";
+import { typeColor } from "@/lib/colors";
+import { typeSort } from "@/lib/type-display";
 import type { GraphData, GraphNode, PageHit } from "@/lib/types";
 import { type GraphInstance, mountGraph } from "@/lib/viz/graph";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -95,14 +96,6 @@ function selectedNodeSummary(data: GraphData, selectedNode: GraphNode) {
   return { incoming, links, outgoing, related };
 }
 
-// Legend dots share the one type palette (src/lib/colors.ts).
-const LEGEND_TYPES: { type: string; color: string }[] = [
-  { type: "person", color: TYPE_COLORS.person },
-  { type: "company", color: TYPE_COLORS.company },
-  { type: "product", color: TYPE_COLORS.product },
-  { type: "concept", color: TYPE_COLORS.concept },
-];
-
 export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<GraphInstance | null>(null);
@@ -112,6 +105,13 @@ export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }:
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const localFocus = useMemo(() => focusSet(data, focusSlug), [data, focusSlug]);
+  const legendTypes = useMemo(
+    () =>
+      [...new Set(data.nodes.map((node) => node.type || "other"))]
+        .sort(typeSort)
+        .map((type) => ({ type, color: typeColor(type) })),
+    [data.nodes],
+  );
   const selectedNode = useMemo(
     () => data.nodes.find((node) => node.id === selectedId) ?? null,
     [data.nodes, selectedId],
@@ -223,7 +223,7 @@ export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }:
   return (
     <div ref={containerRef} className={`graph-fullscreen${className ? ` ${className}` : ""}`}>
       <div className={`glegend${typeFilter ? " glegend-filtering" : ""}`}>
-        {LEGEND_TYPES.map(({ type, color }) => (
+        {legendTypes.map(({ type, color }) => (
           <button
             key={type}
             type="button"

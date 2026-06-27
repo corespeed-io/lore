@@ -1,15 +1,8 @@
 "use client";
 
 import { plain } from "@/lib/markdown";
+import { typeLabel, typeSort } from "@/lib/type-display";
 import type { PageHit } from "@/lib/types";
-
-const TYPE_CHIPS: [string, string][] = [
-  ["all", "All"],
-  ["person", "People"],
-  ["company", "Companies"],
-  ["product", "Products"],
-  ["concept", "Concepts"],
-];
 
 interface SearchResultsProps {
   items: PageHit[];
@@ -86,10 +79,26 @@ export function SearchResults({
     }
     const counts: Record<string, number> = {};
     for (const p of allPages) counts[p.type ?? "other"] = (counts[p.type ?? "other"] ?? 0) + 1;
-    const chips = TYPE_CHIPS.filter(([k]) => k === "all" || counts[k]);
+    const types = Object.keys(counts).sort(typeSort);
+    const chips: [string, string][] = [
+      ["all", "All"],
+      ...types.map((t): [string, string] => [t, typeLabel(t)]),
+    ];
     const shown = typeFilter === "all" ? allPages : allPages.filter((p) => p.type === typeFilter);
+    const maybeLimited = allPages.length >= 100;
     return (
       <div className="page-wrap">
+        <div className="memories-head">
+          <p>
+            Showing {shown.length}
+            {typeFilter !== "all" ? ` of ${allPages.length}` : ""} memories
+          </p>
+          {maybeLimited && (
+            <span>
+              Showing the first {allPages.length} returned by gbrain. Use search for older matches.
+            </span>
+          )}
+        </div>
         <div className="chip-row">
           {chips.map(([k, label]) => (
             <button

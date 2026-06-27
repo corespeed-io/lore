@@ -1,5 +1,5 @@
 import * as d3 from "d3";
-import { TYPE_COLORS } from "../colors";
+import { typeColor } from "../colors";
 import type { GraphData, GraphLink } from "../types";
 
 export function degrees(links: GraphLink[]): Record<string, number> {
@@ -52,7 +52,6 @@ export function mountGraph(
 ): GraphInstance {
   let W = Math.max(320, el.clientWidth || 640);
   let H = Math.max(320, el.clientHeight || 460);
-  const C = TYPE_COLORS;
   const linkColor = "#ebebeb";
   const nodeStroke = "#ffffff";
   const labelFill = "#171717";
@@ -94,7 +93,7 @@ export function mountGraph(
     .join("circle")
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .attr("r", (d: any) => d.r)
-    .attr("fill", (d) => C[d.type] ?? C.concept ?? "#8f8f8f")
+    .attr("fill", (d) => typeColor(d.type))
     .attr("stroke", nodeStroke)
     .attr("stroke-width", 1.5)
     .style("cursor", "pointer");
@@ -284,7 +283,7 @@ export function mountGraph(
 
   function paintNodeFocus(id: string, selected: boolean) {
     const A = adj[id] ?? new Set([id]);
-    const nodeColor = C[nodeById.get(id)?.type ?? ""] ?? C.concept ?? labelFill;
+    const nodeColor = typeColor(nodeById.get(id)?.type ?? "");
     node
       .attr("opacity", (n) => (A.has(n.id) ? 1 : 0.12))
       .attr("stroke", (n) => (selected && n.id === id ? labelFill : nodeStroke))

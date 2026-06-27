@@ -11,6 +11,17 @@ test("parseRoute: default + ?tab= fallback", () => {
   expect(parseRoute("/", "?tab=bogus").tab).toBe("overview"); // invalid → overview
 });
 
+test("admin console sections route by path; read surfaces unchanged", () => {
+  for (const t of ["requests", "agents", "jobs", "calibration"] as const) {
+    expect(parseRoute(`/${t}`, "").tab).toBe(t);
+    expect(routeUrl({ tab: t })).toBe(`/${t}`);
+  }
+  // read surfaces still route as before — viewer flow intact
+  expect(parseRoute("/memories", "").tab).toBe("search");
+  expect(parseRoute("/graph", "").tab).toBe("graph");
+  expect(routeUrl({ tab: "overview" })).toBe("/");
+});
+
 test("parseRoute: graph routes (focus vs page)", () => {
   expect(parseRoute("/graph", "")).toEqual({ tab: "graph", focus: undefined });
   expect(parseRoute("/graph/people/hao-su", "")).toEqual({

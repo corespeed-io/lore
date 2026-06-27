@@ -16,10 +16,10 @@ export function isHashTitle(label: string): boolean {
 }
 
 export function nodeType(slug: string, given?: string): string {
+  if (given?.trim()) return given.trim();
   if (slug.startsWith("people/")) return "person";
   if (slug.startsWith("companies/")) return "company";
   if (slug.startsWith("entities/")) return "product";
-  if (given === "person" || given === "company" || given === "product") return given;
   return "concept";
 }
 
@@ -59,6 +59,18 @@ export async function buildGraph(): Promise<GraphData> {
     }),
   );
   const titles = new Map<string, { title: string; type?: string }>();
+  try {
+    const { text } = await callTool("list_pages", { limit: 100, sort: "updated_desc" });
+    const pages = JSON.parse(text);
+    if (Array.isArray(pages)) {
+      for (const page of pages as PageHit[]) {
+        if (!page.slug || titles.has(page.slug)) continue;
+        titles.set(page.slug, { title: page.title ?? page.slug, type: page.type });
+      }
+    }
+  } catch {
+    // The query seeds below still produce a graph when list_pages is unavailable.
+  }
   for (const items of seedResults) {
     for (const it of items) {
       if (!it.slug || titles.has(it.slug)) continue;
@@ -86,25 +98,21 @@ export async function buildGraph(): Promise<GraphData> {
     const label = t ? t.title : (slug.split("/").pop() ?? slug).replace(/-/g, " ");
     nodes.set(slug, { id: slug, label, type: nodeType(slug, t?.type) });
   };
+  for (const slug of titles.keys()) ensure(slug);
   for (const { from_slug, to_slug } of rows) {
     if (!from_slug || !to_slug || from_slug === to_slug) continue;
     ensure(from_slug);
     ensure(to_slug);
     edges.add([from_slug, to_slug].sort().join("|"));
   }
-  // 4. Keep the graph meaningful: drop hash-titled mem0 imports, then isolated
-  // nodes (no links). Both stay findable via Search; they just aren't graph nodes.
+  // 4. Drop hash-titled mem0 imports, but keep legitimate isolated pages. The
+  // graph should show the brain's current page set, not only connected pages.
   const titled = new Map([...nodes].filter(([, n]) => !isHashTitle(n.label)));
   const linkPairs = [...edges]
     .map((e) => e.split("|") as [string, string])
     .filter(([s, t]) => titled.has(s) && titled.has(t));
-  const linked = new Set<string>();
-  for (const [s, t] of linkPairs) {
-    linked.add(s);
-    linked.add(t);
-  }
   const data: GraphData = {
-    nodes: [...titled.values()].filter((n) => linked.has(n.id)),
+    nodes: [...titled.values()],
     links: linkPairs.map(([source, target]) => ({ source, target })),
   };
   cache = { data, at: Date.now() };
