@@ -2,7 +2,10 @@ import { loadConfig } from "./config";
 import { callTool } from "./gbrain";
 import type { GraphData, GraphNode, PageHit } from "./types";
 
-const TTL_MS = 600_000;
+// 1h: the brain's page/link topology changes slowly, and every rebuild fans out
+// a traverse_graph call per seed — a long TTL keeps that off the gbrain request
+// log (was 10m, which spammed the log with graph reads).
+const TTL_MS = 3_600_000;
 // Bound how many seed pages we expand through gbrain's link graph. Real graphs
 // have far fewer seed pages than this; the cap just stops a pathological brain
 // from firing thousands of link reads.
@@ -32,11 +35,15 @@ interface LinkRow {
   to_slug?: string;
 }
 
-async function linkRows(tool: "get_links" | "get_backlinks", slug: string): Promise<LinkRow[]> {
+// One bulk call per seed instead of get_links + get_backlinks (two calls):
+// traverse_graph with direction="both" at depth 1 returns every edge incident
+// to the seed (incoming + outgoing) in a single request, halving the link-read
+// volume that floods the gbrain request log.
+async function edgeRows(slug: string): Promise<LinkRow[]> {
   try {
-    const { text } = await callTool(tool, { slug });
+    const { text } = await callTool("traverse_graph", { slug, depth: 1, direction: "both" });
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? (parsed as LinkRow[]) : [];
   } catch {
     return [];
   }
@@ -82,11 +89,7 @@ export async function buildGraph(): Promise<GraphData> {
   // typed edges and the wikilinks that live outside the matched chunk, which the
   // old snippet-scan silently dropped.
   const seeds = [...titles.keys()].slice(0, EXPAND_CAP);
-  const rows = (
-    await Promise.all(
-      seeds.flatMap((s) => [linkRows("get_links", s), linkRows("get_backlinks", s)]),
-    )
-  ).flat();
+  const rows = (await Promise.all(seeds.map((s) => edgeRows(s)))).flat();
 
   // 3. Assemble undirected nodes + edges. Seed pages keep their real title/type;
   // a link target that wasn't itself a seed gets a slug-derived label.
