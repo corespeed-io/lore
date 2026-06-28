@@ -2,8 +2,9 @@ import { expect, test, vi } from "vitest";
 import { buildGraph, clearGraphCache, isHashTitle, nodeType } from "../src/lib/graph.js";
 
 // Stub gbrain so buildGraph reads a fixed fixture instead of a live brain.
-// `query` seeds the page set (titles/types); `get_links`/`get_backlinks` return
-// the REAL edge rows the build now relies on (shape: {from_slug, to_slug}).
+// `query` seeds the page set (titles/types); `traverse_graph` (direction=both,
+// depth 1) returns every edge incident to the slug — incoming + outgoing — in
+// one call (shape: {from_slug, to_slug}), which is what the build now relies on.
 vi.mock("../src/lib/gbrain.js", async (orig) => {
   const real = await orig<typeof import("../src/lib/gbrain.js")>();
   const SEEDS = [
@@ -17,26 +18,28 @@ vi.mock("../src/lib/gbrain.js", async (orig) => {
     { slug: "extracts/receipt", title: "Receipt", type: "extract_receipt" },
     { slug: "tech/hash-import", title: "904b1d36", type: "concept" },
   ];
-  const LINKS: Record<string, { from_slug: string; to_slug: string }[]> = {
-    "companies/acme": [
-      // a `mentions`/typed edge the old chunk-text scan would have missed
-      { from_slug: "companies/acme", to_slug: "people/ada" },
-      // a target that was never itself a seed → pendant node, slug-derived label
-      { from_slug: "companies/acme", to_slug: "entities/widget" },
-      // hash-titled target → dropped even though it's linked
-      { from_slug: "companies/acme", to_slug: "concepts/7416e83d" },
-    ],
+  // The full edge set; traverse_graph(both) returns the rows incident to a slug.
+  const EDGES: { from_slug: string; to_slug: string }[] = [
+    // a `mentions`/typed edge the old chunk-text scan would have missed
+    { from_slug: "companies/acme", to_slug: "people/ada" },
+    // a target that was never itself a seed → pendant node, slug-derived label
+    { from_slug: "companies/acme", to_slug: "entities/widget" },
+    // hash-titled target → dropped even though it's linked
+    { from_slug: "companies/acme", to_slug: "concepts/7416e83d" },
     // reciprocal edge → must dedupe to a single undirected link
-    "people/ada": [{ from_slug: "people/ada", to_slug: "companies/acme" }],
-  };
+    { from_slug: "people/ada", to_slug: "companies/acme" },
+  ];
   return {
     ...real,
     callTool: vi.fn(async (tool: string, args: { slug?: string }) => {
       if (tool === "list_pages") return { isError: false, text: JSON.stringify(PAGES) };
       if (tool === "query") return { isError: false, text: JSON.stringify(SEEDS) };
-      if (tool === "get_links")
-        return { isError: false, text: JSON.stringify(LINKS[args.slug ?? ""] ?? []) };
-      return { isError: false, text: "[]" }; // get_backlinks etc.
+      if (tool === "traverse_graph") {
+        const s = args.slug ?? "";
+        const incident = EDGES.filter((e) => e.from_slug === s || e.to_slug === s);
+        return { isError: false, text: JSON.stringify(incident) };
+      }
+      return { isError: false, text: "[]" };
     }),
   };
 });
