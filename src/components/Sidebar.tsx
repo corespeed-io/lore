@@ -26,7 +26,7 @@ const ADMIN_NAV: { id: Tab; label: string }[] = [
   { id: "requests", label: "Requests" },
   { id: "agents", label: "Access" },
   { id: "jobs", label: "Queue" },
-  { id: "calibration", label: "Calibration" },
+  { id: "calibration", label: "Track record" },
 ];
 
 const ICONS: Partial<Record<Tab, React.ReactNode>> = {

@@ -442,7 +442,7 @@ export function CalibrationPanel() {
   const outcomes = p ? calibrationOutcomes(p) : null;
   return (
     <Panel
-      title="Calibration"
+      title="Track record"
       state={cal}
       needs="GET /admin/api/calibration/profile"
       actions={

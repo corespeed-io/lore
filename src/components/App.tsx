@@ -25,7 +25,7 @@ const TAB_LABELS: Record<Tab, string> = {
   requests: "Requests",
   agents: "Access",
   jobs: "Queue",
-  calibration: "Calibration",
+  calibration: "Track record",
 };
 
 // gbrain's public list_pages operation currently caps at 100 and does not
