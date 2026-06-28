@@ -2447,30 +2447,69 @@ a.ext {
   font-size: 14px;
   line-height: 1.5;
 }
-.admin-charts {
+/* Light-themed calibration visuals (replaced the dark server-rendered SVGs). */
+.calibration-grid-charts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.calibration-gauge {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-  margin-top: 16px;
+  gap: 8px;
 }
-.admin-chart {
-  margin: 0;
-  border: 1px solid var(--hairline);
-  border-radius: 12px;
-  padding: 12px;
+.calibration-gauge-track {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--hairline);
+  /* visible so the baseline marker can extend a touch above/below the track */
+  overflow: visible;
 }
-.admin-chart img {
-  width: 100%;
-  height: auto;
-  display: block;
+.calibration-gauge-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  border-radius: 999px;
+  min-width: 2px;
 }
-.admin-chart figcaption {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
+.calibration-gauge-ok {
+  background: #1a7f37;
+}
+.calibration-gauge-warn {
+  background: #d29922;
+}
+.calibration-gauge-neutral {
+  background: var(--link);
+}
+.calibration-gauge-marker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--ink);
+  z-index: 1;
+}
+.calibration-gauge small {
   color: var(--muted);
-  margin-top: 8px;
+  font-size: 12px;
+}
+.calibration-split {
+  display: flex;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--hairline);
+}
+.calibration-split .seg {
+  display: block;
+  height: 100%;
+}
+.calibration-split .seg-ok {
+  background: #1a7f37;
+}
+.calibration-split .seg-partial {
+  background: #d29922;
+}
+.calibration-split .seg-bad {
+  background: #c0392b;
 }
 .admin-toggle {
   display: flex;

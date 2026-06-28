@@ -10,6 +10,7 @@ import {
   agentOptions,
   calibrationGeneratedAt,
   calibrationIssues,
+  calibrationOutcomes,
   decimal,
   dollars,
   formatParams,
@@ -358,12 +359,40 @@ export function JobsPanel() {
   );
 }
 
-const CHARTS = [
-  { type: "brier-trend", label: "Brier trend" },
-  { type: "pattern-statements", label: "Pattern statements" },
-  { type: "domain-bars", label: "Per-domain accuracy" },
-  { type: "abandoned-threads", label: "Abandoned threads" },
-];
+// Light-themed horizontal gauge: a value on a 0..max track with an optional
+// baseline marker. Replaces the dark server-rendered SVG charts so the panel
+// stays on Lore's light theme (built from the profile JSON, no gbrain images).
+function CalibrationGauge({
+  value,
+  max,
+  marker,
+  tone,
+  caption,
+}: {
+  value: number | null | undefined;
+  max: number;
+  marker?: number;
+  tone: "ok" | "warn" | "neutral";
+  caption: string;
+}) {
+  const pct =
+    value == null || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(1, value / max)) * 100;
+  const markerPct = marker != null ? Math.max(0, Math.min(1, marker / max)) * 100 : null;
+  return (
+    <div className="calibration-gauge">
+      <div className="calibration-gauge-track">
+        <span
+          className={`calibration-gauge-fill calibration-gauge-${tone}`}
+          style={{ width: `${pct}%` }}
+        />
+        {markerPct != null && (
+          <span className="calibration-gauge-marker" style={{ left: `${markerPct}%` }} />
+        )}
+      </div>
+      <small>{caption}</small>
+    </div>
+  );
+}
 
 function CalibrationMetric({
   label,
@@ -410,6 +439,7 @@ export function CalibrationPanel() {
   const issues = p ? calibrationIssues(p) : [];
   const patterns = p?.pattern_statements ?? [];
   const biasTags = p?.active_bias_tags ?? [];
+  const outcomes = p ? calibrationOutcomes(p) : null;
   return (
     <Panel
       title="Calibration"
@@ -549,14 +579,54 @@ export function CalibrationPanel() {
                 <p className="admin-muted">No pattern statements returned.</p>
               )}
             </div>
-            <div className="admin-charts">
-              {CHARTS.map((c) => (
-                <figure key={c.type} className="admin-chart">
-                  {/* server-proxied SVG, chart-type allowlisted */}
-                  <img src={`/api/admin/charts/${c.type}`} alt={c.label} loading="lazy" />
-                  <figcaption>{c.label}</figcaption>
-                </figure>
-              ))}
+            <div className="calibration-grid calibration-grid-charts">
+              <div className="calibration-card">
+                <p className="admin-card-label">Brier vs baseline</p>
+                <CalibrationGauge
+                  value={p.brier}
+                  max={0.5}
+                  marker={0.25}
+                  tone={p.brier != null && p.brier <= 0.25 ? "ok" : "warn"}
+                  caption={`${decimal(p.brier)} · 0.25 baseline · lower is better`}
+                />
+              </div>
+              <div className="calibration-card">
+                <p className="admin-card-label">Accuracy</p>
+                <CalibrationGauge
+                  value={p.accuracy}
+                  max={1}
+                  tone="neutral"
+                  caption={`${percent(p.accuracy, 1)} of resolved calls`}
+                />
+              </div>
+              <div className="calibration-card">
+                <p className="admin-card-label">Outcomes</p>
+                {outcomes ? (
+                  <>
+                    <div className="calibration-split" aria-hidden="true">
+                      {outcomes.correct > 0 && (
+                        <span className="seg seg-ok" style={{ flexGrow: outcomes.correct }} />
+                      )}
+                      {outcomes.partial > 0 && (
+                        <span
+                          className="seg seg-partial"
+                          style={{ flexGrow: outcomes.partial }}
+                        />
+                      )}
+                      {outcomes.incorrect > 0 && (
+                        <span className="seg seg-bad" style={{ flexGrow: outcomes.incorrect }} />
+                      )}
+                    </div>
+                    <small>
+                      {outcomes.correct} correct · {outcomes.incorrect} wrong
+                      {outcomes.partial > 0 ? ` · ${outcomes.partial} partial` : ""} · n=
+                      {outcomes.total}
+                    </small>
+                  </>
+                ) : (
+                  <p className="admin-muted">No resolved outcomes yet.</p>
+                )}
+              </div>
             </div>
             <details className="admin-details">
               <summary>Raw profile</summary>
