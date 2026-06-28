@@ -6,10 +6,14 @@ import type { GraphData, GraphNode, PageHit } from "./types";
 // a traverse_graph call per seed — a long TTL keeps that off the gbrain request
 // log (was 10m, which spammed the log with graph reads).
 const TTL_MS = 3_600_000;
-// Bound how many seed pages we expand through gbrain's link graph. Real graphs
-// have far fewer seed pages than this; the cap just stops a pathological brain
-// from firing thousands of link reads.
-const EXPAND_CAP = 60;
+// Edges come from a FEW deep traversals, not one shallow call per page.
+// traverse_graph(both, depth N) returns the whole reachable neighborhood's edges
+// in a single call, so a handful of deep roots cover the graph while keeping the
+// gbrain request log quiet (was 1 shallow call × up to 60 seeds = 60 reads/build;
+// now ~TRAVERSE_ROOTS reads/build). Roots are the most-relevant pages; depth 5
+// (gbrain's default, cap 10) reaches across the connected brain.
+const TRAVERSE_ROOTS = 8;
+const TRAVERSE_DEPTH = 5;
 let cache: { data: GraphData; at: number } | null = null;
 
 // mem0-migrated pages carry a content-hash as their title (e.g. "7416e83d").
@@ -39,9 +43,9 @@ interface LinkRow {
 // traverse_graph with direction="both" at depth 1 returns every edge incident
 // to the seed (incoming + outgoing) in a single request, halving the link-read
 // volume that floods the gbrain request log.
-async function edgeRows(slug: string): Promise<LinkRow[]> {
+async function edgeRows(slug: string, depth: number): Promise<LinkRow[]> {
   try {
-    const { text } = await callTool("traverse_graph", { slug, depth: 1, direction: "both" });
+    const { text } = await callTool("traverse_graph", { slug, depth, direction: "both" });
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? (parsed as LinkRow[]) : [];
   } catch {
@@ -84,12 +88,12 @@ export async function buildGraph(): Promise<GraphData> {
       titles.set(it.slug, { title: it.title ?? it.slug, type: it.type });
     }
   }
-  // 2. Edges from gbrain's ACTUAL link graph (outgoing + incoming) for each seed
-  // page — not a regex over the search snippet. This surfaces the mentions/manual/
-  // typed edges and the wikilinks that live outside the matched chunk, which the
-  // old snippet-scan silently dropped.
-  const seeds = [...titles.keys()].slice(0, EXPAND_CAP);
-  const rows = (await Promise.all(seeds.map((s) => edgeRows(s)))).flat();
+  // 2. Edges from gbrain's ACTUAL link graph (incoming + outgoing) via a few deep
+  // traversals from the most-relevant root pages — not a regex over the search
+  // snippet. This surfaces the mentions/manual/typed edges and the wikilinks that
+  // live outside the matched chunk, which the old snippet-scan silently dropped.
+  const roots = [...titles.keys()].slice(0, TRAVERSE_ROOTS);
+  const rows = (await Promise.all(roots.map((s) => edgeRows(s, TRAVERSE_DEPTH)))).flat();
 
   // 3. Assemble undirected nodes + edges. Seed pages keep their real title/type;
   // a link target that wasn't itself a seed gets a slug-derived label.
