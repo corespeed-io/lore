@@ -4,6 +4,7 @@ import {
   agentOptions,
   calibrationGeneratedAt,
   calibrationIssues,
+  calibrationOutcomes,
   decimal,
   dollars,
   formatParams,
@@ -13,6 +14,22 @@ import {
   scopeList,
 } from "../src/lib/admin-format.js";
 import { agents, calibrationProfile, jobsSnapshot, requestsPage } from "./fixtures/admin.js";
+
+test("calibrationOutcomes reconstructs correct/incorrect/partial from scorecard aggregates", () => {
+  // 8 resolved, 50% accuracy, 0 partial → 4 correct / 4 wrong (exact)
+  expect(
+    calibrationOutcomes({ ...calibrationProfile, total_resolved: 8, accuracy: 0.5, partial_rate: 0 }),
+  ).toEqual({ correct: 4, incorrect: 4, partial: 0, total: 8 });
+  // with partials: 10 resolved, 20% partial (=2), accuracy 75% over the 8 non-partial → 6/2
+  expect(
+    calibrationOutcomes({ ...calibrationProfile, total_resolved: 10, accuracy: 0.75, partial_rate: 0.2 }),
+  ).toEqual({ correct: 6, incorrect: 2, partial: 2, total: 10 });
+  // guards: no data / no accuracy → null
+  expect(calibrationOutcomes({ ...calibrationProfile, total_resolved: 0 })).toBeNull();
+  expect(
+    calibrationOutcomes({ ...calibrationProfile, total_resolved: 8, accuracy: null }),
+  ).toBeNull();
+});
 
 test("formatParams matches upstream summary (query / slug / ~partial / limit / +N)", () => {
   expect(formatParams(null)).toBeNull();

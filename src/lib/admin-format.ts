@@ -67,6 +67,32 @@ export interface CalibrationIssue {
   detail: string;
 }
 
+export interface CalibrationOutcomes {
+  correct: number;
+  incorrect: number;
+  partial: number;
+  total: number;
+}
+
+// Reconstruct the correct/incorrect/partial counts from the scorecard's own
+// aggregates — the inverse of how gbrain computes them:
+//   total = correct + incorrect + partial
+//   partial_rate = partial / total
+//   accuracy = correct / (correct + incorrect)   (partial excluded)
+// Exact for clean samples (integer rounding for the rest). Returns null when
+// there's nothing to show or accuracy is unavailable.
+export function calibrationOutcomes(profile: CalibrationProfile): CalibrationOutcomes | null {
+  const total = profile.total_resolved ?? 0;
+  if (total <= 0) return null;
+  const acc = profile.accuracy;
+  if (acc == null || !Number.isFinite(acc)) return null;
+  const partial = Math.min(total, Math.max(0, Math.round((profile.partial_rate ?? 0) * total)));
+  const nonPartial = total - partial;
+  const correct = Math.min(nonPartial, Math.max(0, Math.round(acc * nonPartial)));
+  const incorrect = nonPartial - correct;
+  return { correct, incorrect, partial, total };
+}
+
 // "just now" / "5m ago" / "3h ago" / "2d ago".
 export function relativeTime(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return "—";
