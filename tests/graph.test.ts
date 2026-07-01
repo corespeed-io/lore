@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { callTool } from "../src/lib/gbrain.js";
 import { buildGraph, clearGraphCache, isHashTitle, nodeType } from "../src/lib/graph.js";
 
 // Stub gbrain so buildGraph reads a fixed fixture instead of a live brain.
@@ -86,4 +87,23 @@ test("buildGraph builds from pages + the real link graph: isolated nodes stay in
   expect(ids).not.toContain("concepts/7416e83d");
   // hash-titled page-list import also dropped
   expect(ids).not.toContain("tech/hash-import");
+});
+
+test("buildGraph fails loud instead of caching an edgeless graph when traversals error", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = mocked.getMockImplementation();
+  if (!base) throw new Error("callTool mock missing");
+  // Pages/seeds still resolve (nodes exist), but every edge read fails → the
+  // graph would be all-isolated. That must throw, not cache a scattered graph.
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "traverse_graph") throw new Error("gbrain 429");
+    return base(tool, args);
+  });
+  try {
+    await expect(buildGraph()).rejects.toThrow(/traversals failed/);
+  } finally {
+    mocked.mockImplementation(base);
+    clearGraphCache();
+  }
 });
