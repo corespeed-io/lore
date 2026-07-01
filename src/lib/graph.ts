@@ -43,13 +43,17 @@ interface LinkRow {
 // traverse_graph with direction="both" at depth 1 returns every edge incident
 // to the seed (incoming + outgoing) in a single request, halving the link-read
 // volume that floods the gbrain request log.
-async function edgeRows(slug: string, depth: number): Promise<LinkRow[]> {
+//
+// `ok` distinguishes "this root genuinely reached no edges" from "the read
+// failed": collapsing both to [] is how a transient gbrain hiccup silently
+// turned the whole graph edgeless (every node degree 0 → uniform scatter).
+async function edgeRows(slug: string, depth: number): Promise<{ rows: LinkRow[]; ok: boolean }> {
   try {
     const { text } = await callTool("traverse_graph", { slug, depth, direction: "both" });
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as LinkRow[]) : [];
+    return { rows: Array.isArray(parsed) ? (parsed as LinkRow[]) : [], ok: true };
   } catch {
-    return [];
+    return { rows: [], ok: false };
   }
 }
 
@@ -92,8 +96,25 @@ export async function buildGraph(): Promise<GraphData> {
   // traversals from the most-relevant root pages — not a regex over the search
   // snippet. This surfaces the mentions/manual/typed edges and the wikilinks that
   // live outside the matched chunk, which the old snippet-scan silently dropped.
-  const roots = [...titles.keys()].slice(0, TRAVERSE_ROOTS);
-  const rows = (await Promise.all(roots.map((s) => edgeRows(s, TRAVERSE_DEPTH)))).flat();
+  //
+  // Roots MUST be well-connected pages, not just the newest. A deep traversal
+  // from a freshly-created (still-unlinked) page reaches nothing, and the newest
+  // pages often are exactly that — so recency-ordered roots (list_pages order)
+  // can miss every hub and yield an all-isolated graph. Seed-query hits are
+  // relevance-ranked and reliably surface the hubs (entities/companies/people),
+  // so seed the roots from them — round-robin across queries so each contributes
+  // its top hit — and fall back to recent pages only to fill TRAVERSE_ROOTS.
+  const rankedSlugs: string[] = [];
+  const deepest = Math.max(0, ...seedResults.map((r) => r.length));
+  for (let i = 0; i < deepest; i++)
+    for (const hits of seedResults) {
+      const slug = hits[i]?.slug;
+      if (slug) rankedSlugs.push(slug);
+    }
+  const roots = [...new Set([...rankedSlugs, ...titles.keys()])].slice(0, TRAVERSE_ROOTS);
+  const traversals = await Promise.all(roots.map((s) => edgeRows(s, TRAVERSE_DEPTH)));
+  const rows = traversals.flatMap((t) => t.rows);
+  const anyTraversalFailed = traversals.some((t) => !t.ok);
 
   // 3. Assemble undirected nodes + edges. Seed pages keep their real title/type;
   // a link target that wasn't itself a seed gets a slug-derived label.
@@ -122,6 +143,13 @@ export async function buildGraph(): Promise<GraphData> {
     nodes: [...titled.values()],
     links: linkPairs.map(([source, target]) => ({ source, target })),
   };
+  // One healthy root returns the whole reachable neighborhood, so zero edges is
+  // normal only when the brain truly has none. Zero edges WHILE a traversal
+  // errored means the emptiness is a gbrain hiccup — surface it (route → 502,
+  // NOT cached) instead of caching a misleading "everything scattered" graph for
+  // the full 1h TTL.
+  if (!data.links.length && anyTraversalFailed)
+    throw new Error("graph: link traversals failed — refusing to cache an edgeless graph");
   cache = { data, at: Date.now() };
   return data;
 }

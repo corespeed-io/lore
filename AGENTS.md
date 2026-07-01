@@ -70,14 +70,20 @@ typecheck + lint + test + build must pass (this is what CI runs).
   page never switches tabs, so `tab` IS the origin. Don't reintroduce per-tab page state.
 - `src/app/api/graph/route.ts` + `src/lib/graph.ts` — `/api/graph` seeds a page
   set from `list_pages` plus the seed queries, then reads gbrain's **actual link graph**
-  (`get_links` + `get_backlinks` per seed page, fanned out in parallel, capped at
-  `EXPAND_CAP`) into `{nodes, links}`, 10-min cached. Edges come from gbrain's
-  typed/mentions/manual links — **not** a regex over the search snippet, which
-  missed every link outside the matched chunk. **Drops hash-titled mem0 imports**
-  (`isHashTitle`) but keeps legitimate isolated pages so the graph shows pages
-  that currently have no edges. Slug == node id. Node `type` is dynamic: preserve
-  gbrain's returned `type` string and only infer `person` / `company` / `product`
-  from slug prefixes when the backend did not return a type.
+  via a FEW deep `traverse_graph(direction=both)` calls from the most-relevant roots
+  (`TRAVERSE_ROOTS`, `TRAVERSE_DEPTH`) — one bulk call returns a whole reachable
+  neighborhood, so this covers the graph while keeping the gbrain request log quiet
+  (the old `get_links`+`get_backlinks`-per-seed fan-out spammed it). `{nodes, links}`,
+  **1h cached**. Edges come from gbrain's typed/mentions/manual links — **not** a regex
+  over the search snippet, which missed every link outside the matched chunk. **Drops
+  hash-titled mem0 imports** (`isHashTitle`) but keeps legitimate isolated pages so the
+  graph shows pages that currently have no edges. A failed traversal read is caught to
+  `[]`; since one healthy root returns the whole neighborhood, buildGraph **fails loud
+  (throws → route 502, uncached) when it ends up with zero edges AND a traversal
+  errored** — don't silently cache an edgeless "everything scattered" graph for the 1h
+  TTL. Slug == node id. Node `type` is dynamic: preserve gbrain's returned `type` string
+  and only infer `person` / `company` / `product` from slug prefixes when the backend
+  did not return a type.
 - `src/app/api/call/route.ts` + `src/lib/gbrain.ts` — `/api/call` proxies a gbrain
   MCP tool, gated by `READ_ONLY_TOOLS` (the security boundary — see Security). It
   validates `tool` is a string and clamps unbounded args (`limit`/`depth`/…). Client
