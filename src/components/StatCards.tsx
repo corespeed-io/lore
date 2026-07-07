@@ -4,13 +4,14 @@ type Tab = "overview" | "graph" | "search";
 
 interface StatCardsProps {
   pageCount: number;
-  linkCount: number;
+  // "—" when the graph read failed: an unknown link count must not render as 0.
+  linkCount: number | string;
   sourceCount: number;
   onNavigate: (tab: Tab) => void;
 }
 
 export function StatCards({ pageCount, linkCount, sourceCount, onNavigate }: StatCardsProps) {
-  const cards: { label: string; value: number; target: Tab }[] = [
+  const cards: { label: string; value: number | string; target: Tab }[] = [
     { label: "Pages", value: pageCount, target: "search" },
     { label: "Links", value: linkCount, target: "graph" },
     { label: "Sources", value: sourceCount, target: "search" },

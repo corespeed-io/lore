@@ -40,6 +40,35 @@ test("GET /api/health is ok", async () => {
   expect((await res.json()).status).toBe("ok");
 });
 
+test("GET /api/graph maps a failed build to 502 and a healthy build to 200", async () => {
+  const { clearGraphCache } = await import("../src/lib/graph.js");
+  const { GET } = await import("../src/app/api/graph/route.js");
+  const gbrain = await import("../src/lib/gbrain.js");
+  const mocked = vi.mocked(gbrain.callTool);
+  const base = mocked.getMockImplementation();
+  if (!base) throw new Error("callTool mock missing");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  clearGraphCache();
+  mocked.mockImplementation(async () => {
+    throw new Error("gbrain down");
+  });
+  try {
+    const bad = await GET();
+    expect(bad.status).toBe(502);
+    expect((await bad.json()).detail).toBe("couldn't reach the brain");
+  } finally {
+    mocked.mockImplementation(base);
+    error.mockRestore();
+    clearGraphCache();
+  }
+  const ok = await GET();
+  expect(ok.status).toBe(200);
+  const body = await ok.json();
+  expect(body.nodes).toEqual([]);
+  expect(body.links).toEqual([]);
+  clearGraphCache();
+});
+
 test("POST /api/call clamps an oversized limit before reaching gbrain", async () => {
   const { POST } = await import("../src/app/api/call/route.js");
   const gbrain = await import("../src/lib/gbrain.js");

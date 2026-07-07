@@ -608,10 +608,7 @@ export function CalibrationPanel() {
                         <span className="seg seg-ok" style={{ flexGrow: outcomes.correct }} />
                       )}
                       {outcomes.partial > 0 && (
-                        <span
-                          className="seg seg-partial"
-                          style={{ flexGrow: outcomes.partial }}
-                        />
+                        <span className="seg seg-partial" style={{ flexGrow: outcomes.partial }} />
                       )}
                       {outcomes.incorrect > 0 && (
                         <span className="seg seg-bad" style={{ flexGrow: outcomes.incorrect }} />

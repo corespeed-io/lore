@@ -6,10 +6,12 @@ import { degrees } from "@/lib/viz/graph";
 interface TopHubsProps {
   nodes: GraphData["nodes"];
   links: GraphData["links"];
+  // The graph read failed: "no hubs" is unknown, not empty.
+  unavailable?: boolean;
   onOpen: (slug: string) => void;
 }
 
-export function TopHubs({ nodes, links, onOpen }: TopHubsProps) {
+export function TopHubs({ nodes, links, unavailable, onOpen }: TopHubsProps) {
   const deg = degrees(links);
   const hubs = [...nodes]
     .filter((n) => (deg[n.id] ?? 0) > 0)
@@ -27,7 +29,9 @@ export function TopHubs({ nodes, links, onOpen }: TopHubsProps) {
       ))}
       {hubs.length === 0 && (
         <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>
-          No connected nodes yet.
+          {unavailable
+            ? "Link data unavailable — couldn't reach gbrain."
+            : "No connected nodes yet."}
         </p>
       )}
     </div>

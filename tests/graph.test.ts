@@ -1,10 +1,12 @@
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { callTool } from "../src/lib/gbrain.js";
 import { buildGraph, clearGraphCache, isHashTitle, nodeType } from "../src/lib/graph.js";
 
 // Stub gbrain so buildGraph reads a fixed fixture instead of a live brain.
 // `query` seeds the page set (titles/types); `traverse_graph` (direction=both,
-// depth 1) returns every edge incident to the slug — incoming + outgoing — in
-// one call (shape: {from_slug, to_slug}), which is what the build now relies on.
+// deep) returns every edge in the slug's reachable neighborhood — incoming +
+// outgoing — in one call (shape: {from_slug, to_slug}), which is what the
+// build relies on.
 vi.mock("../src/lib/gbrain.js", async (orig) => {
   const real = await orig<typeof import("../src/lib/gbrain.js")>();
   const SEEDS = [
@@ -42,6 +44,17 @@ vi.mock("../src/lib/gbrain.js", async (orig) => {
       return { isError: false, text: "[]" };
     }),
   };
+});
+
+// Every buildGraph test swaps the mock implementation and relies on the module
+// cache being empty; restore both so test order can't leak state.
+const baseImpl = () => {
+  const base = vi.mocked(callTool).getMockImplementation();
+  if (!base) throw new Error("callTool mock missing");
+  return base;
+};
+afterEach(() => {
+  clearGraphCache();
 });
 
 test("isHashTitle flags content-hash labels but not real titles", () => {
@@ -86,4 +99,281 @@ test("buildGraph builds from pages + the real link graph: isolated nodes stay in
   expect(ids).not.toContain("concepts/7416e83d");
   // hash-titled page-list import also dropped
   expect(ids).not.toContain("tech/hash-import");
+});
+
+test("traversal roots prefer relevance-ranked seed hits over the newest pages", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  // list_pages (updated_desc) is filled by MORE than TRAVERSE_ROOTS fresh,
+  // still-unlinked pages; the only edge-bearing hub is surfaced solely by the
+  // seed queries. Recency-ordered roots (the pre-fix behavior) would traverse
+  // only the fresh pages and build the all-isolated "scattered" graph.
+  const fresh = Array.from({ length: 9 }, (_, i) => ({
+    slug: `notes/fresh-${i}`,
+    title: `Fresh ${i}`,
+    type: "concept",
+  }));
+  const hub = { slug: "companies/hub", title: "Hub", type: "company" };
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "list_pages") return { isError: false, text: JSON.stringify(fresh) };
+    if (tool === "query") return { isError: false, text: JSON.stringify([hub]) };
+    if (tool === "traverse_graph") {
+      const rows =
+        (args as { slug?: string }).slug === "companies/hub"
+          ? [{ from_slug: "companies/hub", to_slug: "notes/fresh-0" }]
+          : [];
+      return { isError: false, text: JSON.stringify(rows) };
+    }
+    return { isError: false, text: "[]" };
+  });
+  try {
+    const g = await buildGraph();
+    expect(g.links).toHaveLength(1);
+  } finally {
+    mocked.mockImplementation(base);
+  }
+});
+
+test("traversal roots round-robin across seed queries (each query's top hit gets a slot)", async () => {
+  clearGraphCache();
+  // loadConfig reads live env — pin the queries so an exported SEED_QUERIES
+  // in the runner's shell can't change the expected slot math below.
+  vi.stubEnv("SEED_QUERIES", "alpha||beta||gamma||delta");
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  // Each of the 4 seed queries returns 3 distinct hubs (12 > 8 slots).
+  const traversed: string[] = [];
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "query") {
+      const q = (args as { query: string }).query.replace(/\W+/g, "-");
+      const hits = [0, 1, 2].map((i) => ({
+        slug: `hubs/${q}-${i}`,
+        title: `Hub ${q} ${i}`,
+        type: "concept",
+      }));
+      return { isError: false, text: JSON.stringify(hits) };
+    }
+    if (tool === "traverse_graph") {
+      traversed.push((args as { slug: string }).slug);
+      return { isError: false, text: "[]" }; // healthy, genuinely edgeless
+    }
+    return base(tool, args);
+  });
+  try {
+    await buildGraph();
+    expect(traversed).toHaveLength(8);
+    expect(new Set(traversed).size).toBe(8);
+    // round-robin: every query's rank-0 hit is traversed, and all of them
+    // come before any lower-ranked hit
+    expect(traversed.slice(0, 4).every((s) => s.endsWith("-0"))).toBe(true);
+    expect(traversed.filter((s) => s.endsWith("-0"))).toHaveLength(4);
+  } finally {
+    mocked.mockImplementation(base);
+    vi.unstubAllEnvs();
+  }
+});
+
+test("buildGraph serves a genuinely edgeless brain without throwing (and caches it)", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "traverse_graph") return { isError: false, text: "[]" }; // healthy, no edges
+    return base(tool, args);
+  });
+  try {
+    const g = await buildGraph();
+    expect(g.links).toHaveLength(0);
+    expect(g.nodes.length).toBeGreaterThan(0);
+  } finally {
+    mocked.mockImplementation(base);
+  }
+});
+
+test("buildGraph fails loud instead of caching an edgeless graph when traversals error", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  // Pages/seeds still resolve (nodes exist), but every edge read fails → the
+  // graph would be all-isolated. That must throw, not cache a scattered graph.
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "traverse_graph") throw new Error("gbrain 429");
+    return base(tool, args);
+  });
+  try {
+    await expect(buildGraph()).rejects.toThrow(/refusing to serve an edgeless graph/);
+    // and the failed build must NOT have been cached: a retry re-attempts
+    // upstream and re-fails (a poisoned cache would resolve with the edgeless graph)
+    await expect(buildGraph()).rejects.toThrow(/refusing to serve an edgeless graph/);
+  } finally {
+    mocked.mockImplementation(base);
+  }
+});
+
+// Each shape pins ONE edgeRows failure branch (callTool does NOT throw on any
+// of these; they used to parse as "healthy, zero edges" and slip past the
+// guard): the isError flag on an otherwise healthy-looking body, a non-array
+// payload, and a non-empty array carrying no {from_slug, to_slug} rows
+// (schema drift — e.g. a backend answering with node rows instead of edges).
+const FAILED_READ_SHAPES: [string, { isError: boolean; text: string }][] = [
+  ["an isError flag on a healthy-looking body", { isError: true, text: "[]" }],
+  ["a non-array payload", { isError: false, text: '"not an array"' }],
+  [
+    "an array without edge rows",
+    { isError: false, text: JSON.stringify([{ slug: "x", title: "X" }]) },
+  ],
+];
+for (const [shape, reply] of FAILED_READ_SHAPES) {
+  test(`a traverse read returning ${shape} counts as a failed read`, async () => {
+    clearGraphCache();
+    const mocked = vi.mocked(callTool);
+    const base = baseImpl();
+    mocked.mockImplementation(async (tool, args) => {
+      if (tool === "traverse_graph") return reply;
+      return base(tool, args);
+    });
+    try {
+      await expect(buildGraph()).rejects.toThrow(/refusing to serve an edgeless graph/);
+    } finally {
+      mocked.mockImplementation(base);
+    }
+  });
+}
+
+test("filter-emptiness is not failure: hash-only edges + a failed read still serve (no 502)", async () => {
+  clearGraphCache();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  // acme's only edge goes to a hash-titled page (dropped from the viz) and a
+  // DIFFERENT root's read fails. Pre-filter edges exist, so the emptiness of
+  // data.links is a filtering artifact, not a gbrain hiccup — must not throw.
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "traverse_graph") {
+      if ((args as { slug?: string }).slug === "companies/acme")
+        return {
+          isError: false,
+          text: JSON.stringify([{ from_slug: "companies/acme", to_slug: "concepts/7416e83d" }]),
+        };
+      throw new Error("gbrain 429");
+    }
+    return base(tool, args);
+  });
+  try {
+    const g = await buildGraph();
+    expect(g.links).toHaveLength(0);
+  } finally {
+    mocked.mockImplementation(base);
+    warn.mockRestore();
+  }
+});
+
+test("hash-titled pages don't consume traversal-root slots", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  // 8 hash-titled mem0 imports lead both the query ranking and the recency
+  // list; the only edge-bearing hub sits behind them at position 9. If either
+  // root pool let hash pages through, the hub would be sliced out of the 8
+  // root slots and the graph would build edgeless.
+  const hashes = Array.from({ length: 8 }, (_, i) => ({
+    slug: `mem0/import-${i}`,
+    title: `a1b2c${i}d4`,
+    type: "concept",
+  }));
+  const hub = { slug: "companies/hub", title: "Hub", type: "company" };
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "query") return { isError: false, text: JSON.stringify(hashes) };
+    if (tool === "list_pages") return { isError: false, text: JSON.stringify([...hashes, hub]) };
+    if (tool === "traverse_graph") {
+      const rows =
+        (args as { slug?: string }).slug === "companies/hub"
+          ? [{ from_slug: "companies/hub", to_slug: "notes/pinned" }]
+          : [];
+      return { isError: false, text: JSON.stringify(rows) };
+    }
+    return base(tool, args);
+  });
+  try {
+    const g = await buildGraph();
+    expect(g.links).toHaveLength(1);
+  } finally {
+    mocked.mockImplementation(base);
+  }
+});
+
+test("buildGraph fails loud on a total gbrain outage instead of caching an empty graph", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  mocked.mockImplementation(async () => {
+    throw new Error("fetch failed");
+  });
+  try {
+    // No roots were even traversed — the seed-phase failure alone must trip
+    // the guard (this used to cache {nodes:[],links:[]} for the full TTL).
+    await expect(buildGraph()).rejects.toThrow(/refusing to serve an edgeless graph/);
+  } finally {
+    mocked.mockImplementation(base);
+  }
+});
+
+test("a partial traversal failure with surviving edges serves the graph but does NOT cache it", async () => {
+  clearGraphCache();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  mocked.mockImplementation(async (tool, args) => {
+    if (tool === "traverse_graph" && (args as { slug?: string }).slug !== "companies/acme")
+      throw new Error("gbrain 429");
+    return base(tool, args);
+  });
+  try {
+    const g = await buildGraph();
+    // acme's incident rows alone still yield both undirected links
+    expect(g.links).toHaveLength(2);
+    // degraded build is not cached: a second call hits upstream again
+    const callsAfterFirst = mocked.mock.calls.length;
+    await buildGraph();
+    expect(mocked.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+  } finally {
+    mocked.mockImplementation(base);
+    warn.mockRestore();
+  }
+});
+
+test("buildGraph serves the last good graph stale when a rebuild fails", async () => {
+  clearGraphCache();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  const good = await buildGraph(); // healthy build → cached
+  expect(good.links).toHaveLength(2);
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(Date.now() + 3_600_001); // expire the TTL
+    mocked.mockImplementation(async (tool, args) => {
+      if (tool === "traverse_graph") throw new Error("gbrain down");
+      return base(tool, args);
+    });
+    // the rebuild fails, but the expired-yet-real graph beats a 502
+    await expect(buildGraph()).resolves.toBe(good);
+  } finally {
+    vi.useRealTimers();
+    mocked.mockImplementation(base);
+    warn.mockRestore();
+  }
+});
+
+test("concurrent cache misses share a single rebuild (single-flight)", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  mocked.mockClear();
+  const [a, b] = await Promise.all([buildGraph(), buildGraph()]);
+  expect(a).toBe(b);
+  // one rebuild's worth of upstream calls: 4 seed queries + list_pages + ≤8
+  // traversals — a second concurrent rebuild would double this
+  const listCalls = mocked.mock.calls.filter(([tool]) => tool === "list_pages").length;
+  expect(listCalls).toBe(1);
 });

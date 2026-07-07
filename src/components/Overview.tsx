@@ -18,6 +18,8 @@ interface OverviewProps {
   appSubtitle: string;
   adminSummary?: ReactNode;
   graphData: GraphData;
+  // Non-null when /api/graph failed: link stats are unknown, not zero.
+  graphError?: string | null;
   allPages: PageHit[];
   onOpen: (slug: string) => void;
   onType: (type: string) => void;
@@ -38,12 +40,14 @@ export function Overview({
   appSubtitle,
   adminSummary,
   graphData,
+  graphError,
   allPages,
   onOpen,
   onType,
   onNavigate,
 }: OverviewProps) {
   const byCounts = countByType(allPages.length ? allPages : graphData.nodes);
+  const linksUnknown = Boolean(graphError) && graphData.links.length === 0;
   const [sources, setSources] = useState<SourceInfo[]>([]);
   const [salient, setSalient] = useState<SalientPage[]>([]);
   const visibleSlugs = new Set(allPages.map((p) => p.slug));
@@ -80,7 +84,7 @@ export function Overview({
         <div className="stat-row">
           <StatCards
             pageCount={allPages.length}
-            linkCount={graphData.links.length}
+            linkCount={linksUnknown ? "—" : graphData.links.length}
             sourceCount={sources.length}
             onNavigate={onNavigate}
           />
@@ -92,7 +96,12 @@ export function Overview({
 
       <div className="panel-grid">
         <Breakdown byCounts={byCounts} onType={onType} />
-        <TopHubs nodes={graphData.nodes} links={graphData.links} onOpen={onOpen} />
+        <TopHubs
+          nodes={graphData.nodes}
+          links={graphData.links}
+          unavailable={linksUnknown}
+          onOpen={onOpen}
+        />
         <Sources sources={sources} />
         <RecentActivity items={recentItems} onOpen={onOpen} />
       </div>

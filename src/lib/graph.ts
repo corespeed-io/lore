@@ -15,6 +15,9 @@ const TTL_MS = 3_600_000;
 const TRAVERSE_ROOTS = 8;
 const TRAVERSE_DEPTH = 5;
 let cache: { data: GraphData; at: number } | null = null;
+// Single-flight: concurrent cache misses share one rebuild instead of each
+// fanning the full list_pages + seed-query + traversal pipeline at gbrain.
+let inflight: Promise<GraphData> | null = null;
 
 // mem0-migrated pages carry a content-hash as their title (e.g. "7416e83d").
 // They're real memories but meaningless as graph labels — drop them from the viz.
@@ -30,8 +33,12 @@ export function nodeType(slug: string, given?: string): string {
   return "concept";
 }
 
+// Test-only reset. NOT safe to call while a rebuild is in flight: there is no
+// generation fencing, so a pending rebuild still writes `cache` when it
+// settles (and its .finally clears a successor's inflight registration).
 export function clearGraphCache(): void {
   cache = null;
+  inflight = null;
 }
 
 interface LinkRow {
@@ -39,48 +46,88 @@ interface LinkRow {
   to_slug?: string;
 }
 
-// One bulk call per seed instead of get_links + get_backlinks (two calls):
-// traverse_graph with direction="both" at depth 1 returns every edge incident
-// to the seed (incoming + outgoing) in a single request, halving the link-read
-// volume that floods the gbrain request log.
-async function edgeRows(slug: string, depth: number): Promise<LinkRow[]> {
+// One traverse_graph(direction="both", depth=TRAVERSE_DEPTH) call per selected
+// root returns every edge in the root's reachable neighborhood — incoming +
+// outgoing — so a few deep reads cover the graph (see TRAVERSE_ROOTS above).
+//
+// `ok` distinguishes "this root genuinely reached no edges" from "the read
+// failed": collapsing both to [] is how a transient gbrain hiccup silently
+// turned the whole graph edgeless (every node degree 0 → uniform scatter).
+// A read counts as failed when the call threw, gbrain flagged a tool-level
+// error (isError — callTool does NOT throw on those), the payload wasn't an
+// array, or a non-empty array carried no usable {from_slug, to_slug} rows
+// (schema drift: e.g. a backend answering with node rows instead of edges).
+async function edgeRows(slug: string, depth: number): Promise<{ rows: LinkRow[]; ok: boolean }> {
   try {
-    const { text } = await callTool("traverse_graph", { slug, depth, direction: "both" });
+    const { isError, text } = await callTool("traverse_graph", { slug, depth, direction: "both" });
+    if (isError) return { rows: [], ok: false };
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as LinkRow[]) : [];
+    if (!Array.isArray(parsed)) return { rows: [], ok: false };
+    const rows = (parsed as LinkRow[]).filter(
+      (r) => typeof r?.from_slug === "string" && typeof r?.to_slug === "string",
+    );
+    return { rows, ok: parsed.length === 0 || rows.length > 0 };
   } catch {
-    return [];
+    return { rows: [], ok: false };
   }
 }
 
 export async function buildGraph(): Promise<GraphData> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
+  inflight ??= rebuild().finally(() => {
+    inflight = null;
+  });
+  try {
+    return await inflight;
+  } catch (err) {
+    // Stale beats 502: an expired-but-real graph is better than an error page,
+    // and it keeps a degraded gbrain from being hammered with full rebuilds.
+    if (cache) {
+      console.warn("graph: rebuild failed — serving stale graph", err);
+      return cache.data;
+    }
+    throw err;
+  }
+}
+
+async function rebuild(): Promise<GraphData> {
   const cfg = loadConfig();
+  // Every upstream read feeds ONE failure signal. Seed-phase failures used to
+  // be invisible (caught to []), which let a total gbrain outage cache an
+  // EMPTY graph as healthy for the full TTL — and let an all-seed-query
+  // failure silently fall back to recency-ordered roots, the exact
+  // scattered-graph regression this module guards against.
+  let seedReadFailed = false;
   // 1. Seed: candidate pages from the seed queries. This anchors the graph on the
   // pages the brain considers relevant and gives us their real titles + types.
   const seedResults = await Promise.all(
     cfg.seedQueries.map(async (q): Promise<PageHit[]> => {
       try {
-        const { text } = await callTool("query", { query: q, limit: 40 });
-        const parsed = JSON.parse(text);
-        return Array.isArray(parsed) ? parsed : [];
+        const { isError, text } = await callTool("query", { query: q, limit: 40 });
+        const parsed = isError ? null : JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed;
       } catch {
-        return [];
+        // fall through to the failure mark below
       }
+      seedReadFailed = true;
+      return [];
     }),
   );
   const titles = new Map<string, { title: string; type?: string }>();
   try {
-    const { text } = await callTool("list_pages", { limit: 100, sort: "updated_desc" });
-    const pages = JSON.parse(text);
+    const { isError, text } = await callTool("list_pages", { limit: 100, sort: "updated_desc" });
+    const pages = isError ? null : JSON.parse(text);
     if (Array.isArray(pages)) {
       for (const page of pages as PageHit[]) {
         if (!page.slug || titles.has(page.slug)) continue;
         titles.set(page.slug, { title: page.title ?? page.slug, type: page.type });
       }
+    } else {
+      seedReadFailed = true;
     }
   } catch {
     // The query seeds below still produce a graph when list_pages is unavailable.
+    seedReadFailed = true;
   }
   for (const items of seedResults) {
     for (const it of items) {
@@ -92,8 +139,31 @@ export async function buildGraph(): Promise<GraphData> {
   // traversals from the most-relevant root pages — not a regex over the search
   // snippet. This surfaces the mentions/manual/typed edges and the wikilinks that
   // live outside the matched chunk, which the old snippet-scan silently dropped.
-  const roots = [...titles.keys()].slice(0, TRAVERSE_ROOTS);
-  const rows = (await Promise.all(roots.map((s) => edgeRows(s, TRAVERSE_DEPTH)))).flat();
+  //
+  // Roots MUST be well-connected pages, not just the newest. A deep traversal
+  // from a freshly-created (still-unlinked) page reaches nothing, and the newest
+  // pages often are exactly that — so recency-ordered roots (list_pages order)
+  // can miss every hub and yield an all-isolated graph. Seed-query hits are
+  // relevance-ranked and reliably surface the hubs (entities/companies/people),
+  // so seed the roots from them — round-robin across queries so each contributes
+  // its top hit — and fall back to recent pages only to fill TRAVERSE_ROOTS.
+  // Hash-titled mem0 imports are dropped from the viz anyway, so don't let them
+  // consume one of the few root slots.
+  const rankedSlugs: string[] = [];
+  const deepest = Math.max(0, ...seedResults.map((r) => r.length));
+  for (let i = 0; i < deepest; i++)
+    for (const hits of seedResults) {
+      const hit = hits[i];
+      if (hit?.slug && !isHashTitle(hit.title ?? "")) rankedSlugs.push(hit.slug);
+    }
+  const recentSlugs = [...titles.entries()]
+    .filter(([, t]) => !isHashTitle(t.title))
+    .map(([slug]) => slug);
+  const roots = [...new Set([...rankedSlugs, ...recentSlugs])].slice(0, TRAVERSE_ROOTS);
+  const traversals = await Promise.all(roots.map((s) => edgeRows(s, TRAVERSE_DEPTH)));
+  const rows = traversals.flatMap((t) => t.rows);
+  const failedTraversals = traversals.filter((t) => !t.ok).length;
+  const anyReadFailed = seedReadFailed || failedTraversals > 0;
 
   // 3. Assemble undirected nodes + edges. Seed pages keep their real title/type;
   // a link target that wasn't itself a seed gets a slug-derived label.
@@ -122,6 +192,26 @@ export async function buildGraph(): Promise<GraphData> {
     nodes: [...titled.values()],
     links: linkPairs.map(([source, target]) => ({ source, target })),
   };
+  // Zero fetched edges is normal only when the brain truly has none: one
+  // healthy root returns its whole reachable neighborhood. Zero fetched edges
+  // WHILE an upstream read failed means the emptiness is a hiccup — surface it
+  // (route → 502, uncached) instead of presenting a misleading "everything
+  // scattered" (or empty) graph as healthy. Gate on the PRE-filter edge set: a
+  // brain whose every edge touches a hash-titled page is legitimately edgeless
+  // after filtering and must not 502.
+  if (!edges.size && anyReadFailed)
+    throw new Error(
+      `graph: upstream reads failed (seed phase failed: ${seedReadFailed}, traversals failed: ${failedTraversals}/${roots.length}) — refusing to serve an edgeless graph`,
+    );
+  // A degraded-but-nonempty build (some reads failed, edges survived) is served
+  // but NOT cached, so the next request retries instead of pinning a possibly
+  // partial graph for the full TTL.
+  if (anyReadFailed) {
+    console.warn(
+      `graph: ${failedTraversals}/${roots.length} traversals failed${seedReadFailed ? " (and a seed read failed)" : ""} — serving uncached, possibly partial graph`,
+    );
+    return data;
+  }
   cache = { data, at: Date.now() };
   return data;
 }
