@@ -482,6 +482,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   appSubtitle={appSubtitle}
                   adminSummary={adminEnabled ? <AdminDashboard /> : null}
                   graphData={graphData}
+                  graphError={graphError}
                   allPages={allPages}
                   onOpen={openMemory}
                   onType={drillType}

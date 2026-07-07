@@ -77,11 +77,15 @@ typecheck + lint + test + build must pass (this is what CI runs).
   **1h cached**. Edges come from gbrain's typed/mentions/manual links — **not** a regex
   over the search snippet, which missed every link outside the matched chunk. **Drops
   hash-titled mem0 imports** (`isHashTitle`) but keeps legitimate isolated pages so the
-  graph shows pages that currently have no edges. A failed traversal read is caught to
-  `[]`; since one healthy root returns the whole neighborhood, buildGraph **fails loud
-  (throws → route 502, uncached) when it ends up with zero edges AND a traversal
-  errored** — don't silently cache an edgeless "everything scattered" graph for the 1h
-  TTL. Slug == node id. Node `type` is dynamic: preserve gbrain's returned `type` string
+  graph shows pages that currently have no edges. Failure handling: every upstream
+  read — seed queries, `list_pages`, traversals, including MCP `isError` results and
+  non-edge-shaped payloads — feeds ONE failure signal. Zero fetched edges + any failed
+  read ⇒ buildGraph **fails loud** (throws → route 502, logged, uncached) instead of
+  caching an edgeless "everything scattered" (or empty) graph for the 1h TTL; edges
+  survived + a failed read ⇒ served but NOT cached (next request retries); rebuilds are
+  **single-flighted**, and a failed rebuild serves the last good expired graph **stale**
+  rather than the 502. The dashboard renders the link stat as "—" (not 0) when the
+  graph read failed. Slug == node id. Node `type` is dynamic: preserve gbrain's returned `type` string
   and only infer `person` / `company` / `product` from slug prefixes when the backend
   did not return a type.
 - `src/app/api/call/route.ts` + `src/lib/gbrain.ts` — `/api/call` proxies a gbrain
