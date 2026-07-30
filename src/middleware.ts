@@ -44,6 +44,9 @@ function json(detail: string, status: number, extra: Record<string, string> = {}
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   if (path === "/api/health") return NextResponse.next();
+  // The standalone-brain MCP endpoint carries its own bearer auth (agents are
+  // not browser users); it must not sit behind viewer password/proxy auth.
+  if (path === "/api/mcp") return NextResponse.next();
 
   const r = await checkAuth(req.headers, req.cookies);
   if (!r.ok) {

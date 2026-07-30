@@ -50,15 +50,53 @@ npm test           # vitest run
 npm run build      # next build (production)
 ```
 
-Required env (see `.env.example`): `GBRAIN_MCP_URL`, `GBRAIN_TOKEN`. **Auth fails
-closed**, so for local dev without Cloudflare Access set `AUTH_MODE=none` **and**
-`ALLOW_INSECURE=1` — otherwise every route returns 403. Before opening a PR, all of
+Required env (see `.env.example`): either `DATABASE_URL` (standalone brain, below)
+or `GBRAIN_MCP_URL` + `GBRAIN_TOKEN` (remote gbrain). **Auth fails closed**, so for
+local dev without Cloudflare Access set `AUTH_MODE=none` **and** `ALLOW_INSECURE=1`
+— otherwise every route returns 403. Before opening a PR, all of
 typecheck + lint + test + build must pass (this is what CI runs).
 
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page
 (`__webpack_modules__[moduleId] is not a function`). To build: stop dev, `rm -rf
 .next`, build, then `rm -rf .next` and restart dev.
+
+## Standalone brain (no gbrain)
+
+Setting `DATABASE_URL` (Postgres + pgvector, e.g. Neon) with `GBRAIN_MCP_URL`
+unset flips lore into **standalone mode**: it serves its own single-tenant brain
+instead of proxying a gbrain. `src/lib/gbrain.ts` `isStandalone()` short-circuits
+`callTool` into `src/server/local.ts`, so every existing read path (dashboard,
+graph, search, page view) works unchanged.
+
+- `src/server/db.ts` — driver-free `Db` seam (`query` + `tx`) plus `initSchema`:
+  pages / chunks / edges / pending_links / meta over pgvector + pg_trgm. The
+  `meta` row pins the embedding space — **changing `EMBEDDINGS_MODEL`/`_DIM`
+  fails loud** (re-embed required); never weaken that assert.
+- `src/server/pipeline.ts` — chunking, `[[wikilink]]` extraction (fences
+  stripped), OpenAI-compatible embeddings client (`EMBEDDINGS_URL/_API_KEY/
+  _MODEL/_DIM`).
+- `src/server/store.ts` — the engine. Writes embed BEFORE the transaction (no
+  half-written pages); `content_hash` short-circuit makes re-ingest free;
+  deletes are soft (`deleted_at`); unresolved wikilinks park in `pending_links`
+  and resolve transactionally when the target page appears. Search = vector +
+  FTS + trigram/ILIKE (the CJK arm — 'simple' tsvector can't segment CJK) fused
+  with RRF; the vector arm degrades away if the embeddings call fails.
+- `src/server/mcp.ts` — one tool registry drives `tools/list` + `tools/call`:
+  the 8 bare-name read tools lore calls (get_page errors MUST keep the literal
+  `not_found` — lore regex-matches it; `traverse_graph` MUST return
+  `{from_slug,to_slug}` rows) plus write tools `put_page` / `remember` /
+  `delete_page` for agents.
+- `src/app/api/mcp/route.ts` — stateless Streamable-HTTP MCP endpoint for
+  agents. Its own bearer auth: `BRAIN_WRITE_TOKEN` (read+write) /
+  `BRAIN_READ_TOKEN` (read-only), both ≥16 chars, fail-closed when unset;
+  middleware exempts `/api/mcp` from viewer auth for exactly this reason —
+  don't remove either side of that pairing.
+- Tests: `tests/brain-store.test.ts` (PGlite + pgvector + pg_trgm, pinned
+  `@electric-sql/pglite@0.4.3` — 0.5 dropped the bundled vector extension),
+  `tests/brain-mcp.test.ts` (envelope/contract), `tests/brain-route.test.ts`
+  (auth). The store is exercised against real SQL in-process; production uses
+  node-postgres via `src/server/local.ts`.
 
 ## Architecture
 

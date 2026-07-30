@@ -45,13 +45,17 @@ Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/gar
 
 ## Quickstart
 
-> **Prerequisite:** a running [gbrain](https://github.com/garrytan/gbrain) backend — point `GBRAIN_MCP_URL` at its MCP endpoint.
+Two ways to run lore:
+
+**Standalone (no gbrain)** — bring only a Postgres with pgvector (e.g. a free [Neon](https://neon.tech) database). Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember` / `delete_page`, bearer `BRAIN_WRITE_TOKEN`).
 
 ```bash
 git clone https://github.com/corespeed-io/lore.git && cd lore
-cp .env.example .env        # set GBRAIN_MCP_URL + GBRAIN_TOKEN — auth is off for local dev by default
+cp .env.example .env        # set DATABASE_URL + EMBEDDINGS_* (leave GBRAIN_MCP_URL unset)
 npm install && npm run dev  # → http://localhost:3000
 ```
+
+**With a gbrain backend** — point `GBRAIN_MCP_URL` at a running [gbrain](https://github.com/garrytan/gbrain) MCP endpoint and set `GBRAIN_TOKEN` (or a read-only OAuth client) in `.env`.
 
 ## Deploy your own
 

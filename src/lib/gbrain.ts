@@ -30,6 +30,12 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 
 export class ToolNotAllowedError extends Error {}
 
+// Standalone mode: DATABASE_URL set and no GBRAIN_MCP_URL — lore serves its
+// own brain from src/server/ instead of proxying to an external gbrain.
+export function isStandalone(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.DATABASE_URL) && !env.GBRAIN_MCP_URL;
+}
+
 export function parseMcp(body: string): unknown {
   for (const raw of body.split("\n")) {
     const line = raw.trim();
@@ -109,6 +115,11 @@ export async function callTool(
 ): Promise<{ isError: boolean; text: string }> {
   if (!READ_ONLY_TOOLS.has(tool))
     throw new ToolNotAllowedError(`tool '${tool}' not allowed (read-only)`);
+  if (isStandalone()) {
+    // Dynamic import keeps pg out of every bundle that never uses local mode.
+    const { callLocalTool } = await import("@/server/local");
+    return callLocalTool(tool, args);
+  }
   const cfg = loadConfig();
   if (!cfg.gbrainMcpUrl) throw new Error("GBRAIN_MCP_URL is not set");
   const res = await fetch(cfg.gbrainMcpUrl, {
