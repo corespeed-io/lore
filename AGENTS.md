@@ -95,8 +95,36 @@ graph, search, page view) works unchanged.
 - Tests: `tests/brain-store.test.ts` (PGlite + pgvector + pg_trgm, pinned
   `@electric-sql/pglite@0.4.3` — 0.5 dropped the bundled vector extension),
   `tests/brain-mcp.test.ts` (envelope/contract), `tests/brain-route.test.ts`
-  (auth). The store is exercised against real SQL in-process; production uses
-  node-postgres via `src/server/local.ts`.
+  (auth). The store is exercised against real SQL in-process; production picks
+  a driver via `src/server/drivers.ts` (below).
+
+## Deploy targets
+
+Lore deploys to Node hosts and Cloudflare Workers from the same tree with ONE
+DB driver (node-postgres); the only infra-aware code is
+`src/server/drivers.ts` (connection lifetime + where the URL comes from) —
+keep it that way.
+
+- **Local / Docker / Railway / Vercel** (Node): `next start` or the Dockerfile
+  (Railway auto-detects; `railway.toml` present). Long-lived `pg` Pool over
+  `DATABASE_URL`.
+- **Cloudflare Workers** (OpenNext): `npm run cf:build` / `cf:preview` (local
+  workerd) / `cf:deploy`. Config: `wrangler.jsonc` (nodejs_compat) +
+  `open-next.config.ts`; build output `.open-next/` is gitignored AND
+  biome-ignored (biome hangs crawling it). workerd forbids holding sockets
+  across requests, so on Workers every query/tx opens a short-lived `pg`
+  Client — cheap ONLY through the **Hyperdrive binding** (`HYPERDRIVE`, the
+  blessed path: `wrangler hyperdrive create`, works with any Postgres; a
+  plain `DATABASE_URL` secret works but pays origin TLS per query). The
+  binding is read via `getCloudflareContext()` at runtime — it never appears
+  in `process.env`, which is why standalone detection goes through
+  `resolveDatabaseUrl()`, not an env check. Other secrets via
+  `wrangler secret put` (EMBEDDINGS_API_KEY, BRAIN_*_TOKEN, UI_PASSWORD).
+- The per-isolate in-memory rate limiter and the 1h graph cache are
+  per-instance on Workers — acceptable, documented in `src/middleware.ts` /
+  `src/lib/graph.ts`.
+- After touching middleware or auth, smoke BOTH runtimes: `next start` and
+  `cf:preview`, expecting `/` → 403 with no env, `/api/health` → 200.
 
 ## Architecture
 
@@ -169,7 +197,12 @@ graph, search, page view) works unchanged.
   never commit `.env`. Admin responses pass through `stripSecrets` so token/secret/`client_secret`
   fields never reach the browser — except a create's **one-time** secret, which surfaces once and
   the UI masks + treats as one-time sensitive output.
-- **Auth** lives in `middleware.ts` → `src/lib/auth.ts`. `AUTH_MODE=proxy` verifies
+- **Auth** lives in `src/middleware.ts` → `src/lib/auth.ts`. **GOTCHA: the middleware
+  file MUST stay under `src/`** — this project keeps code in `src/`, and Next.js
+  silently ignores a root-level `middleware.ts` in that layout (it shipped fail-OPEN
+  that way once: empty middleware-manifest, no 403s, no rate limits — verify with
+  `python3 -c "import json; print(json.load(open('.next/server/middleware-manifest.json'))['middleware'])"`
+  after a build if you touch it). `AUTH_MODE=proxy` verifies
   the Cloudflare Access JWT with jose (signature against the team JWKS, `aud` ==
   `ACCESS_AUD`, issuer == team domain, exp). `password` = HTTP Basic. `none` denies
   unless `ALLOW_INSECURE=1`. A proxy deploy missing `ACCESS_AUD`/`ACCESS_TEAM_DOMAIN`

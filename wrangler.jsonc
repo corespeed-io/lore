@@ -1,0 +1,41 @@
+// Cloudflare Workers deployment (one of lore's deploy targets — see README).
+//   npm run cf:preview  → local workerd preview
+//   npm run cf:deploy   → deploy to your Cloudflare account
+//
+// Database — the blessed path is Hyperdrive (works with ANY Postgres: Neon,
+// RDS, Supabase, self-hosted; free plan included). Workers can't hold DB
+// sockets across requests, so lore opens a client per query — Hyperdrive
+// keeps the real pool warm at the edge and makes that cheap:
+//   npx wrangler hyperdrive create lore-db --connection-string="postgres://…"
+// then paste the returned id below and uncomment. (Fallback: a plain
+// DATABASE_URL secret also works, but pays origin TLS per query.)
+//
+// Secrets (wrangler secret put): EMBEDDINGS_API_KEY, BRAIN_WRITE_TOKEN,
+// BRAIN_READ_TOKEN, UI_PASSWORD. Plain config goes in "vars".
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lore",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-03-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  // "hyperdrive": [
+  //   {
+  //     "binding": "HYPERDRIVE",
+  //     "id": "<your-hyperdrive-id>",
+  //     // local preview (cf:preview) connects directly to this Postgres:
+  //     "localConnectionString": "postgres://localhost:5432/lore"
+  //   }
+  // ],
+  "vars": {
+    // Non-secret config; mirror .env.example. Override per-environment as needed.
+    // "APP_TITLE": "my brain",
+    // "AUTH_MODE": "password",
+    // "EMBEDDINGS_URL": "https://api.openai.com/v1/embeddings",
+    // "EMBEDDINGS_MODEL": "text-embedding-3-small",
+    // "EMBEDDINGS_DIM": "1536"
+  }
+}

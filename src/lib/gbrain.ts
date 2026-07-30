@@ -30,10 +30,14 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 
 export class ToolNotAllowedError extends Error {}
 
-// Standalone mode: DATABASE_URL set and no GBRAIN_MCP_URL — lore serves its
-// own brain from src/server/ instead of proxying to an external gbrain.
-export function isStandalone(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.DATABASE_URL) && !env.GBRAIN_MCP_URL;
+// Standalone mode: a database is configured (DATABASE_URL, or a Hyperdrive
+// binding on Workers) and no GBRAIN_MCP_URL — lore serves its own brain from
+// src/server/ instead of proxying to an external gbrain.
+export async function isStandalone(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  if (env.GBRAIN_MCP_URL) return false;
+  if (env.DATABASE_URL) return true;
+  const { resolveDatabaseUrl } = await import("@/server/drivers");
+  return Boolean(await resolveDatabaseUrl());
 }
 
 export function parseMcp(body: string): unknown {
@@ -115,7 +119,7 @@ export async function callTool(
 ): Promise<{ isError: boolean; text: string }> {
   if (!READ_ONLY_TOOLS.has(tool))
     throw new ToolNotAllowedError(`tool '${tool}' not allowed (read-only)`);
-  if (isStandalone()) {
+  if (await isStandalone()) {
     // Dynamic import keeps pg out of every bundle that never uses local mode.
     const { callLocalTool } = await import("@/server/local");
     return callLocalTool(tool, args);

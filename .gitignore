@@ -10,3 +10,7 @@ tmp/
 .claude
 .gstack/
 .superpowers/
+
+# Cloudflare (OpenNext) build output
+.open-next/
+.wrangler/

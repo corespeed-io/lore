@@ -24,7 +24,10 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare build && wrangler dev",
+    "cf:deploy": "opennextjs-cloudflare build && wrangler deploy"
   },
   "dependencies": {
     "d3": "^7.9.0",
@@ -38,13 +41,15 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@electric-sql/pglite": "^0.4.3",
+    "@opennextjs/cloudflare": "^1.20.2",
     "@types/d3": "^7.4.3",
     "@types/node": "^20.17.0",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.2.6"
+    "vitest": "^3.2.6",
+    "wrangler": "^4.115.0"
   },
   "overrides": {
     "postcss": "^8.5.10"

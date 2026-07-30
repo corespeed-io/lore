@@ -69,6 +69,14 @@ Lore is a standard Next.js standalone app, so it also runs on **Railway** (Docke
 docker build -t lore . && docker run -p 3000:8080 --env-file .env lore
 ```
 
+Or on **Cloudflare Workers** (via OpenNext) — put any Postgres behind a [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) binding (free plan included; see `wrangler.jsonc`):
+
+```bash
+npx wrangler hyperdrive create lore-db --connection-string="postgres://…"   # paste id into wrangler.jsonc
+npx wrangler secret put EMBEDDINGS_API_KEY   # + BRAIN_WRITE_TOKEN, UI_PASSWORD…
+npm run cf:deploy
+```
+
 ## Configuration
 
 Config is entirely environment-driven — see [`.env.example`](.env.example) for the full list.

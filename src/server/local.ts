@@ -1,48 +1,24 @@
 // Compiler-enforced: this module opens DATABASE_URL and must never reach the
 // client bundle.
 import "server-only";
-import { Pool } from "pg";
-import { type Db, initSchema } from "./db";
+import { initSchema } from "./db";
+import { makeDb, resolveDatabaseUrl } from "./drivers";
 import { embeddingsConfigFromEnv, makeEmbedFn } from "./pipeline";
 import { type Store, createStore } from "./store";
 
-function pgDb(pool: Pool): Db {
-  return {
-    query: async (text, params) => {
-      const res = await pool.query(text, params as unknown[]);
-      return { rows: res.rows as Record<string, unknown>[] };
-    },
-    async tx(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const out = await fn(async (text, params) => {
-          const res = await client.query(text, params as unknown[]);
-          return { rows: res.rows as Record<string, unknown>[] };
-        });
-        await client.query("COMMIT");
-        return out;
-      } catch (e) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw e;
-      } finally {
-        client.release();
-      }
-    },
-  };
-}
-
 let storePromise: Promise<Store> | null = null;
 
-// One pool + one schema init per process; init failures are not cached so a
-// fixed env/database heals on the next request.
+// One store + one schema init per process/isolate; init failures are not
+// cached so a fixed env/database heals on the next request. Whether the store
+// holds sockets is the driver's business (Node pools; Workers opens a client
+// per call/tx), so this singleton is safe on Workers too.
 export function getStore(): Promise<Store> {
   if (!storePromise) {
     storePromise = (async () => {
-      const url = process.env.DATABASE_URL;
-      if (!url) throw new Error("DATABASE_URL is not set");
+      const url = await resolveDatabaseUrl();
+      if (!url) throw new Error("no database configured: bind HYPERDRIVE or set DATABASE_URL");
       const cfg = embeddingsConfigFromEnv();
-      const db = pgDb(new Pool({ connectionString: url, max: 5 }));
+      const db = await makeDb(url);
       await initSchema(db, { embeddingModel: cfg.model, embeddingDim: cfg.dim });
       return createStore(db, makeEmbedFn(cfg));
     })();

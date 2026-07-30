@@ -24,7 +24,8 @@ function grant(authorization: string | null, env = process.env): Access | null {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.DATABASE_URL) {
+  const { resolveDatabaseUrl } = await import("@/server/drivers");
+  if (!(await resolveDatabaseUrl())) {
     return NextResponse.json({ detail: "standalone brain not configured" }, { status: 404 });
   }
   const access = grant(req.headers.get("authorization"));
