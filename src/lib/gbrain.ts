@@ -26,6 +26,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "list_link_sources",
   "resolve_slugs",
   "get_chunks",
+  "find_orphans",
+  "list_broken_links",
 ]);
 
 export class ToolNotAllowedError extends Error {}

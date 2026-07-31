@@ -5,7 +5,7 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import type { Db, Query } from "../src/server/db.js";
 import { initSchema } from "../src/server/db.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
-import { chunkBody, extractWikilinks } from "../src/server/pipeline.js";
+import { chunkBody, extractRefs, normalizeRef } from "../src/server/pipeline.js";
 import type { Store } from "../src/server/store.js";
 import { createStore } from "../src/server/store.js";
 
@@ -67,10 +67,10 @@ test("chunkBody splits on paragraphs and hard-splits oversized ones", () => {
   expect(chunkBody("x".repeat(5000)).length).toBeGreaterThan(1);
 });
 
-test("extractWikilinks handles targets, sections, aliases, and skips fences", () => {
+test("extractRefs handles targets, sections, aliases, and skips fences", () => {
   const body =
     "See [[people/jane]] and [[Acme Corp|the client]] and [[notes#sec]].\n```\n[[not-a-link]]\n```";
-  expect(extractWikilinks(body).sort()).toEqual(["Acme Corp", "notes", "people/jane"]);
+  expect(extractRefs(body).sort()).toEqual(["Acme Corp", "notes", "people/jane"]);
 });
 
 test("initSchema fails loud on an embedding-space change", async () => {
@@ -347,4 +347,121 @@ test("an absurdly large body is refused before it becomes thousands of chunks", 
   await expect(store.putPage({ slug: "notes/huge", body: "x".repeat(1_000_001) })).rejects.toThrow(
     /body too large/,
   );
+});
+
+test("normalizeRef folds width, case, quotes and whitespace", () => {
+  expect(normalizeRef("  Some   Note  ")).toBe("some note");
+  expect(normalizeRef('"Quoted"')).toBe("quoted");
+  // NFKC: fullwidth CJK-keyboard latin must fold to ASCII, or a ref typed in a
+  // CJK IME never matches the page it names.
+  expect(normalizeRef("ＭＯＣ")).toBe("moc");
+});
+
+test("extractRefs: markdown links, frontmatter values, embeds and inline code", () => {
+  expect(extractRefs("see [Acme](notes/acme.md) and [x](./other)")).toEqual(
+    expect.arrayContaining(["notes/acme", "other"]),
+  );
+  // external, mailto, anchors and non-markdown files are not page refs
+  expect(extractRefs("[a](https://x.com) [b](mailto:a@b.c) [c](#sec) [d](img.png)")).toEqual([]);
+  // image embeds are attachments, not links
+  expect(extractRefs("![[Pasted image.png]] and ![alt](pic.md)")).toEqual([]);
+  // structure lives in Properties for a lot of real vaults
+  expect(
+    extractRefs("body has none", { up: "[[MOC]]", related: ["[[A]]", "[[B]]"] }).sort(),
+  ).toEqual(["A", "B", "MOC"]);
+  // a note documenting the syntax must not grow an edge
+  expect(extractRefs("write `[[example]]` to link")).toEqual([]);
+});
+
+test("a ref resolves by filename even when the title differs", async () => {
+  // The real Obsidian case: the H1 is not the filename, so the title arm cannot
+  // match and only the basename arm can. (A page with no H1 derives its title
+  // FROM the slug tail, which would make this pass for the wrong reason.)
+  await store.putPage({
+    slug: "notes/deep-note-xyz",
+    body: "# Completely Different Heading\n\ntarget",
+  });
+  const res = await store.putPage({ slug: "notes/refers", body: "see [[Deep Note Xyz]]" });
+  expect(res.pending).toEqual([]);
+  expect((await store.getBacklinks({ slug: "notes/deep-note-xyz" })).map((b) => b.slug)).toContain(
+    "notes/refers",
+  );
+});
+
+test("a ref resolves by declared alias", async () => {
+  await store.putPage({
+    slug: "people/robert-smith",
+    body: "# Robert Smith\n\nbio",
+    frontmatter: { aliases: ["Bob", "Bobby S"] },
+  });
+  const res = await store.putPage({ slug: "notes/mentions-bob", body: "asked [[Bob]] about it" });
+  expect(res.pending).toEqual([]);
+  expect((await store.getBacklinks({ slug: "people/robert-smith" })).map((b) => b.slug)).toContain(
+    "notes/mentions-bob",
+  );
+  // and the page is findable by its own alias
+  expect((await store.search({ query: "Bobby S", limit: 10 })).map((h) => h.slug)).toContain(
+    "people/robert-smith",
+  );
+});
+
+test("put_page reports refs that resolved to nothing", async () => {
+  const res = await store.putPage({
+    slug: "notes/has-broken",
+    body: "points at [[No Such Page At All]]",
+  });
+  expect(res.pending).toEqual(["No Such Page At All"]);
+  const broken = await store.brokenLinks({ limit: 50 });
+  expect(broken).toEqual(
+    expect.arrayContaining([{ from_slug: "notes/has-broken", ref: "No Such Page At All" }]),
+  );
+  // an unchanged re-put still reports it
+  const again = await store.putPage({
+    slug: "notes/has-broken",
+    body: "points at [[No Such Page At All]]",
+  });
+  expect(again.unchanged).toBe(true);
+  expect(again.pending).toEqual(["No Such Page At All"]);
+});
+
+test("a forward ref resolves through any arm, not just exact slug", async () => {
+  await store.putPage({ slug: "notes/early-alias-ref", body: "waits for [[Nickname]]" });
+  await store.putPage({ slug: "notes/early-base-ref", body: "waits for [[Late Note]]" });
+  await store.putPage({
+    slug: "vault/late-note",
+    body: "# Late Note\n\narrived",
+    frontmatter: { aliases: ["Nickname"] },
+  });
+  const backlinks = (await store.getBacklinks({ slug: "vault/late-note" })).map((b) => b.slug);
+  expect(backlinks).toContain("notes/early-alias-ref");
+  expect(backlinks).toContain("notes/early-base-ref");
+  expect(await store.brokenLinks({ limit: 50 })).not.toContainEqual({
+    from_slug: "notes/early-alias-ref",
+    ref: "Nickname",
+  });
+});
+
+test("rename_page keeps stale [[old-slug]] refs working and rejects collisions", async () => {
+  await store.putPage({ slug: "old/place", body: "content" });
+  await store.putPage({ slug: "notes/points-old", body: "see [[old/place]]" });
+  await store.renamePage({ slug: "old/place", to: "new/place" });
+  await expect(store.getPage({ slug: "old/place" })).rejects.toThrow(/not_found/);
+  expect((await store.getPage({ slug: "new/place" })).body).toBe("content");
+  // the referring page is untouched, and its ref still resolves on re-put
+  const res = await store.putPage({ slug: "notes/points-old", body: "see [[old/place]] again" });
+  expect(res.pending).toEqual([]);
+  expect((await store.getBacklinks({ slug: "new/place" })).map((b) => b.slug)).toContain(
+    "notes/points-old",
+  );
+  await expect(store.renamePage({ slug: "new/place", to: "people/jane" })).rejects.toThrow(
+    /already taken/,
+  );
+  await expect(store.renamePage({ slug: "nope/gone", to: "x/y" })).rejects.toThrow(/not_found/);
+});
+
+test("find_orphans lists pages nothing points to", async () => {
+  await store.putPage({ slug: "notes/lonely", body: "nobody links here" });
+  const orphans = (await store.findOrphans({ limit: 200 })).map((o) => o.slug);
+  expect(orphans).toContain("notes/lonely");
+  expect(orphans).not.toContain("people/jane");
 });

@@ -98,7 +98,9 @@ export const TOOLS: Record<string, ToolDef> = {
     description:
       "Create or update a page (upsert by slug). Markdown body; [[wikilinks]] become graph edges. " +
       "frontmatter.related_ids (slugs) add explicit edges. Omitted fields are left as they were, " +
-      "so editing a memory's body keeps its kind and metadata; pass frontmatter: {} to clear it.",
+      "so editing a memory's body keeps its kind and metadata; pass frontmatter: {} to clear it. " +
+      "Refs are resolved by slug, title, filename or alias; the response's `pending` array lists " +
+      "any that matched nothing, so you can correct them in the same turn.",
     inputSchema: obj(
       {
         slug: { type: "string" },
@@ -134,6 +136,26 @@ export const TOOLS: Record<string, ToolDef> = {
       "Soft-delete a page by slug. The body and its links are kept, so restore_page can bring it back.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
     handler: (s, a) => s.deletePage({ slug: String(a.slug ?? "") }),
+  },
+  rename_page: {
+    access: "write",
+    description:
+      "Change a page's slug. Links keep working: the old slug becomes an alias of the page, " +
+      "and other pages' bodies are left untouched.",
+    inputSchema: obj({ slug: { type: "string" }, to: { type: "string" } }, ["slug", "to"]),
+    handler: (s, a) => s.renamePage({ slug: String(a.slug ?? ""), to: String(a.to ?? "") }),
+  },
+  find_orphans: {
+    access: "read",
+    description: "Pages nothing links to.",
+    inputSchema: obj({ limit: { type: "number" } }),
+    handler: (s, a) => s.findOrphans({ limit: a.limit as number }),
+  },
+  list_broken_links: {
+    access: "read",
+    description: "Refs that point at a page which does not exist, as {from_slug, ref} rows.",
+    inputSchema: obj({ limit: { type: "number" } }),
+    handler: (s, a) => s.brokenLinks({ limit: a.limit as number }),
   },
   restore_page: {
     access: "write",

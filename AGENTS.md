@@ -102,12 +102,34 @@ graph, search, page view) works unchanged.
 - `remember` de-duplicates an exact repeat (same body + same frontmatter)
   instead of minting a second `mem-<uuid>`; an MCP retry is the ordinary case
   and `content_hash` cannot reconcile two different slugs.
-- Known gap: **no rename**. A new slug creates a second page; edges are keyed
-  by page id so they would survive an in-place slug change, but the literal
-  `[[old-slug]]` text in other pages would not. Rewriting referencing bodies
-  is the wrong fix (it mutates notes the user didn't touch and re-embeds every
-  referrer) — the cheap version is an alias arm in `resolveRef` plus appending
-  the old slug to the renamed page's own `frontmatter.aliases`.
+- Link resolution has **four arms, in precedence order**: exact slug, exact
+  title, filename (`pages.basename`), declared alias
+  (`frontmatter->'aliases'`). Every comparison goes through `normalizeRef`
+  (NFKC + lowercase + quote-strip + whitespace-collapse) and the basename arm
+  additionally through `normalizeSlugish` (folds `-`/`_` to spaces).
+  **`pages.basename`'s SQL expression and `normalizeSlugish` are two halves of
+  one comparison — change one and you must change the other**, or the arm
+  silently matches nothing (that shipped once and only a reverse-verified test
+  caught it). `extractRefs` reads wikilinks AND Markdown links from the body
+  AND from frontmatter string values, masks fenced *and* inline code, and skips
+  `!` embeds. The forward-reference query in `putPage` must mirror all four
+  arms or refs parked before their target existed never land.
+- `put_page` returns `pending[]`: the refs that resolved to nothing, so an
+  agent can correct a typo in the same turn. `find_orphans` (pages nothing
+  points to) and `list_broken_links` are the human-facing halves.
+- `rename_page` changes the slug in place and appends the old slug to that
+  page's own aliases, which is what keeps stale `[[old-slug]]` refs elsewhere
+  resolving. It deliberately does **not** rewrite other pages' bodies —
+  that would mutate notes the user didn't touch, change their content_hash,
+  and re-embed every referrer.
+- **Schema changes need a migration, not just DDL.** `CREATE TABLE IF NOT
+  EXISTS` cannot alter an existing table, so `db.ts` keys explicit steps on
+  `meta.schema_version` and — critically — runs them **before** the DDL block,
+  because that DDL indexes columns (`basename`) an older database does not have
+  yet. Get the order wrong and init throws `column "basename" does not exist`,
+  which surfaces as an `isError` tool result and an empty dashboard, not a
+  crash. `tests/brain-migrate.test.ts` builds a real v1 database and pins both
+  the upgrade and the ordering.
 - `src/server/mcp.ts` — one tool registry drives `tools/list` + `tools/call`:
   the 8 bare-name read tools lore calls (get_page errors MUST keep the literal
   `not_found` — lore regex-matches it; `traverse_graph` MUST return

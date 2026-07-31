@@ -27,16 +27,105 @@ export function chunkBody(body: string, target = 1200): string[] {
   return out;
 }
 
-// [[target]], [[target#section]], [[target|label]] — fenced code stripped first
-// so examples don't become edges. Returns de-duped refs (slug or title).
-export function extractWikilinks(body: string): string[] {
-  const noFences = body.replace(/```[\s\S]*?```/g, "");
+// One normalizer, used on BOTH sides of every link comparison. A mismatch here
+// makes stored keys silently unmatchable with no error anywhere, so nothing may
+// compare refs without going through this.
+export function normalizeRef(ref: string): string {
+  return ref
+    .normalize("NFKC")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+// The basename arm's half of a two-sided comparison: filenames use hyphens or
+// underscores where a ref is typed with spaces. Mirrors the SQL expression on
+// pages.basename -- change one and you must change the other, or the arm
+// silently matches nothing.
+export function normalizeSlugish(ref: string): string {
+  return normalizeRef(ref).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Blank out fenced blocks and inline code spans, preserving length so nothing
+// downstream sees shifted offsets. A note documenting `[[example]]` syntax must
+// not grow an edge the author cannot find in their prose.
+function maskCode(body: string): string {
+  const blank = (m: string) => m.replace(/[^\n]/g, " ");
+  return body.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank);
+}
+
+const WIKILINK = /(!?)\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]/g;
+// [text](target) — Obsidian's Markdown-link mode, and what Logseq/Foam export.
+const MDLINK = /\[[^\]\n]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+
+function addRef(refs: Set<string>, raw: string): void {
+  const ref = raw.trim();
+  if (ref) refs.add(ref);
+}
+
+// Turn a Markdown-link target into a page ref, or null if it isn't one:
+// external URLs, mailto, in-page anchors, and non-markdown files (images,
+// PDFs) are not pages.
+function mdTargetToRef(target: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) return null;
+  if (target.startsWith("#")) return null;
+  const path = decodeURIComponent(target.split("#")[0].replace(/^\.\//, ""));
+  if (!path) return null;
+  const ext = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+  if (ext && ext !== "md") return null;
+  return ext ? path.slice(0, -(ext.length + 1)) : path;
+}
+
+// Every way a page can point at another page: [[wikilinks]] (with #section and
+// |alias), Markdown links, and both of those inside frontmatter values — real
+// vaults put structure in Properties (`up: "[[MOC]]"`, `related: ["[[A]]"]`),
+// and a body-only extractor imports those notes as edgeless dots.
+// `![[embed]]` and `![](img.png)` are attachments, not links.
+// ponytail: a Markdown link whose TEXT contains a wikilink yields both refs;
+// they dedupe when they resolve to the same page, and are genuinely two
+// references when they don't. Not worth span-tracking machinery.
+export function extractRefs(body: string, frontmatter?: Record<string, unknown>): string[] {
   const refs = new Set<string>();
-  for (const m of noFences.matchAll(/\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]/g)) {
-    const ref = m[1].trim();
-    if (ref) refs.add(ref);
-  }
+  const scan = (text: string) => {
+    const masked = maskCode(text);
+    for (const m of masked.matchAll(WIKILINK)) if (!m[1]) addRef(refs, m[2]);
+    for (const m of masked.matchAll(MDLINK)) {
+      const ref = mdTargetToRef(m[1]);
+      // An image embed is written ![alt](img.png); the ! is outside our match,
+      // so check the char before it.
+      const at = m.index ?? 0;
+      if (ref && masked[at - 1] !== "!") addRef(refs, ref);
+    }
+  };
+  scan(body);
+  for (const value of stringLeaves(frontmatter)) scan(value);
   return [...refs];
+}
+
+// Walk a frontmatter object's string leaves (arrays and nested objects
+// included) so `up: "[[MOC]]"` and `related: ["[[A]]", "[[B]]"]` both count.
+function stringLeaves(value: unknown, depth = 0): string[] {
+  if (depth > 6) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((v) => stringLeaves(v, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((v) =>
+      stringLeaves(v, depth + 1),
+    );
+  }
+  return [];
+}
+
+// Frontmatter `aliases` is the other name a page answers to — Obsidian writes
+// it as a string or a list. Normalized on the way in so the stored keys and
+// every lookup agree.
+export function frontmatterAliases(frontmatter?: Record<string, unknown>): string[] {
+  const raw = frontmatter?.aliases ?? frontmatter?.alias;
+  const list = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+  const out = new Set<string>();
+  for (const a of list) if (typeof a === "string" && a.trim()) out.add(normalizeRef(a));
+  return [...out];
 }
 
 export interface EmbeddingsConfig {

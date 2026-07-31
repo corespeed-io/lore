@@ -3,7 +3,14 @@
 // reference resolution. Single-tenant by design — no sources, no scopes.
 
 import type { Db, Query } from "./db";
-import { type EmbedFn, chunkBody, extractWikilinks } from "./pipeline";
+import {
+  type EmbedFn,
+  chunkBody,
+  extractRefs,
+  frontmatterAliases,
+  normalizeRef,
+  normalizeSlugish,
+} from "./pipeline";
 
 export type PageKind = "note" | "memory";
 
@@ -82,13 +89,16 @@ function likeLiteral(s: string): string {
 }
 
 export interface Store {
-  putPage(args: PutPageArgs): Promise<{ slug: string; unchanged: boolean }>;
+  putPage(args: PutPageArgs): Promise<{ slug: string; unchanged: boolean; pending: string[] }>;
   remember(args: {
     memory: string;
     metadata?: Record<string, unknown>;
   }): Promise<{ slug: string }>;
   deletePage(args: { slug: string }): Promise<{ slug: string; deleted: true }>;
   restorePage(args: { slug: string }): Promise<{ slug: string; restored: true }>;
+  renamePage(args: { slug: string; to: string }): Promise<{ slug: string; from: string }>;
+  findOrphans(args: { limit?: number }): Promise<{ slug: string; title: string }[]>;
+  brokenLinks(args: { limit?: number }): Promise<{ from_slug: string; ref: string }[]>;
   getPage(args: { slug: string; fuzzy?: boolean }): Promise<Record<string, unknown>>;
   listPages(args: { limit?: number; kind?: string }): Promise<PageHit[]>;
   search(args: { query: string; limit?: number }): Promise<PageHit[]>;
@@ -103,18 +113,45 @@ export interface Store {
 }
 
 export function createStore(db: Db, embed: EmbedFn): Store {
-  // Resolve a wikilink ref (slug or title) to a page id within one transaction.
+  // Resolve a ref to a page id, in order of how specific the match is: exact
+  // slug, exact title, last slug segment ([[Some Note]] -> notes/some-note),
+  // then a declared alias. Everything is compared through normalizeRef so a
+  // stored key and a lookup can never disagree.
+  // ponytail: 4 indexed point-lookups, not one big OR — cheap, and each arm's
+  // precedence is readable. Ties break on the shortest slug, then alphabetically,
+  // so a denser graph never depends on row order.
   async function resolveRef(q: Query, ref: string): Promise<number | null> {
-    const bySlug = await q("SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL", [ref]);
-    if (bySlug.rows.length) return Number(bySlug.rows[0].id);
-    const byTitle = await q(
-      "SELECT id FROM pages WHERE lower(title) = lower($1) AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1",
-      [ref],
-    );
-    return byTitle.rows.length ? Number(byTitle.rows[0].id) : null;
+    const norm = normalizeRef(ref);
+    if (!norm) return null;
+    const arms: [string, unknown[]][] = [
+      ["SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL", [ref.trim()]],
+      [
+        `SELECT id FROM pages WHERE lower(btrim(title)) = $1 AND deleted_at IS NULL
+         ORDER BY length(slug), slug LIMIT 1`,
+        [norm],
+      ],
+      [
+        `SELECT id FROM pages WHERE basename = $1 AND deleted_at IS NULL
+         ORDER BY length(slug), slug LIMIT 1`,
+        [normalizeSlugish(ref)],
+      ],
+      [
+        `SELECT id FROM pages
+         WHERE frontmatter->'aliases' @> to_jsonb($1::text) AND deleted_at IS NULL
+         ORDER BY length(slug), slug LIMIT 1`,
+        [norm],
+      ],
+    ];
+    for (const [sql, params] of arms) {
+      const res = await q(sql, params);
+      if (res.rows.length) return Number(res.rows[0].id);
+    }
+    return null;
   }
 
-  async function putPage(args: PutPageArgs): Promise<{ slug: string; unchanged: boolean }> {
+  async function putPage(
+    args: PutPageArgs,
+  ): Promise<{ slug: string; unchanged: boolean; pending: string[] }> {
     const slug = args.slug?.trim();
     if (!slug || !SLUG_RE.test(slug)) {
       throw new Error(
@@ -148,9 +185,20 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // page between note and memory hashes the same and gets skipped as
     // "unchanged". JSON-encoding the tuple keeps field boundaries clear.
     const hash = await sha256Hex(JSON.stringify([kind, title, args.body, frontmatter]));
+    // (hash covers the caller's frontmatter; alias normalization is derived)
 
     if (existing && existing.content_hash === hash) {
-      return { slug, unchanged: true }; // idempotent re-ingest: skip embedding entirely
+      // Idempotent re-ingest: skip embedding entirely. Still report what does
+      // not resolve, so a caller re-putting a page learns about broken links.
+      const stillPending = await db.query(
+        "SELECT target_ref FROM pending_links WHERE from_page_id = (SELECT id FROM pages WHERE slug = $1)",
+        [slug],
+      );
+      return {
+        slug,
+        unchanged: true,
+        pending: stillPending.rows.map((r) => String(r.target_ref)),
+      };
     }
 
     // Embed BEFORE writing: a failed embed leaves nothing half-written, so no
@@ -159,11 +207,16 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     const chunks = chunkBody(args.body);
     const vectors = await embed(chunks);
 
-    const refs = extractWikilinks(args.body);
+    const refs = extractRefs(args.body, frontmatter);
+    // Normalize declared aliases in place so the alias arm's @> containment
+    // check compares like with like.
+    const aliases = frontmatterAliases(frontmatter);
+    const storedFrontmatter = aliases.length ? { ...frontmatter, aliases } : frontmatter;
     const related = Array.isArray(frontmatter.related_ids)
       ? (frontmatter.related_ids as unknown[]).filter((r): r is string => typeof r === "string")
       : [];
 
+    const pending: string[] = [];
     await db.tx(async (q) => {
       const up = await q(
         `INSERT INTO pages (slug, kind, title, body, frontmatter, content_hash)
@@ -173,7 +226,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
            frontmatter = EXCLUDED.frontmatter, content_hash = EXCLUDED.content_hash,
            deleted_at = NULL, updated_at = now()
          RETURNING id, title`,
-        [slug, kind, title, args.body, JSON.stringify(frontmatter), hash],
+        [slug, kind, title, args.body, JSON.stringify(storedFrontmatter), hash],
       );
       const pageId = Number(up.rows[0].id);
 
@@ -189,25 +242,23 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       await q("DELETE FROM edges WHERE from_page_id = $1 AND lane = 'declared'", [pageId]);
       await q("DELETE FROM pending_links WHERE from_page_id = $1", [pageId]);
       const targets = new Map<number, string>(); // id -> kind (wikilink wins over related)
+      const park = async (ref: string) => {
+        pending.push(ref);
+        await q(
+          `INSERT INTO pending_links (from_page_id, target_ref, ref_norm) VALUES ($1, $2, $3)
+           ON CONFLICT DO NOTHING`,
+          [pageId, ref, normalizeRef(ref)],
+        );
+      };
       for (const ref of related) {
         const id = await resolveRef(q, ref);
         if (id !== null && id !== pageId) targets.set(id, "related");
-        else if (id === null) {
-          await q(
-            "INSERT INTO pending_links (from_page_id, target_ref) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            [pageId, ref],
-          );
-        }
+        else if (id === null) await park(ref);
       }
       for (const ref of refs) {
         const id = await resolveRef(q, ref);
         if (id !== null && id !== pageId) targets.set(id, "wikilink");
-        else if (id === null) {
-          await q(
-            "INSERT INTO pending_links (from_page_id, target_ref) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            [pageId, ref],
-          );
-        }
+        else if (id === null) await park(ref);
       }
       for (const [toId, edgeKind] of targets) {
         await q(
@@ -218,9 +269,18 @@ export function createStore(db: Db, embed: EmbedFn): Store {
 
       // Forward references: pages that wiki-linked this slug/title before it
       // existed now get their edge, and the pending row is consumed.
+      // Every name this page now answers to, so refs parked before it existed
+      // resolve through the SAME arms resolveRef uses. Miss one and forward
+      // links silently never land.
+      const names = [
+        normalizeRef(slug),
+        normalizeRef(String(up.rows[0].title)),
+        normalizeSlugish(slug.replace(/^.*\//, "")),
+        ...aliases,
+      ].filter(Boolean);
       const pend = await q(
-        "SELECT from_page_id, target_ref FROM pending_links WHERE lower(target_ref) IN (lower($1), lower($2))",
-        [slug, up.rows[0].title as string],
+        "SELECT from_page_id, target_ref FROM pending_links WHERE ref_norm = ANY($1::text[])",
+        [[...new Set(names)]],
       );
       for (const row of pend.rows) {
         const fromId = Number(row.from_page_id);
@@ -235,7 +295,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         ]);
       }
     });
-    return { slug, unchanged: false };
+    return { slug, unchanged: false, pending };
   }
 
   return {
@@ -304,6 +364,66 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         frontmatter: (row.frontmatter as Record<string, unknown>) ?? {},
       });
       return { slug, restored: true as const };
+    },
+
+    // Rename in place. Edges are keyed by page id so they survive untouched;
+    // the old slug is appended to this page's own aliases, which is what makes
+    // every stale [[old-slug]] elsewhere keep resolving. Deliberately does NOT
+    // rewrite other pages' bodies: that would mutate notes the user did not
+    // touch, change their content_hash, and re-embed every referrer.
+    async renamePage({ slug, to }) {
+      const target = to?.trim();
+      if (!target || !SLUG_RE.test(target)) throw new Error(`invalid slug: ${JSON.stringify(to)}`);
+      if (target === slug) return { slug: target, from: slug };
+      return db.tx(async (q) => {
+        const cur = await q(
+          "SELECT id, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
+          [slug],
+        );
+        if (!cur.rows.length) throw new Error(`not_found: ${slug}`);
+        const clash = await q("SELECT 1 FROM pages WHERE slug = $1", [target]);
+        if (clash.rows.length) throw new Error(`slug already taken: ${target}`);
+        const fm = (cur.rows[0].frontmatter as Record<string, unknown>) ?? {};
+        const aliases = new Set(frontmatterAliases(fm));
+        aliases.add(normalizeRef(slug));
+        aliases.delete(normalizeRef(target));
+        await q(
+          "UPDATE pages SET slug = $1, frontmatter = $2::jsonb, updated_at = now() WHERE id = $3",
+          [target, JSON.stringify({ ...fm, aliases: [...aliases] }), Number(cur.rows[0].id)],
+        );
+        return { slug: target, from: slug };
+      });
+    },
+
+    // Pages nothing points to. The defect a force-directed graph makes visually
+    // obvious and that no other read answers.
+    async findOrphans({ limit }) {
+      const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
+      const res = await db.query(
+        `SELECT p.slug, p.title FROM pages p
+         WHERE p.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM edges e JOIN pages src ON src.id = e.from_page_id
+             WHERE e.to_page_id = p.id AND src.deleted_at IS NULL
+           )
+         ORDER BY p.updated_at DESC LIMIT $1`,
+        [n],
+      );
+      return res.rows.map((r) => ({ slug: String(r.slug), title: String(r.title) }));
+    },
+
+    // Refs that point at a page which does not exist — the precise complement
+    // of findOrphans, and the answer to "why does my imported graph look empty".
+    async brokenLinks({ limit }) {
+      const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
+      const res = await db.query(
+        `SELECT p.slug AS from_slug, pl.target_ref AS ref
+         FROM pending_links pl JOIN pages p ON p.id = pl.from_page_id
+         WHERE p.deleted_at IS NULL
+         ORDER BY p.updated_at DESC, pl.target_ref LIMIT $1`,
+        [n],
+      );
+      return res.rows.map((r) => ({ from_slug: String(r.from_slug), ref: String(r.ref) }));
     },
 
     async getPage({ slug, fuzzy }) {
