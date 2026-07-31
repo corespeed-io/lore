@@ -211,3 +211,34 @@ test("invalid slugs are rejected", async () => {
   await expect(store.putPage({ slug: "has space", body: "x" })).rejects.toThrow(/invalid slug/);
   await expect(store.putPage({ slug: "bad[slug]", body: "x" })).rejects.toThrow(/invalid slug/);
 });
+
+test("every page reports a type (lore filters by strict equality)", async () => {
+  await store.putPage({ slug: "notes/plain", body: "A note with no type at all." });
+  const pages = await store.listPages({ limit: 200 });
+  for (const p of pages) expect(p.type, `${p.slug} has no type`).toBeTruthy();
+  const byslug = new Map(pages.map((p) => [p.slug, p.type]));
+  expect(byslug.get("notes/plain")).toBe("note");
+  expect(byslug.get("people/jane")).toBe("person");
+  expect((await store.getPage({ slug: "people/jane" })).type).toBe("person");
+});
+
+test("LIKE metacharacters in a query are matched literally, not as wildcards", async () => {
+  await store.putPage({ slug: "notes/pct", body: "Conversion was 50% last quarter." });
+  // Lexical arms only: the vector arm has no similarity floor, so it returns
+  // its nearest pages for ANY query and would mask what ILIKE matched.
+  const lexical = createStore(pgliteDb(pg), async () => {
+    throw new Error("vector arm off");
+  });
+  const wildcard = await lexical.search({ query: "%", limit: 50 });
+  expect(wildcard.map((h) => h.slug)).not.toContain("notes/plain");
+  const literal = await lexical.search({ query: "50%", limit: 10 });
+  expect(literal.map((h) => h.slug)).toContain("notes/pct");
+});
+
+test("changing a page from note to memory is not skipped as unchanged", async () => {
+  const body = "This text does not change.";
+  await store.putPage({ slug: "notes/flip", body });
+  const second = await store.putPage({ slug: "notes/flip", body, kind: "memory" });
+  expect(second.unchanged).toBe(false);
+  expect((await store.getPage({ slug: "notes/flip" })).type).toBe("memory");
+});

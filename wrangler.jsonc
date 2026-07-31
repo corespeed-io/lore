@@ -6,9 +6,19 @@
 // RDS, Supabase, self-hosted; free plan included). Workers can't hold DB
 // sockets across requests, so lore opens a client per query — Hyperdrive
 // keeps the real pool warm at the edge and makes that cheap:
-//   npx wrangler hyperdrive create lore-db --connection-string="postgres://…"
+//
+//   npx wrangler hyperdrive create lore-db --caching-disabled \
+//     --connection-string="postgres://…"
+//
 // then paste the returned id below and uncomment. (Fallback: a plain
 // DATABASE_URL secret also works, but pays origin TLS per query.)
+//
+// --caching-disabled IS REQUIRED. Hyperdrive caches read queries for 60s by
+// default and does NOT invalidate them on write, so an agent that calls
+// put_page and then reads the page back gets the pre-write answer — or a
+// not_found. Pooling is the part lore needs; the cache is actively wrong for
+// a read-write brain. Existing config: wrangler hyperdrive update <id>
+// --caching-disabled.
 //
 // Secrets (wrangler secret put): EMBEDDINGS_API_KEY, BRAIN_WRITE_TOKEN,
 // BRAIN_READ_TOKEN, UI_PASSWORD. Plain config goes in "vars".

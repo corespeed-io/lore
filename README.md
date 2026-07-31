@@ -72,7 +72,7 @@ docker build -t lore . && docker run -p 3000:8080 --env-file .env lore
 Or on **Cloudflare Workers** (via OpenNext) — put any Postgres behind a [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) binding (free plan included; see `wrangler.jsonc`):
 
 ```bash
-npx wrangler hyperdrive create lore-db --connection-string="postgres://…"   # paste id into wrangler.jsonc
+npx wrangler hyperdrive create lore-db --caching-disabled --connection-string="postgres://…"
 npx wrangler secret put EMBEDDINGS_API_KEY   # + BRAIN_WRITE_TOKEN, UI_PASSWORD…
 npm run cf:deploy
 ```

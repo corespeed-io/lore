@@ -114,8 +114,13 @@ keep it that way.
   biome-ignored (biome hangs crawling it). workerd forbids holding sockets
   across requests, so on Workers every query/tx opens a short-lived `pg`
   Client — cheap ONLY through the **Hyperdrive binding** (`HYPERDRIVE`, the
-  blessed path: `wrangler hyperdrive create`, works with any Postgres; a
-  plain `DATABASE_URL` secret works but pays origin TLS per query). The
+  blessed path: `wrangler hyperdrive create --caching-disabled`, works with
+  any Postgres; a plain `DATABASE_URL` secret works but pays origin TLS per
+  query). **`--caching-disabled` is mandatory** - Hyperdrive caches reads for
+  60s and never invalidates them on write, so a put_page followed by a
+  get_page returns the pre-write row (or `not_found`). Only the pooling is
+  wanted here; this failure is Workers-only, Node and Railway never see it.
+  The
   binding is read via `getCloudflareContext()` at runtime — it never appears
   in `process.env`, which is why standalone detection goes through
   `resolveDatabaseUrl()`, not an env check. Other secrets via
