@@ -465,3 +465,72 @@ test("find_orphans lists pages nothing points to", async () => {
   expect(orphans).toContain("notes/lonely");
   expect(orphans).not.toContain("people/jane");
 });
+
+test("the mention sweep writes only auto edges, is idempotent, and is reversible", async () => {
+  await store.putPage({ slug: "people/wanda-ford", body: "# Wanda Ford\n\nbio" });
+  await store.putPage({ slug: "notes/mentions-wanda", body: "Talked to Wanda Ford about it." });
+
+  // Nothing inferred yet: naming a page is not a link.
+  expect(
+    (await store.getBacklinks({ slug: "people/wanda-ford" })).map((b) => b.slug),
+  ).not.toContain("notes/mentions-wanda");
+
+  const dry = await store.sweepMentions({ limit: 200, dryRun: true });
+  expect(dry.pairs).toEqual(
+    expect.arrayContaining([{ from_slug: "notes/mentions-wanda", to_slug: "people/wanda-ford" }]),
+  );
+  expect(dry.edgesAdded).toBe(0); // a dry run writes nothing
+  expect(
+    (await store.getBacklinks({ slug: "people/wanda-ford" })).map((b) => b.slug),
+  ).not.toContain("notes/mentions-wanda");
+
+  const first = await store.sweepMentions({ limit: 200 });
+  expect(first.edgesAdded).toBeGreaterThan(0);
+  expect((await store.getBacklinks({ slug: "people/wanda-ford" })).map((b) => b.slug)).toContain(
+    "notes/mentions-wanda",
+  );
+  // The inferred edge lives in its own lane, so a person can tell it from theirs.
+  const lanes = await pg.query(
+    `SELECT DISTINCT lane FROM edges e
+     JOIN pages f ON f.id = e.from_page_id WHERE f.slug = 'notes/mentions-wanda'`,
+  );
+  expect((lanes as { rows: { lane: string }[] }).rows.map((r) => r.lane)).toEqual(["auto"]);
+
+  // Idempotent: a second sweep of the same pages adds nothing.
+  const second = await store.sweepMentions({ limit: 200 });
+  expect(second.edgesAdded).toBe(0);
+
+  // Reversible: one delete undoes every inference it ever made.
+  const cleared = await store.clearAutoEdges();
+  expect(cleared.removed).toBeGreaterThan(0);
+  expect(
+    (await store.getBacklinks({ slug: "people/wanda-ford" })).map((b) => b.slug),
+  ).not.toContain("notes/mentions-wanda");
+  // ...and a declared link to the same page is untouched by the clear.
+  await store.putPage({ slug: "notes/declares-wanda", body: "see [[people/wanda-ford]]" });
+  await store.clearAutoEdges();
+  expect((await store.getBacklinks({ slug: "people/wanda-ford" })).map((b) => b.slug)).toContain(
+    "notes/declares-wanda",
+  );
+});
+
+test("an inferred edge cannot promote a page in search", async () => {
+  // The backlink boost counts the declared lane only: a heuristic must not be
+  // able to change ranking.
+  await store.putPage({
+    slug: "concepts/zylophone-topic",
+    body: "# Zylophone topic\n\nabout zylophone",
+  });
+  for (const i of [1, 2, 3, 4, 5]) {
+    await store.putPage({ slug: `notes/auto-ref-${i}`, body: "Discussing Zylophone topic here." });
+  }
+  const before = (await store.search({ query: "zylophone", limit: 5 })).find(
+    (h) => h.slug === "concepts/zylophone-topic",
+  );
+  await store.sweepMentions({ limit: 200 });
+  const after = (await store.search({ query: "zylophone", limit: 5 })).find(
+    (h) => h.slug === "concepts/zylophone-topic",
+  );
+  expect(after?.score).toBe(before?.score);
+  await store.clearAutoEdges();
+});

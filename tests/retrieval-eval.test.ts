@@ -115,14 +115,20 @@ test(`retrieval baseline over ${fixture.queries.length} queries`, async () => {
     console.log("misses:", JSON.stringify(misses.map((m) => ({ q: m.q, miss: m.miss }))));
   }
 
-  // BASELINE recorded 2026-07-31 against the lexical arms:
-  //   recall@10 0.9417 · ndcg@10 0.9291 · mrr 0.9667 · precision@10 0.105
-  // Floors sit just under those, with a little room for RRF tie order. Raise
-  // them when a change genuinely improves retrieval; never lower them to make
-  // a build pass — that is the one move this file exists to prevent.
-  expect(report[`recall@${K}`]).toBeGreaterThanOrEqual(0.9);
-  expect(report[`ndcg@${K}`]).toBeGreaterThanOrEqual(0.85);
-  expect(report.mrr).toBeGreaterThanOrEqual(0.85);
+  // HISTORY — the point of this file is that a ranking change has to show up
+  // here before it ships:
+  //   2026-07-31  three lexical/vector arms + flat RRF, no boosts
+  //               recall@10 0.9417 · ndcg@10 0.9291 · mrr 0.9667
+  //   2026-07-31  + title-phrase boost (x1.25) and log inbound-link boost
+  //               recall@10 0.9417 · ndcg@10 0.9357 · mrr 0.9750
+  //               (recall held, ranking improved — which is what a reordering
+  //               boost should do; it cannot add candidates)
+  // Floors sit just under the current numbers, with a little room for RRF tie
+  // order. Raise them when a change genuinely improves retrieval; never lower
+  // them to make a build pass — that is the one move this file exists to stop.
+  expect(report[`recall@${K}`]).toBeGreaterThanOrEqual(0.93);
+  expect(report[`ndcg@${K}`]).toBeGreaterThanOrEqual(0.92);
+  expect(report.mrr).toBeGreaterThanOrEqual(0.96);
 }, 60_000);
 
 test("every query returns something, and nothing returns the whole corpus", async () => {

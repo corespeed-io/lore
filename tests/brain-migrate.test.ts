@@ -63,7 +63,7 @@ test("a v1 database migrates in place, keeping its data", async () => {
   await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
 
   const one = async (sql: string) => (await db.query(sql)).rows[0] as Record<string, unknown>;
-  expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(2);
+  expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(3);
   // separators folded, so a ref typed "Robert Smith" can match the filename
   expect((await one("SELECT basename FROM pages WHERE slug='people/robert-smith'")).basename).toBe(
     "robert smith",
@@ -78,6 +78,11 @@ test("a v1 database migrates in place, keeping its data", async () => {
     ).hit,
   ).toBe(true);
   expect(Number((await one("SELECT count(*)::int AS n FROM pages")).n)).toBe(2);
+  // v3 columns landed too: the sweep watermark and the maintenance lease
+  expect(
+    (await one("SELECT mentions_scanned_at FROM pages LIMIT 1")).mentions_scanned_at,
+  ).toBeNull();
+  expect((await one("SELECT maintenance_lease FROM meta")).maintenance_lease).toBeNull();
 
   // and it is idempotent: a second init is a no-op, not a re-migration
   await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
@@ -92,6 +97,37 @@ test("a fresh database initializes at the current version", async () => {
   const row = (await db.query("SELECT schema_version FROM meta")).rows[0] as {
     schema_version: number;
   };
-  expect(Number(row.schema_version)).toBe(2);
+  expect(Number(row.schema_version)).toBe(3);
+  await pg.close();
+});
+
+test("a fresh database really has every column its schema_version claims", async () => {
+  // The drift this catches: `meta` was defined twice (bootstrap + ddl list), so
+  // a fresh database got the 4-column bootstrap, the ddl copy became a no-op,
+  // and initSchema stamped schema_version 3 onto a table missing a v3 column.
+  const pg = new PGlite({ extensions: { vector, pg_trgm } });
+  const db = pgliteDb(pg);
+  await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
+
+  const cols = async (table: string) =>
+    (
+      await db.query("SELECT column_name FROM information_schema.columns WHERE table_name = $1", [
+        table,
+      ])
+    ).rows.map((r) => String(r.column_name));
+
+  expect(await cols("meta")).toEqual(
+    expect.arrayContaining([
+      "id",
+      "embedding_model",
+      "embedding_dim",
+      "schema_version",
+      "maintenance_lease",
+    ]),
+  );
+  expect(await cols("pages")).toEqual(
+    expect.arrayContaining(["basename", "fts", "mentions_scanned_at", "deleted_at"]),
+  );
+  expect(await cols("pending_links")).toEqual(expect.arrayContaining(["ref_norm"]));
   await pg.close();
 });

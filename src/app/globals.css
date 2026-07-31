@@ -2692,3 +2692,35 @@ a.ext {
 .import .dim {
   color: var(--muted);
 }
+
+/* Graph health panel */
+.graph-health-line {
+  font-size: 13px;
+  color: var(--body);
+  margin: 0.75rem 0 0.25rem;
+}
+.graph-health-line:first-of-type {
+  margin-top: 0;
+}
+.graph-health-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.9;
+}
+.graph-health-list code {
+  font-family: var(--font-mono), monospace;
+}
+.graph-health-src {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+.graph-health-src:hover {
+  color: var(--link);
+  text-decoration: underline;
+}

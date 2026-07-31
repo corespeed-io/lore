@@ -3,6 +3,7 @@
 // reference resolution. Single-tenant by design — no sources, no scopes.
 
 import type { Db, Query } from "./db";
+import { buildGazetteer, findMentions } from "./mentions";
 import {
   type EmbedFn,
   chunkBody,
@@ -11,6 +12,7 @@ import {
   normalizeRef,
   normalizeSlugish,
 } from "./pipeline";
+import { isTitlePhraseMatch } from "./title-match";
 
 export type PageKind = "note" | "memory";
 
@@ -38,6 +40,10 @@ const ARM_LIMIT = 40;
 // ANN candidates pulled before per-page max-pool: multi-chunk pages and
 // soft-deleted rows both eat slots, so over-fetch well past ARM_LIMIT.
 const ANN_OVERFETCH = ARM_LIMIT * 5;
+// Ranking weights. Changing either MUST move the numbers in
+// tests/retrieval-eval.test.ts, which is the whole reason that file exists.
+const TITLE_BOOST = 1.25;
+const BACKLINK_WEIGHT = 0.05;
 // A guard, not a policy: one pasted logfile would otherwise become thousands of
 // chunks, one enormous embeddings bill, and a request that cannot finish inside
 // a Worker's CPU budget. Far above any real note.
@@ -110,6 +116,16 @@ export interface Store {
   }): Promise<{ from_slug: string; to_slug: string }[]>;
   recentPages(args: { days?: number; limit?: number }): Promise<PageHit[]>;
   pageCount(): Promise<number>;
+  // Deterministic mention linking into the 'auto' edge lane. Returns what it
+  // did so a caller can page through the brain, and takes a lease so two
+  // schedulers cannot sweep at once.
+  sweepMentions(args: { limit?: number; dryRun?: boolean }): Promise<{
+    scanned: number;
+    edgesAdded: number;
+    remaining: number;
+    pairs: { from_slug: string; to_slug: string }[];
+  }>;
+  clearAutoEdges(): Promise<{ removed: number }>;
   // Cursor-paged for export: streaming beats materializing the whole brain.
   exportBatch(args: { afterSlug?: string; limit?: number }): Promise<
     { slug: string; title: string; body: string; frontmatter: Record<string, unknown> }[]
@@ -578,6 +594,39 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         });
       }
       if (fused.size === 0) return [];
+
+      // Two boosts, applied BEFORE the slice — after it they would only reorder
+      // what the user already got, which is not the point. One extra indexed
+      // query over the fused ids (<= arms x ARM_LIMIT):
+      //   - title phrase: the query names this page (structural match, see
+      //     title-match.ts). An Obsidian user thinks in note names.
+      //   - inbound links, log-compressed: in a hand-made link graph, how many
+      //     notes point at a page is a direct read of what its author treats as
+      //     central. Only the 'declared' lane counts — an inferred edge must not
+      //     be able to promote a page.
+      // Both fail visibly (the wrong page at rank 1), which is the bar for
+      // keeping a weight that no eval can calibrate. Their effect on the frozen
+      // query set is recorded in tests/retrieval-eval.test.ts.
+      const fusedIds = [...fused.keys()];
+      const boostRows = await db.query(
+        `SELECT p.id, p.title,
+                (SELECT count(*) FROM edges e
+                  JOIN pages src ON src.id = e.from_page_id AND src.deleted_at IS NULL
+                  WHERE e.to_page_id = p.id AND e.lane = 'declared') AS inbound
+         FROM pages p WHERE p.id = ANY($1::bigint[]) AND p.deleted_at IS NULL`,
+        [fusedIds],
+      );
+      for (const row of boostRows.rows) {
+        const agg = fused.get(Number(row.id));
+        if (!agg) continue;
+        if (isTitlePhraseMatch(trimmed, String(row.title))) {
+          agg.rrf *= TITLE_BOOST;
+          agg.labels.add("title");
+        }
+        const inbound = Number(row.inbound) || 0;
+        if (inbound > 0) agg.rrf *= 1 + BACKLINK_WEIGHT * Math.log(1 + inbound);
+      }
+
       const ranked = [...fused.entries()].sort((a, b) => b[1].rrf - a[1].rrf).slice(0, n);
       const ids = ranked.map(([id]) => id);
       const pages = await db.query(
@@ -668,6 +717,71 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         type: pageType(r),
         updated_at: iso(r.updated_at),
       }));
+    },
+
+    async sweepMentions({ limit, dryRun }) {
+      const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
+      // The gazetteer is small (typed pages only), so it is cheap to rebuild per
+      // call and always current.
+      const named = await db.query(
+        `SELECT id, slug, title, frontmatter->'aliases' AS aliases FROM pages
+         WHERE deleted_at IS NULL`,
+      );
+      const gazetteer = buildGazetteer(
+        named.rows.map((r) => ({
+          id: Number(r.id),
+          slug: String(r.slug),
+          title: String(r.title),
+          aliases: Array.isArray(r.aliases) ? (r.aliases as string[]) : [],
+        })),
+      );
+      const slugById = new Map(named.rows.map((r) => [Number(r.id), String(r.slug)]));
+
+      const batch = await db.query(
+        `SELECT id, body FROM pages WHERE deleted_at IS NULL
+         ORDER BY mentions_scanned_at NULLS FIRST, id LIMIT $1`,
+        [n],
+      );
+      const pairs: { from_slug: string; to_slug: string }[] = [];
+      let edgesAdded = 0;
+      for (const row of batch.rows) {
+        const fromId = Number(row.id);
+        for (const toId of findMentions(String(row.body), gazetteer)) {
+          if (toId === fromId) continue; // self-link guard
+          pairs.push({
+            from_slug: slugById.get(fromId) ?? String(fromId),
+            to_slug: slugById.get(toId) ?? String(toId),
+          });
+          if (dryRun) continue;
+          // The (from, to, lane) primary key makes this idempotent, and the
+          // declared lane is never touched: a real link always wins in the UI.
+          const res = await db.query(
+            `INSERT INTO edges (from_page_id, to_page_id, lane, kind)
+             VALUES ($1, $2, 'auto', 'mention') ON CONFLICT DO NOTHING RETURNING 1`,
+            [fromId, toId],
+          );
+          edgesAdded += res.rows.length;
+        }
+        if (!dryRun) {
+          await db.query("UPDATE pages SET mentions_scanned_at = now() WHERE id = $1", [fromId]);
+        }
+      }
+      const left = await db.query(
+        `SELECT count(*)::int AS n FROM pages
+         WHERE deleted_at IS NULL AND mentions_scanned_at IS NULL`,
+      );
+      return {
+        scanned: batch.rows.length,
+        edgesAdded,
+        remaining: Number(left.rows[0].n),
+        pairs,
+      };
+    },
+
+    async clearAutoEdges() {
+      const res = await db.query("DELETE FROM edges WHERE lane = 'auto' RETURNING 1");
+      await db.query("UPDATE pages SET mentions_scanned_at = NULL");
+      return { removed: res.rows.length };
     },
 
     async exportBatch({ afterSlug, limit }) {

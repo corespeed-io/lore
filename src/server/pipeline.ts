@@ -50,7 +50,7 @@ export function normalizeSlugish(ref: string): string {
 // Blank out fenced blocks and inline code spans, preserving length so nothing
 // downstream sees shifted offsets. A note documenting `[[example]]` syntax must
 // not grow an edge the author cannot find in their prose.
-function maskCode(body: string): string {
+export function maskCode(body: string): string {
   const blank = (m: string) => m.replace(/[^\n]/g, " ");
   return body.replace(/```[\s\S]*?```/g, blank).replace(/`[^`\n]*`/g, blank);
 }

@@ -1,12 +1,13 @@
 // Compiler-enforced: this module opens DATABASE_URL and must never reach the
 // client bundle.
 import "server-only";
-import { initSchema } from "./db";
+import { type Db, initSchema } from "./db";
 import { makeDb, resolveDatabaseUrl } from "./drivers";
 import { embeddingsConfigFromEnv, makeEmbedFn } from "./pipeline";
 import { type Store, createStore } from "./store";
 
 let storePromise: Promise<Store> | null = null;
+let dbPromise: Promise<Db> | null = null;
 
 // One store + one schema init per process/isolate; init failures are not
 // cached so a fixed env/database heals on the next request. Whether the store
@@ -20,6 +21,7 @@ export function getStore(): Promise<Store> {
       const cfg = embeddingsConfigFromEnv();
       const db = await makeDb(url);
       await initSchema(db, { embeddingModel: cfg.model, embeddingDim: cfg.dim });
+      dbPromise = Promise.resolve(db);
       return createStore(db, makeEmbedFn(cfg));
     })();
     storePromise.catch(() => {
@@ -27,6 +29,15 @@ export function getStore(): Promise<Store> {
     });
   }
   return storePromise;
+}
+
+// The maintenance route needs the raw connection for its lease compare-and-set;
+// everything else should go through the Store. Initializing via getStore keeps
+// the schema check on one path.
+export async function getDb(): Promise<Db> {
+  await getStore();
+  if (!dbPromise) throw new Error("database not initialized");
+  return dbPromise;
 }
 
 // gbrain.ts calls this in standalone mode — same {isError, text} envelope as

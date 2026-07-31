@@ -17,10 +17,11 @@ const LIMITS: Record<string, { max: number; windowMs: number }> = {
   "/api/mcp": { max: 600, windowMs: 60_000 },
   "/api/import": { max: 120, windowMs: 60_000 },
   "/api/export": { max: 10, windowMs: 60_000 },
+  "/api/maintenance": { max: 60, windowMs: 60_000 },
 };
 
 // Paths that authenticate themselves instead of using the viewer gate.
-const BRAIN_ROUTES = new Set(["/api/mcp", "/api/import", "/api/export"]);
+const BRAIN_ROUTES = new Set(["/api/mcp", "/api/import", "/api/export", "/api/maintenance"]);
 const hits = new Map<string, { count: number; resetAt: number }>();
 // Cap the map so a stream of one-shot keys (distinct IPs/emails that never
 // recur) can't grow it without bound — buckets are only refreshed lazily on a

@@ -171,14 +171,67 @@ graph, search, page view) works unchanged.
   rate-limited there. **The viewer console stays read-only by construction:
   writing needs the write credential, whoever you are.**
 
+## Ranking
+
+`search` fuses three arms with flat RRF, then applies exactly two boosts
+**before** the slice (after it they would only reorder what the caller already
+got):
+
+- **Title phrase** (x1.25, `src/server/title-match.ts`) — the query names this
+  page. The load-bearing rules are STRUCTURAL, not tuned: token-boundary
+  matching so "art" cannot match "Bartholomew", and a two-content-token floor
+  so a query of "the" cannot promote everything. That is why this is safe to
+  keep without a per-deployment eval — a wrong boundary rule fails visibly at
+  rank 1, unlike a wrong weight.
+- **Inbound links**, log-compressed (`1 + 0.05*ln(1+n)`) — in a hand-made link
+  graph, how many notes point at a page is a direct read of what its author
+  treats as central. **Only the `declared` lane counts**: an inferred edge must
+  never be able to promote a page, and there is a test for that.
+
+Both landed only after the eval fixture existed, and their effect is recorded
+in it. There is deliberately no reranker, no query expansion, no similarity
+floor and no autocut.
+
+## Background job: mention linking
+
+`src/server/mentions.ts` + `POST /api/maintenance` — the one enrichment worth
+porting from gbrain's ~20-phase cycle, and the only occupant of the `auto` edge
+lane. Deterministic, zero-LLM, and reversible: it writes only
+`lane='auto', kind='mention'`, so `{"action":"clear"}` (or
+`DELETE FROM edges WHERE lane='auto'`) undoes every inference it ever made.
+
+Four choices carry the safety, none of them a tuned weight: the gazetteer is
+built only from slug-prefixed typed pages (`people/ companies/ entities/
+concepts/`) so a page called "Notes" cannot link from everywhere; a
+`MIN_NAME_LENGTH` of 4 (short names under-link, which is the right trade — a
+false auto edge pollutes the graph until someone notices, a missing one is
+invisible); longest-match-wins so "Robert Smith" does not also link "Robert";
+and code is masked exactly as it is for declared links, so a note documenting
+`` `[[Name]]` `` syntax grows nothing.
+
+Nothing calls the route on its own — wire whatever scheduler the host has, and
+it is off until you do. It takes a compare-and-set lease on `meta` so two
+schedulers cannot sweep at once, does at most 200 pages per call, and
+`{"dryRun":true}` reports what it *would* link. An HTTP route rather than a
+Workers `scheduled` handler on purpose: OpenNext's worker exports only `fetch`
+plus its DO classes, and a Cron Trigger invocation caps at 15 minutes
+wall-clock while an HTTP-triggered Worker does not.
+
 ## Retrieval regression gate
 
-`tests/retrieval-eval.test.ts` + `tests/fixtures/retrieval.json` — a frozen
-20-query corpus with relevance judgments and four pure metric functions.
+`tests/retrieval-eval.test.ts` + `tests/fixtures/retrieval.json` + the pure
+metrics in `tests/metrics.ts` — a frozen 20-query corpus with relevance
+judgments. (The metrics live outside the test file because biome forbids
+exports from one; note also that a check run as `npm run lint | tail -1`
+reports the PIPE's exit status, so it can never fail — do not gate on piped
+commands.)
 **Nothing that multiplies, floors, or truncates a score may ship without moving
 these numbers first**: no title boost, no backlink boost, no similarity floor,
-no autocut, no reranker. Baseline recorded 2026-07-31: `recall@10 0.9417 ·
-ndcg@10 0.9291 · mrr 0.9667`. The floors sit just under those and are printed
+no autocut, no reranker. Baselines are recorded in the file as
+history: `recall@10 0.9417 · ndcg@10 0.9291 · mrr 0.9667` for the bare arms,
+then `0.9417 / 0.9357 / 0.9750` once the two ranking boosts landed — recall
+held while ranking improved, which is exactly what a reordering boost should
+do. The floors sit just under those and are printed
 on every run, so a CI output diff is the signal. **Raise them when retrieval
 genuinely improves; never lower them to make a build pass.**
 

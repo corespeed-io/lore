@@ -17,20 +17,27 @@ export interface BrainMeta {
   embeddingDim: number;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+
+// ONE definition, used by both the bootstrap in initSchema and the ddl list
+// below. Two copies drifted once already: the bootstrap created `meta` without
+// maintenance_lease, which made the ddl copy a no-op and left a FRESH database
+// claiming schema_version 3 while missing a v3 column.
+const META_DDL = `CREATE TABLE IF NOT EXISTS meta (
+  id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  embedding_model TEXT NOT NULL,
+  embedding_dim INT NOT NULL,
+  schema_version INT NOT NULL,
+  -- Compare-and-set lease: one mention sweep at a time, even if two schedulers
+  -- fire at once.
+  maintenance_lease TIMESTAMPTZ
+)`;
 
 function ddl(dim: number): { sql: string; optional?: boolean }[] {
   return [
     { sql: "CREATE EXTENSION IF NOT EXISTS vector" },
     { sql: "CREATE EXTENSION IF NOT EXISTS pg_trgm" },
-    {
-      sql: `CREATE TABLE IF NOT EXISTS meta (
-        id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-        embedding_model TEXT NOT NULL,
-        embedding_dim INT NOT NULL,
-        schema_version INT NOT NULL
-      )`,
-    },
+    { sql: META_DDL },
     {
       sql: `CREATE TABLE IF NOT EXISTS pages (
         id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -43,6 +50,8 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
         deleted_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        -- When the mention sweep last looked at this page; NULL means never.
+        mentions_scanned_at TIMESTAMPTZ,
         -- The last slug segment with separators folded to spaces, so a ref typed
         -- as [[Some Note]] finds notes/some-note. normalizeSlugish() is the JS
         -- half of this comparison; the two MUST agree.
@@ -64,6 +73,10 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
     { sql: "CREATE INDEX IF NOT EXISTS pages_fts ON pages USING gin (fts)" },
     { sql: "CREATE INDEX IF NOT EXISTS pages_updated ON pages (updated_at DESC)" },
     { sql: "CREATE INDEX IF NOT EXISTS pages_basename ON pages (basename)" },
+    // The sweep asks for the least-recently-scanned pages.
+    {
+      sql: "CREATE INDEX IF NOT EXISTS pages_mentions_scanned ON pages (mentions_scanned_at NULLS FIRST)",
+    },
     // Containment lookups against frontmatter->'aliases'.
     { sql: "CREATE INDEX IF NOT EXISTS pages_frontmatter ON pages USING gin (frontmatter)" },
     {
@@ -119,12 +132,7 @@ export async function initSchema(db: Db, meta: BrainMeta): Promise<void> {
   if (!Number.isInteger(meta.embeddingDim) || meta.embeddingDim < 1 || meta.embeddingDim > 16000) {
     throw new Error(`invalid embedding dim: ${meta.embeddingDim}`);
   }
-  await db.query(`CREATE TABLE IF NOT EXISTS meta (
-    id INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    embedding_model TEXT NOT NULL,
-    embedding_dim INT NOT NULL,
-    schema_version INT NOT NULL
-  )`);
+  await db.query(META_DDL);
   const existing = await db.query(
     "SELECT embedding_model, embedding_dim, schema_version FROM meta WHERE id = 1",
   );
@@ -186,6 +194,10 @@ async function migrate(db: Db, from: number): Promise<void> {
     await db.query(
       "UPDATE pending_links SET ref_norm = lower(btrim(target_ref)) WHERE ref_norm = ''",
     );
+  }
+  if (from < 3) {
+    await db.query("ALTER TABLE meta ADD COLUMN IF NOT EXISTS maintenance_lease TIMESTAMPTZ");
+    await db.query("ALTER TABLE pages ADD COLUMN IF NOT EXISTS mentions_scanned_at TIMESTAMPTZ");
   }
   await db.query("UPDATE meta SET schema_version = $1 WHERE id = 1", [SCHEMA_VERSION]);
 }
