@@ -87,10 +87,15 @@ graph, search, page view) works unchanged.
   editing a memory's body demotes it to a note and drops its category and
   `related_ids`, which are graph edges. `frontmatter: {}` clears deliberately.
   `list_pages` takes `kind` (`memory` | `note`) so a client can list memories
-  only. Not implemented, by choice: bulk `ingest` (a client loop over
-  `put_page` covers it) and `clear_all_memory` (single-user; `delete_page` in
-  a loop, and an unrecoverable bulk wipe on an agent-callable surface is a
-  worse default than the tedium).
+  without pulling every page. There is deliberately no bulk-wipe tool: a
+  client loop over `delete_page` covers it, and an unrecoverable mass delete
+  on an agent-callable surface is a worse default than the tedium.
+- Known gaps in the write surface, if you are adding tools: **no restore**
+  (deletes are soft, so the row is there, but nothing exposes un-deleting it)
+  and **no rename** (a new slug creates a second page; edges are keyed by page
+  id so they would survive an in-place slug change, but the literal
+  `[[old-slug]]` text in other pages would not — a correct rename has to
+  rewrite referencing bodies, which is why it isn't a one-liner).
 - `src/server/mcp.ts` — one tool registry drives `tools/list` + `tools/call`:
   the 8 bare-name read tools lore calls (get_page errors MUST keep the literal
   `not_found` — lore regex-matches it; `traverse_graph` MUST return
