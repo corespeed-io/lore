@@ -270,3 +270,81 @@ test("list_pages can narrow to memories or notes", async () => {
   const all = await store.listPages({ limit: 200 });
   expect(all.length).toBeGreaterThan(memories.length);
 });
+
+test("soft delete drops the chunks so they stop eating ANN candidate slots", async () => {
+  await store.putPage({ slug: "notes/bulky", body: "para one\n\npara two\n\npara three" });
+  const before = await pg.query("SELECT count(*)::int AS n FROM chunks");
+  await store.deletePage({ slug: "notes/bulky" });
+  const after = await pg.query("SELECT count(*)::int AS n FROM chunks");
+  const rows = (r: unknown) => Number((r as { rows: { n: number }[] }).rows[0].n);
+  expect(rows(after)).toBeLessThan(rows(before));
+  const kept = await pg.query("SELECT body FROM pages WHERE slug = 'notes/bulky'");
+  expect((kept as { rows: { body: string }[] }).rows[0].body).toContain("para one");
+});
+
+test("restore_page brings a page back AND re-indexes it for search", async () => {
+  await store.putPage({ slug: "notes/oops", body: "Uniquewordzephyr appears only here." });
+  expect(
+    (await store.search({ query: "Uniquewordzephyr", limit: 5 })).map((h) => h.slug),
+  ).toContain("notes/oops");
+  await store.deletePage({ slug: "notes/oops" });
+  expect(
+    (await store.search({ query: "Uniquewordzephyr", limit: 5 })).map((h) => h.slug),
+  ).not.toContain("notes/oops");
+  await store.restorePage({ slug: "notes/oops" });
+  const page = await store.getPage({ slug: "notes/oops" });
+  expect(page.body).toContain("Uniquewordzephyr");
+  // The trap: restoring through the normal put path without clearing
+  // content_hash short-circuits as "unchanged" and leaves zero chunks.
+  const chunks = await pg.query(
+    "SELECT count(*)::int AS n FROM chunks c JOIN pages p ON p.id = c.page_id WHERE p.slug = 'notes/oops'",
+  );
+  expect(Number((chunks as { rows: { n: number }[] }).rows[0].n)).toBeGreaterThan(0);
+  expect(
+    (await store.search({ query: "Uniquewordzephyr", limit: 5 })).map((h) => h.slug),
+  ).toContain("notes/oops");
+  await expect(store.restorePage({ slug: "notes/never-deleted" })).rejects.toThrow(/not_found/);
+});
+
+test("restore keeps kind and frontmatter", async () => {
+  const { slug } = await store.remember({ memory: "restore me", metadata: { category: "c" } });
+  await store.deletePage({ slug });
+  await store.restorePage({ slug });
+  const page = await store.getPage({ slug });
+  expect(page.type).toBe("memory");
+  expect((page.frontmatter as Record<string, unknown>).category).toBe("c");
+});
+
+test("an identical remember retry returns the same page instead of duplicating", async () => {
+  const a = await store.remember({ memory: "exactly the same", metadata: { category: "z" } });
+  const b = await store.remember({ memory: "exactly the same", metadata: { category: "z" } });
+  expect(b.slug).toBe(a.slug);
+  const dupes = await pg.query(
+    "SELECT count(*)::int AS n FROM pages WHERE body = 'exactly the same' AND deleted_at IS NULL",
+  );
+  expect(Number((dupes as { rows: { n: number }[] }).rows[0].n)).toBe(1);
+  // Different metadata is a different memory, not a retry.
+  const c = await store.remember({ memory: "exactly the same", metadata: { category: "other" } });
+  expect(c.slug).not.toBe(a.slug);
+});
+
+test("traversal does not step through a soft-deleted page", async () => {
+  await store.putPage({ slug: "chain/a", body: "to [[chain/b]]" });
+  await store.putPage({ slug: "chain/b", body: "to [[chain/c]]" });
+  await store.putPage({ slug: "chain/c", body: "to [[chain/d]]" });
+  await store.putPage({ slug: "chain/d", body: "end" });
+  expect(
+    (await store.traverseGraph({ slug: "chain/a", depth: 5, direction: "both" })).length,
+  ).toBeGreaterThanOrEqual(3);
+  await store.deletePage({ slug: "chain/b" });
+  const edges = await store.traverseGraph({ slug: "chain/a", depth: 5, direction: "both" });
+  // c-d is a real edge, but it is only reachable from a THROUGH the dead page.
+  const slugs = new Set(edges.flatMap((e) => [e.from_slug, e.to_slug]));
+  expect(slugs.has("chain/d")).toBe(false);
+});
+
+test("an absurdly large body is refused before it becomes thousands of chunks", async () => {
+  await expect(store.putPage({ slug: "notes/huge", body: "x".repeat(1_000_001) })).rejects.toThrow(
+    /body too large/,
+  );
+});

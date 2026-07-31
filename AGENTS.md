@@ -90,12 +90,24 @@ graph, search, page view) works unchanged.
   without pulling every page. There is deliberately no bulk-wipe tool: a
   client loop over `delete_page` covers it, and an unrecoverable mass delete
   on an agent-callable surface is a worse default than the tedium.
-- Known gaps in the write surface, if you are adding tools: **no restore**
-  (deletes are soft, so the row is there, but nothing exposes un-deleting it)
-  and **no rename** (a new slug creates a second page; edges are keyed by page
-  id so they would survive an in-place slug change, but the literal
-  `[[old-slug]]` text in other pages would not — a correct rename has to
-  rewrite referencing bodies, which is why it isn't a one-liner).
+- Delete/restore invariant: `delete_page` sets `deleted_at` AND drops the
+  page's chunks — the vector arm's inner query must stay a bare
+  `ORDER BY … LIMIT` to keep HNSW, so its candidates are filtered by
+  `deleted_at` only AFTER the LIMIT, and dead chunks would permanently steal
+  ANN slots. `restore_page` therefore has to re-embed, and it **clears
+  `content_hash` first**: without that the re-put matches the stored hash,
+  short-circuits as "unchanged", reports success, and leaves a live page with
+  zero chunks that the vector arm can never see again. Both halves are
+  reverse-verified in `tests/brain-store.test.ts`.
+- `remember` de-duplicates an exact repeat (same body + same frontmatter)
+  instead of minting a second `mem-<uuid>`; an MCP retry is the ordinary case
+  and `content_hash` cannot reconcile two different slugs.
+- Known gap: **no rename**. A new slug creates a second page; edges are keyed
+  by page id so they would survive an in-place slug change, but the literal
+  `[[old-slug]]` text in other pages would not. Rewriting referencing bodies
+  is the wrong fix (it mutates notes the user didn't touch and re-embeds every
+  referrer) — the cheap version is an alias arm in `resolveRef` plus appending
+  the old slug to the renamed page's own `frontmatter.aliases`.
 - `src/server/mcp.ts` — one tool registry drives `tools/list` + `tools/call`:
   the 8 bare-name read tools lore calls (get_page errors MUST keep the literal
   `not_found` — lore regex-matches it; `traverse_graph` MUST return

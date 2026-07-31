@@ -130,9 +130,16 @@ export const TOOLS: Record<string, ToolDef> = {
   },
   delete_page: {
     access: "write",
-    description: "Soft-delete a page by slug (recoverable in the database).",
+    description:
+      "Soft-delete a page by slug. The body and its links are kept, so restore_page can bring it back.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
     handler: (s, a) => s.deletePage({ slug: String(a.slug ?? "") }),
+  },
+  restore_page: {
+    access: "write",
+    description: "Undo a delete_page: brings the page back and re-indexes it for search.",
+    inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
+    handler: (s, a) => s.restorePage({ slug: String(a.slug ?? "") }),
   },
 };
 

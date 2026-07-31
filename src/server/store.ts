@@ -31,6 +31,10 @@ const ARM_LIMIT = 40;
 // ANN candidates pulled before per-page max-pool: multi-chunk pages and
 // soft-deleted rows both eat slots, so over-fetch well past ARM_LIMIT.
 const ANN_OVERFETCH = ARM_LIMIT * 5;
+// A guard, not a policy: one pasted logfile would otherwise become thousands of
+// chunks, one enormous embeddings bill, and a request that cannot finish inside
+// a Worker's CPU budget. Far above any real note.
+const MAX_BODY_CHARS = 1_000_000;
 
 function sha256Hex(s: string): Promise<string> {
   return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then((buf) =>
@@ -84,6 +88,7 @@ export interface Store {
     metadata?: Record<string, unknown>;
   }): Promise<{ slug: string }>;
   deletePage(args: { slug: string }): Promise<{ slug: string; deleted: true }>;
+  restorePage(args: { slug: string }): Promise<{ slug: string; restored: true }>;
   getPage(args: { slug: string; fuzzy?: boolean }): Promise<Record<string, unknown>>;
   listPages(args: { limit?: number; kind?: string }): Promise<PageHit[]>;
   search(args: { query: string; limit?: number }): Promise<PageHit[]>;
@@ -117,6 +122,11 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       );
     }
     if (typeof args.body !== "string") throw new Error("body must be a string");
+    if (args.body.length > MAX_BODY_CHARS) {
+      throw new Error(
+        `body too large: ${args.body.length} chars exceeds the ${MAX_BODY_CHARS} limit`,
+      );
+    }
     const prior = await db.query(
       "SELECT content_hash, kind, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
       [slug],
@@ -234,6 +244,17 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     async remember({ memory, metadata }) {
       if (typeof memory !== "string" || !memory.trim())
         throw new Error("memory must be a non-empty string");
+      // An MCP retry replays the same call, and every remember mints a fresh
+      // uuid slug -- so without this the same memory lands twice under two
+      // slugs that content_hash can never reconcile. Exact match only: no
+      // threshold, nothing to tune.
+      const dupe = await db.query(
+        `SELECT slug FROM pages
+         WHERE kind = 'memory' AND deleted_at IS NULL AND body = $1 AND frontmatter = $2::jsonb
+         LIMIT 1`,
+        [memory, JSON.stringify(metadata ?? {})],
+      );
+      if (dupe.rows.length) return { slug: String(dupe.rows[0].slug) };
       const slug = `mem-${crypto.randomUUID()}`;
       const firstLine = memory.trim().split("\n")[0].slice(0, 80);
       const title = typeof metadata?.title === "string" ? metadata.title : firstLine;
@@ -242,12 +263,47 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     },
 
     async deletePage({ slug }) {
+      return db.tx(async (q) => {
+        const res = await q(
+          "UPDATE pages SET deleted_at = now(), updated_at = now() WHERE slug = $1 AND deleted_at IS NULL RETURNING id",
+          [slug],
+        );
+        if (!res.rows.length) throw new Error(`not_found: ${slug}`);
+        // Drop the chunks: the vector arm's inner query must stay a bare
+        // ORDER BY/LIMIT to keep the HNSW index, so its candidates are filtered
+        // by deleted_at only AFTER the LIMIT. Leaving dead chunks in place lets
+        // every delete permanently steal ANN slots and quietly degrade search.
+        // The pages row (body, edges, frontmatter) stays, so restore can rebuild.
+        await q("DELETE FROM chunks WHERE page_id = $1", [Number(res.rows[0].id)]);
+        return { slug, deleted: true as const };
+      });
+    },
+
+    async restorePage({ slug }) {
       const res = await db.query(
-        "UPDATE pages SET deleted_at = now(), updated_at = now() WHERE slug = $1 AND deleted_at IS NULL RETURNING id",
+        `SELECT title, body, kind, frontmatter FROM pages
+         WHERE slug = $1 AND deleted_at IS NOT NULL`,
         [slug],
       );
-      if (!res.rows.length) throw new Error(`not_found: ${slug}`);
-      return { slug, deleted: true as const };
+      const row = res.rows[0];
+      if (!row) throw new Error(`not_found: no deleted page with slug ${slug}`);
+      // Un-delete FIRST so the re-put sees the row as prior state, then re-put to
+      // rebuild the chunks that deletePage dropped. content_hash is cleared
+      // because otherwise the re-put matches the stored hash, short-circuits as
+      // "unchanged", and leaves the page alive with zero chunks -- invisible to
+      // the vector arm forever.
+      await db.query(
+        "UPDATE pages SET deleted_at = NULL, content_hash = '', updated_at = now() WHERE slug = $1",
+        [slug],
+      );
+      await putPage({
+        slug,
+        title: String(row.title),
+        body: String(row.body),
+        kind: row.kind as PageKind,
+        frontmatter: (row.frontmatter as Record<string, unknown>) ?? {},
+      });
+      return { slug, restored: true as const };
     },
 
     async getPage({ slug, fuzzy }) {
@@ -357,10 +413,6 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       // So: ANN over-fetch first, then per-page max-pool on the small result.
       // ponytail: no similarity floor - nearest-neighbour always returns
       // something, so a gibberish query still yields its N closest pages.
-      // Any floor is model-dependent; add one (or autocut) once tuned against
-      // the embedding model actually in use.
-      // ponytail: no similarity floor - nearest-neighbour always returns
-      // something, so a gibberish query still yields its N closest pages.
       // A floor is model-dependent; add one (or autocut) once tuned against
       // the embedding model actually in use.
       try {
@@ -443,24 +495,31 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       const dir = direction === "in" || direction === "out" ? direction : "both";
       const step =
         dir === "out"
-          ? "SELECT e.to_page_id AS next_id, n.depth + 1 AS depth FROM nodes n JOIN edges e ON e.from_page_id = n.id"
+          ? "SELECT e.to_page_id AS next_id, n.depth + 1 AS depth FROM nodes n JOIN live_edges e ON e.from_page_id = n.id"
           : dir === "in"
-            ? "SELECT e.from_page_id AS next_id, n.depth + 1 AS depth FROM nodes n JOIN edges e ON e.to_page_id = n.id"
+            ? "SELECT e.from_page_id AS next_id, n.depth + 1 AS depth FROM nodes n JOIN live_edges e ON e.to_page_id = n.id"
             : `SELECT CASE WHEN e.from_page_id = n.id THEN e.to_page_id ELSE e.from_page_id END AS next_id,
                       n.depth + 1 AS depth
-               FROM nodes n JOIN edges e ON e.from_page_id = n.id OR e.to_page_id = n.id`;
+               FROM nodes n JOIN live_edges e ON e.from_page_id = n.id OR e.to_page_id = n.id`;
+      // live_edges keeps the frontier on undeleted pages: walking THROUGH a
+      // soft-deleted page would pull in edges from a component the seed cannot
+      // actually reach, which is not what "reachable from this slug" means.
       const res = await db.query(
-        `WITH RECURSIVE nodes (id, depth) AS (
+        `WITH RECURSIVE live_edges AS (
+           SELECT e.from_page_id, e.to_page_id, pf.slug AS from_slug, pt.slug AS to_slug
+           FROM edges e
+           JOIN pages pf ON pf.id = e.from_page_id AND pf.deleted_at IS NULL
+           JOIN pages pt ON pt.id = e.to_page_id AND pt.deleted_at IS NULL
+         ),
+         nodes (id, depth) AS (
            SELECT id, 0 FROM pages WHERE slug = $1 AND deleted_at IS NULL
            UNION
            SELECT s.next_id, s.depth FROM (${step} WHERE n.depth < $2) s
          )
-         SELECT DISTINCT pf.slug AS from_slug, pt.slug AS to_slug
-         FROM edges e
+         SELECT DISTINCT e.from_slug, e.to_slug
+         FROM live_edges e
          JOIN nodes nf ON nf.id = e.from_page_id
          JOIN nodes nt ON nt.id = e.to_page_id
-         JOIN pages pf ON pf.id = e.from_page_id AND pf.deleted_at IS NULL
-         JOIN pages pt ON pt.id = e.to_page_id AND pt.deleted_at IS NULL
          LIMIT 2000`,
         [slug, d],
       );
