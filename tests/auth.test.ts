@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { beforeEach, expect, test } from "vitest";
 import { checkAuth } from "../src/lib/auth.js";
 
@@ -76,4 +77,15 @@ test("proxy mode rejects a forged / unverifiable token", async () => {
   // so checkAuth fails closed — the old presence-only check would have allowed it.
   const h = new Headers({ "cf-access-jwt-assertion": "tok" });
   expect((await checkAuth(h, cookies())).ok).toBe(false);
+});
+
+// Placement guard. checkAuth is only reachable because Next picks the
+// middleware up, and with app code under src/ it looks ONLY at
+// src/middleware.ts — a root-level middleware.ts compiles fine, ships an
+// empty middleware manifest, and silently serves every route unauthenticated.
+// No behavioral test catches that, so assert the path itself.
+test("middleware lives where Next will actually load it", () => {
+  const root = new URL("..", import.meta.url);
+  expect(existsSync(new URL("src/middleware.ts", root))).toBe(true);
+  expect(existsSync(new URL("middleware.ts", root))).toBe(false);
 });
