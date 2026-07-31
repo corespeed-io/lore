@@ -242,3 +242,31 @@ test("changing a page from note to memory is not skipped as unchanged", async ()
   expect(second.unchanged).toBe(false);
   expect((await store.getPage({ slug: "notes/flip" })).type).toBe("memory");
 });
+
+test("put_page keeps kind and frontmatter the caller omitted", async () => {
+  const { slug } = await store.remember({
+    memory: "v1 text",
+    metadata: { category: "preference", related_ids: ["people/jane"] },
+  });
+  // The natural "update this memory" call: slug + new body, nothing else.
+  await store.putPage({ slug, body: "v2 text" });
+  const after = await store.getPage({ slug });
+  expect(after.body).toBe("v2 text");
+  expect(after.type).toBe("memory");
+  expect((after.frontmatter as Record<string, unknown>).category).toBe("preference");
+  // related_ids are graph edges — losing them would silently unlink the page.
+  expect((await store.getBacklinks({ slug: "people/jane" })).map((b) => b.slug)).toContain(slug);
+  // Clearing is still possible, but only by asking for it.
+  await store.putPage({ slug, body: "v3 text", frontmatter: {} });
+  expect((await store.getPage({ slug })).frontmatter).toEqual({});
+});
+
+test("list_pages can narrow to memories or notes", async () => {
+  const memories = await store.listPages({ limit: 200, kind: "memory" });
+  expect(memories.length).toBeGreaterThan(0);
+  expect(memories.every((p) => p.type === "memory")).toBe(true);
+  const notes = await store.listPages({ limit: 200, kind: "note" });
+  expect(notes.some((p) => p.slug.startsWith("mem-"))).toBe(false);
+  const all = await store.listPages({ limit: 200 });
+  expect(all.length).toBeGreaterThan(memories.length);
+});

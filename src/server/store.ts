@@ -5,11 +5,13 @@
 import type { Db, Query } from "./db";
 import { type EmbedFn, chunkBody, extractWikilinks } from "./pipeline";
 
+export type PageKind = "note" | "memory";
+
 export interface PutPageArgs {
   slug: string;
   title?: string;
   body: string;
-  kind?: "note" | "memory";
+  kind?: PageKind;
   frontmatter?: Record<string, unknown>;
 }
 
@@ -83,7 +85,7 @@ export interface Store {
   }): Promise<{ slug: string }>;
   deletePage(args: { slug: string }): Promise<{ slug: string; deleted: true }>;
   getPage(args: { slug: string; fuzzy?: boolean }): Promise<Record<string, unknown>>;
-  listPages(args: { limit?: number }): Promise<PageHit[]>;
+  listPages(args: { limit?: number; kind?: string }): Promise<PageHit[]>;
   search(args: { query: string; limit?: number }): Promise<PageHit[]>;
   getBacklinks(args: { slug: string }): Promise<{ slug: string; title: string }[]>;
   traverseGraph(args: {
@@ -115,19 +117,29 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       );
     }
     if (typeof args.body !== "string") throw new Error("body must be a string");
-    const kind = args.kind === "memory" ? "memory" : "note";
-    const frontmatter = args.frontmatter ?? {};
+    const prior = await db.query(
+      "SELECT content_hash, kind, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
+      [slug],
+    );
+    const existing = prior.rows[0];
+
+    // Omitting a field updates nothing: put_page is the only way to edit a
+    // page, so an agent editing a memory's body must not silently demote it to
+    // a note or drop its category / related_ids (which are graph edges). Pass
+    // frontmatter: {} to clear it deliberately.
+    const kind =
+      args.kind === "memory" || args.kind === "note"
+        ? args.kind
+        : ((existing?.kind as PageKind | undefined) ?? "note");
+    const frontmatter =
+      args.frontmatter ?? ((existing?.frontmatter as Record<string, unknown> | undefined) || {});
     const title = (args.title ?? "").trim() || titleFromBody(args.body, slug);
     // Hash every field a write can change - kind included, or flipping a
     // page between note and memory hashes the same and gets skipped as
     // "unchanged". JSON-encoding the tuple keeps field boundaries clear.
     const hash = await sha256Hex(JSON.stringify([kind, title, args.body, frontmatter]));
 
-    const prior = await db.query(
-      "SELECT content_hash FROM pages WHERE slug = $1 AND deleted_at IS NULL",
-      [slug],
-    );
-    if (prior.rows.length && prior.rows[0].content_hash === hash) {
+    if (existing && existing.content_hash === hash) {
       return { slug, unchanged: true }; // idempotent re-ingest: skip embedding entirely
     }
 
@@ -271,12 +283,16 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       };
     },
 
-    async listPages({ limit }) {
+    async listPages({ limit, kind }) {
       const n = Math.min(Math.max(Number(limit) || 100, 1), 200);
+      // kind narrows to notes or memories; anything else lists everything, so
+      // lore's own unfiltered call is unaffected.
+      const only = kind === "memory" || kind === "note" ? kind : null;
       const res = await db.query(
         `SELECT slug, kind, title, frontmatter, updated_at FROM pages
-         WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT $1`,
-        [n],
+         WHERE deleted_at IS NULL AND ($2::text IS NULL OR kind = $2)
+         ORDER BY updated_at DESC LIMIT $1`,
+        [n, only],
       );
       return res.rows.map((r) => ({
         slug: String(r.slug),

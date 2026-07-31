@@ -26,10 +26,14 @@ async function searchHandler(store: Store, args: Record<string, unknown>): Promi
 export const TOOLS: Record<string, ToolDef> = {
   list_pages: {
     access: "read",
-    description: "List pages, most recently updated first.",
-    inputSchema: obj({ limit: { type: "number" }, sort: { type: "string" } }),
+    description: "List pages, most recently updated first. kind narrows to 'memory' or 'note'.",
+    inputSchema: obj({
+      limit: { type: "number" },
+      sort: { type: "string" },
+      kind: { type: "string", enum: ["note", "memory"] },
+    }),
     // ponytail: sort is accepted but always updated_desc — the only order lore asks for.
-    handler: (s, a) => s.listPages({ limit: a.limit as number }),
+    handler: (s, a) => s.listPages({ limit: a.limit as number, kind: a.kind as string }),
   },
   get_page: {
     access: "read",
@@ -93,7 +97,8 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "write",
     description:
       "Create or update a page (upsert by slug). Markdown body; [[wikilinks]] become graph edges. " +
-      "frontmatter.related_ids (slugs) add explicit edges.",
+      "frontmatter.related_ids (slugs) add explicit edges. Omitted fields are left as they were, " +
+      "so editing a memory's body keeps its kind and metadata; pass frontmatter: {} to clear it.",
     inputSchema: obj(
       {
         slug: { type: "string" },

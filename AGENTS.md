@@ -82,6 +82,15 @@ graph, search, page view) works unchanged.
   and resolve transactionally when the target page appears. Search = vector +
   FTS + trigram/ILIKE (the CJK arm — 'simple' tsvector can't segment CJK) fused
   with RRF; the vector arm degrades away if the embeddings call fails.
+- Agent-facing write semantics: `put_page` is the only edit path, so **omitted
+  fields are preserved** (kind, frontmatter) rather than reset — otherwise
+  editing a memory's body demotes it to a note and drops its category and
+  `related_ids`, which are graph edges. `frontmatter: {}` clears deliberately.
+  `list_pages` takes `kind` (`memory` | `note`) so a client can list memories
+  only. Not implemented, by choice: bulk `ingest` (a client loop over
+  `put_page` covers it) and `clear_all_memory` (single-user; `delete_page` in
+  a loop, and an unrecoverable bulk wipe on an agent-callable surface is a
+  worse default than the tedium).
 - `src/server/mcp.ts` — one tool registry drives `tools/list` + `tools/call`:
   the 8 bare-name read tools lore calls (get_page errors MUST keep the literal
   `not_found` — lore regex-matches it; `traverse_graph` MUST return
