@@ -57,7 +57,10 @@ function maskCode(body: string): string {
 
 const WIKILINK = /(!?)\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]/g;
 // [text](target) — Obsidian's Markdown-link mode, and what Logseq/Foam export.
-const MDLINK = /\[[^\]\n]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+// The target runs to the closing paren rather than to the first space, because
+// real files contain BOTH "Maps/Reading MOC.md" and the %20-encoded form; an
+// optional "title" is stripped afterwards.
+const MDLINK = /\[[^\]\n]*\]\(([^)\n]+)\)/g;
 
 function addRef(refs: Set<string>, raw: string): void {
   const ref = raw.trim();
@@ -67,10 +70,15 @@ function addRef(refs: Set<string>, raw: string): void {
 // Turn a Markdown-link target into a page ref, or null if it isn't one:
 // external URLs, mailto, in-page anchors, and non-markdown files (images,
 // PDFs) are not pages.
-function mdTargetToRef(target: string): string | null {
+function mdTargetToRef(raw: string): string | null {
+  // Drop an optional link title: [x](path "Title")
+  const target = raw.replace(/\s+["'(].*$/, "").trim();
+  if (!target) return null;
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) return null;
   if (target.startsWith("#")) return null;
-  const path = decodeURIComponent(target.split("#")[0].replace(/^\.\//, ""));
+  // Relative prefixes are noise: ../Maps/Note.md names the same page as
+  // Maps/Note.md. Obsidian's Markdown mode and Logseq/Foam exports emit these.
+  const path = decodeURIComponent(target.split("#")[0].replace(/^(?:\.{1,2}\/)+/, ""));
   if (!path) return null;
   const ext = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
   if (ext && ext !== "md") return null;

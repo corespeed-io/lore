@@ -11,7 +11,16 @@ export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)
 const LIMITS: Record<string, { max: number; windowMs: number }> = {
   "/api/call": { max: 120, windowMs: 60_000 },
   "/api/graph": { max: 60, windowMs: 60_000 },
+  // Bearer-authed, so these are not open — but an unauthenticated caller can
+  // still burn CPU guessing tokens, and an import loop should not be able to
+  // hammer the embeddings provider without bound.
+  "/api/mcp": { max: 600, windowMs: 60_000 },
+  "/api/import": { max: 120, windowMs: 60_000 },
+  "/api/export": { max: 10, windowMs: 60_000 },
 };
+
+// Paths that authenticate themselves instead of using the viewer gate.
+const BRAIN_ROUTES = new Set(["/api/mcp", "/api/import", "/api/export"]);
 const hits = new Map<string, { count: number; resetAt: number }>();
 // Cap the map so a stream of one-shot keys (distinct IPs/emails that never
 // recur) can't grow it without bound — buckets are only refreshed lazily on a
@@ -44,9 +53,10 @@ function json(detail: string, status: number, extra: Record<string, string> = {}
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   if (path === "/api/health") return NextResponse.next();
-  // The standalone-brain MCP endpoint carries its own bearer auth (agents are
-  // not browser users); it must not sit behind viewer password/proxy auth.
-  if (path === "/api/mcp") return NextResponse.next();
+  // The standalone-brain endpoints carry their own bearer auth (agents and
+  // import/export tools are not browser users); they must not sit behind the
+  // viewer's password/proxy gate. Rate limits below still apply.
+  if (BRAIN_ROUTES.has(path)) return NextResponse.next();
 
   const r = await checkAuth(req.headers, req.cookies);
   if (!r.ok) {

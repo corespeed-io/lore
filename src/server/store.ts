@@ -110,6 +110,10 @@ export interface Store {
   }): Promise<{ from_slug: string; to_slug: string }[]>;
   recentPages(args: { days?: number; limit?: number }): Promise<PageHit[]>;
   pageCount(): Promise<number>;
+  // Cursor-paged for export: streaming beats materializing the whole brain.
+  exportBatch(args: { afterSlug?: string; limit?: number }): Promise<
+    { slug: string; title: string; body: string; frontmatter: Record<string, unknown> }[]
+  >;
 }
 
 export function createStore(db: Db, embed: EmbedFn): Store {
@@ -131,9 +135,12 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         [norm],
       ],
       [
+        // The ref's own last segment, so a path-ish ref ("Maps/Reading MOC",
+        // or ../Maps/Reading MOC.md after extraction) matches a page's
+        // filename the same way a bare [[Reading MOC]] does.
         `SELECT id FROM pages WHERE basename = $1 AND deleted_at IS NULL
          ORDER BY length(slug), slug LIMIT 1`,
-        [normalizeSlugish(ref)],
+        [normalizeSlugish(ref.replace(/^.*\//, ""))],
       ],
       [
         `SELECT id FROM pages
@@ -660,6 +667,22 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         title: String(r.title),
         type: pageType(r),
         updated_at: iso(r.updated_at),
+      }));
+    },
+
+    async exportBatch({ afterSlug, limit }) {
+      const n = Math.min(Math.max(Number(limit) || 100, 1), 500);
+      const res = await db.query(
+        `SELECT slug, title, body, frontmatter FROM pages
+         WHERE deleted_at IS NULL AND ($1::text IS NULL OR slug > $1)
+         ORDER BY slug LIMIT $2`,
+        [afterSlug ?? null, n],
+      );
+      return res.rows.map((r) => ({
+        slug: String(r.slug),
+        title: String(r.title),
+        body: String(r.body),
+        frontmatter: (r.frontmatter as Record<string, unknown>) ?? {},
       }));
     },
 

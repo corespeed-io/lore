@@ -35,6 +35,7 @@ Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/gar
 - **Force-directed graph** — d3 node-link view with smooth zoom/pan, click-to-filter by type, and connection-walking from any node.
 - **Dashboard** — pages, links, sources, daily activity, top hubs, and recent memories at a glance.
 - **Hybrid search** — title + content search over your gbrain, as you type.
+- **Bring your Obsidian vault** — pick a folder at `/import`; files become pages, folders become slug prefixes, and `[[wikilinks]]` become edges (including the ones in frontmatter, Markdown-style links, and aliases). Export the whole brain back out as a tar of `slug.md` from `/api/export`.
 - **Pluggable viz modules** — drop in a new `src/lib/viz/<name>.ts` to add a visualization.
 - **Fail-closed auth** — none (dev), HTTP Basic, or Cloudflare Access (JWT-verified). Read-only by design.
 - **Deploy anywhere** — standalone Docker image; one-click to Vercel or Railway.

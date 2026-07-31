@@ -146,6 +146,48 @@ graph, search, page view) works unchanged.
   (auth). The store is exercised against real SQL in-process; production picks
   a driver via `src/server/drivers.ts` (below).
 
+## Vault import / export
+
+- **Import** is browser-driven: `/import` (a client component) reads the folder
+  with a plain directory input and POSTs batches to `/api/import`. Nothing
+  server-side touches a filesystem, so it behaves identically on Node and
+  Workers. `src/server/vault.ts` is the pure half — `pathToSlug`
+  ("Projects/My Note.md" -> "projects/my-note", which the basename arm then
+  matches against `[[My Note]]`), and a ~40-line frontmatter reader covering
+  the subset Obsidian writes (scalars, inline and block arrays). It is
+  deliberately NOT a YAML implementation; an unparseable value is kept as its
+  raw string rather than dropped.
+- **Export** is `/api/export`: a streamed USTAR tar of `slug.md`, one
+  cursor-paged batch at a time so memory stays flat. `src/server/tar.ts` is
+  ~130 lines and zero dependencies. Two things it gets right that are easy to
+  break: the checksum field is **six octal digits + NUL + space** (not the
+  plain octal form the numeric fields use — `tar` validates this exactly), and
+  a path too long for USTAR's name(100)+prefix(155) is **skipped and reported**
+  rather than truncated. Validated by extracting with the system `tar`.
+- Both routes plus `/api/mcp` authenticate with the SAME bearer pair via
+  `src/server/auth-bearer.ts` — one rule, one place. Import needs
+  `BRAIN_WRITE_TOKEN`; export accepts either token. They are exempt from the
+  viewer gate in `src/middleware.ts` (they are not browser users) but are still
+  rate-limited there. **The viewer console stays read-only by construction:
+  writing needs the write credential, whoever you are.**
+
+## Retrieval regression gate
+
+`tests/retrieval-eval.test.ts` + `tests/fixtures/retrieval.json` — a frozen
+20-query corpus with relevance judgments and four pure metric functions.
+**Nothing that multiplies, floors, or truncates a score may ship without moving
+these numbers first**: no title boost, no backlink boost, no similarity floor,
+no autocut, no reranker. Baseline recorded 2026-07-31: `recall@10 0.9417 ·
+ndcg@10 0.9291 · mrr 0.9667`. The floors sit just under those and are printed
+on every run, so a CI output diff is the signal. **Raise them when retrieval
+genuinely improves; never lower them to make a build pass.**
+
+Scope, stated honestly: the test embeds with a char-hash, so the vector arm
+carries no meaning here — these numbers score the LEXICAL arms and the fusion
+around them. That is the part a refactor breaks silently (verified: disabling
+the trigram arm drops recall to 0.79 and fails the gate), but it is not a
+quality claim against a real embedding model.
+
 ## Deploy targets
 
 Lore deploys to Node hosts and Cloudflare Workers from the same tree with ONE
