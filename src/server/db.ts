@@ -2,6 +2,8 @@
 // node-postgres in production and PGlite in tests. Keep this file free of any
 // driver import so the store stays testable without a server.
 
+import { MEMORY_DDL, MEMORY_MIGRATION } from "./memory/ddl";
+
 export type Query = (
   text: string,
   params?: unknown[],
@@ -17,7 +19,7 @@ export interface BrainMeta {
   embeddingDim: number;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // ONE definition, used by both the bootstrap in initSchema and the ddl list
 // below. Two copies drifted once already: the bootstrap created `meta` without
@@ -116,6 +118,9 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
     // ref_norm is written by normalizeRef() in JS (NFKC is not available in
     // SQL), so it cannot be a generated column.
     { sql: "CREATE INDEX IF NOT EXISTS pending_links_norm ON pending_links (ref_norm)" },
+    // Agent Memory (v4). Declared next to everything else so there is exactly
+    // one list that owns the schema.
+    ...MEMORY_DDL,
   ];
 }
 
@@ -198,6 +203,11 @@ async function migrate(db: Db, from: number): Promise<void> {
   if (from < 3) {
     await db.query("ALTER TABLE meta ADD COLUMN IF NOT EXISTS maintenance_lease TIMESTAMPTZ");
     await db.query("ALTER TABLE pages ADD COLUMN IF NOT EXISTS mentions_scanned_at TIMESTAMPTZ");
+  }
+  if (from < 4) {
+    // Agent Memory tables. These are additive — no existing table changes
+    // shape — so the same statements serve a fresh database and an upgrade.
+    for (const stmt of MEMORY_MIGRATION) await db.query(stmt.sql);
   }
   await db.query("UPDATE meta SET schema_version = $1 WHERE id = 1", [SCHEMA_VERSION]);
 }
