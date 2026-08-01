@@ -16,8 +16,15 @@ const BLOCKER = /\b(?:blocked|stuck|waiting on|can't proceed|fails|failing)\b/i;
 const QUESTION = /\?\s*$/;
 const DONE = /\b(?:done|finished|completed|shipped|merged|landed)\b/i;
 
+// Each ITEM is bounded too, not just the list. Capping the list at 12 while every
+// item could be 400KB bounds the wrong dimension: one append_event with a large
+// payload field produced an ~800KB rendered_summary, which every later version
+// folds forward in a table nothing prunes.
+const MAX_ITEM = 400;
+const item = (v: string): string => (v.length <= MAX_ITEM ? v : `${v.slice(0, MAX_ITEM)}…`);
+
 function dedupePush(list: string[], value: string, cap = 12): void {
-  const v = value.trim();
+  const v = item(value.trim());
   if (!v || list.includes(v)) return;
   list.push(v);
   // Bounded so a long thread cannot grow the summary without limit; the oldest
@@ -50,8 +57,10 @@ export const extractiveSummarizer: Summarizer = {
         const name = String(e.structured_payload?.name ?? text.slice(0, 60));
         const reference = String(e.structured_payload?.reference ?? "");
         const type = String(e.structured_payload?.type ?? "artifact");
+        // artifacts and corrections were the two lists with no cap at all.
         if (!next.artifacts.some((a) => a.name === name && a.reference === reference)) {
-          next.artifacts.push({ name, reference, type });
+          next.artifacts.push({ name: item(name), reference: item(reference), type: item(type) });
+          while (next.artifacts.length > 12) next.artifacts.shift();
         }
         continue;
       }
@@ -73,7 +82,10 @@ export const extractiveSummarizer: Summarizer = {
       if (CORRECTION.test(text)) {
         // The latest explicit correction REPLACES current state; the outdated
         // version is kept as a correction record, not as a live requirement.
-        if (next.goal && next.goal !== text) next.corrections.push({ old: next.goal, new: text });
+        if (next.goal && next.goal !== text) {
+          next.corrections.push({ old: item(next.goal), new: item(text) });
+          while (next.corrections.length > 12) next.corrections.shift();
+        }
         next.goal = text;
         // A corrected goal invalidates requirements phrased against the old one.
         next.requirements = next.requirements.filter(

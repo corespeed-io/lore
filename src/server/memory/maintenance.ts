@@ -6,7 +6,13 @@
 //   1. summaries   fold new events into the rolling state
 //   2. extraction  propose memory from events past each thread's checkpoint
 //   3. projection  rebuild or remove pages for whatever the lifecycle changed
-//   4. consolidate expire, dedupe, surface conflicts, propose procedures
+//   4. consolidate expire, dedupe, surface conflicts
+//
+// NOT "propose procedures", which this line used to claim. consolidateMemory is
+// called without a scope, and findProcedureCandidates only scans a scope it is
+// given, so that stage cannot run — and nothing in src/ calls recordEpisode or
+// promoteProcedure either, so the whole procedure surface is dead code today.
+// Saying otherwise in a header is how a reader concludes a stage is covered.
 //
 // Extraction runs HERE rather than after every message on purpose: a per-message
 // extractor would spend work on turns that produce nothing durable, and would

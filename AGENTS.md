@@ -431,7 +431,14 @@ privacy defect, not a modelling one.
 **Episodes and procedures** (`episodes.ts`). An episode stores observable
 goal/actions/tools/result and CITES the event range instead of copying the trace.
 A procedure needs two successful episodes, or one plus explicit approval, and
-records required permissions as information only.
+records required permissions as information only. **NOT WIRED, and read this
+before building on it:** nothing in `src/` calls `recordEpisode` or
+`promoteProcedure`, and `consolidateMemory` is invoked without a scope while
+`findProcedureCandidates` only scans a scope it is given — so the "propose
+procedures" stage cannot run at all. The surface is dead code kept for the host
+that will drive it, which means its guarantees are UNTESTED IN ANGER: a reviewer
+noted it accepts cross-scope episodes and an `approved` boolean the caller
+supplies. Wiring it is a change that needs its own review, not a one-line call.
 
 **Background work** (`maintenance.ts`, `consolidate.ts`) runs from
 `POST /api/maintenance {"action":"memory"}` under the SAME lease as the mention
