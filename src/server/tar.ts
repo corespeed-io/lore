@@ -153,7 +153,12 @@ function quote(s: string): string {
   // gone. It also let a crafted array element SPLIT (`zzz\", notes/b` became two
   // elements), minting a graph edge and an alias the author never wrote — the
   // exact class the comma handling above exists to stop.
-  return /^[A-Za-z0-9 _.\-/]+$/.test(s)
+  // The bare form is only safe when the reader gets the same bytes back. A value
+  // that is empty or all whitespace does NOT: the writer emitted `note:  ` and
+  // parseFrontmatter's `if (raw === "") continue` dropped the key entirely, so a
+  // legitimate blank value disappeared from the page. Leading/trailing space goes
+  // the same way, because the reader trims.
+  return s !== "" && s === s.trim() && /^[A-Za-z0-9 _.\-/]+$/.test(s)
     ? s
     : `"${oneLine(s.replace(/\\/g, "\\\\").replace(/"/g, '\\"'))}"`;
 }
@@ -185,4 +190,11 @@ function oneLine(s: string): string {
 // cannot mis-read are written as-is; anything else is dropped, because there is
 // no escaping that makes an arbitrary key safe AND round-trippable, and silently
 // writing a key that re-reads as something else is the bug.
-const SAFE_KEY = /^[A-Za-z0-9_.][A-Za-z0-9_.\- ]*$/;
+// ...which this regex then allowed anyway: a TRAILING SPACE. `{"aliases ": [...]}`
+// is inert in the store — nothing reads a key with a space on the end — but it was
+// written as `aliases : [...]` and the importer's `kv[1].trim()` reads that back as
+// a live `aliases`, which is one of resolveRef's four arms. So an export/import
+// round trip MINTED a resolution arm, which is the precise thing the sentence above
+// promises it does not do. A key is only round-trippable if it equals its trimmed
+// form; anything else is dropped, as the rule already says.
+const SAFE_KEY = /^[A-Za-z0-9_.](?:[A-Za-z0-9_.\- ]*[A-Za-z0-9_.\-])?$/;

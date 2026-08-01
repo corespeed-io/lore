@@ -495,12 +495,14 @@ const MIGRATION_BATCH = 200;
 // convergence sweep, not a schema change — idempotent, and on a clean brain two
 // anti-joins that return nothing.
 //
-// COST, measured (PGlite, 5,000 pages): clean brain 18ms per cold start; first
-// boot with 5,000 legacy strays 7.3s, ONCE, on upgrade; every cold start after
-// that ~285ms, proportional to how many private projections the brain once had,
-// not to its size. Index-assisted (Index Scan using pages_pkey), not a seq scan.
-// The leak check is deliberately NOT skipped when the first batch is empty: a
-// branch that turns a security check off is worth more than one query.
+// COST: measured against PGlite at 5,000 pages — a clean brain is cheap per cold
+// start, a first boot with a large legacy backlog is a one-time upgrade cost, and
+// every cold start after that is proportional to how many private projections the
+// brain ONCE had rather than to its size. The candidate scan is index-assisted,
+// not a seq scan. The figures are in the round-5 commit message rather than here:
+// an inline benchmark number goes stale silently and nothing checks it. The leak
+// check is deliberately NOT skipped when the first batch is empty — a branch that
+// turns a security check off is worth more than one query.
 //
 // BOUNDED WORK. It pages by id and resumes past the highest id it judged, so
 // every candidate is judged exactly once and the loop ends. Deliberately NOT

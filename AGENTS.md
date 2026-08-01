@@ -343,8 +343,12 @@ hidden: a secret **split across two sibling fields** is not detected (n fields h
 2^n concatenations, so any partial version is a list — and it costs a
 `BRAIN_WRITE_TOKEN`, i.e. the owner, while the party this screen protects against
 holds `BRAIN_READ_TOKEN` and cannot write at all); and the extra pairing makes the
-walk O(leaves x depth), measured at 0.14ms for a realistic `put_page` and 96ms for
-a payload engineered deep-and-wide, again write-token-only.
+walk O(leaves x depth), which is bounded two ways — `mcp.ts` refuses on the
+caller's GRANT before screening, so a read token cannot buy the walk at all, and
+`MAX_DEPTH` refuses a payload nested deeper than it can screen rather than failing
+open on the part it cannot reach. Specific timings live in the round-5/6 commit
+messages, not here: an inline benchmark figure goes stale silently and nothing
+checks it.
 Instruction-shaped content is DEMOTED, not deleted: it stays searchable content,
 can never become a procedure, and never auto-commits. A memory cannot widen
 authorization — structurally, because no memory type is consulted for tool

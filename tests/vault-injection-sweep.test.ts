@@ -177,6 +177,34 @@ test("a backslash cannot split an array element into a graph edge", () => {
   expect(note.frontmatter.aliases, "two aliases merged into one").toEqual(["C:\\", "Home Dir"]);
 });
 
+// A KEY IS STRUCTURE. SAFE_KEY's own comment says "silently writing a key that
+// re-reads as something else is the bug" — and the regex allowed a TRAILING SPACE,
+// so `{"aliases ": [...]}`, inert in the store because nothing reads that key, was
+// written as `aliases : [...]` and read back as a LIVE `aliases`. Aliases are one
+// of resolveRef's four arms, so the round trip minted a resolution arm.
+test("a key that would re-read as a different key is dropped, not silently renamed", () => {
+  const { note } = trip("Ok", { "aliases ": ["victim-name"], keep: "kept" });
+  expect(Object.keys(note.frontmatter).sort(), "a trailing-space key came back live").toEqual([
+    "keep",
+    "title",
+  ]);
+  // MIRROR: an ordinary key with an interior space still round-trips.
+  const ok = trip("Ok", { "my key": "value", aliases: ["real-alias"] }).note;
+  expect(ok.frontmatter["my key"]).toBe("value");
+  expect(ok.frontmatter.aliases).toEqual(["real-alias"]);
+});
+
+// A blank value is a value. The writer emitted `note:  ` bare, and the reader's
+// `if (raw === "") continue` dropped the key — so a legitimate empty string
+// vanished from the page instead of coming back empty.
+test("a whitespace-only value keeps its key", () => {
+  const { note } = trip("Ok", { note: " ", also: "x" });
+  expect(Object.keys(note.frontmatter).sort()).toEqual(["also", "note", "title"]);
+  // The reader trims, so what comes back is "", not " " — the key survives, which
+  // is the property that was lost.
+  expect(note.frontmatter.note).toBe("");
+});
+
 // --- real store: does the round trip create an edge that did not exist? ------
 
 async function freshStore(): Promise<{ close: () => Promise<void>; store: Store; db: Db }> {

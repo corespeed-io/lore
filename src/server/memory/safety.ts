@@ -164,7 +164,10 @@ export function findSecrets(text: string): SecretFinding[] {
 // and any depth by construction, so there is no container left to add.
 //
 // COST: one extra scan per (leaf, enclosing key) pair, so O(leaves x depth)
-// rather than O(leaves). A realistic put_page is 0.14ms.
+// rather than O(leaves). Measured on a realistic put_page and on an engineered
+// deep-and-wide payload; the figures are in the round-5 and round-6 commit
+// messages rather than here, because an inline number goes stale silently and
+// nothing checks it.
 //
 // TRAP, because it bit once: this screen must run AFTER the caller's grant is
 // checked, not before. mcp.ts used to decide on the tool's access alone, which
