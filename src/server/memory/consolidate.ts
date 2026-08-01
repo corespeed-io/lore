@@ -1,0 +1,153 @@
+// Localized background consolidation.
+//
+// Never a global rewrite. Each job works on ONE narrow target — a memory key, a
+// thread, a scope, a handful of projections — so a job is bounded, retryable and
+// safe to interrupt. A consolidation pass that rewrote the whole store would be
+// impossible to reason about and impossible to roll back.
+//
+// Runs under the same maintenance lease as the mention sweep, so exactly one
+// background writer exists at a time whatever a scheduler does.
+
+import type { Db } from "../db";
+import type { Store } from "../store";
+import { findProcedureCandidates } from "./episodes";
+import { expireMemories, rowToMemory } from "./items";
+import { runProjections } from "./projection";
+
+export interface ConsolidationReport {
+  expired: number;
+  duplicatesRetired: number;
+  conflicts: number;
+  procedureCandidates: { goal: string; episodeIds: string[]; successes: number }[];
+  projectionsRepaired: number;
+  projectionsFailed: number;
+}
+
+// Two committed memories that mean the same thing under the same key should not
+// both be live. The active-key unique index prevents that for keyed memories, so
+// this catches the unkeyed case: identical content in the same scope and type.
+async function retireExactDuplicates(db: Db, limit: number): Promise<number> {
+  const dupes = await db.query(
+    `SELECT array_agg(id ORDER BY created_at) AS ids
+     FROM memory_items
+     WHERE status = 'committed' AND memory_key IS NULL
+     GROUP BY scope_type, coalesce(scope_id, ''), memory_type, lower(btrim(content))
+     HAVING count(*) > 1
+     LIMIT $1`,
+    [limit],
+  );
+  let retired = 0;
+  for (const row of dupes.rows) {
+    const ids = (row.ids as string[]).map(String);
+    // Keep the oldest — it owns the provenance — and supersede the rest.
+    const [keep, ...rest] = ids;
+    for (const id of rest) {
+      await db.tx(async (q) => {
+        const cur = await q("SELECT status, content FROM memory_items WHERE id = $1", [id]);
+        if (!cur.rows.length) return;
+        await q(
+          `UPDATE memory_items SET status = 'superseded', valid_to = coalesce(valid_to, now()),
+             supersedes_id = coalesce(supersedes_id, NULL), updated_at = now() WHERE id = $1`,
+          [id],
+        );
+        await q(
+          `INSERT INTO memory_revisions (id, memory_id, operation, previous_status, new_status, actor, reason)
+           VALUES ($1, $2, 'SUPERSEDE', $3, 'superseded', 'consolidation', $4)`,
+          [crypto.randomUUID(), id, String(cur.rows[0].status), `exact duplicate of ${keep}`],
+        );
+      });
+      retired++;
+    }
+  }
+  return retired;
+}
+
+// Conflicts are SURFACED, never resolved automatically: if two sources disagree
+// and neither outranks the other, a machine picking a winner is how a wrong fact
+// becomes permanent.
+async function countConflicts(db: Db): Promise<number> {
+  const res = await db.query(
+    "SELECT count(*)::int AS n FROM memory_items WHERE status = 'conflict'",
+  );
+  return Number(res.rows[0].n);
+}
+
+export async function consolidateMemory(
+  db: Db,
+  store: Store,
+  args?: { limit?: number; scopeType?: "thread" | "agent" | "vault"; scopeId?: string | null },
+): Promise<ConsolidationReport> {
+  const limit = Math.min(Math.max(args?.limit ?? 50, 1), 200);
+
+  const { expired } = await expireMemories(db, limit);
+  const duplicatesRetired = await retireExactDuplicates(db, limit);
+  const conflicts = await countConflicts(db);
+
+  // Procedure candidates are proposed for the requested scope only — this is the
+  // "localized" part. Without a scope, nothing is scanned.
+  const procedureCandidates = args?.scopeType
+    ? await findProcedureCandidates(db, {
+        scopeType: args.scopeType,
+        scopeId: args.scopeId,
+        limit: 20,
+      })
+    : [];
+
+  // Anything the lifecycle changed needs its page rebuilt or removed. Doing this
+  // last means a memory retired earlier in this same pass is already handled.
+  const projections = await runProjections(db, store, limit);
+
+  return {
+    expired,
+    duplicatesRetired,
+    conflicts,
+    procedureCandidates,
+    projectionsRepaired: projections.projected,
+    projectionsFailed: projections.failed,
+  };
+}
+
+// Backend health for the Graph Health panel: the numbers that say whether the
+// memory system is keeping up, not just whether it is running.
+export interface MemoryHealth {
+  unprocessed_events: number;
+  threads_with_stale_summaries: number;
+  candidate_memories: number;
+  conflicts: number;
+  failed_projections: number;
+  stale_active_projections: number;
+  maintenance_lease: string | null;
+}
+
+export async function memoryHealth(db: Db): Promise<MemoryHealth> {
+  const one = async (sql: string) => Number((await db.query(sql)).rows[0]?.n ?? 0);
+  const lease = await db.query("SELECT maintenance_lease FROM meta WHERE id = 1");
+  return {
+    // Events past the extraction checkpoint (or with no checkpoint at all).
+    unprocessed_events: await one(`
+      SELECT count(*)::int AS n FROM conversation_events e
+      LEFT JOIN extraction_checkpoints c ON c.thread_id = e.thread_id
+      WHERE e.sequence > coalesce(c.last_extracted_sequence, 0)`),
+    threads_with_stale_summaries: await one(`
+      SELECT count(*)::int AS n FROM threads
+      WHERE last_event_sequence > last_summary_sequence`),
+    candidate_memories: await one(
+      "SELECT count(*)::int AS n FROM memory_items WHERE status = 'candidate'",
+    ),
+    conflicts: await one("SELECT count(*)::int AS n FROM memory_items WHERE status = 'conflict'"),
+    failed_projections: await one(
+      "SELECT count(*)::int AS n FROM memory_items WHERE projection_status = 'failed'",
+    ),
+    // A retired memory whose page is still live: the leak this whole layer exists
+    // to prevent, so it is worth counting rather than assuming.
+    stale_active_projections: await one(`
+      SELECT count(*)::int AS n FROM memory_items m
+      JOIN pages p ON p.id = m.projection_page_id
+      WHERE m.status <> 'committed' AND p.deleted_at IS NULL`),
+    maintenance_lease: lease.rows[0]?.maintenance_lease
+      ? String(lease.rows[0].maintenance_lease)
+      : null,
+  };
+}
+
+export { rowToMemory };

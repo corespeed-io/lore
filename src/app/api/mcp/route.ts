@@ -36,9 +36,9 @@ export async function POST(req: Request) {
   }
 
   const { handleRpc } = await import("@/server/mcp");
-  const { getStore } = await import("@/server/local");
+  const { getBrainCtx } = await import("@/server/local");
   try {
-    const rpc = await handleRpc(getStore, access, method, params);
+    const rpc = await handleRpc(getBrainCtx, access, method, params);
     if (rpc.notification) return new NextResponse(null, { status: 202 });
     if (rpc.error) {
       return NextResponse.json({ jsonrpc: "2.0", id: id ?? null, error: rpc.error });

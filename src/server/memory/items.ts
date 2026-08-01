@@ -341,14 +341,18 @@ export async function writeMemory(db: Db, args: WriteMemoryArgs): Promise<WriteM
       };
     }
 
-    // SUPERSEDE: create the replacement, commit it, close the old one out.
-    const memory = await insert("committed", active.id);
+    // SUPERSEDE. Order matters: the partial unique index allows ONE committed row
+    // per (scope, type, key), so the old row must be retired BEFORE the
+    // replacement is inserted. Both happen in this transaction, so a failed
+    // insert rolls the retirement back rather than leaving the key with no
+    // active value.
     await q(
       `UPDATE memory_items
        SET status = 'superseded', valid_to = now(), updated_at = now()
        WHERE id = $1`,
       [active.id],
     );
+    const memory = await insert("committed", active.id);
     await revise(q, {
       memoryId: active.id,
       operation: "SUPERSEDE",

@@ -40,6 +40,13 @@ export async function getDb(): Promise<Db> {
   return dbPromise;
 }
 
+// The one context every tool call gets. Built through getStore so the schema
+// check and the singleton stay on one path.
+export async function getBrainCtx(): Promise<{ store: Store; db: Db }> {
+  const store = await getStore();
+  return { store, db: await getDb() };
+}
+
 // gbrain.ts calls this in standalone mode — same {isError, text} envelope as
 // the remote-gbrain path so nothing downstream changes.
 export async function callLocalTool(
@@ -47,7 +54,7 @@ export async function callLocalTool(
   args: object,
 ): Promise<{ isError: boolean; text: string }> {
   const { handleRpc } = await import("./mcp");
-  const rpc = await handleRpc(getStore, "read", "tools/call", {
+  const rpc = await handleRpc(getBrainCtx, "read", "tools/call", {
     name: tool,
     arguments: args as Record<string, unknown>,
   });

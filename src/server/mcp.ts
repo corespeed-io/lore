@@ -2,15 +2,26 @@
 // names, same shapes) plus three write tools for agents. One registry drives
 // tools/list and tools/call; access is decided by the caller's bearer grant.
 
+import type { Db } from "./db";
+import { isMemorySlug } from "./memory/projection";
+import { MEMORY_TOOLS } from "./memory/tools";
 import type { PageHit, Store } from "./store";
 
 export type Access = "read" | "write";
 
-interface ToolDef {
+// Tools get the store for pages and the raw db for canonical memory. Anything
+// that needs both (the memory tools) is written against this, not against a
+// second connection of its own.
+export interface BrainCtx {
+  store: Store;
+  db: Db;
+}
+
+export interface ToolDef {
   access: Access;
   description: string;
   inputSchema: Record<string, unknown>;
-  handler: (store: Store, args: Record<string, unknown>) => Promise<unknown>;
+  handler: (ctx: BrainCtx, args: Record<string, unknown>) => Promise<unknown>;
 }
 
 const obj = (props: Record<string, unknown>, required: string[] = []) => ({
@@ -19,8 +30,8 @@ const obj = (props: Record<string, unknown>, required: string[] = []) => ({
   ...(required.length ? { required } : {}),
 });
 
-async function searchHandler(store: Store, args: Record<string, unknown>): Promise<PageHit[]> {
-  return store.search({ query: String(args.query ?? ""), limit: args.limit as number });
+async function searchHandler(ctx: BrainCtx, args: Record<string, unknown>): Promise<PageHit[]> {
+  return ctx.store.search({ query: String(args.query ?? ""), limit: args.limit as number });
 }
 
 export const TOOLS: Record<string, ToolDef> = {
@@ -33,13 +44,13 @@ export const TOOLS: Record<string, ToolDef> = {
       kind: { type: "string", enum: ["note", "memory"] },
     }),
     // ponytail: sort is accepted but always updated_desc — the only order lore asks for.
-    handler: (s, a) => s.listPages({ limit: a.limit as number, kind: a.kind as string }),
+    handler: (c, a) => c.store.listPages({ limit: a.limit as number, kind: a.kind as string }),
   },
   get_page: {
     access: "read",
     description: "Fetch one page by slug (fuzzy falls back to title match).",
     inputSchema: obj({ slug: { type: "string" }, fuzzy: { type: "boolean" } }, ["slug"]),
-    handler: (s, a) => s.getPage({ slug: String(a.slug ?? ""), fuzzy: Boolean(a.fuzzy) }),
+    handler: (c, a) => c.store.getPage({ slug: String(a.slug ?? ""), fuzzy: Boolean(a.fuzzy) }),
   },
   search: {
     access: "read",
@@ -57,7 +68,7 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "read",
     description: "Pages that link to the given slug.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (s, a) => s.getBacklinks({ slug: String(a.slug ?? "") }),
+    handler: (c, a) => c.store.getBacklinks({ slug: String(a.slug ?? "") }),
   },
   traverse_graph: {
     access: "read",
@@ -66,8 +77,8 @@ export const TOOLS: Record<string, ToolDef> = {
       { slug: { type: "string" }, depth: { type: "number" }, direction: { type: "string" } },
       ["slug"],
     ),
-    handler: (s, a) =>
-      s.traverseGraph({
+    handler: (c, a) =>
+      c.store.traverseGraph({
         slug: String(a.slug ?? ""),
         depth: a.depth as number,
         direction: a.direction as string,
@@ -77,12 +88,12 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "read",
     description: "The single source of this standalone brain.",
     inputSchema: obj({}),
-    handler: async (s) => ({
+    handler: async (c) => ({
       sources: [
         {
           id: "default",
           name: process.env.APP_TITLE ?? "brain",
-          page_count: await s.pageCount(),
+          page_count: await c.store.pageCount(),
         },
       ],
     }),
@@ -91,7 +102,7 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "read",
     description: "Recently updated pages.",
     inputSchema: obj({ days: { type: "number" }, limit: { type: "number" } }),
-    handler: (s, a) => s.recentPages({ days: a.days as number, limit: a.limit as number }),
+    handler: (c, a) => c.store.recentPages({ days: a.days as number, limit: a.limit as number }),
   },
   put_page: {
     access: "write",
@@ -111,31 +122,27 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       ["slug", "body"],
     ),
-    handler: (s, a) =>
-      s.putPage({
+    handler: (c, a) => {
+      // The memory/ namespace belongs to generated projections. A user page must
+      // never be able to overwrite one, or a rebuild would clobber real notes.
+      if (isMemorySlug(String(a.slug ?? ""))) {
+        throw new Error(`slug '${String(a.slug)}' is reserved for generated memory projections`);
+      }
+      return c.store.putPage({
         slug: String(a.slug ?? ""),
         title: a.title as string | undefined,
         body: String(a.body ?? ""),
         kind: a.kind as "note" | "memory" | undefined,
         frontmatter: a.frontmatter as Record<string, unknown> | undefined,
-      }),
-  },
-  remember: {
-    access: "write",
-    description: "Save one atomic memory (auto-slugged mem-<uuid>). Metadata rides as frontmatter.",
-    inputSchema: obj({ memory: { type: "string" }, metadata: { type: "object" } }, ["memory"]),
-    handler: (s, a) =>
-      s.remember({
-        memory: String(a.memory ?? ""),
-        metadata: a.metadata as Record<string, unknown> | undefined,
-      }),
+      });
+    },
   },
   delete_page: {
     access: "write",
     description:
       "Soft-delete a page by slug. The body and its links are kept, so restore_page can bring it back.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (s, a) => s.deletePage({ slug: String(a.slug ?? "") }),
+    handler: (c, a) => c.store.deletePage({ slug: String(a.slug ?? "") }),
   },
   rename_page: {
     access: "write",
@@ -143,27 +150,31 @@ export const TOOLS: Record<string, ToolDef> = {
       "Change a page's slug. Links keep working: the old slug becomes an alias of the page, " +
       "and other pages' bodies are left untouched.",
     inputSchema: obj({ slug: { type: "string" }, to: { type: "string" } }, ["slug", "to"]),
-    handler: (s, a) => s.renamePage({ slug: String(a.slug ?? ""), to: String(a.to ?? "") }),
+    handler: (c, a) => c.store.renamePage({ slug: String(a.slug ?? ""), to: String(a.to ?? "") }),
   },
   find_orphans: {
     access: "read",
     description: "Pages nothing links to.",
     inputSchema: obj({ limit: { type: "number" } }),
-    handler: (s, a) => s.findOrphans({ limit: a.limit as number }),
+    handler: (c, a) => c.store.findOrphans({ limit: a.limit as number }),
   },
   list_broken_links: {
     access: "read",
     description: "Refs that point at a page which does not exist, as {from_slug, ref} rows.",
     inputSchema: obj({ limit: { type: "number" } }),
-    handler: (s, a) => s.brokenLinks({ limit: a.limit as number }),
+    handler: (c, a) => c.store.brokenLinks({ limit: a.limit as number }),
   },
   restore_page: {
     access: "write",
     description: "Undo a delete_page: brings the page back and re-indexes it for search.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (s, a) => s.restorePage({ slug: String(a.slug ?? "") }),
+    handler: (c, a) => c.store.restorePage({ slug: String(a.slug ?? "") }),
   },
 };
+
+// Object.assign rather than a spread inside the literal so the memory tools are
+// visibly a separate module's contribution to one registry.
+Object.assign(TOOLS, MEMORY_TOOLS);
 
 export const READ_TOOL_NAMES = Object.keys(TOOLS).filter((t) => TOOLS[t].access === "read");
 
@@ -190,7 +201,7 @@ export interface RpcResult {
 // lore and MCP clients expect. The store is fetched lazily so handshake
 // methods (initialize/tools/list/ping) never touch the database.
 export async function handleRpc(
-  getStore: () => Promise<Store>,
+  getCtx: () => Promise<BrainCtx>,
   access: Access,
   method: string,
   params: Record<string, unknown> | undefined,
@@ -229,8 +240,8 @@ export async function handleRpc(
         return { error: { code: -32602, message: `tool '${name}' requires write access` } };
       }
       try {
-        const store = await getStore();
-        const value = await def.handler(store, clampArgs(params?.arguments));
+        const ctx = await getCtx();
+        const value = await def.handler(ctx, clampArgs(params?.arguments));
         return {
           result: { content: [{ type: "text", text: JSON.stringify(value) }], isError: false },
         };

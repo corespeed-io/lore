@@ -28,6 +28,10 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_chunks",
   "find_orphans",
   "list_broken_links",
+  // Agent Memory reads. recall was already here (gbrain has an op of that name);
+  // these are the rest of the read surface.
+  "inspect_memory",
+  "memory_gate",
 ]);
 
 export class ToolNotAllowedError extends Error {}
