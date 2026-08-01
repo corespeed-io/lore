@@ -21,7 +21,7 @@ import { normalizeRef } from "../pipeline";
 import type { ConversationEvent } from "./events";
 import { getConversationEvents } from "./events";
 import type { MemoryItem, MemoryType, Operation, ScopeType } from "./items";
-import { rowToMemory, writeMemory } from "./items";
+import { isUserSource, rowToMemory, writeMemory } from "./items";
 import { findSecrets, looksLikeInstruction } from "./safety";
 import type { StructuredSummary } from "./summary";
 
@@ -196,7 +196,11 @@ function speaksForUser(event: ConversationEvent): boolean {
     // actor_type is DERIVED from the type in events.ts, so a row where the two
     // disagree never passed through that chokepoint at all.
     event.actor_type === "user" &&
-    (!event.source || event.source.startsWith("user:"))
+    // isUserSource, imported rather than re-spelled: this used to be
+    // `!event.source`, which made an empty-string source the user here and NOT the
+    // user in items.ts's USER_EVENT_SQL. Two readers of one column, on the column
+    // that decides whose words a memory is.
+    isUserSource(event.source)
   );
 }
 

@@ -201,6 +201,26 @@ async function revise(
 // Unstamped `source` counts as the user's own transport, which is the contract
 // extract.ts's speaksForUser reads the same way — the two must agree, or a
 // memory extraction treats as the user's would be unprotected here.
+// WHICH SOURCES SPEAK FOR THE USER — stated once, and read by BOTH the SQL below
+// and the JS predicate extract.ts uses, because they disagreed. `speaksForUser`
+// tested `!event.source`, so an empty-string source was the user; this SQL tests
+// `IS NULL`, so it was not. An event could therefore be extracted AS the user's own
+// words (committing explicit, and able to supersede a user-stated memory) while
+// `statedByUser` and `citesUser` said it was not the user — so the memory it
+// produced was unprotected, and citing that event in forget's
+// `authorizing_event_ids` granted nothing. That second half is why this stopped
+// being cosmetic: user provenance is now load-bearing for revocation.
+//
+// NULL/undefined means UNSTAMPED, which is the user's own transport. An empty
+// string is a source someone set to nothing — not the same thing, and the safe
+// reading of an ambiguous stamp is "not the user". SQL and JS cannot literally
+// share an expression, so tests/memory-extract.ts pins them against each other over
+// the same rows rather than trusting this paragraph, the way ADDRESS_SQL and
+// projectionSlug are pinned.
+export function isUserSource(source: string | null | undefined): boolean {
+  return source === null || source === undefined || source.startsWith("user:");
+}
+
 const USER_EVENT_SQL = "e.actor_type = 'user' AND (e.source IS NULL OR e.source LIKE 'user:%')";
 
 /** Was this memory's evidence the user's own words? */

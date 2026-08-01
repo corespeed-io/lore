@@ -16,7 +16,12 @@ import {
   deterministicExtractor,
   runExtraction,
 } from "../src/server/memory/extract.js";
-import { commitCandidate, getActiveByKey, writeMemory } from "../src/server/memory/items.js";
+import {
+  commitCandidate,
+  getActiveByKey,
+  isUserSource,
+  writeMemory,
+} from "../src/server/memory/items.js";
 import { runProjections } from "../src/server/memory/projection.js";
 import { recallMemory } from "../src/server/memory/recall.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
@@ -450,3 +455,92 @@ test("an unlabelled user correction lands however many memories the thread holds
     over: "billing email is new@corp.example",
   });
 }, 240_000);
+
+// TWO READERS OF ONE COLUMN, on the column that decides whose words a memory is.
+// extract.ts's speaksForUser tested `!event.source`, so an empty-string source was
+// the user; items.ts's USER_EVENT_SQL tests `IS NULL`, so it was not. An event
+// could be extracted AS the user's own words — committing explicit, able to
+// supersede a user-stated memory — while statedByUser and citesUser said it was
+// not the user, so the memory was unprotected AND citing that event in forget's
+// authorizing_event_ids granted nothing. SQL and JS cannot share an expression, so
+// they are pinned against each other over the same rows.
+test("the JS and SQL definitions of 'the user said it' agree on every source", async () => {
+  const sources: (string | null)[] = [
+    null,
+    "user:cli",
+    "user:",
+    "",
+    " ",
+    "tool:append_event",
+    "User:cli",
+    "system",
+    "xuser:cli",
+  ];
+  await ensureThread(db, "t-src");
+  const observed: Record<string, { js: boolean; sql: boolean }> = {};
+  for (const [i, source] of sources.entries()) {
+    const id = `ev-${i}`;
+    await db.query(
+      `INSERT INTO conversation_events
+         (id, thread_id, sequence, event_type, actor_type, content, source, content_hash)
+       VALUES ($1, 't-src', $2, 'user_message', 'user', 'My city is Berlin.', $3, $4)`,
+      [id, i + 1, source, `h${i}`],
+    );
+    // The SQL side, asked exactly as items.ts asks it.
+    const sql = await db.query(
+      `SELECT 1 FROM conversation_events e
+        WHERE e.id = $1 AND e.actor_type = 'user'
+          AND (e.source IS NULL OR e.source LIKE 'user:%')`,
+      [id],
+    );
+    observed[JSON.stringify(source)] = {
+      js: isUserSource(source),
+      sql: sql.rows.length > 0,
+    };
+  }
+  for (const [label, { js, sql }] of Object.entries(observed)) {
+    expect(js, `source ${label}: JS and SQL disagree`).toBe(sql);
+  }
+  // ...and pin the VERDICTS too, so "they agree" cannot be satisfied by both
+  // becoming wrong together. Unstamped is the user's own transport; an empty or
+  // whitespace source is a stamp set to nothing, which is not the same thing.
+  // ...and prove EXTRACTION actually calls it. Asserting isUserSource against the
+  // SQL only shows the shared function is right; it says nothing about whether
+  // extract.ts uses it, and a first version of this test passed with
+  // speaksForUser's old `!event.source` restored. An unstamped event's fact is the
+  // user's and commits; an empty-source event's is not and stays a candidate.
+  const statusFor = async (threadId: string, source: string | null) => {
+    await ensureThread(db, threadId);
+    await db.query(
+      `INSERT INTO conversation_events
+         (id, thread_id, sequence, event_type, actor_type, content, source, content_hash)
+       VALUES ($1, $2, 1, 'user_message', 'user', 'My city is Berlin.', $3, $4)`,
+      [`e-${threadId}`, threadId, source, `h-${threadId}`],
+    );
+    await runExtraction(db, deterministicExtractor, {
+      threadId,
+      allowedScopes: [{ scopeType: "thread", scopeId: threadId }],
+    });
+    const row = await db.query(
+      "SELECT status FROM memory_items WHERE scope_id = $1 ORDER BY created_at LIMIT 1",
+      [threadId],
+    );
+    return String(row.rows[0]?.status ?? "none");
+  };
+  expect({
+    unstamped: await statusFor("t-unstamped", null),
+    empty: await statusFor("t-empty", ""),
+  }).toEqual({ unstamped: "committed", empty: "candidate" });
+
+  expect(Object.fromEntries(Object.entries(observed).map(([k, v]) => [k, v.js]))).toEqual({
+    null: true,
+    '"user:cli"': true,
+    '"user:"': true,
+    '""': false,
+    '" "': false,
+    '"tool:append_event"': false,
+    '"User:cli"': false,
+    '"system"': false,
+    '"xuser:cli"': false,
+  });
+});
