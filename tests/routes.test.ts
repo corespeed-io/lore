@@ -4,6 +4,7 @@ import { vector } from "@electric-sql/pglite/vector";
 import { afterEach, expect, test, vi } from "vitest";
 import { type Db, type Query, initSchema } from "../src/server/db.js";
 import { handleRpc } from "../src/server/mcp.js";
+import { findSecretsInPayload } from "../src/server/memory/safety.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
 
@@ -348,6 +349,99 @@ test("the same bytes are refused at BOTH doors, and no row holds them", async ()
       arguments: { slug: "ops/runbook" },
     });
     expect((get.result as { content: { text: string }[]; isError: boolean }).isError).toBe(true);
+  });
+});
+
+// REFUTATION of the round-4 adjacency fix, and the reason the fix changed shape.
+// That round taught findSecretsInPayload to visit an object's key and value
+// TOGETHER, because labelled_credential is an adjacency pattern — the label is
+// the only evidence, the value has no shape to test. But it synthesized the pair
+// only `if (typeof x === "string")`, which is a LIST of the one container shape
+// someone remembered. The value moved one step sideways into an array or a nested
+// object and the label never met it again.
+//
+// Not hypothetical: vault.ts's frontmatter reader parses BOTH `api_key: [v]` and
+// a `- v` block into an array, so an imported note carried the credential through
+// a screen that refuses the identical scalar. The walker now carries every
+// enclosing key down to every string leaf, so container shape is not a question
+// it asks.
+const CRED = "hunter2swordfish";
+
+test("a labelled credential is refused whatever CONTAINER the value sits in", async () => {
+  await withImportBrain(async (ctx) => {
+    // Unit: the three shapes, and the scalar that always worked, at one call.
+    for (const [label, payload] of [
+      ["scalar (worked before)", { api_key: CRED }],
+      ["inline array", { api_key: [CRED] }],
+      ["block array", { api_key: [CRED, "second"] }],
+      ["nested object", { api_key: { v: CRED } }],
+      ["array of objects", { api_key: [{ v: CRED }] }],
+      ["deeply nested", { frontmatter: { api_key: { a: { b: [CRED] } } } }],
+    ] as const) {
+      expect(
+        findSecretsInPayload(payload).map((f) => f.kind),
+        label,
+      ).toContain("labelled_credential");
+    }
+
+    // Door 1, the tool call: frontmatter is a declared object arg, so this is the
+    // exact payload an agent sends.
+    const tool = await handleRpc(() => Promise.resolve(ctx), "write", "tools/call", {
+      name: "put_page",
+      arguments: { slug: "ops/cfg", body: "config", frontmatter: { api_key: [CRED] } },
+    });
+    expect(tool.result, "reached a handler").toBeUndefined();
+    expect(tool.error?.code).toBe(-32602);
+    expect(tool.error?.message).toContain("labelled_credential");
+    // The refusal names the kind, never the value.
+    expect(tool.error?.message).not.toContain(CRED);
+
+    // Door 2, the importer, in BOTH spellings vault.ts turns into an array. The
+    // scalar spelling is included as the control: it was already refused, and the
+    // point of the finding is that these three used to disagree.
+    const results = await importFiles([
+      { path: "ops/scalar.md", text: ["---", `api_key: ${CRED}`, "---", "notes"].join("\n") },
+      { path: "ops/inline.md", text: ["---", `api_key: [${CRED}]`, "---", "notes"].join("\n") },
+      { path: "ops/block.md", text: ["---", "api_key:", `  - ${CRED}`, "---", "notes"].join("\n") },
+    ]);
+    for (const r of results) {
+      expect(r.status, r.path).toBe("skipped");
+      expect(r.detail, r.path).toMatch(/refused: request contains/);
+      expect(r.detail, r.path).not.toContain(CRED);
+    }
+
+    // And the invariant the kind list is only a proxy for: no column of any table
+    // holds the credential, so the read-only bearer has nothing to find.
+    expect((await ctx.db.query("SELECT slug FROM pages")).rows).toEqual([]);
+    expect(await occurrencesOf(ctx.db, CRED)).toEqual([]);
+  });
+});
+
+// The mirror, weighted equally: widening the screen must not start refusing
+// honest notes. A false positive here REJECTS a real memory, which is the harm
+// the Luhn validator exists to avoid — so the same containers, with content that
+// merely reads like a credential label, must still import.
+test("carrying the label down does not refuse honest content", async () => {
+  await withImportBrain(async (ctx) => {
+    for (const payload of [
+      { password_policy: ["at least twelve characters"] },
+      { secret: ["santa"] },
+      { notes: { summary: "we discussed the basic infrastructure requirements" } },
+      { title: "Bearer of bad news", body: ["a bearer instrument matures"] },
+      { thread_id: "thread-1785550770695", tags: ["timestamps", "are-not-cards"] },
+    ]) {
+      expect(findSecretsInPayload(payload), JSON.stringify(payload)).toEqual([]);
+    }
+    const [ok] = await importFiles([
+      {
+        path: "ops/policy.md",
+        text: ["---", "password_policy:", "  - at least twelve characters", "---", "fine"].join(
+          "\n",
+        ),
+      },
+    ]);
+    expect(ok.status).toBe("created");
+    expect((await ctx.db.query("SELECT slug FROM pages")).rows).toEqual([{ slug: "ops/policy" }]);
   });
 });
 

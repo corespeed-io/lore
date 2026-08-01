@@ -212,6 +212,104 @@ test("a real user correction still works, and history stays reachable", async ()
   );
 });
 
+// REFUTATION of "unknown authority fails CLOSED". The classifier was a DENY-list
+// on one exact byte prefix (`!name || name.startsWith("tool:")`), while the
+// comment above it promised an allow-list. Only an empty or missing actor failed
+// closed; every other unrecognised string was read as "code in this repo" and
+// given full authority over a memory the user stated. Latent — no door turns
+// caller input into an actor today — but it is the shape that collects the next
+// handler to name itself.
+test("every near-miss of the tool prefix fails CLOSED, not open", async () => {
+  const real = await userMemory({
+    threadId: "t1",
+    sentence: "My billing email is real@example.com.",
+    scopeType: "thread",
+    scopeId: "t1",
+    memoryKey: "user.billing_email",
+  });
+  const spoofs = [
+    "Tool:forget",
+    "TOOL:FORGET",
+    "tools:forget",
+    "tool",
+    "tool_forget",
+    "tool.forget",
+    "tool :forget",
+    "ｔｏｏｌ:forget", // fullwidth
+    "tool​:forget", // zero-width space before the colon
+    "mcp/tool:forget",
+    "agent:rogue",
+    "handler:forget_v2",
+  ];
+  const outcome: Record<string, string> = {};
+  for (const actor of spoofs) {
+    await revokeMemory(db, { memoryId: real.id, actor }).catch(() => undefined);
+    outcome[actor] = must(await getMemory(db, real.id), "the row").status;
+  }
+  expect(outcome).toEqual(Object.fromEntries(spoofs.map((s) => [s, "committed"])));
+
+  // MIRROR, so this is not just "refuse everything": the registered in-repo
+  // authorities still work, and the tool surface is still refused.
+  await expect(revokeMemory(db, { memoryId: real.id, actor: "tool:forget" })).rejects.toThrow(
+    /stated by the user/,
+  );
+  expect((await revokeMemory(db, { memoryId: real.id, actor: "admin:console" }))?.status).toBe(
+    "revoked",
+  );
+});
+
+// THE MIRROR, and it was broken in the other direction. `mayAmend` allows an
+// agent-surface change to a user-stated memory "unless the change itself carries
+// the user's words", and `revokeMemory` has accepted `sourceEventIds` for exactly
+// that since it was written — but `forget`, the ONLY revocation surface
+// (READ_ONLY_TOOLS has no `forget`; /api/maintenance never revokes), never passed
+// any and always stamped `tool:forget`. So the rule had no satisfying case: a
+// user-stated memory could not be revoked by anyone, through anything, ever,
+// while AGENTS.md documents `forget` as THE recovery for a wrong memory. A rule
+// nobody can satisfy is not a safety property, it is a dead end.
+test("the user's own words can revoke the user's own memory, and only in their thread", async () => {
+  const real = await userMemory({
+    threadId: "t-rev",
+    sentence: "My billing email is real@example.com.",
+    scopeType: "thread",
+    scopeId: "t-rev",
+    memoryKey: "user.billing_email",
+  });
+
+  // Without evidence: refused, as before. This is the control — it is what makes
+  // the success below mean "the citation did it".
+  await expect(tool("forget", { memory_id: real.id, thread_id: "t-rev" })).rejects.toThrow(
+    /stated by the user/,
+  );
+
+  // The user asks, in this thread. Only a non-tool transport can append a
+  // user_message (events.ts refuses a `tool:`-sourced one and append_event's
+  // enum excludes every user-implied type), which is what makes the citation
+  // unforgeable from the agent surface.
+  const elsewhere = await say("t-other", "Forget my billing email.");
+  const asked = await say("t-rev", "Forget my billing email.");
+
+  // An event from ANOTHER thread is not "the user asked me here".
+  await expect(
+    tool("forget", {
+      memory_id: real.id,
+      thread_id: "t-rev",
+      authorizing_event_ids: [elsewhere.id],
+    }),
+  ).rejects.toThrow(/events in the thread this call is working in/);
+  expect(must(await getMemory(db, real.id), "row").status).toBe("committed");
+
+  // ...and the real thing lands.
+  const done = await tool("forget", {
+    memory_id: real.id,
+    thread_id: "t-rev",
+    authorizing_event_ids: [asked.id],
+  });
+  expect(done.revoked).toBe(1);
+  expect(done.forgotten).toBe(true);
+  expect(must(await getMemory(db, real.id), "row").status).toBe("revoked");
+});
+
 test("an unidentified caller is refused: unknown authority is the weakest authority", async () => {
   const real = await userMemory({
     threadId: "t1",
@@ -375,6 +473,19 @@ function aimedPayloads(schema: Record<string, unknown>, victim: Victim): Record<
   // declared value without a combinatorial explosion of database work.
   for (const [name, choices] of enums) {
     for (const choice of choices.slice(1)) out.push(withScope({ [name]: choice }));
+  }
+  // ...and one payload per property with that property DROPPED. Filling every
+  // declared field is not what a real caller does, and it made this fuzz
+  // fragile in a way that hid its own failure: the day `forget` gained an
+  // optional `authorizing_event_ids`, every generated payload carried a
+  // synthetic value for it, every call was refused during argument validation,
+  // and the whole sweep stopped reaching a write path. The control assertion
+  // caught it — but only because there IS a control. Dropping one field at a
+  // time means a new optional argument can never make the sweep vacuous again.
+  for (const name of Object.keys(base)) {
+    const without = { ...base };
+    delete without[name];
+    out.push({ ...without, ...victim.scopeArgs });
   }
   return out;
 }

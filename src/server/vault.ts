@@ -14,10 +14,21 @@ export interface ParsedNote {
   frontmatter: Record<string, unknown>;
 }
 
+// WHICH EXTENSIONS ARE A PAGE — spelled once, here, and exported, because three
+// places were answering it and one of them answered differently. `isMarkdown`
+// (the import route's filter) and `NOTE_EXT` (the slug/ref stripper) were the
+// same regex written twice in this file, and pipeline.ts's markdown-link parser
+// had a third spelling that accepted only `md`. So `Other.markdown` imported as a
+// page, `[[Notes/Other.markdown]]` linked to it, and `[Other](Notes/Other.markdown)`
+// produced NO ref at all — no edge, no pending_links row, and nothing in
+// list_broken_links either, because a ref that was never extracted cannot be
+// reported broken. Silently invisible is the worst of the three outcomes.
+export const NOTE_EXT = /\.(md|markdown)$/i;
+
 // A markdown file becomes a page; anything else in the vault is an attachment
 // we do not store.
 export function isMarkdown(path: string): boolean {
-  return /\.(md|markdown)$/i.test(path);
+  return NOTE_EXT.test(path);
 }
 
 // --- one name, one slug ------------------------------------------------------
@@ -37,9 +48,6 @@ export function isMarkdown(path: string): boolean {
 // leading '/' left an empty first segment, which no page can ever have, so every
 // root-relative link was unsatisfiable by construction.
 const LEADING_NOISE = /^(?:\.{1,2}\/|\/)+/;
-// A page IS a markdown file; the extension is not part of its name. Stripped for
-// the file and for the ref, so [[Maps/Note.md]] and Maps/Note.md agree.
-const NOTE_EXT = /\.(md|markdown)$/i;
 // Characters lore's slug rule forbids, plus the ones that make a slug ambiguous
 // inside a wikilink. ONE source expression, two uses below (delete them from a
 // filename / refuse to address by them), so the class cannot drift.

@@ -8,6 +8,22 @@ const cookies = (m: Record<string, string> = {}) => ({
   get: (n: string) => (n in m ? { value: m[n] } : undefined),
 });
 
+// A real brain credential, because the middleware now VALIDATES the bearer
+// instead of merely noticing one. Before, any string got past the gate, so these
+// tests could use invented tokens; that was the defect, not a convenience.
+const VALID = "brain-write-token-for-limiter-tests";
+
+// The limiter's bucket map is module-level and does not reset between tests, so
+// every test that counts requests needs an identity of its own — otherwise one
+// test's exhausted bucket is the next one's mystery 429. The file already relied
+// on this (each test used a different invented token); now that the middleware
+// validates the credential, "different" has to mean "differently VALID".
+function credential(name: string): string {
+  const token = `brain-write-token-${name}`;
+  process.env.BRAIN_WRITE_TOKEN = token;
+  return `Bearer ${token}`;
+}
+
 beforeEach(() => {
   for (const k of [
     "AUTH_MODE",
@@ -18,6 +34,10 @@ beforeEach(() => {
   ]) {
     delete process.env[k];
   }
+  process.env.BRAIN_WRITE_TOKEN = VALID;
+  // Reflect.deleteProperty, NOT `= undefined`: Node coerces that to the STRING
+  // "undefined", which is 16+ characters and would become a working credential.
+  Reflect.deleteProperty(process.env, "BRAIN_READ_TOKEN");
 });
 
 test("none mode fails closed without ALLOW_INSECURE", async () => {
@@ -95,17 +115,19 @@ const req = (path: string, ip = "10.0.0.1") =>
 // rate limiter, so their LIMITS entries were dead code — 700 requests to
 // /api/mcp all answered 200 while /api/call correctly 429'd. Limits here are
 // hand-read from src/middleware.ts, never computed from it.
-// CHANGED: this used to send no credential at all. A brain route now refuses a
-// Bearer-less request at the gate (see the next test), so the credential is
-// what the limiter keys on and the request has to carry one; the claim under
-// test — viewer gate skipped, limiter enforced — is unchanged.
+// CHANGED TWICE, both said out loud. It first stopped sending no credential at
+// all, because a brain route refuses a Bearer-less request at the gate. It now
+// sends a VALID one, because the gate validates rather than merely notices: an
+// invented token is refused here, so it could no longer reach the 200 this test
+// counts. The claim under test — viewer gate skipped, limiter enforced — is
+// unchanged.
 test.each([
   ["/api/export", 10],
   ["/api/maintenance", 60],
   ["/api/import", 120],
   ["/api/mcp", 600],
 ])("%s skips the viewer gate but still 429s past %i/min", async (path, max) => {
-  const h = { authorization: "Bearer per-scope-bucket-token-0001" };
+  const h = { authorization: credential(`scope-${path.replace(/\W/g, "-")}`) };
   for (let i = 0; i < max; i++) {
     // 200 == NextResponse.next(); a 401/403 here would mean the viewer gate ran.
     expect((await mw(path, h)).status).toBe(200);
@@ -133,31 +155,57 @@ test("700 credential-less /api/mcp POSTs with rotating burner emails get zero 20
     );
     codes.add(res.status);
   }
-  expect([...codes]).toEqual([401]);
+  // CHANGED, deliberately and in the strengthening direction: this used to read
+  // `[401]`. A refused caller is now CHARGED before it is refused, so past the
+  // route's 600 the answer becomes 429. Neither is a 200, which is the claim.
+  expect([...codes].sort()).toEqual([401, 429]);
 });
 
 // Same rotation, now by a caller that does present a credential: the email is
 // not identity, the token is, so all 700 land in one bucket.
 test("rotating the Access email cannot dodge a brain route's bucket", async () => {
+  const auth = credential("email-rotation");
   const h = (i: number) => ({
-    authorization: "Bearer email-rotation-fixed-token-02",
+    authorization: auth,
     "cf-access-authenticated-user-email": `burner-${i}@evil.test`,
   });
   for (let i = 0; i < 600; i++) expect((await mw("/api/mcp", h(i))).status).toBe(200);
   expect((await mw("/api/mcp", h(600))).status).toBe(429);
 });
 
-// And the sibling path: rotate the CREDENTIAL instead. A per-token bucket alone
-// would be dodged by a caller sending garbage tokens (each 401s downstream, but
-// each would also mint a bucket), so the address the proxy stamped is charged
-// too — "all from a single source IP" is the part the caller cannot rotate.
-test("rotating the bearer token cannot dodge the source-address bucket", async () => {
-  const h = (i: number) => ({
-    authorization: `Bearer token-rotation-burner-${i}`,
-    "x-forwarded-for": "203.0.113.9",
-  });
-  for (let i = 0; i < 600; i++) expect((await mw("/api/mcp", h(i))).status).toBe(200);
-  expect((await mw("/api/mcp", h(600))).status).toBe(429);
+// REWRITTEN, because the old version passed for the wrong reason and an
+// adversarial pass proved it. It rotated garbage bearers and asserted they were
+// limited — but it also sent x-forwarded-for, so what it actually exercised was
+// the address bucket. Strip that one header (a BARE origin: `next start` or the
+// Dockerfile with nothing in front) and there was no address to charge, every
+// invented token minted its own `t:` bucket, and 700 rotated burners were 700
+// x 200. The middleware now validates the credential, so an invented token never
+// reaches a `t:` bucket at all — it is charged to the rejected-caller bucket,
+// which is the one thing the caller cannot vary.
+test.each([
+  ["behind a proxy", { "x-forwarded-for": "203.0.113.9" }],
+  ["on a bare origin, the case that used to be free", {}],
+])("rotating an invalid bearer buys nothing (%s)", async (_label, extra) => {
+  const h = (i: number) => ({ authorization: `Bearer token-rotation-burner-${i}`, ...extra });
+  const codes = new Set<number>();
+  for (let i = 0; i < 700; i++) codes.add((await mw("/api/mcp", h(i))).status);
+  expect(codes.has(200), "an invented credential was let through").toBe(false);
+  expect(codes.has(429), "rotation was never limited").toBe(true);
+});
+
+// THE OTHER FACE OF THE SAME BUG, and the more damaging one: the address bucket
+// used to be charged BEFORE the credential was checked, so traffic that was
+// always going to 401 spent the owner's quota. /api/export is 10/min, so eleven
+// credential-less requests from an address locked the real owner out of it for
+// the rest of the window.
+test("credential-less traffic cannot spend the owner's quota", async () => {
+  const from = { "x-forwarded-for": "203.0.113.200" };
+  const auth = credential("owner-quota");
+  for (let i = 0; i < 11; i++) {
+    await mw("/api/export", { authorization: `Bearer not-a-real-token-${i}`, ...from });
+  }
+  const owner = await mw("/api/export", { authorization: auth, ...from });
+  expect(owner.status, "the owner was locked out by traffic that never authenticated").toBe(200);
 });
 
 // The over-enforcement half of the same bug: behind a router that sets only
@@ -197,7 +245,9 @@ test.each(["/api/mcp/", "/api/mcp/anything", "/api/export/x"])(
   "%s is not an unguarded amplifier",
   async (path) => {
     process.env.ALLOW_INSECURE = "1";
-    expect((await mw(path)).status).toBe(401);
+    // Its own address: the rejected-caller bucket is keyed by address, and a
+    // sibling test above deliberately exhausts the addressless one.
+    expect((await mw(path, { "x-forwarded-for": `198.51.100.${path.length}` })).status).toBe(401);
   },
 );
 

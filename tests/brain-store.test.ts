@@ -383,6 +383,37 @@ test("extractRefs: markdown links, frontmatter values, embeds and inline code", 
     "notes/ok",
     "report-100%",
   ]);
+
+  // THREE READERS OF "IS THIS A PAGE". isMarkdown (the import filter) and
+  // NOTE_EXT (the slug stripper) both accepted `.markdown`; this parser accepted
+  // only `md`. So the file imported, [[Notes/Other.markdown]] linked to it, and
+  // the Markdown-link spelling produced NO ref — which is worse than a broken
+  // one, because list_broken_links reports refs that resolved to nothing, not
+  // refs that were never extracted. All three now read one exported NOTE_EXT.
+  expect(extractRefs("[Other](Notes/Other.markdown)")).toEqual(["Notes/Other"]);
+  expect(extractRefs("[Other](Notes/Other.MARKDOWN)")).toEqual(["Notes/Other"]);
+  // ...and the negative half is unchanged: a non-page extension is still not a ref.
+  expect(extractRefs("[d](img.png) [e](doc.pdf) [f](sheet.markdownx)")).toEqual([]);
+});
+
+// The end-to-end half of the same finding: the ref has to become a real edge,
+// not merely be extracted.
+test("a .markdown Markdown-link target makes an edge like its .md sibling", async () => {
+  await store.putPage({ slug: "notes/target-md", body: "# Target" });
+  await store.putPage({ slug: "notes/target-markdown", body: "# Target" });
+  const md = await store.putPage({
+    slug: "notes/from-md",
+    body: "see [T](notes/target-md.md)",
+  });
+  const markdown = await store.putPage({
+    slug: "notes/from-markdown",
+    body: "see [T](notes/target-markdown.markdown)",
+  });
+  expect(md.pending, "control: the .md spelling resolves").toEqual([]);
+  expect(markdown.pending, "the .markdown spelling resolves too").toEqual([]);
+  expect(
+    (await store.getBacklinks({ slug: "notes/target-markdown" })).map((b) => b.slug),
+  ).toContain("notes/from-markdown");
 });
 
 test("a ref resolves by filename even when the title differs", async () => {

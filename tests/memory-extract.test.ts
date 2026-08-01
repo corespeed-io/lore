@@ -16,7 +16,7 @@ import {
   deterministicExtractor,
   runExtraction,
 } from "../src/server/memory/extract.js";
-import { getActiveByKey, writeMemory } from "../src/server/memory/items.js";
+import { commitCandidate, getActiveByKey, writeMemory } from "../src/server/memory/items.js";
 import { runProjections } from "../src/server/memory/projection.js";
 import { recallMemory } from "../src/server/memory/recall.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
@@ -386,3 +386,67 @@ test("the user's own transport still commits when it stamps its own source", asy
   });
   expect(res.applied.map((a) => a.status)).toEqual(["committed"]);
 });
+
+// FAMILY 3: the rule was applied to a TRUNCATED RESULT rather than to the
+// question. The unlabelled-correction path requires exactly one shape-matching
+// referent, and it read that from `ORDER BY updated_at DESC LIMIT 200` over every
+// committed memory in scope. Past 200, the user's own referent fell off the end,
+// the filter found zero candidates, and the correction was dropped with no
+// proposal, no conflict and no record anywhere. No adversary needed: 200 ordinary
+// agent notes are enough, and after that the thread can never be corrected again.
+test("an unlabelled user correction lands however many memories the thread holds", async () => {
+  const correctedTo = async (noise: number, threadId: string) => {
+    await say(threadId, "My billing email is real@example.com.");
+    await runExtraction(db, deterministicExtractor, {
+      threadId,
+      allowedScopes: sweepScopes(threadId),
+    });
+    // Ordinary agent notes — what `remember` writes: unkeyed, no structured
+    // value, nothing a correction could ever refer to. They could never have
+    // been candidates; they merely FILLED the 200-row window and pushed the real
+    // referent off the end. That is the whole defect, so this is the noise that
+    // reproduces it. (220 same-SHAPE keyed referents would be a different and
+    // genuinely ambiguous case, which the extractor is right to leave alone.)
+    const noiseSource = await say(threadId, "the agent took some notes");
+    for (let i = 0; i < noise; i++) {
+      const w = await writeMemory(db, {
+        scopeType: "thread",
+        scopeId: threadId,
+        memoryType: "semantic",
+        content: `routine agent note ${i}`,
+        sourceEventIds: [noiseSource.id],
+        explicit: false,
+        createdBy: "extractor:test",
+      });
+      // Committed, the way the `remember` tool commits an unkeyed note under the
+      // agent's own name — otherwise these would be candidates and would never
+      // have been in the window at all.
+      if (w.memory) {
+        await commitCandidate(db, { memoryId: w.memory.id, actor: "extractor:test" });
+      }
+    }
+    await say(threadId, "Actually, use new@corp.example now.");
+    await runExtraction(db, deterministicExtractor, {
+      threadId,
+      allowedScopes: sweepScopes(threadId),
+    });
+    return (
+      await getActiveByKey(db, {
+        scopeType: "thread",
+        scopeId: threadId,
+        memoryType: "semantic",
+        memoryKey: "user.billing_email",
+      })
+    )?.content;
+  };
+
+  // The control and the case, asserted together so a green run cannot mean
+  // "neither of them corrected anything".
+  expect({
+    under: await correctedTo(5, "t-small"),
+    over: await correctedTo(220, "t-large"),
+  }).toEqual({
+    under: "billing email is new@corp.example",
+    over: "billing email is new@corp.example",
+  });
+}, 240_000);

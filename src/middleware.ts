@@ -1,5 +1,6 @@
 import { checkAuth } from "@/lib/auth";
 import { loadConfig } from "@/lib/config";
+import { grantFor, parseBearer } from "@/server/auth-bearer";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
@@ -108,9 +109,25 @@ export async function middleware(req: NextRequest) {
   if (path === "/api/health") return NextResponse.next();
 
   const scope = scopeOf(path);
-  // Same shape auth-bearer.ts parses, so "has a credential" here means the same
-  // thing it means in the route.
-  const bearer = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const authorization = req.headers.get("authorization");
+  const addr = clientAddr(req.headers, loadConfig().authMode === "proxy");
+
+  // AUTHENTICATE FIRST, THEN CHARGE. The old order did the opposite and it cost
+  // two defects with one root: the middleware only checked that a Bearer header
+  // was PRESENT, and validity was decided later, in the route.
+  //   - A presented token is not a proved one, so `t:<hash of whatever was
+  //     typed>` handed every INVENTED bearer a private bucket. On a bare origin
+  //     (no cf-connecting-ip, no x-forwarded-for) that was the only bucket, so
+  //     700 requests under 700 burner tokens were 700 x 200 on /api/mcp. The
+  //     existing rotation test passed only because it sent x-forwarded-for.
+  //   - Where an address IS observable it was charged BEFORE the credential was
+  //     checked, so 10 credential-less requests exhausted /api/export's bucket
+  //     for that address and the owner's next real call got a 429. Traffic that
+  //     was always going to 401 could spend the owner's quota.
+  // So: ask auth-bearer.ts the same question the route asks (which is why that
+  // file no longer imports node:crypto), and put rejected callers in a bucket
+  // namespace of their own.
+  let denial: NextResponse | null = null;
   // Bucket identities. A key must be something the caller PROVES, never a string
   // it merely types: keying on cf-access-authenticated-user-email let a caller
   // with no credential at all rotate burner emails and take 700 x 200 on
@@ -124,16 +141,15 @@ export async function middleware(req: NextRequest) {
   // limiter: an early `return NextResponse.next()` here made their four LIMITS
   // entries dead code and /api/mcp answered 700 requests a minute unthrottled.
   if (BRAIN_ROUTES.has(scope)) {
-    // With no Bearer header grantFor() returns null under every config, so the
-    // request cannot succeed downstream anyway. Refusing it here is what makes
-    // the limiter enforceable: every request that gets past this point carries a
-    // credential, so there is always an unforgeable thing to key on.
-    if (!bearer) return json("auth required", 401, { "WWW-Authenticate": "Bearer" });
-    ids.push(`t:${await tokenId(bearer)}`);
+    // parseBearer, not a second regex: the bytes this keys on and the bytes the
+    // route compares have to be the same bytes.
+    const token = parseBearer(authorization);
+    if (token && grantFor(authorization)) ids.push(`t:${await tokenId(token)}`);
+    else denial = json("auth required", 401, { "WWW-Authenticate": "Bearer" });
   } else {
     const r = await checkAuth(req.headers, req.cookies);
     if (!r.ok) {
-      return json(
+      denial = json(
         r.detail ?? (r.status === 401 ? "auth required" : "forbidden"),
         r.status ?? 403,
         r.wwwAuthenticate ? { "WWW-Authenticate": "Basic" } : {},
@@ -141,16 +157,28 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // Charge the observed address as well, so rotating the credential cannot buy a
-  // second bucket. Everything behind one NAT shares this bucket; the limits above
-  // are sized for that.
-  // ponytail: a BARE origin (nothing proxying in front) stamps no address, so
-  // there a caller can invent x-forwarded-for and dodge this bucket. Bounding
-  // that needs a trusted-hop count in config, not more header sniffing — and a
-  // brain route still has to get past the 401 above and the token compare in the
-  // route itself.
-  const addr = clientAddr(req.headers, loadConfig().authMode === "proxy");
-  if (addr || ids.length === 0) ids.push(`ip:${addr ?? "anon"}`);
+  if (denial) {
+    // A REJECTED caller is charged in its own namespace. Two things follow, and
+    // both were broken before: it cannot spend a bucket a valid caller needs
+    // (that was the owner lockout), and it cannot escape a bucket by varying
+    // whatever it presented, because nothing it presented is part of the key
+    // (that was the rotation dodge). Charged rather than refused for free,
+    // because a 401 still costs an auth check — in proxy mode, a JWT
+    // verification.
+    ids.length = 0;
+    ids.push(`bad:${addr ?? "anon"}`);
+  } else {
+    // Charge the observed address as well, so rotating the credential cannot buy
+    // a second bucket. Everything behind one NAT shares this bucket; the limits
+    // above are sized for that. Only PROVED callers are charged here, which is
+    // what keeps a flood of bad credentials out of it.
+    // ponytail: a BARE origin (nothing proxying in front) stamps no address, so
+    // a valid-credential holder there is limited only by its `t:` bucket. Since
+    // there are exactly two brain credentials, that is a bounded number of
+    // buckets rather than one per request; bounding it further needs a
+    // trusted-hop count in config, not more header sniffing.
+    if (addr || ids.length === 0) ids.push(`ip:${addr ?? "anon"}`);
+  }
 
   const rule = LIMITS[scope] ?? UNMATCHED;
   const now = Date.now();
@@ -160,5 +188,5 @@ export async function middleware(req: NextRequest) {
     return json("rate limit exceeded", 429);
   }
 
-  return NextResponse.next();
+  return denial ?? NextResponse.next();
 }

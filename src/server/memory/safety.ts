@@ -29,6 +29,21 @@
 //   convincing. It is kept because demoting the obvious cases is cheap, not
 //   because it decides anything.
 //
+//   A SECRET SPLIT ACROSS TWO SIBLING FIELDS IS NOT DETECTED, and that is a
+//   judgement rather than a gap left to be found. `{k1:"AKIAIOSFODNN",
+//   k2:"7EXAMPLE"}` is two ordinary strings; catching it means testing
+//   concatenations, and n fields have 2^n of them, so any partial version is a
+//   list — the shape that has lost every round in this repo. What is closed is
+//   the case that occurs by ACCIDENT: a LABEL and its value separated by a
+//   container, which findSecretsInPayload below now pairs at any depth, because
+//   an imported vault's frontmatter really does produce `{api_key: ["…"]}`.
+//   Deliberate splitting is not an accident, and it costs a BRAIN_WRITE_TOKEN:
+//   the screen runs on WRITE tools, and the holder of that token is the owner,
+//   who can store whatever they like in their own brain by construction. The
+//   party this screen protects against — a BRAIN_READ_TOKEN holder reading a
+//   credential back out of search — cannot write at all. So the residual is
+//   reachable only by someone who does not need it.
+//
 // THE ACTUAL GUARANTEE IS STRUCTURAL, and it is a property of the code's shape
 // rather than of any string match: NO MEMORY OF ANY TYPE IS CONSULTED FOR AN
 // AUTHORIZATION DECISION. Access comes from the caller's bearer grant
@@ -134,30 +149,57 @@ export function findSecrets(text: string): SecretFinding[] {
 // turns `password: "x"` into `password: \"x\"` and breaks the very patterns
 // this is here to run, and a credential hides in an object KEY as easily as in
 // a value. Findings are deduplicated by kind so a reason reads once.
+//
+// ADJACENCY IS CARRIED DOWN, not matched at one level. Several patterns —
+// labelled_credential above all — are about a LABEL sitting next to a VALUE:
+// the label is the only evidence, because the value has no shape to test. So
+// every string leaf is scanned raw AND once per object key that lexically
+// encloses it, as `<key>: <leaf>`.
+//
+// The previous version synthesized that pair only when the value was itself a
+// string (`if (typeof x === "string")`). That is a LIST — of the one container
+// shape someone remembered — and it lost the same way every list in this
+// codebase has: `{api_key: "hunter2swordfish"}` was refused while
+//   { api_key: ["hunter2swordfish"] }      (a frontmatter block or inline array)
+//   { api_key: { v: "hunter2swordfish" } } (any nesting at all)
+// walked straight through, label and value never seen together. The array shape
+// is not hypothetical: vault.ts's frontmatter reader parses `api_key:\n  - x`
+// into exactly it, and /api/import feeds that object through handleRpc's screen.
+// Carrying the label to the leaf covers arrays, nested objects, arrays of
+// objects and any depth by construction, so there is no container left to add.
+//
+// COST, measured rather than asserted: one extra scan per (leaf, enclosing key)
+// pair, so a payload with L leaves nested D deep costs O(L*D) instead of O(L).
+// A realistic put_page (4KB body, three frontmatter arrays) is 0.14ms; a payload
+// engineered to be deep AND wide — 400 nested objects each carrying a leaf — is
+// 96ms. That quadratic is real and is NOT reachable unauthenticated: this screen
+// runs for WRITE tools only, so it costs a BRAIN_WRITE_TOKEN, and that token
+// already buys /api/export (a full dump) and delete_page over the whole brain.
+// CPU is the least of what a leaked write credential can do here, and the walk's
+// own unbounded recursion was already reachable the same way.
 export function findSecretsInPayload(payload: unknown): SecretFinding[] {
   const kinds = new Set<string>();
-  const visit = (v: unknown): void => {
+  const scan = (text: string): void => {
+    for (const f of findSecrets(text)) kinds.add(f.kind);
+  };
+  const visit = (v: unknown, labels: readonly string[]): void => {
     if (typeof v === "string") {
-      for (const f of findSecrets(v)) kinds.add(f.kind);
+      scan(v);
+      for (const label of labels) scan(`${label}: ${v}`);
     } else if (Array.isArray(v)) {
-      for (const x of v) visit(x);
+      // An array is not a label, so the enclosing keys pass straight through it.
+      for (const x of v) visit(x, labels);
     } else if (v && typeof v === "object") {
       for (const [k, x] of Object.entries(v)) {
-        visit(k);
-        visit(x);
-        // The key and the value are also visited TOGETHER, as `k: x`. Several
-        // patterns — labelled_credential above all — are about ADJACENCY: the
-        // label is the evidence that the value is a secret, since the value
-        // itself has no shape to test. Visiting the two separately loses exactly
-        // that. It matters most for imported frontmatter, where
-        // `---\napi_key: hunter2swordfish\n---` parses to
-        // { api_key: "hunter2swordfish" }: the credential is split across a key
-        // and a value that, apart, look like ordinary words.
-        if (typeof x === "string") visit(`${k}: ${x}`);
+        // The key on its own: a credential can BE a key as easily as a value.
+        scan(k);
+        // A repeated key adds no new pairing, so a self-referential shape cannot
+        // grow the label list without bound.
+        visit(x, labels.includes(k) ? labels : [...labels, k]);
       }
     }
   };
-  visit(payload);
+  visit(payload, []);
   return [...kinds].map((kind) => ({ kind }));
 }
 

@@ -1,6 +1,8 @@
 // Write-path helpers: deterministic chunking, zero-LLM wikilink extraction,
 // and the embeddings client. No DB access here — pure functions plus one fetch.
 
+import { NOTE_EXT } from "./vault";
+
 export type EmbedFn = (texts: string[]) => Promise<number[][]>;
 
 // Paragraph-accumulating splitter targeting ~1200 chars (≈400 tokens). Memories
@@ -104,9 +106,15 @@ function mdTargetToRef(raw: string, fromSlug?: string): string | null {
     path = base.join("/");
   }
   if (!path) return null;
-  const ext = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
-  if (ext && ext !== "md") return null;
-  return ext ? path.slice(0, -(ext.length + 1)) : path;
+  // NOTE_EXT, imported rather than re-spelled. This test used to be
+  // `ext !== "md"`, a third reader of "which extensions are a page" that
+  // disagreed with the two in vault.ts: a `.markdown` target returned null, so
+  // [Other](Notes/Other.markdown) produced no ref, no edge, and — because
+  // list_broken_links reports refs that RESOLVED to nothing, not refs that were
+  // never extracted — no report either. A link to a real page, invisible.
+  const ext = path.match(/\.([a-z0-9]+)$/i)?.[1];
+  if (ext && !NOTE_EXT.test(path)) return null;
+  return path.replace(NOTE_EXT, "");
 }
 
 // Every way a page can point at another page: [[wikilinks]] (with #section and

@@ -457,7 +457,11 @@ test("a retracted vault page brought back to life is re-retracted, even with its
   if (!slug) throw new Error("a vault memory must have an address");
 
   // forget: the page is retracted and the bookkeeping says so.
-  const revoked = await revokeMemory(db, { memoryId: memory.id, actor: "test" });
+  // "admin:test", not "test": items.ts now classifies authority from an ENUMERATED
+  // registry instead of a deny-list on the "tool:" prefix, so an unregistered name
+  // is the agent surface and may not retire what the user stated. These tests stand
+  // in for an in-repo caller, which is what "admin:" says.
+  const revoked = await revokeMemory(db, { memoryId: memory.id, actor: "admin:test" });
   if (!revoked) throw new Error("revoke failed");
   expect((await projectMemory(db, store, revoked)).status).toBe("removed");
 
@@ -684,7 +688,7 @@ test("adjacent: mid-migration, recall's page arm still cannot hand over another 
   // tool calls projectMemory directly, and that path finds a legacy page by the
   // same two handles the sweep uses, so `forgotten: true` is not a lie on a
   // database that has not been swept yet.
-  const revoked = await revokeMemory(db, { memoryId: thread.id, actor: "test" });
+  const revoked = await revokeMemory(db, { memoryId: thread.id, actor: "admin:test" });
   if (!revoked) throw new Error("revoke failed");
   expect((await projectMemory(db, store, revoked)).status).toBe("removed");
   const gone = await db.query("SELECT count(*)::int AS n FROM pages WHERE id = $1", [legacyPage]);
@@ -1296,7 +1300,7 @@ test("adjacent: the sweep's retract leaves exactly the state store.deletePage le
     expect(Number(beforeTwin.chunks)).toBeGreaterThan(0);
 
     await brain.store.deletePage({ slug: "notes/knife-twin" });
-    const revoked = await revokeMemory(brain.db, { memoryId: memory.id, actor: "test" });
+    const revoked = await revokeMemory(brain.db, { memoryId: memory.id, actor: "admin:test" });
     if (!revoked) throw new Error("revoke failed");
     await runProjections(brain.db, brain.store, 50);
 

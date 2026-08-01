@@ -226,18 +226,46 @@ async function citesUser(q: Query, eventIds: readonly string[]): Promise<boolean
 // Is this change being made through the AGENT surface? tools.ts stamps
 // `tool:<name>` on every actor and every createdBy it writes, and never takes
 // that string from its caller — the same provenance rule, for the same reason,
-// as `source` on an event. An unidentified caller lands here too: unknown
-// authority is the WEAKEST authority, not a free pass, so a future handler that
-// forgets to name itself is refused rather than trusted.
+// as `source` on an event.
+//
+// AN ALLOW-LIST, DEFAULT DENY. This was written as a deny-list on one exact byte
+// prefix — `!name || name.startsWith("tool:")` — while the comment above it
+// promised "unknown authority is the WEAKEST authority". Those are opposite
+// rules, and the code was the weaker one: only an empty or missing actor failed
+// closed, and every OTHER unrecognised string was read as "code in this repo"
+// and handed full authority to retire a memory the user stated. An adversarial
+// pass drove twelve of them through — `Tool:forget`, `TOOL:FORGET`,
+// `tools:forget`, `tool_forget`, `tool.forget`, `tool :forget`, the fullwidth
+// `ｔｏｏｌ:forget`, a zero-width space before the colon, `mcp/tool:forget`,
+// `agent:rogue`, `handler:forget_v2`, and the bare word `tool`. None is reachable
+// from a door today, because no caller-controlled string becomes an actor; that
+// makes it a latent defect rather than a live one, and exactly the kind that the
+// next handler to name itself `agent:consolidator` collects.
+//
+// So the trusted vocabulary is ENUMERATED, the way READ_ONLY_TOOLS and
+// ADMIN_ENDPOINTS are enumerated elsewhere in this repo, and everything outside
+// it is the agent surface. The design decision this preserves is the one the
+// old comment described and tests/memory-authority.test.ts pins: a NAMED
+// in-process caller — a migration, the extraction pass, an admin console — is
+// code in this repo rather than text from a model, and may amend. What changes
+// is that it must be named HERE to count, so the twelve strings above fail
+// closed instead of being promoted by a prefix test that never saw them.
+//
+// Matched exactly, or as `<authority>:<detail>` so a caller can say which
+// migration it is. Case-sensitive and untrimmed beyond whitespace: `Admin` is
+// not `admin`, because a classifier that folds case is a second reader of the
+// name and this whole finding is what that costs.
+const IN_REPO_AUTHORITIES: readonly string[] = ["system", "extractor", "admin", "user"];
+
 function fromAgentSurface(actor?: string | null): boolean {
   const name = actor?.trim();
-  return !name || name.startsWith("tool:");
+  if (!name) return true;
+  return !IN_REPO_AUTHORITIES.some((a) => name === a || name.startsWith(`${a}:`));
 }
 
-// THE RULE, written once. An agent-surface change may not touch a memory the
-// user stated — unless the change itself carries the user's words. Everything
-// else (a maintenance job, an admin path, a named in-process caller) is code in
-// this repo rather than text from a model, and is allowed.
+// THE RULE, written once. A change may not retire or rewrite a memory the user
+// stated unless the change itself carries the user's words. There is no name a
+// caller can present that substitutes for that evidence.
 async function mayAmend(
   q: Query,
   memoryId: string,

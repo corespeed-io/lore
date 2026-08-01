@@ -296,14 +296,31 @@ is how a wrong fact becomes permanent.
 — `content` and `structured_value`, because the latter is stored on the row and
 rendered into the projection's frontmatter, so screening only the prose lets a key
 move one field to the left and walk through. `enrichMemory` is the second door
-into that column and screens too. Secrets are REJECTED.
+into that column and screens too. Secrets are REJECTED. The payload walker pairs
+every string leaf with **every object key that encloses it**, at any depth and
+through any container: `labelled_credential` is an ADJACENCY pattern (the label is
+the only evidence, the value has no shape to test), and pairing it only with a
+STRING value was a list of one container shape — `{api_key: ["…"]}`, which is
+exactly what an imported vault's frontmatter block array parses to, walked through
+a screen that refused the identical scalar. Two residuals, both judged rather than
+hidden: a secret **split across two sibling fields** is not detected (n fields have
+2^n concatenations, so any partial version is a list — and it costs a
+`BRAIN_WRITE_TOKEN`, i.e. the owner, while the party this screen protects against
+holds `BRAIN_READ_TOKEN` and cannot write at all); and the extra pairing makes the
+walk O(leaves x depth), measured at 0.14ms for a realistic `put_page` and 96ms for
+a payload engineered deep-and-wide, again write-token-only.
 Instruction-shaped content is DEMOTED, not deleted: it stays searchable content,
 can never become a procedure, and never auto-commits. A memory cannot widen
 authorization — structurally, because no memory type is consulted for tool
 permissions.
 
-**Projection** (`projection.ts`). Stable slug per memory
-(`memory/{thread|agent}/<scope>/<id>`, `memory/vault/<id>`), so a retry updates
+**Projection** (`projection.ts`). Stable slug per memory — `memory/vault/<id>`,
+and **that is the only shape**: `projectionSlug` returns `string | null`, and null
+("this memory owns no page, ever") is the answer for every thread- and
+agent-scoped memory, because only vault scope is projected into the shared graph.
+The older `memory/thread/<scope>/<id>` spellings exist only as rows an earlier
+release wrote, which `migrateMemoryNamespace` sweeps out at boot. A stable slug is
+what makes a retry an update
 instead of duplicating. Retired memories have their page soft-deleted, so a
 superseded value leaves active search at once. A projection failure leaves the
 memory `committed` with `projection_status='failed'` — canonical truth does not
@@ -315,9 +332,15 @@ the rename/restore halves shipped missing a second time and a review caught them
 A projection is addressed by its stored `projection_page_id`, never by slug, so a
 page that drifted off its canonical slug is still retracted when its memory is
 revoked — addressing by slug is what let a renamed projection survive `forget`
-and keep answering searches. `delete_page` on a live projection is allowed and the
-next maintenance pass rebuilds it: the page is a derived artifact, so deleting one
-is a cache eviction, not a revocation.
+and keep answering searches. `delete_page` on a live projection is **refused**
+(`mcp.ts`'s `reserved` clause) — an earlier revision allowed it on the argument
+that a page is a derived artifact so evicting one is a cache eviction rather than
+a revocation, which ignored who holds the lever: a caller knowing nothing but a
+memory id could take that memory out of its owner's retrieval until the next
+sweep, and was answered `not_found` — the same text as a miss — because the filter
+ran on the RESULT, after the row had already been updated. `forget` is the
+revocation path and it checks scope BEFORE it acts. A page deleted some other way
+is still rebuilt by the next maintenance pass.
 
 **Retrieval** (`recall.ts`). Reuses the whole existing pipeline, then resolves
 every hit back to canonical memory and filters on status, scope and time. Two
@@ -399,16 +422,28 @@ multi-turn scenario, so each layer's value is a number:
 |---|---|---|---|---|---|---|
 | A recent events | 0.875 | 1 | 0 | 0.667 | 0 | 204 |
 | B summary only | 0.375 | 1 | 0 | 0.333 | 0 | 157 |
-| C page search | 0.875 | 0 | 1 | 0.667 | 1 | 1865 |
-| **D summary+memory** | **1.0** | **1** | **1** | **0** | **0** | 194 |
-| **E D+graph** | **1.0** | **1** | **1** | **0** | **0** | 194 |
+| C page search | 0.375 | 0 | 0 | 0.333 | 1 | 734 |
+| **D summary+memory** | **1.0** | **1** | **1** | **0** | **0** | 76 |
+| **E D+graph** | **1.0** | **1** | **1** | **0** | **0** | 76 |
 
-Recorded 2026-07-31. The finding worth keeping: **page search alone leaks stale
-values (0.667) and has zero temporal accuracy** — which is why canonical filtering
-is not optional. The gate asserts the CORRECTNESS metrics (supersession,
-staleness, temporal), not taste: a ranking idea that improves recall while letting
-a superseded value through is not an improvement. Embeddings, rerankers, autocut
-and similarity floors stay gated behind this fixture plus the retrieval one.
+**Re-recorded 2026-08-01, and the C/D/E rows MOVED — said out loud rather than
+quietly refreshed.** The numbers first recorded here (2026-07-31) predate the
+round-3 decision to stop projecting thread- and agent-scoped memories into the
+shared page graph. Page search is exactly the strategy that reads that graph, so
+C fell from 0.875 to 0.375 recall and from 1 to 0 supersession — it can no longer
+see private memories at all — and D/E's context shrank from 194 to 76 chars for
+the same reason. No metric was lowered to make anything pass: the gate asserts
+D and E's correctness columns, which are unchanged at 1/1/0, and the drop is in
+the BASELINE the gate exists to beat. Verified against the pre-change tree
+(`git stash`, re-run) so the movement is attributed to round 3, not to round 5.
+
+The finding worth keeping is now sharper than it was: **page search alone has zero
+temporal accuracy AND zero supersession accuracy, and it is the only strategy that
+pulls in a distractor (1.0)** — which is why canonical filtering is not optional.
+The gate asserts the CORRECTNESS metrics (supersession, staleness, temporal), not
+taste: a ranking idea that improves recall while letting a superseded value through
+is not an improvement. Embeddings, rerankers, autocut and similarity floors stay
+gated behind this fixture plus the retrieval one.
 
 ## Retrieval regression gate
 

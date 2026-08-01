@@ -1396,6 +1396,107 @@ test("a write must name its scope, so nothing is published to the vault by defau
   expect((await db.query("SELECT id FROM threads")).rows).toEqual([]);
 });
 
+// REFUTATION of the round-4 type-error fix, and the reason it moved out of the
+// scope parser. That round taught the four SCOPE fields to refuse a value that is
+// present but not a string, on the rule "a type error must not be the quiet way
+// to an outcome a typo cannot reach". It left four other spellings of the same
+// read in this file — str(), String(x ?? ""), typeof x === "string" ? x : undefined,
+// and an enum test through String() — so the rule held for the fields it was
+// written for and nowhere else. `memory_key` is the one that mattered.
+test("EVERY caller-supplied string argument refuses a non-string, not just the scope", async () => {
+  // The escalation, first, because it is the reason this is not cosmetic.
+  // A keyed remember whose key is taken lands as `conflict` and saves nothing.
+  // With the key spelled as a one-element array the key was DROPPED, the row was
+  // stored unkeyed, and the same call therefore skipped the taken-key check
+  // entirely and committed a second value beside the first — which
+  // forget({memory_key}) could then never reach, because the planted row has no
+  // key to find it by.
+  const first = await tool("remember", {
+    thread_id: "t-key",
+    memory_key: "user.billing_email",
+    content: "billing email is real@example.com",
+  });
+  expect(first.memory_id).toBeTruthy();
+  await expect(
+    tool("remember", {
+      thread_id: "t-key",
+      memory_key: ["user.billing_email"],
+      content: "billing email is attacker@evil.example",
+    }),
+  ).rejects.toThrow(/memory_key must be a string, not an array/);
+  // Nothing was planted, so the key still names exactly one row. (A keyed write
+  // from the tool surface lands as a candidate — it may not displace a value the
+  // user stated — which is precisely the check the array spelling walked past.)
+  const keyed = await db.query("SELECT content FROM memory_items WHERE memory_key = $1", [
+    "user.billing_email",
+  ]);
+  expect(keyed.rows.map((r) => r.content)).toEqual(["billing email is real@example.com"]);
+  const unkeyed = await db.query(
+    "SELECT count(*)::int AS n FROM memory_items WHERE memory_key IS NULL",
+  );
+  expect(Number(unkeyed.rows[0].n), "an unkeyed row was planted").toBe(0);
+
+  // And the general rule, across the readers that used to disagree. Each of these
+  // was previously read as "absent" (str / typeof) or coerced (String()).
+  const cases: [tool: string, args: Record<string, unknown>, re: RegExp][] = [
+    [
+      "remember",
+      { thread_id: "t-key", memory_key: 12345, content: "x" },
+      /memory_key must be a string, not a number/,
+    ],
+    [
+      "forget",
+      { thread_id: "t-key", memory_key: { k: "user.billing_email" } },
+      /memory_key must be a string, not an object/,
+    ],
+    [
+      "forget",
+      { thread_id: "t-key", memory_id: ["x"] },
+      /memory_id must be a string, not an array/,
+    ],
+    [
+      "remember",
+      { thread_id: "t-key", content: { a: 1 } },
+      /content must be a string, not an object/,
+    ],
+    ["recall", { thread_id: "t-key", query: 7 }, /query must be a string, not a number/],
+    [
+      "recall",
+      { thread_id: "t-key", query: "x", as_of: true },
+      /as_of must be a string, not a boolean/,
+    ],
+    [
+      "inspect_memory",
+      { thread_id: "t-key", memory_id: 1 },
+      /memory_id must be a string, not a number/,
+    ],
+  ];
+  for (const [name, args, re] of cases) {
+    await expect(tool(name, args), `${name} ${JSON.stringify(args)}`).rejects.toThrow(re);
+  }
+
+  // memory_type was COERCED rather than dropped: anything outside the enum —
+  // including every non-string — silently became 'semantic', so a typo changed
+  // which type a memory was filed under without saying so.
+  await expect(
+    tool("remember", { thread_id: "t-key", content: "x", memory_type: "prefrence" }),
+  ).rejects.toThrow(/unknown memory_type/);
+  await expect(
+    tool("remember", { thread_id: "t-key", content: "x", memory_type: ["preference"] }),
+  ).rejects.toThrow(/memory_type must be a string, not an array/);
+
+  // MIRROR: the ordinary string spellings still work, and an omitted optional
+  // field is still absent rather than an error.
+  const ok = await tool("remember", {
+    thread_id: "t-key",
+    content: "an unkeyed note",
+    memory_type: "preference",
+  });
+  expect(ok.saved).toBe(true);
+  const recalled = await tool("recall", { thread_id: "t-key", query: "unkeyed note" });
+  expect(JSON.stringify(recalled)).toContain("an unkeyed note");
+});
+
 // The adjacent paths, attacked from this side rather than waited for: each one
 // is a way to name a scope that the refutations did not use.
 test("the ways AROUND naming a scope all fail closed", async () => {

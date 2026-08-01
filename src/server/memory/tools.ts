@@ -77,15 +77,29 @@ type Scope = { scopeType: ScopeType; scopeId: string | null };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
-// A scope field that is PRESENT but not a string is refused, never read as
-// absent. str() alone cannot tell those apart, and treating them the same failed
-// open: `scope: ["thread"]`, `1`, `{s:"thread"}` and `true` all became "no scope
-// named" and fell through to the bare-scope_id inference, so the call landed at
-// AGENT scope and reported saved:true — while the mere typo `scope:"thred"` was
-// correctly refused. A type error must not be the quiet way to a wider scope
-// than a typo can reach. null/undefined/omitted still mean absent, which is what
-// a JSON client sends for a field it is not using.
-function scopeField(name: string, v: unknown): string | null {
+// THE ONE READER of a caller-supplied string argument. A field that is PRESENT
+// but not a string is refused, never read as absent. `str()` alone cannot tell
+// those apart, and treating them the same failed open: `scope: ["thread"]`, `1`,
+// `{s:"thread"}` and `true` all became "no scope named" and fell through to the
+// bare-scope_id inference, so the call landed at AGENT scope and reported
+// saved:true — while the mere typo `scope:"thred"` was correctly refused. A type
+// error must not be the quiet way to an outcome a typo cannot reach.
+// null/undefined/omitted still mean absent, which is what a JSON client sends
+// for a field it is not using.
+//
+// APPLIED TO EVERY STRING ARGUMENT, not to the scope fields it was written for.
+// Round 4 fixed the four scope fields and left this file with FOUR OTHER
+// spellings of the same read — `str(a.x)`, `String(a.x ?? "")`,
+// `typeof a.x === "string" ? a.x : undefined`, and an enum test through
+// `String()` — which is the list shape that has lost every round here. The one
+// that mattered was `memory_key`: `remember({memory_key:["user.billing_email"]})`
+// dropped the key, stored the row UNKEYED, and so walked past the `conflict` the
+// identical string spelling earns — committing a second "billing email" beside
+// the user's, which `forget({memory_key:"user.billing_email"})` then could not
+// reach, because the row it planted has no key. Meanwhile `forget` read the same
+// non-string value as "not supplied" and refused the call outright: two readers
+// of one field, opposite verdicts.
+function argString(name: string, v: unknown): string | null {
   if (v === undefined || v === null) return null;
   if (typeof v !== "string") {
     const kind = Array.isArray(v)
@@ -96,6 +110,28 @@ function scopeField(name: string, v: unknown): string | null {
     throw new Error(`${name} must be a string, not ${kind}`);
   }
   return str(v);
+}
+
+// The same rule for a list of strings: every element goes through argString, so
+// a non-string hiding inside an array is refused where it is read rather than
+// coerced somewhere later.
+function argStringList(name: string, v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) throw new Error(`${name} must be an array of strings`);
+  return v.map((x, i) => argString(`${name}[${i}]`, x)).filter((x): x is string => x !== null);
+}
+
+// The same rule for a field whose value must come from a fixed set: absent takes
+// the documented default, an unrecognised value is REFUSED rather than coerced.
+// `TYPE_ENUM.includes(String(a.memory_type)) ? … : "semantic"` silently rewrote a
+// typo — and every non-string — into a different memory type, which is the exact
+// failure the scope parser refuses to make one function above.
+function argEnum(name: string, v: unknown, allowed: readonly string[], fallback: string): string {
+  const s = argString(name, v);
+  if (s === null) return fallback;
+  if (!allowed.includes(s))
+    throw new Error(`unknown ${name}: expected one of ${allowed.join(", ")}`);
+  return s;
 }
 
 const sameScope = (a: Scope, b: Scope): boolean =>
@@ -153,17 +189,17 @@ async function resolveCallScope(
 ): Promise<CallScope> {
   const requested = one(
     "scope",
-    scopeField("scope", a.scope),
-    scopeField("scope_type", a.scope_type),
+    argString("scope", a.scope),
+    argString("scope_type", a.scope_type),
   );
   if (requested !== null && !SCOPE_ENUM.includes(requested)) {
     // Not coerced to a default. The old fallback turned any unrecognised scope
     // into 'agent', so a typo silently changed which rows a call touched.
     throw new Error(`unknown scope: expected one of ${SCOPE_ENUM.join(", ")}`);
   }
-  const scopeId = scopeField("scope_id", a.scope_id);
-  let namedThread = scopeField("thread_id", a.thread_id);
-  let namedAgent = scopeField("agent_id", a.agent_id);
+  const scopeId = argString("scope_id", a.scope_id);
+  let namedThread = argString("thread_id", a.thread_id);
+  let namedAgent = argString("agent_id", a.agent_id);
   if (requested === "thread") {
     namedThread = one("thread", scopeId, namedThread);
     if (!namedThread) throw new Error("scope 'thread' needs an id: pass thread_id");
@@ -327,11 +363,9 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
     ),
     handler: async (c: BrainCtx, a, s) => {
       const { scopeType, scopeId } = s.target;
-      const content = String(a.content ?? "").trim();
+      const content = argString("content", a.content) ?? "";
       if (!content) throw new Error("content is required");
-      const memoryType = (
-        TYPE_ENUM.includes(String(a.memory_type)) ? a.memory_type : "semantic"
-      ) as MemoryType;
+      const memoryType = argEnum("memory_type", a.memory_type, TYPE_ENUM, "semantic") as MemoryType;
       const structuredValue = (a.structured_value as Record<string, unknown>) ?? {};
 
       // Screen the WHOLE call, before anything durable happens. Handing the raw
@@ -399,7 +433,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         scopeType,
         scopeId,
         memoryType,
-        memoryKey: str(a.memory_key),
+        memoryKey: argString("memory_key", a.memory_key),
         content,
         structuredValue,
         sourceEventIds: [event.id],
@@ -476,14 +510,17 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       ["query"],
     ),
     handler: async (c: BrainCtx, a, s) => {
-      const asOf = typeof a.as_of === "string" && a.as_of.trim() ? a.as_of.trim() : undefined;
+      const asOf = argString("as_of", a.as_of) ?? undefined;
       const results = await recallMemory(c.db, c.store, {
-        query: String(a.query ?? ""),
+        query: argString("query", a.query) ?? "",
         scopes: s.readable,
         limit: a.limit as number,
         asOf,
         expandGraph: Boolean(a.expand_graph),
-        types: typeof a.memory_type === "string" ? [a.memory_type as MemoryType] : undefined,
+        types:
+          a.memory_type === undefined || a.memory_type === null
+            ? undefined
+            : [argEnum("memory_type", a.memory_type, TYPE_ENUM, "semantic") as MemoryType],
       });
       return {
         mode: asOf ? "historical" : "current",
@@ -516,6 +553,13 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       memory_id: { type: "string" },
       memory_key: { type: "string" },
       reason: { type: "string" },
+      authorizing_event_ids: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Event ids in THIS thread that authorize the revocation. A memory the user " +
+          "stated can only be revoked by citing the user's own words asking for it.",
+      },
     }),
     handler: async (c: BrainCtx, a, s) => {
       // Every revocation names its scope, the memory_id path included: a bare id
@@ -523,8 +567,8 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       // everyone else's retrieval.
       const scope = s.target;
       let ids: string[] = [];
-      const memoryId = str(a.memory_id);
-      const memoryKey = str(a.memory_key);
+      const memoryId = argString("memory_id", a.memory_id);
+      const memoryKey = argString("memory_key", a.memory_key);
       if (memoryId) {
         ids = [memoryId];
       } else if (memoryKey) {
@@ -532,6 +576,43 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         ids = found.map((m) => m.id);
       } else {
         throw new Error("memory_id or memory_key is required");
+      }
+
+      // THE USER'S OWN DOOR. mayAmend (items.ts) refuses an agent-surface change
+      // to a memory the user stated "unless the change itself carries the user's
+      // words" — and revokeMemory has taken `sourceEventIds` for exactly that
+      // since it was written, but this handler never passed any. The rule
+      // therefore had no satisfying case: `forget` always stamped `tool:forget`,
+      // it is the only revocation surface (READ_ONLY_TOOLS has no `forget`, and
+      // /api/maintenance never revokes), so a user-stated memory could not be
+      // revoked by anyone, through anything, ever. AGENTS.md meanwhile documents
+      // `forget` as THE recovery for a wrong memory.
+      //
+      // Restricted to the thread this call is working in, because "the user asked
+      // me to" has to mean the user asked HERE. Citing an event that is not the
+      // user's grants nothing extra — citesUser tests the actor, and a failure
+      // just leaves the ordinary agent-surface rule in force.
+      //
+      // Honest scope, because it is worth being clear about: no door in this
+      // repo can currently append a `user_message` (append_event's event-type
+      // enum is derived from the actor table and excludes every user-implied
+      // type, and events.ts refuses a `tool:`-sourced one), so today no memory is
+      // user-stated and this argument changes no outcome. It is the door the
+      // transport that DOES feed the event log will need, and without it the
+      // authority rule is one nobody can ever satisfy.
+      const cited = argStringList("authorizing_event_ids", a.authorizing_event_ids);
+      let sourceEventIds: string[] | undefined;
+      if (cited.length) {
+        const found = await c.db.query(
+          "SELECT id FROM conversation_events WHERE id = ANY($1::text[]) AND thread_id = $2",
+          [cited, s.threadId],
+        );
+        if (found.rows.length !== cited.length) {
+          throw new Error(
+            "authorizing_event_ids must name events in the thread this call is working in",
+          );
+        }
+        sourceEventIds = found.rows.map((r) => String(r.id));
       }
 
       const targets: MemoryItem[] = [];
@@ -551,7 +632,8 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         const m = await revokeMemory(c.db, {
           memoryId: target.id,
           actor: "tool:forget",
-          reason: str(a.reason) ?? undefined,
+          sourceEventIds,
+          reason: argString("reason", a.reason) ?? undefined,
         });
         if (!m) continue;
         revoked.push(m.id);
@@ -581,7 +663,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       "as in remember and recall; a memory outside them reads as not_found.",
     inputSchema: obj({ memory_id: { type: "string" } }, ["memory_id"]),
     handler: async (c: BrainCtx, a, s) => {
-      const id = String(a.memory_id ?? "");
+      const id = argString("memory_id", a.memory_id) ?? "";
       const found = await inspectMemory(c.db, id);
       // A raw memory id is a scope-free handle, so an out-of-scope hit must be
       // indistinguishable from a miss: otherwise inspect_memory is a read of a
@@ -643,13 +725,13 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       await ensureThread(c.db, s.threadId, s.agentId ?? undefined);
       const res = await appendConversationEvent(c.db, {
         threadId: s.threadId,
-        eventType: String(a.event_type) as EventType,
-        content: typeof a.content === "string" ? a.content : "",
+        eventType: (argString("event_type", a.event_type) ?? "") as EventType,
+        content: argString("content", a.content) ?? "",
         structuredPayload: (a.structured_payload as Record<string, unknown>) ?? {},
-        actorId: typeof a.actor_id === "string" ? a.actor_id : undefined,
+        actorId: argString("actor_id", a.actor_id) ?? undefined,
         source: "tool:append_event",
-        traceId: typeof a.trace_id === "string" ? a.trace_id : undefined,
-        idempotencyKey: typeof a.idempotency_key === "string" ? a.idempotency_key : undefined,
+        traceId: argString("trace_id", a.trace_id) ?? undefined,
+        idempotencyKey: argString("idempotency_key", a.idempotency_key) ?? undefined,
       });
       return {
         event_id: res.event.id,
@@ -725,7 +807,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
     // Takes no scope, and still goes through `scoped` — there is NO opt-out. A
     // tool that could skip the wrapper is a tool that could grow a data read
     // later and skip the parse with it.
-    handler: async (_c: BrainCtx, a) => shouldRetrieveMemory(String(a.input ?? "")),
+    handler: async (_c: BrainCtx, a) => shouldRetrieveMemory(argString("input", a.input) ?? ""),
   },
 };
 

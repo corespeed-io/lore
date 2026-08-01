@@ -44,6 +44,9 @@ export interface ExtractorInput {
   events: ConversationEvent[];
   summary: StructuredSummary | null;
   /** A small relevant slice of active memory, for supersede/NOOP decisions. */
+  /** Every committed, KEYED, string-valued memory in the allowed scopes —
+   *  COMPLETE, not a recent window. See referentsFor: the consumer below decides
+   *  "exactly one referent", and that question cannot be answered from a LIMIT. */
   activeMemories: MemoryItem[];
   allowedScopes: { scopeType: ScopeType; scopeId: string | null }[];
 }
@@ -305,7 +308,31 @@ export interface ExtractionResult {
   applied: { operation: string; status: string; memoryId: string | null; reason?: string }[];
 }
 
-async function activeMemoriesFor(
+// THE SET A CORRECTION CAN REFER TO — complete, not a recent window.
+//
+// This was `ORDER BY updated_at DESC LIMIT 200` over every committed memory in
+// scope, and its one consumer then required EXACTLY ONE shape-matching referent
+// before it would apply the correction. Those two do not compose: "exactly one
+// in the whole scope" was being decided from a truncated list, so once a thread
+// held more than 200 committed memories the user's own referent fell off the
+// end, the filter returned zero candidates, and `candidates.length !== 1`
+// dropped the correction on the floor with no proposal, no conflict and no
+// record anywhere. A user saying "actually it is new@corp.example" was silently
+// ignored — permanently, for that thread, from the 201st memory onward. It did
+// not need an adversary: 200 ordinary agent notes are enough.
+//
+// The fix is not a bigger number, because any number is the same bug further
+// out. The predicate the consumer actually needs is narrow — committed, in
+// scope, KEYED, and carrying a string structured value — so it is expressed in
+// SQL and the result is complete. What it cannot express is `valueShape`, which
+// stays in JS as the single definition it already is; SQL would be a second
+// reader of it.
+//
+// Unbounded by row count, bounded by MEANING: these are keyed, structured facts
+// ("user.billing_email"), not free notes, and a personal brain holds few of
+// them. The scan was already unbounded in the dimension that matters (it read
+// every event in the thread).
+async function referentsFor(
   db: Db,
   scopes: { scopeType: ScopeType; scopeId: string | null }[],
 ): Promise<MemoryItem[]> {
@@ -313,10 +340,12 @@ async function activeMemoriesFor(
   const rows = await db.query(
     `SELECT * FROM memory_items
      WHERE status = 'committed'
+       AND memory_key IS NOT NULL
+       AND jsonb_typeof(structured_value -> 'value') = 'string'
        AND (scope_type, coalesce(scope_id, '')) IN (
          SELECT * FROM unnest($1::text[], $2::text[])
        )
-     ORDER BY updated_at DESC LIMIT 200`,
+     ORDER BY updated_at DESC`,
     [scopes.map((s) => s.scopeType), scopes.map((s) => s.scopeId ?? "")],
   );
   return rows.rows.map(rowToMemory);
@@ -362,7 +391,7 @@ export async function runExtraction(
     args.allowedScopes && args.allowedScopes.length > 0
       ? args.allowedScopes
       : [{ scopeType: "thread" as ScopeType, scopeId: args.threadId }];
-  const active = await activeMemoriesFor(db, scopes);
+  const active = await referentsFor(db, scopes);
   const { proposals } = await extractor.extract({
     events,
     summary: args.summary ?? null,
