@@ -377,6 +377,12 @@ test("a labelled credential is refused whatever CONTAINER the value sits in", as
       ["nested object", { api_key: { v: CRED } }],
       ["array of objects", { api_key: [{ v: CRED }] }],
       ["deeply nested", { frontmatter: { api_key: { a: { b: [CRED] } } } }],
+      // THE SECRET AS A KEY. A key was scanned raw only, never against its
+      // enclosing labels — so moving the value one position LEFT defeated the
+      // adjacency that carrying labels down exists to catch. "No container left
+      // to add" was true; the axis was position, not container.
+      ["secret as a key", { password: { [CRED]: true } }],
+      ["secret as a key, nested", { creds: { api_key: { [CRED]: 1 } } }],
       // NON-STRING LEAVES. The container fix carried the label down but still
       // only scanned STRING leaves, so a JSON number — which is what a client
       // sends for a digit run it does not think of as text — was never visited
@@ -448,6 +454,46 @@ test("carrying the label down does not refuse honest content", async () => {
     ]);
     expect(ok.status).toBe("created");
     expect((await ctx.db.query("SELECT slug FROM pages")).rows).toEqual([{ slug: "ops/policy" }]);
+  });
+});
+
+// THE TOKEN MUST SURVIVE THE DRIVER. The fencing token was the timestamptz
+// itself, and `pg` parses that into a JS Date — milliseconds — while a real
+// server's now() is microsecond-resolution, so the value sent back bore no
+// relation to the value stored and the release matched nothing. Maintenance was
+// then throttled to one batch per LEASE_MINUTES on every real deployment.
+//
+// CI could not see it: PGlite's now() comes from Date.now(), so its microsecond
+// field is always zero and the round trip is lossless there. This test plants a
+// microsecond-bearing lease EXPLICITLY instead of trusting now(), which is the
+// only way a PGlite suite can observe the production behaviour.
+test("the lease token survives a microsecond-resolution timestamp", async () => {
+  await withImportBrain(async (ctx) => {
+    const micro = "2026-08-01 20:33:32.078413+00";
+    await ctx.db.query("UPDATE meta SET maintenance_lease = $1::timestamptz WHERE id = 1", [micro]);
+    const stored = await ctx.db.query(
+      "SELECT maintenance_lease::text AS t, to_char(maintenance_lease, 'US') AS us FROM meta WHERE id = 1",
+    );
+    // Guard against the test being vacuous on a driver that truncates on the way
+    // IN: if the microseconds are gone here, this test proves nothing.
+    expect(String(stored.rows[0].us), "the harness cannot store microseconds").not.toBe("000000");
+
+    // The round trip the release performs: read the token back, send it, match.
+    const token = String(stored.rows[0].t);
+    const matched = await ctx.db.query(
+      "SELECT 1 FROM meta WHERE id = 1 AND maintenance_lease = $1::timestamptz",
+      [token],
+    );
+    expect(matched.rows.length, "the ::text token did not match the stored value").toBe(1);
+
+    // ...and the shape it replaced: a JS Date carries only milliseconds, so the
+    // value the driver would send back cannot match a microsecond timestamp.
+    const asDate = new Date(stored.rows[0].t as string);
+    const lossy = await ctx.db.query(
+      "SELECT 1 FROM meta WHERE id = 1 AND maintenance_lease = $1::timestamptz",
+      [asDate.toISOString()],
+    );
+    expect(lossy.rows.length, "a Date token matched, so this test cannot fail").toBe(0);
   });
 });
 

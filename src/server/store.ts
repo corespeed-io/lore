@@ -524,7 +524,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // Two readers of one row: the write acts on the page whatever its state, so
     // the read has to see the same page.
     const prior = await db.query(
-      "SELECT content_hash, kind, frontmatter, deleted_at FROM pages WHERE slug = $1",
+      "SELECT content_hash, kind, title, frontmatter, deleted_at FROM pages WHERE slug = $1",
       [slug],
     );
     const existing = prior.rows[0];
@@ -547,9 +547,19 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // A projection page's title is derived too — taken from the canonical body's
     // own H1 rather than from the caller, or a forged title on an honest body
     // still poisons search (title is half the fts vector).
+    // An OMITTED title is preserved, like every other omitted field. mcp.ts's
+    // put_page description promises "Omitted fields are left as they were", and
+    // title was the one it did not keep: a body-only edit on a page whose title
+    // came from frontmatter (remember_note's metadata.title) or from an H1 the
+    // edit removed silently renamed it to the slug-derived fallback. Title is half
+    // the FTS vector and the whole input to the title boost, so that is a ranking
+    // change with no diff. An empty string still means "derive it", which is what
+    // a caller clearing a title asks for.
     const title = owner
       ? titleFromBody(args.body, slug)
-      : (args.title ?? "").trim() || titleFromBody(args.body, slug);
+      : (args.title ?? "").trim() ||
+        (args.title === undefined ? ((existing?.title as string | undefined) ?? "").trim() : "") ||
+        titleFromBody(args.body, slug);
     // Hash every field a write can change - kind included, or flipping a
     // page between note and memory hashes the same and gets skipped as
     // "unchanged". JSON-encoding the tuple keeps field boundaries clear.

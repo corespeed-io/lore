@@ -96,13 +96,28 @@ export async function POST(req: Request) {
     `UPDATE meta SET maintenance_lease = now()
      WHERE id = 1 AND (maintenance_lease IS NULL
                        OR maintenance_lease < now() - make_interval(mins => $1))
-     RETURNING maintenance_lease`,
+     RETURNING maintenance_lease::text`,
     [LEASE_MINUTES],
   );
   if (lease.rows.length === 0) {
     return NextResponse.json({ detail: "a sweep is already running" }, { status: 409 });
   }
-  const held = lease.rows[0].maintenance_lease;
+  // ::text, and compared back as ::timestamptz. The token was the timestamptz
+  // itself, and `pg` parses that into a JS Date — MILLISECONDS — while a real
+  // server's now() is microsecond-resolution. So the value sent back in the
+  // release bore no relation to the value stored, `WHERE maintenance_lease = $1`
+  // matched nothing ~999 times in 1000, and the row count was never checked and
+  // the error swallowed. The lease was then freed only by the 10-minute timeout:
+  // maintenance throttled to one batch per ten minutes, on every deployment
+  // target, and a STRICT REGRESSION, because the unconditional release it
+  // replaced always worked.
+  //
+  // CI could not see it. PGlite's now() comes from Date.now(), so its microsecond
+  // field is always zero and the round trip is lossless there — the mirror
+  // assertion passed for a reason that does not exist in production, which is
+  // exactly the class of test failure this branch keeps having to kill. The test
+  // now plants a microsecond-bearing lease explicitly rather than trusting now().
+  const held = String(lease.rows[0].maintenance_lease);
   try {
     if (body.action === "memory") {
       const { runMemoryMaintenance } = await import("@/server/memory/maintenance");
@@ -123,9 +138,10 @@ export async function POST(req: Request) {
     // been superseded releases NOTHING, so it cannot free a lease it no longer
     // owns. If it does not match, the successor is mid-sweep and its lease stands.
     await db
-      .query("UPDATE meta SET maintenance_lease = NULL WHERE id = 1 AND maintenance_lease = $1", [
-        held,
-      ])
+      .query(
+        "UPDATE meta SET maintenance_lease = NULL WHERE id = 1 AND maintenance_lease = $1::timestamptz",
+        [held],
+      )
       .catch(() => {});
   }
 }

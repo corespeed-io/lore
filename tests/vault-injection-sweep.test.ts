@@ -263,6 +263,32 @@ test("a truncated array element cannot mint a declared edge", async () => {
   expect(edges.rows.map((r) => String(r.to_slug))).toEqual([]);
 });
 
+// THE WRITER'S ESCAPES AND THE READER'S UN-ESCAPE MUST BE INVERSES. oneLine emits
+// C-style escapes for the five line terminators so a value carrying one cannot
+// break the importer's line splitter; the reader dropped the backslash and kept
+// the letter, so "\n" decoded to the LETTER n. The five characters oneLine exists
+// to protect were the five it destroyed. Third disagreement in this pair, after
+// the quote and the backslash.
+test("a line terminator survives the round trip instead of becoming a letter", () => {
+  const cases: [string, string][] = [
+    ["LF", "line1\nline2"],
+    ["CR", "line1\rline2"],
+    ["U+2028", "line1\u2028line2"],
+    ["U+2029", "line1\u2029line2"],
+    ["NEL", "line1\u0085line2"],
+    ["tab", "col1\tcol2"],
+  ];
+  for (const [name, value] of cases) {
+    const { note } = trip(value, { note: value, list: [value, "sibling"] });
+    expect(note.frontmatter.title, `title/${name}`).toBe(value);
+    expect(note.frontmatter.note, `value/${name}`).toBe(value);
+    expect(note.frontmatter.list, `array/${name}`).toEqual([value, "sibling"]);
+  }
+  // ...and the earlier fixes still hold alongside it: a backslash is still a
+  // backslash, not an escape introducer that eats its neighbour.
+  expect(trip("C:\\Users\\bob", {}).note.frontmatter.title).toBe("C:\\Users\\bob");
+});
+
 // --- real store: does the round trip create an edge that did not exist? ------
 
 async function freshStore(): Promise<{ close: () => Promise<void>; store: Store; db: Db }> {

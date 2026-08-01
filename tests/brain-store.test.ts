@@ -465,6 +465,31 @@ test("re-putting identical bytes over a soft-deleted page brings it back", async
   );
 });
 
+// mcp.ts's put_page promises "Omitted fields are left as they were". Title was the
+// one it did not keep: the prior-row read never selected it, so a body-only edit on
+// a page whose title came from frontmatter, or from an H1 the edit removed, silently
+// renamed it to the slug-derived fallback. Title is half the FTS vector and the
+// whole input to the title boost, so that is a ranking change with no diff.
+test("an omitted title is preserved, and an explicit empty one re-derives", async () => {
+  await store.putPage({ slug: "notes/titled", title: "Q3 Board Review", body: "no heading here" });
+  expect((await store.getPage({ slug: "notes/titled" })).title).toBe("Q3 Board Review");
+
+  // The ordinary edit: body only, nothing else mentioned.
+  await store.putPage({ slug: "notes/titled", body: "revised, still no heading" });
+  expect(
+    (await store.getPage({ slug: "notes/titled" })).title,
+    "a body-only edit renamed the page",
+  ).toBe("Q3 Board Review");
+
+  // MIRROR 1: an explicit title still wins.
+  await store.putPage({ slug: "notes/titled", title: "Renamed", body: "x" });
+  expect((await store.getPage({ slug: "notes/titled" })).title).toBe("Renamed");
+  // MIRROR 2: an explicit EMPTY title means "derive it", which is how a caller
+  // clears one.
+  await store.putPage({ slug: "notes/titled", title: "", body: "# From The Heading" });
+  expect((await store.getPage({ slug: "notes/titled" })).title).toBe("From The Heading");
+});
+
 test("a ref resolves by filename even when the title differs", async () => {
   // The real Obsidian case: the H1 is not the filename, so the title arm cannot
   // match and only the basename arm can. (A page with no H1 derives its title

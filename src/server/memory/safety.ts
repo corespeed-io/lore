@@ -213,8 +213,14 @@ export function findSecretsInPayload(payload: unknown): SecretFinding[] {
       for (const x of v) visit(x, labels, depth + 1);
     } else if (v && typeof v === "object") {
       for (const [k, x] of Object.entries(v)) {
-        // The key on its own: a credential can BE a key as easily as a value.
+        // The key on its own AND against its enclosing labels. A key was scanned
+        // raw only, so moving the secret one position LEFT defeated the adjacency
+        // that carrying labels down was added to catch:
+        // `{password: {hunter2secret: true}}` committed, while
+        // `{password: "hunter2secret"}` was refused. "No container left to add"
+        // was true; the axis was position, not container.
         scan(k);
+        for (const label of labels) scan(`${label}: ${k}`);
         // A repeated key adds no new pairing, so a self-referential shape cannot
         // grow the label list without bound.
         visit(x, labels.includes(k) ? labels : [...labels, k], depth + 1);

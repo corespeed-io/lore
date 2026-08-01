@@ -171,6 +171,29 @@ export function parseFrontmatter(text: string): {
 // Shared, because having two functions answer "what does this value say" is how
 // the same string came back two different ways depending on which container it
 // sat in.
+// THE INVERSE OF tar.ts's oneLine, and it has to BE the inverse. oneLine emits
+// C-style escapes for the five line terminators (\r \n \u2028 \u2029 \u0085) so a
+// value carrying one cannot break the importer's line splitter. The reader dropped
+// the backslash and kept the letter, so "\n" decoded to the LETTER n: the five
+// characters oneLine exists to protect were the five it destroyed, and
+// `aliases: ["a<LF>b"]` came back as ["anb"]. Third time this writer/reader pair
+// has disagreed — after the quote and the backslash — so the decode is one
+// function now, called from both places that read a quoted value.
+const ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "\t" };
+
+/** Decode the escape whose payload starts at `i`. Returns the character and the
+ *  LAST index consumed, so a \uXXXX form advances past all five. */
+function decodeEscape(s: string, i: number): [string, number] {
+  const c = s[i];
+  if (c === "u" && /^[0-9a-fA-F]{4}$/.test(s.slice(i + 1, i + 5))) {
+    return [String.fromCharCode(Number.parseInt(s.slice(i + 1, i + 5), 16)), i + 4];
+  }
+  // Anything else keeps the old behaviour — a backslash before an ordinary
+  // character means that character, which is what the quote and backslash fixes
+  // rely on.
+  return [ESCAPES[c] ?? c, i];
+}
+
 function unquotedValue(t: string): string {
   return t.replace(/\s+#\s.*$/, "").trim();
 }
@@ -190,7 +213,9 @@ function scalar(raw: string): string {
     let out = "";
     for (let i = 1; i < t.length; i++) {
       if (t[i] === "\\" && i + 1 < t.length) {
-        out += t[++i];
+        const [ch, j] = decodeEscape(t, i + 1);
+        out += ch;
+        i = j;
         continue;
       }
       if (t[i] === '"') return out.trim();
@@ -233,7 +258,9 @@ function inlineArray(raw: string): string[] {
     if (quote) {
       // Backslash escapes only inside double quotes, matching the writer.
       if (c === "\\" && quote === '"' && i + 1 < raw.length - 1) {
-        cur += raw[++i];
+        const [ch, j] = decodeEscape(raw, i + 1);
+        cur += ch;
+        i = j;
         continue;
       }
       if (c === quote) quote = null;

@@ -120,6 +120,42 @@ function rowToSummary(r: Record<string, unknown>): ThreadSummary {
 // the door does not excuse storing something that should never have been stored.
 export const MAX_RENDERED_SUMMARY = 8000;
 
+// AND THE STRUCTURED ROW, bounded at the WRITE. Capping inside
+// summarizer-default.ts bounds one implementation of a pluggable interface — the
+// next summarizer rediscovers the problem, and the default one still leaked
+// through `goal`, the `next_action` derived from it, and an `approval` decision,
+// none of which went through its item cap. structured_summary is folded forward
+// into every later version, returned unclamped by get_summary, and lives in a
+// table nothing prunes. This is the one place every summary is written, so it is
+// the only bound that cannot be bypassed.
+const MAX_STRUCTURED = 32_000;
+
+function clampStructured(structured: StructuredSummary): StructuredSummary {
+  const json = JSON.stringify(structured);
+  if (json.length <= MAX_STRUCTURED) return structured;
+  // Truncate the free-text fields rather than dropping entries: losing WHICH
+  // decisions were made is worse than losing the tail of one of them.
+  const cut = (v: string) => (v.length > 2000 ? `${v.slice(0, 2000)}…` : v);
+  return {
+    ...structured,
+    goal: cut(structured.goal),
+    next_action: cut(structured.next_action),
+    background: structured.background.slice(0, 12).map(cut),
+    requirements: structured.requirements.slice(0, 12).map(cut),
+    constraints: structured.constraints.slice(0, 12).map(cut),
+    completed: structured.completed.slice(0, 12).map(cut),
+    open_questions: structured.open_questions.slice(0, 12).map(cut),
+    blockers: structured.blockers.slice(0, 12).map(cut),
+    decisions: structured.decisions.slice(0, 12).map((d) => ({ ...d, value: cut(d.value) })),
+    corrections: structured.corrections
+      .slice(0, 12)
+      .map((c) => ({ old: cut(c.old), new: cut(c.new) })),
+    artifacts: structured.artifacts
+      .slice(0, 12)
+      .map((a) => ({ ...a, name: cut(a.name), reference: cut(a.reference) })),
+  };
+}
+
 /** Cut to a budget, saying so. Silent truncation of a summary would read as the
  *  conversation simply not having contained the rest. */
 export function clampRendered(text: string, max = MAX_RENDERED_SUMMARY): string {
@@ -227,6 +263,9 @@ export async function refreshThreadSummary(
       "UPDATE thread_summaries SET superseded_at = now() WHERE thread_id = $1 AND superseded_at IS NULL",
       [threadId],
     );
+    // ONE bound, at the one write. See clampStructured: capping inside the
+    // default summarizer bounds one implementation of a pluggable interface.
+    const bounded = clampStructured(structured);
     const ins = await q(
       `INSERT INTO thread_summaries
          (id, thread_id, version, covered_from_sequence, covered_through_sequence,
@@ -238,8 +277,8 @@ export async function refreshThreadSummary(
         version,
         from + 1,
         through,
-        JSON.stringify(structured),
-        clampRendered(renderSummary(structured)),
+        JSON.stringify(bounded),
+        clampRendered(renderSummary(bounded)),
         summarizer.version,
       ],
     );
