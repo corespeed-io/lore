@@ -170,12 +170,26 @@ function invalidSlug(slug: string): boolean {
 // control character written into a regex literal is itself the kind of thing that
 // makes a source file hard to read and grep — and biome forbids it for that
 // reason. Same rule, said in a way that survives being looked at.
+function isControlCode(c: number): boolean {
+  return c < 0x20 || c === 0x7f;
+}
+
 function hasControlChar(slug: string): boolean {
-  for (let i = 0; i < slug.length; i++) {
-    const c = slug.charCodeAt(i);
-    if (c < 0x20 || c === 0x7f) return true;
-  }
+  for (let i = 0; i < slug.length; i++) if (isControlCode(slug.charCodeAt(i))) return true;
   return false;
+}
+
+/** Replace control characters with spaces. Same class as hasControlChar, one
+ *  definition — and by code point rather than by a regex, because biome forbids a
+ *  control character in a regex literal for the same reason this repo does: it is
+ *  invisible in the source and in the diff. */
+function stripControlChars(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    out += isControlCode(c) ? " " : text[i];
+  }
+  return out;
 }
 
 // The JS half of REF_KEY_SQL (db.ts): the coarse key a parked ref is looked up
@@ -886,7 +900,13 @@ export function createStore(db: Db, embed: EmbedFn): Store {
 
     async search({ query, limit }) {
       const n = Math.min(Math.max(Number(limit) || 25, 1), 200);
-      const trimmed = (query ?? "").trim();
+      // Control characters are stripped, NOT passed through. Postgres rejects a
+      // NUL inside a text parameter, and the FTS arm runs OUTSIDE the try that
+      // lets the vector arm degrade — so one NUL in a query threw out of the
+      // whole call instead of costing one arm. A character that cannot be in any
+      // indexed text cannot be part of a query for it, so dropping it loses
+      // nothing and turns a crash into a normal search.
+      const trimmed = stripControlChars(query ?? "").trim();
       if (!trimmed) return [];
 
       type Arm = { label: "vector" | "keyword"; rows: { page_id: number; chunk?: string }[] };

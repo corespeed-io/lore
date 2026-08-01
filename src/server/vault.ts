@@ -218,7 +218,14 @@ function scalar(raw: string): string {
         i = j;
         continue;
       }
-      if (t[i] === '"') return out.trim();
+      // NOT out.trim(). A quoted value's edge whitespace is DATA — the writer
+      // quotes such a value precisely to preserve it (quote() only leaves a value
+      // bare when it equals its own trim). Trimming here threw it away again, so
+      // the same string round-tripped intact as an inline array element and lost
+      // its spaces as a scalar and as a block array: the sibling of the quotedness
+      // fix below, in the same file, in the opposite direction. unquotedValue
+      // still trims, because YAML does trim an UNQUOTED value.
+      if (t[i] === '"') return out;
       out += t[i];
     }
     // Unterminated: fall through and keep the raw string. Not a YAML parser, and
@@ -226,7 +233,7 @@ function scalar(raw: string): string {
     // silently becoming something else.
   } else if (t.startsWith("'")) {
     const end = t.indexOf("'", 1);
-    if (end !== -1) return t.slice(1, end).trim();
+    if (end !== -1) return t.slice(1, end);
   }
   return unquotedValue(t);
 }

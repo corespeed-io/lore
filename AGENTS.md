@@ -637,6 +637,52 @@ keep it that way.
 - `/api/call` and `/api/graph` are rate-limited per user in middleware; `next.config.mjs`
   sets a strict CSP + security headers (`'unsafe-eval'` is dev-only).
 
+## Known residuals (reviewed, deliberately open)
+
+Filed by review and left open ON PURPOSE, so the next person finds them here
+instead of rediscovering them. None is a privilege or data-exposure defect; each
+says why it is not fixed, because "we know" is only useful if the reason is
+written down.
+
+- **A credential split across two SIBLING fields is undetected.** `{k1:"AKIA…",
+  k2:"…"}` is two ordinary strings. Catching it means testing concatenations, and
+  n fields have 2^n of them, so any partial version is a list — the shape that has
+  lost every round here. It also costs a `BRAIN_WRITE_TOKEN`, i.e. the owner, while
+  the party the screen protects against holds `BRAIN_READ_TOKEN` and cannot write.
+- **`pages.basename` cannot do NFKC in SQL**, so the filename arm cannot reach a
+  file differing from the ref only by Unicode normalization. Closing it needs a
+  schema bump plus a table rewrite. Documented at the column.
+- **A fullwidth solidus makes `pathToSlug` and `refAddress` disagree** (`x-／-y.md`
+  imports at `x-/-y`, a ref addresses `x/y`), because one splits before NFKC and
+  the other after. A broken link, never a wrong edge.
+- **A rejected caller on a BARE origin can mint rate-limit buckets** by rotating
+  `x-forwarded-for`, which `clientAddr` reads unconditionally as a fallback. It
+  buys 401s, which were free before the limiter existed. Bounding it needs a
+  trusted-hop count in config, not more header sniffing.
+- **A read token's traffic to a write-only route is charged to the shared address
+  bucket** even though it can never succeed there. Fixing it means the middleware
+  knowing each brain route's required grant — a second reader of a rule the routes
+  already own, unless that rule is moved somewhere both can share.
+- **An agent may adopt an unowned thread** (`ensureThread`'s first-writer claim),
+  after which that thread's `user_message`s become citable for agent-scope
+  revocations. It grants nothing new: an agent holding a user-stated agent-scope
+  memory already owns a thread the user spoke in.
+- **`local.ts` does not cache an init failure**, so every request against a brain
+  whose boot repair fails closed builds another `pg.Pool` that is never `end()`ed.
+  Node only. Fixing it properly needs a `close` on the `Db` seam, which is a
+  change to the one infra-aware interface and wants its own review — that is the
+  only reason it is here rather than fixed.
+- **`renamePage` leaves a stale `content_hash`**, so re-putting the pre-rename
+  payload answers `unchanged:true`. Bounded to the `aliases` key the rename itself
+  adds.
+- **`pageType` defaults to `note` while `lib/graph.ts`'s `nodeType` defaults to
+  `concept`** for edge-discovered nodes, against a comment claiming they cannot
+  diverge. Cosmetic: a node colour.
+- **`/api/mcp` resolves the database URL before checking the bearer**, so an
+  unauthenticated caller can tell 404 from 401 — unlike import/maintenance.
+- **The procedure surface is dead code with known holes.** See the Episodes and
+  procedures section: it is not wired, and wiring it needs its own review.
+
 ## Test gotchas (when verifying in a browser)
 
 - Setting an input's `.value` + dispatching `input` does NOT trigger React 19's

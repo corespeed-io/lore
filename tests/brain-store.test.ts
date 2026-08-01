@@ -490,6 +490,17 @@ test("an omitted title is preserved, and an explicit empty one re-derives", asyn
   expect((await store.getPage({ slug: "notes/titled" })).title).toBe("From The Heading");
 });
 
+// A control character in a QUERY is not a reason to fail the call. Postgres
+// rejects a NUL inside a text parameter, and the FTS arm runs outside the try
+// that lets the vector arm degrade — so one NUL threw out of the whole search.
+test("a control character in a search query degrades instead of throwing", async () => {
+  await store.putPage({ slug: "notes/searchable", body: "# Searchable\n\nthe quick brown fox" });
+  const hits = await store.search({ query: "quick\u0000 brown" });
+  expect(hits.map((h) => h.slug)).toContain("notes/searchable");
+  // ...and a query that is ONLY control characters is empty, not an error.
+  expect(await store.search({ query: "\u0000\u000b" })).toEqual([]);
+});
+
 test("a ref resolves by filename even when the title differs", async () => {
   // The real Obsidian case: the H1 is not the filename, so the title arm cannot
   // match and only the basename arm can. (A page with no H1 derives its title

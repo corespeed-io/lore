@@ -135,10 +135,16 @@ test("honest titles round-trip", () => {
     // passed whether an honest title survived or was mangled — which is the whole
     // question it exists to ask. The point of the sweep above is that hostile
     // titles cannot inject frontmatter; the point of THIS one is the mirror, and a
-    // mirror that cannot fail is not a mirror. `padded` is the one deliberate
-    // exception: the reader trims, because a YAML scalar's surrounding whitespace
-    // is not part of the value.
-    expect(note.frontmatter.title, JSON.stringify(title)).toBe(title.trim());
+    // mirror that cannot fail is not a mirror.
+    //
+    // CHANGED from `title.trim()` to `title`, and said out loud: `  padded  ` used
+    // to be a documented exception on the grounds that "a YAML scalar's
+    // surrounding whitespace is not part of the value". That is true of an
+    // UNQUOTED scalar, and quote() now quotes any value that differs from its own
+    // trim — so the writer preserves it deliberately and the reader no longer
+    // throws it away. The round trip is byte-exact in all three containers, which
+    // is a stronger claim than the one this line used to make.
+    expect(note.frontmatter.title, JSON.stringify(title)).toBe(title);
   }
 });
 
@@ -200,9 +206,12 @@ test("a key that would re-read as a different key is dropped, not silently renam
 test("a whitespace-only value keeps its key", () => {
   const { note } = trip("Ok", { note: " ", also: "x" });
   expect(Object.keys(note.frontmatter).sort()).toEqual(["also", "note", "title"]);
-  // The reader trims, so what comes back is "", not " " — the key survives, which
-  // is the property that was lost.
-  expect(note.frontmatter.note).toBe("");
+  // CHANGED alongside the byte-exactness fix: what comes back is now " ", not "".
+  // The key surviving was the property this test was written for, and it still
+  // holds; the value surviving intact is the stronger property it now also gets,
+  // because quote() quotes a whitespace-only value and scalar no longer trims
+  // inside the quotes.
+  expect(note.frontmatter.note).toBe(" ");
 });
 
 // THE SIBLING OF THE ROUND-6 scalar() FIX, one container to the side. scalar
@@ -287,6 +296,31 @@ test("a line terminator survives the round trip instead of becoming a letter", (
   // ...and the earlier fixes still hold alongside it: a backslash is still a
   // backslash, not an escape introducer that eats its neighbour.
   expect(trip("C:\\Users\\bob", {}).note.frontmatter.title).toBe("C:\\Users\\bob");
+});
+
+// BYTE-EXACT MEANS ALL THREE CONTAINERS. The quote() fix made the writer quote a
+// value whose edge whitespace matters; scalar then threw it away again with a trim
+// INSIDE the quotes, while inlineArray had stopped doing so. Same string, two
+// answers by container — the sibling of the quotedness fix, in the same file, in
+// the opposite direction. Nothing is minted by it; it is silent lossy round
+// tripping of data the writer deliberately preserved.
+test("edge whitespace in a quoted value survives in every container", () => {
+  for (const value of ["trailing space ", " leading space", "  both  ", " "]) {
+    const text = serializeNote(value, { note: value, list: [value, "x"] }, "body");
+    const note = parseNote({ path: "n.md", text });
+    expect(note.frontmatter.title, `title ${JSON.stringify(value)}`).toBe(value);
+    expect(note.frontmatter.note, `scalar ${JSON.stringify(value)}`).toBe(value);
+    expect(note.frontmatter.list, `array ${JSON.stringify(value)}`).toEqual([value, "x"]);
+  }
+  // Block arrays reach the same reader, so they must agree too.
+  const block = parseNote({
+    path: "n.md",
+    text: '---\nlist:\n  - "trailing space "\n  - plain\n---\nbody',
+  });
+  expect(block.frontmatter.list).toEqual(["trailing space ", "plain"]);
+  // MIRROR: an UNQUOTED value is still trimmed, because YAML trims those.
+  const bare = parseNote({ path: "n.md", text: "---\nnote:   spaced out   \n---\nbody" });
+  expect(bare.frontmatter.note).toBe("spaced out");
 });
 
 // --- real store: does the round trip create an edge that did not exist? ------
