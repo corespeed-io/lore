@@ -414,6 +414,23 @@ test("memory evaluation across five context strategies", async () => {
   expect(D.temporal_accuracy).toBe(1);
   expect(D[`fact_recall_at_${K}`]).toBeGreaterThanOrEqual(0.85);
   expect(D[`fact_recall_at_${K}`]).toBeGreaterThan(C[`fact_recall_at_${K}`]);
+
+  // THE BASELINE IS PINNED TOO, and a reviewer's observation rather than mine:
+  // when C fell from 0.875 to 0.375 (round 3 stopped projecting private memories,
+  // and page search is the strategy that reads that graph), `D > C` quietly became
+  // a much weaker claim. A gate that compares against a MOVING baseline stops
+  // meaning much the moment the baseline moves — and it moves in the flattering
+  // direction, so nothing complains. What actually carries this gate is the
+  // absolute floors above; the comparison is now a sanity check on top of them.
+  //
+  // So the baseline is an assertion, not a number in a comment. C changing is a
+  // deliberate change to the thing D is measured AGAINST — including someone
+  // "improving" it by putting private memories back in the shared graph, which is
+  // the decision this whole design turns on — and it has to be acknowledged here
+  // rather than silently absorbed into a comparison that still passes.
+  expect(C.supersession_accuracy, "page search gained supersession accuracy").toBe(0);
+  expect(C.temporal_accuracy, "page search gained temporal accuracy").toBe(0);
+  expect(C[`fact_recall_at_${K}`], "the recorded baseline moved").toBeCloseTo(0.375, 3);
   // Graph expansion may add context but must not break correctness.
   expect(E[`fact_recall_at_${K}`]).toBeGreaterThanOrEqual(D[`fact_recall_at_${K}`]);
   expect(E.supersession_accuracy).toBe(1);
