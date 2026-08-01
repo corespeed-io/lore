@@ -274,7 +274,12 @@ and code is masked exactly as it is for declared links, so a note documenting
 
 Nothing calls the route on its own — wire whatever scheduler the host has, and
 it is off until you do. It takes a compare-and-set lease on `meta` so two
-schedulers cannot sweep at once, does at most 200 pages per call, and
+schedulers cannot sweep at once — **compare-and-set at BOTH ends**: the winner
+keeps the timestamp it wrote as a fencing token and releases only if the column
+still matches it. Releasing unconditionally made this claim false for exactly the
+case the lease exists for, because a holder that overran the timeout came back and
+wiped the lease of the SUCCESSOR that had legitimately taken over, and every
+overrun handed out one more concurrent sweep. It does at most 200 pages per call, and
 `{"dryRun":true}` reports what it *would* link. An HTTP route rather than a
 Workers `scheduled` handler on purpose: OpenNext's worker exports only `fetch`
 plus its DO classes, and a Cron Trigger invocation caps at 15 minutes

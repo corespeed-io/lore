@@ -82,17 +82,27 @@ export async function POST(req: Request) {
 
   // Compare-and-set: whoever wins the UPDATE holds the lease, everyone else
   // gets a 409 and leaves. No row updated means someone is already sweeping.
+  //
+  // The winner keeps the exact timestamp it wrote as a FENCING TOKEN, because
+  // acquiring was compare-and-set while releasing was not: the release cleared
+  // the column unconditionally. So a holder that overran the timeout — the only
+  // situation the timeout exists for — came back and wiped the lease of the
+  // SUCCESSOR that had legitimately taken over, and the next scheduler acquired
+  // on top of a sweep already in flight. "Two schedulers cannot sweep at once"
+  // was false for exactly the case the lease is there to handle, and it cascades:
+  // every overrun hands out one more concurrent sweep.
   const db = await getDb();
   const lease = await db.query(
     `UPDATE meta SET maintenance_lease = now()
      WHERE id = 1 AND (maintenance_lease IS NULL
                        OR maintenance_lease < now() - make_interval(mins => $1))
-     RETURNING 1`,
+     RETURNING maintenance_lease`,
     [LEASE_MINUTES],
   );
   if (lease.rows.length === 0) {
     return NextResponse.json({ detail: "a sweep is already running" }, { status: 409 });
   }
+  const held = lease.rows[0].maintenance_lease;
   try {
     if (body.action === "memory") {
       const { runMemoryMaintenance } = await import("@/server/memory/maintenance");
@@ -109,7 +119,13 @@ export async function POST(req: Request) {
     });
   } finally {
     // Release immediately so the next batch can start; the timeout is only a
-    // backstop for a crashed run.
-    await db.query("UPDATE meta SET maintenance_lease = NULL WHERE id = 1").catch(() => {});
+    // backstop for a crashed run. Guarded by the token: a holder that has already
+    // been superseded releases NOTHING, so it cannot free a lease it no longer
+    // owns. If it does not match, the successor is mid-sweep and its lease stands.
+    await db
+      .query("UPDATE meta SET maintenance_lease = NULL WHERE id = 1 AND maintenance_lease = $1", [
+        held,
+      ])
+      .catch(() => {});
   }
 }

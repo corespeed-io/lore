@@ -196,7 +196,12 @@ export function findSecretsInPayload(payload: unknown): SecretFinding[] {
     // because payment_card is exactly a digit-run pattern and the whole point of
     // this walk is that the SHAPE of the container is not a question we ask.
     // (A card number is under 2^53, so it survives JSON parsing intact.)
-    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+    if (
+      typeof v === "string" ||
+      typeof v === "number" ||
+      typeof v === "boolean" ||
+      typeof v === "bigint"
+    ) {
       const text = String(v);
       scan(text);
       for (const label of labels) scan(`${label}: ${text}`);

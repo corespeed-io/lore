@@ -451,6 +451,67 @@ test("carrying the label down does not refuse honest content", async () => {
   });
 });
 
+// THE LEASE WAS COMPARE-AND-SET ON THE WAY IN AND UNCONDITIONAL ON THE WAY OUT.
+// AGENTS.md promises "two schedulers cannot sweep at once". The release cleared
+// the column with no ownership test, so a holder that OVERRAN the timeout — the
+// only situation the timeout exists for — came back and wiped the lease of the
+// successor that had legitimately taken over, letting the next scheduler start on
+// top of a sweep already in flight. It cascades: every overrun hands out one more
+// concurrent sweep.
+test("an overrunning sweep cannot release its successor's lease", async () => {
+  await withImportBrain(async (ctx) => {
+    const leaseNow = async () =>
+      (await ctx.db.query("SELECT maintenance_lease FROM meta WHERE id = 1")).rows[0]
+        .maintenance_lease;
+
+    // Holder A acquires and, mid-sweep, the timeout elapses and successor B takes
+    // over — modelled by overwriting the column while A is still inside its run.
+    // The Db seam is where a real overrun would interleave.
+    let taken: unknown = null;
+    const racing: Db = {
+      query: async (text, params) => {
+        const res = await ctx.db.query(text, params);
+        if (!taken && /sweepMentions|FROM pages/i.test(text)) {
+          await ctx.db.query(
+            "UPDATE meta SET maintenance_lease = now() + interval '1 second' WHERE id = 1",
+          );
+          taken = await leaseNow();
+        }
+        return res;
+      },
+      tx: ctx.db.tx,
+    };
+    brain.ctx = { db: racing, store: createStore(racing, embed) };
+
+    const { POST } = await import("../src/app/api/maintenance/route.js");
+    const res = await POST(
+      new Request("http://x/api/maintenance", {
+        method: "POST",
+        headers: { ...bearer(WRITE), "content-type": "application/json" },
+        body: JSON.stringify({ dryRun: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(taken, "the successor never took over, so nothing was raced").not.toBeNull();
+    // B's lease must survive A's release.
+    expect(await leaseNow(), "the overrunning holder wiped its successor's lease").not.toBeNull();
+
+    // MIRROR: the ordinary case still releases, or every sweep after the first
+    // would 409 until the timeout.
+    brain.ctx = ctx;
+    await ctx.db.query("UPDATE meta SET maintenance_lease = NULL WHERE id = 1");
+    const clean = await POST(
+      new Request("http://x/api/maintenance", {
+        method: "POST",
+        headers: { ...bearer(WRITE), "content-type": "application/json" },
+        body: JSON.stringify({ dryRun: true }),
+      }),
+    );
+    expect(clean.status).toBe(200);
+    expect(await leaseNow(), "an ordinary sweep did not release its own lease").toBeNull();
+  });
+});
+
 test("/api/import crosses refuseReserved, in the slug AND in the body", async () => {
   await withImportBrain(async (ctx) => {
     const results = await importFiles([
