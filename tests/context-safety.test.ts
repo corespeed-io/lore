@@ -13,6 +13,12 @@ import { MEMORY_GUARD, buildMemoryContext } from "../src/server/memory/context.j
 import { appendConversationEvent, ensureThread } from "../src/server/memory/events.js";
 import { type MemoryItem, writeMemory } from "../src/server/memory/items.js";
 import { recallMemory } from "../src/server/memory/recall.js";
+import {
+  EMPTY_SUMMARY,
+  MAX_RENDERED_SUMMARY,
+  clampRendered,
+  renderSummary,
+} from "../src/server/memory/summary.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
 import { serializeNote } from "../src/server/tar.js";
@@ -257,4 +263,39 @@ test("a LIKE metacharacter in an as_of query is a literal, not a wildcard", asyn
   // Honest queries are unaffected: both arms still work.
   expect(await keys("billing email")).toEqual(["user.billing_email"]);
   expect(await keys("15%")).toEqual(["billing.discount"]);
+});
+
+// A SUMMARY IS A ROLLING STATE stored in a table nothing prunes, so an unbounded
+// one is not a big string — it is a big string every later version folds forward
+// and every later context window carries whole. `maxChars` was spent only inside
+// the memory-selection loop, so the documented budget did not govern this block at
+// all. Reachable with one append_event carrying a large structured_payload field
+// and one refresh_summary.
+test("a huge summary is bounded at the write and clamped in the pack", () => {
+  const huge = "x".repeat(400_000);
+  const rendered = clampRendered(renderSummary({ ...EMPTY_SUMMARY, goal: huge }));
+  expect(rendered.length, "the stored summary is unbounded").toBeLessThan(
+    MAX_RENDERED_SUMMARY + 200,
+  );
+  expect(rendered, "truncation was silent").toContain("summary truncated");
+
+  // ...and the pack clamps too, because a row written by an older release is
+  // still out there.
+  const pack = buildMemoryContext({
+    memories: [],
+    userInput: "what is my billing email?",
+    summary: {
+      id: "s1",
+      thread_id: "t",
+      version: 1,
+      status: "active",
+      covers_from_sequence: 0,
+      covers_to_sequence: 1,
+      structured_summary: {},
+      rendered_summary: huge,
+      summarizer_version: "v",
+      created_at: new Date(0).toISOString(),
+    } as never,
+  });
+  expect(pack.text.length, "the pack carried an unbounded summary").toBeLessThan(20_000);
 });

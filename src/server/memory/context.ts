@@ -20,6 +20,7 @@ import type { ConversationEvent } from "./events";
 import type { MemoryItem } from "./items";
 import type { RecalledMemory } from "./recall";
 import type { ThreadSummary } from "./summary";
+import { clampRendered } from "./summary";
 
 // Sits immediately before the memory block, every time. Memory is evidence the
 // model may reason about, never a channel for instructions: a fact stored last
@@ -183,7 +184,13 @@ export function buildMemoryContext(args: BuildContextArgs): MemoryContext {
     // Labelled, because a summary records what was SAID during the thread and can
     // therefore contain a value that durable memory has since superseded. Memory
     // comes later in the pack and is the authority on current facts.
-    push("summary", `${SUMMARY_NOTE}\n\n${fenceTags(args.summary.rendered_summary)}`);
+    // Clamped as well as bounded at the write: `maxChars` was spent ONLY inside
+    // the memory-selection loop below, so the documented budget did not govern
+    // this block at all and a large stored summary went into the pack whole.
+    push(
+      "summary",
+      `${SUMMARY_NOTE}\n\n${fenceTags(clampRendered(args.summary.rendered_summary, maxChars))}`,
+    );
   }
   if (chosen.length) {
     push(

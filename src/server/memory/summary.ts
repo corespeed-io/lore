@@ -108,6 +108,24 @@ function rowToSummary(r: Record<string, unknown>): ThreadSummary {
   };
 }
 
+// A summary is a ROLLING STATE that every later version folds forward, and it is
+// stored in a table nothing prunes — so an unbounded one is not a big string, it
+// is a big string carried forever and pushed whole into every context window
+// after it. Reachable today: one append_event with a 400KB structured_payload
+// field, then refresh_summary, produced an 800KB rendered_summary.
+//
+// Bounded HERE, at the write, rather than only at the readers. A reader-side clamp
+// leaves the row itself unbounded, so every future reader has to remember to clamp
+// too, and the next one will not. context.ts clamps as well, because defence at
+// the door does not excuse storing something that should never have been stored.
+export const MAX_RENDERED_SUMMARY = 8000;
+
+/** Cut to a budget, saying so. Silent truncation of a summary would read as the
+ *  conversation simply not having contained the rest. */
+export function clampRendered(text: string, max = MAX_RENDERED_SUMMARY): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n\n[summary truncated at ${max} chars]`;
+}
+
 // One deterministic rendering, so the same structured summary always produces
 // the same text and a diff between versions is meaningful. Empty sections are
 // omitted rather than printed blank.
@@ -191,7 +209,7 @@ export async function refreshThreadSummary(
         from + 1,
         through,
         JSON.stringify(structured),
-        renderSummary(structured),
+        clampRendered(renderSummary(structured)),
         summarizer.version,
       ],
     );

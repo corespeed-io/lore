@@ -42,6 +42,13 @@ async function retireExactDuplicates(db: Db, limit: number): Promise<number> {
     // Keep the oldest — it owns the provenance — and supersede the rest.
     const [keep, ...rest] = ids;
     for (const id of rest) {
+      // THE LIMIT COUNTS GROUPS, and this loop is inside one. A single group of
+      // 10,000 duplicates was 10,000 sequential transactions in one call — the
+      // bound the caller asked for applied to the wrong dimension. Bounded by the
+      // same limit, on the thing that actually costs: one transaction per row.
+      // What is left over is not lost, because the sweep is idempotent and the
+      // next pass sees the same group with fewer members.
+      if (retired >= limit) return retired;
       // THROUGH THE CHOKEPOINT. This was a raw `UPDATE memory_items SET
       // status='superseded'` — a SECOND writer of authored state, with no lock, no
       // authority check and no status re-check. The invariant was stated per-file
