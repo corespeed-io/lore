@@ -458,10 +458,29 @@ test("rename_page keeps stale [[old-slug]] refs working and rejects collisions",
   await store.renamePage({ slug: "old/place", to: "new/place" });
   await expect(store.getPage({ slug: "old/place" })).rejects.toThrow(/not_found/);
   expect((await store.getPage({ slug: "new/place" })).body).toBe("content");
-  // the referring page is untouched, and its ref still resolves on re-put
+  // CHANGED IN ROUND 3, deliberately. [[old/place]] is an ADDRESS and that
+  // address is now vacant, so the alias the rename leaves behind may not answer
+  // it: an alias is a name. Honouring it would also mean a page later created AT
+  // old/place could never take its own inbound links — the same permanent
+  // mis-attachment the address rule exists to stop (see resolveRef). The ref is
+  // reported broken instead of silently redirected.
   const res = await store.putPage({ slug: "notes/points-old", body: "see [[old/place]] again" });
-  expect(res.pending).toEqual([]);
-  expect((await store.getBacklinks({ slug: "new/place" })).map((b) => b.slug)).toContain(
+  expect(res.pending).toEqual(["old/place"]);
+  expect((await store.getBacklinks({ slug: "new/place" })).map((b) => b.slug)).not.toContain(
+    "notes/points-old",
+  );
+  // What the rename alias is actually for, and what still works: a NAME-shaped
+  // old slug, and the page's own basename/title — Obsidian's default link style.
+  await store.putPage({ slug: "oldname", body: "movable" });
+  await store.renamePage({ slug: "oldname", to: "new/spot" });
+  const byName = await store.putPage({ slug: "notes/points-name", body: "see [[oldname]]" });
+  expect(byName.pending).toEqual([]);
+  expect((await store.getBacklinks({ slug: "new/spot" })).map((b) => b.slug)).toContain(
+    "notes/points-name",
+  );
+  // ...and a page that later moves INTO the vacated address takes those links.
+  await store.putPage({ slug: "old/place", body: "new tenant" });
+  expect((await store.getBacklinks({ slug: "old/place" })).map((b) => b.slug)).toContain(
     "notes/points-old",
   );
   await expect(store.renamePage({ slug: "new/place", to: "people/jane" })).rejects.toThrow(
@@ -800,13 +819,30 @@ test("a path-shaped ref lands in the directory it names, forward and backward", 
   expect((await store.getBacklinks({ slug: "maps/dated-note" })).map((b) => b.slug)).toContain(
     "notes/wants-maps",
   );
-  // Backward, and the case a real import hits: the vault prefix makes the ref's
-  // path a SUFFIX of the slug, which still satisfies it.
+  // CHANGED IN ROUND 3, deliberately. This used to assert that a vault PREFIX on
+  // the slug still satisfies the ref (folded slug ends with the ref's path). That
+  // suffix rule is what let archive/maps/dated-note steal [[Maps/Dated Note]] —
+  // and it is self-defeating besides, because a path-shaped ref is written
+  // precisely when the basename is ambiguous, so resolving it by suffix hands it
+  // back to whichever colliding page was written first. An address now means one
+  // page, and a prefixed import's path-shaped refs are REPORTED broken instead of
+  // silently attached to a same-named page in another directory.
   await store.putPage({ slug: "vault/maps/deep-note", body: "# Deep Heading" });
   const res = await store.putPage({ slug: "notes/wants-deep", body: "see [[Maps/Deep Note]]" });
-  expect(res.pending).toEqual([]);
+  expect(res.pending).toEqual(["Maps/Deep Note"]);
+  expect(
+    (await store.getBacklinks({ slug: "vault/maps/deep-note" })).map((b) => b.slug),
+  ).not.toContain("notes/wants-deep");
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "notes/wants-deep",
+    ref: "Maps/Deep Note",
+  });
+  // ...and the bare NAME still reaches it, which is Obsidian's default link
+  // style: a name asserts no location, so any page answering to it may take it.
+  const byName = await store.putPage({ slug: "notes/wants-deep-name", body: "see [[Deep Note]]" });
+  expect(byName.pending).toEqual([]);
   expect((await store.getBacklinks({ slug: "vault/maps/deep-note" })).map((b) => b.slug)).toContain(
-    "notes/wants-deep",
+    "notes/wants-deep-name",
   );
 });
 
@@ -858,4 +894,326 @@ test("an inferred edge cannot promote a page in search", async () => {
   );
   expect(after?.score).toBe(before?.score);
   await store.clearAutoEdges();
+});
+
+// --- the address rule ------------------------------------------------------
+// A ref containing '/' names a LOCATION: only the page at that location may
+// satisfy it, through any arm. Round 2 guarded the basename arm alone and the
+// title arm, the alias arm and an "ends with the ref's path" escape each reached
+// the same wrong edge. Each of these tests fails if the rule is applied to
+// fewer than all four arms.
+
+const backlinkSlugs = (slug: string) =>
+  store.getBacklinks({ slug }).then((rows) => rows.map((r) => r.slug));
+
+test("no arm may satisfy an address with a page that does not live there", async () => {
+  await store.putPage({ slug: "src/wants-a", body: "the real one is [[Maps/Dated Note X]]" });
+  await store.putPage({ slug: "src/wants-b", body: "the real one is [[deep/steal-b]]" });
+  await store.putPage({ slug: "src/wants-c", body: "the real one is [[deep/steal-c]]" });
+
+  // A — one directory deeper: its folded slug ENDS with the ref's path.
+  await store.putPage({ slug: "archive/maps/dated-note-x", body: "# Decoy A" });
+  // B — the title arm: an H1 that is literally the ref.
+  await store.putPage({ slug: "zz/decoy-b", body: "# deep/steal-b" });
+  // C — the alias arm: frontmatter claiming the address as one of its names.
+  await store.putPage({
+    slug: "zz/decoy-c",
+    body: "decoy c",
+    frontmatter: { aliases: ["deep/steal-c"] },
+  });
+
+  for (const [decoy, from] of [
+    ["archive/maps/dated-note-x", "src/wants-a"],
+    ["zz/decoy-b", "src/wants-b"],
+    ["zz/decoy-c", "src/wants-c"],
+  ]) {
+    expect(await backlinkSlugs(decoy), decoy).not.toContain(from);
+  }
+  // The miss stays VISIBLE. A stolen ref is worse than a broken one precisely
+  // because landing deletes the pending row, so nothing reports it any more.
+  const broken = await store.brokenLinks({ limit: 200 });
+  expect(broken).toContainEqual({ from_slug: "src/wants-a", ref: "Maps/Dated Note X" });
+  expect(broken).toContainEqual({ from_slug: "src/wants-b", ref: "deep/steal-b" });
+  expect(broken).toContainEqual({ from_slug: "src/wants-c", ref: "deep/steal-c" });
+
+  // ...and the real pages, arriving last, still take their links.
+  await store.putPage({ slug: "maps/dated-note-x", body: "# Real A" });
+  await store.putPage({ slug: "deep/steal-b", body: "# Real B" });
+  await store.putPage({ slug: "deep/steal-c", body: "# Real C" });
+  expect(await backlinkSlugs("maps/dated-note-x")).toContain("src/wants-a");
+  expect(await backlinkSlugs("deep/steal-b")).toContain("src/wants-b");
+  expect(await backlinkSlugs("deep/steal-c")).toContain("src/wants-c");
+  const after = await store.brokenLinks({ limit: 200 });
+  for (const from of ["src/wants-a", "src/wants-b", "src/wants-c"]) {
+    expect(after.map((b) => b.from_slug)).not.toContain(from);
+  }
+});
+
+test("a rename cannot steal an address either", async () => {
+  // renamePage sweeps pending_links too, so it is a second door into the same
+  // landing. It resolves through resolveRef, so it answers to the same rule.
+  await store.putPage({ slug: "src/wants-moved", body: "waits for [[Maps/Moved Note]]" });
+  await store.putPage({ slug: "tmp/holding", body: "# Holding" });
+  await store.renamePage({ slug: "tmp/holding", to: "archive/maps/moved-note" });
+  expect(await backlinkSlugs("archive/maps/moved-note")).not.toContain("src/wants-moved");
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "src/wants-moved",
+    ref: "Maps/Moved Note",
+  });
+  await store.putPage({ slug: "maps/moved-note", body: "# Real Moved" });
+  expect(await backlinkSlugs("maps/moved-note")).toContain("src/wants-moved");
+});
+
+test("the address rule holds for CJK and for a ref carrying #section|alias", async () => {
+  await store.putPage({ slug: "src/wants-cjk", body: "等待 [[地图/日期笔记]]" });
+  await store.putPage({ slug: "src/wants-sect", body: "see [[Maps/Sect Note#Heading|the note]]" });
+  await store.putPage({ slug: "存档/地图/日期笔记", body: "# 诱饵" });
+  await store.putPage({ slug: "archive/maps/sect-note", body: "# Decoy Sect" });
+  expect(await backlinkSlugs("存档/地图/日期笔记")).not.toContain("src/wants-cjk");
+  expect(await backlinkSlugs("archive/maps/sect-note")).not.toContain("src/wants-sect");
+  await store.putPage({ slug: "地图/日期笔记", body: "# 真的" });
+  await store.putPage({ slug: "maps/sect-note", body: "# Real Sect" });
+  expect(await backlinkSlugs("地图/日期笔记")).toContain("src/wants-cjk");
+  expect(await backlinkSlugs("maps/sect-note")).toContain("src/wants-sect");
+});
+
+test("a root-relative markdown link resolves instead of being broken forever", async () => {
+  // Docusaurus/mkdocs write [Note](/maps/root-note.md). Keeping the leading '/'
+  // left an empty first segment, which invalidSlug forbids on every page — so
+  // the ref was unsatisfiable by construction and sat in list_broken_links.
+  await store.putPage({ slug: "maps/root-note", body: "# Root Note" });
+  const back = await store.putPage({
+    slug: "src/root-back",
+    body: "see [Note](/maps/root-note.md)",
+  });
+  expect(back.pending).toEqual([]);
+  expect(await backlinkSlugs("maps/root-note")).toContain("src/root-back");
+  // ...forward too, and it is still an ADDRESS: a same-named page elsewhere
+  // cannot take it while it waits.
+  await store.putPage({ slug: "src/root-fwd", body: "see [Later](/maps/root-late.md)" });
+  await store.putPage({ slug: "zz/root-late", body: "# Decoy Late" });
+  expect(await backlinkSlugs("zz/root-late")).not.toContain("src/root-fwd");
+  await store.putPage({ slug: "maps/root-late", body: "# Later" });
+  expect(await backlinkSlugs("maps/root-late")).toContain("src/root-fwd");
+  expect((await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug)).not.toContain(
+    "src/root-fwd",
+  );
+});
+
+test("a path-shaped related_id is an address too", async () => {
+  // The other ref loop in putPage. Same resolveRef, so the same rule — this
+  // pins that the frontmatter door was not left open.
+  await store.putPage({
+    slug: "src/rel-wants",
+    body: "no body links",
+    frontmatter: { related_ids: ["deep/rel-target"] },
+  });
+  await store.putPage({ slug: "zz/rel-decoy", body: "# deep/rel-target" });
+  expect(await backlinkSlugs("zz/rel-decoy")).not.toContain("src/rel-wants");
+  await store.putPage({ slug: "deep/rel-target", body: "the real one" });
+  expect(await backlinkSlugs("deep/rel-target")).toContain("src/rel-wants");
+});
+
+test("a relative link resolves against the page it is written on", async () => {
+  // `./` and `../` mean what they mean in Markdown: relative to the REFERRING
+  // file's folder. They used to be stripped, which read as "../Maps/Note names
+  // the same page as Maps/Note" — harmless only while ref matching fell back to
+  // bare filenames. Once a ref containing a separator became an ADDRESS naming
+  // exactly one page, flattening turned every relative link into either a wrong
+  // edge or a permanently broken one. A vault imported under a folder prefix
+  // (the `/import` default) is where it bites: `../Maps/Reading MOC.md` written
+  // in `v/notes/x` means `v/maps/reading-moc`, and stripping the prefix made it
+  // mean a top-level `maps/reading-moc` that does not exist.
+  await store.putPage({ slug: "vault/maps/rel-target", body: "# Rel Target" });
+  await store.putPage({ slug: "vault/notes/rel-sibling", body: "# Sibling" });
+
+  // ../ climbs out of notes/ and back down into maps/
+  const up = await store.putPage({
+    slug: "vault/notes/rel-up",
+    body: "see [t](../maps/Rel Target.md)",
+  });
+  expect(up.pending).toEqual([]);
+  expect(await backlinkSlugs("vault/maps/rel-target")).toContain("vault/notes/rel-up");
+
+  // ./ stays in the referrer's own folder
+  const here = await store.putPage({
+    slug: "vault/notes/rel-here",
+    body: "see [s](./rel-sibling.md)",
+  });
+  expect(here.pending).toEqual([]);
+  expect(await backlinkSlugs("vault/notes/rel-sibling")).toContain("vault/notes/rel-here");
+
+  // ...and a relative link that climbs past the root resolves to what is left,
+  // rather than throwing or silently naming the wrong page.
+  const past = await store.putPage({
+    slug: "vault/notes/rel-past",
+    body: "see [t](../../vault/maps/Rel Target.md)",
+  });
+  expect(past.pending).toEqual([]);
+  expect(await backlinkSlugs("vault/maps/rel-target")).toContain("vault/notes/rel-past");
+});
+
+test("one address, many spellings — and never two pages", async () => {
+  // Everything foldPath is for: separators, case, fullwidth (a CJK IME types
+  // ＭＡＰＳ), and the ../ prefix Logseq and Foam emit. All name ONE page.
+  // `./maps/…` is NOT in this list and must not be: written on `src/spell-N` it
+  // resolves against that page's own folder and names `src/maps/…`, a different
+  // page. See the relative-resolution test below.
+  await store.putPage({ slug: "maps/spelled-note", body: "# Spelled" });
+  const refs = [
+    "[[Maps/Spelled Note]]",
+    "[[maps/spelled_note]]",
+    "[[ＭＡＰＳ/Spelled Note]]",
+    "[x](../maps/Spelled Note.md)",
+  ];
+  for (let i = 0; i < refs.length; i++) {
+    const res = await store.putPage({ slug: `src/spell-${i}`, body: `see ${refs[i]}` });
+    expect(res.pending, refs[i]).toEqual([]);
+    expect(await backlinkSlugs("maps/spelled-note"), refs[i]).toContain(`src/spell-${i}`);
+  }
+  // A resolved ref is never ALSO reported broken: landing and parking are the
+  // two branches of one decision inside one transaction.
+  const broken = (await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug);
+  for (let i = 0; i < refs.length; i++) expect(broken).not.toContain(`src/spell-${i}`);
+  // ...and it lands on exactly one page: one declared edge out of each referrer.
+  const edges = await pg.query(
+    `SELECT count(*)::int AS n FROM edges e JOIN pages p ON p.id = e.from_page_id
+     WHERE p.slug LIKE 'src/spell-%' AND e.lane = 'declared'`,
+  );
+  expect(Number((edges as { rows: { n: number }[] }).rows[0].n)).toBe(refs.length);
+});
+
+test("two pages sharing a basename: an address picks its own, a bare name is a name", async () => {
+  // Both refs are parked, and the page that is NOT wanted is written first.
+  await store.putPage({ slug: "src/addr-x", body: "[[alpha/twin-note]]" });
+  await store.putPage({ slug: "src/addr-y", body: "[[beta/twin-note]]" });
+  await store.putPage({ slug: "beta/twin-note", body: "# Beta Twin" });
+  expect(await backlinkSlugs("beta/twin-note")).not.toContain("src/addr-x");
+  await store.putPage({ slug: "alpha/twin-note", body: "# Alpha Twin" });
+  expect(await backlinkSlugs("alpha/twin-note")).toEqual(expect.arrayContaining(["src/addr-x"]));
+  expect(await backlinkSlugs("alpha/twin-note")).not.toContain("src/addr-y");
+  expect(await backlinkSlugs("beta/twin-note")).toContain("src/addr-y");
+  // A bare name asserts NO location, so it is genuinely ambiguous input; the
+  // store answers deterministically (shortest slug, then alphabetically) rather
+  // than by write order. beta/twin-note is shorter than alpha/twin-note.
+  const bare = await store.putPage({ slug: "src/addr-bare", body: "[[Twin Note]]" });
+  expect(bare.pending).toEqual([]);
+  expect(await backlinkSlugs("beta/twin-note")).toContain("src/addr-bare");
+  expect(await backlinkSlugs("alpha/twin-note")).not.toContain("src/addr-bare");
+});
+
+test("an address survives its target being deleted and recreated", async () => {
+  await store.putPage({ slug: "src/wants-cycle", body: "points at [[cycle/target]]" });
+  await store.putPage({ slug: "cycle/target", body: "v1" });
+  expect(await backlinkSlugs("cycle/target")).toContain("src/wants-cycle");
+  await store.deletePage({ slug: "cycle/target" });
+  // Re-put the referrer while the target is gone: the ref re-parks.
+  const gone = await store.putPage({
+    slug: "src/wants-cycle",
+    body: "points at [[cycle/target]]!",
+  });
+  expect(gone.pending).toEqual(["cycle/target"]);
+  // A same-named page cannot move in on the parked ref while the address is
+  // vacant-but-soft-deleted...
+  await store.putPage({ slug: "zz/target", body: "# Decoy Target" });
+  expect(await backlinkSlugs("zz/target")).not.toContain("src/wants-cycle");
+  // ...and restore_page, which writes through putPage, lands it.
+  await store.restorePage({ slug: "cycle/target" });
+  expect(await backlinkSlugs("cycle/target")).toContain("src/wants-cycle");
+});
+
+test("an address is found past the basename arm's candidate cap", async () => {
+  // The cap is 25, ordered shortest-slug-first, and the tie-break has nothing to
+  // do with which page is AT the address — so a vault with many same-named files
+  // (exactly when path-shaped refs get written) could starve the real target out
+  // of the candidate list and park a ref that is perfectly resolvable.
+  for (let i = 0; i < 26; i++) {
+    await store.putPage({ slug: `d${String(i).padStart(2, "0")}/my-note`, body: `decoy ${i}` });
+  }
+  await store.putPage({ slug: "src/wants-capped", body: "see [[Deeper/Dir/My Note]]" });
+  await store.putPage({ slug: "deeper/dir/my-note", body: "# The Real One" });
+  expect(await backlinkSlugs("deeper/dir/my-note")).toContain("src/wants-capped");
+  expect((await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug)).not.toContain(
+    "src/wants-capped",
+  );
+  // ...and none of the 26 decoys took it.
+  const stolen = await pg.query(
+    `SELECT pt.slug FROM edges e
+     JOIN pages pf ON pf.id = e.from_page_id JOIN pages pt ON pt.id = e.to_page_id
+     WHERE pf.slug = 'src/wants-capped'`,
+  );
+  expect((stolen as { rows: { slug: string }[] }).rows.map((r) => r.slug)).toEqual([
+    "deeper/dir/my-note",
+  ]);
+});
+
+test("the mention sweep cannot consume or steal a parked address", async () => {
+  // The one edge writer that does NOT go through resolveRef. It must stay unable
+  // to reach the bad state: its edges are in the 'auto' lane, it never touches
+  // pending_links, and clear_auto_edges undoes all of it — so a parked address is
+  // still parked, still reported, and still lands on the right page afterwards.
+  await store.putPage({ slug: "src/wants-swept", body: "waits for [[people/sweep-target]]" });
+  await store.putPage({ slug: "people/sweep-decoy", body: "# Sweep Target" });
+  await store.sweepMentions({ limit: 200 });
+  expect(await backlinkSlugs("people/sweep-decoy")).not.toContain("src/wants-swept");
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "src/wants-swept",
+    ref: "people/sweep-target",
+  });
+  await store.putPage({ slug: "people/sweep-target", body: "# The Real Sweep Target" });
+  expect(await backlinkSlugs("people/sweep-target")).toContain("src/wants-swept");
+  await store.clearAutoEdges();
+  expect(await backlinkSlugs("people/sweep-target")).toContain("src/wants-swept");
+});
+
+test("percent-encoded and NFD path refs address the same page", async () => {
+  // Two spellings a real export produces that no test covered: %20 in a Markdown
+  // link target, and a macOS NFD path segment typed composed in the ref.
+  const nfd = "maps/café-note"; // café-note, decomposed the way macOS stores it
+  await store.putPage({ slug: nfd, body: "# Unrelated Heading" });
+  await store.putPage({ slug: "maps/enc-note", body: "# Another Unrelated Heading" });
+  const a = await store.putPage({ slug: "src/enc-ref", body: "[x](Maps/Enc%20Note.md)" });
+  const b = await store.putPage({ slug: "src/nfd-ref", body: "see [[Maps/Café Note]]" });
+  expect(a.pending).toEqual([]);
+  expect(b.pending).toEqual([]);
+  expect(await backlinkSlugs("maps/enc-note")).toContain("src/enc-ref");
+  expect(await backlinkSlugs(nfd)).toContain("src/nfd-ref");
+});
+
+test("two slugs folding to ONE address: the literal spelling still wins its own page", async () => {
+  // The boundary of what the folding can tell apart, pinned so it is a known
+  // property rather than a surprise: separators and case fold away, so
+  // maps/dup-note and maps/dup_note are ONE address. The canonical-spelling probe
+  // must not let that steal a ref that names an existing slug exactly — an exact
+  // slug is the strongest evidence there is, and it stays the most specific arm.
+  await store.putPage({ slug: "maps/dup_note", body: "# First Written" });
+  await store.putPage({ slug: "maps/dup-note", body: "# Second Written" });
+  const lands = async (ref: string, i: number) => {
+    await store.putPage({ slug: `src/dup-${i}`, body: `see [[${ref}]]` });
+    const rows = await pg.query(
+      `SELECT pt.slug FROM edges e JOIN pages pf ON pf.id = e.from_page_id
+       JOIN pages pt ON pt.id = e.to_page_id WHERE pf.slug = $1`,
+      [`src/dup-${i}`],
+    );
+    return (rows as { rows: { slug: string }[] }).rows.map((r) => r.slug);
+  };
+  expect(await lands("maps/dup_note", 0)).toEqual(["maps/dup_note"]);
+  expect(await lands("maps/dup-note", 1)).toEqual(["maps/dup-note"]);
+  // Spelled as neither, it lands on the canonical (hyphenated) page — one page,
+  // decided by the folding, not by which of the two was written first.
+  expect(await lands("Maps/Dup Note", 2)).toEqual(["maps/dup-note"]);
+});
+
+test("a slug whose name merely FOLDS into a separator cannot take an address", async () => {
+  // The sideways step Unicode offers: NFKC turns a fullwidth solidus into '/', so
+  // the single-segment page "uni／steal" folds to the two-segment address
+  // "uni/steal". It is not at that address — it is one top-level page with an odd
+  // name — and it must not be able to consume a ref that names the directory.
+  // Its H1 is the ref, so the title arm really does hand this row to the rule —
+  // the rule has to be what rejects it, not the query happening to miss it.
+  await store.putPage({ slug: "src/wants-uni", body: "waits for [[uni/steal]]" });
+  await store.putPage({ slug: "uni／steal", body: "# uni/steal" });
+  expect(await backlinkSlugs("uni／steal")).not.toContain("src/wants-uni");
+  await store.putPage({ slug: "uni/steal", body: "# The Real One" });
+  expect(await backlinkSlugs("uni/steal")).toContain("src/wants-uni");
 });

@@ -4,8 +4,9 @@
 
 import type { Db } from "./db";
 import { isMemorySlug } from "./memory/projection";
-import { isScopedProjection } from "./memory/projection";
+import { findSecretsInPayload } from "./memory/safety";
 import { MEMORY_TOOLS } from "./memory/tools";
+import { extractRefs, normalizeRef } from "./pipeline";
 import { type PageHit, type Store, normalizePageSlug } from "./store";
 
 export type Access = "read" | "write";
@@ -22,11 +23,11 @@ export interface ToolDef {
   access: Access;
   description: string;
   inputSchema: Record<string, unknown>;
-  // Args that NAME a page and must never name one inside the reserved memory/
-  // namespace: arg -> the clause its refusal reads with. DECLARED here and
-  // enforced once in tools/call (refuseReserved), not written into each handler:
-  // the guards this replaces were per-handler, each read its own spelling of the
-  // slug, and one leading space walked past three of them at once.
+  // WORDING ONLY. Every argument of every WRITE tool is refused when it names a
+  // page in the reserved memory/ namespace (refuseReserved); this map just picks
+  // the sentence for the args where the generic one would mislead. It does NOT
+  // pick which args are checked — an opt-in list is what left delete_page
+  // unguarded, since a list only guards what someone remembered to add.
   reserved?: Record<string, string>;
   handler: (ctx: BrainCtx, args: Record<string, unknown>) => Promise<unknown>;
 }
@@ -158,13 +159,19 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "write",
     description:
       "Soft-delete a page by slug. The body and its links are kept, so restore_page can bring it " +
-      "back. A memory/ projection page is derived, so deleting one only clears it until the next " +
-      "maintenance pass rebuilds it — revoke the memory with forget instead.",
+      "back. A memory/ projection page belongs to its memory: revoke it with forget, which is " +
+      "scoped, instead.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    // No `reserved` on purpose, and the one deliberate exemption: the page is a
-    // derived artifact, so deleting a projection is a cache eviction, not a
-    // revocation — the next maintenance pass rebuilds it (pinned in
-    // tests/brain-mcp.test.ts, which also holds the exemption list).
+    // The old exemption ("a projection is derived, so deleting it is only a cache
+    // eviction the sweep undoes") ignored who was holding the eviction lever: a
+    // caller who knows nothing but a memory id could take that memory out of its
+    // owner's retrieval until the next pass, and was answered 'not_found' — the
+    // same text as a miss — because the filter ran on the RESULT, after the row
+    // had already been updated. forget is the revocation path and it checks scope
+    // BEFORE it acts; this door now refuses instead of racing a sweep.
+    reserved: {
+      slug: "is a generated memory projection: revoke it with forget, not delete_page",
+    },
     handler: (c, a) => c.store.deletePage({ slug: normalizePageSlug(a.slug) }),
   },
   rename_page: {
@@ -262,25 +269,111 @@ export function clampArgs(args: unknown): Record<string, unknown> {
   return out;
 }
 
-// The reserved memory/ namespace, refused at the door on EXACTLY the string the
-// store will persist — before a database connection is even opened, since the
-// decision needs nothing from it. ONE loop over the tool's own declaration is the
-// point: the guards this replaces lived in three handlers, each read
-// String(a.slug) while the store read args.slug.trim(), and so
-// put_page{slug:" memory/vault/<id>"} was not memory/-prefixed to any of them and
-// was written as memory/vault/<id> anyway. A new write tool cannot re-open that by
-// forgetting to copy an `if` — it either declares `reserved` or the registry test
-// in tests/brain-mcp.test.ts fails.
-// This is not a second source of truth: the rule is isMemorySlug (projection.ts)
-// over normalizePageSlug (store.ts), the same two functions the store checks with.
-// It is the outer door, and it is load-bearing where the store is deliberately
-// permissive — renaming a projection OUT of memory/, and restoring the page of a
-// still-committed memory.
-function refuseReserved(def: ToolDef, args: Record<string, unknown>): void {
-  for (const [arg, clause] of Object.entries(def.reserved ?? {})) {
-    const slug = normalizePageSlug(args[arg]);
-    if (isMemorySlug(slug)) throw new Error(`slug '${slug}' ${clause}`);
+// The form the store MATCHES a ref in: normalizeRef (pipeline.ts's "nothing may
+// compare refs without going through this" — NFKC, unquoted, case-folded) with
+// the './' and '../' segments dropped, because the store's own foldPath discards
+// those before it compares. Found by attacking this door: every other spelling of
+// [[memory/vault/<id>]] was refused and [[../memory/vault/<id>]] was not, yet it
+// resolves to exactly the same page.
+function refForm(s: string): string {
+  return normalizeRef(s)
+    .split("/")
+    .filter((seg) => seg !== "." && seg !== "..")
+    .join("/");
+}
+
+// Does this value NAME a page in the reserved memory/ namespace — anywhere
+// inside it, at any depth, in a key or a value? Read every way the STORE reads a
+// name, using the store's own readers rather than a second spelling:
+//   - as a slug, through normalizePageSlug: the exact string a row is written
+//     from (which is why " memory/vault/x" is not a way in);
+//   - as a ref, through refForm above (so case, quoting, NFKC and ../ are not);
+//   - as TEXT THAT CONTAINS refs, through extractRefs: the very function putPage
+//     calls to turn a body and its frontmatter into edges, so a [[wikilink]] or a
+//     Markdown link is caught by the same parser that would have minted the edge
+//     — and a wikilink inside a code fence, which that parser masks, correctly
+//     names nothing here because it names nothing there either.
+// The last arm is the one a declared-arg check could never have: the door read
+// `slug`, so put_page{body:'x [[memory/scoped/<id>]]'} linked into the namespace
+// and reported back whether the ref resolved — an existence oracle on a raw id.
+function reservedNameIn(value: unknown): string | null {
+  if (typeof value === "string") {
+    for (const name of [normalizePageSlug(value), refForm(value)]) {
+      if (isMemorySlug(name)) return name;
+    }
+    for (const ref of extractRefs(value)) {
+      if (isMemorySlug(refForm(ref))) return refForm(ref);
+    }
+    return null;
   }
+  if (Array.isArray(value)) {
+    for (const v of value) {
+      const found = reservedNameIn(v);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) {
+      const found = reservedNameIn(k) ?? reservedNameIn(v);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+// The reserved memory/ namespace, refused at the door — before a database
+// connection is even opened, since the decision needs nothing from one, and
+// before the handler, because a rule that runs after the write is not a rule
+// (that ordering is exactly how delete_page mutated the row and then answered
+// 'not_found').
+//
+// DEFAULT DENY over every argument of every write tool, not an opt-in list of
+// args. The list shape has now failed twice for the same reason: it guards the
+// entries someone remembered, and the next caller uses the entry they did not —
+// `slug` was guarded while `body`, `frontmatter.related_ids`, `frontmatter
+// .aliases` and delete_page's own slug were not. There is nothing to forget to
+// add now: a tool is either a READ, or it may not name a reserved page anywhere.
+// Reads may name one on purpose — the console opens a vault memory's page by slug.
+//
+// Not a second source of truth: the rule is isMemorySlug (projection.ts) over the
+// store's own normalizers. It is the outer door, load-bearing where the store is
+// deliberately permissive — renaming a projection OUT of memory/, restoring the
+// page of a still-committed memory, and deleting a projection the store treats as
+// an ordinary page.
+function refuseReserved(def: ToolDef, args: Record<string, unknown>): void {
+  if (def.access !== "write") return;
+  const seen = new Set<string>();
+  // Declared args first, so a call that abuses two ends is named by the worse one
+  // (rename_page's `slug` before its `to`) whatever order the JSON arrived in.
+  for (const arg of [...Object.keys(def.reserved ?? {}), ...Object.keys(args)]) {
+    if (seen.has(arg)) continue;
+    seen.add(arg);
+    const named = reservedNameIn(args[arg]);
+    if (named !== null) throw new Error(`slug '${named}' ${def.reserved?.[arg] ?? RESERVED}`);
+  }
+}
+
+// No credential may enter this system through ANY field of ANY call.
+//
+// The per-field gate has now been defeated three times with one move: it was
+// wired to `content`, then to `structured_value`, then to `memory_key`, and the
+// credential simply moved to thread_id / actor_id / trace_id / idempotency_key /
+// memory_revisions.reason. Every one of those is TEXT in ddl.ts and every one was
+// reached by a handler that had already appended an immutable event before
+// anything was screened — so the detector fired, the write was "rejected", and
+// the secret was in the log anyway. There is no list of fields to complete here;
+// there is one place every agent-supplied byte arrives, and this is it.
+//
+// REFUSE, never rewrite. At the dispatcher there is no way to know which field is
+// safe to mangle, and safety.ts's own note says why partial rewriting has no
+// correct form: a detector matches a marker, not the extent of a secret. Only the
+// finding's KIND is reported — the value is never echoed back into a log line.
+function secretRefusal(params: unknown): string | null {
+  const findings = findSecretsInPayload(params);
+  if (!findings.length) return null;
+  const kinds = findings.map((f) => f.kind).join(", ");
+  return `refused: request contains ${kinds} — credentials are never accepted as input`;
 }
 
 export interface RpcResult {
@@ -293,51 +386,37 @@ export interface RpcResult {
 // MCP tool results with isError:true — not JSON-RPC errors — matching what
 // lore and MCP clients expect. The store is fetched lazily so handshake
 // methods (initialize/tools/list/ping) never touch the database.
-// Which door the call came through. The page surface has no per-agent principal
-// — one shared bearer serves every agent — so a scope predicate on page reads has
-// nothing to filter against. What the two doors DO differ on is who is behind
-// them: `owner` is the authenticated human's own console (/api/call, viewer
-// session), `agents` is the shared brain bearer. Thread- and agent-scoped
-// memories are the owner's to browse and NOT something an agent should reach by
-// searching the shared graph, which is exactly the leak that made the extraction
-// scope fix cosmetic: the memory row was correctly thread-scoped while search,
-// list_pages{kind:"memory"}, get_page, get_recent_salience and find_orphans all
-// handed the same content back to anyone.
-export type Surface = "owner" | "agents";
-
-// A result may name a page as `slug`, or as the `from_slug`/`to_slug` of a graph
-// edge, at any depth. Anything naming a scoped projection is dropped from a list
-// and turns a direct read into the literal `not_found:` string lore matches on —
-// so an agent cannot even learn that another thread's memory exists, which is the
-// same rule memory/tools.ts already enforces on the memory tools.
-const SLUG_FIELDS = ["slug", "from_slug", "to_slug"] as const;
-
-function namesScoped(v: unknown): boolean {
-  if (!v || typeof v !== "object") return false;
-  const o = v as Record<string, unknown>;
-  return SLUG_FIELDS.some((f) => typeof o[f] === "string" && isScopedProjection(o[f] as string));
-}
-
-function hideScoped(value: unknown): unknown {
-  if (Array.isArray(value)) return value.filter((v) => !namesScoped(v)).map(hideScoped);
-  if (!value || typeof value !== "object") return value;
-  if (namesScoped(value)) {
-    // Direct read of a scoped page: indistinguishable from one that never existed.
-    throw new Error(`not_found: ${(value as { slug?: string }).slug ?? "page"}`);
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, hideScoped(v)]),
-  );
-}
-
+//
+// There is deliberately NO result filter here any more. The `hideScoped` pass
+// that used to sit on the way out was a filter over content that had already
+// been projected into the shared page/FTS/edge space, and every hole in it was a
+// consequence of leaking first and hiding after: it threw not_found naming the
+// REAL page's slug (a substring oracle over the very content it was hiding, plus
+// the memory's uuid), it dropped array elements at one depth and threw at
+// another (so one append_event payload poisoned an immutable thread forever),
+// and page_count and the rrf denominator still counted what it had removed.
+// projection.ts no longer puts thread- and agent-scoped memories into that space
+// at all, and recall.ts reads memory_items directly, so there is nothing on the
+// page surface left to hide — and no filter left to have holes.
+//
+// The rule kept from it, applied to every error path in this file: an error
+// message must never echo a value the caller did not supply. The refusals below
+// quote the caller's own tool name, method, and slug, and the secret refusal
+// quotes only the KIND of what it found.
 export async function handleRpc(
   getCtx: () => Promise<BrainCtx>,
   access: Access,
   method: string,
   params: Record<string, unknown> | undefined,
-  surface: Surface = "agents",
 ): Promise<RpcResult> {
   if (method?.startsWith("notifications/")) return { notification: true };
+  // ONE screen, over the WHOLE params object, for EVERY method — above the tool
+  // lookup, above the access gate, above any connection. Only the notification
+  // arm is higher, and that one is dropped whole: no handler, no row, nothing to
+  // refuse. -32602 rather than an isError tool result because no tool ran; the
+  // access gate below already refuses this way.
+  const secrets = secretRefusal(params);
+  if (secrets) return { error: { code: -32602, message: secrets } };
   switch (method) {
     case "initialize":
       return {
@@ -371,25 +450,16 @@ export async function handleRpc(
         return { error: { code: -32602, message: `tool '${name}' requires write access` } };
       }
       try {
+        // Screened and decided on the SAME object the handler is about to read:
+        // clampArgs' output, not the raw params, so there is no second spelling
+        // between the door and the write.
         const args = clampArgs(params?.arguments);
-        // Every tools/call passes here, so this is the one place the namespace is
-        // decided — and the handler below reads the same normalizePageSlug value.
         refuseReserved(def, args);
         const ctx = await getCtx();
         const value = await def.handler(ctx, args);
-        // Filtered in the DISPATCHER, not in each handler: every tools/call
-        // passes here, so a page tool added later is safe by default. Not in
-        // store.ts either — recall generates its candidates with store.search,
-        // so a store-level filter would blind recall exactly like not projecting
-        // at all.
         return {
           result: {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(surface === "owner" ? value : hideScoped(value)),
-              },
-            ],
+            content: [{ type: "text", text: JSON.stringify(value) }],
             isError: false,
           },
         };

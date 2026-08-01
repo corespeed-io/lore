@@ -54,16 +54,16 @@ export async function callLocalTool(
   args: object,
 ): Promise<{ isError: boolean; text: string }> {
   const { handleRpc } = await import("./mcp");
-  // "owner": this path is the authenticated human's own console, so their
-  // thread- and agent-scoped memories are theirs to browse. /api/mcp passes
-  // "agents" and does not get them.
-  const rpc = await handleRpc(
-    getBrainCtx,
-    "read",
-    "tools/call",
-    { name: tool, arguments: args as Record<string, unknown> },
-    "owner",
-  );
+  // No per-surface argument. The console used to be handed an unfiltered view
+  // because the dispatcher was filtering scoped content back out of results for
+  // everyone else; scoped memories are no longer projected into the page space at
+  // all, so both doors see the same pages and neither needs a switch. The console
+  // is still narrower than /api/mcp by the thing that actually decides: it passes
+  // "read", so no write tool is reachable from a viewer session.
+  const rpc = await handleRpc(getBrainCtx, "read", "tools/call", {
+    name: tool,
+    arguments: args as Record<string, unknown>,
+  });
   if (rpc.error) throw new Error(rpc.error.message);
   const result = rpc.result as { content: { text: string }[]; isError: boolean };
   return { isError: Boolean(result.isError), text: result.content[0]?.text ?? "" };

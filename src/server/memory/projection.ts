@@ -1,56 +1,51 @@
 // Layer 4: the page projection.
 //
-// A committed memory is projected into the existing pages/edges/FTS system so it
-// is browseable and searchable with everything else. The page is a DERIVED,
-// REBUILDABLE artifact — the canonical record stays in memory_items, and a
-// failed or deleted projection loses nothing. That is why projection_status is a
-// field on the memory rather than an exception: canonical commit succeeds even
-// when projection does not.
+// ONE rule. Everything in this file is its enforcement:
 //
-// Reserved slug namespace, so an imported user note can never collide with (or be
-// overwritten by) a generated memory page — and, in the same string, the ONE mark
-// that says whether an unscoped reader may see the page at all:
-//   memory/vault/<memory-id>    vault scope: shared with every reader, by definition
-//   memory/scoped/<memory-id>   thread/agent scope: NOT shared — see below
+//   A page under memory/ exists IF AND ONLY IF a committed, VAULT-scoped memory
+//   owns that exact address.
 //
-// SCOPE, and the half of it this file cannot close on its own:
+// Why the biconditional and not a filter. Two rounds tried the other shape: put
+// every memory's content in the shared page graph and hide the private ones on
+// the way out. pages/edges/FTS carry no principal — /api/mcp authenticates one
+// shared BRAIN_READ_TOKEN for every agent and every thread — so hiding meant a
+// predicate applied at read time, and a read-time predicate over content that IS
+// there loses to the first path nobody listed: a fuzzy-title substring oracle,
+// score arithmetic, page_count arithmetic, an unmigrated database, a tool that
+// carries no slug. `vault` is the only scope that MEANS "every reader", so it is
+// the only scope whose content is written to the shared graph at all. Thread- and
+// agent-scoped memories are never projected; there is nothing to hide, so there
+// is no filter to have a bug in. They are retrieved from canonical memory instead
+// (recall.ts's canonical arm), which is where their scope is checked anyway.
 //
-// pages/edges/FTS carry no principal. `/api/mcp` authenticates ONE shared
-// BRAIN_READ_TOKEN for every agent and every thread (auth-bearer.ts), so a page is
-// readable by all of them or by none — and `vault` is the only memory scope that
-// MEANS all of them.
+// The rule is enforced at ONE decision, `projectionSlug()`, and reconciled from
+// BOTH ends:
+//   - memory -> page: runProjections' due query selects every memory whose page
+//     state disagrees with what projectionSlug says it may own.
+//   - page -> memory: sweepMemoryNamespace walks the pages table itself, so a
+//     page written under ANY slug shape this codebase ever used, by a release
+//     that predates this rule or by a hand-repair in psql, is still judged. A
+//     sweep that can only see rows some bookkeeping column points at cannot
+//     migrate a database; this one enumerates the pages, so nothing about a
+//     memory row can hide a page from it.
 //
-// A thread- or agent-scoped memory still has to be FINDABLE, and recall's
-// candidate generation IS store.search over these pages (recall.ts resolves each
-// hit back to memory_items and filters scope THERE, which is why recall is scoped
-// and a raw page read is not). store.search returns the evidence it matched — the
-// title, the best-matching chunk, or the body's first 300 chars — so "findable by
-// recall" and "readable by an unscoped page read" are the same property. Measured,
-// not assumed: retract a thread memory's page and recall of that memory FROM ITS
-// OWN THREAD drops from 1 hit to 0.
-//
-// So the boundary belongs at the READER, where the credential is, not at the
-// record: a page tool must not RETURN a scoped projection. That is one predicate —
-// isScopedProjection() below, kept in the same file as the writer of the slug so
-// the two halves cannot drift — applied once in mcp.ts's `tools/call` dispatcher,
-// the single place every page read passes and the only one that knows the caller.
-// ponytail: what this file DOES remove is the attribution — which scope holder
-// owns a memory never reaches a page (not the slug, not the body, not the
-// frontmatter), because no retrieval path consumes it. It does not remove the
-// content, because that removes recall. CEILING: until that dispatcher filter
-// lands, a BRAIN_READ_TOKEN holder can still read a scoped memory's value by
-// naming it in a search or fetching its page; it just cannot learn whose it is.
+// store.ts asks projectionSlug the same question before it will write anything
+// under memory/ (projectionOwner), so narrowing this function narrowed the write
+// door in the same edit: no memory outside vault scope owns any address, so no
+// put_page, /api/import or restore_page can create one.
 
 import type { Db } from "../db";
 import type { Store } from "../store";
-import type { MemoryItem } from "./items";
+import type { MemoryItem, ScopeType } from "./items";
 import { rowToMemory } from "./items";
 
 export const MEMORY_SLUG_PREFIX = "memory/";
-// The namespace whose pages are not shared. A SLUG prefix on purpose: the slug is
-// the one field every page read already returns, so the reader-side filter needs
-// nothing the caller does not already hold.
-export const SCOPED_SLUG_PREFIX = `${MEMORY_SLUG_PREFIX}scoped/`;
+
+// The one scope a principal-less page can honour. Every "shared" answer in this
+// file — the JS predicates AND the SQL mirrors below — is derived from this
+// constant, so they cannot drift onto different answers.
+const SHARED_SCOPE: ScopeType = "vault";
+export const SHARED_SLUG_PREFIX = `${MEMORY_SLUG_PREFIX}${SHARED_SCOPE}/`;
 
 // A user page can never live under this prefix: the import path and put_page both
 // go through here to check.
@@ -61,24 +56,37 @@ export function isMemorySlug(slug: string): boolean {
 // `vault` is the only scope a principal-less page can honour, so it is the only
 // one whose content belongs in the shared graph. One place decides it.
 export function isSharedScope(memory: Pick<MemoryItem, "scope_type">): boolean {
-  return memory.scope_type === "vault";
+  return memory.scope_type === SHARED_SCOPE;
 }
 
-// The page belongs to a memory the shared read surface must not hand back.
+// THE CHOKEPOINT. Which page this memory owns — and `null` means it owns none,
+// ever. Every write path (projectMemory here, putPage/restorePage in store.ts via
+// projectionOwner) and every removal path (verdictFor below) asks this one
+// function, so "may this content be in the shared graph?" has exactly one answer
+// in exactly one place.
+//
+// Stable for the scope that does get a page: the same memory always projects to
+// the same slug, which is what makes a retry an update instead of a duplicate.
+export function projectionSlug(memory: Pick<MemoryItem, "id" | "scope_type">): string | null {
+  return isSharedScope(memory) ? `${SHARED_SLUG_PREFIX}${memory.id}` : null;
+}
+
+// Belt-and-braces for the shared read surface (mcp.ts's dispatcher) while a
+// database is still mid-migration. Deliberately broader than the one namespace it
+// replaced: ANY memory/ address that is not a vault projection is content the
+// shared surface must not hand back, whatever slug shape wrote it.
 export function isScopedProjection(slug: string): boolean {
-  return slug.startsWith(SCOPED_SLUG_PREFIX);
+  return isMemorySlug(slug) && !slug.startsWith(SHARED_SLUG_PREFIX);
 }
 
-// Stable: the same memory always projects to the same slug, which is what makes
-// a retry an update instead of a duplicate. The scope ID is deliberately absent —
-// it was owner attribution that every page read handed back, and no retrieval
-// path consumes it. Dropping it also drops the sanitizer that folded two
-// different scope ids ("t/A", "t-A") onto one segment.
-export function projectionSlug(memory: MemoryItem): string {
-  return isSharedScope(memory)
-    ? `${MEMORY_SLUG_PREFIX}vault/${memory.id}`
-    : `${SCOPED_SLUG_PREFIX}${memory.id}`;
-}
+// --- SQL mirrors of the two predicates above ---------------------------------
+//
+// Interpolated from the SAME constant, and used ONLY as candidate filters: every
+// row they select is re-judged in JS by projectionSlug/verdictFor before anything
+// is written or deleted. So the worst a drift here can do is delay a repair — it
+// can never authorise a page.
+const ADDRESS_SQL = `(CASE WHEN m.scope_type = '${SHARED_SCOPE}' THEN '${SHARED_SLUG_PREFIX}' || m.id END)`;
+const WANTS_PAGE_SQL = `(m.status = 'committed' AND ${ADDRESS_SQL} IS NOT NULL)`;
 
 function titleFor(memory: MemoryItem): string {
   const key = memory.memory_key ? `${memory.memory_key}: ` : "";
@@ -100,8 +108,8 @@ export function renderProjection(memory: MemoryItem): { body: string; refs: stri
   lines.push(memory.content, "");
   const meta: string[] = [
     `- type: ${memory.memory_type}`,
-    // The scope TYPE is shape, not ownership; the scope ID would name the thread
-    // or agent that owns this memory, and every page read returns this body.
+    // Always `vault` now — only a shared memory is ever rendered. Kept as a line
+    // rather than dropped so an exported page still says what it is.
     `- scope: ${memory.scope_type}`,
     `- status: ${memory.status}`,
     `- effective: ${memory.valid_from}${memory.valid_to ? ` — ${memory.valid_to}` : ""}`,
@@ -123,69 +131,108 @@ export interface ProjectResult {
   error?: string;
 }
 
-// The page this memory OWNS, addressed by the id the memory row already stores.
-// The slug is only where the page started: a page moved off it (a rename from
-// before the namespace guard, or an older database) is invisible to a slug lookup,
-// so retraction would silently skip it and a forgotten memory would keep
-// answering search forever.
-async function ownedPage(
-  db: Db,
-  memory: MemoryItem,
-): Promise<{ slug: string; deleted: boolean } | null> {
-  // Page ids are bigserial, so falsy means "no page recorded" with no ambiguity.
-  if (!memory.projection_page_id) return null;
-  const res = await db.query("SELECT slug, deleted_at FROM pages WHERE id = $1", [
-    memory.projection_page_id,
-  ]);
-  const row = res.rows[0];
-  return row ? { slug: String(row.slug), deleted: row.deleted_at !== null } : null;
+interface PageRow {
+  id: number;
+  slug: string;
+  live: boolean;
 }
 
-// Project one memory. Committed memories get an active page; everything the
-// lifecycle has retired is removed from active search immediately (the canonical
-// row keeps the history, so nothing is lost by deleting the projection).
+// keep    the address is the canonical slug of a committed shared memory
+// retract the page must not be READ (it may still be revived, or it may not be
+//         ours to destroy)
+// purge   the ROW must not exist at all
+type Verdict = "keep" | "retract" | "purge";
+
+// The single question every page is judged by, and the only consumer of
+// projectionSlug's answer besides the writer below. `owner` is the memory the
+// ADDRESS names — resolved from the address, never from who is asking.
+function verdictFor(slug: string, owner: MemoryItem | null): Verdict {
+  // Nothing claims this address. It must not be read (the namespace is reserved,
+  // and no reader can tell it from a projection), but its bytes are not ours to
+  // destroy: a database written before the namespace guard existed could have a
+  // real user note here, and a personal brain does not trade data loss for
+  // tidiness. Same answer for a projection renamed OUT of the namespace, which is
+  // how this branch is reached with a slug that is not under memory/.
+  if (!owner || !slug.endsWith(`/${owner.id}`)) return "retract";
+  // Attributable to a memory that may not own this address — every thread/agent
+  // projection ever written, under every slug shape (memory/thread/<scope>/<id>
+  // from 86abe92, memory/scoped/<id> from 2befdf4), plus a vault page sitting at
+  // a stale address.
+  if (projectionSlug(owner) !== slug) return "purge";
+  return owner.status === "committed" ? "keep" : "retract";
+}
+
+// Carry out one verdict. Retract is soft (the page stays revivable through the
+// same stable slug when its memory re-commits); purge deletes the ROW, because
+// this address may never hold a page and a soft delete would leave private
+// content in pages.body, one forgotten `deleted_at IS NULL` away from every
+// reader. chunks / edges / pending_links cascade, and
+// memory_items.projection_page_id is ON DELETE SET NULL.
+async function applyVerdict(
+  db: Db,
+  store: Store,
+  page: PageRow,
+  verdict: Verdict,
+): Promise<Verdict> {
+  if (verdict === "purge") {
+    await db.query("DELETE FROM pages WHERE id = $1", [page.id]);
+  } else if (verdict === "retract" && page.live) {
+    await store.deletePage({ slug: page.slug });
+  }
+  return verdict;
+}
+
+// Every page this memory could own, by BOTH handles — and neither is a slug
+// SHAPE this release happens to know:
+//   - projection_page_id: the link the projection recorded, shape-independent.
+//   - the last slug segment: every projection slug this codebase has ever written
+//     ends in the memory id. Over-broad on purpose — a page found here is only
+//     ever judged by verdictFor, so a false positive costs a rebuildable
+//     artifact, while a false negative is content that outlives its memory.
+async function pagesOwnedBy(db: Db, memory: MemoryItem): Promise<PageRow[]> {
+  const tail = `/${memory.id}`;
+  const res = await db.query(
+    `SELECT id, slug, (deleted_at IS NULL) AS live FROM pages
+     WHERE id = $1 OR (slug LIKE $2 AND right(slug, $3::int) = $4)`,
+    // Page ids are bigserial, so -1 stands in for "no page recorded" with no
+    // ambiguity and no second query.
+    [memory.projection_page_id ?? -1, `${MEMORY_SLUG_PREFIX}%`, tail.length, tail],
+  );
+  return res.rows.map((r) => ({
+    id: Number(r.id),
+    slug: String(r.slug),
+    live: r.live === true,
+  }));
+}
+
+// Project one memory. A committed VAULT memory gets an active page; everything
+// else — retired, or simply not shared — loses whatever page it has.
 export async function projectMemory(
   db: Db,
   store: Store,
   memory: MemoryItem,
 ): Promise<ProjectResult> {
   const slug = projectionSlug(memory);
-  const active = memory.status === "committed";
+  const active = slug !== null && memory.status === "committed";
 
   try {
-    const owned = await ownedPage(db, memory);
+    // Reconcile every page this memory touches BEFORE writing: two live pages for
+    // one memory is exactly how a stale copy survives the next forget.
+    for (const page of await pagesOwnedBy(db, memory)) {
+      await applyVerdict(db, store, page, verdictFor(page.slug, memory));
+    }
 
     if (!active) {
-      // Superseded / revoked / expired / candidate: must not appear in active
-      // search. Soft delete keeps the row (and its chunks are dropped), and a
-      // later re-commit revives it through the same stable slug.
-      // By id first: that is the page this memory owns wherever it now lives.
-      if (owned && !owned.deleted) await store.deletePage({ slug: owned.slug });
-      // Then by slug, for a memory whose page id was never recorded — a projection
-      // that died between the put and the UPDATE below still left a live page.
-      // This arm knows the CURRENT slug only, which is the whole reason the page id
-      // is the primary handle: a page written under an older slug scheme is
-      // retracted through `owned` above, and — if its id was also lost — only by a
-      // full rebuild (projection_status='pending', the documented recovery).
-      const existing = await db.query(
-        "SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL",
-        [slug],
-      );
-      if (existing.rows.length) await store.deletePage({ slug });
       await db.query(
         "UPDATE memory_items SET projection_status = 'removed', projection_error = NULL, updated_at = now() WHERE id = $1",
         [memory.id],
       );
       return { memoryId: memory.id, slug, status: "removed" };
     }
+    // `active` already proves it; TypeScript needs it said.
+    if (slug === null) throw new Error("unreachable: active projection with no address");
 
     const { body, refs } = renderProjection(memory);
-    // A page that drifted off the canonical slug is retracted, not left live: two
-    // live pages for one memory is exactly how a stale copy survives the next
-    // forget, and the page is derived, so nothing is lost by dropping it.
-    if (owned && !owned.deleted && owned.slug !== slug) {
-      await store.deletePage({ slug: owned.slug });
-    }
     // Revive a soft-deleted projection rather than leaving it hidden: the same
     // slug is reused deliberately, which is what makes a retry idempotent.
     const dead = await db.query("SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NOT NULL", [
@@ -204,8 +251,8 @@ export async function projectMemory(
         memory_key: memory.memory_key,
         scope_type: memory.scope_type,
         // scope_id is NOT written: get_page and /api/export return frontmatter
-        // verbatim, so it was the owning thread/agent id handed to any reader.
-        // recall filters scope on memory_items, so nothing needs it here.
+        // verbatim. It is always the vault here — one instance, nothing to
+        // attribute — but writing it would put the field back on the surface.
         effective_from: memory.valid_from,
         // Declared refs are also surfaced as related_ids so they resolve through
         // the existing declared-edge path.
@@ -231,33 +278,114 @@ export async function projectMemory(
   }
 }
 
-// Drain whatever needs projecting: newly committed memories, and anything the
-// lifecycle retired since its page was written. Bounded and idempotent, so it is
-// safe to call from the maintenance sweep as often as a scheduler likes.
+export interface NamespaceSweep {
+  retracted: number;
+  purged: number;
+  failed: number;
+}
+
+// The page -> memory half of the biconditional, and the migration.
+//
+// Driven by the PAGES table, so it sees every page in the reserved namespace
+// however it got there: written by a release with a different slug scheme, left
+// behind by a projection that died before it recorded its page id, resurrected by
+// `UPDATE pages SET deleted_at = NULL` in psql. That is the whole point — the
+// previous sweep could only see rows a memory row pointed at, so a committed
+// memory with projection_status='ok' and a live page matched no arm and the
+// migration returned [].
+//
+// The candidate filter is the exact negation of "healthy": some memory's canonical
+// ADDRESS is this slug, and the page's liveness already matches that memory's
+// committed-ness. Everything else is looked at. Live pages first, because a
+// retracted page can no longer leak and must never crowd a live one out of the
+// batch.
+async function sweepMemoryNamespace(db: Db, store: Store, limit: number): Promise<NamespaceSweep> {
+  const candidates = await db.query(
+    `SELECT p.id, p.slug, (p.deleted_at IS NULL) AS live
+     FROM pages p
+     WHERE p.slug LIKE $1
+       AND NOT EXISTS (
+         SELECT 1 FROM memory_items m
+         WHERE ${ADDRESS_SQL} = p.slug
+           AND (p.deleted_at IS NULL) = (m.status = 'committed')
+       )
+     ORDER BY (p.deleted_at IS NULL) DESC, p.id
+     LIMIT $2`,
+    // ponytail: prefix LIKE over slug; a seq scan is fine at this size, and the
+    // NOT EXISTS keeps the healthy majority out of the result either way.
+    [`${MEMORY_SLUG_PREFIX}%`, limit],
+  );
+  const out: NamespaceSweep = { retracted: 0, purged: 0, failed: 0 };
+  if (!candidates.rows.length) return out;
+
+  // The address names its owner: the last segment is the memory id under every
+  // slug shape this codebase has written. A miss is not a pass — verdictFor reads
+  // a missing owner as "retract".
+  const ids = candidates.rows.map((r) => String(r.slug).split("/").at(-1) ?? "");
+  const owners = await db.query("SELECT * FROM memory_items WHERE id = ANY($1::text[])", [ids]);
+  const byId = new Map(owners.rows.map((r) => [String(r.id), rowToMemory(r)]));
+
+  for (const row of candidates.rows) {
+    const page: PageRow = { id: Number(row.id), slug: String(row.slug), live: row.live === true };
+    const owner = byId.get(page.slug.split("/").at(-1) ?? "") ?? null;
+    try {
+      // One bad page must not stop the sweep, or a single wedged row keeps every
+      // other leak alive.
+      const verdict = await applyVerdict(db, store, page, verdictFor(page.slug, owner));
+      if (verdict === "purge") out.purged++;
+      else if (verdict === "retract" && page.live) out.retracted++;
+    } catch {
+      out.failed++;
+    }
+  }
+  return out;
+}
+
+// Drain whatever needs projecting: newly committed memories, anything the
+// lifecycle retired since its page was written, and anything sitting in the
+// reserved namespace that no longer belongs there. Bounded and idempotent, so it
+// is safe to call from the maintenance sweep as often as a scheduler likes.
 export async function runProjections(
   db: Db,
   store: Store,
   limit = 50,
-): Promise<{ projected: number; failed: number; results: ProjectResult[] }> {
+): Promise<{
+  projected: number;
+  failed: number;
+  namespace: NamespaceSweep;
+  results: ProjectResult[];
+}> {
   const n = Math.min(Math.max(limit, 1), 200);
-  // Due = the projection does not agree with the memory's status, judged by BOTH
-  // halves of the bookkeeping and by the PAGE itself. The page half is not
-  // redundant: the column is what drifts. A retracted page brought back to life
-  // (an older release whose restore_page/rename_page guards were missing, or a
-  // hand-repair in psql) leaves status='revoked' WITH projection_status='removed',
-  // which matched none of the four status arms this used to have — so the revoked
-  // content answered search forever and `stale_active_projections` never returned
-  // to 0 however many sweeps ran, which is exactly what AGENTS.md promises it does.
-  // Written as one XOR per half rather than as a list of (status, projection_status)
-  // pairs, so the arms mirror the two health counters instead of enumerating states
-  // and missing one again. The mirror image is the arm that was added for
-  // delete_page on a live projection: committed, no live page, so it is rebuilt.
+  // Pages first: purging a page clears memory_items.projection_page_id, so the
+  // due query below picks the same memory up and its bookkeeping converges in
+  // this same pass.
+  const namespace = await sweepMemoryNamespace(db, store, n);
+
+  // Due = the projection does not agree with what this memory may own, judged by
+  // BOTH halves of the bookkeeping and by the PAGE itself, at the ADDRESS rather
+  // than through the recorded link — the link is the thing that goes missing.
+  // Written as one XOR per half against WANTS_PAGE_SQL rather than as a list of
+  // (status, projection_status) pairs, so the arms mirror the invariant instead of
+  // enumerating states and missing one. The arms, in order:
+  //   1. never projected, or the last attempt failed
+  //   2. the bookkeeping column disagrees with what it may own — the arm the
+  //      migration rides in on: a committed THREAD memory with
+  //      projection_status='ok' now disagrees, where before it looked healthy and
+  //      the sweep returned []
+  //   3. the page at its address disagrees (retracted-then-resurrected, or a
+  //      committed memory whose page was evicted by delete_page)
+  //   4. a live page it recorded that is NOT at its address (a projection renamed
+  //      out of the namespace by a release whose rename guard was missing)
   const due = await db.query(
     `SELECT m.* FROM memory_items m
      WHERE m.projection_status IN ('pending', 'failed')
-        OR (m.status = 'committed') <> (m.projection_status = 'ok')
-        OR (m.status = 'committed') <> EXISTS (
-             SELECT 1 FROM pages p WHERE p.id = m.projection_page_id AND p.deleted_at IS NULL)
+        OR ${WANTS_PAGE_SQL} <> (m.projection_status = 'ok')
+        OR ${WANTS_PAGE_SQL} <> EXISTS (
+             SELECT 1 FROM pages p WHERE p.slug = ${ADDRESS_SQL} AND p.deleted_at IS NULL)
+        OR EXISTS (
+             SELECT 1 FROM pages p
+             WHERE p.id = m.projection_page_id AND p.deleted_at IS NULL
+               AND p.slug IS DISTINCT FROM ${ADDRESS_SQL})
      ORDER BY m.updated_at LIMIT $1`,
     [n],
   );
@@ -268,6 +396,7 @@ export async function runProjections(
   return {
     projected: results.filter((r) => r.status === "ok").length,
     failed: results.filter((r) => r.status === "failed").length,
+    namespace,
     results,
   };
 }

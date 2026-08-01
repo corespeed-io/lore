@@ -13,6 +13,15 @@
 //   SUPERSEDE  the active value is out of date
 //   CONFLICT   contradicts the active value, but neither source outranks the other
 //   REVOKE     explicitly forget
+//
+// The second rule, and the reason `amendMemory` exists: AUTHORITY BELONGS TO THE
+// ROW, NOT TO THE VERB. Whether a change is allowed is decided once, in one
+// function every change to an existing row goes through — not re-decided by each
+// operation. Guarding the ADD path alone is exactly how a keyed `remember` was
+// made safe while `forget` next to it still retired the same fact for free: two
+// ordinary tool calls (forget, then remember) replaced a value the user had
+// stated. A verb added tomorrow inherits the rule because it cannot change a row
+// without passing through the same door.
 
 import type { Db, Query } from "../db";
 import { normalizeRef } from "../pipeline";
@@ -176,6 +185,164 @@ async function revise(
   );
 }
 
+// --- Authority ---------------------------------------------------------------
+//
+// Who a change speaks for is DERIVED, never passed. There is no `authority`
+// argument, no `explicit: true` to set, no actor string an LLM can choose —
+// because every one of those is a claim, and a claim is what the agent surface
+// gets to make. Both inputs below are columns the agent surface cannot write.
+
+// An event that carries the USER's own words. `actor_type` is derived from the
+// event type inside events.ts (never supplied by a caller) and `source` is
+// stamped by the WRITER, not by the writer's caller — so a tool cannot append
+// one of these at all (events.ts refuses `tool:`-sourced user-implied events).
+// Keyed on actor_type rather than a list of event types on purpose: a
+// user-implied type added tomorrow is covered the day it is added.
+// Unstamped `source` counts as the user's own transport, which is the contract
+// extract.ts's speaksForUser reads the same way — the two must agree, or a
+// memory extraction treats as the user's would be unprotected here.
+const USER_EVENT_SQL = "e.actor_type = 'user' AND (e.source IS NULL OR e.source LIKE 'user:%')";
+
+/** Was this memory's evidence the user's own words? */
+export async function statedByUser(q: Query, memoryId: string): Promise<boolean> {
+  const res = await q(
+    `SELECT 1 FROM memory_sources s JOIN conversation_events e ON e.id = s.event_id
+     WHERE s.memory_id = $1 AND ${USER_EVENT_SQL} LIMIT 1`,
+    [memoryId],
+  );
+  return res.rows.length > 0;
+}
+
+/** Does this change cite the user's own words as its evidence? */
+async function citesUser(q: Query, eventIds: readonly string[]): Promise<boolean> {
+  if (eventIds.length === 0) return false;
+  const res = await q(
+    `SELECT 1 FROM conversation_events e WHERE e.id = ANY($1::text[]) AND ${USER_EVENT_SQL} LIMIT 1`,
+    [[...eventIds]],
+  );
+  return res.rows.length > 0;
+}
+
+// Is this change being made through the AGENT surface? tools.ts stamps
+// `tool:<name>` on every actor and every createdBy it writes, and never takes
+// that string from its caller — the same provenance rule, for the same reason,
+// as `source` on an event. An unidentified caller lands here too: unknown
+// authority is the WEAKEST authority, not a free pass, so a future handler that
+// forgets to name itself is refused rather than trusted.
+function fromAgentSurface(actor?: string | null): boolean {
+  const name = actor?.trim();
+  return !name || name.startsWith("tool:");
+}
+
+// THE RULE, written once. An agent-surface change may not touch a memory the
+// user stated — unless the change itself carries the user's words. Everything
+// else (a maintenance job, an admin path, a named in-process caller) is code in
+// this repo rather than text from a model, and is allowed.
+async function mayAmend(
+  q: Query,
+  memoryId: string,
+  by: { actor?: string | null; sourceEventIds?: readonly string[] },
+): Promise<boolean> {
+  if (!fromAgentSurface(by.actor)) return true;
+  if (await citesUser(q, by.sourceEventIds ?? [])) return true;
+  return !(await statedByUser(q, memoryId));
+}
+
+// A row moving to 'expired' because its OWN expires_at has passed is authorized
+// by the row, not by whoever runs the sweep: expires_at is written once, by the
+// INSERT below, and no statement anywhere updates it afterwards. Read from the
+// locked row rather than believed from the caller, so a sweep cannot expire
+// anything early and cannot expire anything that never asked to expire.
+function isSelfExpiry(before: MemoryItem, status: MemoryStatus | undefined): boolean {
+  return (
+    status === "expired" &&
+    before.expires_at !== null &&
+    Date.parse(before.expires_at) <= Date.now()
+  );
+}
+
+export interface Amendment {
+  memoryId: string;
+  /** memory_revisions.operation for this change. */
+  operation: string;
+  status?: MemoryStatus;
+  /** Already merged by the caller; written whole. */
+  structuredValue?: Record<string, unknown>;
+  supersedesId?: string | null;
+  /** Mark the projection for a rebuild (a newly committed memory needs a page). */
+  resetProjection?: boolean;
+  /** Evidence for the change ITSELF — this is what can carry user authority. */
+  sourceEventIds?: readonly string[];
+  actor?: string;
+  reason?: string;
+  /** Recorded on the revision only. */
+  newContent?: string | null;
+}
+
+// THE CHOKEPOINT. Every change to an existing memory row's authored state —
+// status, structured_value, valid_to, supersedes_id — happens here.
+// SUPERSEDE, REVOKE, EXPIRE, COMMIT and ENRICH are five callers of one function,
+// not five places that each remember to check; a sixth verb cannot change a row
+// without becoming a sixth caller. Nothing else in this file writes those
+// columns on an existing row.
+//
+// Refuses by THROWING: a revocation that silently did nothing while reporting
+// {revoked:1} is the failure this exists to prevent, so the caller is told.
+export async function amendMemory(
+  q: Query,
+  a: Amendment,
+): Promise<{ before: MemoryItem; after: MemoryItem } | null> {
+  // Locked: the authority decision and the write must see the same row, or a
+  // concurrent amendment is authorized against a state that no longer exists.
+  const cur = await q("SELECT * FROM memory_items WHERE id = $1 FOR UPDATE", [a.memoryId]);
+  if (!cur.rows.length) return null;
+  const before = rowToMemory(cur.rows[0]);
+
+  if (
+    !isSelfExpiry(before, a.status) &&
+    !(await mayAmend(q, a.memoryId, { actor: a.actor, sourceEventIds: a.sourceEventIds }))
+  ) {
+    throw new Error(
+      `refused: memory ${a.memoryId} was stated by the user — an agent may not ` +
+        `${a.operation.toLowerCase()} it. Only the user can change what the user said.`,
+    );
+  }
+
+  // Anything that is not 'committed' has left active retrieval, so its validity
+  // window closes. coalesce, never a bare now(): a window that was already
+  // closed keeps the timestamp it was closed at, or an as_of read moves.
+  const retires = a.status !== undefined && a.status !== "committed" && a.status !== "candidate";
+  const res = await q(
+    `UPDATE memory_items
+       SET status = coalesce($2::text, status),
+           structured_value = coalesce($3::jsonb, structured_value),
+           supersedes_id = coalesce(supersedes_id, $4::text),
+           projection_status = CASE WHEN $5::boolean THEN 'pending' ELSE projection_status END,
+           valid_to = CASE WHEN $6::boolean THEN coalesce(valid_to, now()) ELSE valid_to END,
+           updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [
+      a.memoryId,
+      a.status ?? null,
+      a.structuredValue ? JSON.stringify(a.structuredValue) : null,
+      a.supersedesId ?? null,
+      Boolean(a.resetProjection),
+      retires,
+    ],
+  );
+  await revise(q, {
+    memoryId: a.memoryId,
+    operation: a.operation,
+    previousStatus: before.status,
+    newStatus: a.status ?? before.status,
+    previousContent: before.content,
+    newContent: a.newContent ?? null,
+    actor: a.actor,
+    reason: a.reason ?? null,
+  });
+  return { before, after: rowToMemory(res.rows[0]) };
+}
+
 // The active memory for a logical key, if any. "Active" excludes everything the
 // lifecycle has retired, which is what makes a superseded value vanish from
 // current retrieval the moment it is replaced.
@@ -244,6 +411,52 @@ export async function writeMemory(db: Db, args: WriteMemoryArgs): Promise<WriteM
       memory: rowToMemory(existingFp.rows[0]),
       reason: "identical memory already recorded",
     };
+  }
+
+  // A user statement must never leave the user with LESS authority than an
+  // agent's copy of the same sentence. The attack this closes runs the other way
+  // round from the obvious one: the agent stores the sentence FIRST, the user
+  // says it second, and consolidation's duplicate sweep keeps the OLDEST row —
+  // the agent's — so the only surviving copy is one the agent may then forget.
+  // Rather than create the duplicate and argue about which survives, the user's
+  // evidence is attached to the row that already says it: one row, and it is now
+  // the user's. Deliberately the SAME comparison consolidate.ts groups on
+  // (scope, type, key, lower(btrim(content))), so what that sweep would call a
+  // duplicate is exactly what this refuses to leave lying around.
+  //
+  // One-directional and not guarded by amendMemory: this only ever RAISES a
+  // row's authority, it only fires when the user's own words trigger it, and it
+  // changes nothing a reader can see.
+  const twin = await db.query(
+    `SELECT id FROM memory_items
+      WHERE status = 'committed'
+        AND scope_type = $1 AND coalesce(scope_id, '') = coalesce($2, '')
+        AND memory_type = $3 AND coalesce(memory_key, '') = coalesce($4, '')
+        AND lower(btrim(content)) = lower(btrim($5::text))
+      ORDER BY created_at LIMIT 1`,
+    [args.scopeType, args.scopeId ?? null, args.memoryType, args.memoryKey ?? null, args.content],
+  );
+  const twinId = twin.rows[0] ? String(twin.rows[0].id) : null;
+  if (twinId && (await citesUser(db.query, sources)) && !(await statedByUser(db.query, twinId))) {
+    return db.tx(async (q) => {
+      for (const eventId of sources) {
+        await q(
+          `INSERT INTO memory_sources (memory_id, event_id, evidence_type)
+           VALUES ($1, $2, 'explicit_statement') ON CONFLICT DO NOTHING`,
+          [twinId, eventId],
+        );
+      }
+      const reason = "the user stated what this memory already says; their evidence is now on it";
+      await revise(q, {
+        memoryId: twinId,
+        operation: "NOOP",
+        actor: args.createdBy ?? "system",
+        reason,
+      });
+      const row = await q("SELECT * FROM memory_items WHERE id = $1", [twinId]);
+      const memory = rowToMemory(row.rows[0]);
+      return { operation: "NOOP", status: memory.status, memory, reason };
+    });
   }
 
   const active = args.memoryKey
@@ -318,9 +531,14 @@ export async function writeMemory(db: Db, args: WriteMemoryArgs): Promise<WriteM
       return { operation: "ADD", status: targetStatus, memory };
     }
 
-    // There IS an active value and this one differs. Whether we may replace it
-    // depends on whether this source outranks it.
-    if (!commitable) {
+    // There IS an active value and this one differs. Two separate questions:
+    // may this source commit at all (provenance + screening), and may it retire
+    // THAT row (authority, which belongs to the row). Asked here so the honest
+    // answer is a recorded CONFLICT; amendMemory below is what enforces it.
+    const mayReplace =
+      commitable &&
+      (await mayAmend(q, active.id, { actor: args.createdBy, sourceEventIds: sources }));
+    if (!mayReplace) {
       // Not authorized to overwrite: record the disagreement instead of picking
       // a winner. A human or a policy resolves it later.
       const memory = await insert("conflict", null);
@@ -347,23 +565,16 @@ export async function writeMemory(db: Db, args: WriteMemoryArgs): Promise<WriteM
     // replacement is inserted. Both happen in this transaction, so a failed
     // insert rolls the retirement back rather than leaving the key with no
     // active value.
-    await q(
-      `UPDATE memory_items
-       SET status = 'superseded', valid_to = now(), updated_at = now()
-       WHERE id = $1`,
-      [active.id],
-    );
-    const memory = await insert("committed", active.id);
-    await revise(q, {
+    await amendMemory(q, {
       memoryId: active.id,
       operation: "SUPERSEDE",
-      previousStatus: active.status,
-      newStatus: "superseded",
-      previousContent: active.content,
-      newContent: args.content,
+      status: "superseded",
+      sourceEventIds: sources,
       actor: args.createdBy ?? "system",
       reason: args.reason ?? `superseded by ${id}`,
+      newContent: args.content,
     });
+    const memory = await insert("committed", active.id);
     await revise(q, {
       memoryId: id,
       operation: "ADD",
@@ -385,10 +596,12 @@ export async function enrichMemory(
     structuredValue: Record<string, unknown>;
     actor?: string;
     reason?: string;
+    /** Evidence for the enrichment itself; the only thing that carries user authority. */
+    sourceEventIds?: readonly string[];
   },
 ): Promise<MemoryItem | null> {
   return db.tx(async (q) => {
-    const cur = await q("SELECT * FROM memory_items WHERE id = $1", [args.memoryId]);
+    const cur = await q("SELECT * FROM memory_items WHERE id = $1 FOR UPDATE", [args.memoryId]);
     if (!cur.rows.length) return null;
     const before = rowToMemory(cur.rows[0]);
     // Enrich is a second door into structured_value, so it passes the same
@@ -401,20 +614,20 @@ export async function enrichMemory(
         `contains ${secrets.map((f) => f.kind).join(", ")} — credentials are never stored as memory`,
       );
     }
+    // Through the chokepoint like every other change: ENRICH rewrites what a
+    // memory says (structured_value is on the row, rendered into the projection
+    // and read back by inspect_memory), so "adds detail" is not a reason to skip
+    // the authority the row carries.
     const merged = { ...before.structured_value, ...args.structuredValue };
-    const res = await q(
-      "UPDATE memory_items SET structured_value = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING *",
-      [JSON.stringify(merged), args.memoryId],
-    );
-    await revise(q, {
+    const done = await amendMemory(q, {
       memoryId: args.memoryId,
       operation: "ENRICH",
-      previousStatus: before.status,
-      newStatus: before.status,
+      structuredValue: merged,
+      sourceEventIds: args.sourceEventIds,
       actor: args.actor,
       reason: args.reason ?? "non-conflicting detail added",
     });
-    return rowToMemory(res.rows[0]);
+    return done?.after ?? null;
   });
 }
 
@@ -422,28 +635,26 @@ export async function enrichMemory(
 // leaves active retrieval immediately, and its projection is marked for cleanup.
 export async function revokeMemory(
   db: Db,
-  args: { memoryId: string; actor?: string; reason?: string },
+  args: {
+    memoryId: string;
+    actor?: string;
+    reason?: string;
+    /** Evidence for the revocation itself. A user asking to forget something is
+     *  a user_message; citing it is how a revocation carries the user's
+     *  authority. Citing nothing is an agent revoking, whatever it calls itself. */
+    sourceEventIds?: readonly string[];
+  },
 ): Promise<MemoryItem | null> {
   return db.tx(async (q) => {
-    const cur = await q("SELECT * FROM memory_items WHERE id = $1", [args.memoryId]);
-    if (!cur.rows.length) return null;
-    const before = rowToMemory(cur.rows[0]);
-    const res = await q(
-      `UPDATE memory_items
-       SET status = 'revoked', valid_to = coalesce(valid_to, now()), updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [args.memoryId],
-    );
-    await revise(q, {
+    const done = await amendMemory(q, {
       memoryId: args.memoryId,
       operation: "REVOKE",
-      previousStatus: before.status,
-      newStatus: "revoked",
-      previousContent: before.content,
+      status: "revoked",
+      sourceEventIds: args.sourceEventIds,
       actor: args.actor,
       reason: args.reason ?? "revoked",
     });
-    return rowToMemory(res.rows[0]);
+    return done?.after ?? null;
   });
 }
 
@@ -458,10 +669,10 @@ export async function commitCandidate(
   if (cur.status !== "candidate" && cur.status !== "conflict") {
     return { operation: "NOOP", status: cur.status, memory: cur, reason: "not a candidate" };
   }
-  const src = await db.query("SELECT count(*)::int AS n FROM memory_sources WHERE memory_id = $1", [
+  const src = await db.query("SELECT event_id FROM memory_sources WHERE memory_id = $1", [
     args.memoryId,
   ]);
-  if (Number(src.rows[0].n) === 0) {
+  if (src.rows.length === 0) {
     return {
       operation: "REJECT",
       status: "rejected",
@@ -469,6 +680,12 @@ export async function commitCandidate(
       reason: "cannot commit a memory with no source event",
     };
   }
+  // Deliberately NOT passed to amendMemory below: the authority for a change is
+  // the evidence THE CHANGE cites, never evidence the target already carried.
+  // Inheriting it would mean an agent gains the user's authority by pointing at
+  // a candidate the user's words produced — and promoting such a candidate to
+  // committed policy is precisely what its demotion existed to prevent.
+  // The APPROVER is the authority here, and the approver is the actor.
   return db.tx(async (q) => {
     // Committing a keyed candidate supersedes whatever is active for that key,
     // or the partial unique index would reject the second committed row.
@@ -482,41 +699,32 @@ export async function commitCandidate(
       );
       if (activeRes.rows.length) {
         superseded = rowToMemory(activeRes.rows[0]);
-        await q(
-          "UPDATE memory_items SET status = 'superseded', valid_to = now(), updated_at = now() WHERE id = $1",
-          [superseded.id],
-        );
-        await revise(q, {
+        await amendMemory(q, {
           memoryId: superseded.id,
           operation: "SUPERSEDE",
-          previousStatus: superseded.status,
-          newStatus: "superseded",
-          previousContent: superseded.content,
-          newContent: cur.content,
+          status: "superseded",
           actor: args.actor,
           reason: `superseded by committed candidate ${cur.id}`,
+          newContent: cur.content,
         });
       }
     }
-    const res = await q(
-      `UPDATE memory_items
-       SET status = 'committed', supersedes_id = coalesce(supersedes_id, $2),
-           projection_status = 'pending', updated_at = now()
-       WHERE id = $1 RETURNING *`,
-      [args.memoryId, superseded?.id ?? null],
-    );
-    await revise(q, {
+    const done = await amendMemory(q, {
       memoryId: args.memoryId,
       operation: "COMMIT",
-      previousStatus: cur.status,
-      newStatus: "committed",
+      status: "committed",
+      supersedesId: superseded?.id ?? null,
+      resetProjection: true,
       actor: args.actor,
       reason: args.reason ?? "approved",
     });
+    if (!done) {
+      return { operation: "REJECT", status: "rejected", memory: null, reason: "not_found" };
+    }
     return {
       operation: "ADD" as Operation,
       status: "committed" as MemoryStatus,
-      memory: rowToMemory(res.rows[0]),
+      memory: done.after,
       superseded,
     };
   });
@@ -526,29 +734,28 @@ export async function commitCandidate(
 // "the user said forget it" and "it aged out" are different histories.
 export async function expireMemories(db: Db, limit = 200): Promise<{ expired: number }> {
   const due = await db.query(
-    `SELECT id, status, content FROM memory_items
+    `SELECT id FROM memory_items
      WHERE status = 'committed' AND expires_at IS NOT NULL AND expires_at <= now()
      ORDER BY expires_at LIMIT $1`,
     [Math.min(Math.max(limit, 1), 500)],
   );
   let expired = 0;
   for (const row of due.rows) {
-    await db.tx(async (q) => {
-      await q(
-        `UPDATE memory_items SET status = 'expired', valid_to = coalesce(valid_to, now()),
-           updated_at = now() WHERE id = $1`,
-        [row.id],
-      );
-      await revise(q, {
-        memoryId: String(row.id),
-        operation: "EXPIRE",
-        previousStatus: String(row.status),
-        newStatus: "expired",
-        previousContent: String(row.content),
-        reason: "expires_at reached",
-      });
-    });
-    expired++;
+    // No actor and no cited event: the sweep has no authority of its own. It
+    // gets through the chokepoint only because the ROW authorized this, by
+    // carrying an expires_at that has passed (isSelfExpiry re-checks it against
+    // the locked row). Counted only when a row actually moved.
+    const done = await db.tx(async (q) =>
+      Boolean(
+        await amendMemory(q, {
+          memoryId: String(row.id),
+          operation: "EXPIRE",
+          status: "expired",
+          reason: "expires_at reached",
+        }),
+      ),
+    );
+    if (done) expired++;
   }
   return { expired };
 }

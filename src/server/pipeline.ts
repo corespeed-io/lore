@@ -70,24 +70,38 @@ function addRef(refs: Set<string>, raw: string): void {
 // Turn a Markdown-link target into a page ref, or null if it isn't one:
 // external URLs, mailto, in-page anchors, and non-markdown files (images,
 // PDFs) are not pages.
-function mdTargetToRef(raw: string): string | null {
+function mdTargetToRef(raw: string, fromSlug?: string): string | null {
   // Drop an optional link title: [x](path "Title")
   const target = raw.replace(/\s+["'(].*$/, "").trim();
   if (!target) return null;
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) return null;
   if (target.startsWith("#")) return null;
-  // Relative prefixes are noise: ../Maps/Note.md names the same page as
-  // Maps/Note.md. Obsidian's Markdown mode and Logseq/Foam exports emit these.
   // decodeURIComponent THROWS on malformed percent-encoding — a link like
   // [x](report-100%.md), which a human writes without thinking. An exception
   // here would propagate out of extractRefs and fail the whole page write, so a
   // single odd link would abort a vault import.
-  const rel = target.split("#")[0].replace(/^(?:\.{1,2}\/)+/, "");
   let path: string;
+  const bare = target.split("#")[0];
   try {
-    path = decodeURIComponent(rel);
+    path = decodeURIComponent(bare);
   } catch {
-    path = rel;
+    path = bare;
+  }
+  // A relative link is RESOLVED against the referring page's folder, not
+  // flattened. `../Maps/Note.md` written in `v/notes/x` means `v/maps/note`,
+  // and stripping the `../` used to make it mean `maps/note` — a different
+  // page, or none at all once a vault is imported under a folder prefix. It
+  // only looked harmless while ref matching fell back to bare filenames; now
+  // that a ref containing a separator is an ADDRESS naming exactly one page,
+  // a mis-resolved prefix is a silently wrong or permanently broken edge.
+  if (/^\.{1,2}\//.test(path)) {
+    const base = (fromSlug ?? "").split("/").slice(0, -1);
+    for (const seg of path.split("/")) {
+      if (seg === "." || seg === "") continue;
+      if (seg === "..") base.pop();
+      else base.push(seg);
+    }
+    path = base.join("/");
   }
   if (!path) return null;
   const ext = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
@@ -103,13 +117,19 @@ function mdTargetToRef(raw: string): string | null {
 // ponytail: a Markdown link whose TEXT contains a wikilink yields both refs;
 // they dedupe when they resolve to the same page, and are genuinely two
 // references when they don't. Not worth span-tracking machinery.
-export function extractRefs(body: string, frontmatter?: Record<string, unknown>): string[] {
+export function extractRefs(
+  body: string,
+  frontmatter?: Record<string, unknown>,
+  // The page the refs are written ON. Only relative Markdown links need it, and
+  // only they can be wrong without it.
+  fromSlug?: string,
+): string[] {
   const refs = new Set<string>();
   const scan = (text: string) => {
     const masked = maskCode(text);
     for (const m of masked.matchAll(WIKILINK)) if (!m[1]) addRef(refs, m[2]);
     for (const m of masked.matchAll(MDLINK)) {
-      const ref = mdTargetToRef(m[1]);
+      const ref = mdTargetToRef(m[1], fromSlug);
       // An image embed is written ![alt](img.png); the ! is outside our match,
       // so check the char before it.
       const at = m.index ?? 0;

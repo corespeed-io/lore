@@ -365,17 +365,40 @@ test("memory evaluation across five context strategies", async () => {
   const E = report.E_memory_graph;
   const C = report.C_pages;
 
-  // BASELINES recorded 2026-07-31. Moved once since: C_pages context_size
-  // 1892 -> 1849, because the projection stopped rendering the scope HOLDER into
-  // the page (projection.ts — the owning thread/agent id was readable from every
-  // unscoped page read and no retrieval path consumed it). Only C's context size
-  // moved; every correctness metric is unchanged, which is the point — the
-  // attribution was pure leak, not signal. AGENTS.md's table still says 1865, a
-  // figure that predates this run.
+  // BASELINES re-recorded 2026-08-01, when thread- and agent-scoped memories
+  // stopped being projected into the shared page graph at all (projection.ts).
+  // Every movement below is a consequence of that ONE change, and each is a
+  // measurement of it rather than noise:
   //
-  // What C does NOT measure, and a reader should not assume it does: whether page
-  // search can reach ANOTHER scope's memory. It can — see
-  // tests/memory-projection-scope.test.ts, which pins that boundary.
+  //   C_pages  fact_recall 0.875 -> 0.375, supersession 1 -> 0,
+  //            stale_memory_hit_rate 0.667 -> 0.333, precision 0.078 -> 0.021,
+  //            context_size 1813 -> 734.
+  //     C is page search with no canonical filtering — i.e. exactly what an
+  //     UNSCOPED reader of the shared graph can see. Its recall fell because the
+  //     answers it used to find were other scopes' private memories, which is the
+  //     leak this design removes; the same fact reads as a supersession score of 0
+  //     (it can no longer see the agent's current billing email either). Its stale
+  //     hit rate HALVED for the same reason: of the three forbidden strings, the
+  //     thread-only working state is no longer reachable from a page. The one that
+  //     remains is notes/untrusted-import, a real user page, which is a page
+  //     search correctly returning a page. C now measures the leak surface, which
+  //     is a more useful thing for it to measure than it measured before.
+  //
+  //   D/E      precision 0.3125 -> 0.5, context_size 194 -> 76.
+  //     Recall, supersession, temporal and staleness are all unchanged at their
+  //     gate values. Precision ROSE and the pack shrank because non-vault recall
+  //     no longer goes through the page pipeline's vector arm, which on this
+  //     fixture's 8-dimensional character-bag embedding returns a nearest
+  //     neighbour for everything. That is a fixture artefact as much as a design
+  //     win — do not read it as "lexical beats hybrid".
+  //
+  //   A/B      unchanged: neither reads the page graph.
+  //
+  // What D/E GIVE UP, stated because no metric here shows it: a private memory has
+  // no page, so it has no chunk embeddings and no edges. Paraphrase recall for
+  // thread/agent memories is now lexical-only, and one-hop graph expansion (E) can
+  // only reach vault memories — E ties D on this fixture because every case's
+  // answer is a direct hit, not because expansion is free.
   //
   // The gate is on correctness, not on taste:
   //   - a superseded value must never surface in current mode
@@ -397,6 +420,38 @@ test("memory evaluation across five context strategies", async () => {
   // And the pack a model actually sees stays small.
   expect(D.context_size).toBeLessThan(2000);
 }, 120_000);
+
+test("C_pages is now the leak surface, and it is empty of private memory", async () => {
+  // The C number moving is not the finding — this is. Page search is what an
+  // unscoped BRAIN_READ_TOKEN holder can do, and it must not be able to reach a
+  // thread- or agent-scoped memory by ANY query, including the memory's own text.
+  //
+  // The forbidden set is read back from the database rather than written out here,
+  // so a memory added to the fixture later is covered without anyone remembering
+  // to add it: the adversary's whole method is finding the entry nobody listed.
+  const priv = await db.query(
+    "SELECT id, content, coalesce(memory_key, '') AS memory_key FROM memory_items WHERE scope_type <> 'vault'",
+  );
+  expect(priv.rows.length).toBeGreaterThan(0);
+
+  // Every query the eval asks, plus each private memory's own content — the
+  // strongest query there is for a fact you already suspect.
+  const queries = [...cases().map((c) => c.query), ...priv.rows.map((r) => String(r.content))];
+  const reads: unknown[] = [await store.listPages({ kind: "memory" }), await store.exportBatch({})];
+  for (const q of queries) reads.push(await store.search({ query: q, limit: K }));
+  const blob = JSON.stringify(reads);
+
+  for (const row of priv.rows) {
+    expect(blob).not.toContain(String(row.content));
+    expect(blob).not.toContain(String(row.id));
+    if (row.memory_key) expect(blob).not.toContain(String(row.memory_key));
+  }
+  // …and the vault memory IS still reachable, so this is a boundary and not just
+  // an empty graph.
+  expect(JSON.stringify(await store.search({ query: "import convention", limit: K }))).toContain(
+    "one folder per project",
+  );
+});
 
 test("the assembled context pack stays within budget and carries the guard", async () => {
   const recalled = await recallMemory(db, store, {

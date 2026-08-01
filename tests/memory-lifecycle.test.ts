@@ -81,7 +81,8 @@ function must<T>(value: T | null | undefined, what: string): T {
 }
 
 const AGENT = { scopeType: "agent" as const, scopeId: "agent-1" };
-const SCOPES = [AGENT, { scopeType: "vault" as const, scopeId: null }];
+const VAULT = { scopeType: "vault" as const, scopeId: null };
+const SCOPES = [AGENT, VAULT];
 
 async function say(threadId: string, content: string) {
   await ensureThread(db, threadId);
@@ -345,8 +346,12 @@ test("revoking a memory removes it from active retrieval and keeps the history",
     memoryKey: "user.response_style",
   });
   expect(active).not.toBeNull();
-  const slug = projectionSlug(must(active, "active memory"));
-  expect((await store.getPage({ slug })).slug).toBe(slug);
+  // ADAPTED to the landed projection change (projection.ts): only SHARED (vault)
+  // memories are written to the graph, so an agent-scoped memory has no page at
+  // all and projectionSlug answers null. Not a loosening — the page assertions
+  // this replaces were asserting a page that must no longer exist, and the
+  // revocation assertions below are untouched.
+  expect(projectionSlug(must(active, "active memory"))).toBeNull();
 
   const revoked = await revokeMemory(db, {
     memoryId: must(active, "active memory").id,
@@ -361,7 +366,9 @@ test("revoking a memory removes it from active retrieval and keeps the history",
   // Projection cleanup is retryable and idempotent.
   await projectMemory(db, store, must(revoked, "revoked memory"));
   await projectMemory(db, store, must(revoked, "revoked memory"));
-  await expect(store.getPage({ slug })).rejects.toThrow(/not_found/);
+  expect(
+    (await db.query("SELECT count(*)::int AS n FROM pages WHERE slug LIKE 'memory/%'")).rows[0].n,
+  ).toBe(0);
   expect((await recallMemory(db, store, { query: "dark mode", scopes: [AGENT] })).length).toBe(0);
 
   const inspected = await inspectMemory(db, must(active, "active memory").id);
@@ -518,9 +525,13 @@ test("a procedure needs two successful episodes, or one plus approval, and grant
 
 test("a projection failure leaves the memory committed and is repairable without duplicates", async () => {
   const ev = await say("t12", "My deploy target is production-west.");
+  // ADAPTED to the landed projection change (projection.ts): only SHARED (vault)
+  // memories are projected, so this has to be a vault memory or there is no
+  // putPage for the broken store to fail. The scope moved; every assertion about
+  // the failure and the repair is the one that was here before.
   const res = await writeMemory(db, {
-    scopeType: "agent",
-    scopeId: "agent-1",
+    scopeType: "vault",
+    scopeId: null,
     memoryType: "semantic",
     memoryKey: "user.deploy_target",
     content: "deploy target is production-west",
@@ -543,7 +554,7 @@ test("a projection failure leaves the memory committed and is repairable without
   expect(after?.memory.projection_status).toBe("failed");
   // Direct key lookup still works — it does not depend on the projection.
   expect(
-    (await searchMemoryByKey(db, { memoryKey: "user.deploy_target", scopes: [AGENT] })).length,
+    (await searchMemoryByKey(db, { memoryKey: "user.deploy_target", scopes: [VAULT] })).length,
   ).toBe(1);
 
   // Retry repairs it, and does not create a second page.
@@ -879,7 +890,11 @@ test("remember(thread_id) is readable by recall(thread_id)", async () => {
     thread_id: "t-round-trip",
   });
   expect(saved.saved).toBe(true);
-  expect(saved.projection).toBe("ok");
+  // ADAPTED to the landed projection change (projection.ts): a thread-scoped
+  // memory is deliberately never written to the shared graph, so its projection
+  // is "removed", not "ok". This makes the round trip below STRONGER, not
+  // weaker — recall has to find it with no page to search.
+  expect(saved.projection).toBe("removed");
 
   // saved:true from the same id the caller named has to mean readable, or this
   // is write-only memory that reports success.
@@ -1000,11 +1015,13 @@ test("a forget whose page retraction fails does not report a successful forget",
   // remember no longer commits: a tool may store its own note but may not take
   // over a logical key a user statement could own. Keeping memory_key here would
   // have pinned that (now removed) authority instead of the retraction.
+  //
+  // ADAPTED to the landed projection change (projection.ts): only a SHARED
+  // (vault) memory has a page, so a vault memory is now the only vehicle for a
+  // failing retraction. The scope moved; every assertion below is unchanged.
   const saved = await tool("remember", {
     content: "deploy target is production-west",
-    scope: "agent",
-    scope_id: "agent-1",
-    thread_id: "t-forget",
+    scope: "vault",
   });
   expect(saved.projection).toBe("ok");
 
@@ -1016,7 +1033,7 @@ test("a forget whose page retraction fails does not report a successful forget",
   } as unknown as Store;
   const failed = await tool(
     "forget",
-    { memory_id: saved.memory_id, scope: "agent", scope_id: "agent-1" },
+    { memory_id: saved.memory_id, scope: "vault" },
     { db, store: brokenStore },
   );
   // Canonical revocation succeeded, the retraction did not: for a REVOCATION,
@@ -1030,11 +1047,7 @@ test("a forget whose page retraction fails does not report a successful forget",
   expect(Number(pages.rows[0].n)).toBe(1);
 
   // Calling it again with a working store finishes the job and says so.
-  const done = await tool("forget", {
-    memory_id: saved.memory_id,
-    scope: "agent",
-    scope_id: "agent-1",
-  });
+  const done = await tool("forget", { memory_id: saved.memory_id, scope: "vault" });
   expect(done.forgotten).toBe(true);
   expect(done.projection_failed).toEqual([]);
 });
@@ -1133,4 +1146,332 @@ test("a candidate is invisible until approved, then supersedes the active value"
   expect(committed.status).toBe("committed");
   await runProjections(db, store, 50);
   expect((await recallMemory(db, store, { query: "timezone", scopes: [AGENT] })).length).toBe(1);
+});
+
+// --- 12. ONE scope shape ----------------------------------------------------
+//
+// The write-only-memory defect was fixed once and refuted once, because the fix
+// hardened the WRITER's scope parser and left the READERS with their own. These
+// tests are about the shape of the fix rather than about a list of fields: the
+// scope block and the parse are applied by the table constructor in tools.ts, so
+// they are asserted over Object.keys(MEMORY_TOOLS) — a tool added tomorrow is
+// covered by them on the day it is added.
+
+const SCOPE_FIELD_NAMES = ["scope", "scope_id", "thread_id", "agent_id"];
+
+// One arg bag that satisfies every memory tool's own required fields, so a test
+// can drive the WHOLE table with one call site and the refusal under test is the
+// only thing that can fail.
+function everyToolArgs(scope: Record<string, unknown>): Record<string, unknown> {
+  return {
+    content: "a sentence",
+    query: "a sentence",
+    input: "a sentence",
+    event_type: "tool_result",
+    memory_id: "00000000-0000-4000-8000-000000000000",
+    ...scope,
+  };
+}
+
+test("every memory tool names a scope with the SAME fields", () => {
+  for (const [name, def] of Object.entries(MEMORY_TOOLS)) {
+    const schema = def.inputSchema as { properties: Record<string, unknown>; required?: string[] };
+    for (const field of SCOPE_FIELD_NAMES) {
+      // remember published scope/scope_id/thread_id and NO agent_id; recall and
+      // inspect_memory published thread_id/agent_id and NO scope_id. An agent
+      // using only the fields the schemas declared wrote memory that nothing it
+      // could spell would read — and was told saved:true.
+      expect(Object.keys(schema.properties), `${name} does not publish ${field}`).toContain(field);
+      // …and none of them is mandatory: which field names the scope is a choice
+      // among equals, not a per-tool dialect.
+      expect(schema.required ?? [], `${name} requires ${field}`).not.toContain(field);
+    }
+  }
+});
+
+test("every spelling of a scope writes where that same spelling reads", async () => {
+  // Every way the schema lets a caller name a scope. Whatever a spelling means,
+  // remember / recall / inspect_memory / forget must all mean the same by it —
+  // that agreement is the property, not any particular meaning.
+  const spellings: [string, Record<string, unknown>][] = [
+    ["thread_id", { thread_id: "sx-thread" }],
+    ["scope+thread_id", { scope: "thread", thread_id: "sx-scope-thread" }],
+    ["scope+scope_id as thread", { scope: "thread", scope_id: "sx-thread-id" }],
+    ["agent_id", { agent_id: "sx-agent" }],
+    ["scope+agent_id", { scope: "agent", agent_id: "sx-scope-agent" }],
+    ["scope+scope_id as agent", { scope: "agent", scope_id: "sx-agent-id" }],
+    ["bare scope_id", { scope_id: "sx-bare" }],
+    ["vault", { scope: "vault" }],
+  ];
+  const words = ["kigali", "zanzibar", "trieste", "oaxaca", "nairobi", "lisbon", "kyoto", "bogota"];
+
+  for (const [i, [label, scope]] of spellings.entries()) {
+    const word = words[i];
+    const saved = await tool("remember", {
+      content: `the ${word} runbook is in rotate.sh`,
+      ...scope,
+    });
+    expect(saved.saved, `${label} did not save`).toBe(true);
+
+    const back = (await tool("recall", { query: `${word} runbook`, ...scope })) as {
+      count: number;
+      memories: { id: string }[];
+    };
+    expect(back.count, `${label} saved but recall found nothing`).toBe(1);
+    expect(back.memories[0].id, label).toBe(saved.memory_id);
+
+    const seen = await tool("inspect_memory", { memory_id: saved.memory_id, ...scope });
+    expect(seen.id, `${label} saved but inspect_memory could not see it`).toBe(saved.memory_id);
+
+    const gone = await tool("forget", { memory_id: saved.memory_id, ...scope });
+    expect(gone.revoked, `${label} saved but forget could not reach it`).toBe(1);
+  }
+});
+
+test("scope_id and agent_id are the SAME scope, to the writer and to the reader", async () => {
+  // Verbatim from the refutation: remember({content, scope_id:'scopeXray'}) said
+  // saved:true, and recall/inspect_memory with scope_id found nothing, because
+  // one spelling — agent_id, which remember did not even offer — was the only
+  // one the readers understood.
+  const saved = await tool("remember", {
+    content: "the kigali runbook is in rotate.sh",
+    scope_id: "scopeXray",
+  });
+  expect(saved.saved).toBe(true);
+  for (const spelling of [
+    { scope_id: "scopeXray" },
+    { agent_id: "scopeXray" },
+    { scope: "agent", scope_id: "scopeXray" },
+    { scope: "agent", agent_id: "scopeXray" },
+  ]) {
+    const label = JSON.stringify(spelling);
+    expect((await tool("recall", { query: "kigali runbook", ...spelling })).count, label).toBe(1);
+    expect(
+      (await tool("inspect_memory", { memory_id: saved.memory_id, ...spelling })).id,
+      label,
+    ).toBe(saved.memory_id);
+  }
+  // thread:scopeXray is a DIFFERENT scope and it is empty. That is fine — what
+  // was not fine was a writer and a reader disagreeing about which one the same
+  // argument meant.
+  expect((await tool("recall", { query: "kigali runbook", thread_id: "scopeXray" })).count).toBe(0);
+});
+
+test("a call may not name a scope wider than the one it is working in", async () => {
+  // Verbatim from the refutation: committed at vault, readable from every
+  // unrelated thread and agent, from a call that also named a thread.
+  await expect(
+    tool("remember", {
+      content: "the hotel wifi password is on the desk",
+      scope: "vault",
+      thread_id: "threadHotel",
+    }),
+  ).rejects.toThrow(/wider/);
+
+  // Verbatim from the refutation: saved into a SIBLING thread, unreadable by the
+  // thread that said it. extract.ts:387 refuses exactly this shape.
+  await expect(
+    tool("remember", {
+      content: "a sentence the victim thread never heard",
+      scope: "thread",
+      scope_id: "threadVictim",
+      thread_id: "threadMine",
+    }),
+  ).rejects.toThrow(/two scopes/);
+
+  // Neither attempt half-happened: no memory, no event, no thread.
+  for (const id of ["threadHotel", "threadVictim", "threadMine"]) {
+    expect(
+      (await tool("recall", { query: "hotel wifi sentence victim", thread_id: id })).count,
+      id,
+    ).toBe(0);
+  }
+  expect(Number((await db.query("SELECT count(*)::int AS n FROM memory_items")).rows[0].n)).toBe(0);
+  expect(
+    Number((await db.query("SELECT count(*)::int AS n FROM conversation_events")).rows[0].n),
+  ).toBe(0);
+  expect((await db.query("SELECT id FROM threads")).rows).toEqual([]);
+});
+
+test("an agent-scoped remember does not fall into a thread every caller can name", async () => {
+  // tools.ts used to read `str(a.thread_id) ?? "direct"`, so this call wrote the
+  // memory's verbatim content into one hardcoded thread as an agent_action, and
+  // list_events had no scope check at all: agent-2 read it back with
+  // list_events({thread_id:'direct'}) while inspect_memory, forget, recall,
+  // get_page and search all correctly hid the same memory from it.
+  const content = "the nightly widget pipeline was rerun by hand";
+  expect((await tool("remember", { content, agent_id: "agent-1" })).saved).toBe(true);
+
+  expect((await db.query("SELECT id FROM threads WHERE id = 'direct'")).rows).toEqual([]);
+  await expect(tool("list_events", { thread_id: "direct" })).rejects.toThrow(/not_found/);
+  // A sibling agent asking for ITS events gets its own (empty) scope, never this.
+  await expect(tool("list_events", { agent_id: "agent-2" })).rejects.toThrow(/not_found/);
+  await expect(tool("get_summary", { agent_id: "agent-2" })).resolves.toEqual({ summary: null });
+
+  // The owner reads its own: the scope-owned thread is not write-only either.
+  const own = (await tool("list_events", { agent_id: "agent-1" })) as {
+    events: { content: string }[];
+  };
+  expect(own.events.map((e) => e.content)).toContain(content);
+
+  // The residual, pinned rather than hidden: the event log is append-only, so
+  // forget CANNOT take the sentence out of it. What the fix changes is WHO the
+  // surviving copy is reachable by — its own scope, and nothing else.
+  const saved = (await tool("recall", { query: "widget pipeline", agent_id: "agent-1" })) as {
+    memories: { id: string }[];
+  };
+  expect(
+    (await tool("forget", { memory_id: saved.memories[0].id, agent_id: "agent-1" })).revoked,
+  ).toBe(1);
+  expect((await tool("recall", { query: "widget pipeline", agent_id: "agent-1" })).count).toBe(0);
+  const after = (await tool("list_events", { agent_id: "agent-1" })) as {
+    events: { content: string }[];
+  };
+  expect(after.events.map((e) => e.content)).toContain(content);
+  await expect(tool("list_events", { agent_id: "agent-2" })).rejects.toThrow(/not_found/);
+  await expect(tool("list_events", { thread_id: "direct" })).rejects.toThrow(/not_found/);
+
+  // And the thread it landed in is in a namespace no caller may name, in any
+  // spelling that reaches the same string.
+  expect((await db.query("SELECT id FROM threads")).rows.map((r) => String(r.id))).toEqual([
+    "scope:agent:agent-1",
+  ]);
+  for (const spelling of [
+    "scope:agent:agent-1",
+    " scope:agent:agent-1 ",
+    "SCOPE:agent:agent-1",
+    "scope:vault",
+  ]) {
+    await expect(tool("list_events", { thread_id: spelling }), spelling).rejects.toThrow(
+      /reserved/,
+    );
+  }
+});
+
+test("no memory tool will work in a thread that belongs to another agent", async () => {
+  await tool("append_event", {
+    thread_id: "t-owned",
+    agent_id: "agent-1",
+    event_type: "agent_action",
+    content: "agent-1 was here",
+  });
+  // The whole table, not a list of the tools someone remembered to guard.
+  for (const name of Object.keys(MEMORY_TOOLS)) {
+    await expect(
+      tool(name, everyToolArgs({ thread_id: "t-owned", agent_id: "agent-2" })),
+      name,
+    ).rejects.toThrow(/belongs to another agent/);
+  }
+  // Ownership is decided once, at creation, and a second claim cannot take it.
+  await expect(ensureThread(db, "t-owned", "agent-2")).rejects.toThrow(/belongs to another agent/);
+  expect((await getThread(db, "t-owned"))?.agent_id).toBe("agent-1");
+});
+
+test("no memory tool lets a caller name a scope-owned thread", async () => {
+  for (const name of Object.keys(MEMORY_TOOLS)) {
+    await expect(
+      tool(name, everyToolArgs({ thread_id: "scope:agent:agent-1" })),
+      name,
+    ).rejects.toThrow(/reserved/);
+  }
+});
+
+test("a write must name its scope, so nothing is published to the vault by default", async () => {
+  for (const [name, def] of Object.entries(MEMORY_TOOLS)) {
+    if (def.access !== "write") continue;
+    await expect(tool(name, everyToolArgs({})), name).rejects.toThrow(/name the scope/);
+  }
+  expect(Number((await db.query("SELECT count(*)::int AS n FROM memory_items")).rows[0].n)).toBe(0);
+  expect((await db.query("SELECT id FROM threads")).rows).toEqual([]);
+});
+
+// The adjacent paths, attacked from this side rather than waited for: each one
+// is a way to name a scope that the refutations did not use.
+test("the ways AROUND naming a scope all fail closed", async () => {
+  // `scope_type` is the older spelling of `scope`, read by the same parser — so
+  // it cannot smuggle the widening that `scope` is refused.
+  await expect(
+    tool("remember", { content: "smuggled to the vault", scope_type: "vault", thread_id: "t-a" }),
+  ).rejects.toThrow(/wider/);
+  await expect(
+    tool("remember", {
+      content: "two names for one field",
+      scope: "thread",
+      scope_type: "vault",
+      thread_id: "t-a",
+    }),
+  ).rejects.toThrow(/two scopes/);
+
+  // A scope field that is not a string is NOT a scope. It must not fall through
+  // to something broader — `["t-victim"]` used to be String()'d into a thread id
+  // by list_events, and an unreadable scope_id used to default the type to agent.
+  await expect(tool("remember", { content: "x", thread_id: ["t-victim"] })).rejects.toThrow(
+    /name the scope/,
+  );
+  await expect(tool("remember", { content: "x", scope: "thread", scope_id: 123 })).rejects.toThrow(
+    /needs an id/,
+  );
+  await expect(tool("remember", { content: "x", agent_id: "   " })).rejects.toThrow(
+    /name the scope/,
+  );
+
+  // An unrecognised scope is refused, not coerced. The old parser turned
+  // anything outside the enum into 'agent', so scope:'Vault' quietly wrote an
+  // agent memory under whatever scope_id came with it.
+  await expect(
+    tool("remember", { content: "x", scope: "Vault", scope_id: "agent-1" }),
+  ).rejects.toThrow(/unknown scope/);
+
+  expect(Number((await db.query("SELECT count(*)::int AS n FROM memory_items")).rows[0].n)).toBe(0);
+  expect((await db.query("SELECT id FROM threads")).rows).toEqual([]);
+});
+
+test("forget reaches the scope the call is IN, never merely one it can read", async () => {
+  // A thread can READ its agent's memories. It must not be able to REVOKE them:
+  // forget uses the target scope, recall uses the readable set, and a revocation
+  // takes a fact away from everyone else's retrieval.
+  const mine = await tool("remember", {
+    content: "the widget pipeline runs nightly",
+    agent_id: "agent-1",
+  });
+  expect(mine.saved).toBe(true);
+  expect(
+    (await tool("recall", { query: "widget pipeline", thread_id: "t-b", agent_id: "agent-1" }))
+      .count,
+  ).toBe(1);
+
+  const denied = await tool("forget", {
+    memory_id: mine.memory_id,
+    thread_id: "t-b",
+    agent_id: "agent-1",
+  });
+  expect(denied).toEqual({ revoked: 0, memories: [], forgotten: false, reason: "not_found" });
+  expect(
+    (await db.query("SELECT status FROM memory_items WHERE id = $1", [mine.memory_id])).rows[0]
+      .status,
+  ).toBe("committed");
+
+  // The scope it WAS written in still revokes it.
+  expect((await tool("forget", { memory_id: mine.memory_id, agent_id: "agent-1" })).revoked).toBe(
+    1,
+  );
+});
+
+test("a near-miss spelling of a scope-owned thread reaches nothing", async () => {
+  await tool("remember", { content: "the kigali runbook is in rotate.sh", agent_id: "agent-1" });
+  // Not the reserved prefix, so not refused — and not the minted id either, so
+  // it is simply a different (empty) thread. The minted namespace is exact
+  // ASCII, so no near-miss can collide with it.
+  // Written as escapes: a Cyrillic homoglyph and a zero-width space are invisible
+  // in a source file, and a reader has to be able to see what is being tried.
+  for (const near of [
+    "scopeagent:agent-1",
+    "\u0455cope:agent:agent-1",
+    "scope\u200b:agent:agent-1",
+  ]) {
+    await expect(tool("list_events", { thread_id: near }), near).rejects.toThrow(/not_found/);
+  }
+  // …and the memory itself is still only where its own scope can see it.
+  expect((await tool("recall", { query: "kigali runbook", agent_id: "agent-1" })).count).toBe(1);
+  expect((await tool("recall", { query: "kigali runbook", agent_id: "agent-2" })).count).toBe(0);
 });

@@ -128,6 +128,15 @@ async function sha256Hex(s: string): Promise<string> {
     .join("");
 }
 
+// A thread has AT MOST ONE OWNER, ever. The first writer to name an agent claims
+// it; a later claim by a different agent is refused, not silently dropped.
+//
+// This lives here because ensureThread is the only way a thread comes into
+// existence, so no writer — tool, extractor, ingestion, or whatever is added
+// next — can create or adopt one without passing it. Ownership is what tells a
+// reader whose events a thread holds (tools.ts refuses a caller that names a
+// thread together with an agent that does not own it), and an owner a second
+// caller could overwrite would not be ownership at all.
 export async function ensureThread(
   db: Db,
   threadId: string,
@@ -138,7 +147,23 @@ export async function ensureThread(
      ON CONFLICT (id) DO NOTHING RETURNING id`,
     [threadId, agentId ?? null],
   );
-  return { id: threadId, created: res.rows.length > 0 };
+  if (res.rows.length) return { id: threadId, created: true };
+  if (!agentId) return { id: threadId, created: false };
+  // Conditional on agent_id IS NULL, so two concurrent claims cannot both win:
+  // the loser reads the winner's row below and is refused.
+  const claimed = await db.query(
+    "UPDATE threads SET agent_id = $2 WHERE id = $1 AND agent_id IS NULL RETURNING id",
+    [threadId, agentId],
+  );
+  if (claimed.rows.length) return { id: threadId, created: false };
+  const row = await db.query("SELECT agent_id FROM threads WHERE id = $1", [threadId]);
+  const owner = row.rows[0]?.agent_id;
+  if (owner !== null && owner !== undefined && String(owner) !== agentId) {
+    // Names no agent: which agent owns a thread is not something a caller that
+    // does not own it gets to learn from an error message.
+    throw new Error(`forbidden: thread ${threadId} belongs to another agent`);
+  }
+  return { id: threadId, created: false };
 }
 
 // A unique violation (SQLSTATE 23505). Message-matched as well as coded because
