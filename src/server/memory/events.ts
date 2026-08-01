@@ -244,7 +244,14 @@ export async function appendConversationEvent(
         args.actorId ?? null,
         content,
         JSON.stringify(payload),
-        args.source ?? null,
+        // NORMALIZED AT THE DOOR, so the ambiguous value never exists in the
+        // column. An empty or whitespace `source` is neither NULL (unstamped —
+        // the user's own transport) nor `user:` — and items.ts's USER_EVENT_SQL
+        // read it as NOT the user while extract.ts's speaksForUser read it AS the
+        // user. isUserSource now settles the read side; this settles the write
+        // side, which is the better half: `source: header ?? ""` is exactly what
+        // a host integration writes.
+        args.source?.trim() || null,
         args.traceId ?? null,
         args.idempotencyKey ?? null,
         hash,

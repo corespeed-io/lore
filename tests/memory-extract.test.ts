@@ -544,3 +544,38 @@ test("the JS and SQL definitions of 'the user said it' agree on every source", a
     '"xuser:cli"': false,
   });
 });
+
+// THE OTHER HALF, at the write door. isUserSource settles how a blank source is
+// READ; this settles whether one can be stored at all. `source: header ?? ""` is
+// exactly what a host integration writes, and an empty stamp is neither
+// "unstamped" (NULL, the user's own transport) nor a `user:` transport — so the
+// column should never hold one.
+test("a blank source is normalized to NULL at the write door", async () => {
+  await ensureThread(db, "t-blank");
+  for (const [i, source] of ["", "   ", "\t"].entries()) {
+    await appendConversationEvent(db, {
+      threadId: "t-blank",
+      eventType: "user_message",
+      content: `blank source ${i}`,
+      source,
+    });
+  }
+  const rows = await db.query(
+    "SELECT source FROM conversation_events WHERE thread_id = 't-blank' ORDER BY sequence",
+  );
+  expect(
+    rows.rows.map((r) => r.source),
+    "a blank source was stored verbatim",
+  ).toEqual([null, null, null]);
+  // MIRROR: a real stamp is kept exactly, including its trailing detail.
+  await appendConversationEvent(db, {
+    threadId: "t-blank",
+    eventType: "user_message",
+    content: "real",
+    source: "user:cli",
+  });
+  const kept = await db.query(
+    "SELECT source FROM conversation_events WHERE content = 'real' AND thread_id = 't-blank'",
+  );
+  expect(kept.rows[0].source).toBe("user:cli");
+});

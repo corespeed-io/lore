@@ -210,13 +210,18 @@ export async function findProcedureCandidates(
   const res = await db.query(
     `SELECT structured_value->>'goal' AS goal,
             array_agg(id ORDER BY created_at) AS ids,
-            count(*) FILTER (WHERE (structured_value->>'success')::boolean) AS successes
+            -- Compared, not CAST. A ::boolean cast throws on any value Postgres
+            -- cannot parse, and structured_value is agent-writable, so ONE
+            -- episodic memory carrying success:"maybe" made this query raise for
+            -- that whole scope, permanently, instead of simply not counting.
+            -- A poison pill in a maintenance query is worse than a wrong count.
+            count(*) FILTER (WHERE structured_value->>'success' = 'true') AS successes
      FROM memory_items
      WHERE memory_type = 'episodic' AND status = 'committed'
        AND scope_type = $1 AND coalesce(scope_id, '') = coalesce($2, '')
        AND structured_value->>'goal' IS NOT NULL
      GROUP BY 1
-     HAVING count(*) FILTER (WHERE (structured_value->>'success')::boolean) >= $3
+     HAVING count(*) FILTER (WHERE structured_value->>'success' = 'true') >= $3
      LIMIT $4`,
     [
       args.scopeType,

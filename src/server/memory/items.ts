@@ -221,6 +221,13 @@ export function isUserSource(source: string | null | undefined): boolean {
   return source === null || source === undefined || source.startsWith("user:");
 }
 
+// ASYMMETRY WITH speaksForUser, and it is deliberate rather than an oversight.
+// This keys on actor_type, so an `approval` event counts here (IMPLIED_ACTOR maps
+// it to "user") while extract.ts's speaksForUser requires `user_message`. That is
+// the right split: an approval IS the user acting, so it may carry authority for
+// an amendment; it is not a statement of fact, so extraction must not mine it for
+// memories. A tool cannot forge either — TOOL_APPENDABLE_EVENTS is derived from
+// this same actor table and excludes every user-implied type.
 const USER_EVENT_SQL = "e.actor_type = 'user' AND (e.source IS NULL OR e.source LIKE 'user:%')";
 
 /** Was this memory's evidence the user's own words? */
