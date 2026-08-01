@@ -173,18 +173,30 @@ function isUniqueViolation(e: unknown): boolean {
   return e instanceof Error && /duplicate key value|unique constraint/i.test(e.message);
 }
 
+// One safe read of the actor table, so no caller re-derives it with a bare index.
+function actorFor(eventType: EventType): ActorType | undefined {
+  return Object.hasOwn(IMPLIED_ACTOR, eventType) ? IMPLIED_ACTOR[eventType] : undefined;
+}
+
 export async function appendConversationEvent(
   db: Db,
   args: AppendEventArgs,
 ): Promise<AppendResult> {
   if (!args.threadId?.trim()) throw new Error("threadId is required");
-  if (!IMPLIED_ACTOR[args.eventType]) throw new Error(`unknown event_type: ${args.eventType}`);
+  // Object.hasOwn: a bare index walks the prototype chain, so "constructor",
+  // "toString", "valueOf" and "__proto__" all satisfied this guard AND the
+  // user-implied guard below, and were caught only by the driver refusing a
+  // function-valued parameter further down. Membership is a question about the
+  // table, not about JavaScript.
+  if (!Object.hasOwn(IMPLIED_ACTOR, args.eventType)) {
+    throw new Error(`unknown event_type: ${args.eventType}`);
+  }
   // Only the user speaks for the user. `source` is set by the tool, not by the
   // tool's caller, so this is provenance an agent cannot forge — and without it
   // one `append_event {event_type:"user_message"}` plants a statement the next
   // extraction sweep auto-commits over the real value. Refused rather than
   // relabelled: an event that lies about who spoke has no honest form.
-  if (args.source?.startsWith("tool:") && IMPLIED_ACTOR[args.eventType] === "user") {
+  if (args.source?.startsWith("tool:") && actorFor(args.eventType) === "user") {
     throw new Error(
       `forbidden: ${args.source} may not append a ${args.eventType} — only the user speaks for the user`,
     );
@@ -228,7 +240,7 @@ export async function appendConversationEvent(
         args.threadId,
         sequence,
         args.eventType,
-        IMPLIED_ACTOR[args.eventType],
+        actorFor(args.eventType),
         args.actorId ?? null,
         content,
         JSON.stringify(payload),

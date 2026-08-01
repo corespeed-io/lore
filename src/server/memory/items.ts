@@ -25,7 +25,7 @@
 
 import type { Db, Query } from "../db";
 import { normalizeRef } from "../pipeline";
-import { findSecrets, screenMemoryContent } from "./safety";
+import { findSecretsInPayload, screenMemoryContent } from "./safety";
 
 export type ScopeType = "thread" | "agent" | "vault";
 export type MemoryType = "semantic" | "preference" | "episodic" | "procedural" | "working_state";
@@ -255,7 +255,26 @@ async function citesUser(q: Query, eventIds: readonly string[]): Promise<boolean
 // migration it is. Case-sensitive and untrimmed beyond whitespace: `Admin` is
 // not `admin`, because a classifier that folds case is a second reader of the
 // name and this whole finding is what that costs.
-const IN_REPO_AUTHORITIES: readonly string[] = ["system", "extractor", "admin", "user"];
+const IN_REPO_AUTHORITIES: readonly string[] = ["system", "extractor", "admin"];
+
+// How in-repo code NAMES itself, so the vocabulary cannot drift away from the
+// registry above. episodes.ts spelled its actors `episode-recorder` and
+// `procedure-promoter` freehand: both are in-repo callers, both were trusted by
+// the old prefix deny-list, and neither is in the registry — so tightening the
+// classifier silently turned a legitimate `promoteProcedure` SUPERSEDE into a
+// CONFLICT, leaving a stale procedure active with no error raised. That is the
+// mirror failure, and it is why the registry cannot be a list someone remembers
+// to join: a module asks for its name here instead of inventing one.
+//
+// `user` is deliberately NOT a registry entry. Nothing in this repo stamps it,
+// and `user:<transport>` is the spelling USER_EVENT_SQL reserves for the user's
+// own event SOURCE — so a future writer naming itself `user:slack` by analogy
+// would collect unconditional amend authority without citing any event. The
+// user's authority comes from cited events, which is a thing that must exist,
+// never from a name, which is a thing anyone can type.
+export function inRepoActor(name: string): string {
+  return `system:${name}`;
+}
 
 function fromAgentSurface(actor?: string | null): boolean {
   const name = actor?.trim();
@@ -633,10 +652,20 @@ export async function enrichMemory(
     if (!cur.rows.length) return null;
     const before = rowToMemory(cur.rows[0]);
     // Enrich is a second door into structured_value, so it passes the same
-    // secret scan writeMemory does. Only findSecrets, not the whole screen:
+    // secret scan writeMemory does. Only the detector, not the whole screen:
     // enrich adds detail to an already-screened memory, it does not create one,
     // so there is no status to downgrade — but a credential is still refused.
-    const secrets = findSecrets(JSON.stringify(args.structuredValue));
+    //
+    // findSecretsInPayload over the OBJECT, not findSecrets over a
+    // JSON.stringify of it. That was a second reader of the credential rule, and
+    // safety.ts's own header says why it could not work: escaping turns
+    // `api_key: hunter2swordfish` into `"api_key":"hunter2swordfish"`, putting a
+    // quote between the label and the colon, so labelled_credential — the
+    // adjacency pattern this whole round is about — could never fire here. It
+    // passed its test only because an OpenAI key has a shape of its own and needs
+    // no label. AGENTS.md meanwhile calls this "the second door into that column"
+    // and says it screens too; now it screens the same way.
+    const secrets = findSecretsInPayload(args.structuredValue);
     if (secrets.length) {
       throw new Error(
         `contains ${secrets.map((f) => f.kind).join(", ")} — credentials are never stored as memory`,

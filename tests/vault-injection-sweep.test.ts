@@ -130,10 +130,15 @@ test("honest titles round-trip", () => {
     "a: b",
     "  padded  ",
   ]) {
-    const { text, note } = trip(title, {});
-    console.log(
-      `--- honest ${JSON.stringify(title)} -> ${JSON.stringify(note.frontmatter.title)} :: ${JSON.stringify(text.split("\n")[1])}`,
-    );
+    const { note } = trip(title, {});
+    // ASSERTED. This used to console.log the round trip and assert nothing, so it
+    // passed whether an honest title survived or was mangled — which is the whole
+    // question it exists to ask. The point of the sweep above is that hostile
+    // titles cannot inject frontmatter; the point of THIS one is the mirror, and a
+    // mirror that cannot fail is not a mirror. `padded` is the one deliberate
+    // exception: the reader trims, because a YAML scalar's surrounding whitespace
+    // is not part of the value.
+    expect(note.frontmatter.title, JSON.stringify(title)).toBe(title.trim());
   }
 });
 
@@ -228,22 +233,70 @@ test("slugs that could escape the tar are refused on write", async () => {
     "a\\b",
     "a.",
     "...",
-    " ..",
-    ".. x",
-    "a /../../b",
+    "\u0000..",
+    "..\u0000x",
+    "a\u0000/../../b",
     `${"x".repeat(200)}`,
     `${"d/".repeat(60)}note`,
     "．．/x",
   ];
+  // ASSERTED, one verdict per vector. This test used to enumerate all nineteen
+  // and only console.log the outcome, so it passed whether every one was refused
+  // or every one was accepted — the measuring-probe pattern, and it was hiding two
+  // live bugs (backslash traversal and NUL truncation) in its own output. The
+  // expected map is written out by hand so that a CHANGE in behaviour has to be
+  // acknowledged here rather than absorbed silently.
+  const verdict: Record<string, string> = {};
   for (const slug of bad) {
-    let outcome = "ACCEPTED";
     try {
       await store.putPage({ slug, title: "T", body: "b" });
-    } catch (e) {
-      outcome = `refused: ${(e as Error).message.slice(0, 90)}`;
+      verdict[JSON.stringify(slug)] = "ACCEPTED";
+    } catch {
+      verdict[JSON.stringify(slug)] = "REFUSED";
     }
-    console.log(`slug ${JSON.stringify(slug)} -> ${outcome}`);
   }
+  expect(verdict).toEqual({
+    // Traversal and separator abuse, in every spelling.
+    '".."': "REFUSED",
+    '"."': "REFUSED",
+    '"../etc/passwd"': "REFUSED",
+    '"/abs/x"': "REFUSED",
+    '"a//b"': "REFUSED",
+    '"trailing/"': "REFUSED",
+    '"a/./b"': "REFUSED",
+    '"a/../../b"': "REFUSED",
+    // Backslash: one segment to us, three to a Windows extractor. It reached the
+    // export tar verbatim until the slug rule refused the character outright.
+    '"..\\\\..\\\\etc\\\\passwd"': "REFUSED",
+    '"a\\\\b"': "REFUSED",
+    // NUL: USTAR's name field is NUL-terminated, so "..<NUL>x.md" is read back by
+    // tar as "..". One string here, a shorter one there.
+    '"\\u0000.."': "REFUSED",
+    '"..\\u0000x"': "REFUSED",
+    '"a\\u0000/../../b"': "REFUSED",
+    // ACCEPTED ON PURPOSE, and each for a reason:
+    // percent-encoding is not decoded by any tar reader, so these are literal
+    // characters and name a real file;
+    '"%2e%2e/x"': "ACCEPTED",
+    // a trailing dot is legal here and merely awkward on Windows — the member is
+    // "a..md", which does not end in a dot, so nothing is stripped;
+    '"a."': "ACCEPTED",
+    '"..."': "ACCEPTED",
+    // fullwidth FULL STOP is not FULL STOP: this names a real directory, and
+    // refusing non-ASCII would break every CJK vault;
+    '"．．/x"': "ACCEPTED",
+    // ...and length is tar.ts's job, not the validator's: a path too long for
+    // USTAR is SKIPPED and reported inside the archive rather than truncated.
+    [JSON.stringify("x".repeat(200))]: "ACCEPTED",
+    [JSON.stringify(`${"d/".repeat(60)}note`)]: "ACCEPTED",
+  });
+
+  // ...and the rows agree with the verdicts: exactly the accepted set is stored,
+  // alongside the two fixture pages this file's earlier tests created.
   const rows = await db.query("SELECT slug FROM pages ORDER BY slug");
-  console.log("stored slugs", JSON.stringify(rows.rows.map((r) => r.slug)));
+  const stored = rows.rows.map((r) => String(r.slug));
+  for (const [json, want] of Object.entries(verdict)) {
+    const slug = JSON.parse(json) as string;
+    expect(stored.includes(slug), `${json} stored?`).toBe(want === "ACCEPTED");
+  }
 });

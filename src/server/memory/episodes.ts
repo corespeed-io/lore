@@ -15,7 +15,7 @@
 
 import type { Db } from "../db";
 import type { MemoryItem } from "./items";
-import { getMemory, memoryFingerprint, rowToMemory, writeMemory } from "./items";
+import { getMemory, inRepoActor, memoryFingerprint, rowToMemory, writeMemory } from "./items";
 import type { ScopeType } from "./items";
 
 export interface EpisodeInput {
@@ -80,7 +80,7 @@ export async function recordEpisode(
     explicit: true,
     confidence: 0.8,
     salience: input.success ? 0.5 : 0.7, // failures are more worth remembering
-    createdBy: input.createdBy ?? "episode-recorder",
+    createdBy: input.createdBy ?? inRepoActor("episode-recorder"),
   });
   return { memory: res.memory, operation: res.operation, reason: res.reason };
 }
@@ -188,7 +188,7 @@ export async function promoteProcedure(db: Db, input: ProcedureInput): Promise<P
     explicit: true,
     confidence: Math.min(0.5 + 0.15 * successes, 0.9),
     salience: 0.7,
-    createdBy: input.createdBy ?? "procedure-promoter",
+    createdBy: input.createdBy ?? inRepoActor("procedure-promoter"),
   });
   if (res.memory) {
     for (const e of episodes) {

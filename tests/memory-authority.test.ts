@@ -35,10 +35,12 @@ import {
   expireMemories,
   getActiveByKey,
   getMemory,
+  inRepoActor,
   revokeMemory,
   statedByUser,
   writeMemory,
 } from "../src/server/memory/items.js";
+import { runProjections } from "../src/server/memory/projection.js";
 import { MEMORY_TOOLS } from "../src/server/memory/tools.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
@@ -296,7 +298,7 @@ test("the user's own words can revoke the user's own memory, and only in their t
       thread_id: "t-rev",
       authorizing_event_ids: [elsewhere.id],
     }),
-  ).rejects.toThrow(/events in the thread this call is working in/);
+  ).rejects.toThrow(/events in a thread this call's scope can reach/);
   expect(must(await getMemory(db, real.id), "row").status).toBe("committed");
 
   // ...and the real thing lands.
@@ -308,6 +310,107 @@ test("the user's own words can revoke the user's own memory, and only in their t
   expect(done.revoked).toBe(1);
   expect(done.forgotten).toBe(true);
   expect(must(await getMemory(db, real.id), "row").status).toBe("revoked");
+});
+
+// THE MIRROR OF THE REGISTRY, and it is the failure tightening a rule causes.
+// episodes.ts named its actors `episode-recorder` and `procedure-promoter`
+// freehand. Both are in-repo callers; both were trusted by the old prefix
+// deny-list; neither was in the new registry. So a legitimate promoteProcedure
+// stopped SUPERSEDING and started filing CONFLICTs — no throw, no error, the
+// stale procedure just kept answering. A vocabulary that modules can spell for
+// themselves is the same "list someone must remember to join" that the registry
+// was meant to replace, so they ask items.ts for the name instead.
+test("in-repo modules name themselves through one function, so none is left out", async () => {
+  const real = await userMemory({
+    threadId: "t-inrepo",
+    sentence: "My deploy target is production-west.",
+    scopeType: "thread",
+    scopeId: "t-inrepo",
+    memoryKey: "user.deploy_target",
+  });
+  // The name episodes.ts actually uses must be trusted...
+  expect((await revokeMemory(db, { memoryId: real.id, actor: inRepoActor("x") }))?.status).toBe(
+    "revoked",
+  );
+  // ...and the freehand spellings it used to use must NOT be, or the registry is
+  // decorative.
+  const second = await userMemory({
+    threadId: "t-inrepo2",
+    sentence: "My billing email is real@example.com.",
+    scopeType: "thread",
+    scopeId: "t-inrepo2",
+    memoryKey: "user.billing_email",
+  });
+  for (const bare of ["episode-recorder", "procedure-promoter", "user", "user:slack"]) {
+    await revokeMemory(db, { memoryId: second.id, actor: bare }).catch(() => undefined);
+    expect(must(await getMemory(db, second.id), bare).status, bare).toBe("committed");
+  }
+  // Every actor this repo writes goes through the shared constructor: a freehand
+  // `createdBy: "something"` in a module is the defect, so pin the source.
+  const episodes = readFileSync(
+    new URL("../src/server/memory/episodes.ts", import.meta.url),
+    "utf8",
+  );
+  expect(episodes.match(/createdBy: input\.createdBy \?\? "[^"]+"/g), "freehand actor").toBeNull();
+});
+
+// THE SAME FIX REFUTED FROM BOTH SIDES. Keying the citation on the call's
+// `threadId` rather than on the scope being revoked was simultaneously too loose
+// and too tight, because `s.target` and `s.threadId` come from different
+// arguments.
+test("a citation must come from a thread the revoked SCOPE can reach", async () => {
+  // TOO LOOSE, half one: an agent-scope memory revoked by citing a user message
+  // borrowed from an unrelated, unowned conversation thread.
+  const atAgent = await userMemory({
+    threadId: "t-agent-src",
+    sentence: "My deploy target is production-west.",
+    scopeType: "agent",
+    scopeId: "A",
+    memoryKey: "user.deploy_target",
+  });
+  const unrelated = await say("t-chat", "hello, what is the weather like?");
+  await expect(
+    tool("forget", {
+      scope: "agent",
+      agent_id: "A",
+      thread_id: "t-chat",
+      memory_id: atAgent.id,
+      authorizing_event_ids: [unrelated.id],
+    }),
+  ).rejects.toThrow(/scope can reach/);
+  expect(must(await getMemory(db, atAgent.id), "agent row").status).toBe("committed");
+
+  // TOO TIGHT, half two, and the more damaging one: VAULT is the only scope with
+  // a projected page — the only content a read-token holder can search — and it
+  // had no reachable citation at all. A vault call always works in the minted
+  // thread `scope:vault`, and no caller may name a `scope:`-prefixed thread, so
+  // the recovery AGENTS.md documents was impossible for the case it is really for.
+  const atVault = await userMemory({
+    threadId: "t-vault-src",
+    sentence: "My office is Berlin.",
+    scopeType: "vault",
+    scopeId: null,
+    memoryKey: "user.office",
+  });
+  await runProjections(db, store, 50);
+  const slug = `memory/vault/${atVault.id}`;
+  expect((await db.query("SELECT slug FROM pages WHERE slug = $1", [slug])).rows.length).toBe(1);
+
+  const asked = await say("t-vault-src", "Forget where my office is.");
+  const done = await tool("forget", {
+    scope: "vault",
+    memory_id: atVault.id,
+    authorizing_event_ids: [asked.id],
+  });
+  expect({ revoked: done.revoked, forgotten: done.forgotten }).toEqual({
+    revoked: 1,
+    forgotten: true,
+  });
+  expect(must(await getMemory(db, atVault.id), "vault row").status).toBe("revoked");
+  // ...and the page it owned is off every read, which is the whole point of
+  // being able to revoke a vault memory at all.
+  const page = await db.query("SELECT deleted_at FROM pages WHERE slug = $1", [slug]);
+  expect(page.rows[0]?.deleted_at ?? null, "the projected page is still searchable").not.toBeNull();
 });
 
 test("an unidentified caller is refused: unknown authority is the weakest authority", async () => {

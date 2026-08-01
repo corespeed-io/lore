@@ -37,7 +37,30 @@ export interface PageHit {
   evidence?: string;
 }
 
-const SLUG_RE = /^[^\s[\]|#]{1,512}$/;
+// A backslash is refused OUTRIGHT, not just checked for traversal. A slug is
+// written into the export tar as `${slug}.md`, and which characters an EXTRACTOR
+// treats as a separator is not our choice: GNU tar reads only '/', but Windows
+// extractors read '\' as well. So `..\..\etc\passwd` passed a segment check that
+// split on '/' alone — one segment to us, three to the extractor that escapes the
+// extraction directory with them. That is two readers of one value, where the
+// second reader is someone else's program, so the only safe rule is to refuse the
+// character rather than to model every extractor's parse. Nothing legitimate
+// loses: vault.ts turns a Windows picker's '\' into '/' and then deletes any
+// survivor, so a backslash can only reach a slug through a hand-written put_page.
+// Residual, stated: a page whose slug already contains one (written before this
+// rule) can be read but not re-written, the same shape as the credential-slug
+// residual in mcp.ts.
+//
+// CONTROL CHARACTERS go with it, for the same reason and more sharply. USTAR's
+// name field is NUL-TERMINATED, so a slug containing a NUL is one string to this
+// validator and a SHORTER one to every tar reader: `..\0x` was accepted here,
+// written as the member `..\0x.md`, and read back by tar as `..` — the traversal
+// the '..' segment rule exists to stop, smuggled past it by a character that
+// changes where the name ends. \s does not cover NUL, so it was not caught by the
+// whitespace rule either. The class is every C0 control plus DEL: none has any
+// business in a page name, and each one is a chance for a downstream parser to
+// disagree with us about what the name IS.
+const SLUG_RE = /^[^\s[\]|#\\]{1,512}$/;
 const RRF_K = 60;
 // How many typed pages the mention gazetteer will load. A ceiling, not a
 // policy: the sweep only ever uses names from slug-prefixed typed pages, and
@@ -137,8 +160,22 @@ function addressCandidates(ref: string, address: string): string[] {
 // stop it. Empty segments cover '/abs', 'trailing/' and 'a//b' at once.
 function invalidSlug(slug: string): boolean {
   return (
-    !SLUG_RE.test(slug) || slug.split("/").some((seg) => seg === "" || seg === "." || seg === "..")
+    !SLUG_RE.test(slug) ||
+    hasControlChar(slug) ||
+    slug.split("/").some((seg) => seg === "" || seg === "." || seg === "..")
   );
+}
+
+// Tested by code point rather than by a character class in SLUG_RE, because a
+// control character written into a regex literal is itself the kind of thing that
+// makes a source file hard to read and grep — and biome forbids it for that
+// reason. Same rule, said in a way that survives being looked at.
+function hasControlChar(slug: string): boolean {
+  for (let i = 0; i < slug.length; i++) {
+    const c = slug.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
 }
 
 // The JS half of REF_KEY_SQL (db.ts): the coarse key a parked ref is looked up

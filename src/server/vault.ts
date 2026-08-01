@@ -166,13 +166,35 @@ export function parseFrontmatter(text: string): {
   return { frontmatter: fm, body: text.slice(m[0].length) };
 }
 
+// ORDER IS THE WHOLE BUG HERE. This used to strip ` # comment` FIRST and only
+// then look for quotes, so a `#` INSIDE a quoted value was read as the start of a
+// comment: the writer quotes `Design # notes` (correctly — `#` is not in its safe
+// set), and the reader cut it back to `"Design`, quote and all. A quoted scalar
+// has no comment inside it, so the quote has to be recognized before anything is
+// cut. Unquoted values keep the comment rule, which is what it is for.
+//
+// Stripping ONE layer, not chaining: `"'x'"` is the VALUE `'x'`, and the chained
+// form used to hand back `x`.
 function scalar(raw: string): string {
-  return raw
-    .replace(/\s+#\s.*$/, "")
-    .trim()
-    .replace(/^"(.*)"$/, "$1")
-    .replace(/^'(.*)'$/, "$1")
-    .trim();
+  const t = raw.trim();
+  if (t.startsWith('"')) {
+    let out = "";
+    for (let i = 1; i < t.length; i++) {
+      if (t[i] === "\\" && i + 1 < t.length) {
+        out += t[++i];
+        continue;
+      }
+      if (t[i] === '"') return out.trim();
+      out += t[i];
+    }
+    // Unterminated: fall through and keep the raw string. Not a YAML parser, and
+    // this module's rule is that an unparseable value survives rather than
+    // silently becoming something else.
+  } else if (t.startsWith("'")) {
+    const end = t.indexOf("'", 1);
+    if (end !== -1) return t.slice(1, end).trim();
+  }
+  return t.replace(/\s+#\s.*$/, "").trim();
 }
 
 // Splits on commas that are OUTSIDE quotes. A naive split(",") let one value

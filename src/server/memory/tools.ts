@@ -121,6 +121,18 @@ function argStringList(name: string, v: unknown): string[] {
   return v.map((x, i) => argString(`${name}[${i}]`, x)).filter((x): x is string => x !== null);
 }
 
+// The same rule for a boolean. `Boolean(a.x)` and a bare `if (a.x)` read the
+// value by TRUTHINESS, so the string "false" — a spelling an LLM emits
+// constantly — turned the flag ON: `get_summary({history:"false"})` returned the
+// version history and `recall({expand_graph:"false"})` expanded the graph. A
+// present-but-non-boolean value is a type error, and a type error must not be the
+// quiet way to an outcome the caller did not ask for.
+function argBool(name: string, v: unknown): boolean {
+  if (v === undefined || v === null) return false;
+  if (typeof v !== "boolean") throw new Error(`${name} must be a boolean, not a ${typeof v}`);
+  return v;
+}
+
 // The same rule for a field whose value must come from a fixed set: absent takes
 // the documented default, an unrecognised value is REFUSED rather than coerced.
 // `TYPE_ENUM.includes(String(a.memory_type)) ? … : "semantic"` silently rewrote a
@@ -366,6 +378,18 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       const content = argString("content", a.content) ?? "";
       if (!content) throw new Error("content is required");
       const memoryType = argEnum("memory_type", a.memory_type, TYPE_ENUM, "semantic") as MemoryType;
+      // EVERY caller-supplied argument is read HERE, before anything durable
+      // happens. memory_key used to be read 29 lines further down, at the
+      // writeMemory call — after the immutable provenance event had already been
+      // appended — so `remember({memory_key:["k"], content:"…"})` threw
+      // "memory_key must be a string" and STILL left the content in
+      // conversation_events, which has no delete path and which context.ts packs
+      // into every subsequent context window for that thread. Four refused
+      // retries left four rows. That is the rule mcp.ts states for itself one
+      // layer up — "a rule that runs after the write is not a rule" — broken
+      // inside a handler. The control that proves it was ordering and not policy:
+      // memory_type is read on the line above and its refusal leaves zero rows.
+      const memoryKey = argString("memory_key", a.memory_key);
       const structuredValue = (a.structured_value as Record<string, unknown>) ?? {};
 
       // Screen the WHOLE call, before anything durable happens. Handing the raw
@@ -433,7 +457,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         scopeType,
         scopeId,
         memoryType,
-        memoryKey: argString("memory_key", a.memory_key),
+        memoryKey,
         content,
         structuredValue,
         sourceEventIds: [event.id],
@@ -516,7 +540,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         scopes: s.readable,
         limit: a.limit as number,
         asOf,
-        expandGraph: Boolean(a.expand_graph),
+        expandGraph: argBool("expand_graph", a.expand_graph),
         types:
           a.memory_type === undefined || a.memory_type === null
             ? undefined
@@ -588,28 +612,62 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       // revoked by anyone, through anything, ever. AGENTS.md meanwhile documents
       // `forget` as THE recovery for a wrong memory.
       //
-      // Restricted to the thread this call is working in, because "the user asked
-      // me to" has to mean the user asked HERE. Citing an event that is not the
-      // user's grants nothing extra — citesUser tests the actor, and a failure
-      // just leaves the ordinary agent-surface rule in force.
+      // WHICH THREADS MAY BE CITED FOLLOWS THE SCOPE BEING REVOKED, not the
+      // thread the call happens to have. Keying it on `s.threadId` was wrong in
+      // both directions at once, and an adversarial pass demonstrated both:
+      //   TOO LOOSE — `s.target` and `s.threadId` come from different arguments,
+      //   so `forget({scope:'agent', agent_id:'A', thread_id:'t-chat', …})`
+      //   revoked an AGENT-scope memory while citing a user message borrowed from
+      //   any unowned conversation thread the caller could name.
+      //   TOO TIGHT — a vault-scope call always works in the minted thread
+      //   `scope:vault`, and no caller may name a `scope:`-prefixed thread, so no
+      //   citation was reachable for the vault AT ALL. Vault is the only scope
+      //   with a projected page, i.e. the only content a BRAIN_READ_TOKEN holder
+      //   can search, so the one case AGENTS.md's "a wrong memory: forget"
+      //   recovery is really for was the one case that could never work.
+      // The rule below is derived from the target scope instead:
+      //   thread → that thread, because the memory belongs to that conversation;
+      //   agent  → a thread that agent owns, or its own minted thread;
+      //   vault  → any thread, because the vault is shared and the user speaks
+      //            for it wherever they speak.
       //
-      // Honest scope, because it is worth being clear about: no door in this
-      // repo can currently append a `user_message` (append_event's event-type
-      // enum is derived from the actor table and excludes every user-implied
-      // type, and events.ts refuses a `tool:`-sourced one), so today no memory is
-      // user-stated and this argument changes no outcome. It is the door the
-      // transport that DOES feed the event log will need, and without it the
-      // authority rule is one nobody can ever satisfy.
+      // WHAT THIS GATE ACTUALLY PROVES, said plainly rather than overclaimed: the
+      // user was PRESENT in a conversation this call can reach. It is not consent
+      // to this particular revocation — any user_message will do, including
+      // "thanks, that's helpful". That is a real reduction from "any tool call may
+      // forget anything" and it is unforgeable from the agent surface, but closing
+      // the rest needs the host to mark an event as a revocation REQUEST, which
+      // the event schema cannot express today. Citing an event that is not the
+      // user's grants nothing extra: citesUser tests the actor, and a failure just
+      // leaves the ordinary agent-surface rule in force.
+      //
+      // Honest scope: no door in this repo can currently append a `user_message`
+      // (append_event's event-type enum is derived from the actor table and
+      // excludes every user-implied type, and events.ts refuses a `tool:`-sourced
+      // one), so today no memory is user-stated and this argument changes no
+      // outcome. It is the door the transport that DOES feed the event log will
+      // need, and without it the authority rule is one nobody can ever satisfy.
       const cited = argStringList("authorizing_event_ids", a.authorizing_event_ids);
       let sourceEventIds: string[] | undefined;
       if (cited.length) {
+        const citable =
+          scope.scopeType === "vault"
+            ? { sql: "TRUE", params: [] as unknown[] }
+            : scope.scopeType === "thread"
+              ? { sql: "e.thread_id = $2", params: [scope.scopeId] }
+              : {
+                  sql: "(t.agent_id = $2 OR e.thread_id = $3)",
+                  params: [scope.scopeId, scopeThreadId(scope)],
+                };
         const found = await c.db.query(
-          "SELECT id FROM conversation_events WHERE id = ANY($1::text[]) AND thread_id = $2",
-          [cited, s.threadId],
+          `SELECT e.id FROM conversation_events e
+             JOIN threads t ON t.id = e.thread_id
+            WHERE e.id = ANY($1::text[]) AND ${citable.sql}`,
+          [cited, ...citable.params],
         );
         if (found.rows.length !== cited.length) {
           throw new Error(
-            "authorizing_event_ids must name events in the thread this call is working in",
+            "authorizing_event_ids must name events in a thread this call's scope can reach",
           );
         }
         sourceEventIds = found.rows.map((r) => String(r.id));
@@ -725,7 +783,13 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       await ensureThread(c.db, s.threadId, s.agentId ?? undefined);
       const res = await appendConversationEvent(c.db, {
         threadId: s.threadId,
-        eventType: (argString("event_type", a.event_type) ?? "") as EventType,
+        // argEnum, not argString: the schema declares this field's values, so the
+        // reader has to be the one that checks them. Leaving it to events.ts meant a
+        // prototype-unsafe `IMPLIED_ACTOR[eventType]` lookup decided membership, and
+        // "constructor" / "toString" / "valueOf" / "__proto__" all passed it — they
+        // were stopped only by the driver choking on a function-valued parameter,
+        // which fails closed by accident and with a driver-specific message.
+        eventType: argEnum("event_type", a.event_type, TOOL_APPENDABLE_EVENTS, "") as EventType,
         content: argString("content", a.content) ?? "",
         structuredPayload: (a.structured_payload as Record<string, unknown>) ?? {},
         actorId: argString("actor_id", a.actor_id) ?? undefined,
@@ -793,7 +857,8 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
     inputSchema: obj({ history: { type: "boolean" } }),
     handler: async (c: BrainCtx, a, s) => {
       const threadId = s.threadId;
-      if (a.history) return { history: await getThreadSummaryHistory(c.db, threadId) };
+      if (argBool("history", a.history))
+        return { history: await getThreadSummaryHistory(c.db, threadId) };
       return { summary: await getActiveThreadSummary(c.db, threadId) };
     },
   },

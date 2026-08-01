@@ -395,12 +395,32 @@ test("a credential in ANY field of ANY WRITE tool is refused before the handler 
 // this test still exists: the screen reads the TOOL's access, not the caller's
 // grant, so a read-token holder naming a write tool is screened before the
 // "requires write access" refusal can report anything back.
-test("the screen decides on the tool's own access, not the caller's grant", async () => {
+// REVERSED DELIBERATELY, and the old name was "the screen decides on the tool's
+// own access, not the caller's grant". That ordering was chosen so a read-token
+// holder naming put_page would be "screened here rather than talked out of it
+// later" — and it made the screen, which walks every string leaf against every
+// enclosing key, FREE TO THE ONE PARTY IT PROTECTS AGAINST. An adversarial pass
+// measured a BRAIN_READ_TOKEN holder spending 7.4 seconds of server CPU on an
+// 83KB payload before being told it lacked write access, 600 times a minute.
+// A caller that cannot write has nothing for a credential to land in, so the
+// grant is checked first and the screen is what a WRITER passes.
+test("the grant is checked before the screen, and the screen still guards every write", async () => {
   const denied = await handleRpc(noCtx, "read", "tools/call", {
     name: "put_page",
     arguments: { slug: "notes/a", body: GITHUB },
   });
-  expect(denied.error?.message).toMatch(/refused: request contains/);
+  // CHANGED: was /refused: request contains/. A read token is now turned away on
+  // its grant, which is cheaper and tells it strictly less.
+  expect(denied.error?.message).toMatch(/requires write access/);
+  expect(denied.result, "reached a handler").toBeUndefined();
+  // The half that must NOT change: a WRITE-granted call carrying the same
+  // credential is still refused by the screen, above refuseReserved and above any
+  // connection.
+  const screened = await handleRpc(noCtx, "write", "tools/call", {
+    name: "put_page",
+    arguments: { slug: "notes/a", body: GITHUB },
+  });
+  expect(screened.error?.message).toMatch(/refused: request contains/);
   // Above refuseReserved as well: a call that trips both is refused as a
   // credential, and reaches neither a handler nor a connection either way.
   const both = await handleRpc(noCtx, "write", "tools/call", {
@@ -1028,6 +1048,78 @@ const CARD = "4111 1111 1111 1111";
 // tomorrow — is probed the day it lands, with no list to update. Every read tool
 // gets a payload of credentials in its declared fields AND in one it never
 // declared, and then every text-ish column of every table is scanned.
+// THE SCREEN WAS FREE TO THE PARTY IT PROTECTS AGAINST. secretRefusal ran on the
+// TOOL's access before the CALLER's grant was checked, and the walk it runs is
+// O(leaves x depth) — so a BRAIN_READ_TOKEN holder, who cannot write anything,
+// posted a deep payload naming put_page and spent seconds of server CPU before
+// being told it lacked write access. Measured at 7.4s for 83KB nested 4,000 deep,
+// against /api/mcp's 600 requests a minute. Two changes close it: the grant is
+// checked first, and the walk is depth-bounded.
+test("a read token cannot buy the credential walk, and the walk is bounded", async () => {
+  await withBrain(async (ctx) => {
+    // A payload engineered to be deep AND wide.
+    let deep: Record<string, unknown> = { leaf: "value-here" };
+    for (let i = 0; i < 3000; i++) deep = { [`k${i}`]: deep, [`leaf${i}`]: "value-here" };
+
+    // Opening a context is itself work; if the read token never gets past the
+    // grant check it must never reach one either.
+    let opened = 0;
+    const getCtx = async () => {
+      opened++;
+      return ctx;
+    };
+
+    const started = performance.now();
+    const readCall = await handleRpc(getCtx, "read", "tools/call", {
+      name: "put_page",
+      arguments: { slug: "a/b", body: "x", frontmatter: deep },
+    });
+    const ms = performance.now() - started;
+    expect(readCall.error?.message).toContain("requires write access");
+    expect(opened, "a refused read opened a database context").toBe(0);
+    // Generous by 20x: the point is that it is not seconds. Before the reorder
+    // this same payload took ~4s and still ended in "requires write access".
+    expect(ms, `the read token paid ${ms.toFixed(0)}ms of screening`).toBeLessThan(400);
+
+    // The write token DOES get screened — the screen must not have been skipped
+    // for everyone — and a payload too deep to walk is REFUSED rather than
+    // crashing out of handleRpc as a 500.
+    const writeCall = await handleRpc(getCtx, "write", "tools/call", {
+      name: "put_page",
+      arguments: { slug: "a/b", body: "x", frontmatter: deep },
+    });
+    expect(writeCall.error?.message).toMatch(/unscreenable_payload/);
+    expect(writeCall.result, "an unscreenable payload reached a handler").toBeUndefined();
+  });
+});
+
+// `TOOLS[name]` walked the prototype chain, so "constructor" was a known tool: it
+// skipped the credential screen and the access gate (both read `def.access`,
+// undefined on a function), skipped refuseReserved, and OPENED THE DATABASE
+// before failing with "def.handler is not a function".
+test("a prototype key is not a tool", async () => {
+  await withBrain(async (ctx) => {
+    let opened = 0;
+    const getCtx = async () => {
+      opened++;
+      return ctx;
+    };
+    for (const name of ["constructor", "toString", "valueOf", "__proto__", "hasOwnProperty"]) {
+      const res = await handleRpc(getCtx, "read", "tools/call", { name, arguments: {} });
+      expect(res.error?.message, name).toContain(`unknown tool '${name}'`);
+      expect(res.result, name).toBeUndefined();
+    }
+    expect(opened, "an unknown tool name opened a database context").toBe(0);
+    // MIRROR: a real tool still resolves and still runs.
+    const ok = await handleRpc(getCtx, "read", "tools/call", {
+      name: "list_pages",
+      arguments: {},
+    });
+    expect(ok.error).toBeUndefined();
+    expect(opened).toBe(1);
+  });
+});
+
 test("every read tool takes a credential-shaped payload and persists nothing", async () => {
   await withBrain(async (ctx) => {
     for (const name of READ_TOOL_NAMES) {

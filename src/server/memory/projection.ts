@@ -498,6 +498,18 @@ const MIGRATION_BATCH = 200;
 // keyed step FOREVER. This is a convergence sweep, not a schema change: it is
 // idempotent, and on a clean brain it costs exactly TWO queries that return no
 // rows — the first batch (which exits early) and the leak check — so keying it on a
+// MEASURED, because "it is cheap" is the kind of claim that should carry a number,
+// and because per-cold-start cost is the one real objection to doing this at boot
+// (on Workers cold starts are frequent). Against PGlite, 5,000 ordinary pages:
+//   clean brain                     18ms   — every cold start, the common case
+//   first boot, 5,000 legacy strays  7.3s  — ONCE, and it is an upgrade
+//   every cold start after that     ~285ms — re-judging strays it has retracted
+// The candidate scan is index-assisted (Index Scan using pages_pkey), not a seq
+// scan. The steady-state 285ms is the honest cost of the paragraph below: a
+// retracted page nothing claims stays a candidate forever, because there is
+// nothing left to do to it and destroying it is the one thing this design refuses.
+// It is proportional to how many private projections the brain ONCE had, not to
+// its size, and a brain that never ran an older release pays the 18ms.
 // version buys nothing but a way to miss it. That is two anti-joins over the
 // memory/ prefix per process boot on a single-tenant personal brain. The leak check
 // is deliberately NOT skipped when the first batch came back empty, even though it

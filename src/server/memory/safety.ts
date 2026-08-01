@@ -170,32 +170,59 @@ export function findSecrets(text: string): SecretFinding[] {
 //
 // COST, measured rather than asserted: one extra scan per (leaf, enclosing key)
 // pair, so a payload with L leaves nested D deep costs O(L*D) instead of O(L).
-// A realistic put_page (4KB body, three frontmatter arrays) is 0.14ms; a payload
-// engineered to be deep AND wide — 400 nested objects each carrying a leaf — is
-// 96ms. That quadratic is real and is NOT reachable unauthenticated: this screen
-// runs for WRITE tools only, so it costs a BRAIN_WRITE_TOKEN, and that token
-// already buys /api/export (a full dump) and delete_page over the whole brain.
-// CPU is the least of what a leaked write credential can do here, and the walk's
-// own unbounded recursion was already reachable the same way.
+// A realistic put_page (4KB body, three frontmatter arrays) is 0.14ms.
+//
+// THE QUADRATIC WAS A FREE DoS FOR THE WRONG PARTY, and this comment used to
+// wave it away with "it costs a BRAIN_WRITE_TOKEN, which already buys
+// /api/export". That was false, and an adversarial pass measured it: mcp.ts ran
+// this screen on the TOOL's access before checking the CALLER's grant, so a
+// BRAIN_READ_TOKEN holder — the one party the screen exists to protect against,
+// who cannot write anything — posted 83KB nested 4,000 deep, spent 7.4 SECONDS of
+// server CPU, and was only then told it lacked write access. At /api/mcp's 600
+// requests a minute that is roughly 27 CPU-minutes per wall-minute per instance.
+// Two changes close it and they are in different files on purpose: mcp.ts now
+// refuses on the grant BEFORE screening (a caller who cannot write has nothing to
+// screen), and MAX_DEPTH below bounds the walk itself, so the remaining cost to a
+// write-token holder is linear in payload size.
+// A payload nested deeper than this is REFUSED rather than screened, and the
+// refusal is a finding so every caller of this function already handles it.
+//
+// Two reasons, and the second is why it is a refusal and not a truncation.
+// First, cost: carrying labels down makes the walk O(leaves x depth), and a
+// deep-and-wide payload of 83KB measured at 7.4 seconds of CPU. Second,
+// correctness: past roughly 3,000 frames the recursion below threw
+// RangeError — which left handleRpc as a 500 rather than a refusal, so the
+// deepest payloads were the ones that got the least screening. Screening what we
+// can walk and failing OPEN on the rest is exactly backwards; a payload we cannot
+// walk is a payload we cannot clear.
+//
+// 64 is far past anything a real caller sends (an imported note's frontmatter is
+// two or three levels) and far under the stack limit.
+const MAX_DEPTH = 64;
+
 export function findSecretsInPayload(payload: unknown): SecretFinding[] {
   const kinds = new Set<string>();
   const scan = (text: string): void => {
     for (const f of findSecrets(text)) kinds.add(f.kind);
   };
-  const visit = (v: unknown, labels: readonly string[]): void => {
+  const visit = (v: unknown, labels: readonly string[], depth = 0): void => {
+    if (depth > MAX_DEPTH) {
+      kinds.add("unscreenable_payload");
+      return;
+    }
     if (typeof v === "string") {
       scan(v);
       for (const label of labels) scan(`${label}: ${v}`);
     } else if (Array.isArray(v)) {
       // An array is not a label, so the enclosing keys pass straight through it.
-      for (const x of v) visit(x, labels);
+      for (const x of v) visit(x, labels, depth + 1);
     } else if (v && typeof v === "object") {
       for (const [k, x] of Object.entries(v)) {
         // The key on its own: a credential can BE a key as easily as a value.
         scan(k);
         // A repeated key adds no new pairing, so a self-referential shape cannot
         // grow the label list without bound.
-        visit(x, labels.includes(k) ? labels : [...labels, k]);
+        visit(x, labels.includes(k) ? labels : [...labels, k], depth + 1);
       }
     }
   };

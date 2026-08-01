@@ -4,9 +4,13 @@ import { type TarEntry, serializeNote, tarStream, withSkipReport } from "@/serve
 // together on purpose: a store you can only put data INTO is not one a person
 // should trust with their notes.
 //
-// Read bearer is enough (BRAIN_READ_TOKEN or the write token), same rule as
-// /api/mcp — one request that dumps everything deserves an explicit credential
-// rather than riding the viewer session.
+// The WRITE bearer, not either one — and this comment said the opposite six lines
+// above the code that enforces it, which is how a reader learns the wrong rule
+// from the file that implements it. Export streams `exportBatch` straight out and
+// never passes the MCP dispatcher, so it is the one door that bypasses the scoped
+// projection filter: a full dump is an owner operation. One request that dumps
+// everything deserves an explicit credential rather than riding the viewer
+// session.
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";

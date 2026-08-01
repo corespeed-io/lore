@@ -56,6 +56,19 @@ local dev without Cloudflare Access set `AUTH_MODE=none` **and** `ALLOW_INSECURE
 — otherwise every route returns 403. Before opening a PR, all of
 typecheck + lint + test + build must pass (this is what CI runs).
 
+**GOTCHA — never write a literal NUL byte into source; write `\u0000`.** This has
+happened three times. A file containing one is classified as BINARY by grep, which
+then silently prints no matches for strings that ARE in it — that is how
+`tests/vault-injection-sweep.test.ts` came to hold two tests that asserted nothing
+and a live path-traversal bug while looking fine. Git's own binary heuristic only
+sniffs the first 8000 bytes, so the diff can still render while other tools
+disagree; "it looked fine in the diff" is not evidence. **Do not try to check this
+with `grep`**: `grep -rlP '\x00'` cannot match a NUL (PCRE reads the subject as a C
+string) and `grep -q "$(printf '\000')"` has its NUL eaten by command substitution,
+leaving an empty pattern that matches every file — both report clean, always. The
+check is a test now, `tests/smoke.test.ts`, so CI does it and nobody has to
+remember: a rule enforced by discipline is a rule with a path around it.
+
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page
 (`__webpack_modules__[moduleId] is not a function`). To build: stop dev, `rm -rf
@@ -198,7 +211,9 @@ graph, search, page view) works unchanged.
   scoped-projection filter, and a full dump is an owner operation.
 - Both routes plus `/api/mcp` authenticate with the SAME bearer pair via
   `src/server/auth-bearer.ts` — one rule, one place. Import needs
-  `BRAIN_WRITE_TOKEN`; export accepts either token. They are exempt from the
+  `BRAIN_WRITE_TOKEN`; **so does export** — this line used to say "either token",
+  contradicting the paragraph three lines above it and the route's own code, which
+  compares `grantFor(...) !== "write"`. They are exempt from the
   viewer gate in `src/middleware.ts` (they are not browser users) but are still
   rate-limited there. **The viewer console stays read-only by construction:
   writing needs the write credential, whoever you are.**
@@ -366,9 +381,13 @@ confidently tells a user something untrue. It appends its own provenance event
 rather than creating a fact from nowhere — as an `agent_action`, never as a
 `user_message`: extraction trusts "only the user speaks for the user", so a tool
 that forged that actor could plant a user statement the next sweep auto-commits
-and supersedes the real value with. The event content is passed through
-`redactSecrets` before the insert, because layer 1 has no delete path and a
-rejected write must not leave the credential behind. The server decides scope; a
+and supersedes the real value with. A credential in the event content never
+reaches the insert at all: `handleRpc`'s screen refuses the whole call above the
+tool lookup, so no event is written. (This paragraph used to say the content "is
+passed through `redactSecrets`" — that function was DELETED in 2befdf4 as
+unsound, because a detector matches a MARKER and cannot bound a secret, so
+rewriting deleted the label and kept the key body. There is no redactor; there is
+a refusal.) The server decides scope; a
 caller cannot pass a predicate or widen scope — and because a raw `memory_id` is
 a scope-free handle, `forget` and `inspect_memory` both require the scope the
 caller addresses and report an out-of-scope hit as `not_found`, so a caller cannot

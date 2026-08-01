@@ -487,7 +487,16 @@ export async function handleRpc(
     }
     case "tools/call": {
       const name = String(params?.name ?? "");
-      const def = TOOLS[name];
+      // Object.hasOwn, not a bare index. `TOOLS[name]` walks the prototype chain,
+      // so `tools/call {name:"constructor"}` — and "toString", "valueOf",
+      // "__proto__" — found a truthy `def` and was treated as a KNOWN tool: it
+      // skipped the credential screen and the access gate (both read
+      // `def.access`, which is undefined on a function), skipped refuseReserved,
+      // and then OPENED THE DATABASE via getCtx() before failing with
+      // "def.handler is not a function". No handler ran, so nothing was written —
+      // but "a def was found" is not the same question as "this is a tool", and
+      // the gap let an unknown name reach a connection on a cold isolate.
+      const def = Object.hasOwn(TOOLS, name) ? TOOLS[name] : undefined;
       if (!def) return { error: { code: -32602, message: `unknown tool '${name}'` } };
       // Screened and decided on the SAME object the handler is about to read:
       // clampArgs' output, not the raw params, so there is no second spelling
@@ -498,12 +507,23 @@ export async function handleRpc(
       // a payload too deep to walk leaves handleRpc instead of being caught into an
       // isError tool result that reads like an ordinary miss. -32602 rather than an
       // isError result because no tool ran; the access gate refuses this way too.
+      // THE GRANT IS CHECKED FIRST, and the order is the whole point. It used to
+      // run the other way round, on the reasoning that deciding from the TOOL's
+      // access rather than the caller's meant "a read-token holder naming put_page
+      // is screened here rather than talked out of it later". That reasoning made
+      // the screen — which walks every string leaf against every enclosing key —
+      // free to the one party it exists to protect against. Measured: a
+      // BRAIN_READ_TOKEN holder posting an 83KB payload nested 4,000 deep spent
+      // 7.4 SECONDS of server CPU and was then told it lacked write access, and
+      // /api/mcp allows 600 of those a minute. A caller that cannot write does not
+      // need its payload screened, because there is nothing for a credential to
+      // land in; refusing it on the grant costs one comparison.
+      if (def.access === "write" && access !== "write") {
+        return { error: { code: -32602, message: `tool '${name}' requires write access` } };
+      }
       if (def.access === "write") {
         const secrets = secretRefusal(args);
         if (secrets) return { error: { code: -32602, message: secrets } };
-      }
-      if (def.access === "write" && access !== "write") {
-        return { error: { code: -32602, message: `tool '${name}' requires write access` } };
       }
       try {
         refuseReserved(def, args);

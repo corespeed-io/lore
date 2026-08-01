@@ -158,13 +158,39 @@ export async function middleware(req: NextRequest) {
   }
 
   if (denial) {
-    // A REJECTED caller is charged in its own namespace. Two things follow, and
-    // both were broken before: it cannot spend a bucket a valid caller needs
-    // (that was the owner lockout), and it cannot escape a bucket by varying
-    // whatever it presented, because nothing it presented is part of the key
-    // (that was the rotation dodge). Charged rather than refused for free,
-    // because a 401 still costs an auth check — in proxy mode, a JWT
-    // verification.
+    // A LIMITER MAY NEVER STAND BETWEEN A HUMAN AND THE LOGIN PROMPT. The first
+    // version of this branch charged EVERY rejected caller and then let the 429
+    // replace the denial — and on a bare origin, where every unauthenticated
+    // caller is `bad:anon`, 600 credential-less GETs to `/` exhausted that one
+    // bucket and the next honest visitor got a 429 with NO `WWW-Authenticate`
+    // header. A browser only prompts on a 401 that carries it, so the owner could
+    // not log in to their own console: the same owner-lockout this whole change
+    // set out to close, moved from the `ip:` bucket to the `bad:` one. That is the
+    // rule being enforced at the wrong moment — the challenge is not the attack,
+    // it is the answer an honest caller needs.
+    //
+    // So the viewer gate's denial is delivered unconditionally, exactly as it was
+    // before this change. It is the same judgement `/api/health` already gets one
+    // screen up: a 429'd healthcheck turns a flood into a restart loop, and a
+    // 429'd challenge turns one into a lockout. Both are worse than the flood.
+    //
+    // A BRAIN route's denial is different and stays limited: no human is prompted
+    // by it, a valid credential is keyed under `t:` and cannot be crowded out of
+    // it, and an agent that just retries forever is precisely what wants bounding.
+    // TWO RESIDUALS, both measured, neither hidden:
+    //   - Two credential-less callers on one address share `bad:<addr>`, so one
+    //     can turn the other's 401 into a 429. Neither holds a credential, so no
+    //     legitimate party loses anything it could have had.
+    //   - On a BARE origin the key is `bad:anon` unless the caller supplies
+    //     x-forwarded-for — which clientAddr reads unconditionally as a fallback,
+    //     so there a rejected caller CAN mint a fresh bucket per request by
+    //     rotating that header. An earlier draft of this comment claimed the
+    //     opposite ("nothing it presented is part of the key"); it was wrong, and
+    //     an adversarial pass showed 700 rotated 401s going unlimited. What it
+    //     buys is 401s, which were free before this change too, so the posture is
+    //     unchanged rather than worsened — bounding it needs the trusted-hop
+    //     count clientAddr's own note already asks for, not more header sniffing.
+    if (!BRAIN_ROUTES.has(scope)) return denial;
     ids.length = 0;
     ids.push(`bad:${addr ?? "anon"}`);
   } else {

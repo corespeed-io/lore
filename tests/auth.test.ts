@@ -193,6 +193,30 @@ test.each([
   expect(codes.has(429), "rotation was never limited").toBe(true);
 });
 
+// THE FIX'S OWN OWN-GOAL, caught by an adversarial pass over it. Charging every
+// rejected caller and letting the 429 replace the denial made the LOGIN CHALLENGE
+// rate-limitable: on a bare origin every unauthenticated caller is `bad:anon`, so
+// 600 credential-less GETs exhausted that one bucket and the next honest visitor
+// got a 429 with no `WWW-Authenticate` header. A browser only prompts on a 401
+// that carries it, so the owner could not log in to their own console — the same
+// lockout the fix set out to close, moved from the `ip:` bucket to the `bad:` one.
+test("a flood cannot deny an honest visitor their login challenge", async () => {
+  process.env.AUTH_MODE = "password";
+  process.env.UI_PASSWORD = "secret";
+  // No address headers at all: `next start` or the Dockerfile with nothing in
+  // front, which is where every unauthenticated caller shares one bucket.
+  for (let i = 0; i < 700; i++) await mw("/");
+  const honest = await mw("/");
+  expect(honest.status, "the honest visitor was rate-limited out of logging in").toBe(401);
+  expect(
+    honest.headers.get("WWW-Authenticate"),
+    "the browser was not told how to authenticate",
+  ).toBe("Basic");
+  // ...and the caller that already holds the password still gets in.
+  const ok = await mw("/", { authorization: `Basic ${btoa("x:secret")}` });
+  expect(ok.status).toBe(200);
+});
+
 // THE OTHER FACE OF THE SAME BUG, and the more damaging one: the address bucket
 // used to be charged BEFORE the credential was checked, so traffic that was
 // always going to 401 spent the owner's quota. /api/export is 10/min, so eleven
