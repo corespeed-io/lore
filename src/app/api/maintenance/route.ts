@@ -10,10 +10,17 @@ import { grantFor } from "@/server/auth-bearer";
 // upgrades — and a Cron Trigger invocation caps at 15 minutes wall-clock while
 // an HTTP-triggered Worker does not (CPU is capped either way).
 //
-// POST /api/maintenance            -> sweep a batch
+// POST /api/maintenance
+//      {}                          -> mention sweep (the default job)
 //      { "limit": 50 }             -> batch size (default 50, max 200)
 //      { "dryRun": true }          -> report the edges it WOULD add, write none
 //      { "action": "clear" }       -> delete every auto edge and rescan later
+//      { "action": "memory" }      -> summarize, extract, project, consolidate
+//      { "action": "health" }      -> backend health counters (no writes)
+//
+// The memory job is where background extraction belongs: extraction is
+// deliberately NOT run synchronously after every message, so a scheduler drives
+// it and the lease keeps exactly one writer at a time.
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -38,6 +45,7 @@ export async function POST(req: Request) {
     limit?: number;
     dryRun?: boolean;
     action?: string;
+    thread_id?: string;
   };
 
   const { getStore, getDb } = await import("@/server/local");
@@ -45,6 +53,13 @@ export async function POST(req: Request) {
 
   if (body.action === "clear") {
     return NextResponse.json({ action: "clear", ...(await store.clearAutoEdges()) });
+  }
+
+  const db0 = await getDb();
+  if (body.action === "health") {
+    // Read-only, so it does not take the lease.
+    const { memoryHealth } = await import("@/server/memory/consolidate");
+    return NextResponse.json({ action: "health", ...(await memoryHealth(db0)) });
   }
 
   // Compare-and-set: whoever wins the UPDATE holds the lease, everyone else
@@ -61,6 +76,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ detail: "a sweep is already running" }, { status: 409 });
   }
   try {
+    if (body.action === "memory") {
+      const { runMemoryMaintenance } = await import("@/server/memory/maintenance");
+      return NextResponse.json({
+        action: "memory",
+        ...(await runMemoryMaintenance(db, store, { limit: body.limit, threadId: body.thread_id })),
+      });
+    }
     const result = await store.sweepMentions({ limit: body.limit, dryRun: body.dryRun });
     return NextResponse.json({
       ...result,

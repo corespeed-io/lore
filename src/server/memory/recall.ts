@@ -94,6 +94,37 @@ async function memoriesForPages(
   return out;
 }
 
+// Historical recall CANNOT go through the page projection: retiring a memory
+// removes its page (correct, so a superseded value leaves active search), which
+// means a superseded row has nothing left to search. So as_of queries read
+// canonical memory directly — which also makes them work when a projection has
+// failed. Lexical arms mirror the store's: FTS for segmented text, ILIKE for CJK.
+async function recallHistorical(db: Db, args: RecallArgs): Promise<RecalledMemory[]> {
+  const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
+  const scope = scopeClause(args.scopes, 2);
+  const params: unknown[] = [args.query.trim(), ...scope.params, args.asOf];
+  const temporal = AS_OF_SQL.replaceAll("$ASOF", `$${params.length}`);
+  let typeFilter = "";
+  if (args.types?.length) {
+    params.push(args.types);
+    typeFilter = `AND m.memory_type = ANY($${params.length}::text[])`;
+  }
+  params.push(limit);
+  const res = await db.query(
+    `SELECT m.* FROM memory_items m
+     WHERE ${scope.sql} AND ${temporal} ${typeFilter}
+       AND (
+         to_tsvector('simple', m.content || ' ' || coalesce(m.memory_key, ''))
+           @@ websearch_to_tsquery('simple', $1)
+         OR m.content ILIKE '%' || $1 || '%'
+         OR coalesce(m.memory_key, '') ILIKE '%' || $1 || '%'
+       )
+     ORDER BY m.valid_from DESC LIMIT $${params.length}`,
+    params,
+  );
+  return res.rows.map((row) => ({ memory: rowToMemory(row), via: "key" as const, score: 0 }));
+}
+
 // Current recall: only what is true now.
 export async function recallMemory(
   db: Db,
@@ -101,6 +132,7 @@ export async function recallMemory(
   args: RecallArgs,
 ): Promise<RecalledMemory[]> {
   if (args.scopes.length === 0) return [];
+  if (args.asOf) return recallHistorical(db, args);
   const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
   const hits = await store.search({ query: args.query, limit: limit * 4 });
   const bySlug = await memoriesForPages(
@@ -200,8 +232,13 @@ export interface GateDecision {
 // first implementation rather than the last.
 const PRIOR_STATE =
   /\b(?:before|previously|earlier|last time|we (?:discussed|agreed|decided)|as (?:i|we) (?:said|mentioned)|remind me|did i (?:say|tell)|what did i)\b/i;
+// Two shapes, both genuinely about stored personal state:
+//   a QUESTION about something of the user's — "what is my billing email?"
+//   an instruction to apply their stored way — "use my preferred format"
+// A literal list of attribute words was tried first and was wrong: it missed
+// "my billing email" because `email` was not the word right after `my`.
 const PERSONALIZATION =
-  /\b(?:my|our)\s+(?:preferred|usual|default|style|format|convention|setup|email|address|timezone|time zone)\b|\bprefer\b|\bas usual\b|\blike (?:i|we) always\b/i;
+  /\b(?:what|which|where|who|when|how)\b[^?]*\b(?:my|our)\b|\b(?:my|our)\b[^?]*\?|\b(?:my|our)\s+(?:preferred|usual|default|standard|normal)\b|\bprefer\b|\bas usual\b|\blike (?:i|we) always\b/i;
 const CONTINUATION =
   /\b(?:continue|resume|pick up|carry on|the (?:previous|earlier|last) (?:workflow|procedure|process|run))\b/i;
 const HISTORICAL =

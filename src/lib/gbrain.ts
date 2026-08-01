@@ -32,6 +32,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // these are the rest of the read surface.
   "inspect_memory",
   "memory_gate",
+  "list_events",
+  "get_summary",
 ]);
 
 export class ToolNotAllowedError extends Error {}

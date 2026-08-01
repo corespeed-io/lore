@@ -234,3 +234,18 @@ test("splitPath refuses paths USTAR cannot represent, rather than truncating", (
   }
   expect(splitPath(`${"x".repeat(200)}.md`)).toBeNull();
 });
+
+test("the reserved memory namespace is refused by BOTH write paths", async () => {
+  // put_page (the tool) and /api/import are the two ways a user page gets in.
+  // Guarding one and not the other is how a generated projection gets clobbered,
+  // which is exactly what happened before this test existed.
+  const { isMemorySlug } = await import("../src/server/memory/projection.js");
+  expect(isMemorySlug("memory/vault/abc")).toBe(true);
+  expect(isMemorySlug("memory/thread/t1/abc")).toBe(true);
+  expect(isMemorySlug("notes/memory-of-things")).toBe(false);
+
+  // The importer derives the slug from the path, so a vault folder named
+  // "memory" produces a reserved slug and must be skipped.
+  const note = parseNote({ path: "memory/vault/squatter.md", text: "trying to squat" });
+  expect(isMemorySlug(note.slug)).toBe(true);
+});

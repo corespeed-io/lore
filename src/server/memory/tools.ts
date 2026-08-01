@@ -12,12 +12,13 @@
 //   candidate was committed will confidently tell the user something untrue.
 
 import type { BrainCtx, ToolDef } from "../mcp";
-import { ensureThread } from "./events";
-import { appendConversationEvent } from "./events";
+import type { EventType } from "./events";
+import { appendConversationEvent, ensureThread, getConversationEvents, getThread } from "./events";
 import type { MemoryType, ScopeType } from "./items";
 import { inspectMemory, revokeMemory, writeMemory } from "./items";
 import { projectMemory } from "./projection";
 import { recallMemory, searchMemoryByKey, shouldRetrieveMemory } from "./recall";
+import { getActiveThreadSummary, getThreadSummaryHistory, refreshThreadSummary } from "./summary";
 
 const obj = (props: Record<string, unknown>, required: string[] = []) => ({
   type: "object",
@@ -256,6 +257,119 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
         provenance: found.sources,
         history: found.revisions,
       };
+    },
+  },
+
+  append_event: {
+    access: "write",
+    description:
+      "Append one immutable conversation event. Pass idempotency_key so an at-least-once " +
+      "pipeline can retry safely — a replay returns the existing event instead of duplicating it. " +
+      "Never send hidden reasoning; redact secrets from tool payloads before calling.",
+    inputSchema: obj(
+      {
+        thread_id: { type: "string" },
+        event_type: {
+          type: "string",
+          enum: [
+            "user_message",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "agent_action",
+            "approval",
+            "artifact",
+            "system_observation",
+          ],
+        },
+        content: { type: "string" },
+        structured_payload: { type: "object" },
+        actor_id: { type: "string" },
+        source: { type: "string" },
+        trace_id: { type: "string" },
+        idempotency_key: { type: "string" },
+        agent_id: { type: "string" },
+      },
+      ["thread_id", "event_type"],
+    ),
+    handler: async (c: BrainCtx, a) => {
+      const threadId = String(a.thread_id ?? "").trim();
+      if (!threadId) throw new Error("thread_id is required");
+      await ensureThread(c.db, threadId, typeof a.agent_id === "string" ? a.agent_id : undefined);
+      const res = await appendConversationEvent(c.db, {
+        threadId,
+        eventType: String(a.event_type) as EventType,
+        content: typeof a.content === "string" ? a.content : "",
+        structuredPayload: (a.structured_payload as Record<string, unknown>) ?? {},
+        actorId: typeof a.actor_id === "string" ? a.actor_id : undefined,
+        source: typeof a.source === "string" ? a.source : undefined,
+        traceId: typeof a.trace_id === "string" ? a.trace_id : undefined,
+        idempotencyKey: typeof a.idempotency_key === "string" ? a.idempotency_key : undefined,
+      });
+      return {
+        event_id: res.event.id,
+        sequence: res.event.sequence,
+        duplicate: res.duplicate,
+      };
+    },
+  },
+
+  list_events: {
+    access: "read",
+    description: "Read a thread's events in order, from an optional sequence exclusive.",
+    inputSchema: obj(
+      {
+        thread_id: { type: "string" },
+        from_sequence: { type: "number" },
+        limit: { type: "number" },
+      },
+      ["thread_id"],
+    ),
+    handler: async (c: BrainCtx, a) => {
+      const threadId = String(a.thread_id ?? "");
+      const thread = await getThread(c.db, threadId);
+      if (!thread) throw new Error(`not_found: thread ${threadId}`);
+      const events = await getConversationEvents(c.db, {
+        threadId,
+        fromSequence: a.from_sequence as number,
+        limit: a.limit as number,
+      });
+      return { thread, events };
+    },
+  },
+
+  refresh_summary: {
+    access: "write",
+    description:
+      "Fold the events since the active summary's covered range into a new version. Returns " +
+      "unchanged=true when there is nothing new, rather than churning a version.",
+    inputSchema: obj({ thread_id: { type: "string" } }, ["thread_id"]),
+    handler: async (c: BrainCtx, a) => {
+      const { summarizerFromEnv } = await import("./summarizer-default");
+      const res = await refreshThreadSummary(c.db, summarizerFromEnv(), String(a.thread_id ?? ""));
+      return {
+        unchanged: res.unchanged,
+        version: res.summary?.version ?? null,
+        covered_from: res.summary?.covered_from_sequence ?? null,
+        covered_through: res.summary?.covered_through_sequence ?? null,
+        summary: res.summary?.structured_summary ?? null,
+        rendered: res.summary?.rendered_summary ?? null,
+      };
+    },
+  },
+
+  get_summary: {
+    access: "read",
+    description:
+      "The active thread summary, or its full version history with history=true (every version " +
+      "is kept for debugging).",
+    inputSchema: obj({ thread_id: { type: "string" }, history: { type: "boolean" } }, [
+      "thread_id",
+    ]),
+    handler: async (c: BrainCtx, a) => {
+      const threadId = String(a.thread_id ?? "");
+      if (a.history) return { history: await getThreadSummaryHistory(c.db, threadId) };
+      return { summary: await getActiveThreadSummary(c.db, threadId) };
     },
   },
 

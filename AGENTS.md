@@ -122,6 +122,12 @@ graph, search, page view) works unchanged.
   resolving. It deliberately does **not** rewrite other pages' bodies —
   that would mutate notes the user didn't touch, change their content_hash,
   and re-embed every referrer.
+- Schema is at **v4**. The memory tables are declared in
+  `src/server/memory/ddl.ts` and spliced into the ONE ddl list in `db.ts`; the
+  v3→v4 step is additive (no existing table changes shape), so the same
+  statements serve a fresh database and an upgrade. `tests/brain-migrate.test.ts`
+  covers v1→current, v3→v4 with pages/edges/lanes/aliases/FTS intact, and a fresh
+  database having every column its version claims.
 - **Schema changes need a migration, not just DDL.** `CREATE TABLE IF NOT
   EXISTS` cannot alter an existing table, so `db.ts` keys explicit steps on
   `meta.schema_version` and — critically — runs them **before** the DDL block,
@@ -216,6 +222,131 @@ schedulers cannot sweep at once, does at most 200 pages per call, and
 Workers `scheduled` handler on purpose: OpenNext's worker exports only `fetch`
 plus its DO classes, and a Cron Trigger invocation caps at 15 minutes
 wall-clock while an HTTP-triggered Worker does not.
+
+## Agent Memory
+
+Four layers in `src/server/memory/`, and the BOUNDARIES are the design. Postgres
+is canonical for all four; `pages`/`edges`/FTS are a rebuildable projection, never
+the only copy of anything.
+
+| layer | table | rule |
+|---|---|---|
+| 1 events | `conversation_events` | immutable, ordered ground truth |
+| 2 summary | `thread_summaries` | versioned rolling STATE, reproducible from (1) |
+| 3 memory | `memory_items` + `memory_sources` + `memory_revisions` | canonical, typed, provenance-backed |
+| 4 projection | `pages` under `memory/…` | derived, rebuildable, disposable |
+
+**Events** (`events.ts`). Append-only: a correction is a NEW event, because
+anything citing event 7 must always be able to read the event 7 it was built
+from. `sequence` is allocated by bumping the counter on the thread row inside the
+same transaction as the insert — that is what makes ordering deterministic under
+concurrent appends and stops two replays of an `idempotency_key` from both
+passing the duplicate check. Never store hidden chain-of-thought; redact secrets
+from tool payloads before appending.
+
+**Summaries** (`summary.ts`). Version N+1 = version N folded with the events after
+its covered range; a partial unique index enforces exactly one active summary per
+thread, which is why the old version is retired BEFORE the new one is inserted.
+The summarizer is an interface (`summarizer-default.ts` ships an extractive,
+model-free one); tests use `tests/helpers/fake-summarizer.ts`. A summary records
+what was SAID, so it can legitimately contain a value durable memory has since
+superseded — hence `SUMMARY_NOTE` labels it and memory comes later in the pack.
+
+**Canonical memory** (`items.ts`). A committed memory is NEVER overwritten.
+`writeMemory` picks the operation: ADD / NOOP / ENRICH / SUPERSEDE / CONFLICT.
+**SUPERSEDE order is load-bearing** — retire the old row, then insert the
+replacement, both in one transaction: the active-key partial unique index allows
+one committed row per (scope, type, key), and inserting first fails. A
+`fingerprint` over (scope, type, key, normalized content, source event range)
+makes re-running extraction a NOOP. Provenance is mandatory: with no source event
+a memory can only be a `candidate`. CONFLICT is recorded, never auto-resolved —
+if two sources disagree and neither outranks the other, a machine picking a winner
+is how a wrong fact becomes permanent.
+
+**Safety** (`safety.ts`) is one gate every write passes. Secrets are REJECTED.
+Instruction-shaped content is DEMOTED, not deleted: it stays searchable content,
+can never become a procedure, and never auto-commits. A memory cannot widen
+authorization — structurally, because no memory type is consulted for tool
+permissions.
+
+**Projection** (`projection.ts`). Stable slug per memory
+(`memory/{thread|agent}/<scope>/<id>`, `memory/vault/<id>`), so a retry updates
+instead of duplicating. Retired memories have their page soft-deleted, so a
+superseded value leaves active search at once. A projection failure leaves the
+memory `committed` with `projection_status='failed'` — canonical truth does not
+depend on a page. **The `memory/` namespace is reserved and BOTH user write paths
+refuse it** (`put_page` and `/api/import`) — guarding one and not the other is how
+a generated page gets clobbered, and that shipped once before a test caught it.
+
+**Retrieval** (`recall.ts`). Reuses the whole existing pipeline, then resolves
+every hit back to canonical memory and filters on status, scope and time. Two
+rules: a result appears only if its canonical row is still `committed`, and scope
+is NEVER widened because a `scope_id` is missing. **Historical (`as_of`) recall
+queries `memory_items` directly rather than through the projection** — retiring a
+memory removes its page, so a superseded row has nothing left to search; this also
+makes historical recall work when a projection has failed. The gate
+(`shouldRetrieveMemory`) is deterministic and keeps durable memory out of turns
+that do not need it.
+
+**Context** (`context.ts`). Fixed order — system, role, working state, summary,
+memory, uncovered recent events, user input, tool output — because order encodes
+precedence. `MEMORY_GUARD` sits with the memory block every time. Ranking prefers
+explicit over inferred and narrow scope over broad, deliberately NOT recency-first:
+a stable fact does not become truer by being restated.
+
+**Tools**: `remember` / `recall` / `forget` / `inspect_memory`, plus
+`append_event` / `list_events` / `refresh_summary` / `get_summary` /
+`memory_gate`. `remember` returns `committed|candidate|conflict|rejected` and an
+explicit `saved` flag — reporting "saved" for a candidate is how an agent
+confidently tells a user something untrue. It appends its own provenance event
+rather than creating a fact from nowhere. The server decides scope; a caller
+cannot pass a predicate or widen scope.
+
+**Episodes and procedures** (`episodes.ts`). An episode stores observable
+goal/actions/tools/result and CITES the event range instead of copying the trace.
+A procedure needs two successful episodes, or one plus explicit approval, and
+records required permissions as information only.
+
+**Background work** (`maintenance.ts`, `consolidate.ts`) runs from
+`POST /api/maintenance {"action":"memory"}` under the SAME lease as the mention
+sweep: summarize → extract → project → consolidate, all bounded and idempotent.
+Extraction is deliberately NOT synchronous per message. `{"action":"health"}`
+returns the backend counters (unprocessed events, stale summaries, candidates,
+conflicts, failed projections, stale active projections, lease state).
+
+### Recovery
+
+- **Rebuild every projection**: `UPDATE memory_items SET projection_status='pending'`,
+  then `POST /api/maintenance {"action":"memory"}` until `projected` is 0. Pages
+  are derived; this is always safe.
+- **A failed projection**: canonical memory is fine. Find them with
+  `{"action":"health"}` → `failed_projections`; the same maintenance call retries.
+- **A wrong memory**: `forget` (revoke) — it leaves retrieval immediately and the
+  revision history is kept. Never DELETE a row; the history is the audit trail.
+- **Re-derive memory from events**: reset `extraction_checkpoints.last_extracted_sequence`
+  to 0 and re-run. Fingerprints make it a NOOP rather than a duplication.
+- **A stale page that outlived its memory** is counted as
+  `stale_active_projections`; it should always be 0 after a maintenance pass.
+
+## Agent Memory evaluation gate
+
+`tests/memory-eval.test.ts` compares five context strategies over one frozen
+multi-turn scenario, so each layer's value is a number:
+
+| strategy | fact_recall@8 | temporal | supersession | stale-hit | distractor | ctx chars |
+|---|---|---|---|---|---|---|
+| A recent events | 0.875 | 1 | 0 | 0.667 | 0 | 204 |
+| B summary only | 0.375 | 1 | 0 | 0.333 | 0 | 157 |
+| C page search | 0.875 | 0 | 1 | 0.667 | 1 | 1865 |
+| **D summary+memory** | **1.0** | **1** | **1** | **0** | **0** | 194 |
+| **E D+graph** | **1.0** | **1** | **1** | **0** | **0** | 194 |
+
+Recorded 2026-07-31. The finding worth keeping: **page search alone leaks stale
+values (0.667) and has zero temporal accuracy** — which is why canonical filtering
+is not optional. The gate asserts the CORRECTNESS metrics (supersession,
+staleness, temporal), not taste: a ranking idea that improves recall while letting
+a superseded value through is not an improvement. Embeddings, rerankers, autocut
+and similarity floors stay gated behind this fixture plus the retrieval one.
 
 ## Retrieval regression gate
 

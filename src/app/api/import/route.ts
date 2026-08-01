@@ -1,3 +1,4 @@
+import { isMemorySlug } from "@/server/memory/projection";
 import { type VaultFile, isMarkdown, parseNote } from "@/server/vault";
 // Vault import: the browser reads the folder and posts batches here. Nothing
 // server-side touches a filesystem, so this behaves identically on a Node host
@@ -67,6 +68,19 @@ export async function POST(req: Request) {
     const note = parseNote({ path: file.path, text: file.text });
     if (!note.slug) {
       results.push({ path: file.path, status: "failed", detail: "path yields an empty slug" });
+      continue;
+    }
+    // A vault that happens to contain a `memory/` folder must not be able to
+    // write into the generated-projection namespace: a later rebuild would
+    // clobber the user's note, or the note would shadow a real memory. put_page
+    // enforces the same rule; the importer is the other way in.
+    if (isMemorySlug(note.slug)) {
+      results.push({
+        path: file.path,
+        slug: note.slug,
+        status: "skipped",
+        detail: "the memory/ namespace is reserved for generated memory projections",
+      });
       continue;
     }
     try {
