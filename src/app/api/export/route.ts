@@ -1,5 +1,5 @@
 import { grantFor } from "@/server/auth-bearer";
-import { type TarEntry, serializeNote, tarStream } from "@/server/tar";
+import { type TarEntry, serializeNote, tarStream, withSkipReport } from "@/server/tar";
 // Export the whole brain as a tar of `slug.md` files. Import and export ship
 // together on purpose: a store you can only put data INTO is not one a person
 // should trust with their notes.
@@ -44,15 +44,19 @@ export async function GET(req: Request) {
     }
   }
 
+  // A skip means a slug too long to be representable in USTAR, and it is
+  // discovered mid-stream — the headers are long gone by then. So the report
+  // rides INSIDE the archive as one last entry, which any tar can extract.
+  // (This used to advertise `trailer: x-skipped-paths` and then never send a
+  // trailer, leaving a skip silently unobservable.)
   const skipped: string[] = [];
-  const stream = tarStream(entries(), exportMtime(req), (path) => skipped.push(path));
+  const stream = tarStream(withSkipReport(entries(), skipped), exportMtime(req), (path) =>
+    skipped.push(path),
+  );
   return new Response(stream, {
     headers: {
       "content-type": "application/x-tar",
       "content-disposition": 'attachment; filename="lore-brain.tar"',
-      // Streaming means the body is already going out when a skip happens, so
-      // it cannot be reported in the body — a trailer keeps it observable.
-      trailer: "x-skipped-paths",
       "cache-control": "no-store",
     },
   });

@@ -45,9 +45,15 @@ async function retireExactDuplicates(db: Db, limit: number): Promise<number> {
       await db.tx(async (q) => {
         const cur = await q("SELECT status, content FROM memory_items WHERE id = $1", [id]);
         if (!cur.rows.length) return;
+        // supersedes_id is deliberately NOT set here. It means "this row replaced
+        // <id>", and a duplicate retired in favour of an OLDER row did not
+        // replace it — the relationship is the other way round. The revision
+        // below records which row survived, which is the honest place for it.
+        // (This previously read `supersedes_id = coalesce(supersedes_id, NULL)`,
+        // which is a no-op — dead code that looked like it did something.)
         await q(
           `UPDATE memory_items SET status = 'superseded', valid_to = coalesce(valid_to, now()),
-             supersedes_id = coalesce(supersedes_id, NULL), updated_at = now() WHERE id = $1`,
+             updated_at = now() WHERE id = $1`,
           [id],
         );
         await q(

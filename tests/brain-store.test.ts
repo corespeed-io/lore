@@ -371,6 +371,15 @@ test("extractRefs: markdown links, frontmatter values, embeds and inline code", 
   ).toEqual(["A", "B", "MOC"]);
   // a note documenting the syntax must not grow an edge
   expect(extractRefs("write `[[example]]` to link")).toEqual([]);
+  // A stray '%' is malformed percent-encoding and decodeURIComponent throws on
+  // it. Thrown here, it would propagate out of putPage and abort the import of
+  // an entire vault over one sloppy link, so the odd link degrades and its
+  // neighbours still resolve.
+  expect(() => extractRefs("[a](report-100%.md) [b](notes/ok.md)")).not.toThrow();
+  expect(extractRefs("[a](report-100%.md) [b](notes/ok.md)").sort()).toEqual([
+    "notes/ok",
+    "report-100%",
+  ]);
 });
 
 test("a ref resolves by filename even when the title differs", async () => {

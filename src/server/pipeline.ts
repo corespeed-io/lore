@@ -78,7 +78,17 @@ function mdTargetToRef(raw: string): string | null {
   if (target.startsWith("#")) return null;
   // Relative prefixes are noise: ../Maps/Note.md names the same page as
   // Maps/Note.md. Obsidian's Markdown mode and Logseq/Foam exports emit these.
-  const path = decodeURIComponent(target.split("#")[0].replace(/^(?:\.{1,2}\/)+/, ""));
+  // decodeURIComponent THROWS on malformed percent-encoding — a link like
+  // [x](report-100%.md), which a human writes without thinking. An exception
+  // here would propagate out of extractRefs and fail the whole page write, so a
+  // single odd link would abort a vault import.
+  const rel = target.split("#")[0].replace(/^(?:\.{1,2}\/)+/, "");
+  let path: string;
+  try {
+    path = decodeURIComponent(rel);
+  } catch {
+    path = rel;
+  }
   if (!path) return null;
   const ext = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
   if (ext && ext !== "md") return null;

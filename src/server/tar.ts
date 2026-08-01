@@ -98,6 +98,25 @@ export function tarStream(
   });
 }
 
+export const SKIP_REPORT_PATH = "EXPORT-SKIPPED.txt";
+
+// A skip is discovered mid-stream, when the response headers are long gone, so
+// the report rides inside the archive as one last entry. It is yielded only
+// after every page has been written, which is exactly when the skip list is
+// complete: tarStream pulls the next entry only once the previous one is on the
+// wire, so any skip has already been recorded by then.
+export async function* withSkipReport(
+  pages: AsyncIterable<TarEntry>,
+  skipped: string[],
+): AsyncGenerator<TarEntry> {
+  yield* pages;
+  if (skipped.length === 0) return;
+  yield {
+    path: SKIP_REPORT_PATH,
+    body: `${skipped.length} page(s) were omitted: the path exceeds what the tar format can represent (USTAR allows 100 bytes of name plus a 155-byte directory prefix). Shorten these slugs and export again.\n\n${skipped.join("\n")}\n`,
+  };
+}
+
 // Frontmatter + body, in the shape the importer reads back. Round-tripping
 // matters more than matching any particular tool's style.
 export function serializeNote(

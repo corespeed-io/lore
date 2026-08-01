@@ -5,7 +5,13 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import { type Db, type Query, initSchema } from "../src/server/db.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
-import { serializeNote, splitPath, tarStream } from "../src/server/tar.js";
+import {
+  SKIP_REPORT_PATH,
+  serializeNote,
+  splitPath,
+  tarStream,
+  withSkipReport,
+} from "../src/server/tar.js";
 import { isMarkdown, parseFrontmatter, parseNote, pathToSlug } from "../src/server/vault.js";
 
 const DIM = 8;
@@ -233,6 +239,37 @@ test("splitPath refuses paths USTAR cannot represent, rather than truncating", (
     expect(`${split.prefix}/${split.name}`).toBe(deep);
   }
   expect(splitPath(`${"x".repeat(200)}.md`)).toBeNull();
+});
+
+test("a page too long for USTAR is reported inside the archive, not dropped", async () => {
+  // The skip is discovered mid-stream, long after the response headers went
+  // out, so the only place it can still be observed is the archive itself.
+  const tooLong = `${"x".repeat(200)}.md`;
+  async function* pages() {
+    yield { path: "ok.md", body: "kept" };
+    yield { path: tooLong, body: "unrepresentable" };
+  }
+  const skipped: string[] = [];
+  const stream = tarStream(withSkipReport(pages(), skipped), 1_700_000_000, (p) => skipped.push(p));
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const flat = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of chunks) {
+    flat.set(c, at);
+    at += c.length;
+  }
+  const text = new TextDecoder().decode(flat);
+  expect(skipped).toEqual([tooLong]);
+  expect(text).toContain(SKIP_REPORT_PATH);
+  expect(text).toContain(tooLong);
+  // and the good page still made it
+  expect(text).toContain("kept");
 });
 
 test("the reserved memory namespace is refused by BOTH write paths", async () => {

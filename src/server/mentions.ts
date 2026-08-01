@@ -47,7 +47,10 @@ export interface NamedPage {
 
 // Longest names first so a scan can take the longest match at each position.
 export function buildGazetteer(pages: NamedPage[]): GazetteerEntry[] {
-  const out = new Map<string, GazetteerEntry>();
+  // The winning slug length is carried in the map entry rather than looked up
+  // again: a pages.find() inside this loop made the whole build O(n^2) on the
+  // number of typed pages, which is exactly the size that grows with a vault.
+  const out = new Map<string, { entry: GazetteerEntry; slugLength: number }>();
   for (const page of pages) {
     if (!GAZETTEER_PREFIXES.some((p) => page.slug.startsWith(p))) continue;
     for (const raw of [page.title, ...(page.aliases ?? [])]) {
@@ -56,11 +59,12 @@ export function buildGazetteer(pages: NamedPage[]): GazetteerEntry[] {
       // A name shared by two pages is ambiguous; the shorter slug wins, which
       // is the same stable tie-break resolveRef uses.
       const prior = out.get(name);
-      if (!prior || page.slug.length < (pages.find((p) => p.id === prior.pageId)?.slug.length ?? 0))
-        out.set(name, { pageId: page.id, name });
+      if (!prior || page.slug.length < prior.slugLength) {
+        out.set(name, { entry: { pageId: page.id, name }, slugLength: page.slug.length });
+      }
     }
   }
-  return [...out.values()].sort((a, b) => b.name.length - a.name.length);
+  return [...out.values()].map((v) => v.entry).sort((a, b) => b.name.length - a.name.length);
 }
 
 // Scripts without spaces cannot use word boundaries; those names are matched as
