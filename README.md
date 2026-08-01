@@ -50,7 +50,7 @@ Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/gar
 
 Two ways to run lore:
 
-**Standalone (no gbrain)** — bring only a Postgres with pgvector (e.g. a free [Neon](https://neon.tech) database). Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember` / `delete_page`, bearer `BRAIN_WRITE_TOKEN`).
+**Standalone (no gbrain)** — bring only a Postgres with `pgvector` and `pg_trgm` (e.g. a free [Neon](https://neon.tech) database). PostgreSQL **12 or newer**; tested on 17 and 18. Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember` / `delete_page`, bearer `BRAIN_WRITE_TOKEN`).
 
 ```bash
 git clone https://github.com/corespeed-io/lore.git && cd lore

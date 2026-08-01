@@ -122,6 +122,13 @@ graph, search, page view) works unchanged.
   resolving. It deliberately does **not** rewrite other pages' bodies —
   that would mutate notes the user didn't touch, change their content_hash,
   and re-embed every referrer.
+- **Server requirement: PostgreSQL 12+ with `vector` (pgvector 0.5+) and
+  `pg_trgm`.** The floor comes from stored generated columns (`basename`, `fts`);
+  everything else used here predates 12. Verified against **17.10 and 18.4**
+  (18 is the current stable; 19 was still Beta 2 as of 2026-07-16 and is not a
+  target). CI runs on **PGlite 0.4.3, which is Postgres 17** — so a
+  version-specific problem on a newer server would not show up there, which is
+  why the migration and memory paths are also exercised against a real server.
 - Schema is at **v4**. The memory tables are declared in
   `src/server/memory/ddl.ts` and spliced into the ONE ddl list in `db.ts`; the
   v3→v4 step is additive (no existing table changes shape), so the same
