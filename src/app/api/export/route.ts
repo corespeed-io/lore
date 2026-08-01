@@ -14,7 +14,12 @@ export const runtime = "nodejs";
 const BATCH = 100;
 
 export async function GET(req: Request) {
-  if (!grantFor(req.headers.get("authorization"))) {
+  // WRITE bearer, not read. Export streams store.exportBatch straight to the
+  // client and never passes the MCP dispatcher, so it bypasses the filter that
+  // keeps thread- and agent-scoped memory projections off the shared agent
+  // surface. A full dump is an owner operation; leaving it on the read token
+  // would hand every agent the one door that skips the boundary.
+  if (grantFor(req.headers.get("authorization")) !== "write") {
     return NextResponse.json(
       { detail: "auth required" },
       { status: 401, headers: { "WWW-Authenticate": "Bearer" } },

@@ -128,7 +128,9 @@ export function serializeNote(
   // The H1 already carries the title when it matches; keep it explicit anyway so
   // a re-import cannot lose a title that was only ever frontmatter.
   fm.title = title;
-  const lines = Object.entries(fm).map(([k, v]) => `${oneLine(k)}: ${yamlValue(v)}`);
+  const lines = Object.entries(fm)
+    .filter(([k]) => SAFE_KEY.test(k))
+    .map(([k, v]) => `${k}: ${yamlValue(v)}`);
   return `---\n${lines.join("\n")}\n---\n\n${body.replace(/^\n+/, "")}`;
 }
 
@@ -152,5 +154,24 @@ function quote(s: string): string {
 // `\n---` ends the block early. Escaped rather than stripped, so the character is
 // still visible in the exported note instead of silently disappearing.
 function oneLine(s: string): string {
-  return s.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  return (
+    s
+      .replace(/\r/g, "\\r")
+      .replace(/\n/g, "\\n")
+      // U+2028/U+2029/U+0085 are line terminators to a JS regex but not to the
+      // importer's line splitter, so a title carrying one made `(.*)$` fail to
+      // span the value and the reader dropped the WHOLE entry — a silent loss of
+      // frontmatter on round trip, not an injection but data loss all the same.
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029")
+      .replace(/\u0085/g, "\\u0085")
+  );
 }
+
+// A key is structure, not text: the importer reads `- x` as an element of the
+// PREVIOUS key's block array and `a: b` as a new entry, so a key like "- pwned"
+// or one containing a colon smuggles data into a neighbour. Keys the importer
+// cannot mis-read are written as-is; anything else is dropped, because there is
+// no escaping that makes an arbitrary key safe AND round-trippable, and silently
+// writing a key that re-reads as something else is the bug.
+const SAFE_KEY = /^[A-Za-z0-9_.][A-Za-z0-9_.\- ]*$/;

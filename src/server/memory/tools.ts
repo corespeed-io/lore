@@ -10,15 +10,27 @@
 //   `remember` never says "saved" when it did not save. Its result distinguishes
 //   committed / candidate / conflict / rejected, because an agent that believes a
 //   candidate was committed will confidently tell the user something untrue.
+//
+//   Nothing here claims to be the user. A tool call carries the caller's words,
+//   not the user's, so every write leaves these handlers non-explicit and every
+//   event they append is stamped with a `tool:` source THIS FILE sets. The gate
+//   that matters (events.ts, items.ts) then decides from that provenance instead
+//   of from a flag the caller could have chosen.
 
 import type { BrainCtx, ToolDef } from "../mcp";
 import type { EventType } from "./events";
-import { appendConversationEvent, ensureThread, getConversationEvents, getThread } from "./events";
+import {
+  IMPLIED_ACTOR,
+  appendConversationEvent,
+  ensureThread,
+  getConversationEvents,
+  getThread,
+} from "./events";
 import type { MemoryItem, MemoryType, ScopeType } from "./items";
-import { getMemory, inspectMemory, revokeMemory, writeMemory } from "./items";
+import { commitCandidate, getMemory, inspectMemory, revokeMemory, writeMemory } from "./items";
 import { projectMemory } from "./projection";
 import { recallMemory, searchMemoryByKey, shouldRetrieveMemory } from "./recall";
-import { redactSecrets } from "./safety";
+import { screenMemoryContent } from "./safety";
 import { getActiveThreadSummary, getThreadSummaryHistory, refreshThreadSummary } from "./summary";
 
 const obj = (props: Record<string, unknown>, required: string[] = []) => ({
@@ -29,6 +41,14 @@ const obj = (props: Record<string, unknown>, required: string[] = []) => ({
 
 const SCOPE_ENUM = ["thread", "agent", "vault"];
 const TYPE_ENUM = ["semantic", "preference", "episodic", "procedural", "working_state"];
+
+// What a tool may append: everything whose implied actor is not the user. Taken
+// from the actor table so the tool surface and the invariant events.ts enforces
+// cannot disagree — a hand-written second list is how `user_message` stayed
+// callable while the comment above it said only the user speaks for the user.
+const TOOL_APPENDABLE_EVENTS = (Object.keys(IMPLIED_ACTOR) as EventType[]).filter(
+  (t) => IMPLIED_ACTOR[t] !== "user",
+);
 
 type Scope = { scopeType: ScopeType; scopeId: string | null };
 
@@ -85,12 +105,14 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
   remember: {
     access: "write",
     description:
-      "Save one durable memory. The result says what actually happened: committed, candidate " +
-      "(needs approval), conflict (contradicts an active memory), or rejected (e.g. contained a " +
-      "credential) — a candidate is NOT saved as fact. Use memory_key for a value that can change " +
-      "later (user.billing_email), so a correction supersedes it instead of duplicating it. " +
-      "Scope defaults to what you name: scope_id/agent_id means agent scope, thread_id alone " +
-      "means thread scope — and recall with that same id reads it back.",
+      "Save one durable memory, under your own name. The result says what actually happened: " +
+      "committed, candidate (needs approval), conflict (contradicts an active memory), or " +
+      "rejected (e.g. contained a credential) — a candidate is NOT saved as fact. An UNKEYED " +
+      "note commits, because it displaces nothing. A memory_key groups a value that changes " +
+      "(user.billing_email), and a keyed write from a tool lands as a candidate, or as a " +
+      "conflict when that key already holds a value: retiring something the USER said needs the " +
+      "user, not an agent relaying it. Scope defaults to what you name: scope_id/agent_id means " +
+      "agent scope, thread_id alone means thread scope — and recall with that same id reads it back.",
     inputSchema: obj(
       {
         content: { type: "string" },
@@ -112,62 +134,127 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
       const { scopeType, scopeId } = readScope(a);
       const content = String(a.content ?? "").trim();
       if (!content) throw new Error("content is required");
+      const memoryType = (
+        TYPE_ENUM.includes(String(a.memory_type)) ? a.memory_type : "semantic"
+      ) as MemoryType;
+      const structuredValue = (a.structured_value as Record<string, unknown>) ?? {};
 
-      // An explicit remember IS an observable action, so it becomes an event and
-      // the memory cites it. That is how a tool-created memory gets real
-      // provenance instead of being a fact from nowhere.
+      // Screen the WHOLE call, before anything durable happens. Handing the raw
+      // args over as one payload is the point: the field that leaked last time
+      // (`memory_key`) was not exotic, it was simply not on the enumerated list
+      // — and it reaches memory_items.memory_key, the projection's title, body
+      // and FTS index, and every future context window.
       //
-      // It is an agent_action, NOT a user_message: only the user speaks for the
-      // user (extract.ts trusts user_message as the one source that does), so an
-      // agent able to mint user messages could forge a statement the next sweep
-      // auto-commits at explicit:true over the real value.
+      // ponytail: this runs the PROSE detectors over handles too, so a bare
+      // 13-19 digit, Luhn-valid thread_id/scope_id reads as a card and is
+      // refused. Accepted: such an id is indistinguishable from a card by
+      // anything cheap, and the alternative — exempting one detector from part
+      // of the payload — rebuilds the enumerated list this replaces.
+      const screen = screenMemoryContent({
+        content,
+        memoryType,
+        // A tool never speaks for the user; see the note on writeMemory below.
+        explicit: false,
+        structuredValue,
+        callerPayload: a,
+      });
+
+      // A remember IS an observable action, so it becomes an event and the memory
+      // cites it. That is how a tool-created memory gets real provenance instead
+      // of being a fact from nowhere.
       //
-      // The content is redacted on the way in because conversation_events is
-      // append-only BY DESIGN — there is no delete path — so a credential that
-      // reaches it can never be removed, and it would flow on into summaries and
-      // the context pack. The log still records that something was said. The RAW
-      // text goes to writeMemory, which is the one gate that decides
-      // committed/rejected, so a secret is refused there rather than laundered
-      // into a memory reading "[redacted:…]".
+      // It is an agent_action with a `tool:` source, NOT a user_message: only the
+      // user speaks for the user (extract.ts trusts user_message as the one
+      // source that does), and events.ts refuses a tool-sourced user event, so
+      // this cannot be turned into a forged statement. Secret text is withheld
+      // whole by that same chokepoint — layer 1 has no delete path — while the
+      // memory write below is refused outright rather than laundered into a
+      // memory reading "[withheld:…]".
       const threadId = str(a.thread_id) ?? "direct";
       await ensureThread(c.db, threadId);
       const { event } = await appendConversationEvent(c.db, {
         threadId,
         eventType: "agent_action",
-        content: redactSecrets(content),
+        content,
         source: "tool:remember",
       });
+      if (!screen.allow) {
+        return {
+          outcome: "rejected",
+          operation: "REJECT",
+          memory_id: null,
+          saved: false,
+          superseded_id: null,
+          conflicts_with: null,
+          projection: null,
+          reason: screen.reason,
+        };
+      }
 
+      // explicit:false, always. `explicit` means "the user said it themselves",
+      // which is the authority to auto-commit AND to supersede; passing it from
+      // here let one tool call retire a value the user had actually stated. The
+      // caller cannot influence this, so the SUPERSEDE branch of writeMemory is
+      // unreachable from this tool: a keyed write gets candidate (free key) or
+      // conflict (taken key) instead.
       const res = await writeMemory(c.db, {
         scopeType,
         scopeId,
-        memoryType: (TYPE_ENUM.includes(String(a.memory_type))
-          ? a.memory_type
-          : "semantic") as MemoryType,
+        memoryType,
         memoryKey: str(a.memory_key),
         content,
-        structuredValue: (a.structured_value as Record<string, unknown>) ?? {},
+        structuredValue,
         sourceEventIds: [event.id],
-        explicit: true,
+        explicit: false,
         createdBy: "tool:remember",
       });
+
+      // Storing the agent's OWN note and retiring the user's fact are different
+      // authorities, and `explicit` conflated them. The tool has the first: an
+      // UNKEYED add can never displace anything, because writeMemory only looks
+      // for an active row when a memory_key is given — so it is committed here
+      // under the tool's own name, at the confidence of an inferred write, with
+      // provenance pointing at the agent_action above. The guard is the stored
+      // row's key, not the caller's argument, and `downgrade` is checked so that
+      // any OTHER reason to hold a write back (instruction-shaped content,
+      // external content, whatever safety.ts learns next) still holds it back.
+      let memory = res.memory;
+      let status: string = res.status;
+      let reason = res.reason;
+      if (
+        memory &&
+        res.operation === "ADD" &&
+        res.status === "candidate" &&
+        !memory.memory_key &&
+        screen.downgrade === "not_explicit"
+      ) {
+        const promoted = await commitCandidate(c.db, {
+          memoryId: memory.id,
+          actor: "tool:remember",
+          reason: "stored by the agent under its own name; displaces nothing",
+        });
+        memory = promoted.memory ?? memory;
+        status = promoted.status;
+        reason = promoted.reason;
+      }
+
       // Project immediately so the memory is searchable in the same turn; a
       // failure here leaves the canonical record committed and reports honestly.
       let projection: string | null = null;
-      if (res.memory && res.status === "committed") {
-        const p = await projectMemory(c.db, c.store, res.memory);
+      if (memory && status === "committed") {
+        const p = await projectMemory(c.db, c.store, memory);
         projection = p.status;
       }
       return {
-        outcome: res.status,
+        outcome: status,
         operation: res.operation,
-        memory_id: res.memory?.id ?? null,
+        memory_id: memory?.id ?? null,
         // Deliberately explicit: "saved" is only true for committed.
-        saved: res.status === "committed",
+        saved: status === "committed",
         superseded_id: res.superseded?.id ?? null,
         conflicts_with: res.conflictsWith?.id ?? null,
         projection,
-        reason: res.reason,
+        reason,
       };
     },
   },
@@ -341,29 +428,24 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
   append_event: {
     access: "write",
     description:
-      "Append one immutable conversation event. Pass idempotency_key so an at-least-once " +
-      "pipeline can retry safely — a replay returns the existing event instead of duplicating it. " +
-      "Never send hidden reasoning; redact secrets from tool payloads before calling.",
+      "Append one immutable conversation event for what YOU did. Pass idempotency_key so an " +
+      "at-least-once pipeline can retry safely — a replay returns the existing event instead of " +
+      "duplicating it. Event types that speak for the user (user_message, approval) are not " +
+      "offered: extraction treats the user's own words as authority, so a tool cannot mint them. " +
+      "Never send hidden reasoning; secret text is withheld from the log, not stored.",
     inputSchema: obj(
       {
         thread_id: { type: "string" },
-        event_type: {
-          type: "string",
-          enum: [
-            "user_message",
-            "assistant_message",
-            "tool_call",
-            "tool_result",
-            "agent_action",
-            "approval",
-            "artifact",
-            "system_observation",
-          ],
-        },
+        // Derived from the actor table rather than listed: a new event type is
+        // callable here the day it is added ONLY if it does not speak for the
+        // user, and no second list can drift out of step with that rule.
+        event_type: { type: "string", enum: TOOL_APPENDABLE_EVENTS },
         content: { type: "string" },
         structured_payload: { type: "object" },
         actor_id: { type: "string" },
-        source: { type: "string" },
+        // No `source`. It is the one field on the row that says where an event
+        // really came from, so the TOOL sets it; a caller-chosen source is a
+        // label the caller can lie with.
         trace_id: { type: "string" },
         idempotency_key: { type: "string" },
         agent_id: { type: "string" },
@@ -380,7 +462,7 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
         content: typeof a.content === "string" ? a.content : "",
         structuredPayload: (a.structured_payload as Record<string, unknown>) ?? {},
         actorId: typeof a.actor_id === "string" ? a.actor_id : undefined,
-        source: typeof a.source === "string" ? a.source : undefined,
+        source: "tool:append_event",
         traceId: typeof a.trace_id === "string" ? a.trace_id : undefined,
         idempotencyKey: typeof a.idempotency_key === "string" ? a.idempotency_key : undefined,
       });

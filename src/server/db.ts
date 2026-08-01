@@ -37,12 +37,21 @@ const META_DDL = `CREATE TABLE IF NOT EXISTS meta (
 
 // The candidate filter the forward-reference lookup uses (store.ts), and the
 // expression its index is built on — ONE definition so query and index cannot
-// diverge into a seq scan. ref_norm was written by normalizeRef() in JS, so it
-// is already NFKC-folded and lowercased and SQL only drops the path prefix and
-// the separators. Deliberately COARSER than normalizeSlugish: dropping
-// separators entirely can only OVER-select, and resolveRef() then decides where
-// each ref actually lands, so this can never silently disagree with the JS half
-// the way pages.basename can.
+// diverge into a seq scan. ref_norm was written by normalizeRef() in JS, so it is
+// already NFKC-folded and lowercased and SQL only drops the path prefix and the
+// separators. Coarser than normalizeSlugish, which mostly means it OVER-selects
+// and resolveRef() decides.
+// It does NOT always agree with its JS half (refKey in store.ts), and an earlier
+// version of this comment wrongly promised it could not disagree: JS strips the
+// path BEFORE folding quotes and case, this strips it after ([[qq/'Quoted Uniq']]
+// keys differently on the two sides), and SQL lower() differs from JS
+// toLowerCase() on a dotted 'İ' or a ligature — the same gap pages.basename
+// carries below. A disagreement can only make a parked ref MISS its page (it
+// stays parked, and list_broken_links names it), never point at the wrong one.
+// The real fix is a ref_key column written by refKey() in JS, like ref_norm: a
+// SCHEMA_VERSION bump plus a rebuild of pending_links_key, deliberately not
+// smuggled in as a silent index-expression change (IF NOT EXISTS keys on the
+// NAME, so an existing database would keep the old index and seq-scan instead).
 export const REF_KEY_SQL =
   "regexp_replace(regexp_replace(ref_norm, '^.*/', ''), '[-_ ]+', '', 'g')";
 

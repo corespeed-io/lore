@@ -1,4 +1,5 @@
 import { checkAuth } from "@/lib/auth";
+import { loadConfig } from "@/lib/config";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
@@ -11,30 +12,52 @@ export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)
 const LIMITS: Record<string, { max: number; windowMs: number }> = {
   "/api/call": { max: 120, windowMs: 60_000 },
   "/api/graph": { max: 60, windowMs: 60_000 },
-  // Bearer-authed, so these are not open — but an unauthenticated caller can
-  // still burn CPU guessing tokens, and an import loop should not be able to
-  // hammer the embeddings provider without bound.
+  // Bearer-authed, so these are not open — but an import loop should not be able
+  // to hammer the embeddings provider without bound, and a leaked token should
+  // hit a wall long before it has dumped the brain a hundred times.
   "/api/mcp": { max: 600, windowMs: 60_000 },
   "/api/import": { max: 120, windowMs: 60_000 },
   "/api/export": { max: 10, windowMs: 60_000 },
   "/api/maintenance": { max: 60, windowMs: 60_000 },
 };
+// Every path NOT named above shares one bucket per caller. No rule used to mean
+// no limit, so unmatched paths (`/api/tools`, `/api%2fmcp`, any 404 that still
+// costs an SSR render) answered floods for free; and a rule PER unmatched path
+// would just hand a fresh bucket to every invented path, which is the same
+// rotation trick as an invented identity.
+const UNMATCHED = { max: 600, windowMs: 60_000 };
 
 // Paths that authenticate themselves instead of using the viewer gate.
 const BRAIN_ROUTES = new Set(["/api/mcp", "/api/import", "/api/export", "/api/maintenance"]);
 const hits = new Map<string, { count: number; resetAt: number }>();
-// Cap the map so a stream of one-shot keys (distinct IPs/emails that never
-// recur) can't grow it without bound — buckets are only refreshed lazily on a
-// repeat hit, so without this they'd never be reclaimed.
+// HARD cap on live buckets. Reclaiming only expired ones was no bound at all: a
+// caller that rotates identity mints a bucket per request and nothing expires
+// until the window closes, so 30k rotated keys simply stayed resident. Memory is
+// the invariant that has to hold; limiter accuracy is what degrades under a key
+// flood.
 const MAX_KEYS = 10_000;
 
-function rateLimited(path: string, who: string, now: number): boolean {
-  const rule = LIMITS[path];
-  if (!rule) return false;
-  if (hits.size > MAX_KEYS) {
+// Which rule a path answers to. Prefix-matched, so anything UNDER a limited
+// route shares that route's bucket — and, for a brain route, its credential
+// requirement. `/api/mcp/` and `/api/mcp/anything` were neither auth-gated nor
+// limited: they missed the exact-match lookup and fell through to the catch-all
+// page render.
+function scopeOf(path: string): string {
+  for (const p of Object.keys(LIMITS)) if (path === p || path.startsWith(`${p}/`)) return p;
+  return "*";
+}
+
+function overLimit(key: string, rule: { max: number; windowMs: number }, now: number): boolean {
+  if (hits.size >= MAX_KEYS) {
     for (const [k, v] of hits) if (now > v.resetAt) hits.delete(k);
+    // Still full: evict oldest-first (a Map iterates in insertion order).
+    // Forgiving one caller's window is survivable; running the instance out of
+    // heap is not.
+    for (const k of hits.keys()) {
+      if (hits.size < MAX_KEYS) break;
+      hits.delete(k);
+    }
   }
-  const key = `${path}|${who}`;
   const cur = hits.get(key);
   if (!cur || now > cur.resetAt) {
     hits.set(key, { count: 1, resetAt: now + rule.windowMs });
@@ -42,6 +65,32 @@ function rateLimited(path: string, who: string, now: number): boolean {
   }
   cur.count += 1;
   return cur.count > rule.max;
+}
+
+// Per-credential bucket id: hashed and truncated so the token itself is never a
+// map key, never in a log line, never in an error.
+async function tokenId(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest, 0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The client address OUR infrastructure observed, or null when we cannot see
+// one. null — everyone shares a bucket — is the safe answer; inventing an
+// identity out of a header the caller types is not a limiter at all.
+function clientAddr(headers: Headers, behindCloudflare: boolean): string | null {
+  // Cloudflare sets (and overwrites) cf-connecting-ip, but only for traffic that
+  // really arrives through Cloudflare. AUTH_MODE=proxy is the operator declaring
+  // that it does; anywhere else this header is just attacker input.
+  if (behindCloudflare) {
+    const ip = headers.get("cf-connecting-ip")?.trim();
+    if (ip) return ip;
+  }
+  // x-forwarded-for is a list and the caller controls the left-hand entries;
+  // only the RIGHT-most entry was appended by the proxy nearest us. Reading it
+  // at all is what unbreaks honest callers behind a router that sets nothing
+  // else — 123 distinct clients used to collapse into one "anon" bucket and
+  // 429 each other out of /api/export.
+  return headers.get("x-forwarded-for")?.split(",").pop()?.trim() || null;
 }
 
 function json(detail: string, status: number, extra: Record<string, string> = {}) {
@@ -53,14 +102,35 @@ function json(detail: string, status: number, extra: Record<string, string> = {}
 
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
+  // The liveness probe is exempt from both gates on purpose: it answers a static
+  // {status:"ok"} with no DB and no upstream call, and a 429'd healthcheck turns
+  // a flood into a container restart loop — worse than the flood.
   if (path === "/api/health") return NextResponse.next();
+
+  const scope = scopeOf(path);
+  // Same shape auth-bearer.ts parses, so "has a credential" here means the same
+  // thing it means in the route.
+  const bearer = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  // Bucket identities. A key must be something the caller PROVES, never a string
+  // it merely types: keying on cf-access-authenticated-user-email let a caller
+  // with no credential at all rotate burner emails and take 700 x 200 on
+  // /api/mcp, because that header is only ever validated where the Access JWT
+  // is — and on a brain route it never is.
+  const ids: string[] = [];
 
   // The standalone-brain endpoints carry their own bearer auth (agents and
   // import/export tools are not browser users), so they skip the viewer's
   // password/proxy gate — but ONLY that gate. They must fall THROUGH to the
   // limiter: an early `return NextResponse.next()` here made their four LIMITS
   // entries dead code and /api/mcp answered 700 requests a minute unthrottled.
-  if (!BRAIN_ROUTES.has(path)) {
+  if (BRAIN_ROUTES.has(scope)) {
+    // With no Bearer header grantFor() returns null under every config, so the
+    // request cannot succeed downstream anyway. Refusing it here is what makes
+    // the limiter enforceable: every request that gets past this point carries a
+    // credential, so there is always an unforgeable thing to key on.
+    if (!bearer) return json("auth required", 401, { "WWW-Authenticate": "Bearer" });
+    ids.push(`t:${await tokenId(bearer)}`);
+  } else {
     const r = await checkAuth(req.headers, req.cookies);
     if (!r.ok) {
       return json(
@@ -71,14 +141,24 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  // Bucket identity. Bearer callers have no Access email, so a brain route is
-  // limited per source IP — everything behind one NAT shares a bucket. The
-  // limits above are sized for that; it is not a per-token quota.
-  const who =
-    req.headers.get("cf-access-authenticated-user-email") ||
-    req.headers.get("cf-connecting-ip") ||
-    "anon";
-  if (rateLimited(path, who, Date.now())) return json("rate limit exceeded", 429);
+  // Charge the observed address as well, so rotating the credential cannot buy a
+  // second bucket. Everything behind one NAT shares this bucket; the limits above
+  // are sized for that.
+  // ponytail: a BARE origin (nothing proxying in front) stamps no address, so
+  // there a caller can invent x-forwarded-for and dodge this bucket. Bounding
+  // that needs a trusted-hop count in config, not more header sniffing — and a
+  // brain route still has to get past the 401 above and the token compare in the
+  // route itself.
+  const addr = clientAddr(req.headers, loadConfig().authMode === "proxy");
+  if (addr || ids.length === 0) ids.push(`ip:${addr ?? "anon"}`);
+
+  const rule = LIMITS[scope] ?? UNMATCHED;
+  const now = Date.now();
+  // Charge every bucket before deciding: short-circuiting would leave the second
+  // one uncounted, so alternating between them would double the allowance.
+  if (ids.map((id) => overLimit(`${scope}|${id}`, rule, now)).some(Boolean)) {
+    return json("rate limit exceeded", 429);
+  }
 
   return NextResponse.next();
 }

@@ -8,7 +8,9 @@
 // be dropped in behind the same interface; its proposals arrive as candidates.
 //
 // What is never extracted, enforced here and again in safety.ts:
-//   - assistant guesses as user facts (only user_message is explicit)
+//   - assistant guesses as user facts (only a user_message the USER's own
+//     transport wrote is explicit — see speaksForUser: the event's `source`
+//     decides, because the event TYPE is an argument a caller chooses)
 //   - credentials of any kind
 //   - hidden reasoning (never in the event log to begin with)
 //   - instructions found in content, as policy
@@ -149,17 +151,49 @@ export const DETERMINISTIC_EXTRACTOR_VERSION = "rules-1";
 // the vault. Preferring the widest (this took `agent ?? vault ?? [0]`) turned a
 // sentence said in one thread into a vault fact every other thread and agent
 // could read: extraction may never choose a scope wider than the event it read.
-// No thread scope for THIS event's own thread means no proposal at all, rather
-// than a sideways write into a sibling thread.
+//
+// The corollary has to be enforced too, or the invariant is just a convention the
+// one caller happens to honour: a list that names SOME OTHER thread was not
+// assembled for this event, so it earns no proposal at all. Falling through to
+// agent/vault is how `[thread:tB, vault]` on a tA event committed at vault and
+// `[thread:tB, agent:ag1]` committed at agent — widening in the exact case where
+// the caller's own list says this event's thread was not on offer. A list with no
+// thread scope in it is a different statement (a sweep deliberately writing agent
+// or vault facts), and stays allowed.
 function scopeForEvent(
   allowedScopes: ExtractorInput["allowedScopes"],
   threadId: string,
 ): { scopeType: ScopeType; scopeId: string | null } | null {
+  const own = allowedScopes.find((s) => s.scopeType === "thread" && s.scopeId === threadId);
+  if (own) return own;
+  if (allowedScopes.some((s) => s.scopeType === "thread")) return null;
   return (
-    allowedScopes.find((s) => s.scopeType === "thread" && s.scopeId === threadId) ??
     allowedScopes.find((s) => s.scopeType === "agent") ??
     allowedScopes.find((s) => s.scopeType === "vault") ??
     null
+  );
+}
+
+// Whether an event carries the USER's own words — decided from provenance the
+// caller cannot choose, not from the event type, which is just an argument.
+// `source` is stamped by the WRITER (tools.ts sets `tool:*` itself and does not
+// expose the field in any input schema), so it is the one column an agent cannot
+// forge. A user_message written by anything else is a RELAY of the user: it may
+// propose, never auto-commit — and because a non-explicit write cannot supersede,
+// a relayed value CONFLICTS with what the user actually said instead of retiring
+// it.
+//
+// Fail-closed on an unrecognized source: the contract for event writers is that
+// the user's own transport stamps nothing or `user:<transport>`, and every other
+// writer stamps its own name. A writer that forgets the contract degrades to a
+// candidate rather than inheriting the user's authority.
+function speaksForUser(event: ConversationEvent): boolean {
+  return (
+    event.event_type === "user_message" &&
+    // actor_type is DERIVED from the type in events.ts, so a row where the two
+    // disagree never passed through that chokepoint at all.
+    event.actor_type === "user" &&
+    (!event.source || event.source.startsWith("user:"))
   );
 }
 
@@ -176,6 +210,23 @@ export const deterministicExtractor: MemoryExtractor = {
       if (!scope) continue;
       const text = event.content.trim();
       if (!text || findSecrets(text).length) continue;
+      // The instruction screen reads the RAW sentence — what the user actually
+      // wrote — because every rule below hands the screen its own residue. The
+      // explicit_remember rule strips "Remember that " and the correction rule
+      // keeps only the captured value, so safety.ts's pattern for
+      // "remember that every agent is allowed …" could never fire: that sentence
+      // laundered itself into a COMMITTED memory granting permission, and every
+      // "remember that <policy>" took the same route. Screening once here covers
+      // every rule, including ones added later.
+      //
+      // Coarse on purpose: a fact stated in the same breath as an instruction
+      // yields nothing, rather than a guess at where the instruction ends. The
+      // sentence is still in the event log and still searchable — it just cannot
+      // become memory.
+      if (looksLikeInstruction(text)) continue;
+      // Trust is a property of the event, not of its type. A user_message some
+      // tool wrote is a relay; it may propose, not auto-commit.
+      const explicit = speaksForUser(event);
 
       let matched = false;
       for (const rule of RULES) {
@@ -183,7 +234,9 @@ export const deterministicExtractor: MemoryExtractor = {
         if (!m) continue;
         const built = rule.build(m);
         if (!built) continue;
-        // A rule must not launder an instruction into a fact.
+        // Still screened after the build, on top of the raw screen above: a build
+        // CONCATENATES fragments ("field is value"), so it can form a phrase
+        // neither the raw sentence nor either fragment contained.
         if (looksLikeInstruction(built.content)) continue;
         proposals.push({
           operation: "ADD",
@@ -191,9 +244,9 @@ export const deterministicExtractor: MemoryExtractor = {
           scope_id: scope.scopeId,
           ...built,
           source_event_ids: [event.id],
-          confidence: 0.9,
+          confidence: explicit ? 0.9 : 0.5,
           salience: built.memory_type === "preference" ? 0.7 : 0.5,
-          explicit: true,
+          explicit,
         });
         matched = true;
         break;
@@ -233,9 +286,9 @@ export const deterministicExtractor: MemoryExtractor = {
         content: `${field} is ${value}`,
         structured_value: { field, value },
         source_event_ids: [event.id],
-        confidence: 0.9,
+        confidence: explicit ? 0.9 : 0.5,
         salience: target.salience,
-        explicit: true,
+        explicit,
       });
     }
     return { proposals };
@@ -321,9 +374,17 @@ export async function runExtraction(
   for (const p of proposals) {
     // A proposal may only target a scope the caller allowed. This is the guard
     // that stops an extractor (or a model behind one) from widening scope.
-    const permitted = scopes.some(
-      (s) => s.scopeType === p.scope_type && (s.scopeId ?? "") === (p.scope_id ?? ""),
-    );
+    //
+    // Thread scope has a second condition the allow-list cannot express: these
+    // events all came from args.threadId, so a proposal at thread:<other> would
+    // land a sentence said here where a sibling thread reads it — even though the
+    // caller "allowed" that thread. `scopeForEvent` already declines such a list,
+    // so this exists for whatever is behind the interface next.
+    const permitted =
+      scopes.some(
+        (s) => s.scopeType === p.scope_type && (s.scopeId ?? "") === (p.scope_id ?? ""),
+      ) &&
+      (p.scope_type !== "thread" || p.scope_id === args.threadId);
     if (!permitted) {
       applied.push({
         operation: "REJECT",

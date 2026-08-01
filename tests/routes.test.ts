@@ -164,7 +164,13 @@ test("POST /api/maintenance fails closed and takes the write token only", async 
   expect((await post(WRITE)).status).toBe(404);
 });
 
-test("GET /api/export fails closed but accepts either token", async () => {
+test("GET /api/export fails closed and takes the WRITE token only", async () => {
+  // Changed deliberately from "accepts either token": export streams
+  // exportBatch straight out and never passes the MCP dispatcher, so it is the
+  // one door that bypasses the filter keeping thread- and agent-scoped memory
+  // projections off the shared agent surface. Leaving it on the read token
+  // would hand every agent that door. 404 here is "standalone brain not
+  // configured", i.e. auth already passed.
   armBrain();
   const { GET } = await import("../src/app/api/export/route.js");
   const get = (token?: string) =>
@@ -174,6 +180,6 @@ test("GET /api/export fails closed but accepts either token", async () => {
   expect(none.status).toBe(401);
   expect(none.headers.get("WWW-Authenticate")).toBe("Bearer");
   expect((await get("wrong-but-long-enough")).status).toBe(401);
-  expect((await get(READ)).status).toBe(404);
+  expect((await get(READ)).status).toBe(401);
   expect((await get(WRITE)).status).toBe(404);
 });

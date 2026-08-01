@@ -190,7 +190,12 @@ graph, search, page view) works unchanged.
   break: the checksum field is **six octal digits + NUL + space** (not the
   plain octal form the numeric fields use — `tar` validates this exactly), and
   a path too long for USTAR's name(100)+prefix(155) is **skipped and reported**
-  rather than truncated. Validated by extracting with the system `tar`.
+  rather than truncated — reported as a final `EXPORT-SKIPPED.txt` entry INSIDE
+  the archive, because the skip is discovered mid-stream when the headers are
+  long gone. Validated by extracting with the system `tar`. Export takes the
+  **write** bearer, not either one: it streams `exportBatch` straight out and
+  never passes the MCP dispatcher, so it is the one door that bypasses the
+  scoped-projection filter, and a full dump is an owner operation.
 - Both routes plus `/api/mcp` authenticate with the SAME bearer pair via
   `src/server/auth-bearer.ts` — one rule, one place. Import needs
   `BRAIN_WRITE_TOKEN`; export accepts either token. They are exempt from the

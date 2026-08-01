@@ -75,10 +75,24 @@ const DEFAULT_MAX_CHARS = 6000;
 // events and tool output are raw. Content that can emit `</memory>` followed by
 // `<system>…</system>` both escapes its own section and forges one the pack says
 // outranks it — which is precisely what MEMORY_GUARD claims in words and what
-// this makes true in bytes. Only bracket runs that could BE a delimiter are
-// escaped, so ordinary prose ("latency < 200ms", "a > b") is byte-identical.
+// this makes true in bytes.
+//
+// EVERY `<` goes, not just the ones that look like a tag. The earlier version
+// escaped `</?[A-Za-z][^<>]*>` to keep prose like "latency < 200ms"
+// byte-identical, and an adversarial sweep walked through it 86 different ways:
+// `< /memory >`, `</ memory>`, `<\t/memory>`, and `</memory>` with a zero-width
+// space, BOM, soft hyphen, word joiner or RTL override sitting between the slash
+// and the name. All of them fail the "next char is a letter" test and all of them
+// still read as a closing delimiter to the model that consumes this pack.
+//
+// The reader here is a language model, not a parser: it recognizes tag SHAPES
+// fuzzily, so any rule that tries to enumerate the shapes is an arms race against
+// Unicode. Removing the character that can open a tag is the one rule that cannot
+// be evaded. Ordinary prose pays for it by rendering `<` as `&lt;`, which a model
+// reads correctly — a readable pack that can be forged is worth less than a
+// slightly noisier one that cannot.
 function fenceTags(s: string): string {
-  return s.replace(/<\/?[A-Za-z][^<>]*>/g, (tag) => `&lt;${tag.slice(1, -1)}&gt;`);
+  return s.replace(/</g, "&lt;");
 }
 
 function normalizeForDedupe(s: string): string {
@@ -155,8 +169,13 @@ export function buildMemoryContext(args: BuildContextArgs): MemoryContext {
   // system and role are the deployment's own instructions — the one trusted input
   // here, and the one place an XML-ish tag can be meant literally. Everything
   // below them is fenced.
+  // systemInstructions is the ONE trusted channel — it is the policy this pack
+  // exists to protect, so fencing it would corrupt the thing it defends. Every
+  // other channel is fenced, role included: it comes from configuration a
+  // deployment may template from user data, and an adversarial sweep found it
+  // was the last unfenced way to forge `</memory>`.
   push("system", args.systemInstructions ?? "");
-  push("role", args.agentRole ?? "");
+  push("role", fenceTags(args.agentRole ?? ""));
   if (args.workingState?.length) {
     push("working_state", args.workingState.map((m) => `- ${fenceTags(m.content)}`).join("\n"));
   }

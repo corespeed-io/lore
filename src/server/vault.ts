@@ -96,12 +96,43 @@ function scalar(raw: string): string {
     .trim();
 }
 
+// Splits on commas that are OUTSIDE quotes. A naive split(",") let one value
+// become several across an export -> import round trip: the writer correctly
+// quotes `["doe, jane"]`, and re-reading it produced two aliases. That is not
+// cosmetic — the same trick on `related_ids` MINTS A GRAPH EDGE the author never
+// wrote, and on `aliases` it mints a resolution arm, so a crafted title could
+// make an unrelated page answer to a name.
 function inlineArray(raw: string): string[] {
-  return raw
-    .slice(1, -1)
-    .split(",")
-    .map((s) => scalar(s))
-    .filter(Boolean);
+  const out: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 1; i < raw.length - 1; i++) {
+    const c = raw[i];
+    if (quote) {
+      // Backslash escapes only inside double quotes, matching the writer.
+      if (c === "\\" && quote === '"' && i + 1 < raw.length - 1) {
+        cur += raw[++i];
+        continue;
+      }
+      if (c === quote) quote = null;
+      else cur += c;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      continue;
+    }
+    if (c === ",") {
+      out.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  out.push(cur.trim());
+  // scalar() still runs for comment-stripping and stray-quote tolerance on
+  // values that were never quoted in the first place.
+  return out.map((s) => scalar(s)).filter(Boolean);
 }
 
 // A vault file -> the page to write. The title comes from frontmatter, else the

@@ -4,6 +4,8 @@ import { vector } from "@electric-sql/pglite/vector";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { Db, Query } from "../src/server/db.js";
 import { initSchema } from "../src/server/db.js";
+import { rowToMemory } from "../src/server/memory/items.js";
+import { renderProjection } from "../src/server/memory/projection.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { chunkBody, extractRefs, normalizeRef } from "../src/server/pipeline.js";
 import type { Store } from "../src/server/store.js";
@@ -653,6 +655,188 @@ test("the mention sweep reads the typed pages it needs, not the whole vault", as
   expect(swept.pairs.every((p) => p.from_slug.startsWith("notes/bulk-"))).toBe(true);
   expect(swept.pairs[0].to_slug).toBe("people/nadia-quill");
   await lite.close();
+});
+
+test("the reserved memory/ namespace is closed at the store, whitespace and all", async () => {
+  // The hole a guard outside the store cannot close: it read the CALLER's string
+  // while the row was written from slug.trim(), so " memory/vault/x" does not
+  // start with "memory/" and still upserts memory/vault/x — deleted_at = NULL,
+  // re-chunked, searchable, and no arm of runProjections' due query repairs it.
+  for (const slug of [
+    " memory/vault/squat",
+    "\tmemory/vault/w1",
+    "\nmemory/vault/w2",
+    "memory/vault/w3",
+    "  memory/thread/t1/w4  ",
+  ]) {
+    await expect(store.putPage({ slug, body: "squatting" })).rejects.toThrow(/reserved/);
+  }
+  const live = await pg.query("SELECT slug FROM pages WHERE slug LIKE 'memory/%'");
+  expect((live as { rows: unknown[] }).rows).toEqual([]);
+
+  // A rename's destination is the same door, decided on the same string.
+  await store.putPage({ slug: "notes/squatter", body: "mine" });
+  await expect(
+    store.renamePage({ slug: "notes/squatter", to: " memory/vault/squat" }),
+  ).rejects.toThrow(/reserved/);
+  expect((await store.getPage({ slug: "notes/squatter" })).slug).toBe("notes/squatter");
+});
+
+test("only a committed memory's own projection may live under memory/", async () => {
+  const id = crypto.randomUUID();
+  const slug = `memory/vault/${id}`;
+  await pg.query(
+    `INSERT INTO memory_items (id, scope_type, memory_type, content, status, fingerprint)
+     VALUES ($1, 'vault', 'semantic', 'Zanzibar espresso is the house roast.', 'committed', $1)`,
+    [id],
+  );
+  const row = (await pg.query("SELECT * FROM memory_items WHERE id = $1", [id])) as {
+    rows: Record<string, unknown>[];
+  };
+  const memory = rowToMemory(row.rows[0]);
+  const canonical = renderProjection(memory).body;
+  // Ownership is read from DATA, so the projection layer's own write needs no
+  // exemption and no caller identity — this is projectMemory's exact call.
+  await store.putPage({ slug, title: "ignored", body: canonical, kind: "memory" });
+  expect((await store.getPage({ slug })).slug).toBe(slug);
+  // The title is derived from the canonical body, never taken from the caller:
+  // a forged title on an honest body is half the fts vector.
+  expect((await store.getPage({ slug })).title).not.toBe("ignored");
+
+  // Owning the slug is not enough — the page is a pure function of the memory.
+  // A forged body at the canonical slug of a STILL-COMMITTED memory used to
+  // replace the searchable text for good: memory_items kept the true value,
+  // projection_status stayed 'ok', and nothing ever re-rendered it.
+  await expect(store.putPage({ slug: ` ${slug}`, body: "Zanzibar is decaf." })).rejects.toThrow(
+    /reserved/,
+  );
+  expect(String((await store.getPage({ slug })).body)).toBe(canonical);
+  // A slug nothing owns is refused even with a well-formed id...
+  await expect(
+    store.putPage({ slug: `memory/vault/${crypto.randomUUID()}`, body: "x" }),
+  ).rejects.toThrow(/reserved/);
+  // ...and so is the wrong scope shape for a real committed memory.
+  await expect(store.putPage({ slug: `memory/thread/t1/${id}`, body: "x" })).rejects.toThrow(
+    /reserved/,
+  );
+
+  // The refutation verbatim: capture the projected body, let the lifecycle retire
+  // the memory (page soft-deleted), then re-put the captured body under the slug
+  // with a leading space. That resurrected a REVOKED memory's page permanently.
+  const captured = String((await store.getPage({ slug })).body);
+  await store.deletePage({ slug });
+  await pg.query("UPDATE memory_items SET status = 'revoked' WHERE id = $1", [id]);
+  await expect(store.putPage({ slug: ` ${slug}`, body: captured })).rejects.toThrow(/reserved/);
+  await expect(store.restorePage({ slug: ` ${slug}` })).rejects.toThrow(/reserved/);
+  await expect(store.getPage({ slug })).rejects.toThrow(/not_found/);
+});
+
+test("an evicted projection can always be revived, even from a stale body", async () => {
+  // The store's own restore re-writes the row it just read, so it is exempt from
+  // the body rule. Without that exemption a page whose memory moved on while it
+  // was evicted could never come back: restore would throw, the projection would
+  // fail, and the retry would throw again — a memory unsearchable forever.
+  const id = crypto.randomUUID();
+  const slug = `memory/vault/${id}`;
+  await pg.query(
+    `INSERT INTO memory_items (id, scope_type, memory_type, content, status, fingerprint)
+     VALUES ($1, 'vault', 'semantic', 'Lisbon cortado is the afternoon pour.', 'committed', $1)`,
+    [id],
+  );
+  const render = async () => {
+    const row = (await pg.query("SELECT * FROM memory_items WHERE id = $1", [id])) as {
+      rows: Record<string, unknown>[];
+    };
+    return renderProjection(rowToMemory(row.rows[0])).body;
+  };
+  await store.putPage({ slug, body: await render(), kind: "memory" });
+  await store.deletePage({ slug });
+  await pg.query("UPDATE memory_items SET content = $2 WHERE id = $1", [
+    id,
+    "Lisbon cortado is the morning pour.",
+  ]);
+  await store.restorePage({ slug });
+  expect(String((await store.getPage({ slug })).body)).toContain("afternoon");
+  // ...and the sweep's fresh render then lands on the live page.
+  await store.putPage({ slug, body: await render(), kind: "memory" });
+  expect(String((await store.getPage({ slug })).body)).toContain("morning");
+  await store.deletePage({ slug });
+});
+
+test("a path-shaped forward ref is not satisfied by a page in another directory", async () => {
+  // Parking [[deep/steal-a]] and then writing zz/steal-a made the parked ref a
+  // CANDIDATE, and resolveRef fell through to its basename arm while the real page
+  // did not exist yet: a wrong edge, the pending row consumed, and nothing repairs
+  // it — an idempotent re-put of the real target returns unchanged.
+  await store.putPage({ slug: "src/a", body: "the real one is [[deep/steal-a]]" });
+  await store.putPage({ slug: "zz/steal-a", body: "# Decoy Heading" });
+  expect((await store.getBacklinks({ slug: "zz/steal-a" })).map((b) => b.slug)).not.toContain(
+    "src/a",
+  );
+  // The miss stays VISIBLE instead of turning into a wrong edge.
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "src/a",
+    ref: "deep/steal-a",
+  });
+  await store.putPage({ slug: "deep/steal-a", body: "the real target" });
+  expect((await store.getBacklinks({ slug: "deep/steal-a" })).map((b) => b.slug)).toContain(
+    "src/a",
+  );
+  expect(await store.brokenLinks({ limit: 200 })).not.toContainEqual({
+    from_slug: "src/a",
+    ref: "deep/steal-a",
+  });
+});
+
+test("a path-shaped ref lands in the directory it names, forward and backward", async () => {
+  await store.putPage({ slug: "notes/wants-maps", body: "waits for [[Maps/Dated Note]]" });
+  // Written FIRST and sharing the last segment: this is the page the coarse
+  // candidate key used to hand the ref to.
+  await store.putPage({ slug: "archive/2019/dated-note", body: "# Old One" });
+  expect(
+    (await store.getBacklinks({ slug: "archive/2019/dated-note" })).map((b) => b.slug),
+  ).not.toContain("notes/wants-maps");
+  await store.putPage({ slug: "maps/dated-note", body: "# Real One" });
+  expect((await store.getBacklinks({ slug: "maps/dated-note" })).map((b) => b.slug)).toContain(
+    "notes/wants-maps",
+  );
+  // Backward, and the case a real import hits: the vault prefix makes the ref's
+  // path a SUFFIX of the slug, which still satisfies it.
+  await store.putPage({ slug: "vault/maps/deep-note", body: "# Deep Heading" });
+  const res = await store.putPage({ slug: "notes/wants-deep", body: "see [[Maps/Deep Note]]" });
+  expect(res.pending).toEqual([]);
+  expect((await store.getBacklinks({ slug: "vault/maps/deep-note" })).map((b) => b.slug)).toContain(
+    "notes/wants-deep",
+  );
+});
+
+test("a rename lands the refs already parked on the name it moves to", async () => {
+  await store.putPage({ slug: "notes/awaits-moved", body: "waits for [[moved/here]]" });
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "notes/awaits-moved",
+    ref: "moved/here",
+  });
+  await store.putPage({ slug: "elsewhere/thing", body: "content" });
+  // Only putPage swept pending_links, so a name made resolvable by a RENAME left
+  // the parked ref parked forever with list_broken_links still accusing it.
+  await store.renamePage({ slug: "elsewhere/thing", to: "moved/here" });
+  expect((await store.getBacklinks({ slug: "moved/here" })).map((b) => b.slug)).toContain(
+    "notes/awaits-moved",
+  );
+  expect(await store.brokenLinks({ limit: 200 })).not.toContainEqual({
+    from_slug: "notes/awaits-moved",
+    ref: "moved/here",
+  });
+});
+
+test("a separators-only name resolves forward, not only backward", async () => {
+  // Its coarse key is '', which the filter used to disable rather than match —
+  // the one arm where a ref resolvable once the page exists could never land.
+  await store.putPage({ slug: "notes/awaits-seps", body: "waits for [[-_-]]" });
+  await store.putPage({ slug: "sep/-_-", body: "arrived" });
+  expect((await store.getBacklinks({ slug: "sep/-_-" })).map((b) => b.slug)).toContain(
+    "notes/awaits-seps",
+  );
 });
 
 test("an inferred edge cannot promote a page in search", async () => {

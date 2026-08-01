@@ -3,6 +3,8 @@
 // reference resolution. Single-tenant by design — no sources, no scopes.
 
 import { type Db, type Query, REF_KEY_SQL } from "./db";
+import { type MemoryItem, rowToMemory } from "./memory/items";
+import { isMemorySlug, projectionSlug, renderProjection } from "./memory/projection";
 import { GAZETTEER_PREFIXES, buildGazetteer, findMentions } from "./mentions";
 import {
   type EmbedFn,
@@ -42,6 +44,11 @@ const RRF_K = 60;
 // MIN_NAME_LENGTH picks) instead of pulling an unbounded vault into memory.
 const GAZETTEER_LIMIT = 5000;
 const ARM_LIMIT = 40;
+// Basename candidates the ref resolver pulls before the path filter below runs.
+// Shortest slug first, so the cap only ever drops pages that lost the tie-break
+// anyway; a path-shaped ref whose target sits past it stays PARKED (and visible
+// in list_broken_links) instead of landing on the wrong page.
+const BASENAME_CANDIDATES = 25;
 // ANN candidates pulled before per-page max-pool: multi-chunk pages and
 // soft-deleted rows both eat slots, so over-fetch well past ARM_LIMIT.
 const ANN_OVERFETCH = ARM_LIMIT * 5;
@@ -97,6 +104,29 @@ function pageType(row: { slug?: unknown; kind?: unknown; frontmatter?: unknown }
 // literally instead of turning into a wildcard that matches everything.
 export function likeLiteral(s: string): string {
   return s.replace(/([\\%_])/g, "\\$1");
+}
+
+// ONE normalization for every slug that NAMES a page, applied before anything
+// decides anything about it. A guard that reads the caller's raw string while the
+// row is written from a trimmed one is not a guard: " memory/vault/x" does not
+// start with "memory/" and still writes memory/vault/x. Whitespace of every kind
+// (space, tab, newline, NBSP) is settled here; whatever is left is caught by
+// SLUG_RE, which forbids whitespace outright. Exported so an outer door can
+// decide on the SAME string the store persists instead of on the raw input.
+export function normalizePageSlug(slug: unknown): string {
+  return typeof slug === "string" ? slug.trim() : "";
+}
+
+// Fold a slug or a path-shaped ref to one comparable form, per SEGMENT: the
+// quote/separator folding that lets [[Reading MOC]] find reading-moc has to apply
+// to a path's own last segment too, or 'qq/"Quoted"' and qq/quoted stop agreeing.
+// Leading ./ and ../ are noise (Logseq/Foam exports emit them).
+function foldPath(s: string): string {
+  return s
+    .replace(/^(?:\.{1,2}\/)+/, "")
+    .split("/")
+    .map(normalizeSlugish)
+    .join("/");
 }
 
 // A slug is also a PATH: /api/export writes `${slug}.md` into a tar, so a
@@ -166,8 +196,21 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     const norm = normalizeRef(ref);
     if (!norm) return null;
     const slugish = normalizeSlugish(ref.replace(/^.*\//, ""));
-    const arms: [string, unknown[]][] = [
-      ["SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL", [ref.trim()]],
+    // A ref that names a PATH ("Maps/Late Note") asserts a LOCATION, not just a
+    // filename, so the basename arm must not satisfy it with a page in some other
+    // directory that merely shares a last segment. That mis-attachment is worse
+    // than the broken link it replaces: the edge points at the wrong page AND the
+    // parked row is consumed, so the real target arriving later gets nothing and
+    // no later write repairs it. The ref's path must be a suffix of the page's
+    // (ceiling: a ref carrying a directory the import stripped stays parked and
+    // shows up in list_broken_links, rather than being guessed at).
+    const wantPath = foldPath(ref);
+    const keepPath = (row: Record<string, unknown>) => {
+      const folded = foldPath(String(row.slug));
+      return folded === wantPath || folded.endsWith(`/${wantPath}`);
+    };
+    const arms: [string, unknown[], ((row: Record<string, unknown>) => boolean)?][] = [
+      ["SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL", [normalizePageSlug(ref)]],
       [
         `SELECT id FROM pages WHERE lower(btrim(title)) = $1 AND deleted_at IS NULL
          ORDER BY length(slug), slug LIMIT 1`,
@@ -182,9 +225,10 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         // note is typed NFC — comparing one form only makes this arm miss every
         // accented or CJK filename in a Mac vault. (What it still cannot reach
         // is documented on pages.basename in db.ts.)
-        `SELECT id FROM pages WHERE basename = ANY($1::text[]) AND deleted_at IS NULL
-         ORDER BY length(slug), slug LIMIT 1`,
+        `SELECT id, slug FROM pages WHERE basename = ANY($1::text[]) AND deleted_at IS NULL
+         ORDER BY length(slug), slug LIMIT ${BASENAME_CANDIDATES}`,
         [[...new Set([slugish, slugish.normalize("NFD")])]],
+        wantPath.includes("/") ? keepPath : undefined,
       ],
       [
         `SELECT id FROM pages
@@ -193,17 +237,105 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         [norm],
       ],
     ];
-    for (const [sql, params] of arms) {
+    for (const [sql, params, keep] of arms) {
       const res = await q(sql, params);
-      if (res.rows.length) return Number(res.rows[0].id);
+      const row = keep ? res.rows.find(keep) : res.rows[0];
+      if (row) return Number(row.id);
     }
     return null;
   }
 
+  // Forward references: pages that linked THIS page before it existed now get
+  // their edge, and the pending row is consumed. Vault import walks files in
+  // directory order, so this is the COMMON case, not the exotic one — a forward
+  // ref that never lands is the edgeless graph /import and GraphHealth exist to
+  // explain. Both writes that can make a name resolvable (a put and a rename)
+  // call this, so a name is never resolvable-but-unswept.
+  // ONE resolution rule: the query below is only a CANDIDATE filter and
+  // resolveRef decides where each ref lands. Re-implementing the arms here is
+  // what silently dropped every slug-style ([[late-note-a]]) and path-style
+  // ([[Maps/Late Note]]) ref: they are parked under normalizeRef but were matched
+  // against a normalizeSlugish key nothing ever wrote.
+  // It is NOT the superset of resolveRef the previous comment here claimed, and
+  // claiming it hid two real misses. Both come from the coarse key being computed
+  // by JS on this side (refKey, on the slug) and by SQL on the other (REF_KEY_SQL,
+  // over a ref_norm that JS already folded):
+  //   - ORDER. normalizeRef strips end quotes from the WHOLE ref before SQL strips
+  //     the path, while refKey strips the path first. [[qq/'Quoted Uniq']] keys as
+  //     "'quoteduniq" here and "quoteduniq" there, so qq/quoted-uniq never sweeps
+  //     it — even though resolveRef matches it fine once the page exists.
+  //   - UNICODE. SQL lower() and JS toLowerCase() disagree on a dotted 'İ', a
+  //     ligature, a fullwidth letter (the same gap documented on pages.basename in
+  //     db.ts, which also costs resolveRef its title and basename arms there).
+  // Closing them means storing the key as a column written by refKey in JS, which
+  // is a SCHEMA_VERSION bump and an index rebuild — worth doing, not worth
+  // half-doing. Until then the miss is BOUNDED and visible: the row stays parked
+  // and list_broken_links names it. What it must never do is land on the wrong
+  // page, which is why resolveRef re-checks every candidate.
+  async function landPendingRefs(
+    q: Query,
+    pageId: number,
+    names: string[],
+    key: string,
+  ): Promise<void> {
+    const pend = await q(
+      `SELECT from_page_id, target_ref FROM pending_links
+       WHERE ref_norm = ANY($1::text[]) OR ${REF_KEY_SQL} = $2::text`,
+      // A separators-only basename keys as '', which selects only the parked refs
+      // that are separators-only too — a handful, and indexed. Disabling that arm
+      // (as this used to) was one more ref that resolved backward and could never
+      // land forward, for no bounded gain.
+      [[...new Set(names.filter(Boolean))], key],
+    );
+    for (const row of pend.rows) {
+      const fromId = Number(row.from_page_id);
+      if (fromId === pageId) continue;
+      const ref = String(row.target_ref);
+      const toId = await resolveRef(q, ref);
+      if (toId === null || toId === fromId) continue;
+      await q(
+        "INSERT INTO edges (from_page_id, to_page_id, lane, kind) VALUES ($1, $2, 'declared', 'wikilink') ON CONFLICT DO NOTHING",
+        [fromId, toId],
+      );
+      await q("DELETE FROM pending_links WHERE from_page_id = $1 AND target_ref = $2", [
+        fromId,
+        ref,
+      ]);
+    }
+  }
+
+  // Who owns a page in the reserved memory/ namespace, decided from DATA rather
+  // than from who is calling: a page under memory/ is the projection of a
+  // COMMITTED memory or it is nothing (AGENTS.md, layer 4). Returns that memory,
+  // so the caller can hold the projection to it.
+  async function projectionOwner(slug: string): Promise<MemoryItem | null> {
+    const id = slug.split("/").at(-1) ?? "";
+    try {
+      const res = await db.query(
+        "SELECT * FROM memory_items WHERE id = $1 AND status = 'committed'",
+        [id],
+      );
+      if (!res.rows.length) return null;
+      const owner = rowToMemory(res.rows[0]);
+      // projectionSlug is the authority on where a memory's page lives, so the
+      // shape is never re-derived here: same function, one definition.
+      return projectionSlug(owner) === slug ? owner : null;
+    } catch {
+      // No memory tables at all (a brain older than v4): nothing owns anything.
+      return null;
+    }
+  }
+
+  // `revive` is the store's OWN restore path re-writing a page from the row it
+  // just read (see restorePage) — it cannot introduce foreign content, so it is
+  // exempt from the body rule below. It is a private parameter: the Store the
+  // factory returns wraps putPage in a one-argument function, so no caller
+  // outside this file can set it.
   async function putPage(
     args: PutPageArgs,
+    revive = false,
   ): Promise<{ slug: string; unchanged: boolean; pending: string[] }> {
-    const slug = args.slug?.trim();
+    const slug = normalizePageSlug(args.slug);
     if (!slug || invalidSlug(slug)) {
       throw new Error(
         `invalid slug: must be a relative path, non-empty, no whitespace, []|#, '.'/'..' segments (got ${JSON.stringify(args.slug)})`,
@@ -213,6 +345,34 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     if (args.body.length > MAX_BODY_CHARS) {
       throw new Error(
         `body too large: ${args.body.length} chars exceeds the ${MAX_BODY_CHARS} limit`,
+      );
+    }
+    // Every path that creates or revives a page goes through here, so this ONE
+    // check covers put_page, /api/import, restore_page and remember — and it reads
+    // the SAME normalized slug the row is written from, which is the whole bug: the
+    // outer guard tested the caller's raw string, so put_page{slug:"
+    // memory/vault/<id>"} walked past it and the upsert's deleted_at = NULL
+    // resurrected the page of a REVOKED memory. No arm of runProjections' due query
+    // repairs that, so it never converged.
+    const owner = isMemorySlug(slug) ? await projectionOwner(slug) : null;
+    if (isMemorySlug(slug) && !owner) {
+      throw new Error(`slug '${slug}' is reserved for generated memory projections`);
+    }
+    // ...and owning the slug is not enough: the page is a pure function of the
+    // memory, so the only body that may be written to it is the one that memory
+    // renders. Without this, a forged put at the canonical slug of a still-
+    // committed memory replaces the searchable text permanently — memory_items
+    // keeps the true value, projection_status stays 'ok', and nothing re-renders it.
+    // A legitimate re-projection always passes exactly this body, so this can only
+    // fire on a forgery or on a caller projecting a STALE snapshot (which fails the
+    // projection and is retried from the current row).
+    // ponytail: frontmatter and kind are still the caller's on an owned slug —
+    // metadata, not the text search and recall read. Refusing the namespace
+    // outright is the untrusted door's job (mcp, /api/import), on this same
+    // normalized string; normalizePageSlug is exported for exactly that.
+    if (owner && !revive && args.body !== renderProjection(owner).body) {
+      throw new Error(
+        `slug '${slug}' is reserved for generated memory projections: its body is rendered from memory ${owner.id}`,
       );
     }
     const prior = await db.query(
@@ -231,7 +391,12 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         : ((existing?.kind as PageKind | undefined) ?? "note");
     const frontmatter =
       args.frontmatter ?? ((existing?.frontmatter as Record<string, unknown> | undefined) || {});
-    const title = (args.title ?? "").trim() || titleFromBody(args.body, slug);
+    // A projection page's title is derived too — taken from the canonical body's
+    // own H1 rather than from the caller, or a forged title on an honest body
+    // still poisons search (title is half the fts vector).
+    const title = owner
+      ? titleFromBody(args.body, slug)
+      : (args.title ?? "").trim() || titleFromBody(args.body, slug);
     // Hash every field a write can change - kind included, or flipping a
     // page between note and memory hashes the same and gets skipped as
     // "unchanged". JSON-encoding the tuple keeps field boundaries clear.
@@ -318,49 +483,19 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         );
       }
 
-      // Forward references: pages that linked this page before it existed now
-      // get their edge, and the pending row is consumed. Vault import walks
-      // files in directory order, so this is the COMMON case, not the exotic
-      // one — a forward ref that never lands is the edgeless graph /import and
-      // GraphHealth exist to explain.
-      // ONE resolution rule: the query below is only a CANDIDATE filter (a
-      // superset of every resolveRef arm — normalized name, or the coarse
-      // separator-stripped last segment), and resolveRef decides where each ref
-      // lands. Re-implementing the arms here is what silently dropped every
-      // slug-style ([[late-note-a]]) and path-style ([[Maps/Late Note]]) ref:
-      // they are parked under normalizeRef but were matched against a
-      // normalizeSlugish key nothing ever wrote.
-      const names = [normalizeRef(slug), normalizeRef(String(up.rows[0].title)), ...aliases].filter(
-        Boolean,
+      await landPendingRefs(
+        q,
+        pageId,
+        [normalizeRef(slug), normalizeRef(String(up.rows[0].title)), ...aliases],
+        refKey(slug),
       );
-      const pend = await q(
-        `SELECT from_page_id, target_ref FROM pending_links
-         WHERE ref_norm = ANY($1::text[]) OR ${REF_KEY_SQL} = $2::text`,
-        // A separators-only basename keys as '' and would match every row whose
-        // key is also '', so disable that arm rather than over-select the vault.
-        [[...new Set(names)], refKey(slug) || null],
-      );
-      for (const row of pend.rows) {
-        const fromId = Number(row.from_page_id);
-        if (fromId === pageId) continue;
-        const ref = String(row.target_ref);
-        const toId = await resolveRef(q, ref);
-        if (toId === null || toId === fromId) continue;
-        await q(
-          "INSERT INTO edges (from_page_id, to_page_id, lane, kind) VALUES ($1, $2, 'declared', 'wikilink') ON CONFLICT DO NOTHING",
-          [fromId, toId],
-        );
-        await q("DELETE FROM pending_links WHERE from_page_id = $1 AND target_ref = $2", [
-          fromId,
-          ref,
-        ]);
-      }
     });
     return { slug, unchanged: false, pending };
   }
 
   return {
-    putPage,
+    // One argument on purpose: `revive` stays private to this file.
+    putPage: (args) => putPage(args),
 
     async remember({ memory, metadata }) {
       if (typeof memory !== "string" || !memory.trim())
@@ -383,7 +518,8 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       return { slug };
     },
 
-    async deletePage({ slug }) {
+    async deletePage(args) {
+      const slug = normalizePageSlug(args.slug);
       return db.tx(async (q) => {
         const res = await q(
           "UPDATE pages SET deleted_at = now(), updated_at = now() WHERE slug = $1 AND deleted_at IS NULL RETURNING id",
@@ -400,7 +536,8 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       });
     },
 
-    async restorePage({ slug }) {
+    async restorePage(args) {
+      const slug = normalizePageSlug(args.slug);
       const res = await db.query(
         `SELECT title, body, kind, frontmatter FROM pages
          WHERE slug = $1 AND deleted_at IS NOT NULL`,
@@ -418,13 +555,19 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       // no deleted row to restore from — invisible to the vector arm, and
       // unrecoverable. kind/frontmatter must be passed explicitly for the same
       // reason: there is no visible prior row to inherit them from.
-      await putPage({
-        slug,
-        title: String(row.title),
-        body: String(row.body),
-        kind: row.kind as PageKind,
-        frontmatter: (row.frontmatter as Record<string, unknown>) ?? {},
-      });
+      await putPage(
+        {
+          slug,
+          title: String(row.title),
+          body: String(row.body),
+          kind: row.kind as PageKind,
+          frontmatter: (row.frontmatter as Record<string, unknown>) ?? {},
+        },
+        // The body comes from this page's own row, so a projection whose memory
+        // has moved on since is still revivable — the sweep re-renders it right
+        // after. Refusing it here would strand an evicted page forever.
+        true,
+      );
       return { slug, restored: true as const };
     },
 
@@ -433,27 +576,44 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // every stale [[old-slug]] elsewhere keep resolving. Deliberately does NOT
     // rewrite other pages' bodies: that would mutate notes the user did not
     // touch, change their content_hash, and re-embed every referrer.
-    async renamePage({ slug, to }) {
-      const target = to?.trim();
-      if (!target || invalidSlug(target)) throw new Error(`invalid slug: ${JSON.stringify(to)}`);
-      if (target === slug) return { slug: target, from: slug };
+    async renamePage(args) {
+      const from = normalizePageSlug(args.slug);
+      const target = normalizePageSlug(args.to);
+      if (!target || invalidSlug(target))
+        throw new Error(`invalid slug: ${JSON.stringify(args.to)}`);
+      // Decided on the NORMALIZED destination, so " memory/vault/squat" cannot
+      // walk in past a check that read the raw string. Nothing legitimately
+      // renames INTO the namespace — projections are created by putPage — so this
+      // end is closed outright. Renaming OUT of it stays possible at the store
+      // level on purpose: a database written before the guard existed already has
+      // a projection sitting outside memory/, forget addresses it by its stored
+      // projection_page_id, and brain-mcp pins that that page is still retracted.
+      if (isMemorySlug(target)) {
+        throw new Error(`slug '${target}' is reserved for generated memory projections`);
+      }
+      if (target === from) return { slug: target, from };
       return db.tx(async (q) => {
         const cur = await q(
           "SELECT id, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
-          [slug],
+          [from],
         );
-        if (!cur.rows.length) throw new Error(`not_found: ${slug}`);
+        if (!cur.rows.length) throw new Error(`not_found: ${from}`);
         const clash = await q("SELECT 1 FROM pages WHERE slug = $1", [target]);
         if (clash.rows.length) throw new Error(`slug already taken: ${target}`);
         const fm = (cur.rows[0].frontmatter as Record<string, unknown>) ?? {};
         const aliases = new Set(frontmatterAliases(fm));
-        aliases.add(normalizeRef(slug));
+        aliases.add(normalizeRef(from));
         aliases.delete(normalizeRef(target));
+        const pageId = Number(cur.rows[0].id);
         await q(
           "UPDATE pages SET slug = $1, frontmatter = $2::jsonb, updated_at = now() WHERE id = $3",
-          [target, JSON.stringify({ ...fm, aliases: [...aliases] }), Number(cur.rows[0].id)],
+          [target, JSON.stringify({ ...fm, aliases: [...aliases] }), pageId],
         );
-        return { slug: target, from: slug };
+        // A rename makes a NAME resolvable, exactly like a put does: refs parked on
+        // [[moved/here]] before anything lived there stayed parked forever, with
+        // list_broken_links still accusing them, because only putPage swept.
+        await landPendingRefs(q, pageId, [normalizeRef(target)], refKey(target));
+        return { slug: target, from };
       });
     },
 
@@ -488,7 +648,8 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       return res.rows.map((r) => ({ from_slug: String(r.from_slug), ref: String(r.ref) }));
     },
 
-    async getPage({ slug, fuzzy }) {
+    async getPage({ slug: raw, fuzzy }) {
+      const slug = normalizePageSlug(raw);
       const cols = "slug, kind, title, body, frontmatter, created_at, updated_at";
       let res = await db.query(`SELECT ${cols} FROM pages WHERE slug = $1 AND deleted_at IS NULL`, [
         slug,
@@ -696,7 +857,8 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       });
     },
 
-    async getBacklinks({ slug }) {
+    async getBacklinks(args) {
+      const slug = normalizePageSlug(args.slug);
       const res = await db.query(
         `SELECT src.slug, src.title
          FROM pages target
@@ -709,7 +871,8 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       return res.rows.map((r) => ({ slug: String(r.slug), title: String(r.title) }));
     },
 
-    async traverseGraph({ slug, depth, direction }) {
+    async traverseGraph({ slug: raw, depth, direction }) {
+      const slug = normalizePageSlug(raw);
       const d = Math.min(Math.max(Number(depth) || 5, 1), 10);
       const dir = direction === "in" || direction === "out" ? direction : "both";
       const step =

@@ -7,8 +7,20 @@
 //   - Ordering is deterministic. `sequence` is allocated under a row lock on
 //     the thread, so two concurrent appends get 4 and 5 rather than both
 //     believing they are 4.
+//
+// Append-only also means there is no delete path, which makes this the one place
+// two rules have to be enforced rather than asked for politely:
+//
+//   - A secret that reaches this table can never be removed, and flows on into
+//     summaries and the context pack. So content that trips the detector is
+//     withheld WHOLE (see `withhold`), never partially rewritten.
+//   - Only the user speaks for the user: extraction auto-commits `user_message`
+//     at explicit trust, so a tool-sourced event may not carry a user-implied
+//     type. Both rules live HERE because every writer — every tool, every
+//     ingestion path, every future one — passes through this function.
 
 import type { Db, Query } from "../db";
+import { findSecretsInPayload } from "./safety";
 
 export type EventType =
   | "user_message"
@@ -25,7 +37,9 @@ export type ActorType = "user" | "assistant" | "tool" | "system";
 export interface AppendEventArgs {
   threadId: string;
   eventType: EventType;
-  actorType?: ActorType;
+  // No actorType. It is DERIVED from the event type (see IMPLIED_ACTOR); an
+  // optional override is a forgeable claim about who spoke, and the only reason
+  // to send one is to say something the type does not.
   actorId?: string;
   content?: string;
   structuredPayload?: Record<string, unknown>;
@@ -55,9 +69,11 @@ export interface AppendResult {
   duplicate: boolean;
 }
 
-// Which actor an event type implies when the caller does not say. Keeping this
-// derivable means a caller cannot label a user_message as coming from a tool.
-const IMPLIED_ACTOR: Record<EventType, ActorType> = {
+// Which actor an event type implies. Derived, never supplied, so a caller can
+// neither label a user_message as coming from a tool nor label its own action as
+// coming from the user. Exported because it is also the definition of "this type
+// speaks for the user", which the tool surface has to honour.
+export const IMPLIED_ACTOR: Record<EventType, ActorType> = {
   user_message: "user",
   assistant_message: "assistant",
   tool_call: "assistant",
@@ -86,6 +102,23 @@ function rowToEvent(r: Record<string, unknown>): ConversationEvent {
     trace_id: r.trace_id === null || r.trace_id === undefined ? null : String(r.trace_id),
     created_at: iso(r.created_at),
   };
+}
+
+// All or nothing. A detector recognizes a MARKER or a token, not the extent of a
+// secret, so cutting the finding out of the text leaves the rest of the key
+// behind — the private-key body outlived its own BEGIN line that way. The event
+// itself is still recorded (sequence, type, actor, timestamp: the transcript
+// keeps its shape and no caller has to retry), it just carries no text.
+function withhold(
+  content: string,
+  payload: Record<string, unknown>,
+): { content: string; payload: Record<string, unknown> } {
+  const findings = findSecretsInPayload([content, payload]);
+  if (!findings.length) return { content, payload };
+  const kinds = findings.map((f) => f.kind).join(", ");
+  // Both fields, on one finding: they are one statement, and a secret split
+  // across them is invisible to a per-field decision anyway.
+  return { content: `[withheld: ${kinds}]`, payload: { withheld: kinds } };
 }
 
 async function sha256Hex(s: string): Promise<string> {
@@ -121,8 +154,19 @@ export async function appendConversationEvent(
 ): Promise<AppendResult> {
   if (!args.threadId?.trim()) throw new Error("threadId is required");
   if (!IMPLIED_ACTOR[args.eventType]) throw new Error(`unknown event_type: ${args.eventType}`);
-  const content = args.content ?? "";
-  const payload = args.structuredPayload ?? {};
+  // Only the user speaks for the user. `source` is set by the tool, not by the
+  // tool's caller, so this is provenance an agent cannot forge — and without it
+  // one `append_event {event_type:"user_message"}` plants a statement the next
+  // extraction sweep auto-commits over the real value. Refused rather than
+  // relabelled: an event that lies about who spoke has no honest form.
+  if (args.source?.startsWith("tool:") && IMPLIED_ACTOR[args.eventType] === "user") {
+    throw new Error(
+      `forbidden: ${args.source} may not append a ${args.eventType} — only the user speaks for the user`,
+    );
+  }
+  const { content, payload } = withhold(args.content ?? "", args.structuredPayload ?? {});
+  // Hash what is STORED, so the row cannot be a fingerprint of a secret whose
+  // text this table refused to keep.
   const hash = await sha256Hex(JSON.stringify([args.threadId, args.eventType, content, payload]));
   const id = crypto.randomUUID();
 
@@ -159,7 +203,7 @@ export async function appendConversationEvent(
         args.threadId,
         sequence,
         args.eventType,
-        args.actorType ?? IMPLIED_ACTOR[args.eventType],
+        IMPLIED_ACTOR[args.eventType],
         args.actorId ?? null,
         content,
         JSON.stringify(payload),

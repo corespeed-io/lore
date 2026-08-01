@@ -365,7 +365,19 @@ test("memory evaluation across five context strategies", async () => {
   const E = report.E_memory_graph;
   const C = report.C_pages;
 
-  // BASELINES recorded 2026-07-31. The gate is on correctness, not on taste:
+  // BASELINES recorded 2026-07-31. Moved once since: C_pages context_size
+  // 1892 -> 1849, because the projection stopped rendering the scope HOLDER into
+  // the page (projection.ts — the owning thread/agent id was readable from every
+  // unscoped page read and no retrieval path consumed it). Only C's context size
+  // moved; every correctness metric is unchanged, which is the point — the
+  // attribution was pure leak, not signal. AGENTS.md's table still says 1865, a
+  // figure that predates this run.
+  //
+  // What C does NOT measure, and a reader should not assume it does: whether page
+  // search can reach ANOTHER scope's memory. It can — see
+  // tests/memory-projection-scope.test.ts, which pins that boundary.
+  //
+  // The gate is on correctness, not on taste:
   //   - a superseded value must never surface in current mode
   //   - historical mode must find what was true then
   //   - the memory strategies must beat raw page search on fact recall

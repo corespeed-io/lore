@@ -4,8 +4,9 @@
 
 import type { Db } from "./db";
 import { isMemorySlug } from "./memory/projection";
+import { isScopedProjection } from "./memory/projection";
 import { MEMORY_TOOLS } from "./memory/tools";
-import type { PageHit, Store } from "./store";
+import { type PageHit, type Store, normalizePageSlug } from "./store";
 
 export type Access = "read" | "write";
 
@@ -21,8 +22,19 @@ export interface ToolDef {
   access: Access;
   description: string;
   inputSchema: Record<string, unknown>;
+  // Args that NAME a page and must never name one inside the reserved memory/
+  // namespace: arg -> the clause its refusal reads with. DECLARED here and
+  // enforced once in tools/call (refuseReserved), not written into each handler:
+  // the guards this replaces were per-handler, each read its own spelling of the
+  // slug, and one leading space walked past three of them at once.
+  reserved?: Record<string, string>;
   handler: (ctx: BrainCtx, args: Record<string, unknown>) => Promise<unknown>;
 }
+
+// The one sentence that says "you may not name a page here". store.ts's putPage
+// raises the same clause for the same rule, so the two doors cannot describe the
+// namespace differently.
+const RESERVED = "is reserved for generated memory projections";
 
 const obj = (props: Record<string, unknown>, required: string[] = []) => ({
   type: "object",
@@ -34,6 +46,13 @@ async function searchHandler(ctx: BrainCtx, args: Record<string, unknown>): Prom
   return ctx.store.search({ query: String(args.query ?? ""), limit: args.limit as number });
 }
 
+// Every arg that NAMES a page is read through normalizePageSlug — the store's OWN
+// normalizer, imported rather than re-spelled — so the string this door decides on
+// and the string the row is written from are the same string, for every input
+// shape. String(a.slug) is what made them differ: it kept the whitespace trim()
+// removes, and it also turns a non-string ([" memory/vault/x"]) back into an
+// untrimmed one. normalizePageSlug folds a non-string to "", which the store
+// refuses as an invalid slug.
 export const TOOLS: Record<string, ToolDef> = {
   list_pages: {
     access: "read",
@@ -50,7 +69,8 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "read",
     description: "Fetch one page by slug (fuzzy falls back to title match).",
     inputSchema: obj({ slug: { type: "string" }, fuzzy: { type: "boolean" } }, ["slug"]),
-    handler: (c, a) => c.store.getPage({ slug: String(a.slug ?? ""), fuzzy: Boolean(a.fuzzy) }),
+    handler: (c, a) =>
+      c.store.getPage({ slug: normalizePageSlug(a.slug), fuzzy: Boolean(a.fuzzy) }),
   },
   search: {
     access: "read",
@@ -68,7 +88,7 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "read",
     description: "Pages that link to the given slug.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (c, a) => c.store.getBacklinks({ slug: String(a.slug ?? "") }),
+    handler: (c, a) => c.store.getBacklinks({ slug: normalizePageSlug(a.slug) }),
   },
   traverse_graph: {
     access: "read",
@@ -79,7 +99,7 @@ export const TOOLS: Record<string, ToolDef> = {
     ),
     handler: (c, a) =>
       c.store.traverseGraph({
-        slug: String(a.slug ?? ""),
+        slug: normalizePageSlug(a.slug),
         depth: a.depth as number,
         direction: a.direction as string,
       }),
@@ -122,20 +142,17 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       ["slug", "body"],
     ),
-    handler: (c, a) => {
-      // The memory/ namespace belongs to generated projections. A user page must
-      // never be able to overwrite one, or a rebuild would clobber real notes.
-      if (isMemorySlug(String(a.slug ?? ""))) {
-        throw new Error(`slug '${String(a.slug)}' is reserved for generated memory projections`);
-      }
-      return c.store.putPage({
-        slug: String(a.slug ?? ""),
+    // The memory/ namespace belongs to generated projections. A user page must
+    // never be able to overwrite one, or a rebuild would clobber real notes.
+    reserved: { slug: RESERVED },
+    handler: (c, a) =>
+      c.store.putPage({
+        slug: normalizePageSlug(a.slug),
         title: a.title as string | undefined,
         body: String(a.body ?? ""),
         kind: a.kind as "note" | "memory" | undefined,
         frontmatter: a.frontmatter as Record<string, unknown> | undefined,
-      });
-    },
+      }),
   },
   delete_page: {
     access: "write",
@@ -144,7 +161,11 @@ export const TOOLS: Record<string, ToolDef> = {
       "back. A memory/ projection page is derived, so deleting one only clears it until the next " +
       "maintenance pass rebuilds it — revoke the memory with forget instead.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (c, a) => c.store.deletePage({ slug: String(a.slug ?? "") }),
+    // No `reserved` on purpose, and the one deliberate exemption: the page is a
+    // derived artifact, so deleting a projection is a cache eviction, not a
+    // revocation — the next maintenance pass rebuilds it (pinned in
+    // tests/brain-mcp.test.ts, which also holds the exemption list).
+    handler: (c, a) => c.store.deletePage({ slug: normalizePageSlug(a.slug) }),
   },
   rename_page: {
     access: "write",
@@ -153,20 +174,18 @@ export const TOOLS: Record<string, ToolDef> = {
       "and other pages' bodies are left untouched. The memory/ namespace is closed at BOTH " +
       "ends: a generated projection cannot be moved out of it, and no page can be moved in.",
     inputSchema: obj({ slug: { type: "string" }, to: { type: "string" } }, ["slug", "to"]),
-    handler: (c, a) => {
-      const from = String(a.slug ?? "");
-      const to = String(a.to ?? "");
-      // Both directions, not just the destination. Moving a projection OUT is the
-      // worse half: forget retracts the page its memory owns, and a page nothing
-      // owns keeps answering search — revocation defeated permanently.
-      if (isMemorySlug(from)) {
-        throw new Error(`slug '${from}' is a generated memory projection and cannot be renamed`);
-      }
-      if (isMemorySlug(to)) {
-        throw new Error(`slug '${to}' is reserved for generated memory projections`);
-      }
-      return c.store.renamePage({ slug: from, to });
+    // Both directions, not just the destination. Moving a projection OUT is the
+    // worse half, and the half the store deliberately still allows (its retraction
+    // path is tested by putting a projection outside memory/, the way a database
+    // written before this guard already looks): forget retracts the page its memory
+    // owns, and a page nothing owns keeps answering search — revocation defeated
+    // permanently. `slug` first, so a call that abuses both ends names the worse one.
+    reserved: {
+      slug: "is a generated memory projection and cannot be renamed",
+      to: RESERVED,
     },
+    handler: (c, a) =>
+      c.store.renamePage({ slug: normalizePageSlug(a.slug), to: normalizePageSlug(a.to) }),
   },
   find_orphans: {
     access: "read",
@@ -186,20 +205,17 @@ export const TOOLS: Record<string, ToolDef> = {
       "Undo a delete_page: brings the page back and re-indexes it for search. Refuses a " +
       "memory/ projection — a maintenance pass rebuilds those.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (c, a) => {
-      const slug = String(a.slug ?? "");
-      // A deleted memory/ page was almost always deleted BY the projection
-      // lifecycle, because its memory was retired. Restoring it puts a revoked
-      // fact back into search and no maintenance arm undoes that — the memory is
-      // not committed, so nothing re-projects it. Rebuilding a projection is a
-      // maintenance pass; restore_page is for user pages.
-      if (isMemorySlug(slug)) {
-        throw new Error(
-          `slug '${slug}' is a generated memory projection: rebuild it with a maintenance pass, not restore_page`,
-        );
-      }
-      return c.store.restorePage({ slug });
+    // A deleted memory/ page was almost always deleted BY the projection lifecycle,
+    // because its memory was retired. Restoring it puts a revoked fact back into
+    // search. The store cannot refuse this one — its own revive path (projectMemory)
+    // calls restorePage on a committed memory's page, so an owned slug is legal
+    // there — which makes this door the ONLY thing standing between a caller and a
+    // resurrected projection. Rebuilding one is a maintenance pass; restore_page is
+    // for user pages.
+    reserved: {
+      slug: "is a generated memory projection: rebuild it with a maintenance pass, not restore_page",
     },
+    handler: (c, a) => c.store.restorePage({ slug: normalizePageSlug(a.slug) }),
   },
   remember_note: {
     access: "write",
@@ -246,6 +262,27 @@ export function clampArgs(args: unknown): Record<string, unknown> {
   return out;
 }
 
+// The reserved memory/ namespace, refused at the door on EXACTLY the string the
+// store will persist — before a database connection is even opened, since the
+// decision needs nothing from it. ONE loop over the tool's own declaration is the
+// point: the guards this replaces lived in three handlers, each read
+// String(a.slug) while the store read args.slug.trim(), and so
+// put_page{slug:" memory/vault/<id>"} was not memory/-prefixed to any of them and
+// was written as memory/vault/<id> anyway. A new write tool cannot re-open that by
+// forgetting to copy an `if` — it either declares `reserved` or the registry test
+// in tests/brain-mcp.test.ts fails.
+// This is not a second source of truth: the rule is isMemorySlug (projection.ts)
+// over normalizePageSlug (store.ts), the same two functions the store checks with.
+// It is the outer door, and it is load-bearing where the store is deliberately
+// permissive — renaming a projection OUT of memory/, and restoring the page of a
+// still-committed memory.
+function refuseReserved(def: ToolDef, args: Record<string, unknown>): void {
+  for (const [arg, clause] of Object.entries(def.reserved ?? {})) {
+    const slug = normalizePageSlug(args[arg]);
+    if (isMemorySlug(slug)) throw new Error(`slug '${slug}' ${clause}`);
+  }
+}
+
 export interface RpcResult {
   result?: unknown;
   error?: { code: number; message: string };
@@ -256,11 +293,49 @@ export interface RpcResult {
 // MCP tool results with isError:true — not JSON-RPC errors — matching what
 // lore and MCP clients expect. The store is fetched lazily so handshake
 // methods (initialize/tools/list/ping) never touch the database.
+// Which door the call came through. The page surface has no per-agent principal
+// — one shared bearer serves every agent — so a scope predicate on page reads has
+// nothing to filter against. What the two doors DO differ on is who is behind
+// them: `owner` is the authenticated human's own console (/api/call, viewer
+// session), `agents` is the shared brain bearer. Thread- and agent-scoped
+// memories are the owner's to browse and NOT something an agent should reach by
+// searching the shared graph, which is exactly the leak that made the extraction
+// scope fix cosmetic: the memory row was correctly thread-scoped while search,
+// list_pages{kind:"memory"}, get_page, get_recent_salience and find_orphans all
+// handed the same content back to anyone.
+export type Surface = "owner" | "agents";
+
+// A result may name a page as `slug`, or as the `from_slug`/`to_slug` of a graph
+// edge, at any depth. Anything naming a scoped projection is dropped from a list
+// and turns a direct read into the literal `not_found:` string lore matches on —
+// so an agent cannot even learn that another thread's memory exists, which is the
+// same rule memory/tools.ts already enforces on the memory tools.
+const SLUG_FIELDS = ["slug", "from_slug", "to_slug"] as const;
+
+function namesScoped(v: unknown): boolean {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return SLUG_FIELDS.some((f) => typeof o[f] === "string" && isScopedProjection(o[f] as string));
+}
+
+function hideScoped(value: unknown): unknown {
+  if (Array.isArray(value)) return value.filter((v) => !namesScoped(v)).map(hideScoped);
+  if (!value || typeof value !== "object") return value;
+  if (namesScoped(value)) {
+    // Direct read of a scoped page: indistinguishable from one that never existed.
+    throw new Error(`not_found: ${(value as { slug?: string }).slug ?? "page"}`);
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, hideScoped(v)]),
+  );
+}
+
 export async function handleRpc(
   getCtx: () => Promise<BrainCtx>,
   access: Access,
   method: string,
   params: Record<string, unknown> | undefined,
+  surface: Surface = "agents",
 ): Promise<RpcResult> {
   if (method?.startsWith("notifications/")) return { notification: true };
   switch (method) {
@@ -296,10 +371,27 @@ export async function handleRpc(
         return { error: { code: -32602, message: `tool '${name}' requires write access` } };
       }
       try {
+        const args = clampArgs(params?.arguments);
+        // Every tools/call passes here, so this is the one place the namespace is
+        // decided — and the handler below reads the same normalizePageSlug value.
+        refuseReserved(def, args);
         const ctx = await getCtx();
-        const value = await def.handler(ctx, clampArgs(params?.arguments));
+        const value = await def.handler(ctx, args);
+        // Filtered in the DISPATCHER, not in each handler: every tools/call
+        // passes here, so a page tool added later is safe by default. Not in
+        // store.ts either — recall generates its candidates with store.search,
+        // so a store-level filter would blind recall exactly like not projecting
+        // at all.
         return {
-          result: { content: [{ type: "text", text: JSON.stringify(value) }], isError: false },
+          result: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(surface === "owner" ? value : hideScoped(value)),
+              },
+            ],
+            isError: false,
+          },
         };
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
