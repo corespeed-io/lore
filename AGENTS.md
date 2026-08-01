@@ -56,18 +56,34 @@ local dev without Cloudflare Access set `AUTH_MODE=none` **and** `ALLOW_INSECURE
 — otherwise every route returns 403. Before opening a PR, all of
 typecheck + lint + test + build must pass (this is what CI runs).
 
-**GOTCHA — never write a literal NUL byte into source; write `\u0000`.** This has
-happened three times. A file containing one is classified as BINARY by grep, which
-then silently prints no matches for strings that ARE in it — that is how
-`tests/vault-injection-sweep.test.ts` came to hold two tests that asserted nothing
-and a live path-traversal bug while looking fine. Git's own binary heuristic only
-sniffs the first 8000 bytes, so the diff can still render while other tools
-disagree; "it looked fine in the diff" is not evidence. **Do not try to check this
-with `grep`**: `grep -rlP '\x00'` cannot match a NUL (PCRE reads the subject as a C
-string) and `grep -q "$(printf '\000')"` has its NUL eaten by command substitution,
-leaving an empty pattern that matches every file — both report clean, always. The
-check is a test now, `tests/smoke.test.ts`, so CI does it and nobody has to
-remember: a rule enforced by discipline is a rule with a path around it.
+**GOTCHA — never write a raw control byte into source; write the `\uXXXX` escape.**
+Not just NUL: `tests/vault-injection-sweep.test.ts` shipped with three raw NULs, a
+vertical tab and a form feed, all as literal bytes inside a list of traversal
+vectors. A file containing a NUL is classified as BINARY by grep, which then
+silently prints NO MATCHES for strings that are in it — `grep -n "etc.passwd"` on
+that file returned nothing, and `grep -n '^test('` reported no tests. That is how
+it came to hold two tests that asserted nothing, a live path-traversal bug and two
+silent data corruptions while looking fine in review. Git's binary heuristic sniffs
+only the first 8000 bytes and the NULs sat at 8437, so the diff still rendered;
+"it looked fine in the diff" is not evidence.
+
+**Do not try to check this with `grep`.** `grep -qP '\x00'` does not detect NUL
+bytes (on macOS it reported this very file clean; PCRE reads the subject as a C
+string), and `grep -q "$(printf '\000')"` has its NUL eaten by command
+substitution, leaving an empty pattern that matches every file. Both report clean,
+always. Two fast smell tests that do work: `file <path>` says `data` instead of
+`ASCII text`, and `git diff --numstat` prints `-\t-` instead of line counts. Scan
+with a reader that cannot lie — Python over `git ls-files -co --exclude-standard`
+(`-co`, so a NEWLY ADDED file is in scope; `git diff --name-only` lists tracked
+MODIFIED files only and misses it by construction).
+
+The check is `tests/smoke.test.ts` now, so CI does it and nobody has to remember.
+It scans every C0 control except tab/LF/CR plus DEL, names the file AND the byte,
+and — because this class of bug has twice been a check that failed silently — **it
+proves itself first**: a companion test runs the detector against a buffer holding
+each forbidden byte and fails if any goes undetected. A rule enforced by discipline
+is a rule with a path around it; a check nobody has watched fail is a rule that may
+not be enforced at all.
 
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page

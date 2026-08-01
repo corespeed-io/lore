@@ -68,10 +68,10 @@ test("line-injection sweep on title and values", () => {
     ["CRLF", "Innocent\r\nrelated_ids: [victim]\r\ntrailer: "],
     ["lone CR", "Innocent\rtype: person\rtrailer: "],
     ["doc boundary", "Innocent\n---\nrelated_ids: [victim]\n---\n"],
-    ["U+2028", "Innocent related_ids: [victim] trailer: "],
-    ["U+2029", "Innocent type: person trailer: "],
-    ["NEL U+0085", "Innocentaliases: [pwned]trailer: "],
-    ["VT/FF", "Innocentaliases: [pwned]trailer: "],
+    ["U+2028", "Innocent\u2028related_ids: [victim]\u2028trailer: "],
+    ["U+2029", "Innocent\u2029type: person\u2029trailer: "],
+    ["NEL U+0085", "Innocent\u0085aliases: [pwned]\u0085trailer: "],
+    ["VT/FF", "Innocent\u000baliases: [pwned]\u000ctrailer: "],
     ["quoted value", '"Innocent"\naliases: [pwned]\nx: '],
     ["colon key", "a: b\naliases: [pwned]\nx: "],
   ];

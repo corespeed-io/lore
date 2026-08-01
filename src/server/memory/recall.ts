@@ -295,16 +295,6 @@ export async function recallMemory(
   return out.slice(0, limit);
 }
 
-// Historical recall. Deliberately a separate entry point rather than a flag with
-// a default: reading the past is something a caller has to ask for.
-export function recallHistoricalMemory(
-  db: Db,
-  store: Store,
-  args: RecallArgs & { asOf: string },
-): Promise<RecalledMemory[]> {
-  return recallMemory(db, store, args);
-}
-
 // Direct lookup for a known logical fact — no search involved, so it works even
 // when a projection has failed.
 export async function searchMemoryByKey(

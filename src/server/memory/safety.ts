@@ -156,48 +156,27 @@ export function findSecrets(text: string): SecretFinding[] {
 // every string leaf is scanned raw AND once per object key that lexically
 // encloses it, as `<key>: <leaf>`.
 //
-// The previous version synthesized that pair only when the value was itself a
-// string (`if (typeof x === "string")`). That is a LIST — of the one container
-// shape someone remembered — and it lost the same way every list in this
-// codebase has: `{api_key: "hunter2swordfish"}` was refused while
-//   { api_key: ["hunter2swordfish"] }      (a frontmatter block or inline array)
-//   { api_key: { v: "hunter2swordfish" } } (any nesting at all)
-// walked straight through, label and value never seen together. The array shape
-// is not hypothetical: vault.ts's frontmatter reader parses `api_key:\n  - x`
-// into exactly it, and /api/import feeds that object through handleRpc's screen.
-// Carrying the label to the leaf covers arrays, nested objects, arrays of
-// objects and any depth by construction, so there is no container left to add.
+// TRAP: pairing only when the value is a STRING is a list of the one container
+// shape someone remembered, and it lost — `{api_key: ["…"]}` and
+// `{api_key: {v: "…"}}` both walked through a screen that refused the identical
+// scalar, and vault.ts's frontmatter reader produces exactly that array shape.
+// Carrying the label to the leaf covers arrays, nested objects, arrays of objects
+// and any depth by construction, so there is no container left to add.
 //
-// COST, measured rather than asserted: one extra scan per (leaf, enclosing key)
-// pair, so a payload with L leaves nested D deep costs O(L*D) instead of O(L).
-// A realistic put_page (4KB body, three frontmatter arrays) is 0.14ms.
+// COST: one extra scan per (leaf, enclosing key) pair, so O(leaves x depth)
+// rather than O(leaves). A realistic put_page is 0.14ms.
 //
-// THE QUADRATIC WAS A FREE DoS FOR THE WRONG PARTY, and this comment used to
-// wave it away with "it costs a BRAIN_WRITE_TOKEN, which already buys
-// /api/export". That was false, and an adversarial pass measured it: mcp.ts ran
-// this screen on the TOOL's access before checking the CALLER's grant, so a
-// BRAIN_READ_TOKEN holder — the one party the screen exists to protect against,
-// who cannot write anything — posted 83KB nested 4,000 deep, spent 7.4 SECONDS of
-// server CPU, and was only then told it lacked write access. At /api/mcp's 600
-// requests a minute that is roughly 27 CPU-minutes per wall-minute per instance.
-// Two changes close it and they are in different files on purpose: mcp.ts now
-// refuses on the grant BEFORE screening (a caller who cannot write has nothing to
-// screen), and MAX_DEPTH below bounds the walk itself, so the remaining cost to a
-// write-token holder is linear in payload size.
-// A payload nested deeper than this is REFUSED rather than screened, and the
-// refusal is a finding so every caller of this function already handles it.
+// TRAP, because it bit once: this screen must run AFTER the caller's grant is
+// checked, not before. mcp.ts used to decide on the tool's access alone, which
+// handed the walk to a BRAIN_READ_TOKEN holder — the party the screen protects
+// against, who cannot write — for 7.4 seconds of CPU per 83KB request.
 //
-// Two reasons, and the second is why it is a refusal and not a truncation.
-// First, cost: carrying labels down makes the walk O(leaves x depth), and a
-// deep-and-wide payload of 83KB measured at 7.4 seconds of CPU. Second,
-// correctness: past roughly 3,000 frames the recursion below threw
-// RangeError — which left handleRpc as a 500 rather than a refusal, so the
-// deepest payloads were the ones that got the least screening. Screening what we
-// can walk and failing OPEN on the rest is exactly backwards; a payload we cannot
-// walk is a payload we cannot clear.
-//
-// 64 is far past anything a real caller sends (an imported note's frontmatter is
-// two or three levels) and far under the stack limit.
+// A payload nested deeper than MAX_DEPTH is REFUSED, not truncated, and the
+// refusal is a finding so every caller already handles it. Failing OPEN on the
+// part we cannot walk would mean the deepest payloads got the least screening;
+// past ~3,000 frames the recursion threw RangeError and left handleRpc as a 500.
+// 64 is far past any real caller (frontmatter is two or three levels) and far
+// under the stack limit.
 const MAX_DEPTH = 64;
 
 export function findSecretsInPayload(payload: unknown): SecretFinding[] {

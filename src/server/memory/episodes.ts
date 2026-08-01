@@ -232,17 +232,4 @@ export async function findProcedureCandidates(
   }));
 }
 
-// Exposed for tests and for the eval harness: the fingerprint an episode over a
-// given event range WOULD get, so idempotence can be asserted directly.
-export function episodeFingerprint(input: EpisodeInput): Promise<string> {
-  return memoryFingerprint({
-    scopeType: input.scopeType,
-    scopeId: input.scopeId,
-    memoryType: "episodic",
-    memoryKey: null,
-    content: renderEpisode(input),
-    sourceEventIds: input.sourceEventIds,
-  });
-}
-
 export { rowToMemory };

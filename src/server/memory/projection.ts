@@ -484,51 +484,36 @@ const MIGRATION_BATCH = 200;
 // is already behind, because there is no way to obtain a Store without crossing
 // it.
 //
-// Why not left to the maintenance sweep: POST /api/maintenance needs the write
-// bearer and its own header says nothing calls it on its own. A namespace left
-// dirty by an older release therefore stayed READABLE by every holder of the
-// shared BRAIN_READ_TOKEN until an operator wired a cron, which is not a
-// boundary, it is a hope.
+// Why not the maintenance sweep: POST /api/maintenance needs the write bearer and
+// nothing calls it on its own, so a namespace left dirty by an older release
+// stayed READABLE by every BRAIN_READ_TOKEN holder until an operator wired a
+// cron. That is not a boundary, it is a hope.
 //
-// Why not a `from < N` step in db.ts's version-keyed migration list: a version
-// integer is a second path to the same bad state, and "the chokepoint is not the
-// only path" is how the last three rounds were refuted. A dump restored into a
-// database whose meta row already reads the new version, a hand-set
-// schema_version, a page written by psql the day after the step ran — each skips a
-// keyed step FOREVER. This is a convergence sweep, not a schema change: it is
-// idempotent, and on a clean brain it costs exactly TWO queries that return no
-// rows — the first batch (which exits early) and the leak check — so keying it on a
-// MEASURED, because "it is cheap" is the kind of claim that should carry a number,
-// and because per-cold-start cost is the one real objection to doing this at boot
-// (on Workers cold starts are frequent). Against PGlite, 5,000 ordinary pages:
-//   clean brain                     18ms   — every cold start, the common case
-//   first boot, 5,000 legacy strays  7.3s  — ONCE, and it is an upgrade
-//   every cold start after that     ~285ms — re-judging strays it has retracted
-// The candidate scan is index-assisted (Index Scan using pages_pkey), not a seq
-// scan. The steady-state 285ms is the honest cost of the paragraph below: a
-// retracted page nothing claims stays a candidate forever, because there is
-// nothing left to do to it and destroying it is the one thing this design refuses.
-// It is proportional to how many private projections the brain ONCE had, not to
-// its size, and a brain that never ran an older release pays the 18ms.
-// version buys nothing but a way to miss it. That is two anti-joins over the
-// memory/ prefix per process boot on a single-tenant personal brain. The leak check
-// is deliberately NOT skipped when the first batch came back empty, even though it
-// is provably vacuous then: a branch that turns a security check off is worth more
-// than one query.
+// Why not a version-keyed migration step: a version integer is a second path to
+// the same bad state. A restored dump whose meta row already reads the new
+// version, or a hand-set schema_version, skips a keyed step FOREVER. This is a
+// convergence sweep, not a schema change — idempotent, and on a clean brain two
+// anti-joins that return nothing.
 //
-// BOUNDED WORK. A migration must finish. This pages by id and resumes past the
-// highest id it judged, so every candidate is judged exactly once and the loop
-// ends after at most ceil(candidates / MIGRATION_BATCH) round trips. It is
-// deliberately NOT "loop until the candidate set is empty": a retracted page that
-// nothing claims stays a candidate forever (there is nothing left to do to it, and
-// destroying it is the one thing this design refuses), so that loop would never
-// end. It is also not "loop until a pass changes nothing", which stops early and
-// silently whenever a batch fills up with those inert rows.
+// COST, measured (PGlite, 5,000 pages): clean brain 18ms per cold start; first
+// boot with 5,000 legacy strays 7.3s, ONCE, on upgrade; every cold start after
+// that ~285ms, proportional to how many private projections the brain once had,
+// not to its size. Index-assisted (Index Scan using pages_pkey), not a seq scan.
+// The leak check is deliberately NOT skipped when the first batch is empty: a
+// branch that turns a security check off is worth more than one query.
+//
+// BOUNDED WORK. It pages by id and resumes past the highest id it judged, so
+// every candidate is judged exactly once and the loop ends. Deliberately NOT
+// "loop until the candidate set is empty": a retracted page nothing claims stays
+// a candidate forever (there is nothing left to do to it, and destroying it is
+// the one thing this design refuses), so that loop would never end. Nor "loop
+// until a pass changes nothing", which stops early whenever a batch fills with
+// those inert rows.
 //
 // REMOVAL ONLY. It never writes a page: re-projecting needs an embeddings
 // provider, and opening a brain must not depend on a network call. A committed
-// shared memory whose page is missing is a search gap that the next maintenance
-// pass closes — not a leak — so it is the half that can wait.
+// shared memory whose page is missing is a search gap the next maintenance pass
+// closes — not a leak — so it is the half that can wait.
 export async function migrateMemoryNamespace(db: Db): Promise<NamespaceSweep> {
   const total: NamespaceSweep = { retracted: 0, purged: 0, failed: 0 };
   for (let after = 0; ; ) {
