@@ -514,11 +514,25 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         `slug '${slug}' is reserved for generated memory projections: its body is rendered from memory ${owner.id}`,
       );
     }
+    // NO `deleted_at IS NULL` HERE, and that filter was destroying user data. The
+    // upsert below sets `deleted_at = NULL`, so this write RESURRECTS a
+    // soft-deleted page — but the read that decides which omitted fields to
+    // preserve skipped exactly those rows. A body-only put_page on a soft-deleted
+    // page therefore brought it back with `kind` reset to 'note' and
+    // `frontmatter` reset to {}, silently destroying its category and its
+    // related_ids edges, and reporting unchanged:false as though all were well.
+    // Two readers of one row: the write acts on the page whatever its state, so
+    // the read has to see the same page.
     const prior = await db.query(
-      "SELECT content_hash, kind, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
+      "SELECT content_hash, kind, frontmatter, deleted_at FROM pages WHERE slug = $1",
       [slug],
     );
     const existing = prior.rows[0];
+    // ...but the content_hash short-circuit still needs the row to be LIVE. For a
+    // deleted page the write has an effect even when the bytes are identical —
+    // resurrection — so skipping it would answer unchanged:true and leave the page
+    // deleted, which is the same silent no-op in the other direction.
+    const live = existing !== undefined && !existing.deleted_at;
 
     // Omitting a field updates nothing: put_page is the only way to edit a
     // page, so an agent editing a memory's body must not silently demote it to
@@ -542,7 +556,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     const hash = await sha256Hex(JSON.stringify([kind, title, args.body, frontmatter]));
     // (hash covers the caller's frontmatter; alias normalization is derived)
 
-    if (existing && existing.content_hash === hash) {
+    if (existing && live && existing.content_hash === hash) {
       // Idempotent re-ingest: skip embedding entirely. Still report what does
       // not resolve, so a caller re-putting a page learns about broken links.
       const stillPending = await db.query(

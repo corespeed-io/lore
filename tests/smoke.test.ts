@@ -50,6 +50,16 @@ function controlBytesIn(buf: Buffer): number[] {
 // the detector is run against a buffer that is known to be bad and must catch
 // every byte it claims to catch — otherwise a green run means nothing.
 test("the control-byte detector actually detects", () => {
+  // THE EXPECTED SET IS PINNED, not derived. Iterating FORBIDDEN_BYTES to prove
+  // FORBIDDEN_BYTES works cannot catch someone NARROWING that list — delete an
+  // entry and both the scanner and its proof shrink together, silently, which is
+  // the exact failure this whole test exists to prevent (the first version of the
+  // scanner checked byte 0 alone and reported a file holding a VT and an FF
+  // clean). Written out: 0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F, 0x7F.
+  expect(FORBIDDEN_BYTES).toEqual([
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+    29, 30, 31, 127,
+  ]);
   for (const n of FORBIDDEN_BYTES) {
     const planted = Buffer.concat([Buffer.from("ordinary source"), Buffer.from([n])]);
     expect(controlBytesIn(planted), `byte 0x${n.toString(16)} was not detected`).toEqual([n]);

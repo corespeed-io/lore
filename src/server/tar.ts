@@ -144,7 +144,18 @@ function yamlValue(v: unknown): string {
 // Quote anything that would otherwise reparse as structure — a value like
 // "[[MOC]]" must survive a round trip.
 function quote(s: string): string {
-  return /^[A-Za-z0-9 _.\-/]+$/.test(s) ? s : `"${oneLine(s.replace(/"/g, '\\"'))}"`;
+  // THE BACKSLASH IS ESCAPED FIRST, and it must be, because the reader
+  // un-escapes. vault.ts's `scalar` and `inlineArray` both treat `\X` inside a
+  // double-quoted value as a literal X — so a writer that escapes only `"` and a
+  // reader that un-escapes everything are two readers of one encoding, and the
+  // gap DELETED data: `C:\Users\bob` came back as `C:Usersbob`, and a value
+  // ending in a backslash degraded further on every round trip until it was
+  // gone. It also let a crafted array element SPLIT (`zzz\", notes/b` became two
+  // elements), minting a graph edge and an alias the author never wrote — the
+  // exact class the comma handling above exists to stop.
+  return /^[A-Za-z0-9 _.\-/]+$/.test(s)
+    ? s
+    : `"${oneLine(s.replace(/\\/g, "\\\\").replace(/"/g, '\\"'))}"`;
 }
 
 // This frontmatter block is line-structured: exactly one `key: value` per entry,

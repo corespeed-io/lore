@@ -142,6 +142,41 @@ test("honest titles round-trip", () => {
   }
 });
 
+// THE WRITER AND THE READER MUST AGREE ON WHAT AN ESCAPE IS. `quote()` escaped
+// only `"`, while the rewritten `scalar()` un-escapes every `\X` — two readers of
+// one encoding, and the gap DELETED data rather than mangling it. This is the
+// mirror of the sweep above: hostile input must not gain structure, and honest
+// input must not lose bytes.
+test("a backslash survives the round trip, and survives four of them", () => {
+  for (const value of [
+    "C:\\Users\\bob\\notes",
+    "\\alpha + \\beta",
+    "matches \\d+ digits",
+    "\\\\server\\share",
+    'he said "hi" about C:\\tmp',
+  ]) {
+    const { note } = trip(value, { note: value });
+    expect(note.frontmatter.title, `title ${JSON.stringify(value)}`).toBe(value);
+    expect(note.frontmatter.note, `value ${JSON.stringify(value)}`).toBe(value);
+  }
+  // CUMULATIVE: the old defect got worse on each cycle, ending in an empty
+  // string, so one round trip is not enough to pin it.
+  let carried = "backup path C:\\";
+  for (let i = 0; i < 4; i++) {
+    carried = String(trip(carried, {}).note.frontmatter.title);
+    expect(carried, `round trip ${i + 1}`).toBe("backup path C:\\");
+  }
+});
+
+test("a backslash cannot split an array element into a graph edge", () => {
+  // The comma case is covered above; this is the same attack spelled with a
+  // backslash, which walked past both the writer's escaping and the reader's.
+  const crafted = 'zzz\\", notes/b';
+  const { note } = trip("Ok", { related_ids: [crafted], aliases: ["C:\\", "Home Dir"] });
+  expect(note.frontmatter.related_ids, "one element became two").toEqual([crafted]);
+  expect(note.frontmatter.aliases, "two aliases merged into one").toEqual(["C:\\", "Home Dir"]);
+});
+
 // --- real store: does the round trip create an edge that did not exist? ------
 
 async function freshStore(): Promise<{ close: () => Promise<void>; store: Store; db: Db }> {

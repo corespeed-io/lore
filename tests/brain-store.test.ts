@@ -416,6 +416,55 @@ test("a .markdown Markdown-link target makes an edge like its .md sibling", asyn
   ).toContain("notes/from-markdown");
 });
 
+// P1: put_page on a SOFT-DELETED slug destroyed user data. The prior-row read
+// filtered `deleted_at IS NULL` while the upsert sets `deleted_at = NULL`, so the
+// write resurrected a page the read could not see — bringing it back with `kind`
+// reset to 'note' and `frontmatter` reset to {}, silently dropping the category
+// and the related_ids EDGES, and reporting unchanged:false as though all was
+// well. This is verbatim the harm AGENTS.md gives as the reason "omitted fields
+// are preserved" exists, on the sibling path that fix missed.
+test("editing a soft-deleted page preserves the fields it did not mention", async () => {
+  await store.putPage({ slug: "notes/target-x", body: "# Target X" });
+  await store.putPage({
+    slug: "notes/rich",
+    body: "original body",
+    kind: "memory",
+    frontmatter: { category: "work", related_ids: ["notes/target-x"] },
+  });
+  const edges = async () =>
+    (await store.getBacklinks({ slug: "notes/target-x" })).map((b) => b.slug);
+  expect(await edges(), "control: the edge exists before the delete").toEqual(["notes/rich"]);
+
+  await store.deletePage({ slug: "notes/rich" });
+  // A body-only edit, exactly what an agent sends when changing prose.
+  const res = await store.putPage({ slug: "notes/rich", body: "revised body" });
+  expect(res.unchanged).toBe(false);
+
+  const back = await store.getPage({ slug: "notes/rich" });
+  expect(back.body).toContain("revised body");
+  expect(back.type, "kind was reset to note").toBe("memory");
+  expect((back.frontmatter as Record<string, unknown>).category, "frontmatter was cleared").toBe(
+    "work",
+  );
+  expect(await edges(), "the related_ids edge was destroyed").toEqual(["notes/rich"]);
+});
+
+// ...and the other direction of the same read: the content_hash short-circuit
+// must not fire for a DELETED page, or an identical re-put answers unchanged:true
+// and silently leaves it deleted.
+test("re-putting identical bytes over a soft-deleted page brings it back", async () => {
+  await store.putPage({ slug: "notes/same", body: "identical body" });
+  await store.deletePage({ slug: "notes/same" });
+  const res = await store.putPage({ slug: "notes/same", body: "identical body" });
+  expect(res.unchanged, "reported unchanged and left the page deleted").toBe(false);
+  expect((await store.getPage({ slug: "notes/same" })).body).toContain("identical body");
+  // MIRROR: on a LIVE page the short-circuit still works, which is what makes
+  // re-ingest free.
+  expect((await store.putPage({ slug: "notes/same", body: "identical body" })).unchanged).toBe(
+    true,
+  );
+});
+
 test("a ref resolves by filename even when the title differs", async () => {
   // The real Obsidian case: the H1 is not the filename, so the title arm cannot
   // match and only the basename arm can. (A page with no H1 derives its title

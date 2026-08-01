@@ -344,6 +344,26 @@ export async function amendMemory(
   const cur = await q("SELECT * FROM memory_items WHERE id = $1 FOR UPDATE", [a.memoryId]);
   if (!cur.rows.length) return null;
   const before = rowToMemory(cur.rows[0]);
+  // RETIREMENT IS TERMINAL, decided from the LOCKED row. Locking it and then not
+  // reading its status was the gap: `revoked -> superseded` succeeded, and those
+  // two are not interchangeable — AS_OF_SQL includes 'superseded' and deliberately
+  // excludes 'revoked', so flipping a revoked row put its content back within
+  // reach of a historical read. Every caller picks its target as committed
+  // OUTSIDE this lock (writeMemory's twin lookup, commitCandidate's SELECT), so a
+  // forget racing an extraction-driven supersede lands exactly here. The check has
+  // to be inside the lock, on `before`, or it is a check on a row that has moved.
+  //
+  // A repeat of the SAME status is a no-op rather than an error, so a retried
+  // forget still answers instead of throwing on its own success.
+  if (before.status !== "committed" && before.status !== "candidate") {
+    if (a.status === undefined || a.status === before.status) {
+      return { before, after: before };
+    }
+    throw new Error(
+      `refused: memory ${a.memoryId} is ${before.status} — a retired memory's ` +
+        `authored state is history and cannot be ${a.operation.toLowerCase()}d`,
+    );
+  }
 
   if (
     !isSelfExpiry(before, a.status) &&

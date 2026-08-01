@@ -11,7 +11,7 @@
 import type { Db } from "../db";
 import type { Store } from "../store";
 import { findProcedureCandidates } from "./episodes";
-import { expireMemories, rowToMemory } from "./items";
+import { amendMemory, expireMemories, inRepoActor, rowToMemory } from "./items";
 import { runProjections } from "./projection";
 
 export interface ConsolidationReport {
@@ -42,26 +42,42 @@ async function retireExactDuplicates(db: Db, limit: number): Promise<number> {
     // Keep the oldest — it owns the provenance — and supersede the rest.
     const [keep, ...rest] = ids;
     for (const id of rest) {
-      await db.tx(async (q) => {
-        const cur = await q("SELECT status, content FROM memory_items WHERE id = $1", [id]);
-        if (!cur.rows.length) return;
-        // supersedes_id is deliberately NOT set here. It means "this row replaced
-        // <id>", and a duplicate retired in favour of an OLDER row did not
-        // replace it — the relationship is the other way round. The revision
-        // below records which row survived, which is the honest place for it.
-        // (This previously read `supersedes_id = coalesce(supersedes_id, NULL)`,
-        // which is a no-op — dead code that looked like it did something.)
-        await q(
-          `UPDATE memory_items SET status = 'superseded', valid_to = coalesce(valid_to, now()),
-             updated_at = now() WHERE id = $1`,
-          [id],
-        );
-        await q(
-          `INSERT INTO memory_revisions (id, memory_id, operation, previous_status, new_status, actor, reason)
-           VALUES ($1, $2, 'SUPERSEDE', $3, 'superseded', 'consolidation', $4)`,
-          [crypto.randomUUID(), id, String(cur.rows[0].status), `exact duplicate of ${keep}`],
-        );
+      // THROUGH THE CHOKEPOINT. This was a raw `UPDATE memory_items SET
+      // status='superseded'` — a SECOND writer of authored state, with no lock, no
+      // authority check and no status re-check. The invariant was stated per-file
+      // ("one UPDATE memory_items left in THE FILE") and this is the other file.
+      // A `forget` racing a sweep came out `superseded` rather than `revoked`, and
+      // those are not interchangeable: AS_OF_SQL includes one and excludes the
+      // other, so a revoked memory's content came back within reach of a
+      // historical read. amendMemory locks the row, re-reads its status inside the
+      // lock, refuses to move a retired one, and records the revision itself.
+      //
+      // supersedes_id is deliberately NOT set: it means "this row replaced <id>",
+      // and a duplicate retired in favour of an OLDER row did not replace it — the
+      // relationship is the other way round. The revision records which row
+      // survived, which is the honest place for it.
+      const done = await db.tx(async (q) => {
+        // Re-read UNDER THE LOCK amendMemory is about to take. The group query
+        // above ran in its own statement and selected rows that were committed
+        // THEN; a forget landing in between is the race that produced a
+        // `superseded` row where the user had asked for `revoked`. This is not a
+        // second copy of the authority rule — amendMemory still enforces that and
+        // would throw — it is the sweep asking whether this row is still its
+        // business, so an ordinary concurrent revocation is a skip rather than a
+        // crashed maintenance pass.
+        const cur = await q("SELECT status FROM memory_items WHERE id = $1 FOR UPDATE", [id]);
+        if (cur.rows[0]?.status !== "committed") return null;
+        return amendMemory(q, {
+          memoryId: id,
+          operation: "SUPERSEDE",
+          status: "superseded",
+          actor: inRepoActor("consolidation"),
+          reason: `exact duplicate of ${keep}`,
+        });
       });
+      // A duplicate the sweep did not retire is not work it did. Counting it
+      // would report a retirement that never happened.
+      if (!done || done.after.status !== "superseded") continue;
       retired++;
     }
   }

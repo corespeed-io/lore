@@ -1472,6 +1472,65 @@ test("a refused remember writes NOTHING, not even the append-only event", async 
   expect(await rows()).toBe(1);
 });
 
+// THE SAME ORDERING RULE, in the tool `remember` learned it from. append_event
+// called ensureThread BEFORE reading any argument, so a refused call still
+// created the thread — and permanently CLAIMED an unowned one for the named
+// agent, which locks every other agent out of it and cannot be undone. The log
+// stayed clean (no event, no sequence bump); the ownership write did not.
+test("a refused append_event neither creates nor claims a thread", async () => {
+  const threads = async () => (await db.query("SELECT id, agent_id FROM threads ORDER BY id")).rows;
+  expect(await threads()).toEqual([]);
+
+  await expect(
+    tool("append_event", { thread_id: "t-new", agent_id: "A", event_type: "bogus" }),
+  ).rejects.toThrow(/unknown event_type/);
+  expect(await threads(), "a refused call created a thread").toEqual([]);
+
+  // The worse half: an existing UNOWNED thread must not be claimed by a call
+  // that was refused.
+  await ensureThread(db, "t-open");
+  await expect(
+    tool("append_event", {
+      thread_id: "t-open",
+      agent_id: "Z",
+      event_type: "agent_action",
+      content: "x",
+      trace_id: ["not-a-string"],
+    }),
+  ).rejects.toThrow(/trace_id must be a string/);
+  expect(
+    (await db.query("SELECT agent_id FROM threads WHERE id = 't-open'")).rows[0].agent_id,
+    "a refused call claimed the thread",
+  ).toBeNull();
+
+  // MIRROR: an accepted call still creates the thread and claims it.
+  const ok = await tool("append_event", {
+    thread_id: "t-open",
+    agent_id: "Z",
+    event_type: "agent_action",
+    content: "x",
+  });
+  expect(ok.event_id).toBeTruthy();
+});
+
+// An object argument is read, not cast. `structured_value: "not an object"` was
+// committed and stored as a jsonb SCALAR in a column every reader types as an
+// object; enrichMemory then spread it into {"0":"n","1":"o",...}.
+test("an object argument must be an object", async () => {
+  await expect(
+    tool("remember", { thread_id: "t-obj", content: "x", structured_value: "not an object" }),
+  ).rejects.toThrow(/structured_value must be an object, not a string/);
+  await expect(
+    tool("remember", { thread_id: "t-obj", content: "x", structured_value: ["a"] }),
+  ).rejects.toThrow(/structured_value must be an object, not an array/);
+  // MIRROR: a real object still works, and omitted still means empty.
+  expect((await tool("remember", { thread_id: "t-obj", content: "plain" })).saved).toBe(true);
+  expect(
+    (await tool("remember", { thread_id: "t-obj", content: "y", structured_value: { a: 1 } }))
+      .saved,
+  ).toBe(true);
+});
+
 // A boolean read by TRUTHINESS is a boolean an LLM can get wrong: "false" is a
 // non-empty string. Read tools, so no state changes — but the caller asked for
 // one thing and got another.

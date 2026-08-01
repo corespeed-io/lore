@@ -377,6 +377,12 @@ test("a labelled credential is refused whatever CONTAINER the value sits in", as
       ["nested object", { api_key: { v: CRED } }],
       ["array of objects", { api_key: [{ v: CRED }] }],
       ["deeply nested", { frontmatter: { api_key: { a: { b: [CRED] } } } }],
+      // NON-STRING LEAVES. The container fix carried the label down but still
+      // only scanned STRING leaves, so a JSON number — which is what a client
+      // sends for a digit run it does not think of as text — was never visited
+      // at all. `{card: 4111111111111111}` is a Luhn-valid payment card under
+      // 2^53, so it survives JSON parsing intact and reaches the row.
+      ["number leaf", { password: 4111111111111111 }],
     ] as const) {
       expect(
         findSecretsInPayload(payload).map((f) => f.kind),

@@ -133,6 +133,23 @@ function argBool(name: string, v: unknown): boolean {
   return v;
 }
 
+// The same rule for an object-valued field. A bare `as Record<string, unknown>`
+// cast is not a read, it is a promise to the type checker: `structured_value:
+// "not an object"` was committed and stored as a jsonb SCALAR in a column every
+// reader types as an object, and enrichMemory then spread it into
+// {"0":"n","1":"o",...}. No credential escapes (the walker scans scalar leaves)
+// and nothing is lost, but a row no reader's type describes is a bug waiting for
+// whoever writes the next reader.
+function argObject(name: string, v: unknown): Record<string, unknown> | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "object" || Array.isArray(v)) {
+    throw new Error(
+      `${name} must be an object, not ${Array.isArray(v) ? "an array" : `a ${typeof v}`}`,
+    );
+  }
+  return v as Record<string, unknown>;
+}
+
 // The same rule for a field whose value must come from a fixed set: absent takes
 // the documented default, an unrecognised value is REFUSED rather than coerced.
 // `TYPE_ENUM.includes(String(a.memory_type)) ? … : "semantic"` silently rewrote a
@@ -390,7 +407,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       // inside a handler. The control that proves it was ordering and not policy:
       // memory_type is read on the line above and its refusal leaves zero rows.
       const memoryKey = argString("memory_key", a.memory_key);
-      const structuredValue = (a.structured_value as Record<string, unknown>) ?? {};
+      const structuredValue = argObject("structured_value", a.structured_value) ?? {};
 
       // Screen the WHOLE call, before anything durable happens. Handing the raw
       // args over as one payload is the point: the field that leaked last time
@@ -780,9 +797,13 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       ["event_type"],
     ),
     handler: async (c: BrainCtx, a, s) => {
-      await ensureThread(c.db, s.threadId, s.agentId ?? undefined);
-      const res = await appendConversationEvent(c.db, {
-        threadId: s.threadId,
+      // EVERY ARGUMENT READ BEFORE ANYTHING DURABLE, the same rule `remember`
+      // learned. ensureThread ran first, so a refused call still created the
+      // thread — and, worse, permanently CLAIMED an unowned one for the named
+      // agent, which locks every other agent out of it and cannot be undone.
+      // No event row and no sequence bump, so the append-only log stayed clean;
+      // the ownership write did not.
+      const event = {
         // argEnum, not argString: the schema declares this field's values, so the
         // reader has to be the one that checks them. Leaving it to events.ts meant a
         // prototype-unsafe `IMPLIED_ACTOR[eventType]` lookup decided membership, and
@@ -791,11 +812,16 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         // which fails closed by accident and with a driver-specific message.
         eventType: argEnum("event_type", a.event_type, TOOL_APPENDABLE_EVENTS, "") as EventType,
         content: argString("content", a.content) ?? "",
-        structuredPayload: (a.structured_payload as Record<string, unknown>) ?? {},
+        structuredPayload: argObject("structured_payload", a.structured_payload) ?? {},
         actorId: argString("actor_id", a.actor_id) ?? undefined,
         source: "tool:append_event",
         traceId: argString("trace_id", a.trace_id) ?? undefined,
         idempotencyKey: argString("idempotency_key", a.idempotency_key) ?? undefined,
+      };
+      await ensureThread(c.db, s.threadId, s.agentId ?? undefined);
+      const res = await appendConversationEvent(c.db, {
+        ...event,
+        threadId: s.threadId,
       });
       return {
         event_id: res.event.id,

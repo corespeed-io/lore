@@ -24,6 +24,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import { type Db, type Query, initSchema } from "../src/server/db.js";
 import { TOOLS, handleRpc } from "../src/server/mcp.js";
 import type { BrainCtx } from "../src/server/mcp.js";
+import { consolidateMemory } from "../src/server/memory/consolidate.js";
 import { appendConversationEvent, ensureThread } from "../src/server/memory/events.js";
 import { deterministicExtractor, runExtraction } from "../src/server/memory/extract.js";
 import {
@@ -41,6 +42,7 @@ import {
   writeMemory,
 } from "../src/server/memory/items.js";
 import { runProjections } from "../src/server/memory/projection.js";
+import { searchMemoryByKey } from "../src/server/memory/recall.js";
 import { MEMORY_TOOLS } from "../src/server/memory/tools.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
@@ -310,6 +312,120 @@ test("the user's own words can revoke the user's own memory, and only in their t
   expect(done.revoked).toBe(1);
   expect(done.forgotten).toBe(true);
   expect(must(await getMemory(db, real.id), "row").status).toBe("revoked");
+});
+
+// RETIREMENT IS TERMINAL. amendMemory locked the row and read `before`, then never
+// consulted `before.status` — so `revoked -> superseded` succeeded. Those two are
+// not interchangeable: AS_OF_SQL includes 'superseded' and deliberately excludes
+// 'revoked', so the flip put a revoked memory's content back within reach of a
+// historical read. Every caller picks its target as committed OUTSIDE the lock, so
+// a forget racing an extraction-driven supersede lands exactly here.
+test("a retired memory cannot be moved to another retired state", async () => {
+  const write = await writeMemory(db, {
+    scopeType: "thread",
+    scopeId: "t-term",
+    memoryType: "semantic",
+    memoryKey: "user.city",
+    content: "city is Berlin",
+    structuredValue: { field: "city", value: "Berlin" },
+    sourceEventIds: [(await say("t-term", "My city is Berlin.")).id],
+    explicit: true,
+    createdBy: inRepoActor("test"),
+  });
+  const id = must(write.memory, "written").id;
+  expect(
+    must(await revokeMemory(db, { memoryId: id, actor: "admin:test" }), "revoked").status,
+  ).toBe("revoked");
+
+  // The transition the race produced. It must be refused, not silently applied.
+  await expect(
+    db.tx((q) =>
+      amendMemory(q, {
+        memoryId: id,
+        operation: "SUPERSEDE",
+        status: "superseded",
+        actor: "admin:test",
+      }),
+    ),
+  ).rejects.toThrow(/is revoked/);
+  expect(must(await getMemory(db, id), "row").status).toBe("revoked");
+
+  // ...and the consequence the flip had, asserted directly rather than inferred:
+  // a revoked memory is invisible to a historical read, and stays invisible.
+  const asOf = new Date(Date.now() + 1000).toISOString();
+  const back = await searchMemoryByKey(db, {
+    memoryKey: "user.city",
+    scopes: [{ scopeType: "thread", scopeId: "t-term" }],
+    asOf,
+  });
+  expect(back.map((m) => m.status)).toEqual([]);
+
+  // MIRROR: a repeat of the SAME status is a no-op, not an error, so a retried
+  // forget still answers instead of throwing on its own success.
+  expect(must(await revokeMemory(db, { memoryId: id, actor: "admin:test" }), "retry").status).toBe(
+    "revoked",
+  );
+});
+
+// The SECOND writer of authored state, in the second file. consolidate.ts wrote
+// `status='superseded'` with a raw UPDATE — no lock, no authority check, no status
+// re-check — so a forget racing a sweep came out superseded rather than revoked.
+// Routing it through amendMemory and making retirement terminal are SEPARATE
+// fixes: neither alone closes this.
+test("a forget landing mid-sweep wins: consolidation cannot overwrite it", async () => {
+  const mk = async (content: string) =>
+    must(
+      (
+        await writeMemory(db, {
+          scopeType: "thread",
+          scopeId: "t-con",
+          memoryType: "semantic",
+          content,
+          sourceEventIds: [(await say("t-con", content)).id],
+          explicit: false,
+          createdBy: inRepoActor("test"),
+        })
+      ).memory,
+      "written",
+    ).id;
+  const first = await mk("the deploy runs nightly");
+  const second = await mk("the deploy runs nightly");
+  for (const id of [first, second]) {
+    await commitCandidate(db, { memoryId: id, actor: inRepoActor("test") });
+  }
+
+  // THE RACE, made deterministic. A revoked row is not IN the duplicate group, so
+  // revoking beforehand proves nothing — an earlier version of this test did
+  // exactly that and passed with the defect restored. The window is between the
+  // GROUP BY that selects the group and the per-row update that retires it: the
+  // forget lands there. This wrapper revokes `second` the moment the sweep has
+  // read its group and before it writes.
+  let fired = false;
+  const racing: Db = {
+    query: async (text, params) => {
+      const res = await db.query(text, params);
+      if (!fired && /GROUP BY/i.test(text)) {
+        fired = true;
+        await revokeMemory(db, { memoryId: second, actor: "admin:test" });
+      }
+      return res;
+    },
+    tx: db.tx,
+  };
+
+  const report = await consolidateMemory(racing, store, { limit: 50 });
+  expect(fired, "the sweep never ran its group query, so nothing was raced").toBe(true);
+  // The user's revocation stands. 'superseded' here would be a different status
+  // with different visibility: AS_OF_SQL includes it and excludes 'revoked'.
+  expect(must(await getMemory(db, second), "raced row").status).toBe("revoked");
+  expect(report.duplicatesRetired, "a row it did not retire was counted").toBe(0);
+  expect(must(await getMemory(db, first), "oldest kept").status).toBe("committed");
+
+  // MIRROR: with no race, an ordinary duplicate is still retired.
+  const third = await mk("the deploy runs nightly");
+  await commitCandidate(db, { memoryId: third, actor: inRepoActor("test") });
+  expect((await consolidateMemory(db, store, { limit: 50 })).duplicatesRetired).toBe(1);
+  expect(must(await getMemory(db, third), "third").status).toBe("superseded");
 });
 
 // THE MIRROR OF THE REGISTRY, and it is the failure tightening a rule causes.

@@ -189,9 +189,17 @@ export function findSecretsInPayload(payload: unknown): SecretFinding[] {
       kinds.add("unscreenable_payload");
       return;
     }
-    if (typeof v === "string") {
-      scan(v);
-      for (const label of labels) scan(`${label}: ${v}`);
+    // NUMBERS AND BOOLEANS ARE LEAVES TOO. The container fix carried the label
+    // down but still only scanned STRING leaves, so `{card: 4111111111111111}` —
+    // a JSON number, which is what a client sends for a digit run it does not
+    // think of as text — was never visited at all. Same treatment as a string,
+    // because payment_card is exactly a digit-run pattern and the whole point of
+    // this walk is that the SHAPE of the container is not a question we ask.
+    // (A card number is under 2^53, so it survives JSON parsing intact.)
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+      const text = String(v);
+      scan(text);
+      for (const label of labels) scan(`${label}: ${text}`);
     } else if (Array.isArray(v)) {
       // An array is not a label, so the enclosing keys pass straight through it.
       for (const x of v) visit(x, labels, depth + 1);
