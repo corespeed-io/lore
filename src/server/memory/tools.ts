@@ -14,10 +14,11 @@
 import type { BrainCtx, ToolDef } from "../mcp";
 import type { EventType } from "./events";
 import { appendConversationEvent, ensureThread, getConversationEvents, getThread } from "./events";
-import type { MemoryType, ScopeType } from "./items";
-import { inspectMemory, revokeMemory, writeMemory } from "./items";
+import type { MemoryItem, MemoryType, ScopeType } from "./items";
+import { getMemory, inspectMemory, revokeMemory, writeMemory } from "./items";
 import { projectMemory } from "./projection";
 import { recallMemory, searchMemoryByKey, shouldRetrieveMemory } from "./recall";
+import { redactSecrets } from "./safety";
 import { getActiveThreadSummary, getThreadSummaryHistory, refreshThreadSummary } from "./summary";
 
 const obj = (props: Record<string, unknown>, required: string[] = []) => ({
@@ -29,12 +30,28 @@ const obj = (props: Record<string, unknown>, required: string[] = []) => ({
 const SCOPE_ENUM = ["thread", "agent", "vault"];
 const TYPE_ENUM = ["semantic", "preference", "episodic", "procedural", "working_state"];
 
-function readScope(a: Record<string, unknown>): { scopeType: ScopeType; scopeId: string | null } {
-  const requested = String(a.scope ?? a.scope_type ?? "agent");
+type Scope = { scopeType: ScopeType; scopeId: string | null };
+
+const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+// The scope id is read from the field that NAMES that scope. Taking
+// `scope_id ?? agent_id ?? thread_id` while the type defaulted to 'agent' let
+// remember(thread_id) store an {agent, <thread id>} memory that
+// recall(thread_id) — which looks under thread:<thread id> — could never find:
+// write-only memory that reports saved:true. So the type picks the id, and an
+// unnamed scope is inferred from the id the caller DID pass rather than assumed.
+function readScope(a: Record<string, unknown>): Scope {
+  const scopeIdArg = str(a.scope_id);
+  const agentId = str(a.agent_id);
+  const threadId = str(a.thread_id);
+  const inferred = scopeIdArg || agentId ? "agent" : threadId ? "thread" : "agent";
+  const requested = String(a.scope ?? a.scope_type ?? inferred);
   const scopeType = (SCOPE_ENUM.includes(requested) ? requested : "agent") as ScopeType;
-  const raw = a.scope_id ?? a.agent_id ?? a.thread_id;
-  const scopeId = typeof raw === "string" && raw.trim() ? raw.trim() : null;
-  if (scopeType !== "vault" && !scopeId) {
+  // Vault has exactly one instance, so it has no id. Carrying one would store a
+  // scope_id that every reader looks for as '' and never matches.
+  if (scopeType === "vault") return { scopeType, scopeId: null };
+  const scopeId = scopeIdArg ?? (scopeType === "agent" ? agentId : threadId);
+  if (!scopeId) {
     // Refuse rather than fall back to something broader: a thread memory with no
     // thread is not a vault memory.
     throw new Error(`scope_id is required for scope '${scopeType}'`);
@@ -45,18 +62,23 @@ function readScope(a: Record<string, unknown>): { scopeType: ScopeType; scopeId:
 // Scopes a caller may READ. Broader scopes are visible from a narrower request
 // (a thread can see agent and vault facts) but never the reverse, and never a
 // sibling's.
-function readableScopes(
-  a: Record<string, unknown>,
-): { scopeType: ScopeType; scopeId: string | null }[] {
-  const scopes: { scopeType: ScopeType; scopeId: string | null }[] = [
-    { scopeType: "vault", scopeId: null },
-  ];
-  const agentId = typeof a.agent_id === "string" && a.agent_id.trim() ? a.agent_id.trim() : null;
-  const threadId =
-    typeof a.thread_id === "string" && a.thread_id.trim() ? a.thread_id.trim() : null;
+function readableScopes(a: Record<string, unknown>): Scope[] {
+  const scopes: Scope[] = [{ scopeType: "vault", scopeId: null }];
+  const agentId = str(a.agent_id);
+  const threadId = str(a.thread_id);
   if (agentId) scopes.push({ scopeType: "agent", scopeId: agentId });
   if (threadId) scopes.push({ scopeType: "thread", scopeId: threadId });
   return scopes;
+}
+
+// A memory is reachable only through a scope the caller named. A raw memory_id
+// carries no scope at all, so without this check `forget(<id>)` and
+// `inspect_memory(<id>)` reach another agent's or another thread's memory —
+// exactly the widening an LLM must never be able to do.
+function visibleIn(memory: MemoryItem, scopes: Scope[]): boolean {
+  return scopes.some(
+    (s) => s.scopeType === memory.scope_type && (s.scopeId ?? "") === (memory.scope_id ?? ""),
+  );
 }
 
 export const MEMORY_TOOLS: Record<string, ToolDef> = {
@@ -66,7 +88,9 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
       "Save one durable memory. The result says what actually happened: committed, candidate " +
       "(needs approval), conflict (contradicts an active memory), or rejected (e.g. contained a " +
       "credential) — a candidate is NOT saved as fact. Use memory_key for a value that can change " +
-      "later (user.billing_email), so a correction supersedes it instead of duplicating it.",
+      "later (user.billing_email), so a correction supersedes it instead of duplicating it. " +
+      "Scope defaults to what you name: scope_id/agent_id means agent scope, thread_id alone " +
+      "means thread scope — and recall with that same id reads it back.",
     inputSchema: obj(
       {
         content: { type: "string" },
@@ -76,7 +100,9 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
         memory_key: { type: "string" },
         thread_id: {
           type: "string",
-          description: "Thread this statement was made in, for provenance.",
+          description:
+            "Thread this statement was made in, for provenance. Also the scope id when no " +
+            "scope_id/agent_id is given, so the memory is readable from this thread.",
         },
         structured_value: { type: "object" },
       },
@@ -87,16 +113,28 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
       const content = String(a.content ?? "").trim();
       if (!content) throw new Error("content is required");
 
-      // An explicit remember IS an observable user action, so it becomes an event
-      // and the memory cites it. That is how a tool-created memory gets real
+      // An explicit remember IS an observable action, so it becomes an event and
+      // the memory cites it. That is how a tool-created memory gets real
       // provenance instead of being a fact from nowhere.
-      const threadId =
-        typeof a.thread_id === "string" && a.thread_id.trim() ? a.thread_id.trim() : "direct";
+      //
+      // It is an agent_action, NOT a user_message: only the user speaks for the
+      // user (extract.ts trusts user_message as the one source that does), so an
+      // agent able to mint user messages could forge a statement the next sweep
+      // auto-commits at explicit:true over the real value.
+      //
+      // The content is redacted on the way in because conversation_events is
+      // append-only BY DESIGN — there is no delete path — so a credential that
+      // reaches it can never be removed, and it would flow on into summaries and
+      // the context pack. The log still records that something was said. The RAW
+      // text goes to writeMemory, which is the one gate that decides
+      // committed/rejected, so a secret is refused there rather than laundered
+      // into a memory reading "[redacted:…]".
+      const threadId = str(a.thread_id) ?? "direct";
       await ensureThread(c.db, threadId);
       const { event } = await appendConversationEvent(c.db, {
         threadId,
-        eventType: "user_message",
-        content,
+        eventType: "agent_action",
+        content: redactSecrets(content),
         source: "tool:remember",
       });
 
@@ -106,8 +144,7 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
         memoryType: (TYPE_ENUM.includes(String(a.memory_type))
           ? a.memory_type
           : "semantic") as MemoryType,
-        memoryKey:
-          typeof a.memory_key === "string" && a.memory_key.trim() ? a.memory_key.trim() : null,
+        memoryKey: str(a.memory_key),
         content,
         structuredValue: (a.structured_value as Record<string, unknown>) ?? {},
         sourceEventIds: [event.id],
@@ -186,45 +223,72 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
   forget: {
     access: "write",
     description:
-      "Revoke a memory by id, or by memory_key within a scope. It leaves active retrieval " +
-      "immediately; the revision history is kept, and the generated page is cleaned up.",
+      "Revoke a memory by id, or by memory_key, within the scope you name (scope + scope_id, or " +
+      "agent_id/thread_id) — a memory outside that scope reads as not_found. It leaves active " +
+      "retrieval immediately; the revision history is kept, and the generated page is cleaned up. " +
+      "`forgotten` is true only when the page was retracted too.",
     inputSchema: obj({
       memory_id: { type: "string" },
       memory_key: { type: "string" },
       scope: { type: "string", enum: SCOPE_ENUM },
       scope_id: { type: "string" },
+      agent_id: { type: "string" },
+      thread_id: { type: "string" },
       reason: { type: "string" },
     }),
     handler: async (c: BrainCtx, a) => {
+      // Every revocation names its scope, the memory_id path included: a bare id
+      // is a scope-free handle, and this is the path that takes a fact away from
+      // everyone else's retrieval.
+      const scope = readScope(a);
       let ids: string[] = [];
-      if (typeof a.memory_id === "string" && a.memory_id.trim()) {
-        ids = [a.memory_id.trim()];
-      } else if (typeof a.memory_key === "string" && a.memory_key.trim()) {
-        const { scopeType, scopeId } = readScope(a);
-        const found = await searchMemoryByKey(c.db, {
-          memoryKey: a.memory_key.trim(),
-          scopes: [{ scopeType, scopeId }],
-        });
+      const memoryId = str(a.memory_id);
+      const memoryKey = str(a.memory_key);
+      if (memoryId) {
+        ids = [memoryId];
+      } else if (memoryKey) {
+        const found = await searchMemoryByKey(c.db, { memoryKey, scopes: [scope] });
         ids = found.map((m) => m.id);
       } else {
         throw new Error("memory_id or memory_key is required");
       }
-      if (ids.length === 0) return { revoked: 0, memories: [], reason: "not_found" };
+
+      const targets: MemoryItem[] = [];
+      for (const id of ids) {
+        const m = await getMemory(c.db, id);
+        // Out of scope reads as "no such memory": a caller must not learn that
+        // another agent's memory exists, let alone revoke it.
+        if (m && visibleIn(m, [scope])) targets.push(m);
+      }
+      if (targets.length === 0) {
+        return { revoked: 0, memories: [], forgotten: false, reason: "not_found" };
+      }
 
       const revoked: string[] = [];
-      for (const id of ids) {
+      const projectionFailed: string[] = [];
+      for (const target of targets) {
         const m = await revokeMemory(c.db, {
-          memoryId: id,
+          memoryId: target.id,
           actor: "tool:forget",
-          reason: typeof a.reason === "string" ? a.reason : undefined,
+          reason: str(a.reason) ?? undefined,
         });
         if (!m) continue;
         revoked.push(m.id);
         // Remove the projection now rather than waiting for the sweep: "forget"
-        // must not leave the fact searchable.
-        await projectMemory(c.db, c.store, m);
+        // must not leave the fact searchable. A failure here is NOT a successful
+        // forget — the page is still live and findable — so report it instead of
+        // dropping the result on the floor.
+        const p = await projectMemory(c.db, c.store, m);
+        if (p.status !== "removed") projectionFailed.push(m.id);
       }
-      return { revoked: revoked.length, memories: revoked };
+      return {
+        revoked: revoked.length,
+        memories: revoked,
+        // The counterpart of remember's `saved`: a revocation is only done when
+        // the generated page is gone too. Calling it again retries the retraction.
+        forgotten: revoked.length > 0 && projectionFailed.length === 0,
+        projection_failed: projectionFailed,
+      };
     },
   },
 
@@ -232,11 +296,25 @@ export const MEMORY_TOOLS: Record<string, ToolDef> = {
     access: "read",
     description:
       "Everything known about one memory: current value, type, scope, provenance (source events), " +
-      "effective dates, revision history and projection status.",
-    inputSchema: obj({ memory_id: { type: "string" } }, ["memory_id"]),
+      "effective dates, revision history and projection status. Visible scopes come from " +
+      "thread_id/agent_id exactly as in recall; a memory outside them reads as not_found.",
+    inputSchema: obj(
+      {
+        memory_id: { type: "string" },
+        thread_id: { type: "string" },
+        agent_id: { type: "string" },
+      },
+      ["memory_id"],
+    ),
     handler: async (c: BrainCtx, a) => {
-      const found = await inspectMemory(c.db, String(a.memory_id ?? ""));
-      if (!found) throw new Error(`not_found: memory ${String(a.memory_id ?? "")}`);
+      const id = String(a.memory_id ?? "");
+      const found = await inspectMemory(c.db, id);
+      // A raw memory id is a scope-free handle, so an out-of-scope hit must be
+      // indistinguishable from a miss: otherwise inspect_memory is a read of a
+      // sibling thread's (or another agent's) memory.
+      if (!found || !visibleIn(found.memory, readableScopes(a))) {
+        throw new Error(`not_found: memory ${id}`);
+      }
       return {
         id: found.memory.id,
         value: found.memory.content,

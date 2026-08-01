@@ -2,8 +2,8 @@
 // retrieval (vector + FTS + trigram → RRF), wikilink graph with forward-
 // reference resolution. Single-tenant by design — no sources, no scopes.
 
-import type { Db, Query } from "./db";
-import { buildGazetteer, findMentions } from "./mentions";
+import { type Db, type Query, REF_KEY_SQL } from "./db";
+import { GAZETTEER_PREFIXES, buildGazetteer, findMentions } from "./mentions";
 import {
   type EmbedFn,
   chunkBody,
@@ -36,6 +36,11 @@ export interface PageHit {
 
 const SLUG_RE = /^[^\s[\]|#]{1,512}$/;
 const RRF_K = 60;
+// How many typed pages the mention gazetteer will load. A ceiling, not a
+// policy: the sweep only ever uses names from slug-prefixed typed pages, and
+// past this many of them it under-links (the same safe direction
+// MIN_NAME_LENGTH picks) instead of pulling an unbounded vault into memory.
+const GAZETTEER_LIMIT = 5000;
 const ARM_LIMIT = 40;
 // ANN candidates pulled before per-page max-pool: multi-chunk pages and
 // soft-deleted rows both eat slots, so over-fetch well past ARM_LIMIT.
@@ -90,8 +95,25 @@ function pageType(row: { slug?: unknown; kind?: unknown; frontmatter?: unknown }
 
 // Escape LIKE metacharacters so a query containing % or _ is matched
 // literally instead of turning into a wildcard that matches everything.
-function likeLiteral(s: string): string {
+export function likeLiteral(s: string): string {
   return s.replace(/([\\%_])/g, "\\$1");
+}
+
+// A slug is also a PATH: /api/export writes `${slug}.md` into a tar, so a
+// leading '/' or a '.'/'..' segment either escapes the extraction directory or
+// makes GNU tar refuse the whole archive (exit 2) and take the user's own
+// restore with it. Rejected at the write path, which is the only place that can
+// stop it. Empty segments cover '/abs', 'trailing/' and 'a//b' at once.
+function invalidSlug(slug: string): boolean {
+  return (
+    !SLUG_RE.test(slug) || slug.split("/").some((seg) => seg === "" || seg === "." || seg === "..")
+  );
+}
+
+// The JS half of REF_KEY_SQL (db.ts): the coarse key a parked ref is looked up
+// by. Over-matching is the point — resolveRef decides.
+function refKey(s: string): string {
+  return normalizeRef(s.replace(/^.*\//, "")).replace(/[-_ ]+/g, "");
 }
 
 export interface Store {
@@ -143,6 +165,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
   async function resolveRef(q: Query, ref: string): Promise<number | null> {
     const norm = normalizeRef(ref);
     if (!norm) return null;
+    const slugish = normalizeSlugish(ref.replace(/^.*\//, ""));
     const arms: [string, unknown[]][] = [
       ["SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL", [ref.trim()]],
       [
@@ -154,9 +177,14 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         // The ref's own last segment, so a path-ish ref ("Maps/Reading MOC",
         // or ../Maps/Reading MOC.md after extraction) matches a page's
         // filename the same way a bare [[Reading MOC]] does.
-        `SELECT id FROM pages WHERE basename = $1 AND deleted_at IS NULL
+        // BOTH Unicode forms: pages.basename is built by SQL from the raw slug,
+        // and macOS hands the importer NFD filenames while the ref inside the
+        // note is typed NFC — comparing one form only makes this arm miss every
+        // accented or CJK filename in a Mac vault. (What it still cannot reach
+        // is documented on pages.basename in db.ts.)
+        `SELECT id FROM pages WHERE basename = ANY($1::text[]) AND deleted_at IS NULL
          ORDER BY length(slug), slug LIMIT 1`,
-        [normalizeSlugish(ref.replace(/^.*\//, ""))],
+        [[...new Set([slugish, slugish.normalize("NFD")])]],
       ],
       [
         `SELECT id FROM pages
@@ -176,9 +204,9 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     args: PutPageArgs,
   ): Promise<{ slug: string; unchanged: boolean; pending: string[] }> {
     const slug = args.slug?.trim();
-    if (!slug || !SLUG_RE.test(slug)) {
+    if (!slug || invalidSlug(slug)) {
       throw new Error(
-        `invalid slug: must be non-empty, no whitespace or []|# (got ${JSON.stringify(args.slug)})`,
+        `invalid slug: must be a relative path, non-empty, no whitespace, []|#, '.'/'..' segments (got ${JSON.stringify(args.slug)})`,
       );
     }
     if (typeof args.body !== "string") throw new Error("body must be a string");
@@ -290,31 +318,41 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         );
       }
 
-      // Forward references: pages that wiki-linked this slug/title before it
-      // existed now get their edge, and the pending row is consumed.
-      // Every name this page now answers to, so refs parked before it existed
-      // resolve through the SAME arms resolveRef uses. Miss one and forward
-      // links silently never land.
-      const names = [
-        normalizeRef(slug),
-        normalizeRef(String(up.rows[0].title)),
-        normalizeSlugish(slug.replace(/^.*\//, "")),
-        ...aliases,
-      ].filter(Boolean);
+      // Forward references: pages that linked this page before it existed now
+      // get their edge, and the pending row is consumed. Vault import walks
+      // files in directory order, so this is the COMMON case, not the exotic
+      // one — a forward ref that never lands is the edgeless graph /import and
+      // GraphHealth exist to explain.
+      // ONE resolution rule: the query below is only a CANDIDATE filter (a
+      // superset of every resolveRef arm — normalized name, or the coarse
+      // separator-stripped last segment), and resolveRef decides where each ref
+      // lands. Re-implementing the arms here is what silently dropped every
+      // slug-style ([[late-note-a]]) and path-style ([[Maps/Late Note]]) ref:
+      // they are parked under normalizeRef but were matched against a
+      // normalizeSlugish key nothing ever wrote.
+      const names = [normalizeRef(slug), normalizeRef(String(up.rows[0].title)), ...aliases].filter(
+        Boolean,
+      );
       const pend = await q(
-        "SELECT from_page_id, target_ref FROM pending_links WHERE ref_norm = ANY($1::text[])",
-        [[...new Set(names)]],
+        `SELECT from_page_id, target_ref FROM pending_links
+         WHERE ref_norm = ANY($1::text[]) OR ${REF_KEY_SQL} = $2::text`,
+        // A separators-only basename keys as '' and would match every row whose
+        // key is also '', so disable that arm rather than over-select the vault.
+        [[...new Set(names)], refKey(slug) || null],
       );
       for (const row of pend.rows) {
         const fromId = Number(row.from_page_id);
         if (fromId === pageId) continue;
+        const ref = String(row.target_ref);
+        const toId = await resolveRef(q, ref);
+        if (toId === null || toId === fromId) continue;
         await q(
           "INSERT INTO edges (from_page_id, to_page_id, lane, kind) VALUES ($1, $2, 'declared', 'wikilink') ON CONFLICT DO NOTHING",
-          [fromId, pageId],
+          [fromId, toId],
         );
         await q("DELETE FROM pending_links WHERE from_page_id = $1 AND target_ref = $2", [
           fromId,
-          row.target_ref,
+          ref,
         ]);
       }
     });
@@ -370,15 +408,16 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       );
       const row = res.rows[0];
       if (!row) throw new Error(`not_found: no deleted page with slug ${slug}`);
-      // Un-delete FIRST so the re-put sees the row as prior state, then re-put to
-      // rebuild the chunks that deletePage dropped. content_hash is cleared
-      // because otherwise the re-put matches the stored hash, short-circuits as
-      // "unchanged", and leaves the page alive with zero chunks -- invisible to
-      // the vector arm forever.
-      await db.query(
-        "UPDATE pages SET deleted_at = NULL, content_hash = '', updated_at = now() WHERE slug = $1",
-        [slug],
-      );
+      // The whole restore is putPage's single transaction, on purpose: its
+      // prior-state lookup filters on deleted_at IS NULL, so a deleted row is
+      // invisible to the content_hash short-circuit (nothing to clear), and the
+      // upsert's DO UPDATE clears deleted_at in the SAME transaction that
+      // rebuilds the chunks deletePage dropped. Embedding happens before that
+      // transaction, so a provider failure leaves the page deleted and the
+      // restore retryable. Un-deleting first left a live, zero-chunk page with
+      // no deleted row to restore from — invisible to the vector arm, and
+      // unrecoverable. kind/frontmatter must be passed explicitly for the same
+      // reason: there is no visible prior row to inherit them from.
       await putPage({
         slug,
         title: String(row.title),
@@ -396,7 +435,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // touch, change their content_hash, and re-embed every referrer.
     async renamePage({ slug, to }) {
       const target = to?.trim();
-      if (!target || !SLUG_RE.test(target)) throw new Error(`invalid slug: ${JSON.stringify(to)}`);
+      if (!target || invalidSlug(target)) throw new Error(`invalid slug: ${JSON.stringify(to)}`);
       if (target === slug) return { slug: target, from: slug };
       return db.tx(async (q) => {
         const cur = await q(
@@ -462,10 +501,14 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         );
       }
       if (!res.rows.length && fuzzy) {
+        // Escaped: an unescaped '%' or '_' in the argument is a wildcard, so
+        // asking for a page named "50%" (or "%") returned an arbitrary page
+        // instead of the one whose title contains that text.
         res = await db.query(
-          `SELECT ${cols} FROM pages WHERE deleted_at IS NULL AND title ILIKE '%' || $1 || '%'
+          `SELECT ${cols} FROM pages WHERE deleted_at IS NULL
+             AND title ILIKE '%' || $1 || '%' ESCAPE '\\'
            ORDER BY length(title) ASC, updated_at DESC LIMIT 1`,
-          [slug],
+          [likeLiteral(slug)],
         );
       }
       const row = res.rows[0];
@@ -722,10 +765,17 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     async sweepMentions({ limit, dryRun }) {
       const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
       // The gazetteer is small (typed pages only), so it is cheap to rebuild per
-      // call and always current.
+      // call and always current — but only if the query asks for those pages:
+      // selecting every live page read the whole vault into memory to build a
+      // list of a few hundred names. The prefixes come from mentions.ts, which
+      // owns them, so the filter cannot drift from what buildGazetteer keeps.
+      // Shortest slug first because that is the tie-break buildGazetteer uses
+      // for an ambiguous name, so the cap drops the names it would drop anyway.
       const named = await db.query(
         `SELECT id, slug, title, frontmatter->'aliases' AS aliases FROM pages
-         WHERE deleted_at IS NULL`,
+         WHERE deleted_at IS NULL AND slug LIKE ANY($1::text[])
+         ORDER BY length(slug), slug LIMIT ${GAZETTEER_LIMIT}`,
+        [GAZETTEER_PREFIXES.map((p) => `${p}%`)],
       );
       const gazetteer = buildGazetteer(
         named.rows.map((r) => ({
@@ -737,8 +787,10 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       );
       const slugById = new Map(named.rows.map((r) => [Number(r.id), String(r.slug)]));
 
+      // slug comes along because slugById only knows the gazetteer's pages now;
+      // the page being scanned is usually not one of them.
       const batch = await db.query(
-        `SELECT id, body FROM pages WHERE deleted_at IS NULL
+        `SELECT id, slug, body FROM pages WHERE deleted_at IS NULL
          ORDER BY mentions_scanned_at NULLS FIRST, id LIMIT $1`,
         [n],
       );
@@ -749,7 +801,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         for (const toId of findMentions(String(row.body), gazetteer)) {
           if (toId === fromId) continue; // self-link guard
           pairs.push({
-            from_slug: slugById.get(fromId) ?? String(fromId),
+            from_slug: String(row.slug),
             to_slug: slugById.get(toId) ?? String(toId),
           });
           if (dryRun) continue;

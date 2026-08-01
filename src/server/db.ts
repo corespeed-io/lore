@@ -35,6 +35,17 @@ const META_DDL = `CREATE TABLE IF NOT EXISTS meta (
   maintenance_lease TIMESTAMPTZ
 )`;
 
+// The candidate filter the forward-reference lookup uses (store.ts), and the
+// expression its index is built on — ONE definition so query and index cannot
+// diverge into a seq scan. ref_norm was written by normalizeRef() in JS, so it
+// is already NFKC-folded and lowercased and SQL only drops the path prefix and
+// the separators. Deliberately COARSER than normalizeSlugish: dropping
+// separators entirely can only OVER-select, and resolveRef() then decides where
+// each ref actually lands, so this can never silently disagree with the JS half
+// the way pages.basename can.
+export const REF_KEY_SQL =
+  "regexp_replace(regexp_replace(ref_norm, '^.*/', ''), '[-_ ]+', '', 'g')";
+
 function ddl(dim: number): { sql: string; optional?: boolean }[] {
   return [
     { sql: "CREATE EXTENSION IF NOT EXISTS vector" },
@@ -57,6 +68,17 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
         -- The last slug segment with separators folded to spaces, so a ref typed
         -- as [[Some Note]] finds notes/some-note. normalizeSlugish() is the JS
         -- half of this comparison; the two MUST agree.
+        -- KNOWN GAP, deliberately not closed: SQL has no NFKC, so this mirrors
+        -- lower() + separator folding only, while normalizeSlugish also folds
+        -- compatibility forms and strips surrounding quotes. A FILENAME holding a
+        -- ligature (ﬁ), a fullwidth char (Ｍ) or a quote is therefore unreachable
+        -- through the basename arm: the ref normalizes to the plain form and this
+        -- column keeps the raw one. macOS NFD filenames are the case a real Mac
+        -- vault import hits, so resolveRef() compares the NFD form of the ref too
+        -- (store.ts) — that half IS covered. Closing the rest means making
+        -- basename a plain column written by normalizeSlugish in TS: a
+        -- SCHEMA_VERSION bump, a full backfill through the app, and every write
+        -- path setting it. Not worth that until someone hits it.
         basename TEXT GENERATED ALWAYS AS (btrim(regexp_replace(lower(regexp_replace(slug, '^.*/', '')), '[-_]+', ' ', 'g'))) STORED,
         fts tsvector GENERATED ALWAYS AS (
           to_tsvector(
@@ -118,6 +140,10 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
     // ref_norm is written by normalizeRef() in JS (NFKC is not available in
     // SQL), so it cannot be a generated column.
     { sql: "CREATE INDEX IF NOT EXISTS pending_links_norm ON pending_links (ref_norm)" },
+    // ...and the coarse key the forward-reference candidate filter matches on,
+    // which runs on every page write: without this it is a seq scan over every
+    // parked ref in the vault, per put.
+    { sql: `CREATE INDEX IF NOT EXISTS pending_links_key ON pending_links ((${REF_KEY_SQL}))` },
     // Agent Memory (v4). Declared next to everything else so there is exactly
     // one list that owns the schema.
     ...MEMORY_DDL,

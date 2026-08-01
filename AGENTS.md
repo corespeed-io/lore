@@ -94,12 +94,16 @@ graph, search, page view) works unchanged.
   page's chunks — the vector arm's inner query must stay a bare
   `ORDER BY … LIMIT` to keep HNSW, so its candidates are filtered by
   `deleted_at` only AFTER the LIMIT, and dead chunks would permanently steal
-  ANN slots. `restore_page` therefore has to re-embed, and it **clears
-  `content_hash` first**: without that the re-put matches the stored hash,
-  short-circuits as "unchanged", reports success, and leaves a live page with
-  zero chunks that the vector arm can never see again. Both halves are
-  reverse-verified in `tests/brain-store.test.ts`.
-- `remember` de-duplicates an exact repeat (same body + same frontmatter)
+  ANN slots. `restore_page` therefore has to re-embed, and it is **one transaction with
+  the embed taken first**: the earlier shape (clear `content_hash`, then re-put)
+  was two statements around a network call, so a provider failure left a live,
+  zero-chunk page that the vector arm could never see AND that no longer looked
+  deleted, i.e. permanently unrestorable. Embedding before the transaction means
+  a failure leaves the page deleted and the restore retryable. Reverse-verified
+  in `tests/brain-store.test.ts`.
+- `remember_note` (the page-level write; renamed from `remember` when the
+  Agent Memory tool took that name — `mergeTools` now throws on a collision
+  instead of silently shadowing) de-duplicates an exact repeat (same body + same frontmatter)
   instead of minting a second `mem-<uuid>`; an MCP retry is the ordinary case
   and `content_hash` cannot reconcile two different slugs.
 - Link resolution has **four arms, in precedence order**: exact slug, exact
@@ -110,10 +114,18 @@ graph, search, page view) works unchanged.
   **`pages.basename`'s SQL expression and `normalizeSlugish` are two halves of
   one comparison — change one and you must change the other**, or the arm
   silently matches nothing (that shipped once and only a reverse-verified test
-  caught it). `extractRefs` reads wikilinks AND Markdown links from the body
+  caught it). Known limitation, documented at the column: SQL cannot do NFKC, so
+  the basename arm can't reach a filename whose only difference from the ref is
+  Unicode normalization (macOS NFD, fullwidth, ligatures). Closing it needs a
+  schema bump plus a table rewrite; the ref-side normalizer is deliberately not
+  half-fixed to hide it. `extractRefs` reads wikilinks AND Markdown links from the body
   AND from frontmatter string values, masks fenced *and* inline code, and skips
-  `!` embeds. The forward-reference query in `putPage` must mirror all four
-  arms or refs parked before their target existed never land.
+  `!` embeds. The forward-reference query in `putPage` is a **candidate filter
+  only — `resolveRef` is the single authority**. That split is the fix for a real
+  bug: the query used to re-implement the matching (against the wrong
+  normalization, so slug- and path-style parked refs never landed at all, which
+  is exactly the edgeless-graph symptom a directory-order vault import produces).
+  If you find matching logic written twice, that duplication IS the bug.
 - `put_page` returns `pending[]`: the refs that resolved to nothing, so an
   agent can correct a typo in the same turn. `find_orphans` (pages nothing
   points to) and `list_broken_links` are the human-facing halves.
@@ -146,8 +158,10 @@ graph, search, page view) works unchanged.
 - `src/server/mcp.ts` — one tool registry drives `tools/list` + `tools/call`:
   the 8 bare-name read tools lore calls (get_page errors MUST keep the literal
   `not_found` — lore regex-matches it; `traverse_graph` MUST return
-  `{from_slug,to_slug}` rows) plus write tools `put_page` / `remember` /
-  `delete_page` for agents.
+  `{from_slug,to_slug}` rows) plus write tools `put_page` / `remember_note` /
+  `delete_page` for agents. `mergeTools` merges the memory registry in and
+  **throws on a duplicate name** — the earlier `Object.assign` silently let the
+  memory `remember` shadow the page-level one.
 - `src/app/api/mcp/route.ts` — stateless Streamable-HTTP MCP endpoint for
   agents. Its own bearer auth: `BRAIN_WRITE_TOKEN` (read+write) /
   `BRAIN_READ_TOKEN` (read-only), both ≥16 chars, fail-closed when unset;
@@ -247,8 +261,11 @@ the only copy of anything.
 anything citing event 7 must always be able to read the event 7 it was built
 from. `sequence` is allocated by bumping the counter on the thread row inside the
 same transaction as the insert — that is what makes ordering deterministic under
-concurrent appends and stops two replays of an `idempotency_key` from both
-passing the duplicate check. Never store hidden chain-of-thought; redact secrets
+concurrent appends. The in-transaction duplicate check is a fast path, not the
+guarantee: under READ COMMITTED two concurrent replays can both pass it, so the
+partial unique index on (`thread_id`, `idempotency_key`) is the authority and a
+lost race is caught OUTSIDE the aborted transaction, reads back the winner's row
+and returns the documented `{duplicate:true}` rather than a raw SQL error. Never store hidden chain-of-thought; redact secrets
 from tool payloads before appending.
 
 **Summaries** (`summary.ts`). Version N+1 = version N folded with the events after
@@ -270,7 +287,11 @@ a memory can only be a `candidate`. CONFLICT is recorded, never auto-resolved �
 if two sources disagree and neither outranks the other, a machine picking a winner
 is how a wrong fact becomes permanent.
 
-**Safety** (`safety.ts`) is one gate every write passes. Secrets are REJECTED.
+**Safety** (`safety.ts`) is one gate every write passes, over the WHOLE payload
+— `content` and `structured_value`, because the latter is stored on the row and
+rendered into the projection's frontmatter, so screening only the prose lets a key
+move one field to the left and walk through. `enrichMemory` is the second door
+into that column and screens too. Secrets are REJECTED.
 Instruction-shaped content is DEMOTED, not deleted: it stays searchable content,
 can never become a procedure, and never auto-commits. A memory cannot widen
 authorization — structurally, because no memory type is consulted for tool
@@ -281,9 +302,17 @@ permissions.
 instead of duplicating. Retired memories have their page soft-deleted, so a
 superseded value leaves active search at once. A projection failure leaves the
 memory `committed` with `projection_status='failed'` — canonical truth does not
-depend on a page. **The `memory/` namespace is reserved and BOTH user write paths
-refuse it** (`put_page` and `/api/import`) — guarding one and not the other is how
-a generated page gets clobbered, and that shipped once before a test caught it.
+depend on a page. **The `memory/` namespace is reserved and EVERY user write path refuses it** —
+`put_page`, `/api/import`, `rename_page` (both ends, so a projection cannot be
+moved out either) and `restore_page`. Guarding some and not others is how a
+generated page gets clobbered, and that shipped once before a test caught it;
+the rename/restore halves shipped missing a second time and a review caught them.
+A projection is addressed by its stored `projection_page_id`, never by slug, so a
+page that drifted off its canonical slug is still retracted when its memory is
+revoked — addressing by slug is what let a renamed projection survive `forget`
+and keep answering searches. `delete_page` on a live projection is allowed and the
+next maintenance pass rebuilds it: the page is a derived artifact, so deleting one
+is a cache eviction, not a revocation.
 
 **Retrieval** (`recall.ts`). Reuses the whole existing pipeline, then resolves
 every hit back to canonical memory and filters on status, scope and time. Two
@@ -306,8 +335,26 @@ a stable fact does not become truer by being restated.
 `memory_gate`. `remember` returns `committed|candidate|conflict|rejected` and an
 explicit `saved` flag — reporting "saved" for a candidate is how an agent
 confidently tells a user something untrue. It appends its own provenance event
-rather than creating a fact from nowhere. The server decides scope; a caller
-cannot pass a predicate or widen scope.
+rather than creating a fact from nowhere — as an `agent_action`, never as a
+`user_message`: extraction trusts "only the user speaks for the user", so a tool
+that forged that actor could plant a user statement the next sweep auto-commits
+and supersedes the real value with. The event content is passed through
+`redactSecrets` before the insert, because layer 1 has no delete path and a
+rejected write must not leave the credential behind. The server decides scope; a
+caller cannot pass a predicate or widen scope — and because a raw `memory_id` is
+a scope-free handle, `forget` and `inspect_memory` both require the scope the
+caller addresses and report an out-of-scope hit as `not_found`, so a caller cannot
+even learn that another scope's memory exists. `forget` reports `forgotten` (and
+`projection_failed`) rather than only "revoked": a revocation whose page retraction
+failed has left the content live, and reporting success there tells the user their
+data is gone when it is not.
+
+**Extraction never widens scope** (`extract.ts`). Given a set of allowed scopes it
+takes the NARROWEST that fits the source — thread inside agent inside vault — and
+a correction may only retire a memory in the scope it writes to. The reverse
+(vault winning over thread) turned anything said in one conversation into a global
+fact readable from every other thread, which in a personal knowledge base is a
+privacy defect, not a modelling one.
 
 **Episodes and procedures** (`episodes.ts`). An episode stores observable
 goal/actions/tools/result and CITES the event range instead of copying the trace.
@@ -330,6 +377,9 @@ conflicts, failed projections, stale active projections, lease state).
   `{"action":"health"}` → `failed_projections`; the same maintenance call retries.
 - **A wrong memory**: `forget` (revoke) — it leaves retrieval immediately and the
   revision history is kept. Never DELETE a row; the history is the audit trail.
+  Check `forgotten` in the result, not just `revoked`: `false` means the canonical
+  row is revoked but its page retraction failed, so the content is still live and
+  the call must be retried (the ids are in `projection_failed`).
 - **Re-derive memory from events**: reset `extraction_checkpoints.last_extracted_sequence`
   to 0 and re-run. Fingerprints make it a NOOP rather than a duplication.
 - **A stale page that outlived its memory** is counted as

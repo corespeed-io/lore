@@ -14,7 +14,7 @@
 //     match, not "everything".
 
 import type { Db } from "../db";
-import type { Store } from "../store";
+import { type Store, likeLiteral } from "../store";
 import type { MemoryItem, MemoryType, ScopeType } from "./items";
 import { rowToMemory } from "./items";
 
@@ -109,6 +109,11 @@ async function recallHistorical(db: Db, args: RecallArgs): Promise<RecalledMemor
     params.push(args.types);
     typeFilter = `AND m.memory_type = ANY($${params.length}::text[])`;
   }
+  // The ILIKE arm needs its own param: unescaped, a query of "%" is a wildcard
+  // that returns every memory in scope, which for as_of recall means handing back
+  // superseded values nobody asked for. Same escaping the store's CJK arm uses.
+  params.push(likeLiteral(args.query.trim()));
+  const like = `$${params.length}`;
   params.push(limit);
   const res = await db.query(
     `SELECT m.* FROM memory_items m
@@ -116,8 +121,8 @@ async function recallHistorical(db: Db, args: RecallArgs): Promise<RecalledMemor
        AND (
          to_tsvector('simple', m.content || ' ' || coalesce(m.memory_key, ''))
            @@ websearch_to_tsquery('simple', $1)
-         OR m.content ILIKE '%' || $1 || '%'
-         OR coalesce(m.memory_key, '') ILIKE '%' || $1 || '%'
+         OR m.content ILIKE '%' || ${like} || '%' ESCAPE '\\'
+         OR coalesce(m.memory_key, '') ILIKE '%' || ${like} || '%' ESCAPE '\\'
        )
      ORDER BY m.valid_from DESC LIMIT $${params.length}`,
     params,

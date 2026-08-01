@@ -76,6 +76,24 @@ export interface ProjectResult {
   error?: string;
 }
 
+// The page this memory OWNS, addressed by the id the memory row already stores.
+// The slug is only where the page started: a page moved off it (a rename from
+// before the namespace guard, or an older database) is invisible to a slug lookup,
+// so retraction would silently skip it and a forgotten memory would keep
+// answering search forever.
+async function ownedPage(
+  db: Db,
+  memory: MemoryItem,
+): Promise<{ slug: string; deleted: boolean } | null> {
+  // Page ids are bigserial, so falsy means "no page recorded" with no ambiguity.
+  if (!memory.projection_page_id) return null;
+  const res = await db.query("SELECT slug, deleted_at FROM pages WHERE id = $1", [
+    memory.projection_page_id,
+  ]);
+  const row = res.rows[0];
+  return row ? { slug: String(row.slug), deleted: row.deleted_at !== null } : null;
+}
+
 // Project one memory. Committed memories get an active page; everything the
 // lifecycle has retired is removed from active search immediately (the canonical
 // row keeps the history, so nothing is lost by deleting the projection).
@@ -88,10 +106,16 @@ export async function projectMemory(
   const active = memory.status === "committed";
 
   try {
+    const owned = await ownedPage(db, memory);
+
     if (!active) {
       // Superseded / revoked / expired / candidate: must not appear in active
       // search. Soft delete keeps the row (and its chunks are dropped), and a
       // later re-commit revives it through the same stable slug.
+      // By id first: that is the page this memory owns wherever it now lives.
+      if (owned && !owned.deleted) await store.deletePage({ slug: owned.slug });
+      // Then by slug, for a memory whose page id was never recorded — a projection
+      // that died between the put and the UPDATE below still left a live page.
       const existing = await db.query(
         "SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL",
         [slug],
@@ -105,6 +129,12 @@ export async function projectMemory(
     }
 
     const { body, refs } = renderProjection(memory);
+    // A page that drifted off the canonical slug is retracted, not left live: two
+    // live pages for one memory is exactly how a stale copy survives the next
+    // forget, and the page is derived, so nothing is lost by dropping it.
+    if (owned && !owned.deleted && owned.slug !== slug) {
+      await store.deletePage({ slug: owned.slug });
+    }
     // Revive a soft-deleted projection rather than leaving it hidden: the same
     // slug is reused deliberately, which is what makes a retry idempotent.
     const dead = await db.query("SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NOT NULL", [
@@ -158,11 +188,19 @@ export async function runProjections(
 ): Promise<{ projected: number; failed: number; results: ProjectResult[] }> {
   const n = Math.min(Math.max(limit, 1), 200);
   const due = await db.query(
-    `SELECT * FROM memory_items
-     WHERE projection_status IN ('pending', 'failed')
-        OR (status = 'committed' AND projection_status = 'removed')
-        OR (status <> 'committed' AND projection_status = 'ok')
-     ORDER BY updated_at LIMIT $1`,
+    `SELECT m.* FROM memory_items m
+     WHERE m.projection_status IN ('pending', 'failed')
+        OR (m.status = 'committed' AND m.projection_status = 'removed')
+        OR (m.status <> 'committed' AND m.projection_status = 'ok')
+        -- A committed memory whose page was deleted out from under it (delete_page
+        -- on a projection, or a page hard-deleted by hand). The page is a
+        -- rebuildable retrieval projection and Postgres is canonical, so the delete
+        -- is allowed to stand for one sweep and then repaired — without this arm it
+        -- matched no arm at all, and the memory stayed silently unsearchable.
+        OR (m.status = 'committed' AND m.projection_status = 'ok'
+            AND NOT EXISTS (SELECT 1 FROM pages p
+                            WHERE p.id = m.projection_page_id AND p.deleted_at IS NULL))
+     ORDER BY m.updated_at LIMIT $1`,
     [n],
   );
   const results: ProjectResult[] = [];

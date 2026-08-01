@@ -99,8 +99,18 @@ export function screenMemoryContent(args: {
   explicit: boolean;
   /** True when the text came from an imported note, a web page, tool output… */
   externalContent?: boolean;
+  /** Screened too: it is stored on the row and rendered into the projection. */
+  structuredValue?: Record<string, unknown>;
 }): Verdict {
-  const findings = findSecrets(args.content);
+  // The secret scan covers the whole payload, not just the prose. A credential
+  // put in structured_value is stored on the memory row and rendered into the
+  // projection's frontmatter, so screening only `content` would leave the gate
+  // half-closed — a key moves one field to the left and walks through.
+  const structured =
+    args.structuredValue && Object.keys(args.structuredValue).length
+      ? JSON.stringify(args.structuredValue)
+      : "";
+  const findings = findSecrets(structured ? `${args.content}\n${structured}` : args.content);
   if (findings.length) {
     return {
       allow: false,

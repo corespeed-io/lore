@@ -70,6 +70,17 @@ export interface MemoryContext {
 const DEFAULT_MAX_MEMORIES = 8;
 const DEFAULT_MAX_CHARS = 6000;
 
+// The section tags ARE the precedence structure, and everything from layer 1-3 is
+// ultimately untrusted text: memories are extracted from conversation events, and
+// events and tool output are raw. Content that can emit `</memory>` followed by
+// `<system>…</system>` both escapes its own section and forges one the pack says
+// outranks it — which is precisely what MEMORY_GUARD claims in words and what
+// this makes true in bytes. Only bracket runs that could BE a delimiter are
+// escaped, so ordinary prose ("latency < 200ms", "a > b") is byte-identical.
+function fenceTags(s: string): string {
+  return s.replace(/<\/?[A-Za-z][^<>]*>/g, (tag) => `&lt;${tag.slice(1, -1)}&gt;`);
+}
+
 function normalizeForDedupe(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -103,7 +114,10 @@ export function renderMemory(m: MemoryItem, historical: boolean): string {
   // Only surfaced when it is low enough to matter.
   if (m.confidence < 0.8) bits.push(`confidence=${m.confidence.toFixed(2)}`);
   bits.push(`source=${m.created_by.startsWith("extractor") ? "extracted" : m.created_by}`);
-  return `- [${bits.join(" ")}] ${m.content}`;
+  // Fenced on the whole line, so neither the content nor a crafted memory_key can
+  // close the memory block. Done here rather than at assembly so the budget below
+  // counts the string that actually ships.
+  return fenceTags(`- [${bits.join(" ")}] ${m.content}`);
 }
 
 export function buildMemoryContext(args: BuildContextArgs): MemoryContext {
@@ -138,16 +152,19 @@ export function buildMemoryContext(args: BuildContextArgs): MemoryContext {
     if (text.trim()) sections.push({ name, text: text.trim() });
   };
 
+  // system and role are the deployment's own instructions — the one trusted input
+  // here, and the one place an XML-ish tag can be meant literally. Everything
+  // below them is fenced.
   push("system", args.systemInstructions ?? "");
   push("role", args.agentRole ?? "");
   if (args.workingState?.length) {
-    push("working_state", args.workingState.map((m) => `- ${m.content}`).join("\n"));
+    push("working_state", args.workingState.map((m) => `- ${fenceTags(m.content)}`).join("\n"));
   }
   if (args.summary?.rendered_summary) {
     // Labelled, because a summary records what was SAID during the thread and can
     // therefore contain a value that durable memory has since superseded. Memory
     // comes later in the pack and is the authority on current facts.
-    push("summary", `${SUMMARY_NOTE}\n\n${args.summary.rendered_summary}`);
+    push("summary", `${SUMMARY_NOTE}\n\n${fenceTags(args.summary.rendered_summary)}`);
   }
   if (chosen.length) {
     push(
@@ -160,12 +177,12 @@ export function buildMemoryContext(args: BuildContextArgs): MemoryContext {
     push(
       "recent_events",
       args.recentEvents
-        .map((e) => `- ${e.actor_type}/${e.event_type}: ${e.content.slice(0, 400)}`)
+        .map((e) => fenceTags(`- ${e.actor_type}/${e.event_type}: ${e.content.slice(0, 400)}`))
         .join("\n"),
     );
   }
-  push("user_input", args.userInput);
-  if (args.toolOutput) push("tool_output", args.toolOutput);
+  push("user_input", fenceTags(args.userInput));
+  if (args.toolOutput) push("tool_output", fenceTags(args.toolOutput));
 
   const text = sections.map((s) => `<${s.name}>\n${s.text}\n</${s.name}>`).join("\n\n");
   return {

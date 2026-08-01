@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
+import { NextRequest } from "next/server";
 import { beforeEach, expect, test } from "vitest";
 import { checkAuth } from "../src/lib/auth.js";
+import { middleware } from "../src/middleware.js";
 
 const cookies = (m: Record<string, string> = {}) => ({
   get: (n: string) => (n in m ? { value: m[n] } : undefined),
@@ -77,6 +79,41 @@ test("proxy mode rejects a forged / unverifiable token", async () => {
   // so checkAuth fails closed — the old presence-only check would have allowed it.
   const h = new Headers({ "cf-access-jwt-assertion": "tok" });
   expect((await checkAuth(h, cookies())).ok).toBe(false);
+});
+
+// Middleware wiring. The env is stripped by beforeEach, so the viewer gate is
+// fail-closed (403) for every request below unless the route is exempt.
+const req = (path: string, ip = "10.0.0.1") =>
+  new NextRequest(`http://x${path}`, { headers: { "cf-connecting-ip": ip } });
+
+// The four bearer-authed brain routes are exempt from the VIEWER gate only.
+// Exempting them with an early `return NextResponse.next()` also skipped the
+// rate limiter, so their LIMITS entries were dead code — 700 requests to
+// /api/mcp all answered 200 while /api/call correctly 429'd. Limits here are
+// hand-read from src/middleware.ts, never computed from it.
+test.each([
+  ["/api/export", 10],
+  ["/api/maintenance", 60],
+  ["/api/import", 120],
+  ["/api/mcp", 600],
+])("%s skips the viewer gate but still 429s past %i/min", async (path, max) => {
+  for (let i = 0; i < max; i++) {
+    // 200 == NextResponse.next(); a 401/403 here would mean the viewer gate ran.
+    expect((await middleware(req(path))).status).toBe(200);
+  }
+  const limited = await middleware(req(path));
+  expect(limited.status).toBe(429);
+  expect(await limited.json()).toEqual({ detail: "rate limit exceeded" });
+});
+
+test("the brain-route exemption does not leak to other routes", async () => {
+  const res = await middleware(req("/api/call"));
+  expect(res.status).toBe(403);
+  expect((await res.json()).detail).toMatch(/ALLOW_INSECURE/);
+});
+
+test("/api/health is the one route with neither gate", async () => {
+  expect((await middleware(req("/api/health"))).status).toBe(200);
 });
 
 // Placement guard. checkAuth is only reachable because Next picks the

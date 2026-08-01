@@ -145,22 +145,35 @@ const CORRECTION_RE =
 
 export const DETERMINISTIC_EXTRACTOR_VERSION = "rules-1";
 
+// The NARROWEST allowed scope wins — a thread sits inside an agent sits inside
+// the vault. Preferring the widest (this took `agent ?? vault ?? [0]`) turned a
+// sentence said in one thread into a vault fact every other thread and agent
+// could read: extraction may never choose a scope wider than the event it read.
+// No thread scope for THIS event's own thread means no proposal at all, rather
+// than a sideways write into a sibling thread.
+function scopeForEvent(
+  allowedScopes: ExtractorInput["allowedScopes"],
+  threadId: string,
+): { scopeType: ScopeType; scopeId: string | null } | null {
+  return (
+    allowedScopes.find((s) => s.scopeType === "thread" && s.scopeId === threadId) ??
+    allowedScopes.find((s) => s.scopeType === "agent") ??
+    allowedScopes.find((s) => s.scopeType === "vault") ??
+    null
+  );
+}
+
 export const deterministicExtractor: MemoryExtractor = {
   version: DETERMINISTIC_EXTRACTOR_VERSION,
   async extract({ events, activeMemories, allowedScopes }) {
     const proposals: MemoryProposal[] = [];
-    // Preferences and user facts belong to the broadest allowed scope so they
-    // survive the thread; nothing here ever invents a scope it was not given.
-    const scope =
-      allowedScopes.find((s) => s.scopeType === "agent") ??
-      allowedScopes.find((s) => s.scopeType === "vault") ??
-      allowedScopes[0];
-    if (!scope) return { proposals };
 
     for (const event of events) {
       // Only the user speaks for the user. An assistant_message is a suggestion,
       // and a tool_result is an observation.
       if (event.event_type !== "user_message") continue;
+      const scope = scopeForEvent(allowedScopes, event.thread_id);
+      if (!scope) continue;
       const text = event.content.trim();
       if (!text || findSecrets(text).length) continue;
 
@@ -197,7 +210,16 @@ export const deterministicExtractor: MemoryExtractor = {
       if (shape === "text") continue; // too vague to attach to a key safely
       const candidates = activeMemories.filter((m) => {
         const v = m.structured_value?.value;
-        return typeof v === "string" && valueShape(v) === shape && m.memory_key;
+        return (
+          typeof v === "string" &&
+          valueShape(v) === shape &&
+          m.memory_key &&
+          // Same scope this event writes to. A SUPERSEDE inserts a NEW row in the
+          // TARGET's scope, so letting a thread correction retire a vault fact
+          // publishes that thread's value globally exactly as an ADD would.
+          m.scope_type === scope.scopeType &&
+          (m.scope_id ?? "") === (scope.scopeId ?? "")
+        );
       });
       if (candidates.length !== 1) continue; // ambiguous referent: leave it alone
       const target = candidates[0];

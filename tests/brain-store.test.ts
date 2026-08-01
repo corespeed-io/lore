@@ -523,6 +523,138 @@ test("the mention sweep writes only auto edges, is idempotent, and is reversible
   );
 });
 
+test("a forward ref lands whatever spelling it was written in", async () => {
+  // Vault import walks files in directory order, so the referring note is
+  // normally written BEFORE its target: forward references are the common case.
+  // All three spellings resolve fine when the target already exists; parked,
+  // only the one that happens to be spelled like the target's basename did.
+  await store.putPage({ slug: "notes/fwd-slug", body: "waits for [[late-note-a]]" });
+  await store.putPage({ slug: "notes/fwd-path", body: "waits for [[Maps/Late Note B]]" });
+  await store.putPage({ slug: "notes/fwd-md", body: "waits for [the note](Maps/Late Note C.md)" });
+  // The H1 is deliberately not the filename, so only the basename arm can match.
+  for (const [slug, heading] of [
+    ["maps/late-note-a", "Totally Other Heading"],
+    ["maps/late-note-b", "Another Heading"],
+    ["maps/late-note-c", "Third Heading"],
+  ]) {
+    await store.putPage({ slug, body: `# ${heading}\n\narrived` });
+  }
+  const backlinks = (slug: string) =>
+    store.getBacklinks({ slug }).then((rows) => rows.map((r) => r.slug));
+  expect(await backlinks("maps/late-note-a")).toContain("notes/fwd-slug");
+  expect(await backlinks("maps/late-note-b")).toContain("notes/fwd-path");
+  expect(await backlinks("maps/late-note-c")).toContain("notes/fwd-md");
+  // ...and the parked rows are consumed, so list_broken_links stops accusing them.
+  const broken = (await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug);
+  expect(broken).not.toContain("notes/fwd-slug");
+  expect(broken).not.toContain("notes/fwd-path");
+  expect(broken).not.toContain("notes/fwd-md");
+});
+
+test("a ref resolves to a macOS NFD filename typed composed", async () => {
+  // macOS hands the directory picker decomposed filenames while the ref inside
+  // the note is composed, so an accented filename in a real Mac vault imports
+  // as an orphan unless both forms are compared.
+  // Escaped on purpose: the two forms look identical on screen, and the whole
+  // point is that they are different strings.
+  const nfd = "notes/cafe\u0301-plan"; // café-plan, decomposed the way macOS stores it
+  await store.putPage({ slug: nfd, body: "# Unrelated Heading\n\nnotes" });
+  const res = await store.putPage({
+    slug: "notes/refers-cafe",
+    body: "see [[Caf\u00e9 Plan]]", // composed, the way the ref is typed
+  });
+  expect(res.pending).toEqual([]);
+  expect((await store.getBacklinks({ slug: nfd })).map((b) => b.slug)).toContain(
+    "notes/refers-cafe",
+  );
+});
+
+test("a failed re-embed leaves a restore retryable, not a live zero-chunk page", async () => {
+  await store.putPage({ slug: "notes/atomic", body: "Uniquewordquokka appears only here." });
+  await store.deletePage({ slug: "notes/atomic" });
+  const broken = createStore(pgliteDb(pg), async () => {
+    throw new Error("provider down");
+  });
+  await expect(broken.restorePage({ slug: "notes/atomic" })).rejects.toThrow(/provider down/);
+  // Un-deleting before the embed left the page LIVE with zero chunks and no
+  // deleted row to restore from: invisible to the vector arm, unrecoverable.
+  await expect(store.getPage({ slug: "notes/atomic" })).rejects.toThrow(/not_found/);
+  await store.restorePage({ slug: "notes/atomic" });
+  expect(
+    (await store.search({ query: "Uniquewordquokka", limit: 5 })).map((h) => h.slug),
+  ).toContain("notes/atomic");
+});
+
+test("getPage fuzzy matches '%' literally instead of as a wildcard", async () => {
+  await store.putPage({
+    slug: "notes/margin-target",
+    body: "# Gross margin of 50% for the quarter\n\nbody",
+  });
+  // The bait: an unescaped '%' matches every title, and the fuzzy arm returns
+  // the SHORTEST one — which is this page, never the one the caller named.
+  await store.putPage({ slug: "notes/ab", body: "unrelated" });
+  expect((await store.getPage({ slug: "50%", fuzzy: true })).slug).toBe("notes/margin-target");
+  expect((await store.getPage({ slug: "%", fuzzy: true })).slug).toBe("notes/margin-target");
+});
+
+test("a slug cannot escape the export tar", async () => {
+  // Export writes `${slug}.md` into a USTAR archive, so a slug that is not a
+  // relative path is a traversal on extraction — and GNU tar refuses the whole
+  // archive (exit 2), taking the user's own restore with it.
+  for (const bad of [
+    "../escaped",
+    "notes/../../etc/passwd",
+    "/abs/note",
+    "notes//double",
+    ".",
+    "notes/.",
+  ]) {
+    await expect(store.putPage({ slug: bad, body: "x" })).rejects.toThrow(/invalid slug/);
+  }
+  await store.putPage({ slug: "notes/renameable", body: "x" });
+  await expect(store.renamePage({ slug: "notes/renameable", to: "../escaped" })).rejects.toThrow(
+    /invalid slug/,
+  );
+  // A dot INSIDE a segment is an ordinary slug and stays one.
+  expect((await store.putPage({ slug: "notes/v1.2-plan", body: "x" })).slug).toBe(
+    "notes/v1.2-plan",
+  );
+});
+
+test("the mention sweep reads the typed pages it needs, not the whole vault", async () => {
+  // Its own database: the assertion is how many rows one query returns, which
+  // only means something for a known vault.
+  const lite = new PGlite({ extensions: { vector, pg_trgm } });
+  const base = pgliteDb(lite);
+  await initSchema(base, { embeddingModel: "fake", embeddingDim: DIM });
+  let maxRows = 0;
+  const counted: Db = {
+    query: async (text, params) => {
+      const res = await base.query(text, params);
+      maxRows = Math.max(maxRows, res.rows.length);
+      return res;
+    },
+    tx: base.tx,
+  };
+  const isolated = createStore(counted, embed);
+  await isolated.putPage({ slug: "people/nadia-quill", body: "# Nadia Quill\n\nbio" });
+  for (let i = 0; i < 40; i++) {
+    await isolated.putPage({ slug: `notes/bulk-${i}`, body: "Talked to Nadia Quill about it." });
+  }
+
+  maxRows = 0;
+  const swept = await isolated.sweepMentions({ limit: 5 });
+  expect(swept.scanned).toBe(5);
+  // One typed page in the gazetteer plus a 5-page batch. Reading all 41 live
+  // pages to build a one-name gazetteer is unbounded memory on a real vault.
+  expect(maxRows).toBeLessThanOrEqual(10);
+  // ...and the pairs still name pages, not raw ids.
+  expect(swept.pairs.length).toBeGreaterThan(0);
+  expect(swept.pairs.every((p) => p.from_slug.startsWith("notes/bulk-"))).toBe(true);
+  expect(swept.pairs[0].to_slug).toBe("people/nadia-quill");
+  await lite.close();
+});
+
 test("an inferred edge cannot promote a page in search", async () => {
   // The backlink boost counts the declared lane only: a heuristic must not be
   // able to change ranking.

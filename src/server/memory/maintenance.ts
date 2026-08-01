@@ -72,15 +72,17 @@ export async function runMemoryMaintenance(
       });
     }
     try {
-      // Scopes offered to the extractor: this thread, and the vault. Nothing
-      // wider — an extractor cannot reach an agent or another thread unless a
-      // caller explicitly allows it.
+      // Scopes offered to the extractor: this thread, and nothing wider. An
+      // extractor cannot reach an agent, another thread, or the vault unless a
+      // caller explicitly allows it. `vault` used to be offered here and, under
+      // the old widest-wins selection, always won — every thread statement became
+      // a global fact. Extraction now takes the narrowest allowed scope, so
+      // listing vault would be inert for `rules-1`; it is dropped anyway, because
+      // an allowedScopes list is a permission and a future model-backed extractor
+      // would be entitled to use it.
       const r = await runExtraction(db, deterministicExtractor, {
         threadId,
-        allowedScopes: [
-          { scopeType: "thread", scopeId: threadId },
-          { scopeType: "vault", scopeId: null },
-        ],
+        allowedScopes: [{ scopeType: "thread", scopeId: threadId }],
       });
       extractionRuns++;
       proposals += r.proposals;

@@ -108,6 +108,13 @@ export async function ensureThread(
   return { id: threadId, created: res.rows.length > 0 };
 }
 
+// A unique violation (SQLSTATE 23505). Message-matched as well as coded because
+// the seam accepts any driver, and only the code is portable across all of them.
+function isUniqueViolation(e: unknown): boolean {
+  if ((e as { code?: unknown } | null)?.code === "23505") return true;
+  return e instanceof Error && /duplicate key value|unique constraint/i.test(e.message);
+}
+
 export async function appendConversationEvent(
   db: Db,
   args: AppendEventArgs,
@@ -119,10 +126,11 @@ export async function appendConversationEvent(
   const hash = await sha256Hex(JSON.stringify([args.threadId, args.eventType, content, payload]));
   const id = crypto.randomUUID();
 
-  return db.tx(async (q: Query) => {
+  const append = db.tx(async (q: Query) => {
     // The idempotency check lives inside the transaction that allocates the
-    // sequence: checking first and inserting after would let two replays of the
-    // same key both pass the check.
+    // sequence, so a replay that arrives after the first one committed never
+    // reaches the insert. It is the fast path only: two CONCURRENT replays can
+    // both pass it under READ COMMITTED, which the recovery below handles.
     if (args.idempotencyKey) {
       const dupe = await q(
         "SELECT * FROM conversation_events WHERE thread_id = $1 AND idempotency_key = $2",
@@ -162,6 +170,24 @@ export async function appendConversationEvent(
       ],
     );
     return { event: rowToEvent(ins.rows[0]), duplicate: false };
+  });
+  if (!args.idempotencyKey) return append;
+
+  // The in-transaction pre-check is the fast path, not the guarantee: under READ
+  // COMMITTED it cannot see a concurrent replay's uncommitted row, so the loser
+  // of that race reaches the partial unique index on (thread_id,
+  // idempotency_key) instead. A replay's documented answer is {duplicate:true},
+  // so read the winner back — its row is committed by the time we get here —
+  // rather than surfacing a raw constraint violation to an at-least-once
+  // pipeline. The failed transaction rolled back, so no sequence is burned.
+  return append.catch(async (e) => {
+    if (!isUniqueViolation(e)) throw e;
+    const dupe = await db.query(
+      "SELECT * FROM conversation_events WHERE thread_id = $1 AND idempotency_key = $2",
+      [args.threadId, args.idempotencyKey],
+    );
+    if (!dupe.rows.length) throw e;
+    return { event: rowToEvent(dupe.rows[0]), duplicate: true };
   });
 }
 

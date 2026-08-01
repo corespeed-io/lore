@@ -1,5 +1,5 @@
 // MCP surface of the standalone brain: the read tools lore calls (bare gbrain
-// names, same shapes) plus three write tools for agents. One registry drives
+// names, same shapes) plus the write tools for agents. One registry drives
 // tools/list and tools/call; access is decided by the caller's bearer grant.
 
 import type { Db } from "./db";
@@ -140,7 +140,9 @@ export const TOOLS: Record<string, ToolDef> = {
   delete_page: {
     access: "write",
     description:
-      "Soft-delete a page by slug. The body and its links are kept, so restore_page can bring it back.",
+      "Soft-delete a page by slug. The body and its links are kept, so restore_page can bring it " +
+      "back. A memory/ projection page is derived, so deleting one only clears it until the next " +
+      "maintenance pass rebuilds it — revoke the memory with forget instead.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
     handler: (c, a) => c.store.deletePage({ slug: String(a.slug ?? "") }),
   },
@@ -148,9 +150,23 @@ export const TOOLS: Record<string, ToolDef> = {
     access: "write",
     description:
       "Change a page's slug. Links keep working: the old slug becomes an alias of the page, " +
-      "and other pages' bodies are left untouched.",
+      "and other pages' bodies are left untouched. The memory/ namespace is closed at BOTH " +
+      "ends: a generated projection cannot be moved out of it, and no page can be moved in.",
     inputSchema: obj({ slug: { type: "string" }, to: { type: "string" } }, ["slug", "to"]),
-    handler: (c, a) => c.store.renamePage({ slug: String(a.slug ?? ""), to: String(a.to ?? "") }),
+    handler: (c, a) => {
+      const from = String(a.slug ?? "");
+      const to = String(a.to ?? "");
+      // Both directions, not just the destination. Moving a projection OUT is the
+      // worse half: forget retracts the page its memory owns, and a page nothing
+      // owns keeps answering search — revocation defeated permanently.
+      if (isMemorySlug(from)) {
+        throw new Error(`slug '${from}' is a generated memory projection and cannot be renamed`);
+      }
+      if (isMemorySlug(to)) {
+        throw new Error(`slug '${to}' is reserved for generated memory projections`);
+      }
+      return c.store.renamePage({ slug: from, to });
+    },
   },
   find_orphans: {
     access: "read",
@@ -166,15 +182,55 @@ export const TOOLS: Record<string, ToolDef> = {
   },
   restore_page: {
     access: "write",
-    description: "Undo a delete_page: brings the page back and re-indexes it for search.",
+    description:
+      "Undo a delete_page: brings the page back and re-indexes it for search. Refuses a " +
+      "memory/ projection — a maintenance pass rebuilds those.",
     inputSchema: obj({ slug: { type: "string" } }, ["slug"]),
-    handler: (c, a) => c.store.restorePage({ slug: String(a.slug ?? "") }),
+    handler: (c, a) => {
+      const slug = String(a.slug ?? "");
+      // A deleted memory/ page was almost always deleted BY the projection
+      // lifecycle, because its memory was retired. Restoring it puts a revoked
+      // fact back into search and no maintenance arm undoes that — the memory is
+      // not committed, so nothing re-projects it. Rebuilding a projection is a
+      // maintenance pass; restore_page is for user pages.
+      if (isMemorySlug(slug)) {
+        throw new Error(
+          `slug '${slug}' is a generated memory projection: rebuild it with a maintenance pass, not restore_page`,
+        );
+      }
+      return c.store.restorePage({ slug });
+    },
+  },
+  remember_note: {
+    access: "write",
+    description:
+      "Save one atomic note page (auto-slugged mem-<uuid>). Metadata rides as frontmatter, and an " +
+      "exact repeat returns the existing page instead of a second copy. For durable agent memory " +
+      "with provenance, supersession and scope, use `remember` instead.",
+    inputSchema: obj({ memory: { type: "string" }, metadata: { type: "object" } }, ["memory"]),
+    handler: (c, a) =>
+      c.store.remember({
+        memory: String(a.memory ?? ""),
+        metadata: a.metadata as Record<string, unknown> | undefined,
+      }),
   },
 };
 
-// Object.assign rather than a spread inside the literal so the memory tools are
-// visibly a separate module's contribution to one registry.
-Object.assign(TOOLS, MEMORY_TOOLS);
+// One name, one tool. A bare Object.assign overwrites a same-named page tool with
+// no signal whatsoever — which is how the page-level `remember` disappeared behind
+// the memory one (it is `remember_note` now). A collision is a bug in the
+// registry, so it fails at import instead of silently hiding a tool.
+export function mergeTools(
+  base: Record<string, ToolDef>,
+  extra: Record<string, ToolDef>,
+): Record<string, ToolDef> {
+  for (const name of Object.keys(extra)) {
+    if (name in base) throw new Error(`duplicate MCP tool name '${name}': rename one of them`);
+  }
+  return Object.assign(base, extra);
+}
+
+mergeTools(TOOLS, MEMORY_TOOLS);
 
 export const READ_TOOL_NAMES = Object.keys(TOOLS).filter((t) => TOOLS[t].access === "read");
 

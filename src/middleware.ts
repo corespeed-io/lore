@@ -54,20 +54,26 @@ function json(detail: string, status: number, extra: Record<string, string> = {}
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   if (path === "/api/health") return NextResponse.next();
-  // The standalone-brain endpoints carry their own bearer auth (agents and
-  // import/export tools are not browser users); they must not sit behind the
-  // viewer's password/proxy gate. Rate limits below still apply.
-  if (BRAIN_ROUTES.has(path)) return NextResponse.next();
 
-  const r = await checkAuth(req.headers, req.cookies);
-  if (!r.ok) {
-    return json(
-      r.detail ?? (r.status === 401 ? "auth required" : "forbidden"),
-      r.status ?? 403,
-      r.wwwAuthenticate ? { "WWW-Authenticate": "Basic" } : {},
-    );
+  // The standalone-brain endpoints carry their own bearer auth (agents and
+  // import/export tools are not browser users), so they skip the viewer's
+  // password/proxy gate — but ONLY that gate. They must fall THROUGH to the
+  // limiter: an early `return NextResponse.next()` here made their four LIMITS
+  // entries dead code and /api/mcp answered 700 requests a minute unthrottled.
+  if (!BRAIN_ROUTES.has(path)) {
+    const r = await checkAuth(req.headers, req.cookies);
+    if (!r.ok) {
+      return json(
+        r.detail ?? (r.status === 401 ? "auth required" : "forbidden"),
+        r.status ?? 403,
+        r.wwwAuthenticate ? { "WWW-Authenticate": "Basic" } : {},
+      );
+    }
   }
 
+  // Bucket identity. Bearer callers have no Access email, so a brain route is
+  // limited per source IP — everything behind one NAT shares a bucket. The
+  // limits above are sized for that; it is not a per-token quota.
   const who =
     req.headers.get("cf-access-authenticated-user-email") ||
     req.headers.get("cf-connecting-ip") ||

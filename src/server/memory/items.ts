@@ -16,7 +16,7 @@
 
 import type { Db, Query } from "../db";
 import { normalizeRef } from "../pipeline";
-import { screenMemoryContent } from "./safety";
+import { findSecrets, screenMemoryContent } from "./safety";
 
 export type ScopeType = "thread" | "agent" | "vault";
 export type MemoryType = "semantic" | "preference" | "episodic" | "procedural" | "working_state";
@@ -221,6 +221,7 @@ export async function writeMemory(db: Db, args: WriteMemoryArgs): Promise<WriteM
     memoryType: args.memoryType,
     explicit: Boolean(args.explicit),
     externalContent: args.externalContent,
+    structuredValue: args.structuredValue,
   });
   if (!screen.allow) {
     return { operation: "REJECT", status: "rejected", memory: null, reason: screen.reason };
@@ -390,6 +391,16 @@ export async function enrichMemory(
     const cur = await q("SELECT * FROM memory_items WHERE id = $1", [args.memoryId]);
     if (!cur.rows.length) return null;
     const before = rowToMemory(cur.rows[0]);
+    // Enrich is a second door into structured_value, so it passes the same
+    // secret scan writeMemory does. Only findSecrets, not the whole screen:
+    // enrich adds detail to an already-screened memory, it does not create one,
+    // so there is no status to downgrade — but a credential is still refused.
+    const secrets = findSecrets(JSON.stringify(args.structuredValue));
+    if (secrets.length) {
+      throw new Error(
+        `contains ${secrets.map((f) => f.kind).join(", ")} — credentials are never stored as memory`,
+      );
+    }
     const merged = { ...before.structured_value, ...args.structuredValue };
     const res = await q(
       "UPDATE memory_items SET structured_value = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING *",

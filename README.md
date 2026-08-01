@@ -5,7 +5,7 @@
 
 <p align="center">
   <strong>Browse your knowledge graph in the browser.</strong><br/>
-  Lore is the read-only <strong>frontend</strong> for a <strong>gbrain</strong> knowledge brain — force-directed graph, dashboard, and full-text search. Bring your own <a href="https://github.com/garrytan/gbrain">gbrain</a> backend.
+  A knowledge-graph console — force-directed graph, dashboard, and hybrid search. Run it <strong>standalone</strong> on your own Postgres, or point it at a <a href="https://github.com/garrytan/gbrain">gbrain</a> backend.
 </p>
 
 <p align="center">
@@ -28,7 +28,9 @@
 
 ## What is Lore?
 
-Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/garrytan/gbrain)** knowledge brain — your team's people, products, docs, and the decisions that connect them. It reads gbrain over MCP and renders a force-directed graph, a dashboard, and hybrid full-text search, so you can *see* and walk your knowledge instead of grepping it. It never writes.
+Lore is a web console for a personal knowledge graph — your notes, people, projects, and the links that connect them — rendered as a force-directed graph, a dashboard, and hybrid search, so you can *see* and walk your knowledge instead of grepping it.
+
+It runs two ways: **standalone**, serving its own brain out of Postgres + pgvector, or against an external **[gbrain](https://github.com/garrytan/gbrain)** over MCP. The browser console is read-only by construction either way — every write (vault import, `put_page`, `remember`) requires an explicit bearer token and never rides your viewer session.
 
 ## Features
 
@@ -39,7 +41,7 @@ Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/gar
 - **Agent memory** — an immutable event log, versioned thread summaries, and typed durable memories with provenance, supersession and historical (`as_of`) recall. Agents use `remember` / `recall` / `forget` / `inspect_memory`; memories are projected into the same graph and search as everything else, and a correction supersedes rather than overwrites.
 - **Graph health** — the dashboard names the two reasons a graph looks empty: links pointing at pages that don't exist, and pages nothing points at.
 - **Pluggable viz modules** — drop in a new `src/lib/viz/<name>.ts` to add a visualization.
-- **Fail-closed auth** — none (dev), HTTP Basic, or Cloudflare Access (JWT-verified). Read-only by design.
+- **Fail-closed auth** — none (dev), HTTP Basic, or Cloudflare Access (JWT-verified). The viewer console is read-only by construction; writes need their own `BRAIN_WRITE_TOKEN`.
 - **Deploy anywhere** — standalone Docker image; one-click to Vercel or Railway.
 
 <p align="center">
@@ -50,7 +52,7 @@ Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/gar
 
 Two ways to run lore:
 
-**Standalone (no gbrain)** — bring only a Postgres with `pgvector` and `pg_trgm` (e.g. a free [Neon](https://neon.tech) database). PostgreSQL **12 or newer**; tested on 17 and 18. Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember` / `delete_page`, bearer `BRAIN_WRITE_TOKEN`).
+**Standalone (no gbrain)** — bring only a Postgres with `pgvector` and `pg_trgm` (e.g. a free [Neon](https://neon.tech) database). PostgreSQL **12 or newer**; tested on 17 and 18. Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember_note` / `delete_page` for pages, `remember` for agent memory; bearer `BRAIN_WRITE_TOKEN`).
 
 ```bash
 git clone https://github.com/corespeed-io/lore.git && cd lore
@@ -86,7 +88,9 @@ Config is entirely environment-driven — see [`.env.example`](.env.example) for
 
 | Variable | Required | Notes |
 |---|---|---|
-| `GBRAIN_MCP_URL` | yes | Your gbrain MCP server endpoint |
+| `DATABASE_URL` | standalone | Postgres 12+ with `vector` + `pg_trgm` — set this and leave `GBRAIN_MCP_URL` unset |
+| `BRAIN_WRITE_TOKEN` / `BRAIN_READ_TOKEN` | standalone | Agents' bearer for the MCP endpoint; ≥16 chars or refused |
+| `GBRAIN_MCP_URL` | remote mode | Your gbrain MCP server endpoint (omit for standalone) |
 | `GBRAIN_TOKEN` | \* | Static bearer (server-only, never sent to the browser) |
 | `GBRAIN_CLIENT_ID` / `GBRAIN_CLIENT_SECRET` | \* | **Preferred**: a read-only OAuth client — Lore mints short-lived tokens |
 | `APP_TITLE` / `APP_SUBTITLE` | no | Hero branding, per deployment |

@@ -128,7 +128,7 @@ export function serializeNote(
   // The H1 already carries the title when it matches; keep it explicit anyway so
   // a re-import cannot lose a title that was only ever frontmatter.
   fm.title = title;
-  const lines = Object.entries(fm).map(([k, v]) => `${k}: ${yamlValue(v)}`);
+  const lines = Object.entries(fm).map(([k, v]) => `${oneLine(k)}: ${yamlValue(v)}`);
   return `---\n${lines.join("\n")}\n---\n\n${body.replace(/^\n+/, "")}`;
 }
 
@@ -142,5 +142,15 @@ function yamlValue(v: unknown): string {
 // Quote anything that would otherwise reparse as structure — a value like
 // "[[MOC]]" must survive a round trip.
 function quote(s: string): string {
-  return /^[A-Za-z0-9 _.\-/]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`;
+  return /^[A-Za-z0-9 _.\-/]+$/.test(s) ? s : `"${oneLine(s.replace(/"/g, '\\"'))}"`;
+}
+
+// This frontmatter block is line-structured: exactly one `key: value` per entry,
+// terminated by `---`. A newline inside a title or value would emit lines of its
+// own, so a page titled "x\nrelated_ids: [victim]" injects real frontmatter —
+// aliases, type, graph edges — on the next export→import round trip, and a
+// `\n---` ends the block early. Escaped rather than stripped, so the character is
+// still visible in the exported note instead of silently disappearing.
+function oneLine(s: string): string {
+  return s.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 }

@@ -9,10 +9,11 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import { type Db, type Query, initSchema } from "../src/server/db.js";
 import { buildMemoryContext } from "../src/server/memory/context.js";
 import { promoteProcedure, recordEpisode } from "../src/server/memory/episodes.js";
-import { appendConversationEvent, ensureThread } from "../src/server/memory/events.js";
+import { appendConversationEvent, ensureThread, getThread } from "../src/server/memory/events.js";
 import { deterministicExtractor, runExtraction } from "../src/server/memory/extract.js";
 import {
   commitCandidate,
+  enrichMemory,
   getActiveByKey,
   inspectMemory,
   revokeMemory,
@@ -25,6 +26,7 @@ import {
   shouldRetrieveMemory,
 } from "../src/server/memory/recall.js";
 import { refreshThreadSummary } from "../src/server/memory/summary.js";
+import { MEMORY_TOOLS } from "../src/server/memory/tools.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
 import { fakeSummarizer } from "./helpers/fake-summarizer.js";
@@ -669,6 +671,248 @@ test("context assembly is ordered, budgeted, deduplicated and guarded", async ()
   });
   expect(capped.memoriesIncluded.length).toBe(6);
   expect(capped.memoriesDropped).toBe(14);
+});
+
+// --- 11. the agent-facing tools ---------------------------------------------
+
+// One registry, many result shapes, so the handlers return `unknown`. Reading
+// named fields off the result here beats a cast at every call site.
+function tool(
+  name: string,
+  args: Record<string, unknown>,
+  c: { db: Db; store: Store } = { db, store },
+): Promise<Record<string, unknown>> {
+  return MEMORY_TOOLS[name].handler(c, args) as Promise<Record<string, unknown>>;
+}
+
+const OPENAI_KEY = "sk-live-9QtbRm2ZxKw7Ns4Vd1PcLyHg";
+
+test("the secret gate covers structured_value, not just the prose", async () => {
+  // The gate would be half-closed if it only read `content`: structured_value is
+  // stored on the row and rendered into the projection's frontmatter, so a key
+  // moved one field to the left would walk straight through.
+  const write = await writeMemory(db, {
+    scopeType: "agent",
+    scopeId: "agent-1",
+    memoryType: "semantic",
+    content: "the deploy key for staging",
+    structuredValue: { token: OPENAI_KEY },
+    createdBy: "test",
+    explicit: true,
+    sourceEventIds: [],
+  });
+  expect(write.status).toBe("rejected");
+  expect(write.memory).toBeNull();
+  expect(Number((await db.query("SELECT count(*)::int AS n FROM memory_items")).rows[0].n)).toBe(0);
+
+  // enrich is the second door into the same column, so it screens too.
+  const ok = await writeMemory(db, {
+    scopeType: "agent",
+    scopeId: "agent-1",
+    memoryType: "semantic",
+    content: "staging deploys from the main branch",
+    createdBy: "test",
+    explicit: true,
+    sourceEventIds: [],
+  });
+  const id = ok.memory?.id as string;
+  expect(id).toBeTruthy();
+  await expect(
+    enrichMemory(db, { memoryId: id, structuredValue: { token: OPENAI_KEY } }),
+  ).rejects.toThrow(/credentials are never stored/);
+  const after = await db.query("SELECT structured_value FROM memory_items WHERE id = $1", [id]);
+  expect(JSON.stringify(after.rows[0].structured_value)).not.toContain(OPENAI_KEY);
+});
+
+test("a credential remember rejected never lands in the append-only event log", async () => {
+  const res = await tool("remember", {
+    content: `My api key is ${OPENAI_KEY}`,
+    scope: "agent",
+    scope_id: "agent-1",
+    thread_id: "t-secret",
+  });
+  expect(res.outcome).toBe("rejected");
+  expect(res.saved).toBe(false);
+  expect(Number((await db.query("SELECT count(*)::int AS n FROM memory_items")).rows[0].n)).toBe(0);
+
+  // conversation_events has no delete path, so a secret that reaches it can
+  // never be removed — and it would flow on into summaries and the context pack.
+  // The attempt is still on the record; only the credential is not.
+  const events = await db.query(
+    "SELECT content FROM conversation_events WHERE thread_id = 't-secret'",
+  );
+  expect(events.rows.length).toBe(1);
+  expect(String(events.rows[0].content)).toMatch(/\[redacted:/);
+  const leaked = await db.query(
+    "SELECT count(*)::int AS n FROM conversation_events WHERE content LIKE '%' || $1 || '%'",
+    [OPENAI_KEY],
+  );
+  expect(Number(leaked.rows[0].n)).toBe(0);
+});
+
+test("remember(thread_id) is readable by recall(thread_id)", async () => {
+  const saved = await tool("remember", {
+    content: "The deploy runbook lives in scripts/deploy.sh",
+    thread_id: "t-round-trip",
+  });
+  expect(saved.saved).toBe(true);
+  expect(saved.projection).toBe("ok");
+
+  // saved:true from the same id the caller named has to mean readable, or this
+  // is write-only memory that reports success.
+  const back = await tool("recall", { query: "deploy runbook", thread_id: "t-round-trip" });
+  expect(back.count).toBe(1);
+  expect((back.memories as { id: string }[])[0].id).toBe(saved.memory_id);
+
+  // Because it landed in the scope the caller named, not one it cannot address.
+  const row = await db.query("SELECT scope_type, scope_id FROM memory_items WHERE id = $1", [
+    saved.memory_id,
+  ]);
+  expect(row.rows[0].scope_type).toBe("thread");
+  expect(row.rows[0].scope_id).toBe("t-round-trip");
+});
+
+test("remember records an agent action, so a sweep cannot be fed a forged user statement", async () => {
+  await say("t-forge", "My billing email is real@example.com.");
+  await runExtraction(db, deterministicExtractor, { threadId: "t-forge", allowedScopes: [AGENT] });
+  const key = {
+    scopeType: "agent" as const,
+    scopeId: "agent-1",
+    memoryType: "semantic" as const,
+    memoryKey: "user.billing_email",
+  };
+  expect((await getActiveByKey(db, key))?.content).toContain("real@example.com");
+
+  await tool("remember", {
+    content: "My billing email is attacker@example.com.",
+    scope: "agent",
+    scope_id: "agent-1",
+    thread_id: "t-forge",
+  });
+  const ev = await db.query(
+    "SELECT event_type, actor_type FROM conversation_events WHERE source = 'tool:remember'",
+  );
+  expect(ev.rows.length).toBe(1);
+  expect(ev.rows[0].event_type).not.toBe("user_message");
+  expect(ev.rows[0].actor_type).not.toBe("user");
+
+  // The event is on the record, but it does not speak for the user: extraction
+  // trusts user_message alone, so this must not supersede the real value.
+  await runExtraction(db, deterministicExtractor, { threadId: "t-forge", allowedScopes: [AGENT] });
+  expect((await getActiveByKey(db, key))?.content).toContain("real@example.com");
+});
+
+test("a forget whose page retraction fails does not report a successful forget", async () => {
+  const saved = await tool("remember", {
+    content: "deploy target is production-west",
+    memory_key: "user.deploy_target",
+    scope: "agent",
+    scope_id: "agent-1",
+    thread_id: "t-forget",
+  });
+  expect(saved.projection).toBe("ok");
+
+  const brokenStore = {
+    ...store,
+    deletePage: async () => {
+      throw new Error("disk on fire");
+    },
+  } as unknown as Store;
+  const failed = await tool(
+    "forget",
+    { memory_id: saved.memory_id, scope: "agent", scope_id: "agent-1" },
+    { db, store: brokenStore },
+  );
+  // Canonical revocation succeeded, the retraction did not: for a REVOCATION,
+  // reporting success while the page is still searchable is the dangerous lie.
+  expect(failed.revoked).toBe(1);
+  expect(failed.forgotten).toBe(false);
+  expect(failed.projection_failed).toEqual([saved.memory_id]);
+  const pages = await db.query(
+    "SELECT count(*)::int AS n FROM pages WHERE slug LIKE 'memory/%' AND deleted_at IS NULL",
+  );
+  expect(Number(pages.rows[0].n)).toBe(1);
+
+  // Calling it again with a working store finishes the job and says so.
+  const done = await tool("forget", {
+    memory_id: saved.memory_id,
+    scope: "agent",
+    scope_id: "agent-1",
+  });
+  expect(done.forgotten).toBe(true);
+  expect(done.projection_failed).toEqual([]);
+});
+
+test("forget and inspect_memory cannot reach a memory outside the scope the caller named", async () => {
+  const mine = await tool("remember", {
+    content: "the widget pipeline runs nightly",
+    scope: "agent",
+    scope_id: "agent-1",
+    thread_id: "t-scope",
+  });
+  expect(mine.saved).toBe(true);
+
+  // A sibling agent holding the id must not be able to revoke it, and must not
+  // even learn that it exists.
+  const denied = await tool("forget", {
+    memory_id: mine.memory_id,
+    scope: "agent",
+    scope_id: "agent-2",
+  });
+  expect(denied).toEqual({ revoked: 0, memories: [], forgotten: false, reason: "not_found" });
+  const status = await db.query("SELECT status FROM memory_items WHERE id = $1", [mine.memory_id]);
+  expect(status.rows[0].status).toBe("committed");
+  await expect(
+    tool("inspect_memory", { memory_id: mine.memory_id, agent_id: "agent-2" }),
+  ).rejects.toThrow(/not_found/);
+
+  // The owner sees it and can revoke it.
+  expect(
+    (await tool("inspect_memory", { memory_id: mine.memory_id, agent_id: "agent-1" })).id,
+  ).toBe(mine.memory_id);
+  const gone = await tool("forget", {
+    memory_id: mine.memory_id,
+    scope: "agent",
+    scope_id: "agent-1",
+  });
+  expect(gone.forgotten).toBe(true);
+});
+
+// The loser of an idempotency race sees no existing row under READ COMMITTED —
+// the winner's insert is not committed yet — so this db blinds exactly that
+// pre-check and lets the insert reach the unique index, which is the collision
+// a second connection would produce.
+function raceBlindDb(real: Db): Db {
+  const blind =
+    (q: Query): Query =>
+    async (text, params) =>
+      /^SELECT \* FROM conversation_events/.test(text) ? { rows: [] } : q(text, params);
+  return {
+    query: real.query,
+    tx(fn) {
+      return real.tx((q) => fn(blind(q)));
+    },
+  };
+}
+
+test("a concurrent replay of an idempotency key is reported as a duplicate, not a raw error", async () => {
+  await ensureThread(db, "t-race");
+  const args = {
+    threadId: "t-race",
+    eventType: "tool_result" as const,
+    content: "ok",
+    idempotencyKey: "race-1",
+  };
+  const first = await appendConversationEvent(db, args);
+  const second = await appendConversationEvent(raceBlindDb(db), args);
+  expect(second.duplicate).toBe(true);
+  expect(second.event.id).toBe(first.event.id);
+  const rows = await db.query(
+    "SELECT count(*)::int AS n FROM conversation_events WHERE thread_id = 't-race'",
+  );
+  expect(Number(rows.rows[0].n)).toBe(1);
+  // The losing transaction rolled back, so the allocator burned no sequence.
+  expect((await getThread(db, "t-race"))?.last_event_sequence).toBe(1);
 });
 
 test("a candidate is invisible until approved, then supersedes the active value", async () => {
