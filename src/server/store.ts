@@ -15,6 +15,7 @@ import {
   normalizeSlugish,
 } from "./pipeline";
 import { isTitlePhraseMatch } from "./title-match";
+import { refAddress } from "./vault";
 
 export type PageKind = "note" | "memory";
 
@@ -44,15 +45,6 @@ const RRF_K = 60;
 // MIN_NAME_LENGTH picks) instead of pulling an unbounded vault into memory.
 const GAZETTEER_LIMIT = 5000;
 const ARM_LIMIT = 40;
-// Basename candidates the ref resolver pulls before resolveRef's address rule
-// picks among them. Shortest slug first, so the cap only ever drops pages that
-// lost the tie-break anyway; an addressed ref whose target sits past it stays
-// PARKED (and visible in list_broken_links) instead of landing on the wrong
-// page — the canonical-spelling probe in resolveRef's first arm is what keeps
-// that from happening in the case this cap is actually reachable in (a vault
-// with many same-named files, which is exactly when path-shaped refs get
-// written).
-const BASENAME_CANDIDATES = 25;
 // ANN candidates pulled before per-page max-pool: multi-chunk pages and
 // soft-deleted rows both eat slots, so over-fetch well past ARM_LIMIT.
 const ANN_OVERFETCH = ARM_LIMIT * 5;
@@ -121,20 +113,21 @@ export function normalizePageSlug(slug: unknown): string {
   return typeof slug === "string" ? slug.trim() : "";
 }
 
-// Fold a slug or a path-shaped ref to one comparable form, per SEGMENT: the
-// quote/separator folding that lets [[Reading MOC]] find reading-moc has to apply
-// to a path's own last segment too, or 'qq/"Quoted"' and qq/quoted stop agreeing.
-// Leading ./ ../ and / are all noise: Logseq/Foam emit the first two, and
-// Docusaurus/mkdocs exports write root-relative links ([Note](/maps/note.md)).
-// Keeping the leading '/' kept an empty first segment, which no page can ever
-// have (invalidSlug forbids it) — so every root-relative link was unsatisfiable
-// BY CONSTRUCTION and sat in list_broken_links forever.
-function foldPath(s: string): string {
-  return s
-    .replace(/^(?:\.{1,2}\/|\/)+/, "")
-    .split("/")
-    .map(normalizeSlugish)
-    .join("/");
+// The slug spellings a page may be reached by when a ref ADDRESSES it. ONE list,
+// read by the resolver's point lookup and by the rename that has to undo the edges
+// an address produced — a second copy is how those two would disagree about which
+// edges the rename owns.
+//   - refAddress(ref) IS the definition (vault.ts): the ref put through the same
+//     transform that named the page.
+//   - its decomposed form, because SQL equality is byte-exact and macOS hands the
+//     importer NFD filenames while the ref inside the note is typed composed.
+//   - the ref written out literally, because spelling a slug exactly is the
+//     strongest evidence there is; it also keeps a slug the canonical transform
+//     cannot spell (an uppercase or fullwidth one) reachable by naming it exactly.
+// All three are exact string equalities, so the winner is decided by SPELLING (the
+// order below) and never by which page was written first.
+function addressCandidates(ref: string, address: string): string[] {
+  return [...new Set([normalizePageSlug(ref), address, address.normalize("NFD")])];
 }
 
 // A slug is also a PATH: /api/export writes `${slug}.md` into a tar, so a
@@ -203,35 +196,36 @@ export function createStore(db: Db, embed: EmbedFn): Store {
   async function resolveRef(q: Query, ref: string): Promise<number | null> {
     const norm = normalizeRef(ref);
     if (!norm) return null;
-    const slugish = normalizeSlugish(ref.replace(/^.*\//, ""));
-    // ONE question, asked of the REF before any arm runs, and answered again for
-    // every row every arm returns:
+    // ONE question, asked ONCE, of the REF:
     //
     //   Does this ref name an ADDRESS or a NAME?
     //
-    // A ref containing a path separator names a LOCATION. Exactly one page can
-    // ever satisfy it: the page whose slug IS that path, compared through the
-    // same per-segment folding, so [[Maps/Dated Note]] means maps/dated-note and
-    // nothing else. A ref with no separator is a NAME, and any page that answers
-    // to it (slug, title, basename, alias) may satisfy it.
+    // A ref containing a path separator names a LOCATION, and exactly one page can
+    // ever satisfy it: the page whose slug IS that path. So an address is a POINT
+    // LOOKUP and nothing else — the name arms below are not consulted at all,
+    // because every row they could return would have to BE that page. A ref with
+    // no separator is a NAME, and any page that answers to it (slug, title,
+    // basename, alias) may satisfy it.
     //
-    // This is a property of the ref, not a filter on one arm, because filtering
-    // one arm is what kept failing: the guard sat on the basename arm, and the
-    // title arm ("# deep/steal-b" as an H1), the alias arm (aliases:
-    // ['deep/steal-c']) and an "ends with the ref's path" escape
-    // (archive/maps/dated-note for [[Maps/Dated Note]]) each satisfied an address
-    // with a page that does not live there. Every one of those is the SAME
-    // defect, and it is permanent: landing a parked ref DELETES the pending row,
-    // so the real page arriving later gets nothing, an idempotent re-put of it
-    // returns unchanged, and list_broken_links stops reporting the miss.
+    // Round 2 filtered ONE arm and lost: the title arm ("# deep/steal-b" as an
+    // H1), the alias arm (aliases: ['deep/steal-c']) and an "ends with the ref's
+    // path" escape (archive/maps/dated-note for [[Maps/Dated Note]]) each
+    // satisfied an address with a page that does not live there. Round 3 filtered
+    // EVERY arm through one predicate and still lost, because the predicate was
+    // "folds to that path" and not "IS that path": it folded '-' and '_' to spaces
+    // on both sides, so maps/dated_note and maps/dated-note were ONE address and
+    // whichever real file was written first answered a ref that named the other.
+    // The rule is now a property of the ref alone, resolved by exact equality
+    // against the slug as stored, so there is no predicate over rows to get wrong:
+    // refAddress (vault.ts) is the ONE definition of the slug a name means, shared
+    // with the importer that wrote the slug in the first place.
     //
-    // Why exact and not "ends with": a path-shaped ref is written precisely
-    // BECAUSE the basename is ambiguous, so any rule admitting more than one
-    // candidate hands the ref back the ambiguity it was written to remove — and
-    // hands it to whichever candidate was written FIRST. Exactness is the only
-    // rule whose answer does not depend on write order.
+    // Every failure of this rule is permanent, which is why it is exact and not
+    // generous: landing a parked ref DELETES the pending row, so the real page
+    // arriving later gets nothing, an idempotent re-put of the referrer returns
+    // unchanged, and list_broken_links stops reporting the miss.
     //
-    // Two behaviours are given up for that. Both are traded DOWN to a visible
+    // Three behaviours are given up for that. All are traded DOWN to a visible
     // broken link, never up to a silent wrong edge:
     //   - An import that prefixes every slug with the picked folder
     //     (myvault/maps/note while the note says [[Maps/Note]]) no longer
@@ -242,74 +236,52 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     //     forever would mean a page later created AT old/place could never take
     //     its own inbound links. Name-shaped refs ([[place]], [[Old Title]] —
     //     Obsidian's default link style) still follow the rename.
-    const wantPath = foldPath(ref);
-    const addressed = wantPath.includes("/");
-    const wantDepth = wantPath.split("/").length;
-    const atAddress = (row: Record<string, unknown>) => {
-      if (!addressed) return true;
-      const slug = String(row.slug);
-      // Same folded path AND the same number of REAL directory boundaries. NFKC
-      // folds a fullwidth solidus to '/', so the single page "uni／steal" folds
-      // to uni/steal while living nowhere near that address; without the depth
-      // check the only thing stopping it from answering [[uni/steal]] (through
-      // the title arm, say) is which candidates the SQL happens to return, and
-      // "the query happens to miss it" is not a rule.
-      return slug.split("/").length === wantDepth && foldPath(slug) === wantPath;
-    };
+    //   - A slug the canonical transform cannot spell (uppercase, fullwidth, a
+    //     character forbidden in a slug) is addressable only by naming it
+    //     EXACTLY, which addressCandidates keeps working.
+    const address = refAddress(ref);
+    if (address !== null) {
+      const literal = normalizePageSlug(ref);
+      const res = await q(
+        `SELECT id FROM pages WHERE slug = ANY($1::text[]) AND deleted_at IS NULL
+         ORDER BY (slug = $2) DESC, (slug = $3) DESC, slug LIMIT 1`,
+        [addressCandidates(ref, address), literal, address],
+      );
+      return res.rows.length ? Number(res.rows[0].id) : null;
+    }
+    const slugish = normalizeSlugish(ref.replace(/^.*\//, ""));
     const arms: [string, unknown[]][] = [
+      // Exact slug.
       [
-        // Exact slug. For an address, the canonical hyphenated spelling of that
-        // address is tried too: that is what pathToSlug writes for an imported
-        // vault, so the addressed page is reached by an indexed point lookup
-        // instead of having to survive the basename arm's candidate cap below.
-        // A CANDIDATE, not a decision — atAddress still gates it, so a spelling
-        // this misses costs a parked (reported) ref, never a wrong edge.
-        // The literal slug still WINS the arm (`slug = $2` first): separators and
-        // case fold away, so maps/dup-note and maps/dup_note are one address, and
-        // a ref spelling one of them exactly must not be handed the other.
-        `SELECT id, slug FROM pages WHERE slug = ANY($1::text[]) AND deleted_at IS NULL
-         ORDER BY (slug = $2) DESC, length(slug), slug LIMIT 2`,
-        [
-          [
-            ...new Set([
-              normalizePageSlug(ref),
-              ...(addressed ? [wantPath.replace(/ /g, "-")] : []),
-            ]),
-          ],
-          normalizePageSlug(ref),
-        ],
+        "SELECT id FROM pages WHERE slug = $1 AND deleted_at IS NULL LIMIT 1",
+        [normalizePageSlug(ref)],
       ],
       [
-        `SELECT id, slug FROM pages WHERE lower(btrim(title)) = $1 AND deleted_at IS NULL
+        `SELECT id FROM pages WHERE lower(btrim(title)) = $1 AND deleted_at IS NULL
          ORDER BY length(slug), slug LIMIT 1`,
         [norm],
       ],
       [
-        // The ref's own last segment, so a path-ish ref ("Maps/Reading MOC",
-        // or ../Maps/Reading MOC.md after extraction) matches a page's
-        // filename the same way a bare [[Reading MOC]] does.
+        // The page's filename, so a bare [[Reading MOC]] finds notes/reading-moc.
         // BOTH Unicode forms: pages.basename is built by SQL from the raw slug,
         // and macOS hands the importer NFD filenames while the ref inside the
         // note is typed NFC — comparing one form only makes this arm miss every
         // accented or CJK filename in a Mac vault. (What it still cannot reach
         // is documented on pages.basename in db.ts.)
-        `SELECT id, slug FROM pages WHERE basename = ANY($1::text[]) AND deleted_at IS NULL
-         ORDER BY length(slug), slug LIMIT ${BASENAME_CANDIDATES}`,
+        `SELECT id FROM pages WHERE basename = ANY($1::text[]) AND deleted_at IS NULL
+         ORDER BY length(slug), slug LIMIT 1`,
         [[...new Set([slugish, slugish.normalize("NFD")])]],
       ],
       [
-        `SELECT id, slug FROM pages
+        `SELECT id FROM pages
          WHERE frontmatter->'aliases' @> to_jsonb($1::text) AND deleted_at IS NULL
          ORDER BY length(slug), slug LIMIT 1`,
         [norm],
       ],
     ];
-    // The single exit. Every arm's rows cross atAddress on the way out, so there
-    // is no arm to step sideways into, and adding one cannot bypass the rule.
     for (const [sql, params] of arms) {
       const res = await q(sql, params);
-      const row = res.rows.find(atAddress);
-      if (row) return Number(row.id);
+      if (res.rows.length) return Number(res.rows[0].id);
     }
     return null;
   }
@@ -371,6 +343,67 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         ref,
       ]);
     }
+  }
+
+  // Every ref a page makes, in the order putPage resolves them: declared
+  // related_ids first, then the links in the body and in frontmatter, so a
+  // wikilink's edge kind wins over a related one for the same target. ONE
+  // definition, because the rename has to ask "does this page address the slug I
+  // am moving out of" and a second answer to "what refs does this page make" is a
+  // second reader — extractRefs alone is not that answer, since related_ids are
+  // plain strings it does not report.
+  function pageRefs(
+    body: string,
+    frontmatter: Record<string, unknown>,
+    slug: string,
+  ): { ref: string; kind: "related" | "wikilink" }[] {
+    const related = Array.isArray(frontmatter.related_ids)
+      ? (frontmatter.related_ids as unknown[]).filter((r): r is string => typeof r === "string")
+      : [];
+    return [
+      ...related.map((ref) => ({ ref, kind: "related" as const })),
+      ...extractRefs(body, frontmatter, slug).map((ref) => ({ ref, kind: "wikilink" as const })),
+    ];
+  }
+
+  // Where a page's OUTGOING refs land: resolve each one, edge it or park it.
+  // The single place that decides that, so a write and a rename cannot answer the
+  // address question differently — a rename walks its page out of an address, which
+  // makes some OTHER page's addressed ref stale, and re-deciding that by hand next
+  // to the rename is how the two drift. Returns the refs that resolved to nothing.
+  async function rebuildRefs(
+    q: Query,
+    pageId: number,
+    slug: string,
+    body: string,
+    frontmatter: Record<string, unknown>,
+  ): Promise<string[]> {
+    const pending: string[] = [];
+    await q("DELETE FROM edges WHERE from_page_id = $1 AND lane = 'declared'", [pageId]);
+    await q("DELETE FROM pending_links WHERE from_page_id = $1", [pageId]);
+    const targets = new Map<number, string>(); // id -> kind (wikilink wins over related)
+    for (const { ref, kind } of pageRefs(body, frontmatter, slug)) {
+      const id = await resolveRef(q, ref);
+      if (id !== null) {
+        if (id !== pageId) targets.set(id, kind);
+        continue;
+      }
+      // Parked and reported: the two branches of one decision, in one
+      // transaction, so a ref is never both an edge and a broken link.
+      pending.push(ref);
+      await q(
+        `INSERT INTO pending_links (from_page_id, target_ref, ref_norm) VALUES ($1, $2, $3)
+         ON CONFLICT DO NOTHING`,
+        [pageId, ref, normalizeRef(ref)],
+      );
+    }
+    for (const [toId, edgeKind] of targets) {
+      await q(
+        "INSERT INTO edges (from_page_id, to_page_id, lane, kind) VALUES ($1, $2, 'declared', $3) ON CONFLICT DO NOTHING",
+        [pageId, toId, edgeKind],
+      );
+    }
+    return pending;
   }
 
   // Who owns a page in the reserved memory/ namespace, decided from DATA rather
@@ -492,14 +525,10 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     const chunks = chunkBody(args.body);
     const vectors = await embed(chunks);
 
-    const refs = extractRefs(args.body, frontmatter, slug);
     // Normalize declared aliases in place so the alias arm's @> containment
     // check compares like with like.
     const aliases = frontmatterAliases(frontmatter);
     const storedFrontmatter = aliases.length ? { ...frontmatter, aliases } : frontmatter;
-    const related = Array.isArray(frontmatter.related_ids)
-      ? (frontmatter.related_ids as unknown[]).filter((r): r is string => typeof r === "string")
-      : [];
 
     const pending: string[] = [];
     await db.tx(async (q) => {
@@ -523,34 +552,10 @@ export function createStore(db: Db, embed: EmbedFn): Store {
         );
       }
 
-      // Rebuild declared edges from this page.
-      await q("DELETE FROM edges WHERE from_page_id = $1 AND lane = 'declared'", [pageId]);
-      await q("DELETE FROM pending_links WHERE from_page_id = $1", [pageId]);
-      const targets = new Map<number, string>(); // id -> kind (wikilink wins over related)
-      const park = async (ref: string) => {
-        pending.push(ref);
-        await q(
-          `INSERT INTO pending_links (from_page_id, target_ref, ref_norm) VALUES ($1, $2, $3)
-           ON CONFLICT DO NOTHING`,
-          [pageId, ref, normalizeRef(ref)],
-        );
-      };
-      for (const ref of related) {
-        const id = await resolveRef(q, ref);
-        if (id !== null && id !== pageId) targets.set(id, "related");
-        else if (id === null) await park(ref);
-      }
-      for (const ref of refs) {
-        const id = await resolveRef(q, ref);
-        if (id !== null && id !== pageId) targets.set(id, "wikilink");
-        else if (id === null) await park(ref);
-      }
-      for (const [toId, edgeKind] of targets) {
-        await q(
-          "INSERT INTO edges (from_page_id, to_page_id, lane, kind) VALUES ($1, $2, 'declared', $3) ON CONFLICT DO NOTHING",
-          [pageId, toId, edgeKind],
-        );
-      }
+      // Rebuild declared edges from this page. The caller's frontmatter, not the
+      // stored one: alias normalization is derived, and related_ids are the
+      // caller's own strings.
+      pending.push(...(await rebuildRefs(q, pageId, slug, args.body, frontmatter)));
 
       await landPendingRefs(
         q,
@@ -640,13 +645,14 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       return { slug, restored: true as const };
     },
 
-    // Rename in place. Edges are keyed by page id so they survive untouched;
-    // the old slug is appended to this page's own aliases, which is what makes a
-    // stale NAME-shaped [[old-slug]] elsewhere keep resolving. A path-shaped one
-    // ([[old/place]]) does NOT: an alias is a name and that is an address, whose
-    // page has moved out — see resolveRef. It becomes a reported broken link, and
-    // a page later created at old/place takes those links, which is the whole
-    // reason an address may not be answered by a page that does not live at it.
+    // Rename in place. The old slug is appended to this page's own aliases, which
+    // is what makes a stale NAME-shaped [[old-slug]] elsewhere keep resolving. A
+    // path-shaped one ([[old/place]]) does NOT: an alias is a name and that is an
+    // address, whose page has moved out — see resolveRef. It becomes a reported
+    // broken link, and a page later created at old/place takes those links, which
+    // is the whole reason an address may not be answered by a page that does not
+    // live at it. Edges are keyed by page id, so the ones that are still true
+    // survive untouched and only the ADDRESSED ones are re-decided (below).
     // Deliberately does NOT rewrite other pages' bodies: that would mutate notes
     // the user did not touch, change their content_hash, and re-embed every
     // referrer.
@@ -668,7 +674,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       if (target === from) return { slug: target, from };
       return db.tx(async (q) => {
         const cur = await q(
-          "SELECT id, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
+          "SELECT id, body, frontmatter FROM pages WHERE slug = $1 AND deleted_at IS NULL",
           [from],
         );
         if (!cur.rows.length) throw new Error(`not_found: ${from}`);
@@ -683,6 +689,44 @@ export function createStore(db: Db, embed: EmbedFn): Store {
           "UPDATE pages SET slug = $1, frontmatter = $2::jsonb, updated_at = now() WHERE id = $3",
           [target, JSON.stringify({ ...fm, aliases: [...aliases] }), pageId],
         );
+        const body = String(cur.rows[0].body);
+        // This page's OWN refs are re-decided too: a relative Markdown link
+        // resolves against the folder the page is IN (pipeline.ts), so moving the
+        // page changes what `../maps/x.md` written on it means. Its body is
+        // untouched, so no re-embed and no content_hash change.
+        await rebuildRefs(q, pageId, target, body, fm);
+        // ...and so are the refs pointing AT it. An ADDRESS means the page at that
+        // path; this page has just moved OUT of `from`, so an inbound edge that an
+        // addressed ref produced must go back to PARKED, where the address's real
+        // tenant — present or future — can claim it. Only a NAME legitimately
+        // follows a page, which is what the alias above is for; the write-time rule
+        // said an alias may not answer an address, and a rename that dragged those
+        // edges along was the same rule failing in the other direction (a page NOT
+        // at zz/addr holding the inbound link of [[zz/addr]], with brokenLinks
+        // reporting nothing and the later real tenant getting none of them).
+        // Re-decided by rebuilding the referrer through the SAME function the write
+        // path uses, reading the SAME addressCandidates: one rule, one place.
+        // Deliberately still does NOT rewrite anyone's BODY — only edges move.
+        // Bounded by this page's inbound degree and deliberately NOT capped: a cap
+        // would leave the rule applied to the first N referrers and silently not to
+        // the rest, which is the same invisible half-state this fix is about.
+        const referrers = await q(
+          `SELECT p.id, p.slug, p.body, p.frontmatter FROM edges e
+           JOIN pages p ON p.id = e.from_page_id AND p.deleted_at IS NULL
+           WHERE e.to_page_id = $1 AND e.lane = 'declared' AND e.from_page_id <> $1
+           ORDER BY p.id`,
+          [pageId],
+        );
+        for (const row of referrers.rows) {
+          const refFm = (row.frontmatter as Record<string, unknown>) ?? {};
+          const refBody = String(row.body);
+          const refSlug = String(row.slug);
+          const addressedOld = pageRefs(refBody, refFm, refSlug).some(({ ref }) => {
+            const address = refAddress(ref);
+            return address !== null && addressCandidates(ref, address).includes(from);
+          });
+          if (addressedOld) await rebuildRefs(q, Number(row.id), refSlug, refBody, refFm);
+        }
         // A rename makes a NAME resolvable, exactly like a put does: refs parked on
         // [[moved/here]] before anything lived there stayed parked forever, with
         // list_broken_links still accusing them, because only putPage swept.

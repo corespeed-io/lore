@@ -341,7 +341,14 @@ const AWS = "AKIAIOSFODNN7EXAMPLE";
 const GITHUB = "ghp_abcdefghijklmnopqrstuvwxyz012345";
 const OPENAI = "sk-live-9QtbRm2ZxKw7Ns4Vd1PcLyHg";
 
-test("a credential in ANY field of ANY tool is refused before the handler runs", async () => {
+// NARROWED with the screen: the read-tool cases that used to live in this list
+// ("search"{query}, "get_page"{undeclared_field}, "list_events"{thread_id}) moved
+// to the two tests at the bottom of this file, which assert the property that
+// replaced them — a read is ALLOWED and persists nothing, probed over the whole
+// read registry rather than over three hand-picked tools. The undeclared-field arm
+// is kept here on a write tool, because "there is no list of fields" is the claim
+// this test exists to hold.
+test("a credential in ANY field of ANY WRITE tool is refused before the handler runs", async () => {
   const cases: [string, Record<string, unknown>][] = [
     // Verbatim from the review: the detector fired, the write was "rejected", and
     // the credential was in the append-only log anyway because the handler had
@@ -359,13 +366,12 @@ test("a credential in ANY field of ANY tool is refused before the handler runs",
     ["append_event", { thread_id: "t", event_type: "tool_result", actor_id: `runner-${AWS}` }],
     ["append_event", { thread_id: "t", event_type: "tool_result", trace_id: `trace-${OPENAI}` }],
     ["forget", { memory_id: "m1", scope: "vault", reason: `rotating: the old ${AWS} leaked` }],
-    // ...and the fields nobody has named yet: nested, in an array, in a KEY, on a
-    // read tool, and in an argument the schema does not even mention.
+    // ...and the fields nobody has named yet: nested, in an array, in a KEY, and in
+    // an argument the schema does not even mention.
     ["put_page", { slug: "notes/a", body: "b", frontmatter: { deep: { list: [GITHUB] } } }],
     ["put_page", { slug: "notes/a", body: "b", frontmatter: { [AWS]: 1 } }],
-    ["search", { query: OPENAI }],
-    ["get_page", { slug: "notes/a", undeclared_field: GITHUB }],
-    ["list_events", { thread_id: `t-${AWS}` }],
+    ["put_page", { slug: "notes/a", body: "b", undeclared_field: GITHUB }],
+    ["delete_page", { slug: `receipts/${OPENAI}` }],
   ];
   for (const [name, args] of cases) {
     const rpc = await handleRpc(noCtx, "write", "tools/call", { name, arguments: args });
@@ -380,40 +386,57 @@ test("a credential in ANY field of ANY tool is refused before the handler runs",
   }
 });
 
-// The screen sits above the tool lookup, so there is no "unknown tool" or
-// "requires write access" path that runs first and reports the payload back.
-test("the screen is above the tool lookup and the access gate", async () => {
-  const unknown = await handleRpc(noCtx, "read", "tools/call", {
-    name: "nope",
-    arguments: { q: AWS },
-  });
-  expect(unknown.error?.message).toMatch(/refused: request contains/);
+// CHANGED, and loosened in two arms on purpose — say so plainly. This used to
+// assert that the screen ran for EVERY method: an unknown tool name and
+// `initialize` were refused too. Neither reaches a handler, a store or a row, so
+// screening them protected nothing durable, while screening every method cost the
+// wedge pinned in "a page whose slug is credential-shaped" below — an honest page
+// that could never be read again. The arm that MATTERS is unchanged, and is why
+// this test still exists: the screen reads the TOOL's access, not the caller's
+// grant, so a read-token holder naming a write tool is screened before the
+// "requires write access" refusal can report anything back.
+test("the screen decides on the tool's own access, not the caller's grant", async () => {
   const denied = await handleRpc(noCtx, "read", "tools/call", {
     name: "put_page",
     arguments: { slug: "notes/a", body: GITHUB },
   });
   expect(denied.error?.message).toMatch(/refused: request contains/);
-  // Not only tools/call: params is params.
+  // Above refuseReserved as well: a call that trips both is refused as a
+  // credential, and reaches neither a handler nor a connection either way.
+  const both = await handleRpc(noCtx, "write", "tools/call", {
+    name: "put_page",
+    arguments: { slug: "memory/vault/abc", body: AWS },
+  });
+  expect(both.result, "reached a handler").toBeUndefined();
+  expect(both.error?.message).toMatch(/refused: request contains/);
+  // The methods that persist nothing are no longer screened, and must not error.
   const init = await handleRpc(noCtx, "read", "initialize", { clientInfo: { name: OPENAI } });
-  expect(init.error?.message).toMatch(/refused: request contains/);
+  expect(init.error).toBeUndefined();
+  const unknown = await handleRpc(noCtx, "read", "tools/call", {
+    name: "nope",
+    arguments: { q: AWS },
+  });
+  expect(unknown.error?.message).toMatch(/unknown tool 'nope'/);
 });
 
-// The cost of screening everything is false refusals, so pin the near-misses
-// safety.ts deliberately lets through — this must not become a tool that refuses
-// ordinary prose and ordinary ids.
+// The cost of screening everything a write carries is false refusals, so pin the
+// near-misses safety.ts deliberately lets through — this must not become a door
+// that refuses ordinary prose and ordinary ids.
+// MOVED to put_page: the two prose cases used to ride on `search`, which is a read
+// and is no longer screened at all, so they would have passed vacuously.
 test("credential-SHAPED prose and handles are not refused", async () => {
   const ok = async (name: string, args: Record<string, unknown>) => {
     const rpc = await handleRpc(getCtx, "write", "tools/call", { name, arguments: args });
     expect(rpc.error, `${name} ${JSON.stringify(args)}`).toBeUndefined();
     return rpc.result as { content: { text: string }[]; isError: boolean };
   };
-  expect((await ok("search", { query: "the bearer of bad news" })).isError).toBe(false);
-  expect((await ok("search", { query: "basic infrastructure requirements" })).isError).toBe(false);
+  const put = (body: string) => ok("put_page", { slug: "notes/a", body });
+  expect((await put("the bearer of bad news")).isError).toBe(false);
+  expect((await put("basic infrastructure requirements")).isError).toBe(false);
   // A millisecond timestamp inside a handle is not a payment card (the delimiter
   // guard in safety.ts), and one id in ten passes Luhn by chance.
-  expect((await ok("put_page", { slug: "notes/a", body: "thread-1785550770695" })).isError).toBe(
-    false,
-  );
+  expect((await put("thread-1785550770695")).isError).toBe(false);
+  expect((await ok("search", { query: "the bearer of bad news" })).isError).toBe(false);
 });
 
 // --- hideScoped is GONE ------------------------------------------------------
@@ -661,13 +684,29 @@ test("no argument may link into the reserved namespace, so there is no oracle", 
     const absent = "memory/vault/00000000-0000-4000-8000-000000000000";
 
     for (const target of [slug, absent]) {
-      // Every spelling the store's resolver folds to the same page. `../` is the
-      // one this door missed until it was attacked: foldPath drops leading dot
-      // segments before matching, so [[../memory/vault/<id>]] resolves exactly
-      // like the bare form while `startsWith("memory/")` said it was innocent.
+      // Every spelling the store's resolver folds to the same page. `../` was the
+      // first one this door missed: foldPath drops leading dot segments before
+      // matching, so [[../memory/vault/<id>]] resolves exactly like the bare form
+      // while `startsWith("memory/")` said it was innocent.
+      // The next two are the SAME defect one spelling further out, and both were
+      // ALLOWED (isError:false, edge minted, `pending:[]` as the oracle):
+      //   - a leading '/' left an EMPTY first segment that refForm kept, while
+      //     foldPath strips './' '../' and '/' alike ("all noise");
+      //   - foldPath folds per SEGMENT, so [[memory / vault / <id>]] — the spaces a
+      //     human types — folded to the projection's own address in the store and
+      //     to 'memory / vault / …' at the door.
+      // tests below prove the store really does resolve each of these, which is
+      // what makes refusing them load-bearing rather than decorative.
       for (const ref of [
         target,
         `../${target}`,
+        `/${target}`,
+        `//${target}`,
+        `./${target}`,
+        target.replace(/\//g, " / "),
+        // NFKC folds a fullwidth solidus to '/', and normalizeRef runs NFKC — on
+        // both sides, which is the only reason these two agree here.
+        target.replace(/\//g, "／"),
         `${target}.md`,
         `${target}|see`,
         `${target}#top`,
@@ -677,11 +716,17 @@ test("no argument may link into the reserved namespace, so there is no oracle", 
         await refuse("put_page", { slug: "notes/probe", body: `x [[${ref}]]` }, /reserved/);
       }
       await refuse("put_page", { slug: "notes/probe", body: `x [see](${target}.md)` }, /reserved/);
-      await refuse(
-        "put_page",
-        { slug: "notes/probe", body: "x", frontmatter: { related_ids: [`../${target}`] } },
-        /reserved/,
-      );
+      // The realistic spelling of the leading-slash bug: a Docusaurus/mkdocs export
+      // writes root-relative Markdown links, which is the case foldPath's own
+      // comment says it strips the '/' for.
+      await refuse("put_page", { slug: "notes/probe", body: `x [see](/${target}.md)` }, /reserved/);
+      for (const noisy of [`../${target}`, `/${target}`, target.replace(/\//g, " / ")]) {
+        await refuse(
+          "put_page",
+          { slug: "notes/probe", body: "x", frontmatter: { related_ids: [noisy] } },
+          /reserved/,
+        );
+      }
       // An alias would make every stale ref to that name resolve to the probe.
       await refuse(
         "put_page",
@@ -928,5 +973,127 @@ test("a retracted projection is revived by the sweep, never by restore_page", as
     // The one path that may bring it back still does.
     expect((await runProjections(ctx.db, ctx.store, 50)).projected).toBe(1);
     expect(await searchText(ctx.store, "Oaxaca cascara")).toContain("cascara");
+  });
+});
+
+// --- The door and the store must fold a ref the SAME way ---------------------
+//
+// The other half of the reserved-namespace test above. Refusing a spelling is only
+// load-bearing if the STORE resolves it, and that is exactly the disagreement this
+// family of defect is made of: refForm read the whole string through normalizeRef
+// while foldPath strips leading './' '../' '/' and folds PER SEGMENT. So every
+// noise spelling the door now refuses for memory/ is proved here to mint a real
+// edge for an ordinary address — same folding, nothing reserved about it.
+test("the noise spellings the door refuses are spellings the store RESOLVES", async () => {
+  await withBrain(async (ctx) => {
+    const call = callTool(ctx);
+    await call("put_page", { slug: "docs/target", body: "the target of every spelling" });
+    const spellings = [
+      "docs/target",
+      "/docs/target",
+      "//docs/target",
+      "./docs/target",
+      "../docs/target",
+      "docs / target",
+      "Docs / Target",
+      "docs／target",
+    ];
+    for (const [i, ref] of spellings.entries()) {
+      const from = `notes/from-${i}`;
+      const put = await call("put_page", { slug: from, body: `see [[${ref}]]` });
+      // Nothing parked: the ref landed on a page.
+      expect(put.pending, ref).toEqual([]);
+      const edges = await ctx.db.query(
+        `SELECT pt.slug AS to_slug FROM edges e
+         JOIN pages pf ON pf.id = e.from_page_id
+         JOIN pages pt ON pt.id = e.to_page_id
+         WHERE pf.slug = $1`,
+        [from],
+      );
+      expect(
+        edges.rows.map((r) => String(r.to_slug)),
+        `[[${ref}]] must resolve to docs/target`,
+      ).toEqual(["docs/target"]);
+    }
+  });
+});
+
+// --- Reads are not screened, and that is licensed by what a read can DO ------
+//
+// The screen runs for write tools only now. Two properties license it, and both
+// are asserted rather than argued.
+const CARD = "4111 1111 1111 1111";
+
+// PROBED OVER THE REGISTRY, so a read tool added later — or one that grows a write
+// tomorrow — is probed the day it lands, with no list to update. Every read tool
+// gets a payload of credentials in its declared fields AND in one it never
+// declared, and then every text-ish column of every table is scanned.
+test("every read tool takes a credential-shaped payload and persists nothing", async () => {
+  await withBrain(async (ctx) => {
+    for (const name of READ_TOOL_NAMES) {
+      const args = {
+        ...requiredArgs(TOOLS[name]),
+        query: `${AWS} ${CARD}`,
+        input: `${AWS} rotate it`,
+        slug: `receipts/${GITHUB}`,
+        memory_id: OPENAI,
+        thread_id: `t-${AWS}`,
+        undeclared_field: `${GITHUB} ${CARD}`,
+      };
+      const rpc = await handleRpc(() => Promise.resolve(ctx), "read", "tools/call", {
+        name,
+        arguments: args,
+      });
+      // A read may fail (not_found) — it may not be REFUSED, and it may not leave a
+      // trace. isError is fine; a JSON-RPC error would mean the screen ran.
+      expect(rpc.error, `${name} was refused`).toBeUndefined();
+    }
+    for (const secret of [AWS, GITHUB, OPENAI, "4111111111111111"]) {
+      expect(await occurrencesOf(ctx.db, secret), secret).toEqual([]);
+    }
+    // Not vacuous: the scan finds content that WAS legitimately stored.
+    await ctx.store.putPage({ slug: "notes/canary", body: "canary content" });
+    expect(await occurrencesOf(ctx.db, "canary content")).not.toEqual([]);
+  });
+});
+
+// THE WEDGE, which is what screening reads was costing: 'Receipts/4111…md' is an
+// honest vault filename, Luhn-valid, so the slug itself trips payment_card. With
+// the screen on every method, list_pages handed that slug back and then every tool
+// that NAMED it was refused — the user's own note, permanently unopenable through
+// the only surface the console has.
+test("a page whose slug is credential-shaped can be read; writing one still cannot", async () => {
+  await withBrain(async (ctx) => {
+    const slug = "receipts/4111111111111111";
+    // Past the door on purpose: this is the row a pre-screen release or the
+    // unscreened importer left behind, and the state the screen wedged.
+    await ctx.store.putPage({ slug, body: "annual renewal receipt" });
+    const read = async (name: string, args: Record<string, unknown>) => {
+      const rpc = await handleRpc(() => Promise.resolve(ctx), "read", "tools/call", {
+        name,
+        arguments: args,
+      });
+      expect(rpc.error, `${name} was refused`).toBeUndefined();
+      return rpc.result as { content: { text: string }[]; isError: boolean };
+    };
+    const page = await read("get_page", { slug });
+    expect(page.isError).toBe(false);
+    expect(JSON.parse(page.content[0].text).body).toBe("annual renewal receipt");
+    expect((await read("get_backlinks", { slug })).isError).toBe(false);
+    expect((await read("traverse_graph", { slug })).isError).toBe(false);
+    const listed = JSON.parse((await read("list_pages", {})).content[0].text) as { slug: string }[];
+    expect(listed.map((p) => p.slug)).toContain(slug);
+
+    // ...and the BOUNDARY, pinned rather than left to be discovered: a write naming
+    // it is still refused, because a write may not carry credential bytes and a slug
+    // is bytes. The alternative is a list of write arguments that are safe to carry
+    // one, which is the shape that lost three times.
+    for (const name of ["delete_page", "rename_page"]) {
+      const rpc = await handleRpc(() => Promise.resolve(ctx), "write", "tools/call", {
+        name,
+        arguments: { slug, to: "receipts/renewal" },
+      });
+      expect(rpc.error?.message, name).toMatch(/refused: request contains payment_card/);
+    }
   });
 });

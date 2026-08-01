@@ -6,8 +6,9 @@ import type { Db } from "./db";
 import { isMemorySlug } from "./memory/projection";
 import { findSecretsInPayload } from "./memory/safety";
 import { MEMORY_TOOLS } from "./memory/tools";
-import { extractRefs, normalizeRef } from "./pipeline";
+import { extractRefs } from "./pipeline";
 import { type PageHit, type Store, normalizePageSlug } from "./store";
+import { refAddress } from "./vault";
 
 export type Access = "read" | "write";
 
@@ -269,17 +270,29 @@ export function clampArgs(args: unknown): Record<string, unknown> {
   return out;
 }
 
-// The form the store MATCHES a ref in: normalizeRef (pipeline.ts's "nothing may
-// compare refs without going through this" — NFKC, unquoted, case-folded) with
-// the './' and '../' segments dropped, because the store's own foldPath discards
-// those before it compares. Found by attacking this door: every other spelling of
-// [[memory/vault/<id>]] was refused and [[../memory/vault/<id>]] was not, yet it
-// resolves to exactly the same page.
+// The slug a ref ADDRESSES, decided by the store's own definition rather than by a
+// second spelling of it: refAddress (vault.ts) is the ONE transform that turns a
+// name into a slug, shared with the importer that named the page in the first
+// place, and store.ts's resolveRef asks it the same question one line before it
+// looks a page up. Two readers of this value is the defect this whole round is
+// about, and this door has BEEN the second reader twice:
+//   - it kept the empty first segment a leading '/' leaves, while the store
+//     stripped './' '../' and '/' as noise — so isMemorySlug('/memory/vault/<id>')
+//     was false and [[/memory/vault/<id>]] minted the edge every other spelling
+//     was refused for;
+//   - it folded the whole string with normalizeRef while the store folded PER
+//     SEGMENT, so [[memory / vault / <id>]] — the spaces a human types around a
+//     wikilink's separators — read as 'memory / vault / …' here and as the
+//     projection's own address there.
+// Neither can happen now: there is nothing here to disagree with.
+//
+// `null` means the ref has no separator, so it addresses nothing — "" is the right
+// answer for a prefix test, since no page's slug is empty. A NAME can still reach a
+// projection through the basename arm ([[<uuid>]]), which no string test at a door
+// can know about because it is a database question; that residual is pinned by "a
+// scoped memory is indistinguishable from a memory that does not exist".
 function refForm(s: string): string {
-  return normalizeRef(s)
-    .split("/")
-    .filter((seg) => seg !== "." && seg !== "..")
-    .join("/");
+  return refAddress(s) ?? "";
 }
 
 // Does this value NAME a page in the reserved memory/ namespace — anywhere
@@ -287,7 +300,8 @@ function refForm(s: string): string {
 // name, using the store's own readers rather than a second spelling:
 //   - as a slug, through normalizePageSlug: the exact string a row is written
 //     from (which is why " memory/vault/x" is not a way in);
-//   - as a ref, through refForm above (so case, quoting, NFKC and ../ are not);
+//   - as a ref, through refForm/refAddress above (so case, quoting, NFKC, .md,
+//     './' '../' and a leading '/' are not);
 //   - as TEXT THAT CONTAINS refs, through extractRefs: the very function putPage
 //     calls to turn a body and its frontmatter into edges, so a [[wikilink]] or a
 //     Markdown link is caught by the same parser that would have minted the edge
@@ -296,13 +310,23 @@ function refForm(s: string): string {
 // The last arm is the one a declared-arg check could never have: the door read
 // `slug`, so put_page{body:'x [[memory/scoped/<id>]]'} linked into the namespace
 // and reported back whether the ref resolved — an existence oracle on a raw id.
+//
+// BOTH spellings of every extracted ref, because the store's address lookup takes
+// BOTH (addressCandidates in store.ts): the literal slug and the canonical address.
+// A ref whose literal spelling is a reserved slug but whose canonical address is
+// not — refAddress answers "" when canonicalizing would DELETE a character, e.g.
+// 'memory/vault/x%y' — would otherwise be read by this door as naming nothing while
+// the store still tried it as a slug. (The third candidate, the address in NFD, can
+// only start with 'memory/' when the composed one does: the prefix is ASCII.)
 function reservedNameIn(value: unknown): string | null {
   if (typeof value === "string") {
     for (const name of [normalizePageSlug(value), refForm(value)]) {
       if (isMemorySlug(name)) return name;
     }
     for (const ref of extractRefs(value)) {
-      if (isMemorySlug(refForm(ref))) return refForm(ref);
+      for (const name of [normalizePageSlug(ref), refForm(ref)]) {
+        if (isMemorySlug(name)) return name;
+      }
     }
     return null;
   }
@@ -354,7 +378,7 @@ function refuseReserved(def: ToolDef, args: Record<string, unknown>): void {
   }
 }
 
-// No credential may enter this system through ANY field of ANY call.
+// No credential may enter this system through ANY field of ANY WRITE.
 //
 // The per-field gate has now been defeated three times with one move: it was
 // wired to `content`, then to `structured_value`, then to `memory_key`, and the
@@ -364,6 +388,32 @@ function refuseReserved(def: ToolDef, args: Record<string, unknown>): void {
 // anything was screened — so the detector fired, the write was "rejected", and
 // the secret was in the log anyway. There is no list of fields to complete here;
 // there is one place every agent-supplied byte arrives, and this is it.
+//
+// WRITE tools, not every method — NARROWED, and this is the one direction it may
+// be narrowed in. The screen used to run for every method over the whole params
+// object, and that cost a wedge with no matching gain: import
+// 'Receipts/4111111111111111.md' (an honest vault filename; Luhn-valid, so
+// payment_card fires) and the page exists, list_pages hands back its slug, and
+// then every tool that NAMES that slug is refused — the user's own note can never
+// be opened, searched or read again through the only surface the console has.
+// Nothing durable is written by a read: `access` is the same static field the gate
+// below and refuseReserved already trust to mean "this tool cannot write", every
+// read tool in the registry only SELECTs (resolveCallScope's getThread included),
+// and the console's in-memory request log records tool NAMES, not arguments. So
+// this is not an ad-hoc carve-out of tools someone judged safe; it is the entry
+// rule applied to the entries. `initialize`, `ping`, `tools/list` and an unknown
+// tool name persist nothing either, and are no longer screened for the same
+// reason.
+//
+// What that leaves, stated plainly because it is a real cost and not a gap: a
+// page whose SLUG contains a credential-shaped run — a legacy row, or one a
+// pre-screen release wrote — is readable again but still cannot be deleted or
+// renamed, because delete_page and rename_page are writes and a slug is bytes.
+// The alternative is a list of write arguments that are safe to carry a
+// credential, which is precisely the shape that lost three times above.
+//
+// Decided on the tool's OWN access, never on the caller's grant, so a read-token
+// holder naming put_page is screened here rather than talked out of it later.
 //
 // REFUSE, never rewrite. At the dispatcher there is no way to know which field is
 // safe to mangle, and safety.ts's own note says why partial rewriting has no
@@ -410,13 +460,6 @@ export async function handleRpc(
   params: Record<string, unknown> | undefined,
 ): Promise<RpcResult> {
   if (method?.startsWith("notifications/")) return { notification: true };
-  // ONE screen, over the WHOLE params object, for EVERY method — above the tool
-  // lookup, above the access gate, above any connection. Only the notification
-  // arm is higher, and that one is dropped whole: no handler, no row, nothing to
-  // refuse. -32602 rather than an isError tool result because no tool ran; the
-  // access gate below already refuses this way.
-  const secrets = secretRefusal(params);
-  if (secrets) return { error: { code: -32602, message: secrets } };
   switch (method) {
     case "initialize":
       return {
@@ -446,14 +489,23 @@ export async function handleRpc(
       const name = String(params?.name ?? "");
       const def = TOOLS[name];
       if (!def) return { error: { code: -32602, message: `unknown tool '${name}'` } };
+      // Screened and decided on the SAME object the handler is about to read:
+      // clampArgs' output, not the raw params, so there is no second spelling
+      // between the door and the write.
+      const args = clampArgs(params?.arguments);
+      // ONE screen, over that whole object, for every WRITE tool: above the access
+      // gate, above refuseReserved, above any connection — and OUTSIDE the try, so
+      // a payload too deep to walk leaves handleRpc instead of being caught into an
+      // isError tool result that reads like an ordinary miss. -32602 rather than an
+      // isError result because no tool ran; the access gate refuses this way too.
+      if (def.access === "write") {
+        const secrets = secretRefusal(args);
+        if (secrets) return { error: { code: -32602, message: secrets } };
+      }
       if (def.access === "write" && access !== "write") {
         return { error: { code: -32602, message: `tool '${name}' requires write access` } };
       }
       try {
-        // Screened and decided on the SAME object the handler is about to read:
-        // clampArgs' output, not the raw params, so there is no second spelling
-        // between the door and the write.
-        const args = clampArgs(params?.arguments);
         refuseReserved(def, args);
         const ctx = await getCtx();
         const value = await def.handler(ctx, args);

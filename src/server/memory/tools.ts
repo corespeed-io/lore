@@ -77,6 +77,27 @@ type Scope = { scopeType: ScopeType; scopeId: string | null };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
+// A scope field that is PRESENT but not a string is refused, never read as
+// absent. str() alone cannot tell those apart, and treating them the same failed
+// open: `scope: ["thread"]`, `1`, `{s:"thread"}` and `true` all became "no scope
+// named" and fell through to the bare-scope_id inference, so the call landed at
+// AGENT scope and reported saved:true — while the mere typo `scope:"thred"` was
+// correctly refused. A type error must not be the quiet way to a wider scope
+// than a typo can reach. null/undefined/omitted still mean absent, which is what
+// a JSON client sends for a field it is not using.
+function scopeField(name: string, v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string") {
+    const kind = Array.isArray(v)
+      ? "an array"
+      : typeof v === "object"
+        ? "an object"
+        : `a ${typeof v}`;
+    throw new Error(`${name} must be a string, not ${kind}`);
+  }
+  return str(v);
+}
+
 const sameScope = (a: Scope, b: Scope): boolean =>
   a.scopeType === b.scopeType && (a.scopeId ?? "") === (b.scopeId ?? "");
 
@@ -130,15 +151,19 @@ async function resolveCallScope(
   a: Record<string, unknown>,
   access: Access,
 ): Promise<CallScope> {
-  const requested = one("scope", str(a.scope), str(a.scope_type));
+  const requested = one(
+    "scope",
+    scopeField("scope", a.scope),
+    scopeField("scope_type", a.scope_type),
+  );
   if (requested !== null && !SCOPE_ENUM.includes(requested)) {
     // Not coerced to a default. The old fallback turned any unrecognised scope
     // into 'agent', so a typo silently changed which rows a call touched.
     throw new Error(`unknown scope: expected one of ${SCOPE_ENUM.join(", ")}`);
   }
-  const scopeId = str(a.scope_id);
-  let namedThread = str(a.thread_id);
-  let namedAgent = str(a.agent_id);
+  const scopeId = scopeField("scope_id", a.scope_id);
+  let namedThread = scopeField("thread_id", a.thread_id);
+  let namedAgent = scopeField("agent_id", a.agent_id);
   if (requested === "thread") {
     namedThread = one("thread", scopeId, namedThread);
     if (!namedThread) throw new Error("scope 'thread' needs an id: pass thread_id");

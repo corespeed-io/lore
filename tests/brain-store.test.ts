@@ -9,7 +9,8 @@ import { renderProjection } from "../src/server/memory/projection.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { chunkBody, extractRefs, normalizeRef } from "../src/server/pipeline.js";
 import type { Store } from "../src/server/store.js";
-import { createStore } from "../src/server/store.js";
+import { createStore, normalizePageSlug } from "../src/server/store.js";
+import { refAddress } from "../src/server/vault.js";
 
 const DIM = 8;
 
@@ -1054,15 +1055,22 @@ test("a relative link resolves against the page it is written on", async () => {
 });
 
 test("one address, many spellings — and never two pages", async () => {
-  // Everything foldPath is for: separators, case, fullwidth (a CJK IME types
-  // ＭＡＰＳ), and the ../ prefix Logseq and Foam emit. All name ONE page.
+  // Everything the ref->slug transform is for: case, fullwidth (a CJK IME types
+  // ＭＡＰＳ), the ../ prefix Logseq and Foam emit, and the .md a Markdown link
+  // carries. All name ONE page.
   // `./maps/…` is NOT in this list and must not be: written on `src/spell-N` it
   // resolves against that page's own folder and names `src/maps/…`, a different
   // page. See the relative-resolution test below.
+  //
+  // CHANGED IN ROUND 4, deliberately, and it is a TIGHTENING: [[maps/spelled_note]]
+  // used to be in this list. Folding '-' and '_' together is what let two real
+  // sibling files share one address (see the underscore test below), so the
+  // underscore spelling now names a different page and is REPORTED broken rather
+  // than silently landing here.
   await store.putPage({ slug: "maps/spelled-note", body: "# Spelled" });
   const refs = [
     "[[Maps/Spelled Note]]",
-    "[[maps/spelled_note]]",
+    "[[Maps/Spelled Note.md]]",
     "[[ＭＡＰＳ/Spelled Note]]",
     "[x](../maps/Spelled Note.md)",
   ];
@@ -1216,4 +1224,221 @@ test("a slug whose name merely FOLDS into a separator cannot take an address", a
   expect(await backlinkSlugs("uni／steal")).not.toContain("src/wants-uni");
   await store.putPage({ slug: "uni/steal", body: "# The Real One" });
   expect(await backlinkSlugs("uni/steal")).toContain("src/wants-uni");
+});
+
+// --- the address is EXACT: '-' and '_' name different files -----------------
+// Round 3's predicate was "the slug FOLDS to that path", and the fold turned
+// [-_]+ into spaces, so two real sibling files shared one address and whichever
+// was written first answered a ref that named the other. The predicate is now
+// "the slug IS that path": the ref goes through pathToSlug — the importer's own
+// filename->slug transform, so there is ONE definition of the slug a name means
+// — and the page's stored slug is compared as written.
+
+test("an underscore names a different file, so write order cannot pick an address", async () => {
+  // VERBATIM refutation, in order: the ref is parked, the underscore file lands
+  // first and must not take it, and the file the ref names takes it when it
+  // arrives. Every failure here is permanent — landing deletes the pending row,
+  // so brokenLinks() then reports nothing and an idempotent re-put of the
+  // referrer answers unchanged:true and repairs nothing.
+  await store.putPage({ slug: "ord/wants-dash", body: "see [[Ord/Dated Note]]" });
+  await store.putPage({ slug: "ord/dated_note", body: "# The underscore file" });
+  expect(await backlinkSlugs("ord/dated_note")).not.toContain("ord/wants-dash");
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "ord/wants-dash",
+    ref: "Ord/Dated Note",
+  });
+  await store.putPage({ slug: "ord/dated-note", body: "# The file the ref names" });
+  expect(await backlinkSlugs("ord/dated-note")).toContain("ord/wants-dash");
+  expect((await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug)).not.toContain(
+    "ord/wants-dash",
+  );
+
+  // REVERSE ORDER, same answer. Two orders giving two edges was the defect.
+  await store.putPage({ slug: "rev/dated-note", body: "# Written first" });
+  await store.putPage({ slug: "rev/dated_note", body: "# Written second" });
+  const rev = await store.putPage({ slug: "rev/wants-dash", body: "see [[Rev/Dated Note]]" });
+  expect(rev.pending).toEqual([]);
+  expect(await backlinkSlugs("rev/dated-note")).toContain("rev/wants-dash");
+  expect(await backlinkSlugs("rev/dated_note")).not.toContain("rev/wants-dash");
+
+  // No ordering involved at all: both twins live, and a ref naming ONE of them
+  // exactly lands on that one instead of on its canonical sibling.
+  await store.putPage({ slug: "twin/dup_note", body: "# Underscore twin" });
+  await store.putPage({ slug: "twin/dup-note", body: "# Hyphen twin" });
+  await store.putPage({ slug: "twin/wants-under", body: "see [[Twin/Dup_Note]]" });
+  expect(await backlinkSlugs("twin/dup_note")).toContain("twin/wants-under");
+  expect(await backlinkSlugs("twin/dup-note")).not.toContain("twin/wants-under");
+
+  // The realistic vault shape: an _index sibling cannot answer [[dx/index]].
+  await store.putPage({ slug: "dx/wants-index", body: "see [[dx/index]]" });
+  await store.putPage({ slug: "dx/_index", body: "# The underscore index" });
+  expect(await backlinkSlugs("dx/_index")).not.toContain("dx/wants-index");
+  await store.putPage({ slug: "dx/index", body: "# The real index" });
+  expect(await backlinkSlugs("dx/index")).toContain("dx/wants-index");
+});
+
+test("a rename walks the page out of the address, so its addressed refs re-park", async () => {
+  // The write-time rule is that an address means the page AT that path. A rename
+  // moved the page out and dragged the inbound edge along: a page that does NOT
+  // live at zz/addr held the inbound link of [[zz/addr]], brokenLinks() reported
+  // nothing, and the address's real tenant — created immediately afterwards — got
+  // none of them. Same rule, other direction, decided in the same place.
+  await store.putPage({ slug: "zz/addr", body: "# First tenant" });
+  await store.putPage({ slug: "src/points-addr", body: "see [[zz/addr]]" });
+  expect(await backlinkSlugs("zz/addr")).toContain("src/points-addr");
+  // A NAME-shaped ref at the same page, which MUST survive the rename: an alias
+  // is a name, and over-parking would break Obsidian's default link style.
+  await store.putPage({ slug: "src/names-addr", body: "see [[First tenant]]" });
+  expect(await backlinkSlugs("zz/addr")).toContain("src/names-addr");
+
+  await store.renamePage({ slug: "zz/addr", to: "moved/addr" });
+  expect(await backlinkSlugs("moved/addr")).not.toContain("src/points-addr");
+  expect(await store.brokenLinks({ limit: 200 })).toContainEqual({
+    from_slug: "src/points-addr",
+    ref: "zz/addr",
+  });
+  expect(await backlinkSlugs("moved/addr")).toContain("src/names-addr");
+
+  // The address's next tenant takes the inbound link with NO re-put of the
+  // referrer — which is the state a re-put could never have repaired anyway.
+  await store.putPage({ slug: "zz/addr", body: "# New tenant" });
+  expect(await backlinkSlugs("zz/addr")).toContain("src/points-addr");
+  expect((await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug)).not.toContain(
+    "src/points-addr",
+  );
+});
+
+test("a rename that swaps two slugs hands each address to whoever now lives there", async () => {
+  await store.putPage({ slug: "sw/one", body: "# One" });
+  await store.putPage({ slug: "sw/two", body: "# Two" });
+  await store.putPage({ slug: "src/at-one", body: "see [[sw/one]]" });
+  await store.putPage({ slug: "src/at-two", body: "see [[sw/two]]" });
+  // A destination that exists is refused, so a swap is three moves — three
+  // chances for an addressed edge to be dragged somewhere it does not belong.
+  await store.renamePage({ slug: "sw/one", to: "sw/tmp" });
+  await store.renamePage({ slug: "sw/two", to: "sw/one" });
+  await store.renamePage({ slug: "sw/tmp", to: "sw/two" });
+  expect((await store.getPage({ slug: "sw/one" })).title).toBe("Two");
+  expect(await backlinkSlugs("sw/one")).toContain("src/at-one");
+  expect(await backlinkSlugs("sw/one")).not.toContain("src/at-two");
+  expect(await backlinkSlugs("sw/two")).toContain("src/at-two");
+  expect(await backlinkSlugs("sw/two")).not.toContain("src/at-one");
+  const broken = (await store.brokenLinks({ limit: 200 })).map((b) => b.from_slug);
+  expect(broken).not.toContain("src/at-one");
+  expect(broken).not.toContain("src/at-two");
+});
+
+test("a rename re-resolves the moved page's OWN relative links", async () => {
+  // The outgoing half of the same defect: `../maps/x.md` is resolved against the
+  // folder the referring page is IN (pipeline.ts), so moving the page changes
+  // which address it names. Its body is untouched, so nothing re-embeds.
+  await store.putPage({ slug: "mv/maps/rel-a", body: "# Rel A" });
+  await store.putPage({ slug: "other/maps/rel-a", body: "# Other Rel A" });
+  await store.putPage({ slug: "mv/notes/mover", body: "see [t](../maps/Rel A.md)" });
+  expect(await backlinkSlugs("mv/maps/rel-a")).toContain("mv/notes/mover");
+  await store.renamePage({ slug: "mv/notes/mover", to: "other/notes/mover" });
+  expect(await backlinkSlugs("mv/maps/rel-a")).not.toContain("other/notes/mover");
+  expect(await backlinkSlugs("other/maps/rel-a")).toContain("other/notes/mover");
+});
+
+test("slugs differing only by case or width: an address is exact, so neither steals", async () => {
+  // The boundary of the canonical transform, pinned as a property. It lowercases
+  // and NFKC-folds, so only the CANONICAL spelling is an address; a slug the
+  // transform cannot spell stays reachable by naming it EXACTLY, and never by
+  // naming its canonical twin. Both spellings answer deterministically, and
+  // neither depends on which page was written first.
+  await store.putPage({ slug: "CASE/Addr", body: "# Upper" });
+  await store.putPage({ slug: "case/addr", body: "# Lower" });
+  await store.putPage({ slug: "wide/ｎａｍｅ", body: "# Wide" });
+  await store.putPage({ slug: "wide/name", body: "# Narrow" });
+  const lands = async (ref: string, i: number) => {
+    await store.putPage({ slug: `src/exact-${i}`, body: `see [[${ref}]]` });
+    const rows = await pg.query(
+      `SELECT pt.slug FROM edges e JOIN pages pf ON pf.id = e.from_page_id
+       JOIN pages pt ON pt.id = e.to_page_id WHERE pf.slug = $1`,
+      [`src/exact-${i}`],
+    );
+    return (rows as { rows: { slug: string }[] }).rows.map((r) => r.slug);
+  };
+  expect(await lands("case/addr", 0)).toEqual(["case/addr"]);
+  expect(await lands("CASE/Addr", 1)).toEqual(["CASE/Addr"]);
+  // Neither literal: the canonical page, and only it.
+  expect(await lands("Case/Addr", 2)).toEqual(["case/addr"]);
+  expect(await lands("wide/ｎａｍｅ", 3)).toEqual(["wide/ｎａｍｅ"]);
+  expect(await lands("wide/name", 4)).toEqual(["wide/name"]);
+});
+
+test("a ref whose canonical form would DELETE a character addresses nothing", async () => {
+  // Deleting a character forges a name the ref never spelled: 'ta%rget/deep-note'
+  // canonicalizes to 'target/deep-note', and callers upstream (mcp.ts's
+  // reserved-namespace door) screen the ref's RAW spelling. Such a ref must not
+  // fall back to a NAME either: a name asserts no location, so the basename arm
+  // alone would hand it the page whose filename is deep-note.
+  await store.putPage({ slug: "target/deep-note", body: "# Deep Note Target" });
+  for (const ref of ["ta%rget/deep-note", "ta\\rget/deep-note", "target\\deep-note"]) {
+    const res = await store.putPage({ slug: "src/forged", body: `see [[${ref}]]` });
+    expect(res.pending, ref).toEqual([ref]);
+    expect(await backlinkSlugs("target/deep-note"), ref).not.toContain("src/forged");
+  }
+});
+
+test("no parked ref names a live page: resolved and broken stay mutually exclusive", async () => {
+  // A whole-database check over everything this file wrote. A parked address whose
+  // page is live is the invisible half of the defect: brokenLinks() accuses a ref
+  // that would resolve, and nothing ever sweeps it. The candidate set is spelled
+  // out here rather than imported so the test is an independent reader of the
+  // rule — a live page at ANY spelling the resolver accepts is a violation.
+  const parked = await pg.query(
+    `SELECT p.slug AS from_slug, pl.target_ref AS ref FROM pending_links pl
+     JOIN pages p ON p.id = pl.from_page_id WHERE p.deleted_at IS NULL`,
+  );
+  const rows = (parked as { rows: { from_slug: string; ref: string }[] }).rows;
+  expect(rows.length).toBeGreaterThan(0);
+  for (const { from_slug, ref } of rows) {
+    const address = refAddress(ref);
+    if (address === null) continue;
+    const live = await pg.query(
+      "SELECT slug FROM pages WHERE slug = ANY($1::text[]) AND deleted_at IS NULL",
+      [[...new Set([normalizePageSlug(ref), address, address.normalize("NFD")])]],
+    );
+    expect((live as { rows: { slug: string }[] }).rows, `${from_slug} -> ${ref}`).toEqual([]);
+  }
+});
+
+test("slugs differing only by Unicode composition resolve by spelling, not write order", async () => {
+  // The ONE fold the address rule still allows to reach across the page side, so
+  // it is where to hunt for "two pages, one address": SQL equality is byte-exact
+  // and macOS writes NFD filenames, so the resolver offers both compositions of
+  // the address as candidates. Two pages can therefore both be candidates — and
+  // the winner is decided by SPELLING (the composed form the canonical transform
+  // produces), never by which page was written first. Built with explicit
+  // normalize() calls so this test cannot depend on how the file is encoded.
+  const composed = "cmp/café-note".normalize("NFC");
+  const decomposed = "cmp/café-note".normalize("NFD");
+  expect(composed).not.toBe(decomposed);
+  const lands = async (slugs: string[], ref: string, tag: string) => {
+    for (const slug of slugs) await store.putPage({ slug, body: `# body of ${slug}` });
+    await store.putPage({ slug: `src/cmp-${tag}`, body: `see [[${ref}]]` });
+    const rows = await pg.query(
+      `SELECT pt.slug FROM edges e JOIN pages pf ON pf.id = e.from_page_id
+       JOIN pages pt ON pt.id = e.to_page_id WHERE pf.slug = $1`,
+      [`src/cmp-${tag}`],
+    );
+    return (rows as { rows: { slug: string }[] }).rows.map((r) => r.slug);
+  };
+  // Decomposed page written FIRST, composed second: the composed one answers.
+  expect(await lands([decomposed, composed], "Cmp/Café Note".normalize("NFC"), "a")).toEqual([
+    composed,
+  ]);
+  // ...and the ref's own composition does not change the answer either.
+  expect(await lands([], "Cmp/Café Note".normalize("NFD"), "b")).toEqual([composed]);
+  // A brain where ONLY the decomposed page exists still resolves — the case a real
+  // Mac vault import produces, and the reason both compositions are offered.
+  await store.putPage({ slug: "mac/naïve-note".normalize("NFD"), body: "# Mac file" });
+  const mac = await store.putPage({
+    slug: "src/cmp-mac",
+    body: `see [[${"Mac/Naïve Note".normalize("NFC")}]]`,
+  });
+  expect(mac.pending).toEqual([]);
+  expect(await backlinkSlugs("mac/naïve-note".normalize("NFD"))).toContain("src/cmp-mac");
 });

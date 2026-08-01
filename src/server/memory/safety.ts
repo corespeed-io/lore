@@ -145,6 +145,15 @@ export function findSecretsInPayload(payload: unknown): SecretFinding[] {
       for (const [k, x] of Object.entries(v)) {
         visit(k);
         visit(x);
+        // The key and the value are also visited TOGETHER, as `k: x`. Several
+        // patterns — labelled_credential above all — are about ADJACENCY: the
+        // label is the evidence that the value is a secret, since the value
+        // itself has no shape to test. Visiting the two separately loses exactly
+        // that. It matters most for imported frontmatter, where
+        // `---\napi_key: hunter2swordfish\n---` parses to
+        // { api_key: "hunter2swordfish" }: the credential is split across a key
+        // and a value that, apart, look like ordinary words.
+        if (typeof x === "string") visit(`${k}: ${x}`);
       }
     }
   };

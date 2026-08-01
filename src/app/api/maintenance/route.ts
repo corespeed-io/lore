@@ -48,6 +48,24 @@ export async function POST(req: Request) {
     thread_id?: string;
   };
 
+  // The same credential screen the MCP dispatcher runs, over this body. This
+  // route is a WRITE door that does not pass through handleRpc, and `thread_id`
+  // is a caller-supplied string that reaches ensureThread — which is exactly how
+  // a credential got into the append-only log once before, hiding in a field
+  // nobody had listed. The rule follows the doors, not the tool registry: any
+  // door that writes runs the screen, and it does it by CALLING the same
+  // function rather than growing a copy of the decision.
+  const { findSecretsInPayload } = await import("@/server/memory/safety");
+  const found = findSecretsInPayload(body);
+  if (found.length) {
+    return NextResponse.json(
+      {
+        detail: `refused: request contains ${found.map((f) => f.kind).join(", ")} — credentials are never accepted as input`,
+      },
+      { status: 400 },
+    );
+  }
+
   const { getStore, getDb } = await import("@/server/local");
   const store = await getStore();
 

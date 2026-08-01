@@ -12,7 +12,13 @@ import {
   tarStream,
   withSkipReport,
 } from "../src/server/tar.js";
-import { isMarkdown, parseFrontmatter, parseNote, pathToSlug } from "../src/server/vault.js";
+import {
+  isMarkdown,
+  parseFrontmatter,
+  parseNote,
+  pathToSlug,
+  refAddress,
+} from "../src/server/vault.js";
 
 const DIM = 8;
 const embed: EmbedFn = async (texts) =>
@@ -285,4 +291,59 @@ test("the reserved memory namespace is refused by BOTH write paths", async () =>
   // "memory" produces a reserved slug and must be skipped.
   const note = parseNote({ path: "memory/vault/squatter.md", text: "trying to squat" });
   expect(isMemorySlug(note.slug)).toBe(true);
+});
+
+test("refAddress is pathToSlug: ONE definition of the slug a name means", async () => {
+  // The invariant, not a list of cases. A vault FILE and a path-shaped REF that
+  // spell the same name must produce the same slug, or the store's address rule
+  // and the importer disagree about where a page lives — which is how
+  // maps/dated_note came to answer [[Maps/Dated Note]].
+  for (const path of [
+    "Projects/My Note.md",
+    "Maps/Dated Note.md",
+    "Maps/Dated_Note.md",
+    "docs/_index.md",
+    "笔记/记忆系统.md",
+    "Vault/Deep/Sub Folder/A B.markdown",
+    "ＭＡＰＳ/Spelled Note.md",
+    "a/Weird 'quoted' name.md",
+  ]) {
+    expect(refAddress(path), path).toBe(pathToSlug(path));
+  }
+});
+
+test("refAddress keeps '-' and '_' apart while a space still becomes '-'", () => {
+  // The tension the address rule has to hold: the headline case must keep working
+  // (a wikilink is typed with spaces, a filename has hyphens) while '-' and '_'
+  // stay the distinct characters that name distinct sibling files.
+  expect(refAddress("Maps/Dated Note")).toBe("maps/dated-note");
+  expect(refAddress("Maps/Dated_Note")).toBe("maps/dated_note");
+  expect(refAddress("docs/_index")).toBe("docs/_index");
+  // Noise that says nothing about location, and the extension that is not part of
+  // the name: Logseq/Foam emit ../, mkdocs/Docusaurus emit /, links carry .md.
+  expect(refAddress("../Maps/Note.md")).toBe("maps/note");
+  expect(refAddress("/maps/note")).toBe("maps/note");
+  // A NAME (no separator) is not an address at all — null, so every name arm may
+  // answer it. './Note' is a name too: the leading noise is not a separator.
+  expect(refAddress("Reading MOC")).toBeNull();
+  expect(refAddress("./Note")).toBeNull();
+  // ...and a '\' is a legal filename character in a ref, NOT a separator: reading
+  // it as one would address a page that a caller screening the raw ref never sees
+  // as a path.
+  expect(refAddress("a\\b")).toBeNull();
+});
+
+test("refAddress refuses to address by a spelling that DELETES a character", () => {
+  // '' is an address no page can be at (a slug is never empty), which is the point:
+  // returning null would make the ref a NAME, and a name may be answered by any
+  // page through the title, basename or alias arm. Deleting a character forges a
+  // name the ref never spelled — 'me%mory/vault/x' -> 'memory/vault/x' — and the
+  // reserved-namespace door upstream screens the ref's RAW spelling.
+  expect(refAddress("me%mory/vault/x")).toBe("");
+  expect(refAddress("memory\\/vault/x")).toBe("");
+  expect(refAddress('a/b"c')).toBe("");
+  // A SURROUNDING quote is a fold, not a deletion (normalizeRef strips it too), so
+  // it still addresses — and it agrees with the slug the importer writes for the
+  // same filename, which is what the invariant test above pins.
+  expect(refAddress('qq/"Quoted"')).toBe("qq/quoted");
 });

@@ -1025,16 +1025,27 @@ test("a forget whose page retraction fails does not report a successful forget",
   });
   expect(saved.projection).toBe("ok");
 
-  const brokenStore = {
-    ...store,
-    deletePage: async () => {
-      throw new Error("disk on fire");
+  // The fault is injected at the DB, not at the Store. Retraction moved into
+  // projection.ts's own two statements (see applyVerdict there): the boot repair
+  // has no Store to call deletePage on, and giving it a second implementation of
+  // "retract" would be the two-readers bug this whole round is about. So a store
+  // whose deletePage throws is no longer a fault on this path — it injects
+  // nothing, and the test would pass while proving nothing. Failing the pages
+  // UPDATE is the fault that reaches the code that actually retracts.
+  const brokenDb: Db = {
+    ...db,
+    tx: async (fn) => {
+      const q: Query = async (text, params) => {
+        if (/UPDATE pages SET deleted_at/.test(text)) throw new Error("disk on fire");
+        return db.query(text, params);
+      };
+      return fn(q) as never;
     },
-  } as unknown as Store;
+  };
   const failed = await tool(
     "forget",
     { memory_id: saved.memory_id, scope: "vault" },
-    { db, store: brokenStore },
+    { db: brokenDb, store },
   );
   // Canonical revocation succeeded, the retraction did not: for a REVOCATION,
   // reporting success while the page is still searchable is the dangerous lie.
@@ -1046,7 +1057,7 @@ test("a forget whose page retraction fails does not report a successful forget",
   );
   expect(Number(pages.rows[0].n)).toBe(1);
 
-  // Calling it again with a working store finishes the job and says so.
+  // Calling it again with a working db finishes the job and says so.
   const done = await tool("forget", { memory_id: saved.memory_id, scope: "vault" });
   expect(done.forgotten).toBe(true);
   expect(done.projection_failed).toEqual([]);
@@ -1405,11 +1416,25 @@ test("the ways AROUND naming a scope all fail closed", async () => {
   // A scope field that is not a string is NOT a scope. It must not fall through
   // to something broader — `["t-victim"]` used to be String()'d into a thread id
   // by list_events, and an unreadable scope_id used to default the type to agent.
+  // These now name the offending FIELD instead of reporting the downstream
+  // symptom ("you must name the scope"): the parser refuses a present-but-
+  // unusable value where it reads it, rather than treating it as absent and
+  // letting the next rule explain the consequence. Same outcome, said earlier —
+  // a measuring probe found that `scope: ["thread"]`, `1`, `{…}` and `true` were
+  // all read as "no scope named", fell through to the bare-scope_id inference,
+  // and committed at AGENT scope reporting saved:true, while the mere typo
+  // `scope:"thred"` was correctly refused.
   await expect(tool("remember", { content: "x", thread_id: ["t-victim"] })).rejects.toThrow(
-    /name the scope/,
+    /thread_id must be a string, not an array/,
+  );
+  await expect(
+    tool("remember", { content: "x", scope: ["thread"], scope_id: "a-1" }),
+  ).rejects.toThrow(/scope must be a string, not an array/);
+  await expect(tool("remember", { content: "x", scope: true, scope_id: "a-1" })).rejects.toThrow(
+    /scope must be a string, not a boolean/,
   );
   await expect(tool("remember", { content: "x", scope: "thread", scope_id: 123 })).rejects.toThrow(
-    /needs an id/,
+    /scope_id must be a string, not a number/,
   );
   await expect(tool("remember", { content: "x", agent_id: "   " })).rejects.toThrow(
     /name the scope/,

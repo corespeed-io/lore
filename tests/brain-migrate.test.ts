@@ -194,6 +194,13 @@ INSERT INTO edges (from_page_id,to_page_id,lane) SELECT b.id, a.id, 'auto'
   FROM pages a, pages b WHERE a.slug='people/robert-smith' AND b.slug='notes/links-bob';
 INSERT INTO pending_links (from_page_id,target_ref,ref_norm) SELECT id,'Nobody','nobody'
   FROM pages WHERE slug='notes/links-bob';
+-- A projection an older release wrote for a THREAD-scoped memory, under that
+-- release's slug shape. On a v3 database there are no memory tables at all, so
+-- nothing can claim it: this is the leak a deployed brain carries across the
+-- upgrade, and initSchema has to close it without an operator doing anything.
+INSERT INTO pages (slug,kind,title,body,content_hash) VALUES
+  ('memory/scoped/mem-legacy-1','memory','billing email',
+   'billing email is finance@example.com','h3');
 `;
 
 test("a real v3 database upgrades to v4 with everything intact", async () => {
@@ -207,7 +214,7 @@ test("a real v3 database upgrades to v4 with everything intact", async () => {
   expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(4);
 
   // Nothing the previous release owned may be disturbed by an additive upgrade.
-  expect(Number((await one("SELECT count(*)::int AS n FROM pages")).n)).toBe(2);
+  expect(Number((await one("SELECT count(*)::int AS n FROM pages")).n)).toBe(3);
   expect(Number((await one("SELECT count(*)::int AS n FROM edges WHERE lane='declared'")).n)).toBe(
     1,
   );
@@ -247,6 +254,65 @@ test("a real v3 database upgrades to v4 with everything intact", async () => {
 
   // Idempotent: running init again changes nothing.
   await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
-  expect(Number((await one("SELECT count(*)::int AS n FROM pages")).n)).toBe(2);
+  expect(Number((await one("SELECT count(*)::int AS n FROM pages")).n)).toBe(3);
+  await pg.close();
+});
+
+test("opening a v3 brain sweeps the reserved namespace, and the ORDER is what makes it possible", async () => {
+  // Two things at once, because they are the same ordering constraint.
+  //
+  // 1. The repair is not optional and not on a scheduler. Before this, purging
+  //    legacy projections was reachable only from POST /api/maintenance, which
+  //    needs the write bearer and which nothing calls on its own — so a brain
+  //    upgraded on Monday served every thread's memories to every holder of the
+  //    shared read token until an operator wired a cron. initSchema is on the one
+  //    path to a Store, so putting it here means a brain that has been OPENED has
+  //    been swept.
+  // 2. The sweep reads memory_items, and on a v3 database that table does not
+  //    exist until the v3->v4 migration step creates it. So it must run AFTER
+  //    migrate() — the mirror image of the constraint that migrations run BEFORE
+  //    the DDL block. Move it earlier and this test fails with
+  //    `relation "memory_items" does not exist`, which is the whole point of
+  //    pinning it.
+  const pg = new PGlite({ extensions: { vector, pg_trgm } });
+  const db = pgliteDb(pg);
+  await pg.exec(V3);
+
+  // Pre-upgrade, this is a live page on the shared read surface.
+  const before = await db.query(
+    "SELECT deleted_at FROM pages WHERE slug = 'memory/scoped/mem-legacy-1'",
+  );
+  expect(before.rows[0].deleted_at).toBeNull();
+
+  await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
+
+  // No page in the reserved namespace is readable. Asserted as the invariant over
+  // the whole namespace rather than about one slug, so a second legacy shape
+  // cannot pass by not being listed.
+  const live = await db.query(
+    "SELECT slug FROM pages WHERE slug LIKE 'memory/%' AND deleted_at IS NULL",
+  );
+  expect(live.rows).toEqual([]);
+  // …and it was RETRACTED, not destroyed: with no memory tables in v3 there was
+  // nothing to attribute this page to, and an unattributable page under memory/
+  // may be a note the user wrote themselves. Its bytes survive; no read returns
+  // them.
+  const kept = await db.query(
+    "SELECT body, deleted_at FROM pages WHERE slug = 'memory/scoped/mem-legacy-1'",
+  );
+  expect(kept.rows.length).toBe(1);
+  expect(kept.rows[0].deleted_at).not.toBeNull();
+  expect(String(kept.rows[0].body)).toContain("finance@example.com");
+  // The user's own pages are untouched, and the retract dropped the chunks it
+  // should (there were none to drop here, but a live page's must survive).
+  expect(
+    Number(
+      (
+        await db.query(
+          "SELECT count(*)::int AS n FROM pages WHERE deleted_at IS NULL AND slug NOT LIKE 'memory/%'",
+        )
+      ).rows[0].n,
+    ),
+  ).toBe(2);
   await pg.close();
 });

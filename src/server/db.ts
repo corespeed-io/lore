@@ -3,6 +3,7 @@
 // driver import so the store stays testable without a server.
 
 import { MEMORY_DDL, MEMORY_MIGRATION } from "./memory/ddl";
+import { migrateMemoryNamespace } from "./memory/projection";
 
 export type Query = (
   text: string,
@@ -163,11 +164,23 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
 // the DDL below runs, because that DDL indexes columns (basename) that older
 // databases do not have yet — indexing a missing column throws and the whole
 // init fails. So: bootstrap meta, migrate if needed, then create/verify the
-// rest.
+// rest, and LAST repair the reserved memory/ namespace.
 //
 // The meta row pins the embedding space: a model or dimension change is a
 // re-embed event (2026-07-22 lesson: spaces don't mix), so we fail loud instead
 // of silently writing mixed-space vectors.
+//
+// Why the namespace repair is the last thing here and not a `from < N` step in
+// the version-keyed list below. It is a DATA repair, not a schema change: it must
+// run on every database that has ever been opened, including one whose
+// schema_version already reads current because a dump was restored into it or
+// because somebody set the column by hand. A privacy boundary keyed on an integer
+// has a second path around it; this one has none, because there is no way to get a
+// Store (src/server/local.ts) without awaiting this function, and it THROWS rather
+// than return while any page in the reserved namespace is still readable. It is
+// also why it runs after the DDL loop rather than inside migrate(): the memory
+// tables it reads are created there for a fresh database. See
+// migrateMemoryNamespace in memory/projection.ts for the bound on its work.
 export async function initSchema(db: Db, meta: BrainMeta): Promise<void> {
   if (!Number.isInteger(meta.embeddingDim) || meta.embeddingDim < 1 || meta.embeddingDim > 16000) {
     throw new Error(`invalid embedding dim: ${meta.embeddingDim}`);
@@ -203,6 +216,7 @@ export async function initSchema(db: Db, meta: BrainMeta): Promise<void> {
       [meta.embeddingModel, meta.embeddingDim, SCHEMA_VERSION],
     );
   }
+  await migrateMemoryNamespace(db);
 }
 
 // CREATE TABLE IF NOT EXISTS cannot change an existing table, so a column that

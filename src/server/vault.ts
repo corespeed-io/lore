@@ -20,31 +20,102 @@ export function isMarkdown(path: string): boolean {
   return /\.(md|markdown)$/i.test(path);
 }
 
+// --- one name, one slug ------------------------------------------------------
+//
+// There is exactly ONE definition of "the slug this name means", and both readers
+// of that question go through it: the importer naming a vault FILE, and the store
+// reading the ADDRESS a path-shaped [[ref]] names (refAddress below). Two
+// definitions is precisely what made maps/dated-note and maps/dated_note share one
+// address — the store folded '-' and '_' to spaces on BOTH sides, so its predicate
+// was "folds to that path" rather than "is that path", and whichever of the two
+// real files was written first answered a ref that named the other.
+
+// Noise a path-shaped name carries that says nothing about where the page is.
+// Logseq/Foam emit './' and '../' (relative Markdown links are resolved against
+// the referring page BEFORE they reach here — pipeline.ts mdTargetToRef), and
+// Docusaurus/mkdocs write root-relative links ([Note](/maps/note.md)). Keeping a
+// leading '/' left an empty first segment, which no page can ever have, so every
+// root-relative link was unsatisfiable by construction.
+const LEADING_NOISE = /^(?:\.{1,2}\/|\/)+/;
+// A page IS a markdown file; the extension is not part of its name. Stripped for
+// the file and for the ref, so [[Maps/Note.md]] and Maps/Note.md agree.
+const NOTE_EXT = /\.(md|markdown)$/i;
+// Characters lore's slug rule forbids, plus the ones that make a slug ambiguous
+// inside a wikilink. ONE source expression, two uses below (delete them from a
+// filename / refuse to address by them), so the class cannot drift.
+const FORBIDDEN = /[[\]|#?%<>:"\\^{}]/;
+const FORBIDDEN_ALL = new RegExp(FORBIDDEN.source, "g");
+
+// The folds that RENAME nothing: every character survives in some form. Case,
+// Unicode compatibility form, the quotes normalizeRef also strips, and whitespace
+// as a word separator. Kept separate from the deleting step below because
+// refAddress has to know whether canonicalizing would DELETE a character.
+function foldSegment(seg: string): string {
+  return seg
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\s+/g, "-");
+}
+
+function slugSegment(seg: string): string {
+  return foldSegment(seg)
+    .replace(FORBIDDEN_ALL, "")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function slugPath(path: string): string {
+  return path
+    .replace(LEADING_NOISE, "")
+    .replace(NOTE_EXT, "")
+    .split("/")
+    .filter(Boolean)
+    .map(slugSegment)
+    .join("/");
+}
+
 // Vault path -> slug. Folders are kept (they are how a vault expresses
 // hierarchy) and the filename is slugified, so "Projects/My Note.md" becomes
 // "projects/my-note" — which the basename resolution arm then matches against
-// a ref typed [[My Note]].
+// a ref typed [[My Note]], and which refAddress reproduces exactly from a ref
+// typed [[Projects/My Note]].
 export function pathToSlug(path: string): string {
-  const trimmed = path
-    .replace(/\\/g, "/")
-    .replace(/^\.?\//, "")
-    .replace(/\.(md|markdown)$/i, "");
-  return trimmed
-    .split("/")
-    .filter(Boolean)
-    .map((seg) =>
-      seg
-        .normalize("NFKC")
-        .toLowerCase()
-        .replace(/\s+/g, "-")
-        // Characters lore's slug rule forbids, plus the ones that make a slug
-        // ambiguous in a wikilink.
-        .replace(/[[\]|#?%<>:"\\^{}]/g, "")
-        .replace(/-{2,}/g, "-")
-        .replace(/^-+|-+$/g, ""),
-    )
-    .filter(Boolean)
-    .join("/");
+  // A Windows directory picker hands back backslashes; a vault path uses '/'.
+  return slugPath(path.replace(/\\/g, "/"));
+}
+
+// The slug a path-shaped ref ADDRESSES — or null when the ref contains no
+// separator and is therefore a NAME, which any page answering to it may satisfy.
+//
+// The ref goes through the SAME transform that named the page in the first place,
+// which is the entire point: a space becomes a hyphen (so [[Maps/Dated Note]] still
+// finds maps/dated-note — the headline case, and it must keep working) while an
+// underscore stays an underscore, so maps/dated_note is a DIFFERENT address. The
+// page's stored slug is compared as WRITTEN, never folded, so at most one page can
+// be at an address and write order can never pick a winner.
+//
+// Returns "" — an address no page can be at, since a slug is never empty — rather
+// than null when canonicalizing would DELETE a character. Deleting one forges a
+// name the ref never spelled ("me%mory/vault/x" becomes "memory/vault/x"), and
+// callers upstream screen the ref's RAW spelling (mcp.ts's reserved-namespace
+// door). Returning null there would be worse than returning a wrong address,
+// because null means name-shaped and hands the ref to the title, basename and
+// alias arms — which assert no location at all.
+//
+// A '\' is NOT a separator here, unlike in a filesystem path: inside a ref it is a
+// legal filename character, and reading it as one would make [[a\b]] address a page
+// that a caller screening the raw ref never sees as a path.
+export function refAddress(ref: string): string | null {
+  const path = ref.normalize("NFKC").replace(LEADING_NOISE, "").replace(NOTE_EXT, "");
+  if (!path.includes("/")) return null;
+  const segs = path.split("/").filter(Boolean);
+  if (segs.some((seg) => FORBIDDEN.test(foldSegment(seg)))) return "";
+  // Assembled here rather than by calling slugPath(path): the strips above have
+  // already run, and slugPath would run NOTE_EXT a second time — so "a/x.md.md"
+  // would lose both extensions here while pathToSlug loses one, and the file and
+  // the ref would stop agreeing. Every SEGMENT still goes through slugSegment.
+  return segs.map(slugSegment).join("/");
 }
 
 // The frontmatter subset Obsidian actually writes: scalars, inline arrays, and
