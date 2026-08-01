@@ -166,6 +166,15 @@ export function parseFrontmatter(text: string): {
   return { frontmatter: fm, body: text.slice(m[0].length) };
 }
 
+// THE ONE DEFINITION of what an UNQUOTED frontmatter value says. A quoted value
+// has no comment inside it and needs none of this; an unquoted one ends at ` # `.
+// Shared, because having two functions answer "what does this value say" is how
+// the same string came back two different ways depending on which container it
+// sat in.
+function unquotedValue(t: string): string {
+  return t.replace(/\s+#\s.*$/, "").trim();
+}
+
 // ORDER IS THE WHOLE BUG HERE. This used to strip ` # comment` FIRST and only
 // then look for quotes, so a `#` INSIDE a quoted value was read as the start of a
 // comment: the writer quotes `Design # notes` (correctly — `#` is not in its safe
@@ -194,7 +203,7 @@ function scalar(raw: string): string {
     const end = t.indexOf("'", 1);
     if (end !== -1) return t.slice(1, end).trim();
   }
-  return t.replace(/\s+#\s.*$/, "").trim();
+  return unquotedValue(t);
 }
 
 // Splits on commas that are OUTSIDE quotes. A naive split(",") let one value
@@ -204,8 +213,20 @@ function scalar(raw: string): string {
 // wrote, and on `aliases` it mints a resolution arm, so a crafted title could
 // make an unrelated page answer to a name.
 function inlineArray(raw: string): string[] {
-  const out: string[] = [];
+  // QUOTEDNESS IS TRACKED PER ELEMENT, because it is consumed here and cannot be
+  // recovered later. This used to unquote an element and then hand the result to
+  // scalar() "for comment-stripping on values that were never quoted in the first
+  // place" — but by then nothing could tell the difference, so scalar applied the
+  // UNQUOTED rule to a value that had been quoted. `related_ids: ["notes/a # my
+  // comment"]` read back as `["notes/a"]`, which put a DECLARED graph edge to
+  // notes/a on the page and an alias nobody wrote into resolveRef's alias arm.
+  //
+  // It is the exact asymmetry round 6 fixed for scalar and left here: the same
+  // value round-tripped intact as a title and truncated as an array element. Two
+  // readers of one encoding, one container to the side.
+  const out: { text: string; quoted: boolean }[] = [];
   let cur = "";
+  let quoted = false;
   let quote: '"' | "'" | null = null;
   for (let i = 1; i < raw.length - 1; i++) {
     const c = raw[i];
@@ -220,20 +241,28 @@ function inlineArray(raw: string): string[] {
       continue;
     }
     if (c === '"' || c === "'") {
+      // Whitespace BETWEEN the comma and the opening quote is separator noise, not
+      // part of the value — `[a, "b"]`. Dropping it here rather than trimming the
+      // finished element is what lets edge whitespace INSIDE the quotes survive,
+      // which is the whole reason the writer quotes such a value.
+      if (!cur.trim()) cur = "";
       quote = c;
+      quoted = true;
       continue;
     }
     if (c === ",") {
-      out.push(cur.trim());
+      out.push({ text: cur, quoted });
       cur = "";
+      quoted = false;
       continue;
     }
     cur += c;
   }
-  out.push(cur.trim());
-  // scalar() still runs for comment-stripping and stray-quote tolerance on
-  // values that were never quoted in the first place.
-  return out.map((s) => scalar(s)).filter(Boolean);
+  out.push({ text: cur, quoted });
+  // A quoted element is already exactly what the writer wrote — including a `#`,
+  // and including edge whitespace, which the writer only leaves unquoted when it
+  // is not there. An unquoted one goes through the same rule scalar uses.
+  return out.map((e) => (e.quoted ? e.text : unquotedValue(e.text))).filter(Boolean);
 }
 
 // A vault file -> the page to write. The title comes from frontmatter, else the

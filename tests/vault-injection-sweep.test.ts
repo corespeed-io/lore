@@ -205,6 +205,64 @@ test("a whitespace-only value keeps its key", () => {
   expect(note.frontmatter.note).toBe("");
 });
 
+// THE SIBLING OF THE ROUND-6 scalar() FIX, one container to the side. scalar
+// became quote-aware before comment-stripping; inlineArray did not, and it could
+// not — it consumed the quotes in its own state machine and then handed the
+// UNQUOTED text to scalar, which applied the unquoted rule to a value that had
+// been quoted. The same string round-tripped intact as a title and truncated as an
+// array element.
+test("a # inside a quoted array element is not a comment", () => {
+  const { note } = trip("Victim", {
+    related_ids: ["notes/a # my comment"],
+    aliases: ["Design # notes"],
+    tags: ["plain", "also # quoted"],
+  });
+  // The harm is structural, not cosmetic: a truncated related_id is an edge to a
+  // DIFFERENT page, and a truncated alias is a resolution arm nobody wrote.
+  expect(note.frontmatter.related_ids, "a related_id was truncated").toEqual([
+    "notes/a # my comment",
+  ]);
+  expect(note.frontmatter.aliases).toEqual(["Design # notes"]);
+  expect(note.frontmatter.tags).toEqual(["plain", "also # quoted"]);
+
+  // The SAME value as a scalar — the asymmetry that made this two readers of one
+  // encoding rather than one shared rule.
+  expect(trip("Design # notes", {}).note.frontmatter.title).toBe("Design # notes");
+
+  // MIRROR: an UNQUOTED trailing comment is still a comment, which is why the
+  // unquoted rule exists at all.
+  expect(
+    parseNote({ path: "n.md", text: "---\ntags: [plain # gone]\n---\nb" }).frontmatter.tags,
+  ).toEqual(["plain"]);
+});
+
+// ...and the edge is the thing that actually matters, so assert it against a real
+// store rather than trusting the parse.
+test("a truncated array element cannot mint a declared edge", async () => {
+  const src = await freshStore();
+  await src.store.putPage({ slug: "notes/a", body: "# A" });
+  await src.store.putPage({ slug: "notes/decoy", body: "# Decoy" });
+  const note = parseNote({
+    path: "notes/victim.md",
+    text: serializeNote("Victim", { related_ids: ["notes/decoy # notes/a"] }, "body"),
+  });
+  await src.store.putPage({
+    slug: note.slug,
+    title: note.title,
+    body: note.body,
+    frontmatter: note.frontmatter,
+  });
+  const edges = await src.db.query(
+    `SELECT p2.slug AS to_slug FROM edges e
+       JOIN pages p ON p.id = e.from_page_id
+       JOIN pages p2 ON p2.id = e.to_page_id
+      WHERE p.slug = 'notes/victim' AND e.lane = 'declared'`,
+  );
+  await src.close();
+  // notes/a is a real page, so a truncation would resolve and mint a live edge.
+  expect(edges.rows.map((r) => String(r.to_slug))).toEqual([]);
+});
+
 // --- real store: does the round trip create an edge that did not exist? ------
 
 async function freshStore(): Promise<{ close: () => Promise<void>; store: Store; db: Db }> {
