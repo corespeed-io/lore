@@ -1580,3 +1580,63 @@ test("slugs differing only by Unicode composition resolve by spelling, not write
   expect(mac.pending).toEqual([]);
   expect(await backlinkSlugs("mac/naïve-note".normalize("NFD"))).toContain("src/cmp-mac");
 });
+
+// The query side is encoded differently from the document side, or the strong
+// 2026 models are used at less than they are. The store is the only party that
+// knows which side it is holding, so the role travels with the call; the prefix
+// itself stays in the embedder, where the env lives.
+test("the query prefix reaches queries and never touches documents", async () => {
+  const seen: string[][] = [];
+  const cfg = {
+    url: "http://x/embeddings",
+    apiKey: "k",
+    model: "m",
+    dim: DIM,
+    queryPrefix: "Instruct: retrieve\nQuery: ",
+  };
+  const fetchSpy = async (_url: string, init: { body: string }) => {
+    const input = JSON.parse(init.body).input as string[];
+    seen.push(input);
+    return {
+      ok: true,
+      json: async () => ({ data: input.map((_t, i) => ({ index: i, embedding: fakeVec("x") })) }),
+    };
+  };
+  const orig = globalThis.fetch;
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  try {
+    const { makeEmbedFn } = await import("../src/server/pipeline.js");
+    const embed = makeEmbedFn(cfg);
+    await embed(["a doc"]);
+    await embed(["a question"], "query");
+    await embed(["explicit doc"], "document");
+  } finally {
+    globalThis.fetch = orig;
+  }
+  expect(seen[0]).toEqual(["a doc"]);
+  expect(seen[1]).toEqual(["Instruct: retrieve\nQuery: a question"]);
+  expect(seen[2]).toEqual(["explicit doc"]);
+});
+
+// An unset prefix must leave the bytes on the wire byte-identical to before,
+// or every existing deployment silently changes its query encoding on upgrade.
+test("no prefix configured leaves a query untouched", async () => {
+  const seen: string[][] = [];
+  const fetchSpy = async (_url: string, init: { body: string }) => {
+    const input = JSON.parse(init.body).input as string[];
+    seen.push(input);
+    return {
+      ok: true,
+      json: async () => ({ data: input.map((_t, i) => ({ index: i, embedding: fakeVec("x") })) }),
+    };
+  };
+  const orig = globalThis.fetch;
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+  try {
+    const { makeEmbedFn } = await import("../src/server/pipeline.js");
+    await makeEmbedFn({ url: "http://x", apiKey: "k", model: "m", dim: DIM })(["q"], "query");
+  } finally {
+    globalThis.fetch = orig;
+  }
+  expect(seen[0]).toEqual(["q"]);
+});

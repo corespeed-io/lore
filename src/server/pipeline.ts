@@ -3,7 +3,13 @@
 
 import { NOTE_EXT } from "./vault";
 
-export type EmbedFn = (texts: string[]) => Promise<number[][]>;
+// The role is what the store knows and the embedder cannot infer. Every strong
+// 2026 retrieval model is trained asymmetrically — the query carries a one-line
+// task instruction, the document carries none — and a signature of
+// (texts) => vectors has nowhere to say which side it is holding, so both went
+// through unprefixed. Optional, and "document" by default: a model that wants no
+// instruction (bge-m3) is unaffected, and so is a deployment that sets no prefix.
+export type EmbedFn = (texts: string[], role?: "query" | "document") => Promise<number[][]>;
 
 // Paragraph-accumulating splitter targeting ~1200 chars (≈400 tokens). Memories
 // are usually a single chunk; oversized paragraphs get hard-split.
@@ -179,6 +185,8 @@ export interface EmbeddingsConfig {
   apiKey: string;
   model: string;
   dim: number;
+  /** Prepended to QUERY text only. Empty means the model wants no instruction. */
+  queryPrefix?: string;
 }
 
 export function embeddingsConfigFromEnv(env: NodeJS.ProcessEnv = process.env): EmbeddingsConfig {
@@ -187,26 +195,32 @@ export function embeddingsConfigFromEnv(env: NodeJS.ProcessEnv = process.env): E
     apiKey: env.EMBEDDINGS_API_KEY ?? "",
     model: env.EMBEDDINGS_MODEL ?? "unconfigured",
     dim: Number(env.EMBEDDINGS_DIM ?? 1536),
+    // Not part of the embedding space the meta row pins: changing it changes how
+    // a QUERY is encoded, not what is stored, so it needs no re-embed and must
+    // not trip the model/dim mismatch guard.
+    queryPrefix: env.EMBEDDINGS_QUERY_PREFIX ?? "",
   };
 }
 
 // OpenAI-compatible /embeddings client. Fails loud on misconfig — a write that
 // can't embed must not half-land (the store only writes after embedding).
 export function makeEmbedFn(cfg: EmbeddingsConfig): EmbedFn {
-  return async (texts: string[]): Promise<number[][]> => {
+  return async (texts: string[], role: "query" | "document" = "document"): Promise<number[][]> => {
     if (texts.length === 0) return [];
     if (!cfg.url || !cfg.apiKey) {
       throw new Error(
         "embeddings not configured: set EMBEDDINGS_URL, EMBEDDINGS_API_KEY, EMBEDDINGS_MODEL, EMBEDDINGS_DIM",
       );
     }
+    const prefix = role === "query" ? (cfg.queryPrefix ?? "") : "";
+    const input = prefix ? texts.map((t) => prefix + t) : texts;
     const res = await fetch(cfg.url, {
       method: "POST",
       headers: {
         authorization: `Bearer ${cfg.apiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ model: cfg.model, input: texts, dimensions: cfg.dim }),
+      body: JSON.stringify({ model: cfg.model, input, dimensions: cfg.dim }),
     });
     if (!res.ok) throw new Error(`embeddings ${res.status}`);
     const json = (await res.json()) as { data?: { index?: number; embedding: number[] }[] };
