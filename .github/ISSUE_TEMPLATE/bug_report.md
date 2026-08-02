@@ -25,4 +25,4 @@ labels: bug
 
 **Logs / screenshots**
 
-<!-- Console errors, server logs, screenshots. Never paste GBRAIN_TOKEN or other secrets. -->
+<!-- Console errors, server logs, screenshots. Never paste BRAIN_WRITE_TOKEN or other secrets. -->

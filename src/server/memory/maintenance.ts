@@ -82,14 +82,12 @@ export async function runMemoryMaintenance(
       // extractor cannot reach an agent, another thread, or the vault unless a
       // caller explicitly allows it. `vault` used to be offered here and, under
       // the old widest-wins selection, always won — every thread statement became
-      // a global fact. Extraction now takes the narrowest allowed scope, so
-      // listing vault would be inert for `rules-1`; it is dropped anyway, because
-      // an allowedScopes list is a permission and a future model-backed extractor
-      // would be entitled to use it.
-      const r = await runExtraction(db, deterministicExtractor, {
-        threadId,
-        allowedScopes: [{ scopeType: "thread", scopeId: threadId }],
-      });
+      // ONE scope. This used to pass {scopeType:'thread', scopeId: threadId},
+      // which after the scope collapse wrote where nothing reads: recall's
+      // readable set is the one scope, and projectionSlug returns null for
+      // anything else — so every background-extracted memory was WRITE-ONLY,
+      // the exact failure the tool door exists to prevent.
+      const r = await runExtraction(db, deterministicExtractor, { threadId });
       extractionRuns++;
       proposals += r.proposals;
     } catch (e) {

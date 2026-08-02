@@ -1,4 +1,4 @@
-// In-memory, per-browser-session log of the gbrain calls this tab has made via
+// In-memory, per-browser-session log of the brain calls this tab has made via
 // apiCall(). Read-only observability — it never leaves the browser, holds no
 // credentials, and only records tool name + timing + outcome. Backs the
 // dashboard's Connection health + Recent requests panels via useSyncExternalStore.

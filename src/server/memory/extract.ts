@@ -394,7 +394,7 @@ export async function runExtraction(
   const scopes =
     args.allowedScopes && args.allowedScopes.length > 0
       ? args.allowedScopes
-      : [{ scopeType: "thread" as ScopeType, scopeId: args.threadId }];
+      : [{ scopeType: "vault" as ScopeType, scopeId: null }];
   const active = await referentsFor(db, scopes);
   const { proposals } = await extractor.extract({
     events,

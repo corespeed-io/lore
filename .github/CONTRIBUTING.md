@@ -38,14 +38,18 @@ npm run typecheck && npm run lint && npm test && npm run build
 - **Functional components** — use React hooks.
 - **Kebab-case** for file names; PascalCase for React components.
 
-### Read-only guarantee
+### The console reads; agents write
 
-This app **reads from gbrain and renders graphs**; it does not mutate user data. No write tools or database mutations are allowed—all MCP tool calls are read-only. When adding a feature:
+Lore stores its own pages and memories, so "nothing writes" is not the rule. The
+rule is that **the browser console only ever holds the reading credential**:
+`/api/call` passes `"read"` into the dispatcher, which decides from each tool's
+own declared `access`. When adding a feature:
 
-- ✓ Query gbrain, search, call analysis tools
-- ✗ No mutation tools, no database writes, no destructive operations
+- ✓ Reach for a `read` tool from the console; add a `write` tool to the agent
+  surface (`POST /api/mcp`, bearer `BRAIN_WRITE_TOKEN`)
+- ✗ Never widen a tool from `write` to `read` to make a console feature work
 
-This is enforced by code review.
+See [SECURITY.md](SECURITY.md) for the full model.
 
 ### Testing
 
@@ -56,26 +60,26 @@ This is enforced by code review.
 
 ### Adding a visualization module
 
-1. Create a new file `src/lib/viz/<name>.ts` with a `mount` function:
+1. Create `src/lib/viz/<name>.ts` exporting a mount function that returns a
+   handle the caller can tear down — see `src/lib/viz/graph.ts` for the shape:
+
    ```typescript
-   import type { GraphData, VizOptions } from "@/lib/types";
-   
-   export function mount<Name>(
-     element: HTMLElement,
-     data: GraphData,
-     options: VizOptions,
-   ): void {
-     // Render visualization using d3, canvas, or DOM APIs
+   import type { GraphData } from "@/lib/types";
+
+   export interface Instance {
+     destroy(): void;
+     highlight(ids: Set<string> | null): void;
+   }
+
+   export function mountName(el: HTMLElement, data: GraphData, opts: Opts): Instance {
+     // Render with d3, canvas, or DOM APIs
    }
    ```
 
-2. Type your viz in the registry. Update `src/lib/types.ts` if needed.
+2. Import it directly in the view component and call `destroy()` on unmount —
+   there is no registry to register with.
 
-3. Import and call `mount` in the appropriate view component.
-
-4. Write tests for the viz logic in `tests/viz-<name>.test.ts`.
-
-5. Update the README's "Adding a visualization module" section if the process differs.
+3. Write tests for the pure parts in `tests/viz-<name>.test.ts`.
 
 ### Commits
 
@@ -96,7 +100,7 @@ feat: add timeline visualization module
 
 The following items are deferred post-v1:
 
-1. **Timing-safe password comparison** — `password` auth mode compares with strict equality (`===`). A constant-time compare would mitigate timing attacks (see `src/lib/auth.ts`). Note `password` mode isn't the recommended deployment posture — prefer `proxy` (Cloudflare Access), whose JWT is fully verified.
+1. **Timing-safe password comparison** — `password` auth mode compares in constant time. A constant-time compare would mitigate timing attacks (see `src/lib/auth.ts`). Note `password` mode isn't the recommended deployment posture — prefer `gateway` (a JWT- or secret-verified proxy), whose JWT is fully verified.
 
 ## Questions?
 

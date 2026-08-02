@@ -2,10 +2,17 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite/vector";
 import { expect, test } from "vitest";
-import { READ_ONLY_TOOLS } from "../src/lib/gbrain.js";
 import { type Db, type Query, initSchema } from "../src/server/db.js";
 import type { ToolDef } from "../src/server/mcp.js";
-import { READ_TOOL_NAMES, TOOLS, clampArgs, handleRpc, mergeTools } from "../src/server/mcp.js";
+import {
+  HTTP_STATUS_FOR_ERROR,
+  READ_TOOL_NAMES,
+  TOOLS,
+  clampArgs,
+  handleRpc,
+  headerRefusal,
+  mergeTools,
+} from "../src/server/mcp.js";
 import { memoryHealth } from "../src/server/memory/consolidate.js";
 import { projectionSlug, runProjections } from "../src/server/memory/projection.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
@@ -46,8 +53,17 @@ const stubDb = {
 } as unknown as Db;
 const getCtx = () => Promise.resolve({ store: stub, db: stubDb });
 
-test("every read tool lore may call is in its READ_ONLY_TOOLS allowlist", () => {
-  for (const name of READ_TOOL_NAMES) expect(READ_ONLY_TOOLS.has(name)).toBe(true);
+// There used to be a second, hand-written list of the tools a viewer session may
+// call, and this test checked the two agreed. They did not: 13 of that list's 28
+// entries named tools that exist nowhere in this repo. The list is now derived
+// from the registry, so the only thing left worth asserting is the property the
+// two lists were supposed to have — no write tool is reachable from the console.
+test("the console's tool surface is exactly the read tools, and no write tool", () => {
+  expect(READ_TOOL_NAMES.length).toBeGreaterThan(0);
+  for (const name of READ_TOOL_NAMES) expect(TOOLS[name].access).toBe("read");
+  const writes = Object.keys(TOOLS).filter((n) => TOOLS[n].access === "write");
+  expect(writes.length).toBeGreaterThan(0);
+  for (const name of writes) expect(READ_TOOL_NAMES).not.toContain(name);
 });
 
 test("write tools are not marked read", () => {
@@ -357,15 +373,13 @@ test("a credential in ANY field of ANY WRITE tool is refused before the handler 
       "remember",
       {
         content: "The rotation runbook is in scripts/rotate.sh",
-        scope: "agent",
-        scope_id: "agent-1",
         thread_id: AWS,
       },
     ],
     ["append_event", { thread_id: "t", event_type: "tool_result", idempotency_key: `d-${GITHUB}` }],
     ["append_event", { thread_id: "t", event_type: "tool_result", actor_id: `runner-${AWS}` }],
     ["append_event", { thread_id: "t", event_type: "tool_result", trace_id: `trace-${OPENAI}` }],
-    ["forget", { memory_id: "m1", scope: "vault", reason: `rotating: the old ${AWS} leaked` }],
+    ["forget", { memory_id: "m1", reason: `rotating: the old ${AWS} leaked` }],
     // ...and the fields nobody has named yet: nested, in an array, in a KEY, and in
     // an argument the schema does not even mention.
     ["put_page", { slug: "notes/a", body: "b", frontmatter: { deep: { list: [GITHUB] } } }],
@@ -522,7 +536,7 @@ test("unknown tools and methods are JSON-RPC errors; notifications pass through"
   // constructed, so a notification can never become a write channel.
   const smuggle = await handleRpc(noCtx, "write", "notifications/tools/call", {
     name: "remember",
-    arguments: { content: AWS, scope: "vault" },
+    arguments: { content: AWS },
   });
   expect(smuggle).toEqual({ notification: true });
 });
@@ -618,7 +632,6 @@ test("a projection moved out of memory/ is still retracted when its memory is fo
     const call = callTool(ctx);
     const saved = (await call("remember", {
       content: "Zanzibar espresso is the house roast.",
-      scope: "vault",
     })) as { saved: boolean; memory_id: string; projection: string };
     expect(saved.saved).toBe(true);
     expect(saved.projection).toBe("ok");
@@ -636,7 +649,7 @@ test("a projection moved out of memory/ is still retracted when its memory is fo
     expect(await searchText(ctx.store, "Zanzibar espresso")).toContain("Zanzibar");
 
     // scope is passed as well as the id: forget revokes within a named scope.
-    expect((await call("forget", { memory_id: saved.memory_id, scope: "vault" })).revoked).toBe(1);
+    expect((await call("forget", { memory_id: saved.memory_id })).revoked).toBe(1);
     // Two passes: a leak that survives one sweep is what the reviewer reproduced.
     await runProjections(ctx.db, ctx.store, 50);
     await runProjections(ctx.db, ctx.store, 50);
@@ -661,7 +674,6 @@ test("delete_page cannot evict a memory's projection; forget is the way out", as
     const refuse = refuseTool(ctx);
     const saved = (await call("remember", {
       content: "Lisbon cortado is the afternoon pour.",
-      scope: "vault",
     })) as { memory_id: string };
     const slug = `memory/vault/${saved.memory_id}`;
 
@@ -680,9 +692,7 @@ test("delete_page cannot evict a memory's projection; forget is the way out", as
     // An ordinary page still deletes, and the scoped revocation path still works.
     await call("put_page", { slug: "notes/ordinary", body: "an ordinary note" });
     expect((await call("delete_page", { slug: "notes/ordinary" })).deleted).toBe(true);
-    expect((await call("forget", { memory_id: saved.memory_id, scope: "vault" })).forgotten).toBe(
-      true,
-    );
+    expect((await call("forget", { memory_id: saved.memory_id })).forgotten).toBe(true);
     expect(await searchText(ctx.store, "Lisbon cortado")).not.toContain("cortado");
   });
 });
@@ -698,7 +708,6 @@ test("no argument may link into the reserved namespace, so there is no oracle", 
     const refuse = refuseTool(ctx);
     const saved = (await call("remember", {
       content: "Trieste macchiato is the mid-morning break.",
-      scope: "vault",
     })) as { memory_id: string };
     const slug = `memory/vault/${saved.memory_id}`;
     const absent = "memory/vault/00000000-0000-4000-8000-000000000000";
@@ -786,29 +795,10 @@ test("no argument may link into the reserved namespace, so there is no oracle", 
 // leak for one reason only, and it is the reason hideScoped could be deleted:
 // a non-shared memory HAS NO PAGE, so the probe cannot distinguish one from a
 // uuid that was never used. If that ever stops being true, this test fails.
-test("a scoped memory is indistinguishable from a memory that does not exist", async () => {
-  await withBrain(async (ctx) => {
-    const call = callTool(ctx);
-    const scoped = (await call("remember", {
-      content: "Nairobi AA is what the other thread drinks.",
-      scope: "thread",
-      thread_id: "t-private",
-    })) as { memory_id: string };
-    const never = "00000000-0000-4000-8000-000000000000";
-
-    const probe = async (id: string) =>
-      (await call("put_page", { slug: `notes/probe-${id.slice(0, 8)}`, body: `[[${id}]]` }))
-        .pending;
-    // Identical answers: both refs stay parked, so nothing was there to link to.
-    expect(await probe(scoped.memory_id)).toEqual([scoped.memory_id]);
-    expect(await probe(never)).toEqual([never]);
-    const pages = await ctx.db.query("SELECT slug FROM pages WHERE slug LIKE 'memory/%'");
-    expect(pages.rows).toEqual([]);
-    // ...and the content itself is not on the shared page surface either.
-    expect(await searchText(ctx.store, "Nairobi AA")).not.toContain("Nairobi");
-  });
-});
-
+// A test lived here pinning that a memory in ANOTHER caller's scope reads as
+// not_found — the containment property of the multi-tenant scope model. That
+// model is gone (one brain, one user), so there is no other caller to be
+// indistinguishable from.
 // Every text-ish column of every table, read out of information_schema rather
 // than listed: the refutations all landed in a column nobody had thought to
 // check, so the assertion must not be a list of columns either.
@@ -846,13 +836,10 @@ test("the refuted paths, re-run: a credential reaches NO column of ANY table", a
     // A real, live memory to aim `forget` at, so its refusal cannot pass for a miss.
     const saved = (await call("remember", {
       content: "Rotation runbook lives in scripts/rotate.sh",
-      scope: "vault",
     })) as { memory_id: string };
 
     await refuse("remember", {
       content: "The rotation runbook is in scripts/rotate.sh",
-      scope: "agent",
-      scope_id: "agent-1",
       thread_id: AWS,
     });
     await refuse("append_event", {
@@ -865,7 +852,6 @@ test("the refuted paths, re-run: a credential reaches NO column of ANY table", a
     });
     await refuse("forget", {
       memory_id: saved.memory_id,
-      scope: "vault",
       reason: `rotating because the old key ${AWS} leaked`,
     });
 
@@ -906,7 +892,6 @@ test("no whitespace spelling of a memory/ slug can squat or move a projection", 
     const refuse = refuseTool(ctx);
     const saved = (await call("remember", {
       content: "Kyoto hojicha is the evening cup.",
-      scope: "vault",
     })) as { saved: boolean; memory_id: string };
     expect(saved.saved).toBe(true);
     const slug = `memory/vault/${saved.memory_id}`;
@@ -970,7 +955,6 @@ test("a retracted projection is revived by the sweep, never by restore_page", as
     const refuse = refuseTool(ctx);
     const saved = (await call("remember", {
       content: "Oaxaca cascara is the summer cooler.",
-      scope: "vault",
     })) as { memory_id: string };
     const slug = `memory/vault/${saved.memory_id}`;
     // Reach past the tool: delete_page refuses a projection outright now (see the
@@ -1188,4 +1172,186 @@ test("a page whose slug is credential-shaped can be read; writing one still cann
       expect(rpc.error?.message, name).toMatch(/refused: request contains payment_card/);
     }
   });
+});
+
+// A required argument that nothing enforced. put_page declares `body` required
+// and its description promises "omitted fields are left as they were"; the
+// handler's String(args.body ?? "") gave neither, so `put_page{slug, title}` —
+// a title edit — silently blanked the body, its chunks and its outgoing edges
+// and answered unchanged:false with isError:false. The store is not the place
+// to catch this: by the time a handler runs, the omission already looks like an
+// empty string. Refused at the door, over the schema that already listed it.
+test("a call missing a required argument is refused before the store is opened", async () => {
+  const rpc = await handleRpc(
+    () => Promise.reject(new Error("context must not be constructed")),
+    "write",
+    "tools/call",
+    { name: "put_page", arguments: { slug: "probe", title: "title only" } },
+  );
+  expect(rpc.result).toBeUndefined();
+  expect((rpc.error as { code: number }).code).toBe(-32602);
+  expect((rpc.error as { message: string }).message).toMatch(/missing required argument: body/);
+});
+
+test("every declared required argument is named, not just the first", async () => {
+  const rpc = await handleRpc(
+    () => Promise.reject(new Error("context must not be constructed")),
+    "write",
+    "tools/call",
+    { name: "rename_page", arguments: {} },
+  );
+  expect((rpc.error as { message: string }).message).toMatch(
+    /missing required arguments: slug, to/,
+  );
+});
+
+// An empty string is a value, not an omission: clearing a body is a thing a
+// caller may legitimately mean, and only `undefined` says "I did not pass this".
+test("an empty string satisfies a required argument", async () => {
+  const rpc = await handleRpc(getCtx, "write", "tools/call", {
+    name: "put_page",
+    arguments: { slug: "probe", body: "" },
+  });
+  expect(rpc.error).toBeUndefined();
+  expect((rpc.result as { isError: boolean }).isError).toBe(false);
+});
+
+// MCP 2026-07-28. lore was already stateless, so the revision's largest break
+// costs it nothing — but it does owe an honest version answer, server/discover,
+// and resultType.
+test("server/discover names the versions this server actually speaks", async () => {
+  const rpc = await handleRpc(
+    () => Promise.reject(new Error("context must not be constructed")),
+    "read",
+    "server/discover",
+    { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } },
+  );
+  const r = rpc.result as {
+    resultType: string;
+    supportedVersions: string[];
+    capabilities: Record<string, unknown>;
+    cacheScope: string;
+    _meta: Record<string, { name: string }>;
+  };
+  expect(r.resultType).toBe("complete");
+  expect(r.supportedVersions[0]).toBe("2026-07-28");
+  expect(r.capabilities.tools).toBeTruthy();
+  expect(r._meta["io.modelcontextprotocol/serverInfo"].name).toBe("lore-brain");
+  // Public: versions, capabilities and identity are the same answer for every
+  // caller, and this result carries no tool list.
+  expect(r.cacheScope).toBe("public");
+});
+
+// tools/list is the one that VARIES BY BEARER — a read token sees 15 tools, a
+// write token 24 — so a shared intermediary must never serve one caller's list
+// to another. Getting this backwards is a credential leak, not a cache miss.
+test("tools/list is cached private because its contents depend on the bearer", async () => {
+  const read = await handleRpc(getCtx, "read", "tools/list", {});
+  const write = await handleRpc(getCtx, "write", "tools/list", {});
+  const names = (r: unknown) => (r as { tools: { name: string }[] }).tools.length;
+  expect(names(read.result)).toBeLessThan(names(write.result));
+  expect((read.result as { cacheScope: string }).cacheScope).toBe("private");
+});
+
+// The bug this replaced: `params.protocolVersion ?? "..."` echoed whatever it
+// was asked for, so the server agreed to revisions it implements none of.
+test("an unsupported protocol version is refused, not agreed to", async () => {
+  const rpc = await handleRpc(
+    () => Promise.reject(new Error("context must not be constructed")),
+    "read",
+    "tools/list",
+    { _meta: { "io.modelcontextprotocol/protocolVersion": "1900-01-01" } },
+  );
+  expect(rpc.result).toBeUndefined();
+  const err = rpc.error as { code: number; data: { supported: string[]; requested: string } };
+  expect(err.code).toBe(-32022);
+  expect(err.data.requested).toBe("1900-01-01");
+  expect(err.data.supported).toContain("2026-07-28");
+});
+
+test("initialize never echoes a version this server does not implement", async () => {
+  const bogus = await handleRpc(() => Promise.reject(new Error("no ctx")), "read", "initialize", {
+    protocolVersion: "2099-01-01",
+  });
+  expect((bogus.result as { protocolVersion: string }).protocolVersion).not.toBe("2099-01-01");
+  const legacy = await handleRpc(() => Promise.reject(new Error("no ctx")), "read", "initialize", {
+    protocolVersion: "2025-06-18",
+  });
+  expect((legacy.result as { protocolVersion: string }).protocolVersion).toBe("2025-06-18");
+});
+
+test("every result carries resultType, including a tool call", async () => {
+  const list = await handleRpc(getCtx, "read", "tools/list", {});
+  expect((list.result as { resultType: string }).resultType).toBe("complete");
+  const call = await handleRpc(getCtx, "read", "tools/call", {
+    name: "search",
+    arguments: { query: "x" },
+  });
+  expect((call.result as { resultType: string }).resultType).toBe("complete");
+});
+
+test("tools/list is deterministically ordered so a client may cache it", async () => {
+  const rpc = await handleRpc(getCtx, "write", "tools/list", {});
+  const names = (rpc.result as { tools: { name: string }[] }).tools.map((t) => t.name);
+  expect(names).toEqual([...names].sort());
+});
+
+// `=== undefined` fixed the SPELLING of the data-loss bug, not the bug: a client
+// that serialises an omitted optional as `null` — most of them — still reached
+// String(a.body ?? "") and still wiped the page.
+test("null counts as absent for a required argument", async () => {
+  const rpc = await handleRpc(
+    () => Promise.reject(new Error("context must not be constructed")),
+    "write",
+    "tools/call",
+    { name: "put_page", arguments: { slug: "probe", title: "t", body: null } },
+  );
+  expect(rpc.result).toBeUndefined();
+  expect((rpc.error as { code: number }).code).toBe(-32602);
+  expect((rpc.error as { message: string }).message).toMatch(/missing required argument: body/);
+});
+
+test("the errors the transport must not answer 200 to are mapped", async () => {
+  expect(HTTP_STATUS_FOR_ERROR[-32022]).toBe(400); // UnsupportedProtocolVersion
+  expect(HTTP_STATUS_FOR_ERROR[-32020]).toBe(400); // HeaderMismatch
+  expect(HTTP_STATUS_FOR_ERROR[-32601]).toBe(404); // unknown method
+});
+
+// The refusal used to read only _meta, so a header alone was never checked and
+// `MCP-Protocol-Version: 2099-01-01` was served the full tool list.
+test("the protocol version is refused from the header, not only from _meta", () => {
+  const h = (v: Record<string, string>) => ({ get: (k: string) => v[k.toLowerCase()] ?? null });
+  const bad = headerRefusal(h({ "mcp-protocol-version": "2099-01-01" }), "tools/list", {});
+  expect(bad?.code).toBe(-32022);
+  expect((bad?.data as { requested: string }).requested).toBe("2099-01-01");
+  expect(headerRefusal(h({ "mcp-protocol-version": "2026-07-28" }), "tools/list", {})).toBeNull();
+});
+
+// An intermediary may route on the header while the server executes on the body;
+// the two disagreeing is the vulnerability, not a formatting nit.
+test("a header that disagrees with the body is refused as HeaderMismatch", () => {
+  const h = (v: Record<string, string>) => ({ get: (k: string) => v[k.toLowerCase()] ?? null });
+  const meta = { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } };
+  expect(headerRefusal(h({ "mcp-protocol-version": "2025-03-26" }), "tools/list", meta)?.code).toBe(
+    -32020,
+  );
+  expect(headerRefusal(h({ "mcp-method": "tools/list" }), "tools/call", meta)?.code).toBe(-32020);
+  expect(
+    headerRefusal(h({ "mcp-name": "search" }), "tools/call", { ...meta, name: "put_page" })?.code,
+  ).toBe(-32020);
+  // A Base64 sentinel name is not compared raw — doing so would refuse a
+  // CONFORMING client whose tool name is not header-safe.
+  expect(
+    headerRefusal(h({ "mcp-name": "=?base64?c2VhcmNo?=" }), "tools/call", {
+      ...meta,
+      name: "search",
+    }),
+  ).toBeNull();
+});
+
+// lore is dual-era: a 2025-era client predates these headers entirely, and
+// demanding one would break the clients `initialize` is still here to serve.
+test("a request with no modern headers at all is allowed through", () => {
+  const none = { get: () => null };
+  expect(headerRefusal(none, "initialize", { protocolVersion: "2025-06-18" })).toBeNull();
 });

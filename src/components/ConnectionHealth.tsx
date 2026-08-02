@@ -4,7 +4,7 @@ import { getRequestLog, getServerRequestLog, subscribeRequestLog } from "@/lib/r
 import { useSyncExternalStore } from "react";
 
 // Read API connection health, derived purely from this session's request log —
-// no admin tools, no token introspection. Mirrors gbrain's "live activity" +
+// no admin tools, no token introspection. A "live activity" +
 // error-rate idea, scoped to what a read-only client can actually see.
 export function ConnectionHealth() {
   const log = useSyncExternalStore(subscribeRequestLog, getRequestLog, getServerRequestLog);

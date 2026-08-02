@@ -47,8 +47,8 @@ export async function getBrainCtx(): Promise<{ store: Store; db: Db }> {
   return { store, db: await getDb() };
 }
 
-// gbrain.ts calls this in standalone mode — same {isError, text} envelope as
-// the remote-gbrain path so nothing downstream changes.
+// The console's door (src/lib/tools.ts) calls this: an {isError, text} envelope
+// so the client sees one shape whatever answered.
 export async function callLocalTool(
   tool: string,
   args: object,

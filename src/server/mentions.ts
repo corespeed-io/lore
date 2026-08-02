@@ -11,7 +11,7 @@
 //   1. The gazetteer is built only from SLUG-PREFIXED typed pages (people/,
 //      companies/, entities/, concepts/) plus their aliases. A page called
 //      "Notes" or "Work" is not under one of those prefixes, so it cannot link
-//      from everywhere. This replaces gbrain's hand-maintained ambiguous-word
+//      from everywhere. This replaces a hand-maintained ambiguous-word
 //      ignore list (Apple/Box/Meta/…): that list exists to stop bare words
 //      resolving to pages that do not exist, and every name here belongs to a
 //      page that does.

@@ -30,7 +30,7 @@ export function TopHubs({ nodes, links, unavailable, onOpen }: TopHubsProps) {
       {hubs.length === 0 && (
         <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>
           {unavailable
-            ? "Link data unavailable — couldn't reach gbrain."
+            ? "Link data unavailable — couldn't reach the brain."
             : "No connected nodes yet."}
         </p>
       )}

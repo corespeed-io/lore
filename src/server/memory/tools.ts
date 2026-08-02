@@ -2,30 +2,22 @@
 //
 // Three rules shape these signatures:
 //
-//   ONE SCOPE SHAPE. Every tool here — writer and reader alike — publishes the
-//   SAME four scope fields and resolves them with the SAME parser, and neither
-//   is done by the tool: `scoped()` bolts the fields onto the schema and runs
-//   the parse in front of the handler, and MEMORY_TOOLS is CONSTRUCTED from that
-//   wrapper rather than written out. A handler therefore never sees
-//   a.thread_id / a.scope_id at all; it is handed a resolved CallScope. That is
-//   the fix for write-only memory: a writer's parser and a reader's parser
-//   cannot drift apart when there is only one parser. What drifted before:
-//   `remember` published scope/scope_id/thread_id and stored under scope_id,
-//   while `recall` published thread_id/agent_id and read neither — so
-//   remember({scope_id:'x'}) answered saved:true with a memory that no spelling
-//   of recall, inspect_memory or get_page could ever return.
-//
-//   The server decides scope and filters. A caller asks for "agent scope" and
-//   names its agent; it cannot pass a database predicate, widen a scope, or
-//   select rows the policy would exclude. Anything an LLM controls is a request,
-//   not a query. Naming a scope WIDER than the one the call is working in
-//   (scope:'vault' alongside a thread_id) is refused rather than honoured: the
-//   vault is readable from every thread and every agent, so committing there is
-//   publishing, and publishing has to be the whole intent of the call.
+//   ONE SCOPE. There is one brain and one user, so a memory has nowhere else to
+//   be. This used to be a multi-tenant model — thread/agent/vault, four
+//   interchangeable argument spellings, thread ownership — and it could not work:
+//   the server has no independent source of identity, so `agent_id` was a claim a
+//   caller made about itself against a shared credential. The guard proved it, by
+//   only firing when a caller NAMED an agent; omitting the field read, wrote and
+//   revoked another thread's memories on a read-only token. `thread_id` survives
+//   as a grouping key for a conversation's events, never as a boundary, and the
+//   removed fields are REFUSED rather than ignored — a caller that still sends
+//   `agent_id` believes it is writing somewhere private.
 //
 //   `remember` never says "saved" when it did not save. Its result distinguishes
 //   committed / candidate / conflict / rejected, because an agent that believes a
-//   candidate was committed will confidently tell the user something untrue.
+//   candidate was committed will confidently tell the user something untrue. The
+//   same rule binds the BACKGROUND path: extraction writes the one scope too, or
+//   it produces memory that recall cannot see and search cannot find.
 //
 //   Nothing here claims to be the user. A tool call carries the caller's words,
 //   not the user's, so every write leaves these handlers non-explicit and every
@@ -62,7 +54,6 @@ const obj = (props: Record<string, unknown>, required: string[] = []): SchemaObj
   ...(required.length ? { required } : {}),
 });
 
-const SCOPE_ENUM = ["thread", "agent", "vault"];
 const TYPE_ENUM = ["semantic", "preference", "episodic", "procedural", "working_state"];
 
 // What a tool may append: everything whose implied actor is not the user. Taken
@@ -163,184 +154,71 @@ function argEnum(name: string, v: unknown, allowed: readonly string[], fallback:
   return s;
 }
 
-const sameScope = (a: Scope, b: Scope): boolean =>
-  a.scopeType === b.scopeType && (a.scopeId ?? "") === (b.scopeId ?? "");
-
-// Where a call is. The ONLY scope a handler ever sees — it gets this instead of
-// the caller's raw fields, so there is nothing left for a handler to re-derive
-// its own way.
+// Where a call is. The ONLY scope a handler ever sees, so there is nothing left
+// for a handler to re-derive its own way.
 export interface CallScope {
   /** Where a write lands, and the scope a by-id or by-key operation reaches. */
   target: Scope;
-  /** What a read may see: the target plus the broader scopes the caller named. */
+  /** What a read may see. One entry now, and that is the point. */
   readable: Scope[];
-  /** The ONE thread this call may touch. Derived from the scope, never taken raw. */
+  /** The thread this call's events belong to. */
   threadId: string;
-  /** The agent that owns — or, on the first write, claims — that thread. */
+  /** Kept so the event log's actor column has a shape; always null now. */
   agentId: string | null;
 }
 
-// Threads the SERVER mints, for the scopes that are not threads. An agent
-// working at agent scope still produces events, and they used to land in one
-// hardcoded thread called 'direct': a shared bucket that every scope's content
-// fell into and that ANY caller could name, so list_events({thread_id:'direct'})
-// handed a sibling agent the verbatim content of a memory the memory tools
-// correctly hid from it. Each scope now owns its own thread in a namespace no
-// caller may name, which is what makes "reachable only by naming the scope it
-// was written at" true of events as well as of memories.
-const SCOPE_THREAD_PREFIX = "scope:";
+// ONE brain, ONE user, ONE scope.
+//
+// This used to be a multi-tenant model: memories and events lived at 'thread',
+// 'agent' or 'vault' scope, callers named a scope through four interchangeable
+// argument spellings, threads had owners, and a lattice of checks tried to stop
+// one agent reaching another's rows. It could not work, because the server has
+// no independent source of identity — the caller's `agent_id` was a claim about
+// itself, and the credential is shared. The guard proved it: it only compared
+// an owner against a NAMED agent, so omitting `agent_id` walked straight past it
+// and read, wrote and revoked another thread's memories on a READ-ONLY token.
+//
+// The fix is not a tighter guard. Authorization needs an authenticated principal,
+// lore has one user, and a partition between parties that do not exist is a
+// vulnerability surface bought with nothing. So: everything lives in one scope.
+// `thread_id` survives as what it always usefully was — a grouping key for a
+// conversation, not a tenant boundary.
+const ONE_SCOPE: Scope = { scopeType: "vault", scopeId: null };
 
-function scopeThreadId(s: Scope): string {
-  return s.scopeType === "vault"
-    ? `${SCOPE_THREAD_PREFIX}vault`
-    : `${SCOPE_THREAD_PREFIX}${s.scopeType}:${s.scopeId}`;
-}
+// Events and summaries need a thread even when the caller does not name one.
+const DEFAULT_THREAD = "main";
 
-// Two fields that name the same thing must not name two different things. A
-// call works in ONE scope, so when the arguments disagree the server does not
-// get to guess which one the caller meant — that guess is how
-// remember({scope:'thread', scope_id:'victim', thread_id:'mine'}) stored a
-// sentence in a sibling thread and hid it from the thread that said it.
-function one(what: string, a: string | null, b: string | null): string | null {
-  if (a && b && a !== b) throw new Error(`conflicting ${what}: the arguments name two scopes`);
-  return a ?? b;
-}
+// The scope columns stay in the schema, written as constants. Dropping them is a
+// migration that buys nothing: nothing reads them as a partition any more.
+// The removed arguments are REFUSED, not ignored. A caller that still sends
+// `agent_id` or `scope:'agent'` believes it is writing somewhere private; if we
+// drop the field on the floor, that write lands in the shared brain and answers
+// `committed`. Silence would turn a semantic change into a data leak that looks
+// like success — so it fails loud, once, with the reason.
+const REMOVED_SCOPE_ARGS = ["scope", "scope_type", "scope_id", "agent_id"];
 
-// THE parser. One scope shape for every tool: `thread_id` names a thread,
-// `agent_id` (or a bare `scope_id`) names an agent, `scope:'vault'` names the
-// vault, and `scope` + `scope_id` is just another spelling of the same two
-// fields. Every spelling that can WRITE a scope can also READ it, which is
-// checked below rather than believed.
-async function resolveCallScope(
-  db: Db,
-  a: Record<string, unknown>,
-  access: Access,
-): Promise<CallScope> {
-  const requested = one(
-    "scope",
-    argString("scope", a.scope),
-    argString("scope_type", a.scope_type),
-  );
-  if (requested !== null && !SCOPE_ENUM.includes(requested)) {
-    // Not coerced to a default. The old fallback turned any unrecognised scope
-    // into 'agent', so a typo silently changed which rows a call touched.
-    throw new Error(`unknown scope: expected one of ${SCOPE_ENUM.join(", ")}`);
-  }
-  const scopeId = argString("scope_id", a.scope_id);
-  let namedThread = argString("thread_id", a.thread_id);
-  let namedAgent = argString("agent_id", a.agent_id);
-  if (requested === "thread") {
-    namedThread = one("thread", scopeId, namedThread);
-    if (!namedThread) throw new Error("scope 'thread' needs an id: pass thread_id");
-  } else if (requested === "agent") {
-    namedAgent = one("agent", scopeId, namedAgent);
-    if (!namedAgent) throw new Error("scope 'agent' needs an id: pass agent_id");
-  } else if (requested === "vault") {
-    // The vault has exactly one instance, so it has no id. Carrying one would
-    // store a scope_id every reader looks for as '' and never matches.
-    if (scopeId) throw new Error("scope 'vault' takes no id: the vault is one shared scope");
-  } else if (scopeId) {
-    // A bare scope_id means the AGENT scope — in EVERY tool, so a writer and a
-    // reader that both spell it this way name the same scope.
-    namedAgent = one("agent", scopeId, namedAgent);
-  }
-  if (namedThread?.toLowerCase().startsWith(SCOPE_THREAD_PREFIX)) {
+function resolveCallScope(a: Record<string, unknown>): CallScope {
+  const stale = REMOVED_SCOPE_ARGS.filter((k) => a[k] !== undefined && a[k] !== null);
+  if (stale.length) {
     throw new Error(
-      `thread ids beginning with '${SCOPE_THREAD_PREFIX}' are reserved for scope-owned threads`,
+      `${stale.join(", ")} ${stale.length > 1 ? "no longer exist" : "no longer exists"}: lore has one brain and one scope. Drop them; use thread_id to group a conversation's events.`,
     );
   }
-
-  // Thread ownership is the DB's answer, not the caller's claim: it is written
-  // once, when the thread is created, and never changes (see ensureThread). A
-  // caller that names a thread AND an agent that does not own it is trying to
-  // read or write another agent's log.
-  let owner: string | null = null;
-  if (namedThread) {
-    owner = (await getThread(db, namedThread))?.agent_id ?? null;
-    if (owner && namedAgent && owner !== namedAgent) {
-      throw new Error("forbidden: that thread belongs to another agent");
-    }
-  }
-
-  // The position: the NARROWEST scope the caller named. Narrowest by default is
-  // the safe direction — a memory kept in the thread it was said in can always
-  // be published later, and one published by accident cannot be unpublished.
-  const position: Scope = namedThread
-    ? { scopeType: "thread", scopeId: namedThread }
-    : namedAgent
-      ? { scopeType: "agent", scopeId: namedAgent }
-      : { scopeType: "vault", scopeId: null };
-
-  if (access === "write" && position.scopeType === "vault" && requested !== "vault") {
-    // A write that named nothing would land in the widest scope BY DEFAULT.
-    throw new Error("name the scope this write belongs to: thread_id, agent_id, or scope:'vault'");
-  }
-
-  // The target is the position, with exactly one exception: a caller inside a
-  // thread may operate at the scope of the agent that OWNS that thread. That is
-  // not a widening the caller performed — the ownership came from the database
-  // above. The vault is never reachable that way: nobody owns it, so it has to
-  // be named alone.
-  let target = position;
-  if (requested === "agent" && namedAgent) target = { scopeType: "agent", scopeId: namedAgent };
-  if (requested === "vault") {
-    if (namedThread || namedAgent) {
-      throw new Error(
-        "scope 'vault' is wider than the scope this call works in: drop thread_id/agent_id to work in the vault",
-      );
-    }
-    target = { scopeType: "vault", scopeId: null };
-  }
-
-  const readable: Scope[] = [{ scopeType: "vault", scopeId: null }];
-  if (namedAgent) readable.push({ scopeType: "agent", scopeId: namedAgent });
-  if (namedThread) readable.push({ scopeType: "thread", scopeId: namedThread });
-
-  // saved:true has to MEAN readable. Every target must be one of the scopes a
-  // read with the same arguments can see, or this surface is handing back
-  // write-only memory again. Checked on every call rather than argued for in a
-  // comment: a spelling added later that reaches a new target without reaching
-  // its reader dies here instead of in production.
-  if (!readable.some((s) => sameScope(s, target))) {
-    throw new Error("internal: the target scope is not readable from the same arguments");
-  }
-
   return {
-    target,
-    readable,
-    threadId: namedThread ?? scopeThreadId(position),
-    agentId: namedAgent ?? owner,
+    target: ONE_SCOPE,
+    readable: [ONE_SCOPE],
+    threadId: argString("thread_id", a.thread_id) ?? DEFAULT_THREAD,
+    agentId: null,
   };
 }
 
-// A memory is reachable only through a scope the caller named. A raw memory_id
-// carries no scope at all, so without this check `forget(<id>)` and
-// `inspect_memory(<id>)` reach another agent's or another thread's memory —
-// exactly the widening an LLM must never be able to do.
-function visibleIn(memory: MemoryItem, scopes: Scope[]): boolean {
-  return scopes.some((s) =>
-    sameScope(s, { scopeType: memory.scope_type, scopeId: memory.scope_id }),
-  );
-}
-
-// The scope block, published verbatim by every tool below. One block, so a
-// writer and a reader cannot advertise different names for the same thing —
-// which is what taught an agent to save with `scope_id` and then look for it
-// with `agent_id`, a field remember did not even offer.
+// The one grouping field every memory tool publishes. It was four fields naming
+// a tenant; it is one field naming a conversation.
 const SCOPE_FIELDS: Record<string, unknown> = {
-  scope: {
+  thread_id: {
     type: "string",
-    enum: SCOPE_ENUM,
-    description:
-      "Which scope this call works in. Defaults to the narrowest one you named. " +
-      "'vault' is shared with every thread and agent and must be named on its own.",
+    description: "Optional: group this call's events under a named conversation.",
   },
-  scope_id: {
-    type: "string",
-    description: "The id for `scope`: a thread id, or an agent id. On its own it means an agent.",
-  },
-  thread_id: { type: "string", description: "Thread scope: the thread this call is working in." },
-  agent_id: { type: "string", description: "Agent scope: the agent this call is working as." },
 };
 
 // A tool as WRITTEN: same as ToolDef except the handler is handed the resolved
@@ -364,7 +242,7 @@ function scoped(def: ScopedToolDef): ToolDef {
       ...def.inputSchema,
       properties: { ...def.inputSchema.properties, ...SCOPE_FIELDS },
     },
-    handler: async (c, a) => def.handler(c, a, await resolveCallScope(c.db, a, def.access)),
+    handler: async (c, a) => def.handler(c, a, resolveCallScope(a)),
   };
 }
 
@@ -624,7 +502,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       // words" — and revokeMemory has taken `sourceEventIds` for exactly that
       // since it was written, but this handler never passed any. The rule
       // therefore had no satisfying case: `forget` always stamped `tool:forget`,
-      // it is the only revocation surface (READ_ONLY_TOOLS has no `forget`, and
+      // it is the only revocation surface (the console cannot reach `forget`, and
       // /api/maintenance never revokes), so a user-stated memory could not be
       // revoked by anyone, through anything, ever. AGENTS.md meanwhile documents
       // `forget` as THE recovery for a wrong memory.
@@ -674,7 +552,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
               ? { sql: "e.thread_id = $2", params: [scope.scopeId] }
               : {
                   sql: "(t.agent_id = $2 OR e.thread_id = $3)",
-                  params: [scope.scopeId, scopeThreadId(scope)],
+                  params: [scope.scopeId, DEFAULT_THREAD],
                 };
         const found = await c.db.query(
           `SELECT e.id FROM conversation_events e
@@ -695,7 +573,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
         const m = await getMemory(c.db, id);
         // Out of scope reads as "no such memory": a caller must not learn that
         // another agent's memory exists, let alone revoke it.
-        if (m && visibleIn(m, [scope])) targets.push(m);
+        if (m) targets.push(m);
       }
       if (targets.length === 0) {
         return { revoked: 0, memories: [], forgotten: false, reason: "not_found" };
@@ -743,7 +621,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       // A raw memory id is a scope-free handle, so an out-of-scope hit must be
       // indistinguishable from a miss: otherwise inspect_memory is a read of a
       // sibling thread's (or another agent's) memory.
-      if (!found || !visibleIn(found.memory, s.readable)) {
+      if (!found) {
         throw new Error(`not_found: memory ${id}`);
       }
       return {

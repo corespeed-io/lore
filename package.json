@@ -1,7 +1,7 @@
 {
   "name": "lore",
   "version": "0.1.0",
-  "description": "CoreSpeed's open-source web UI for browsing a gbrain knowledge graph.",
+  "description": "A knowledge-graph console and brain: force-directed graph, hybrid search, and durable agent memory over Postgres.",
   "private": false,
   "license": "MIT",
   "type": "module",
@@ -16,7 +16,7 @@
   "bugs": {
     "url": "https://github.com/corespeed-io/lore/issues"
   },
-  "keywords": ["gbrain", "knowledge-graph", "nextjs", "d3", "visualization"],
+  "keywords": ["knowledge-graph", "memory", "mcp", "nextjs", "pgvector", "d3"],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -53,5 +53,8 @@
   },
   "overrides": {
     "postcss": "^8.5.10"
+  },
+  "bin": {
+    "lore": "bin/lore.mjs"
   }
 }

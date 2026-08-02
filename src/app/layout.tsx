@@ -18,7 +18,7 @@ const geistMono = Geist_Mono({
 
 // Render at request time, not build time. appTitle/appSubtitle come from
 // runtime env (APP_TITLE), but a Docker build has no service vars, so static
-// prerendering would bake the "gbrain" default into the HTML and ignore the
+// prerendering would bake the default title into the HTML and ignore the
 // runtime value. force-dynamic keeps this server-rendered (SSR) but per-request,
 // so the configured title actually shows. Applies to the whole route subtree.
 export const dynamic = "force-dynamic";

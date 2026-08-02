@@ -8,7 +8,7 @@
 //
 // Degrades to nothing: against a backend that does not implement these tools
 // the panel simply does not render, so lore keeps working against a plain
-// gbrain.
+// the brain.
 
 import { apiCall } from "@/lib/api";
 import { useEffect, useState } from "react";

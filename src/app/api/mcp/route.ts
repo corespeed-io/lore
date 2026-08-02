@@ -35,13 +35,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ detail: "bad request" }, { status: 400 });
   }
 
-  const { handleRpc } = await import("@/server/mcp");
+  const { HTTP_STATUS_FOR_ERROR, handleRpc, headerRefusal } = await import("@/server/mcp");
   const { getBrainCtx } = await import("@/server/local");
+  // Header/body agreement is a TRANSPORT check — this is the only layer that can
+  // see both — and it runs before any dispatch: a request whose header and body
+  // disagree about what it is must not be executed on either reading.
+  const badHeader = headerRefusal(req.headers, method, params);
+  if (badHeader) {
+    return NextResponse.json(
+      { jsonrpc: "2.0", id: id ?? null, error: badHeader },
+      { status: HTTP_STATUS_FOR_ERROR[badHeader.code] ?? 400 },
+    );
+  }
   try {
     const rpc = await handleRpc(getBrainCtx, access, method, params);
     if (rpc.notification) return new NextResponse(null, { status: 202 });
     if (rpc.error) {
-      return NextResponse.json({ jsonrpc: "2.0", id: id ?? null, error: rpc.error });
+      // The status is load-bearing, not decoration: a dual-era client inspects
+      // the body of a 400 to decide whether the server is modern, and only
+      // falls back to `initialize` when it is not. Answering 200 told it the
+      // legacy exchange had succeeded.
+      return NextResponse.json(
+        { jsonrpc: "2.0", id: id ?? null, error: rpc.error },
+        { status: HTTP_STATUS_FOR_ERROR[rpc.error.code] ?? 200 },
+      );
     }
     return NextResponse.json({ jsonrpc: "2.0", id: id ?? null, result: rpc.result });
   } catch (e) {

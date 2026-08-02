@@ -992,7 +992,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       // A floor is model-dependent; add one (or autocut) once tuned against
       // the embedding model actually in use.
       try {
-        const [qv] = await embed([trimmed]);
+        const [qv] = await embed([trimmed], "query");
         const vec = await db.query(
           `SELECT s.page_id, 1 - MIN(s.dist) AS score,
                   (ARRAY_AGG(s.text ORDER BY s.dist))[1] AS best_chunk

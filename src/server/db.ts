@@ -20,7 +20,7 @@ export interface BrainMeta {
   embeddingDim: number;
 }
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 // ONE definition, used by both the bootstrap in initSchema and the ddl list
 // below. Two copies drifted once already: the bootstrap created `meta` without
@@ -257,6 +257,21 @@ async function migrate(db: Db, from: number): Promise<void> {
     // Agent Memory tables. These are additive — no existing table changes
     // shape — so the same statements serve a fresh database and an upgrade.
     for (const stmt of MEMORY_MIGRATION) await db.query(stmt.sql);
+  }
+  if (from < 5) {
+    // The multi-tenant memory scope is gone: one brain, one user, one scope.
+    // Without this, every memory written at 'thread' or 'agent' scope would be
+    // stranded — the reads now look only at 'vault', so the rows would still be
+    // there and never come back. Data loss by invisibility is still data loss.
+    //
+    // THE COLLAPSE MUST RETIRE DUPLICATES FIRST — see
+    // retireDuplicateKeysForScopeCollapse, which lives in items.ts because
+    // `status` has one writer and a migration is not a reason to open a second.
+    const { retireDuplicateKeysForScopeCollapse } = await import("./memory/items");
+    await retireDuplicateKeysForScopeCollapse(db);
+    await db.query(
+      "UPDATE memory_items SET scope_type = 'vault', scope_id = NULL WHERE scope_type <> 'vault'",
+    );
   }
   await db.query("UPDATE meta SET schema_version = $1 WHERE id = 1", [SCHEMA_VERSION]);
 }

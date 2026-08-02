@@ -6,13 +6,6 @@ import { Overview } from "@/components/Overview";
 import { PageView } from "@/components/PageView";
 import { SearchResults } from "@/components/SearchResults";
 import { Sidebar } from "@/components/Sidebar";
-import {
-  AdminDashboard,
-  AgentsPanel,
-  CalibrationPanel,
-  JobsPanel,
-  RequestLogPanel,
-} from "@/components/admin/panels";
 import { apiCall } from "@/lib/api";
 import { type RouteState, type Tab, parseRoute, routeUrl } from "@/lib/route";
 import type { GraphData, PageHit } from "@/lib/types";
@@ -22,14 +15,10 @@ const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
   graph: "Graph",
   search: "Memories",
-  requests: "Requests",
-  agents: "Access",
-  jobs: "Queue",
-  calibration: "Track record",
 };
 
-// gbrain's public list_pages operation currently caps at 100 and does not
-// expose offset through MCP, so the browse view treats that as the honest page.
+// list_pages caps at 100 and exposes no offset, so the browse view treats
+// that as the honest page.
 const PAGE_LIST_LIMIT = 100;
 
 interface GraphStore {
@@ -368,17 +357,6 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     await runSearch(query);
   }
 
-  // Whether the gbrain admin surfaces are configured server-side (no secrets in
-  // the response). Gates the admin nav (in Sidebar) + the admin summary on the
-  // dashboard. Each admin panel ALSO fails closed on its own.
-  const [adminEnabled, setAdminEnabled] = useState(false);
-  useEffect(() => {
-    fetch("/api/admin/status")
-      .then((r) => (r.ok ? r.json() : { enabled: false }))
-      .then((d: { enabled?: boolean }) => setAdminEnabled(Boolean(d.enabled)))
-      .catch(() => {});
-  }, []);
-
   function handleTabChange(t: Tab) {
     setOpenPage(null); // any nav click leaves an open memory
     setLocalGraphSlug(null);
@@ -451,7 +429,6 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         onTabChange={handleTabChange}
         onSearch={handleSearch}
         searchRef={searchRef}
-        adminEnabled={adminEnabled}
       />
 
       <main className="app-main">
@@ -480,7 +457,6 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 <Overview
                   appTitle={appTitle}
                   appSubtitle={appSubtitle}
-                  adminSummary={adminEnabled ? <AdminDashboard /> : null}
                   graphData={graphData}
                   graphError={graphError}
                   allPages={allPages}
@@ -495,14 +471,14 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
                 ) : graphError ? (
                   <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                    Couldn't reach gbrain — {graphError}. Check that <code>GBRAIN_MCP_URL</code>{" "}
-                    points at a running gbrain backend; the dashboard's Read API panel shows recent
-                    call status.
+                    Couldn't reach the brain — {graphError}. Check that <code>DATABASE_URL</code>{" "}
+                    points at a running Postgres; the dashboard's Read API panel shows recent call
+                    status.
                   </div>
                 ) : graphData.nodes.length === 0 ? (
                   <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                    No linked pages in this brain yet. Lore graphs pages connected by gbrain links —
-                    add some, or confirm <code>GBRAIN_MCP_URL</code> on the dashboard.
+                    No linked pages in this brain yet. Lore graphs pages connected by
+                    <code>[[wikilinks]]</code> — add some, or import a folder at /import.
                   </div>
                 ) : (
                   <GraphView
@@ -522,27 +498,6 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   onTypeFilter={setMemoryType}
                   onOpen={openMemory}
                 />
-              )}
-
-              {tab === "requests" && (
-                <div className="admin-page">
-                  <RequestLogPanel />
-                </div>
-              )}
-              {tab === "agents" && (
-                <div className="admin-page">
-                  <AgentsPanel />
-                </div>
-              )}
-              {tab === "jobs" && (
-                <div className="admin-page">
-                  <JobsPanel />
-                </div>
-              )}
-              {tab === "calibration" && (
-                <div className="admin-page">
-                  <CalibrationPanel />
-                </div>
               )}
             </>
           )}

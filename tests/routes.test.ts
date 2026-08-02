@@ -31,12 +31,15 @@ vi.mock("../src/server/local.js", () => ({
   },
 }));
 
-vi.mock("../src/lib/gbrain.js", async (orig) => {
-  const real = await orig<typeof import("../src/lib/gbrain.js")>();
+vi.mock("../src/lib/tools.js", async (orig) => {
+  const real = await orig<typeof import("../src/lib/tools.js")>();
+  // The console's surface is derived from the registry now, not restated here —
+  // a stub with its own copy of the list is how the two drifted in the first place.
+  const { TOOLS } = await import("../src/server/mcp.js");
   return {
     ...real,
     callTool: vi.fn(async (tool: string) => {
-      if (!real.READ_ONLY_TOOLS.has(tool)) throw new real.ToolNotAllowedError("nope");
+      if (TOOLS[tool]?.access !== "read") throw new real.ToolNotAllowedError("nope");
       return { isError: false, text: "[]" };
     }),
   };
@@ -74,14 +77,14 @@ test("GET /api/health is ok", async () => {
 test("GET /api/graph maps a failed build to 502 and a healthy build to 200", async () => {
   const { clearGraphCache } = await import("../src/lib/graph.js");
   const { GET } = await import("../src/app/api/graph/route.js");
-  const gbrain = await import("../src/lib/gbrain.js");
-  const mocked = vi.mocked(gbrain.callTool);
+  const tools = await import("../src/lib/tools.js");
+  const mocked = vi.mocked(tools.callTool);
   const base = mocked.getMockImplementation();
   if (!base) throw new Error("callTool mock missing");
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   clearGraphCache();
   mocked.mockImplementation(async () => {
-    throw new Error("gbrain down");
+    throw new Error("brain down");
   });
   try {
     const bad = await GET();
@@ -100,9 +103,9 @@ test("GET /api/graph maps a failed build to 502 and a healthy build to 200", asy
   clearGraphCache();
 });
 
-test("POST /api/call clamps an oversized limit before reaching gbrain", async () => {
+test("POST /api/call clamps an oversized limit before reaching the brain", async () => {
   const { POST } = await import("../src/app/api/call/route.js");
-  const gbrain = await import("../src/lib/gbrain.js");
+  const tools = await import("../src/lib/tools.js");
   await POST(
     new Request("http://x/api/call", {
       method: "POST",
@@ -111,7 +114,7 @@ test("POST /api/call clamps an oversized limit before reaching gbrain", async ()
   );
   // MAX is 200 — hand-known from the route, not computed by the code under test.
   // biome-ignore lint/suspicious/noExplicitAny: reaching into the vi mock
-  const lastArgs = (gbrain.callTool as any).mock.calls.at(-1)[1];
+  const lastArgs = (tools.callTool as any).mock.calls.at(-1)[1];
   expect(lastArgs.limit).toBe(200);
 });
 
@@ -846,4 +849,21 @@ test("GET /api/export fails closed and takes the WRITE token only", async () => 
   expect((await get("wrong-but-long-enough")).status).toBe(401);
   expect((await get(READ)).status).toBe(401);
   expect((await get(WRITE)).status).toBe(404);
+});
+
+// The route tests above stub callTool, so they cannot see whether the REAL one
+// still refuses. That gap is not theoretical: the mock carried its own `throw
+// new ToolNotAllowedError`, and when callTool stopped throwing it — every write
+// tool answering 502 "brain error" instead of 403 — the suite stayed green.
+// This asserts the decision itself, unmocked, off the same registry the
+// dispatcher reads.
+test("the real callTool refuses a write tool, so /api/call can answer 403", async () => {
+  const { callTool, ToolNotAllowedError } =
+    await vi.importActual<typeof import("../src/lib/tools.js")>("../src/lib/tools.js");
+  const { TOOLS } = await import("../src/server/mcp.js");
+
+  for (const name of Object.keys(TOOLS).filter((t) => TOOLS[t].access === "write")) {
+    await expect(callTool(name, {}), name).rejects.toBeInstanceOf(ToolNotAllowedError);
+  }
+  await expect(callTool("no_such_tool", {})).rejects.toBeInstanceOf(ToolNotAllowedError);
 });

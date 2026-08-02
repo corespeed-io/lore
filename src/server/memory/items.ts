@@ -269,7 +269,7 @@ async function citesUser(q: Query, eventIds: readonly string[]): Promise<boolean
 // makes it a latent defect rather than a live one, and exactly the kind that the
 // next handler to name itself `agent:consolidator` collects.
 //
-// So the trusted vocabulary is ENUMERATED, the way READ_ONLY_TOOLS and
+// So the trusted vocabulary is ENUMERATED, the way a tool's `access` and
 // ADMIN_ENDPOINTS are enumerated elsewhere in this repo, and everything outside
 // it is the agent surface. The design decision this preserves is the one the
 // old comment described and tests/memory-authority.test.ts pins: a NAMED
@@ -907,4 +907,34 @@ export async function inspectMemory(db: Db, id: string): Promise<MemoryInspectio
       created_at: iso(r.created_at),
     })),
   };
+}
+
+// The schema-v5 half of the scope collapse, here rather than in db.ts because
+// `status` has exactly one writer and a migration is not a reason to open a
+// second door. It is deliberately NOT amendMemory: that verb asks who is
+// authorized, and a migration has no actor to answer with — it is not an agent
+// acting, it is the shape of the table changing underneath everyone.
+//
+// The collision it exists to avoid: `memory_items_active_key` is unique over
+// (scope_type, coalesce(scope_id,''), memory_type, memory_key) for committed
+// keyed rows, and the whole point of a scope was that the SAME key could be live
+// in two of them. Collapsing them without this throws inside migrate(), so
+// initSchema throws, schema_version stays behind, and every later open fails the
+// same way — a brain that never opens again and cannot repair itself.
+//
+// Newest wins; the losers are superseded, not deleted, so the history stays
+// readable through inspect_memory and `as_of` instead of dying in an upgrade.
+export async function retireDuplicateKeysForScopeCollapse(db: Db): Promise<void> {
+  await db.query(
+    `UPDATE memory_items SET status = 'superseded' WHERE id IN (
+       SELECT id FROM (
+         SELECT id, row_number() OVER (
+           PARTITION BY memory_type, memory_key
+           ORDER BY updated_at DESC, created_at DESC, id
+         ) AS rn
+         FROM memory_items
+         WHERE status = 'committed' AND memory_key IS NOT NULL
+       ) ranked WHERE rn > 1
+     )`,
+  );
 }

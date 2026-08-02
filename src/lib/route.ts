@@ -1,12 +1,7 @@
 // Pure URL <-> route-state mapping for the SPA router. No React/DOM deps, so it
 // is unit-testable in isolation.
 
-export type Tab = "overview" | "graph" | "search" | "requests" | "agents" | "jobs" | "calibration";
-
-// Admin console sections (gbrain admin surfaces). Self-gating: each fails closed
-// server-side unless admin mode is configured. Live in the same shell as the
-// read surfaces (overview/graph/search) — one unified console.
-export const ADMIN_TABS: readonly Tab[] = ["requests", "agents", "jobs", "calibration"];
+export type Tab = "overview" | "graph" | "search";
 
 export interface RouteState {
   tab: Tab;
@@ -77,10 +72,6 @@ export function parseRoute(pathname: string, search: string): RouteState {
     };
   }
 
-  if (segments[0] && (ADMIN_TABS as readonly string[]).includes(segments[0])) {
-    return { tab: segments[0] as Tab };
-  }
-
   const tabParam = params.get("tab");
   const tab: Tab = tabParam === "graph" || tabParam === "search" ? tabParam : "overview";
   return {
@@ -93,7 +84,6 @@ export function parseRoute(pathname: string, search: string): RouteState {
 }
 
 export function routeUrl(route: RouteState): string {
-  if ((ADMIN_TABS as readonly string[]).includes(route.tab)) return `/${route.tab}`;
   let path = "/";
   if (route.tab === "graph") {
     if (route.page) path = `/graph/page/${slugPath(route.page)}`;

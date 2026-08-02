@@ -4,10 +4,6 @@ import { beforeEach, expect, test } from "vitest";
 import { checkAuth } from "../src/lib/auth.js";
 import { middleware } from "../src/middleware.js";
 
-const cookies = (m: Record<string, string> = {}) => ({
-  get: (n: string) => (n in m ? { value: m[n] } : undefined),
-});
-
 // A real brain credential, because the middleware now VALIDATES the bearer
 // instead of merely noticing one. Before, any string got past the gate, so these
 // tests could use invented tokens; that was the defect, not a convenience.
@@ -29,8 +25,10 @@ beforeEach(() => {
     "AUTH_MODE",
     "ALLOW_INSECURE",
     "UI_PASSWORD",
-    "ACCESS_AUD",
-    "ACCESS_TEAM_DOMAIN",
+    "AUTH_GATEWAY_JWKS_URL",
+    "AUTH_GATEWAY_ISSUER",
+    "AUTH_GATEWAY_AUDIENCE",
+    "AUTH_GATEWAY_SHARED_SECRET",
   ]) {
     delete process.env[k];
   }
@@ -42,7 +40,7 @@ beforeEach(() => {
 
 test("none mode fails closed without ALLOW_INSECURE", async () => {
   process.env.AUTH_MODE = "none";
-  const r = await checkAuth(new Headers(), cookies());
+  const r = await checkAuth(new Headers());
   expect(r.ok).toBe(false);
   expect(r.status).toBe(403);
 });
@@ -50,12 +48,12 @@ test("none mode fails closed without ALLOW_INSECURE", async () => {
 test("none mode allows only with explicit ALLOW_INSECURE", async () => {
   process.env.AUTH_MODE = "none";
   process.env.ALLOW_INSECURE = "1";
-  expect((await checkAuth(new Headers(), cookies())).ok).toBe(true);
+  expect((await checkAuth(new Headers())).ok).toBe(true);
 });
 
 test("none-mode 403 explains the real cause (AUTH_MODE / ALLOW_INSECURE)", async () => {
   process.env.AUTH_MODE = "none";
-  const r = await checkAuth(new Headers(), cookies());
+  const r = await checkAuth(new Headers());
   expect(r.ok).toBe(false);
   expect(r.detail).toMatch(/ALLOW_INSECURE/);
   expect(r.detail).not.toMatch(/Cloudflare/); // no more misleading "Cloudflare Access required"
@@ -63,7 +61,7 @@ test("none-mode 403 explains the real cause (AUTH_MODE / ALLOW_INSECURE)", async
 
 test("password mode with no UI_PASSWORD fails closed and says so", async () => {
   process.env.AUTH_MODE = "password";
-  const r = await checkAuth(new Headers(), cookies());
+  const r = await checkAuth(new Headers());
   expect(r.ok).toBe(false);
   expect(r.status).toBe(403);
   expect(r.detail).toMatch(/UI_PASSWORD/);
@@ -72,7 +70,7 @@ test("password mode with no UI_PASSWORD fails closed and says so", async () => {
 test("password mode rejects without basic auth", async () => {
   process.env.AUTH_MODE = "password";
   process.env.UI_PASSWORD = "secret";
-  const r = await checkAuth(new Headers(), cookies());
+  const r = await checkAuth(new Headers());
   expect(r.ok).toBe(false);
   expect(r.status).toBe(401);
   expect(r.wwwAuthenticate).toBe(true);
@@ -82,23 +80,82 @@ test("password mode accepts the right password (any username)", async () => {
   process.env.AUTH_MODE = "password";
   process.env.UI_PASSWORD = "secret";
   const h = new Headers({ authorization: `Basic ${btoa("x:secret")}` });
-  expect((await checkAuth(h, cookies())).ok).toBe(true);
+  expect((await checkAuth(h)).ok).toBe(true);
 });
 
-test("proxy mode fails closed when Access vars are missing", async () => {
-  process.env.AUTH_MODE = "proxy";
-  const h = new Headers({ "cf-access-jwt-assertion": "tok" });
-  expect((await checkAuth(h, cookies())).ok).toBe(false);
+test("password mode with no UI_PASSWORD is a config error, not an open door", async () => {
+  // The hole this replaced: it fell through to `allowInsecure`, so the
+  // documented local-dev pair (ALLOW_INSECURE=1) silently served the whole
+  // console to anyone the moment UI_PASSWORD was forgotten.
+  process.env.AUTH_MODE = "password";
+  process.env.ALLOW_INSECURE = "1";
+  const r = await checkAuth(new Headers());
+  expect(r.ok).toBe(false);
+  expect(r.detail).toMatch(/UI_PASSWORD is not set/);
 });
 
-test("proxy mode rejects a forged / unverifiable token", async () => {
-  process.env.AUTH_MODE = "proxy";
-  process.env.ACCESS_AUD = "aud";
-  process.env.ACCESS_TEAM_DOMAIN = "team.cloudflareaccess.com";
-  // A bare string is not a valid JWS; jwtVerify throws before any network call,
-  // so checkAuth fails closed — the old presence-only check would have allowed it.
+test("gateway mode refuses when nothing proves the request came from the gateway", async () => {
+  // The identity header alone is a login form with no password.
+  process.env.AUTH_MODE = "gateway";
+  const h = new Headers({ "x-forwarded-user": "attacker@example.com" });
+  const r = await checkAuth(h);
+  expect(r.ok).toBe(false);
+  expect(r.detail).toMatch(/needs a proof/);
+});
+
+test("gateway mode: a wrong or missing shared secret is refused", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_SHARED_SECRET = "s3cret-from-the-proxy";
+  expect((await checkAuth(new Headers({ "x-forwarded-user": "a@b.c" }))).ok).toBe(false);
+  const wrong = new Headers({
+    "x-auth-gateway-secret": "s3cret-from-the-proxx",
+    "x-forwarded-user": "a@b.c",
+  });
+  expect((await checkAuth(wrong)).ok).toBe(false);
+});
+
+test("gateway mode: the right secret admits, and carries the identity through", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_SHARED_SECRET = "s3cret-from-the-proxy";
+  const h = new Headers({
+    "x-auth-gateway-secret": "s3cret-from-the-proxy",
+    "x-forwarded-user": "spenc@example.com",
+  });
+  const r = await checkAuth(h);
+  expect(r.ok).toBe(true);
+  expect(r.user).toBe("spenc@example.com");
+});
+
+test("gateway mode: a JWKS without issuer/audience fails closed", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_JWKS_URL = "https://team.cloudflareaccess.com/cdn-cgi/access/certs";
   const h = new Headers({ "cf-access-jwt-assertion": "tok" });
-  expect((await checkAuth(h, cookies())).ok).toBe(false);
+  expect((await checkAuth(h)).ok).toBe(false);
+});
+
+test("gateway mode: a forged token is rejected, and the identity header cannot rescue it", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_JWKS_URL = "https://team.cloudflareaccess.com/cdn-cgi/access/certs";
+  process.env.AUTH_GATEWAY_ISSUER = "https://team.cloudflareaccess.com";
+  process.env.AUTH_GATEWAY_AUDIENCE = "aud";
+  // A bare string is not a valid JWS; jwtVerify throws before any network call.
+  const h = new Headers({ "cf-access-jwt-assertion": "tok", "x-forwarded-user": "a@b.c" });
+  expect((await checkAuth(h)).ok).toBe(false);
+});
+
+// A configured JWKS decides alone. Setting both proofs must not let a failed
+// token fall back to the weaker one.
+test("gateway mode: a shared secret does not rescue a failed JWT", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_JWKS_URL = "https://team.cloudflareaccess.com/cdn-cgi/access/certs";
+  process.env.AUTH_GATEWAY_ISSUER = "https://team.cloudflareaccess.com";
+  process.env.AUTH_GATEWAY_AUDIENCE = "aud";
+  process.env.AUTH_GATEWAY_SHARED_SECRET = "s3cret-from-the-proxy";
+  const h = new Headers({
+    "cf-access-jwt-assertion": "forged",
+    "x-auth-gateway-secret": "s3cret-from-the-proxy",
+  });
+  expect((await checkAuth(h)).ok).toBe(false);
 });
 
 // Middleware wiring. The env is stripped by beforeEach, so the viewer gate is
@@ -318,3 +375,28 @@ test("the bucket map is hard-capped, not just swept for expiry", async () => {
   // The victim's bucket was among the oldest, so a bounded map has dropped it.
   expect((await mw("/api/graph", victim)).status).toBe(200);
 }, 60_000);
+
+// The limiter must not be switchable off by a header the caller types. Preferring
+// cf-connecting-ip was safe only while the proxy mode WAS Cloudflare Access;
+// AUTH_MODE=gateway covers oauth2-proxy, Authelia and any ingress, none of which
+// set or strip it — so rotating it handed out a fresh bucket per request.
+test("rotating cf-connecting-ip does not buy a fresh rate-limit bucket", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_SHARED_SECRET = "gateway-secret-for-limiter-test";
+  const auth = { "x-auth-gateway-secret": "gateway-secret-for-limiter-test" };
+  let limited = 0;
+  for (let i = 0; i < 140; i++) {
+    const res = await middleware(
+      new NextRequest("http://x/api/call", {
+        method: "POST",
+        headers: {
+          ...auth,
+          "cf-connecting-ip": `203.0.113.${i}`,
+          "x-forwarded-for": "198.51.100.7",
+        },
+      }),
+    );
+    if (res.status === 429) limited++;
+  }
+  expect(limited).toBeGreaterThan(0);
+});
