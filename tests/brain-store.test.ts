@@ -501,6 +501,28 @@ test("a control character in a search query degrades instead of throwing", async
   expect(await store.search({ query: "\u0000\u000b" })).toEqual([]);
 });
 
+// Sibling of the search-door fix: a NUL reaching Postgres as a text parameter
+// threw a raw driver error. Refused here with a message that says what to do —
+// refused rather than stripped, because a body is the user's content and a query
+// is only a request.
+test("a NUL in a body, title or frontmatter is refused with a readable message", async () => {
+  for (const args of [
+    { slug: "notes/n1", body: "hello\u0000world" },
+    { slug: "notes/n2", body: "ok", title: "bad\u0000title" },
+    { slug: "notes/n3", body: "ok", frontmatter: { note: "bad\u0000value" } },
+  ]) {
+    await expect(store.putPage(args), JSON.stringify(args.slug)).rejects.toThrow(
+      /contains a NUL byte/,
+    );
+  }
+  expect(
+    (await store.listPages({ limit: 200 })).filter((p) => p.slug.startsWith("notes/n")),
+  ).toEqual([]);
+  // MIRROR: other control characters are storable and must still work.
+  await store.putPage({ slug: "notes/ok", body: "tab\there and a vertical\u000btab" });
+  expect((await store.getPage({ slug: "notes/ok" })).body).toContain("tab");
+});
+
 test("a ref resolves by filename even when the title differs", async () => {
   // The real Obsidian case: the H1 is not the filename, so the title arm cannot
   // match and only the basename arm can. (A page with no H1 derives its title

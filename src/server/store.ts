@@ -495,6 +495,36 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       );
     }
     if (typeof args.body !== "string") throw new Error("body must be a string");
+    // A NUL cannot be stored by Postgres in a text column at all, so it reached the
+    // driver and came back as `invalid byte sequence for encoding "UTF8": 0x00` —
+    // a raw driver error for a realistic input (a UTF-16 .md in an imported vault).
+    // Refused here with a message that says what to do. REFUSED rather than
+    // stripped, unlike the search query one screen up: a query is a request and
+    // dropping a character it cannot match costs nothing, while a body is the
+    // user's content and silently altering it is the worse failure.
+    // The frontmatter is WALKED, not JSON.stringify'd. Stringifying escapes a NUL
+    // into the six characters \u0000, so a check on the encoded form cannot see
+    // the byte it is looking for — the same mistake enrichMemory made by screening
+    // credentials over JSON.stringify, one module over.
+    const nulIn = (v: unknown): boolean => {
+      if (typeof v === "string") return v.includes("\u0000");
+      if (Array.isArray(v)) return v.some(nulIn);
+      if (v && typeof v === "object") {
+        return Object.entries(v).some(([k, x]) => k.includes("\u0000") || nulIn(x));
+      }
+      return false;
+    };
+    for (const [what, bad] of [
+      ["body", args.body.includes("\u0000")],
+      ["title", (args.title ?? "").includes("\u0000")],
+      ["frontmatter", nulIn(args.frontmatter ?? {})],
+    ] as const) {
+      if (bad) {
+        throw new Error(
+          `${what} contains a NUL byte, which cannot be stored — the file is probably not UTF-8`,
+        );
+      }
+    }
     if (args.body.length > MAX_BODY_CHARS) {
       throw new Error(
         `body too large: ${args.body.length} chars exceeds the ${MAX_BODY_CHARS} limit`,

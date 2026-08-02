@@ -150,7 +150,13 @@ export interface MemoryHealth {
 
 export async function memoryHealth(db: Db): Promise<MemoryHealth> {
   const one = async (sql: string) => Number((await db.query(sql)).rows[0]?.n ?? 0);
-  const lease = await db.query("SELECT maintenance_lease FROM meta WHERE id = 1");
+  // ::text, the same driver hazard as the lease token one file over: without it
+  // node-postgres hands back a JS Date and String() formats it as
+  // "Sat Aug 01 2026 20:33:32 GMT+0000 (Coordinated Universal Time)" for a field
+  // typed `string | null` as though it were already text. Report-only here — it is
+  // never compared — but a health endpoint that prints one format on Postgres and
+  // another on PGlite is a health endpoint nobody can diff.
+  const lease = await db.query("SELECT maintenance_lease::text FROM meta WHERE id = 1");
   return {
     // Events past the extraction checkpoint (or with no checkpoint at all).
     unprocessed_events: await one(`

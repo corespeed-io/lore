@@ -652,6 +652,16 @@ written down.
 - **`pages.basename` cannot do NFKC in SQL**, so the filename arm cannot reach a
   file differing from the ref only by Unicode normalization. Closing it needs a
   schema bump plus a table rewrite. Documented at the column.
+- **The export/import round trip is not an IDENTITY for every accepted slug.**
+  `put_page` deliberately accepts a slug named exactly (`Projects/Roadmap`,
+  `trailing-`, a fullwidth or NFD spelling), `/api/export` writes `${slug}.md`, and
+  `pathToSlug` folds it on the way back — so such a page comes back renamed. Links
+  still resolve, because a path-shaped ref is compared by folded address. What is
+  NO LONGER possible is the destructive case: two files in one batch that fold to
+  one slug are reported as a collision instead of one silently overwriting the
+  other. Closing the rename half means either tightening `invalidSlug` (which
+  removes deliberately supported slugs) or carrying the true slug in exported
+  frontmatter (which puts a generated key in user data); both want their own review.
 - **A fullwidth solidus makes `pathToSlug` and `refAddress` disagree** (`x-／-y.md`
   imports at `x-/-y`, a ref addresses `x/y`), because one splits before NFKC and
   the other after. A broken link, never a wrong edge.
@@ -668,8 +678,13 @@ written down.
   revocations. It grants nothing new: an agent holding a user-stated agent-scope
   memory already owns a thread the user spoke in.
 - **`local.ts` does not cache an init failure**, so every request against a brain
-  whose boot repair fails closed builds another `pg.Pool` that is never `end()`ed.
-  Node only. Fixing it properly needs a `close` on the `Db` seam, which is a
+  whose boot repair fails closed builds another `pg.Pool`. Worse than an
+  unreferenced object: `initSchema` issues queries before it can fail, so each
+  orphaned pool has already opened a real socket and holds it until pg's idle
+  timeout reaps it. It needs an AUTHENTICATED caller against an already-wedged
+  brain, and it does NOT compose with the `/api/mcp` 404-before-401 residual —
+  `resolveDatabaseUrl` builds no pool and `getBrainCtx` runs only after the bearer
+  check. Node only. Fixing it properly needs a `close` on the `Db` seam, which is a
   change to the one infra-aware interface and wants its own review — that is the
   only reason it is here rather than fixed.
 - **`renamePage` leaves a stale `content_hash`**, so re-putting the pre-rename

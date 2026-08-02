@@ -14,6 +14,8 @@ import { appendConversationEvent, ensureThread } from "../src/server/memory/even
 import { type MemoryItem, writeMemory } from "../src/server/memory/items.js";
 import { recallMemory } from "../src/server/memory/recall.js";
 import { extractiveSummarizer } from "../src/server/memory/summarizer-default.js";
+import type { Summarizer } from "../src/server/memory/summary.js";
+import { refreshThreadSummary } from "../src/server/memory/summary.js";
 import {
   EMPTY_SUMMARY,
   MAX_RENDERED_SUMMARY,
@@ -350,4 +352,42 @@ test("summary items are bounded per item, and every list is capped", async () =>
   expect(next.artifacts.length, "artifacts was uncapped").toBeLessThanOrEqual(12);
   for (const a of next.artifacts) expect(a.name.length).toBeLessThan(500);
   expect(clampRendered(renderSummary(next)).length).toBeLessThan(MAX_RENDERED_SUMMARY + 200);
+});
+
+// clampStructured HAD NO TEST AT ALL. It is the fix that moved the summary bound
+// from one implementation of a pluggable interface to the single write — the
+// structurally right move — and nothing referenced it, so replacing the call site
+// with `const bounded = structured;` left the suite fully green. A fix without
+// coverage is a fix that leaves the moment someone tidies it.
+//
+// This drives the REAL refreshThreadSummary with a summarizer that returns an
+// oversized goal and next_action — the two producers that bypassed the default
+// summarizer's item cap — and asserts the STORED row, which is the thing that
+// folds forward into every later version.
+test("the stored structured summary is bounded at the write, whatever the summarizer returns", async () => {
+  const huge = "g".repeat(400_000);
+  const oversized: Summarizer = {
+    version: "oversized-1",
+    async summarize() {
+      return { ...EMPTY_SUMMARY, goal: huge, next_action: `Act on: ${huge}` };
+    },
+  };
+  await ensureThread(db, "t-bound");
+  await appendConversationEvent(db, {
+    threadId: "t-bound",
+    eventType: "user_message",
+    content: "anything, the summarizer ignores it",
+  });
+  await refreshThreadSummary(db, oversized, "t-bound");
+
+  const row = await db.query(
+    "SELECT length(structured_summary::text) AS n, length(rendered_summary) AS r FROM thread_summaries WHERE thread_id = 't-bound'",
+  );
+  // Non-vacuity: the summarizer really did return something enormous, so a
+  // missing bound would show as a row in the hundreds of thousands.
+  expect(huge.length).toBeGreaterThan(100_000);
+  expect(Number(row.rows[0].n), "the STORED structured row is unbounded").toBeLessThan(40_000);
+  expect(Number(row.rows[0].r), "the rendered summary is unbounded").toBeLessThan(
+    MAX_RENDERED_SUMMARY + 200,
+  );
 });

@@ -72,6 +72,24 @@ export async function POST(req: Request) {
   const { handleRpc } = await import("@/server/mcp");
   const { getBrainCtx } = await import("@/server/local");
   const results: FileResult[] = [];
+  // TWO FILES THAT MEAN ONE PAGE IS A COLLISION, NOT AN UPDATE.
+  //
+  // put_page accepts slugs pathToSlug cannot reproduce — `Projects/Roadmap`,
+  // `trailing-`, `double--hyphen`, a fullwidth or NFD spelling — because naming a
+  // slug exactly is deliberately supported (store.ts). /api/export then writes
+  // `${slug}.md` with no channel carrying the true slug, so a restore folds every
+  // one of them, and where two fold TOGETHER putPage silently overwrote: two pages
+  // in, one page out, HTTP 200, both files reported `created`, the first file's
+  // content simply gone. Silent data loss on the backup/restore path, which is the
+  // one path where the whole point is that nothing is lost.
+  //
+  // A batch is one restore, so a collision inside it is decidable here, before any
+  // write. This does NOT change slug policy and does not pretend the round trip is
+  // an identity — a slug that is not a fixed point of pathToSlug still normalizes
+  // on the way back in, which is recorded in AGENTS.md's residuals. What it stops
+  // is the destructive case reporting success. tar.ts already sets the precedent:
+  // a path it cannot represent is REPORTED (EXPORT-SKIPPED.txt), never dropped.
+  const claimed = new Map<string, string>();
   for (const raw of files) {
     const file = raw as Partial<VaultFile>;
     // Batch shape and transport limits, all of which can only REFUSE a file and
@@ -93,6 +111,22 @@ export async function POST(req: Request) {
     const note = parseNote({ path: file.path, text: file.text });
     if (!note.slug) {
       results.push({ path: file.path, status: "failed", detail: "path yields an empty slug" });
+      continue;
+    }
+    // Claimed only by a file that actually LANDED (see below), so this reports a
+    // collision with a real page and never shadows a refusal. Claiming here
+    // instead was wrong in a way the suite caught: a batch of crafted paths that
+    // all fold onto one reserved slug reported "collides with …" for the second
+    // one, hiding the reserved-namespace refusal behind a bookkeeping message.
+    // A security verdict must not be masked by an ordering detail.
+    const first = claimed.get(note.slug);
+    if (first !== undefined) {
+      results.push({
+        path: file.path,
+        slug: note.slug,
+        status: "failed",
+        detail: `collides with ${first}: both name the page '${note.slug}'`,
+      });
       continue;
     }
     // The reserved memory/ namespace is NOT checked here any more. It was this
@@ -140,6 +174,7 @@ export async function POST(req: Request) {
       continue;
     }
     const out = rpc.result as { content: { text: string }[]; isError: boolean };
+    if (!out.isError) claimed.set(note.slug, file.path);
     if (out.isError) {
       results.push({
         path: file.path,

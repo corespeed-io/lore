@@ -7,6 +7,7 @@ import { handleRpc } from "../src/server/mcp.js";
 import { findSecretsInPayload } from "../src/server/memory/safety.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
 import { type Store, createStore } from "../src/server/store.js";
+import { serializeNote } from "../src/server/tar.js";
 
 // The brain /api/import writes into, when a test arms one. getBrainCtx is the one
 // function the route asks for a context, so mocking it here is the whole seam —
@@ -469,31 +470,57 @@ test("carrying the label down does not refuse honest content", async () => {
 // only way a PGlite suite can observe the production behaviour.
 test("the lease token survives a microsecond-resolution timestamp", async () => {
   await withImportBrain(async (ctx) => {
+    // REWRITTEN, because the version this replaces was HOLLOW and I claimed in a
+    // commit message that it could not be. It drove ctx.db.query directly and
+    // never imported the route, so its three assertions were facts about
+    // PostgreSQL — that PGlite stores microseconds, that a ::text token matches,
+    // that a Date-derived one does not — and none about route.ts. A reviewer
+    // proved it by restoring the exact historical regression and running the full
+    // suite green. A guard proving the HARNESS can store microseconds is not a
+    // guard proving the ROUTE uses them.
+    //
+    // So this drives the real POST, and gives the acquire a microsecond-bearing
+    // now() by wrapping the Db seam — which is the only way a PGlite suite can
+    // see the production behaviour at all, because PGlite's own now() has a
+    // permanently zero microsecond field.
     const micro = "2026-08-01 20:33:32.078413+00";
-    await ctx.db.query("UPDATE meta SET maintenance_lease = $1::timestamptz WHERE id = 1", [micro]);
-    const stored = await ctx.db.query(
-      "SELECT maintenance_lease::text AS t, to_char(maintenance_lease, 'US') AS us FROM meta WHERE id = 1",
-    );
-    // Guard against the test being vacuous on a driver that truncates on the way
-    // IN: if the microseconds are gone here, this test proves nothing.
-    expect(String(stored.rows[0].us), "the harness cannot store microseconds").not.toBe("000000");
+    const fenced: Db = {
+      query: async (text, params) => {
+        if (/UPDATE meta SET maintenance_lease = now\(\)/.test(text)) {
+          return ctx.db.query(
+            text.replace(
+              "maintenance_lease = now()",
+              `maintenance_lease = '${micro}'::timestamptz`,
+            ),
+            params,
+          );
+        }
+        return ctx.db.query(text, params);
+      },
+      tx: ctx.db.tx,
+    };
+    brain.ctx = { db: fenced, store: createStore(fenced, embed) };
 
-    // The round trip the release performs: read the token back, send it, match.
-    const token = String(stored.rows[0].t);
-    const matched = await ctx.db.query(
-      "SELECT 1 FROM meta WHERE id = 1 AND maintenance_lease = $1::timestamptz",
-      [token],
+    const { POST } = await import("../src/app/api/maintenance/route.js");
+    const res = await POST(
+      new Request("http://x/api/maintenance", {
+        method: "POST",
+        headers: { ...bearer(WRITE), "content-type": "application/json" },
+        body: JSON.stringify({ dryRun: true }),
+      }),
     );
-    expect(matched.rows.length, "the ::text token did not match the stored value").toBe(1);
+    expect(res.status).toBe(200);
 
-    // ...and the shape it replaced: a JS Date carries only milliseconds, so the
-    // value the driver would send back cannot match a microsecond timestamp.
-    const asDate = new Date(stored.rows[0].t as string);
-    const lossy = await ctx.db.query(
-      "SELECT 1 FROM meta WHERE id = 1 AND maintenance_lease = $1::timestamptz",
-      [asDate.toISOString()],
+    // Non-vacuity: the acquire really did store a microsecond-bearing lease, so a
+    // token that lost precision could not have matched it.
+    const after = await ctx.db.query(
+      "SELECT maintenance_lease, to_char($1::timestamptz, 'US') AS us FROM meta WHERE id = 1",
+      [micro],
     );
-    expect(lossy.rows.length, "a Date token matched, so this test cannot fail").toBe(0);
+    expect(String(after.rows[0].us), "the harness cannot store microseconds").not.toBe("000000");
+    // THE BEHAVIOUR: the route released its own lease. This is what goes red when
+    // the token is truncated back to a JS Date.
+    expect(after.rows[0].maintenance_lease, "the route did not release its lease").toBeNull();
   });
 });
 
@@ -555,6 +582,57 @@ test("an overrunning sweep cannot release its successor's lease", async () => {
     );
     expect(clean.status).toBe(200);
     expect(await leaseNow(), "an ordinary sweep did not release its own lease").toBeNull();
+  });
+});
+
+// P1: EXPORT -> IMPORT SILENTLY DESTROYED A PAGE. put_page accepts slugs
+// pathToSlug cannot reproduce (naming a slug exactly is deliberately supported),
+// /api/export writes `${slug}.md` with no channel carrying the true slug, and
+// where two accepted slugs fold to the same value the restore OVERWROTE: two
+// pages in, one out, HTTP 200, both files reported `created`, the first file's
+// content gone with no error, no `skipped` and no `pending[]`. Silent data loss
+// on the one path whose whole purpose is that nothing is lost.
+test("two exported files that fold to one slug are reported, not silently merged", async () => {
+  await withImportBrain(async (ctx) => {
+    // Both accepted by put_page today; neither is a fixed point of pathToSlug.
+    await ctx.store.putPage({ slug: "Projects/Roadmap", body: "Q3 plan: ship lore." });
+    await ctx.store.putPage({ slug: "projects/roadmap-", body: "Deprecated draft." });
+
+    // Exactly what /api/export writes: `${slug}.md`, no slug channel.
+    const exported = (await ctx.store.exportBatch({ limit: 50 })).map((p) => ({
+      path: `${p.slug}.md`,
+      text: serializeNote(p.title, p.frontmatter, p.body),
+    }));
+    expect(exported.map((f) => f.path).sort()).toEqual([
+      "Projects/Roadmap.md",
+      "projects/roadmap-.md",
+    ]);
+
+    // Restore into a fresh brain, through the REAL route.
+    const dest = new PGlite({ extensions: { vector, pg_trgm } });
+    try {
+      const destDb = pgliteDb(dest);
+      await initSchema(destDb, { embeddingModel: "fake", embeddingDim: DIM });
+      brain.ctx = { db: destDb, store: createStore(destDb, embed) };
+      const results = await importFiles(exported);
+
+      // One file lands; the other is REPORTED rather than overwriting it.
+      const created = results.filter((r) => r.status === "created");
+      const collided = results.filter((r) => r.status === "failed");
+      expect(created).toHaveLength(1);
+      expect(collided, "the second file was silently merged").toHaveLength(1);
+      expect(collided[0].detail).toMatch(/collides with .*both name the page 'projects\/roadmap'/);
+
+      // ...and the content that used to vanish is accounted for: exactly one page
+      // exists, and the file that did NOT land is the one named in the report.
+      const rows = await destDb.query("SELECT slug, body FROM pages ORDER BY slug");
+      expect(rows.rows).toHaveLength(1);
+      const survivingPath = created[0].path;
+      expect(collided[0].detail).toContain(survivingPath);
+    } finally {
+      brain.ctx = null;
+      await dest.close();
+    }
   });
 });
 
