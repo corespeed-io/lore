@@ -85,6 +85,35 @@ each forbidden byte and fails if any goes undetected. A rule enforced by discipl
 is a rule with a path around it; a check nobody has watched fail is a rule that may
 not be enforced at all.
 
+**GOTCHA — a test that never invokes the thing it is named for.** FIVE tests on
+this branch passed for a reason unrelated to the fix they guarded, and one of them
+did so while its commit message claimed it could not. **Coverage cannot catch
+this**: the changed line runs — verified, `route.ts`'s lease line was executed by a
+neighbouring test and would have reported green — but no assertion's truth value
+depended on it.
+
+The check is one question: **name the line you changed, change it back, and say
+which named assertion fails.** If you cannot name the assertion BEFORE running the
+suite, the test is hollow.
+
+The mechanical proxy, which is grep-able and belongs in review: **a regression test
+must reach the fix through the same door production does.** A test naming a route
+must import that route's handler; a test naming extraction must call extraction.
+All five skipped that door and asserted a property of the ENVIRONMENT, or of the
+fix's own internal consistency, instead — that PGlite has a clock, that PGlite
+stores microseconds, that a shared helper agrees with the SQL beside it, that a
+probe's log was non-empty. A guard proving the HARNESS can do X is not evidence
+that the CODE does X, and the guard's presence is exactly what makes it feel safe.
+
+So reverse-verify every fix — reintroduce the exact pre-fix expression, watch the
+named test go red, capture the message, restore — and prefer shipping the mutation
+WITH the test, the way `tests/smoke.test.ts` proves its own detector before
+trusting its scan. A check nobody has watched fail is a rule that may not be
+enforced at all; that is true of a test as much as of a scanner.
+ponytail: the unskippable version is a small registry of
+`(file, anchor, pre-fix expression)` plus a CI job that applies each and requires
+the named test to go red. Worth building if a sixth one shows up.
+
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page
 (`__webpack_modules__[moduleId] is not a function`). To build: stop dev, `rm -rf
