@@ -236,12 +236,17 @@ export async function recallMemory(
   // search. One arm, canonical, for every scope.
   if (args.asOf) return recallCanonical(db, args, limit);
 
-  // The split is made by the SAME predicate that decides what gets projected, so
-  // a scope cannot be searched somewhere its memories were never written. It is
-  // total over ScopeType: every scope lands in exactly one arm.
-  const shared = args.scopes.filter((s) => isSharedScope({ scope_type: s.scopeType }));
-  const canonical = args.scopes.filter((s) => !isSharedScope({ scope_type: s.scopeType }));
-
+  // ONE arm, canonical, always. There used to be a split: shared-scope memories
+  // were searched only through their PROJECTED pages, and everything else read
+  // memory_items directly. That made a projection failure invisible rather than
+  // degraded — `remember` answers {saved:true, projection:"failed"} when the
+  // embeddings provider hiccups, and the memory was then unrecallable forever
+  // while `inspect_memory` still called it committed. It survived because it
+  // only affected the vault; collapsing to one scope would have made it the
+  // behaviour of every memory in the brain.
+  //
+  // The projected pages are still where a memory shows up in page search and in
+  // the graph. They are just no longer the only way to find it.
   const out: RecalledMemory[] = [];
   const seen = new Set<string>();
   const add = (r: RecalledMemory) => {
@@ -249,11 +254,12 @@ export async function recallMemory(
     seen.add(r.memory.id);
     out.push(r);
   };
+  for (const r of await recallCanonical(db, args, limit)) add(r);
+  // The projected arm still runs, second: it can match a page whose text was
+  // enriched beyond the memory's own content.
+  const shared = args.scopes.filter((s) => isSharedScope({ scope_type: s.scopeType }));
   if (shared.length) {
     for (const r of await recallProjected(db, store, { ...args, scopes: shared }, limit)) add(r);
-  }
-  if (canonical.length) {
-    for (const r of await recallCanonical(db, { ...args, scopes: canonical }, limit)) add(r);
   }
   // Both arms normalize to their own best hit, so this orders by relative
   // strength within each arm. Stable, so an arm's own order breaks ties.
