@@ -108,8 +108,12 @@ export function pathToSlug(path: string): string {
 // regex over the source — which asserted the PARTS existed and never that the
 // loop CONSUMED them. Leaving the fold and the filter intact while reconnecting
 // the loop to the unfiltered list passed the whole suite with the defect back.
-// A pure plan is behaviourally testable, so the untestable surface shrinks to one
-// line: does the page post what the plan said to post.
+// A pure plan is behaviourally testable, so the untestable SURFACE shrinks to one
+// line: does the page post what the plan said to post. Pinning that one line still
+// takes an unbroken CHAIN of assertions — plan.send -> send -> sendable -> slice —
+// because a pin that checks the links as separate fragments is defeated by keeping
+// every fragment alive and rebinding one of them. That happened twice here, one
+// line apart, so the chain is the thing to preserve if this is ever refactored.
 //
 // Here rather than in the page for the usual reason too: "the slug this path
 // means" is already decided in this file, and a second fold in the client would

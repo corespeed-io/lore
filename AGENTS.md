@@ -109,8 +109,11 @@ that checks the fix's PIECES EXIST will survive a refactor that leaves them
 orphaned. The import fix had three parts (fold before slicing, refuse both
 collided files, post only the remainder); the pin covered two. Leaving the fold and
 the filter expression intact and reconnecting only the loop to the unfiltered list
-passed the whole suite with the data loss restored. **A structural pin must assert
-the DATA FLOW, not the presence of tokens** — and better, SHRINK WHAT NEEDS
+passed the whole suite with the data loss restored. **A structural pin must assert an UNBROKEN
+CHAIN of bindings, not the presence of tokens** — and "data flow" is not enough of
+a rule on its own: the repaired pin asserted three links of that flow as separate
+fragments and was defeated again, one line along, by keeping every fragment alive
+and rebinding one of them — and better, SHRINK WHAT NEEDS
 PINNING: extract the decision into a pure function (`planRestore`), test that by
 behaviour, and let the pin assert only that the component uses what it returned.
 That took the untestable surface from three lines to one.
@@ -127,9 +130,10 @@ go red, capture the message, restore. Name the assertion that will fail BEFORE
 running the suite — if you cannot, the test is hollow. Prefer shipping the mutation
 WITH the test, the way `tests/smoke.test.ts` proves its own detector before
 trusting its scan.
-ponytail: the unskippable version is a registry of
-`(file, anchor, pre-fix expression)` plus a CI job that applies each and requires
-the named test to go red.
+ponytail: the unskippable version of reverse-verification is a registry of
+`(file, anchor, pre-fix expression)` pairs plus a CI job that applies each one and
+requires the named test to go red — which is what would have caught both defeats
+of the import pin without a reviewer having to find them by hand.
 
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page

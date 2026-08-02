@@ -394,7 +394,11 @@ test("planRestore refuses BOTH members of a collision, however the list would be
   const clean = planRestore(["a/b.md", "a/c.md", "d.md"]);
   expect(clean.send).toEqual(["a/b.md", "a/c.md", "d.md"]);
   expect(clean.collided).toEqual([]);
-  // Order is preserved, because the page filters its File objects by this list.
+  // Order is preserved. NOT because the page depends on it — the page builds a
+  // Set and filters `files`, so plan.send's order cannot reach it — but because a
+  // function returning "the paths to post" that reorders them would be a trap for
+  // the next caller. The reason matters: an assertion justified by a false claim
+  // survives the day the claim stops being false in the other direction.
   expect(planRestore(["z.md", "a.md"]).send).toEqual(["z.md", "a.md"]);
   // Three files meaning one page: all three refused, each naming the other two.
   const triple = planRestore(["A/B.md", "a/b.md", "a/b-.md"]);
@@ -413,8 +417,15 @@ test("the import page posts exactly what planRestore returned", () => {
   const loop = src.indexOf("i += BATCH");
   expect(plan, "the page does not call planRestore at all").toBeGreaterThan(-1);
   expect(plan, "the plan is computed after the slicing loop starts").toBeLessThan(loop);
-  // The posted list is derived FROM the plan, not from the raw file list.
+  // AN UNBROKEN CHAIN: plan.send -> send -> sendable -> slice. Asserting the
+  // links as SEPARATE fragments is the same shape this pin was rewritten to
+  // escape, one line further along — a reviewer defeated the previous version by
+  // keeping `files.filter((f) => send.has(filePath(f)))` alive as a count and
+  // rebinding `sendable = files`, which passed lint, typecheck and all 410 tests
+  // while every collided file was posted. Worse than the original: preflight
+  // still reported those files "failed" while they overwrote a page. So the
+  // filter is tied to the BINDING it produces, not merely present somewhere.
   expect(src).toMatch(/const send = new Set\(plan\.send\)/);
-  expect(src).toMatch(/files\.filter\(\(f\) => send\.has\(filePath\(f\)\)\)/);
+  expect(src).toMatch(/const sendable = files\.filter\(\(f\) => send\.has\(filePath\(f\)\)\)/);
   expect(src).toMatch(/sendable\.slice\(i, i \+ BATCH\)/);
 });
