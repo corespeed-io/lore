@@ -1,0 +1,114 @@
+{
+  "note": "A frozen corpus + relevance judgments for the retrieval regression gate. Queries are the shapes a personal-KB user actually types: a couple of words, a name, a question fragment, CJK. `relevant` lists every slug a good result set should contain, most-relevant first.",
+  "corpus": [
+    {
+      "slug": "people/jane-doe",
+      "body": "# Jane Doe\n\nJane leads the memory system work and owns the retrieval pipeline. She wrote [[projects/hybrid-search]]."
+    },
+    {
+      "slug": "people/robert-smith",
+      "aliases": ["Bob"],
+      "body": "# Robert Smith\n\nRobert runs deployment and owns the Cloudflare Workers migration."
+    },
+    {
+      "slug": "projects/hybrid-search",
+      "body": "# Hybrid search\n\nWe fuse a vector arm, a full-text arm and a trigram arm with reciprocal rank fusion. Owned by [[people/jane-doe]]."
+    },
+    {
+      "slug": "projects/vault-import",
+      "body": "# Vault import\n\nImporting an Obsidian vault: the browser reads the folder, the server writes pages, wikilinks become edges."
+    },
+    {
+      "slug": "tech/postgres-fts",
+      "body": "# Postgres full text search\n\ntsvector with the simple configuration cannot segment CJK text, so a trigram arm carries those queries."
+    },
+    {
+      "slug": "tech/pgvector-hnsw",
+      "body": "# pgvector and HNSW\n\nAn HNSW index only helps when the query is a bare ORDER BY with a LIMIT. Adding a GROUP BY makes the planner scan every chunk."
+    },
+    {
+      "slug": "tech/hyperdrive-cache",
+      "body": "# Hyperdrive caching\n\nHyperdrive caches read queries for sixty seconds and never invalidates them on write, so read-after-write returns stale rows."
+    },
+    {
+      "slug": "tech/cloudflare-workers",
+      "body": "# Cloudflare Workers\n\nworkerd forbids holding a socket across requests, so every query opens a short-lived client."
+    },
+    {
+      "slug": "tech/embeddings-model",
+      "body": "# Embedding models\n\nChanging the embedding model or its dimension invalidates every stored vector. The meta row pins both and fails loud."
+    },
+    {
+      "slug": "decisions/no-similarity-floor",
+      "body": "# No similarity floor\n\nA nearest neighbour search always returns something, so a gibberish query still yields its closest pages. Any floor is model dependent."
+    },
+    {
+      "slug": "decisions/soft-delete",
+      "body": "# Soft delete\n\nDeleting a page keeps its body and drops its chunks, so restore can rebuild the index and search stops degrading."
+    },
+    {
+      "slug": "decisions/one-driver",
+      "body": "# One database driver\n\nNode hosts pool connections; Workers opens one per query behind a binding. Same driver either way."
+    },
+    {
+      "slug": "notes/daily-standup",
+      "body": "# Standup\n\nDiscussed the import flow with [[people/jane-doe]] and agreed to ship export at the same time."
+    },
+    {
+      "slug": "notes/reading-list",
+      "body": "# Reading list\n\nPapers on reciprocal rank fusion, dense retrieval and cross encoder rerankers."
+    },
+    {
+      "slug": "notes/grocery",
+      "body": "# Groceries\n\nOat milk, sourdough, two lemons and a bag of coffee beans."
+    },
+    {
+      "slug": "notes/car-service",
+      "body": "# Car service\n\nThe sedan needs new tyres and the front brake pads replaced before winter."
+    },
+    {
+      "slug": "笔记/记忆系统设计",
+      "body": "# 记忆系统设计\n\n我们决定自研记忆系统,替换掉外部引擎,主打个人知识库。检索用向量加全文加三元组融合。"
+    },
+    {
+      "slug": "笔记/中文分词问题",
+      "body": "# 中文分词问题\n\nPostgres 的 simple 配置无法给中文分词,所以中文查询要靠三元组这条臂来兜。"
+    },
+    {
+      "slug": "笔记/部署到-workers",
+      "body": "# 部署到 Workers\n\nWorkers 上不能跨请求持有数据库连接,所以每次查询都开一个短命连接。"
+    },
+    {
+      "slug": "meetings/pricing-review",
+      "body": "# Pricing review\n\nWrites are charged because they embed; reads stay free so an agent loop is cheap."
+    }
+  ],
+  "queries": [
+    { "q": "who owns the retrieval pipeline", "relevant": ["people/jane-doe"] },
+    { "q": "hybrid search", "relevant": ["projects/hybrid-search"] },
+    { "q": "reciprocal rank fusion", "relevant": ["projects/hybrid-search", "notes/reading-list"] },
+    { "q": "Bob", "relevant": ["people/robert-smith"] },
+    { "q": "Robert Smith", "relevant": ["people/robert-smith"] },
+    { "q": "obsidian vault import", "relevant": ["projects/vault-import"] },
+    { "q": "wikilinks become edges", "relevant": ["projects/vault-import"] },
+    {
+      "q": "why does CJK search need trigram",
+      "relevant": ["tech/postgres-fts", "笔记/中文分词问题"]
+    },
+    { "q": "HNSW index not used", "relevant": ["tech/pgvector-hnsw"] },
+    { "q": "stale read after write", "relevant": ["tech/hyperdrive-cache"] },
+    {
+      "q": "socket across requests",
+      "relevant": ["tech/cloudflare-workers", "decisions/one-driver", "笔记/部署到-workers"]
+    },
+    { "q": "changing the embedding model", "relevant": ["tech/embeddings-model"] },
+    { "q": "similarity floor", "relevant": ["decisions/no-similarity-floor"] },
+    { "q": "restore a deleted page", "relevant": ["decisions/soft-delete"] },
+    { "q": "database driver", "relevant": ["decisions/one-driver"] },
+    { "q": "writes are charged", "relevant": ["meetings/pricing-review"] },
+    { "q": "记忆系统", "relevant": ["笔记/记忆系统设计"] },
+    { "q": "中文分词", "relevant": ["笔记/中文分词问题"] },
+    { "q": "自研", "relevant": ["笔记/记忆系统设计"] },
+    { "q": "tyres", "relevant": ["notes/car-service"] }
+  ]
+}

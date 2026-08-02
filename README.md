@@ -5,7 +5,7 @@
 
 <p align="center">
   <strong>Browse your knowledge graph in the browser.</strong><br/>
-  Lore is the read-only <strong>frontend</strong> for a <strong>gbrain</strong> knowledge brain — force-directed graph, dashboard, and full-text search. Bring your own <a href="https://github.com/garrytan/gbrain">gbrain</a> backend.
+  A knowledge-graph console — force-directed graph, dashboard, and hybrid search. Run it <strong>standalone</strong> on your own Postgres, or point it at a <a href="https://github.com/garrytan/gbrain">gbrain</a> backend.
 </p>
 
 <p align="center">
@@ -28,15 +28,20 @@
 
 ## What is Lore?
 
-Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/garrytan/gbrain)** knowledge brain — your team's people, products, docs, and the decisions that connect them. It reads gbrain over MCP and renders a force-directed graph, a dashboard, and hybrid full-text search, so you can *see* and walk your knowledge instead of grepping it. It never writes.
+Lore is a web console for a personal knowledge graph — your notes, people, projects, and the links that connect them — rendered as a force-directed graph, a dashboard, and hybrid search, so you can *see* and walk your knowledge instead of grepping it.
+
+It runs two ways: **standalone**, serving its own brain out of Postgres + pgvector, or against an external **[gbrain](https://github.com/garrytan/gbrain)** over MCP. The browser console is read-only by construction either way — every write (vault import, `put_page`, `remember`) requires an explicit bearer token and never rides your viewer session.
 
 ## Features
 
 - **Force-directed graph** — d3 node-link view with smooth zoom/pan, click-to-filter by type, and connection-walking from any node.
 - **Dashboard** — pages, links, sources, daily activity, top hubs, and recent memories at a glance.
 - **Hybrid search** — title + content search over your gbrain, as you type.
+- **Bring your Obsidian vault** — pick a folder at `/import`; files become pages, folders become slug prefixes, and `[[wikilinks]]` become edges (including the ones in frontmatter, Markdown-style links, and aliases). Export the whole brain back out as a tar of `slug.md` from `/api/export`.
+- **Agent memory** — an immutable event log, versioned thread summaries, and typed durable memories with provenance, supersession and historical (`as_of`) recall. Agents use `remember` / `recall` / `forget` / `inspect_memory`; memories are projected into the same graph and search as everything else, and a correction supersedes rather than overwrites.
+- **Graph health** — the dashboard names the two reasons a graph looks empty: links pointing at pages that don't exist, and pages nothing points at.
 - **Pluggable viz modules** — drop in a new `src/lib/viz/<name>.ts` to add a visualization.
-- **Fail-closed auth** — none (dev), HTTP Basic, or Cloudflare Access (JWT-verified). Read-only by design.
+- **Fail-closed auth** — none (dev), HTTP Basic, or Cloudflare Access (JWT-verified). The viewer console is read-only by construction; writes need their own `BRAIN_WRITE_TOKEN`.
 - **Deploy anywhere** — standalone Docker image; one-click to Vercel or Railway.
 
 <p align="center">
@@ -45,13 +50,17 @@ Lore is a **read-only** web UI for exploring a **[gbrain](https://github.com/gar
 
 ## Quickstart
 
-> **Prerequisite:** a running [gbrain](https://github.com/garrytan/gbrain) backend — point `GBRAIN_MCP_URL` at its MCP endpoint.
+Two ways to run lore:
+
+**Standalone (no gbrain)** — bring only a Postgres with `pgvector` and `pg_trgm` (e.g. a free [Neon](https://neon.tech) database). PostgreSQL **12 or newer**; tested on 17 and 18. Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember_note` / `delete_page` for pages, `remember` for agent memory; bearer `BRAIN_WRITE_TOKEN`).
 
 ```bash
 git clone https://github.com/corespeed-io/lore.git && cd lore
-cp .env.example .env        # set GBRAIN_MCP_URL + GBRAIN_TOKEN — auth is off for local dev by default
+cp .env.example .env        # set DATABASE_URL + EMBEDDINGS_* (leave GBRAIN_MCP_URL unset)
 npm install && npm run dev  # → http://localhost:3000
 ```
+
+**With a gbrain backend** — point `GBRAIN_MCP_URL` at a running [gbrain](https://github.com/garrytan/gbrain) MCP endpoint and set `GBRAIN_TOKEN` (or a read-only OAuth client) in `.env`.
 
 ## Deploy your own
 
@@ -65,13 +74,23 @@ Lore is a standard Next.js standalone app, so it also runs on **Railway** (Docke
 docker build -t lore . && docker run -p 3000:8080 --env-file .env lore
 ```
 
+Or on **Cloudflare Workers** (via OpenNext) — put any Postgres behind a [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) binding (free plan included; see `wrangler.jsonc`):
+
+```bash
+npx wrangler hyperdrive create lore-db --caching-disabled --connection-string="postgres://…"
+npx wrangler secret put EMBEDDINGS_API_KEY   # + BRAIN_WRITE_TOKEN, UI_PASSWORD…
+npm run cf:deploy
+```
+
 ## Configuration
 
 Config is entirely environment-driven — see [`.env.example`](.env.example) for the full list.
 
 | Variable | Required | Notes |
 |---|---|---|
-| `GBRAIN_MCP_URL` | yes | Your gbrain MCP server endpoint |
+| `DATABASE_URL` | standalone | Postgres 12+ with `vector` + `pg_trgm` — set this and leave `GBRAIN_MCP_URL` unset |
+| `BRAIN_WRITE_TOKEN` / `BRAIN_READ_TOKEN` | standalone | Agents' bearer for the MCP endpoint; ≥16 chars or refused |
+| `GBRAIN_MCP_URL` | remote mode | Your gbrain MCP server endpoint (omit for standalone) |
 | `GBRAIN_TOKEN` | \* | Static bearer (server-only, never sent to the browser) |
 | `GBRAIN_CLIENT_ID` / `GBRAIN_CLIENT_SECRET` | \* | **Preferred**: a read-only OAuth client — Lore mints short-lived tokens |
 | `APP_TITLE` / `APP_SUBTITLE` | no | Hero branding, per deployment |

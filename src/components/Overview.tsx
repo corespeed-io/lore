@@ -3,6 +3,7 @@
 import { ActivityChart } from "@/components/ActivityChart";
 import { Breakdown } from "@/components/Breakdown";
 import { ConnectionHealth } from "@/components/ConnectionHealth";
+import { GraphHealth } from "@/components/GraphHealth";
 import { RecentActivity } from "@/components/RecentActivity";
 import { RecentRequests } from "@/components/RecentRequests";
 import { Sources } from "@/components/Sources";
@@ -104,6 +105,7 @@ export function Overview({
         />
         <Sources sources={sources} />
         <RecentActivity items={recentItems} onOpen={onOpen} />
+        <GraphHealth onOpen={onOpen} />
       </div>
 
       <p className="section-eyebrow">Observability</p>
