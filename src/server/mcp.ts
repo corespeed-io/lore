@@ -1,4 +1,4 @@
-// MCP surface of the standalone brain: the read tools lore calls (bare gbrain
+// MCP surface of the brain: the read tools lore's console calls (bare
 // names, same shapes) plus the write tools for agents. One registry drives
 // tools/list and tools/call; access is decided by the caller's bearer grant.
 
@@ -132,6 +132,8 @@ export const TOOLS: Record<string, ToolDef> = {
       "Create or update a page (upsert by slug). Markdown body; [[wikilinks]] become graph edges. " +
       "frontmatter.related_ids (slugs) add explicit edges. Omitted fields are left as they were, " +
       "so editing a memory's body keeps its kind and metadata; pass frontmatter: {} to clear it. " +
+      "`body` is the exception: it is REQUIRED, and a call without it is refused rather than " +
+      "treated as an empty body — send the full new body, or use another tool to edit metadata. " +
       "Refs are resolved by slug, title, filename or alias; the response's `pending` array lists " +
       "any that matched nothing, so you can correct them in the same turn.",
     inputSchema: obj(
@@ -378,6 +380,35 @@ function refuseReserved(def: ToolDef, args: Record<string, unknown>): void {
   }
 }
 
+// The schema has always said which arguments a tool cannot work without. Nothing
+// read it.
+//
+// put_page declares `body` required AND its description promises "omitted fields
+// are left as they were" — a caller who omitted it got neither. The handler's
+// String(args.body ?? "") turned the omission into an empty string, so a call
+// meaning "rename the title" WIPED the page's body, its chunks, its embeddings and
+// its outgoing edges, then answered unchanged:false with isError:false. Nothing in
+// that exchange told the caller they had destroyed the page.
+//
+// Enforced at the one door rather than in each handler: a check a handler has to
+// remember is a check the next tool forgets, and the schema is already the list.
+//
+// `null` counts as absent, and that is the whole point rather than a nicety: a
+// client that serialises an omitted optional as `null` — which is most of them —
+// sent `{slug, title, body: null}`, and an `=== undefined` test waved it through
+// to the same `String(a.body ?? "")` that wipes the page. Checking only
+// `undefined` fixed the spelling of the bug, not the bug.
+//
+// An empty string is NOT absent: clearing a body is a thing a caller may mean,
+// and only a missing value says "I did not pass this".
+function missingRequired(def: ToolDef, args: Record<string, unknown>): string | null {
+  const required = (def.inputSchema as { required?: unknown }).required;
+  if (!Array.isArray(required)) return null;
+  const absent = required.filter((k) => typeof k === "string" && args[k] == null);
+  if (!absent.length) return null;
+  return `missing required argument${absent.length > 1 ? "s" : ""}: ${absent.join(", ")}`;
+}
+
 // No credential may enter this system through ANY field of ANY WRITE.
 //
 // The per-field gate has now been defeated three times with one move: it was
@@ -428,8 +459,33 @@ function secretRefusal(params: unknown): string | null {
 
 export interface RpcResult {
   result?: unknown;
-  error?: { code: number; message: string };
+  error?: { code: number; message: string; data?: unknown };
   notification?: boolean;
+}
+
+const SERVER_INFO = { name: "lore-brain", version: "0.1.0" };
+
+// The protocol revisions this server actually implements, newest first — and the
+// list a client is handed when it asks for one that is not here.
+//
+// 2026-07-28 removed the initialize handshake and made every request
+// self-describing. That cost lore nothing: it was already stateless (a route
+// handler with no session table), and the features the revision removed or
+// deprecated — resources, prompts, sampling, roots, logging, SSE resumability —
+// are features a tools-only brain never had. The legacy revisions stay on the
+// list because tools/list and tools/call are unchanged across all of them.
+const MODERN_VERSION = "2026-07-28";
+const SUPPORTED_VERSIONS = [MODERN_VERSION, "2025-11-25", "2025-06-18", "2025-03-26"];
+
+// Modern clients declare the version on EVERY request rather than once in a
+// handshake. On HTTP it also rides the MCP-Protocol-Version header; reading the
+// _meta copy keeps this function header-free, and a modern client sends both.
+const META_VERSION = "io.modelcontextprotocol/protocolVersion";
+function declaredVersion(params: Record<string, unknown> | undefined): string | null {
+  const meta = params?._meta;
+  if (!meta || typeof meta !== "object") return null;
+  const v = (meta as Record<string, unknown>)[META_VERSION];
+  return typeof v === "string" ? v : null;
 }
 
 // Dispatch one JSON-RPC method. Tool-level failures (including not_found) are
@@ -459,22 +515,151 @@ export async function handleRpc(
   method: string,
   params: Record<string, unknown> | undefined,
 ): Promise<RpcResult> {
+  const rpc = await dispatch(getCtx, access, method, params);
+  // Every modern result carries resultType; "complete" is the ordinary one, and
+  // the other value ("input_required") belongs to multi round-trip requests,
+  // which a brain that elicits nothing never returns. Stamped in ONE place
+  // rather than at each return, so a method added later cannot forget it —
+  // which is exactly how the version answer below rotted.
+  if (rpc.result && typeof rpc.result === "object" && !Array.isArray(rpc.result)) {
+    return { ...rpc, result: { resultType: "complete", ...(rpc.result as object) } };
+  }
+  return rpc;
+}
+
+// The transport owes different HTTP statuses for these, and 2026-07-28 makes the
+// status load-bearing rather than cosmetic: a dual-era client only inspects the
+// BODY of a `400` before deciding whether to fall back to `initialize`, so a
+// modern error served with `200` reads to it as a successful legacy exchange.
+export const HTTP_STATUS_FOR_ERROR: Record<number, number> = {
+  [-32601]: 404, // unknown method — MUST be 404, distinguishable from a legacy 404
+  [-32020]: 400, // HeaderMismatch
+  [-32022]: 400, // UnsupportedProtocolVersion
+};
+
+// Header/body agreement, checked at the transport where both are visible.
+//
+// This exists because the version refusal was BYPASSABLE: declaredVersion() read
+// only `_meta`, so `MCP-Protocol-Version: 2099-01-01` with no `_meta` was served
+// the full tool list, and a header saying 2025-03-26 over a body saying
+// 2026-07-28 was served too. The spec's reason for the rule is exactly that
+// split: an intermediary may route on the header while the server executes on
+// the body, and the two must never be allowed to disagree.
+//
+// DELIBERATE DEVIATION: the spec makes `MCP-Protocol-Version`, `Mcp-Method` and
+// `Mcp-Name` REQUIRED, and a missing one a `-32020`. lore validates them when
+// present but does not demand them, because it is dual-era: 2025-era clients
+// predate the headers entirely, and rejecting a request for lacking one would
+// break the very clients `initialize` is still here to serve. Disagreement is
+// refused; absence is not.
+export function headerRefusal(
+  headers: { get(name: string): string | null },
+  method: string,
+  params: Record<string, unknown> | undefined,
+): { code: number; message: string; data?: unknown } | null {
+  const headerVersion = headers.get("mcp-protocol-version");
+  const bodyVersion = declaredVersion(params);
+  if (headerVersion && bodyVersion && headerVersion !== bodyVersion) {
+    return {
+      code: -32020,
+      message: "Header mismatch: MCP-Protocol-Version does not match the body's _meta",
+    };
+  }
+  const declared = headerVersion ?? bodyVersion;
+  if (declared && !SUPPORTED_VERSIONS.includes(declared)) {
+    return {
+      code: -32022,
+      message: "Unsupported protocol version",
+      data: { supported: SUPPORTED_VERSIONS, requested: declared },
+    };
+  }
+  const headerMethod = headers.get("mcp-method");
+  if (headerMethod && headerMethod !== method) {
+    return { code: -32020, message: "Header mismatch: Mcp-Method does not match the body" };
+  }
+  // Only tools/call, resources/read and prompts/get mirror a name; lore has the
+  // first of those. A name that cannot be an ASCII header value arrives Base64
+  // in the sentinel form, and comparing that to the raw body value would refuse
+  // a CONFORMING client — so a sentinel value is left to the body.
+  const headerName = headers.get("mcp-name");
+  const bodyName = typeof params?.name === "string" ? params.name : null;
+  if (headerName && bodyName && !headerName.startsWith("=?base64?") && headerName !== bodyName) {
+    return { code: -32020, message: "Header mismatch: Mcp-Name does not match the body" };
+  }
+  return null;
+}
+
+async function dispatch(
+  getCtx: () => Promise<BrainCtx>,
+  access: Access,
+  method: string,
+  params: Record<string, unknown> | undefined,
+): Promise<RpcResult> {
   if (method?.startsWith("notifications/")) return { notification: true };
+  // Checked above the switch so every RPC refuses an unsupported version the
+  // same way — which is what lets a client probe with whichever one it likes.
+  const declared = declaredVersion(params);
+  if (declared && !SUPPORTED_VERSIONS.includes(declared)) {
+    return {
+      error: {
+        code: -32022,
+        message: "Unsupported protocol version",
+        data: { supported: SUPPORTED_VERSIONS, requested: declared },
+      },
+    };
+  }
   switch (method) {
-    case "initialize":
+    // MUST exist in 2026-07-28: how a client learns what this server speaks
+    // without a handshake, and how a dual-era client tells a modern server from
+    // a legacy one.
+    case "server/discover":
       return {
         result: {
-          protocolVersion: (params?.protocolVersion as string) ?? "2025-06-18",
+          supportedVersions: SUPPORTED_VERSIONS,
           capabilities: { tools: {} },
-          serverInfo: { name: "lore-brain", version: "0.1.0" },
+          instructions:
+            "A personal knowledge brain: pages with [[wikilink]] edges, hybrid search, " +
+            "and durable agent memory. Writes need the write bearer.",
+          // Public, unlike tools/list: versions, capabilities and identity are
+          // the same answer for every caller, so a shared intermediary may
+          // serve one caller's copy to another. (This result carries no tool
+          // list — that is the one that varies by credential.)
+          ttlMs: 3_600_000,
+          cacheScope: "public",
+          _meta: { "io.modelcontextprotocol/serverInfo": SERVER_INFO },
         },
       };
+    // The legacy door, kept so 2025-era clients still work. It used to answer
+    // `params.protocolVersion ?? "2025-06-18"` — it ECHOED whatever it was
+    // asked for, so a client requesting 2026-07-28 was told yes by a server
+    // implementing none of it. Agreement is a claim; a claim a server cannot
+    // keep is worse than a refusal the client can route around.
+    case "initialize": {
+      const asked = params?.protocolVersion;
+      const agreed =
+        typeof asked === "string" && SUPPORTED_VERSIONS.includes(asked)
+          ? asked
+          : // A legacy client has no fall-forward, so name a version it can
+            // actually speak rather than the modern one it just failed to get.
+            "2025-11-25";
+      return {
+        result: {
+          protocolVersion: agreed,
+          capabilities: { tools: {} },
+          serverInfo: SERVER_INFO,
+        },
+      };
+    }
+    // Removed in 2026-07-28, answered anyway: a legacy client still sends it,
+    // and an empty result costs nothing.
     case "ping":
       return { result: {} };
     case "tools/list": {
-      const visible = Object.entries(TOOLS).filter(
-        ([, def]) => access === "write" || def.access === "read",
-      );
+      const visible = Object.entries(TOOLS)
+        .filter(([, def]) => access === "write" || def.access === "read")
+        // Deterministic order: the revision asks for it so clients can cache a
+        // list and so an LLM's prompt cache keeps hitting across calls.
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
       return {
         result: {
           tools: visible.map(([name, def]) => ({
@@ -482,6 +667,8 @@ export async function handleRpc(
             description: def.description,
             inputSchema: def.inputSchema,
           })),
+          ttlMs: 3_600_000,
+          cacheScope: "private",
         },
       };
     }
@@ -525,6 +712,11 @@ export async function handleRpc(
         const secrets = secretRefusal(args);
         if (secrets) return { error: { code: -32602, message: secrets } };
       }
+      // Above getCtx() with the other door refusals: no tool ran, so this is
+      // -32602 rather than an isError result, and a malformed call never reaches
+      // a connection.
+      const missing = missingRequired(def, args);
+      if (missing) return { error: { code: -32602, message: missing } };
       try {
         refuseReserved(def, args);
         const ctx = await getCtx();
