@@ -103,7 +103,22 @@ assumed "a batch is one restore"; the test posted one batch; the real client pos
 25 at a time. The test agreed with the bug instead of testing it, and it passed
 every check written for shape (1).
 
-The check for both: **derive the test from the THREAT, not from the fix.** A test
+(3) PARTS-NOT-DATAFLOW: where behaviour genuinely cannot be reached — a React
+component a node test cannot drive — the fallback is a structural pin, and a pin
+that checks the fix's PIECES EXIST will survive a refactor that leaves them
+orphaned. The import fix had three parts (fold before slicing, refuse both
+collided files, post only the remainder); the pin covered two. Leaving the fold and
+the filter expression intact and reconnecting only the loop to the unfiltered list
+passed the whole suite with the data loss restored. **A structural pin must assert an UNBROKEN
+CHAIN of bindings, not the presence of tokens** — and "data flow" is not enough of
+a rule on its own: the repaired pin asserted three links of that flow as separate
+fragments and was defeated again, one line along, by keeping every fragment alive
+and rebinding one of them — and better, SHRINK WHAT NEEDS
+PINNING: extract the decision into a pure function (`planRestore`), test that by
+behaviour, and let the pin assert only that the component uses what it returned.
+That took the untestable surface from three lines to one.
+
+The check for all three: **derive the test from the THREAT, not from the fix.** A test
 written by looking at your change encodes your change's assumptions, including the
 wrong ones. Ask what the user actually does — restore a vault, which is many POSTs
 — and make the test do that. And: **a fix justified by a claim about a caller must
@@ -115,9 +130,10 @@ go red, capture the message, restore. Name the assertion that will fail BEFORE
 running the suite — if you cannot, the test is hollow. Prefer shipping the mutation
 WITH the test, the way `tests/smoke.test.ts` proves its own detector before
 trusting its scan.
-ponytail: the unskippable version is a registry of
-`(file, anchor, pre-fix expression)` plus a CI job that applies each and requires
-the named test to go red.
+ponytail: the unskippable version of reverse-verification is a registry of
+`(file, anchor, pre-fix expression)` pairs plus a CI job that applies each one and
+requires the named test to go red — which is what would have caught both defeats
+of the import pin without a reviewer having to find them by hand.
 
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page
@@ -699,6 +715,14 @@ written down.
   a restore is many POSTs and only the client ever sees the whole restore. Closing the rename half means either tightening `invalidSlug` (which
   removes deliberately supported slugs) or carrying the true slug in exported
   frontmatter (which puts a generated key in user data); both want their own review.
+- **A bespoke importer posting to `/api/import` in several batches bypasses the
+  whole-restore fold** and gets only the intra-batch check, so two files meaning one
+  page can still overwrite. The shipped client is safe (`planRestore` folds the
+  whole list before slicing). The server CANNOT close this statelessly — it has no
+  way to know where one restore ends, so telling "overwrite" from "collision" needs
+  a caller-supplied restore id or stored per-page provenance, i.e. a schema change.
+  It costs a `BRAIN_WRITE_TOKEN`, i.e. the owner, over their own data with a script
+  they wrote: a footgun, not a defect.
 - **A fullwidth solidus makes `pathToSlug` and `refAddress` disagree** (`x-／-y.md`
   imports at `x-/-y`, a ref addresses `x/y`), because one splits before NFKC and
   the other after. A broken link, never a wrong edge.
