@@ -166,7 +166,7 @@ export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }:
     setSelectedId(null);
   }, [data.nodes, selectedId]);
 
-  // Content search (gbrain hybrid `search`), debounced → slugs that are graph nodes.
+  // Content search (hybrid `search`), debounced → slugs that are graph nodes.
   useEffect(() => {
     const query = q.trim();
     if (!query) {

@@ -17,7 +17,6 @@ import { useEffect, useState } from "react";
 interface OverviewProps {
   appTitle: string;
   appSubtitle: string;
-  adminSummary?: ReactNode;
   graphData: GraphData;
   // Non-null when /api/graph failed: link stats are unknown, not zero.
   graphError?: string | null;
@@ -39,7 +38,6 @@ function countByType(items: Array<{ type?: string }>) {
 export function Overview({
   appTitle,
   appSubtitle,
-  adminSummary,
   graphData,
   graphError,
   allPages,
@@ -81,7 +79,7 @@ export function Overview({
         </div>
       </div>
 
-      <div className={adminSummary ? "overview-summary has-admin" : "overview-summary"}>
+      <div className="overview-summary">
         <div className="stat-row">
           <StatCards
             pageCount={allPages.length}
@@ -90,7 +88,6 @@ export function Overview({
             onNavigate={onNavigate}
           />
         </div>
-        {adminSummary && <div className="overview-admin-summary">{adminSummary}</div>}
       </div>
 
       <ActivityChart pages={allPages} />

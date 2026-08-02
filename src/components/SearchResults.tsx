@@ -94,9 +94,7 @@ export function SearchResults({
             {typeFilter !== "all" ? ` of ${allPages.length}` : ""} memories
           </p>
           {maybeLimited && (
-            <span>
-              Showing the first {allPages.length} returned by gbrain. Use search for older matches.
-            </span>
+            <span>Showing the first {allPages.length} pages. Use search for older matches.</span>
           )}
         </div>
         <div className="chip-row">

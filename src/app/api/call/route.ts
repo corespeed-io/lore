@@ -1,11 +1,11 @@
-import { ToolNotAllowedError, callTool } from "@/lib/gbrain";
+import { ToolNotAllowedError, callTool } from "@/lib/tools";
 import { NextResponse } from "next/server";
 
 const MAX = 200;
 const BOUNDED = ["limit", "depth", "max", "top_k", "k"];
 
 // The allowlist gates the tool *name*; args are caller-controlled. Clamp the
-// common unbounded knobs so a client can't ask gbrain for a million rows.
+// common unbounded knobs so a client can't ask the brain for a million rows.
 function clampArgs(args: unknown): Record<string, unknown> {
   if (typeof args !== "object" || args === null) return {};
   const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };

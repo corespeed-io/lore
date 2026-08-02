@@ -8,7 +8,7 @@ function clock(at: number): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString(undefined, { hour12: false });
 }
 
-// The gbrain calls this browser session has made — time, tool, latency, status,
+// The brain calls this browser session has made — time, tool, latency, status,
 // and the error when one occurred. Read-only and session-scoped: it shows only
 // THIS tab's own requests (not all agents, which would need admin scope).
 export function RecentRequests() {
@@ -19,7 +19,7 @@ export function RecentRequests() {
       <p className="panel-card-title">Recent requests · this session</p>
       {log.length === 0 ? (
         <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>
-          No gbrain calls yet — browse the graph or search to see them here.
+          No brain calls yet — browse the graph or search to see them here.
         </p>
       ) : (
         <div className="req-list">

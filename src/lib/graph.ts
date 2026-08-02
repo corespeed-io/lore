@@ -1,22 +1,22 @@
 import { loadConfig } from "./config";
-import { callTool } from "./gbrain";
+import { callTool } from "./tools";
 import type { GraphData, GraphNode, PageHit } from "./types";
 
 // 1h: the brain's page/link topology changes slowly, and every rebuild fans out
-// a traverse_graph call per seed — a long TTL keeps that off the gbrain request
+// a traverse_graph call per seed — a long TTL keeps that off the brain request
 // log (was 10m, which spammed the log with graph reads).
 const TTL_MS = 3_600_000;
 // Edges come from a FEW deep traversals, not one shallow call per page.
 // traverse_graph(both, depth N) returns the whole reachable neighborhood's edges
 // in a single call, so a handful of deep roots cover the graph while keeping the
-// gbrain request log quiet (was 1 shallow call × up to 60 seeds = 60 reads/build;
+// the brain request log quiet (was 1 shallow call × up to 60 seeds = 60 reads/build;
 // now ~TRAVERSE_ROOTS reads/build). Roots are the most-relevant pages; depth 5
-// (gbrain's default, cap 10) reaches across the connected brain.
+// (the brain's default, cap 10) reaches across the connected brain.
 const TRAVERSE_ROOTS = 8;
 const TRAVERSE_DEPTH = 5;
 let cache: { data: GraphData; at: number } | null = null;
 // Single-flight: concurrent cache misses share one rebuild instead of each
-// fanning the full list_pages + seed-query + traversal pipeline at gbrain.
+// fanning the full list_pages + seed-query + traversal pipeline at the brain.
 let inflight: Promise<GraphData> | null = null;
 
 // mem0-migrated pages carry a content-hash as their title (e.g. "7416e83d").
@@ -51,9 +51,9 @@ interface LinkRow {
 // outgoing — so a few deep reads cover the graph (see TRAVERSE_ROOTS above).
 //
 // `ok` distinguishes "this root genuinely reached no edges" from "the read
-// failed": collapsing both to [] is how a transient gbrain hiccup silently
+// failed": collapsing both to [] is how a transient the brain hiccup silently
 // turned the whole graph edgeless (every node degree 0 → uniform scatter).
-// A read counts as failed when the call threw, gbrain flagged a tool-level
+// A read counts as failed when the call threw, the brain flagged a tool-level
 // error (isError — callTool does NOT throw on those), the payload wasn't an
 // array, or a non-empty array carried no usable {from_slug, to_slug} rows
 // (schema drift: e.g. a backend answering with node rows instead of edges).
@@ -81,7 +81,7 @@ export async function buildGraph(): Promise<GraphData> {
     return await inflight;
   } catch (err) {
     // Stale beats 502: an expired-but-real graph is better than an error page,
-    // and it keeps a degraded gbrain from being hammered with full rebuilds.
+    // and it keeps a degraded the brain from being hammered with full rebuilds.
     if (cache) {
       console.warn("graph: rebuild failed — serving stale graph", err);
       return cache.data;
@@ -93,7 +93,7 @@ export async function buildGraph(): Promise<GraphData> {
 async function rebuild(): Promise<GraphData> {
   const cfg = loadConfig();
   // Every upstream read feeds ONE failure signal. Seed-phase failures used to
-  // be invisible (caught to []), which let a total gbrain outage cache an
+  // be invisible (caught to []), which let a total the brain outage cache an
   // EMPTY graph as healthy for the full TTL — and let an all-seed-query
   // failure silently fall back to recency-ordered roots, the exact
   // scattered-graph regression this module guards against.
@@ -135,7 +135,7 @@ async function rebuild(): Promise<GraphData> {
       titles.set(it.slug, { title: it.title ?? it.slug, type: it.type });
     }
   }
-  // 2. Edges from gbrain's ACTUAL link graph (incoming + outgoing) via a few deep
+  // 2. Edges from the brain's ACTUAL link graph (incoming + outgoing) via a few deep
   // traversals from the most-relevant root pages — not a regex over the search
   // snippet. This surfaces the mentions/manual/typed edges and the wikilinks that
   // live outside the matched chunk, which the old snippet-scan silently dropped.

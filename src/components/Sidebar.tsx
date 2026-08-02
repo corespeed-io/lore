@@ -8,25 +8,15 @@ interface SidebarProps {
   onTabChange: (tab: Tab) => void;
   onSearch: (q: string) => void;
   searchRef?: React.RefObject<HTMLInputElement | null>;
-  adminEnabled: boolean;
 }
 
-// Product brand — the app is "Lore"; gbrain is the backend brain it views.
+// Product brand — the app is "Lore"; APP_TITLE names the brain it serves.
 const BRAND = "Lore";
 
 const NAV: { id: Tab; label: string }[] = [
   { id: "overview", label: "Dashboard" },
   { id: "graph", label: "Graph" },
   { id: "search", label: "Memories" },
-];
-
-// gbrain admin/observability sections — same shell, shown only when admin mode
-// is configured (server-gated; each section also fails closed on its own).
-const ADMIN_NAV: { id: Tab; label: string }[] = [
-  { id: "requests", label: "Requests" },
-  { id: "agents", label: "Access" },
-  { id: "jobs", label: "Queue" },
-  { id: "calibration", label: "Track record" },
 ];
 
 const ICONS: Partial<Record<Tab, React.ReactNode>> = {
@@ -79,77 +69,9 @@ const ICONS: Partial<Record<Tab, React.ReactNode>> = {
       <path d="M6 5.3h4.2M5.5 8h5.2M6.5 10.6h3.4" strokeLinecap="round" />
     </svg>
   ),
-  requests: (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-hidden="true"
-    >
-      <path d="M4.5 3.5h9M4.5 8h9M4.5 12.5h9" strokeLinecap="round" />
-      <circle cx="2.5" cy="3.5" r="0.8" fill="currentColor" stroke="none" />
-      <circle cx="2.5" cy="8" r="0.8" fill="currentColor" stroke="none" />
-      <circle cx="2.5" cy="12.5" r="0.8" fill="currentColor" stroke="none" />
-    </svg>
-  ),
-  agents: (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-hidden="true"
-    >
-      <circle cx="6" cy="5" r="2.2" />
-      <path d="M2.5 13c.6-2.3 2-3.4 3.5-3.4S8.9 10.7 9.5 13" strokeLinecap="round" />
-      <path d="M10.2 7.1a2 2 0 1 0 .2-4M10.8 10c1.2.2 2.2 1.2 2.7 3" strokeLinecap="round" />
-    </svg>
-  ),
-  jobs: (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-hidden="true"
-    >
-      <rect x="2.5" y="3" width="11" height="3" rx="1" />
-      <rect x="2.5" y="10" width="11" height="3" rx="1" />
-      <path d="M5 8h6M8 6v4" strokeLinecap="round" />
-    </svg>
-  ),
-  calibration: (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      aria-hidden="true"
-    >
-      <path d="M3 11a5.5 5.5 0 1 1 10 0" strokeLinecap="round" />
-      <path d="M8 8.5 11 5" strokeLinecap="round" />
-      <circle cx="8" cy="11" r="1.5" />
-      <path d="M3.5 11h-1M13.5 11h-1M4.3 6.3l-.8-.8M11.7 6.3l.8-.8" strokeLinecap="round" />
-    </svg>
-  ),
 };
 
-export function Sidebar({
-  activeTab,
-  onTabChange,
-  onSearch,
-  searchRef,
-  adminEnabled,
-}: SidebarProps) {
+export function Sidebar({ activeTab, onTabChange, onSearch, searchRef }: SidebarProps) {
   const localRef = useRef<HTMLInputElement>(null);
   const inputRef = searchRef ?? localRef;
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -188,7 +110,7 @@ export function Sidebar({
     }
   }
 
-  const items = adminEnabled ? [...NAV, ...ADMIN_NAV] : NAV;
+  const items = NAV;
 
   return (
     <>

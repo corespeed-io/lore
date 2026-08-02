@@ -5,7 +5,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
 
-// Per-instance fixed-window limiter for the gbrain-proxying routes. Each call is
+// Per-instance fixed-window limiter for the brain-reading routes. Each call is
 // a 1:1 proxy onto the shared brain, so an authenticated/compromised account
 // could otherwise loop to exhaust its quota.
 // ponytail: per-isolate in-memory, fine for a single Railway replica; swap for a
@@ -78,11 +78,11 @@ async function tokenId(token: string): Promise<string> {
 // The client address OUR infrastructure observed, or null when we cannot see
 // one. null — everyone shares a bucket — is the safe answer; inventing an
 // identity out of a header the caller types is not a limiter at all.
-function clientAddr(headers: Headers, behindCloudflare: boolean): string | null {
-  // Cloudflare sets (and overwrites) cf-connecting-ip, but only for traffic that
-  // really arrives through Cloudflare. AUTH_MODE=proxy is the operator declaring
-  // that it does; anywhere else this header is just attacker input.
-  if (behindCloudflare) {
+function clientAddr(headers: Headers, behindGateway: boolean): string | null {
+  // A gateway sets (and overwrites) cf-connecting-ip for traffic that really
+  // arrives through it. AUTH_MODE=gateway is the operator declaring there IS
+  // one in front; anywhere else this header is just attacker input.
+  if (behindGateway) {
     const ip = headers.get("cf-connecting-ip")?.trim();
     if (ip) return ip;
   }
@@ -110,7 +110,7 @@ export async function middleware(req: NextRequest) {
 
   const scope = scopeOf(path);
   const authorization = req.headers.get("authorization");
-  const addr = clientAddr(req.headers, loadConfig().authMode === "proxy");
+  const addr = clientAddr(req.headers, loadConfig().authMode === "gateway");
 
   // AUTHENTICATE FIRST, THEN CHARGE. The old order did the opposite and it cost
   // two defects with one root: the middleware only checked that a Bearer header
@@ -147,7 +147,7 @@ export async function middleware(req: NextRequest) {
     if (token && grantFor(authorization)) ids.push(`t:${await tokenId(token)}`);
     else denial = json("auth required", 401, { "WWW-Authenticate": "Bearer" });
   } else {
-    const r = await checkAuth(req.headers, req.cookies);
+    const r = await checkAuth(req.headers);
     if (!r.ok) {
       denial = json(
         r.detail ?? (r.status === 401 ? "auth required" : "forbidden"),

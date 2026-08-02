@@ -1,14 +1,14 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { callTool } from "../src/lib/gbrain.js";
 import { buildGraph, clearGraphCache, isHashTitle, nodeType } from "../src/lib/graph.js";
+import { callTool } from "../src/lib/tools.js";
 
-// Stub gbrain so buildGraph reads a fixed fixture instead of a live brain.
+// Stub the tool door so buildGraph reads a fixed fixture instead of a live brain.
 // `query` seeds the page set (titles/types); `traverse_graph` (direction=both,
 // deep) returns every edge in the slug's reachable neighborhood — incoming +
 // outgoing — in one call (shape: {from_slug, to_slug}), which is what the
 // build relies on.
-vi.mock("../src/lib/gbrain.js", async (orig) => {
-  const real = await orig<typeof import("../src/lib/gbrain.js")>();
+vi.mock("../src/lib/tools.js", async (orig) => {
+  const real = await orig<typeof import("../src/lib/tools.js")>();
   const SEEDS = [
     { slug: "companies/acme", title: "Acme", type: "company" },
     { slug: "people/ada", title: "Ada Lovelace", type: "person" },
@@ -198,7 +198,7 @@ test("buildGraph fails loud instead of caching an edgeless graph when traversals
   // Pages/seeds still resolve (nodes exist), but every edge read fails → the
   // graph would be all-isolated. That must throw, not cache a scattered graph.
   mocked.mockImplementation(async (tool, args) => {
-    if (tool === "traverse_graph") throw new Error("gbrain 429");
+    if (tool === "traverse_graph") throw new Error("brain 429");
     return base(tool, args);
   });
   try {
@@ -248,7 +248,7 @@ test("filter-emptiness is not failure: hash-only edges + a failed read still ser
   const base = baseImpl();
   // acme's only edge goes to a hash-titled page (dropped from the viz) and a
   // DIFFERENT root's read fails. Pre-filter edges exist, so the emptiness of
-  // data.links is a filtering artifact, not a gbrain hiccup — must not throw.
+  // data.links is a filtering artifact, not a brain hiccup — must not throw.
   mocked.mockImplementation(async (tool, args) => {
     if (tool === "traverse_graph") {
       if ((args as { slug?: string }).slug === "companies/acme")
@@ -256,7 +256,7 @@ test("filter-emptiness is not failure: hash-only edges + a failed read still ser
           isError: false,
           text: JSON.stringify([{ from_slug: "companies/acme", to_slug: "concepts/7416e83d" }]),
         };
-      throw new Error("gbrain 429");
+      throw new Error("brain 429");
     }
     return base(tool, args);
   });
@@ -303,7 +303,7 @@ test("hash-titled pages don't consume traversal-root slots", async () => {
   }
 });
 
-test("buildGraph fails loud on a total gbrain outage instead of caching an empty graph", async () => {
+test("buildGraph fails loud on a total brain outage instead of caching an empty graph", async () => {
   clearGraphCache();
   const mocked = vi.mocked(callTool);
   const base = baseImpl();
@@ -326,7 +326,7 @@ test("a partial traversal failure with surviving edges serves the graph but does
   const base = baseImpl();
   mocked.mockImplementation(async (tool, args) => {
     if (tool === "traverse_graph" && (args as { slug?: string }).slug !== "companies/acme")
-      throw new Error("gbrain 429");
+      throw new Error("brain 429");
     return base(tool, args);
   });
   try {
@@ -354,7 +354,7 @@ test("buildGraph serves the last good graph stale when a rebuild fails", async (
   try {
     vi.setSystemTime(Date.now() + 3_600_001); // expire the TTL
     mocked.mockImplementation(async (tool, args) => {
-      if (tool === "traverse_graph") throw new Error("gbrain down");
+      if (tool === "traverse_graph") throw new Error("brain down");
       return base(tool, args);
     });
     // the rebuild fails, but the expired-yet-real graph beats a 502
