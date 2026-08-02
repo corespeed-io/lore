@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite/vector";
@@ -18,6 +19,7 @@ import {
   parseNote,
   pathToSlug,
   refAddress,
+  slugCollisions,
 } from "../src/server/vault.js";
 
 const DIM = 8;
@@ -346,4 +348,48 @@ test("refAddress refuses to address by a spelling that DELETES a character", () 
   // it still addresses — and it agrees with the slug the importer writes for the
   // same filename, which is what the invariant test above pins.
   expect(refAddress('qq/"Quoted"')).toBe("qq/quoted");
+});
+
+// DERIVED FROM THE THREAT, NOT FROM THE FIX — which is the rule this finding
+// produced. The server-side collision guard was real and its test went red when
+// neutered, but both the guard and the test assumed "a batch is one restore". The
+// client posts BATCH=25 slices, so a restore is ceil(n/25) POSTs, and two files
+// meaning one page land in different requests: each reports `created`, the second
+// overwrites the first, and no server-side check can see it. `Projects/…` and
+// `projects/…` sort far apart, so in practice they separate.
+//
+// The threat is "a user restores a vault", so the check belongs where the whole
+// restore is visible — the client, before it slices.
+test("slugCollisions folds a whole file list, however it would be batched", () => {
+  const paths = [
+    "Projects/Roadmap.md",
+    ...Array.from({ length: 40 }, (_, i) => `notes/n${i}.md`),
+    "projects/roadmap-.md",
+  ];
+  // 42 files: with BATCH=25 the two colliding ones are in different slices.
+  expect(paths.indexOf("Projects/Roadmap.md")).toBeLessThan(25);
+  expect(paths.indexOf("projects/roadmap-.md")).toBeGreaterThanOrEqual(25);
+
+  const collisions = slugCollisions(paths);
+  expect([...collisions.keys()]).toEqual(["projects/roadmap"]);
+  expect(collisions.get("projects/roadmap")).toEqual([
+    "Projects/Roadmap.md",
+    "projects/roadmap-.md",
+  ]);
+  // MIRROR: an ordinary vault has none, or every import would report failures.
+  expect(slugCollisions(["a/b.md", "a/c.md", "d.md"]).size).toBe(0);
+});
+
+// A structural pin, because the whole-restore check lives in a React component
+// that a node test cannot drive. Same shape as the middleware-location test: where
+// a behavioural assertion cannot reach, pin the property of the code that matters.
+test("the import page folds the whole list BEFORE it slices, and posts no collided file", () => {
+  const src = readFileSync(new URL("../src/app/import/page.tsx", import.meta.url), "utf8");
+  const fold = src.indexOf("slugCollisions(");
+  const slice = src.indexOf("i += BATCH");
+  expect(fold, "the page does not fold paths to slugs at all").toBeGreaterThan(-1);
+  expect(fold, "the fold happens after the slicing loop starts").toBeLessThan(slice);
+  // ...and the collided files are excluded from what is posted, rather than one of
+  // them being allowed through as a silent winner.
+  expect(src).toMatch(/filter\(\(f\) => !collided\.has\(filePath\(f\)\)\)/);
 });

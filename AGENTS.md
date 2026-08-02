@@ -85,34 +85,39 @@ each forbidden byte and fails if any goes undetected. A rule enforced by discipl
 is a rule with a path around it; a check nobody has watched fail is a rule that may
 not be enforced at all.
 
-**GOTCHA — a test that never invokes the thing it is named for.** FIVE tests on
-this branch passed for a reason unrelated to the fix they guarded, and one of them
-did so while its commit message claimed it could not. **Coverage cannot catch
-this**: the changed line runs — verified, `route.ts`'s lease line was executed by a
-neighbouring test and would have reported green — but no assertion's truth value
-depended on it.
+**GOTCHA — a test that cannot falsify the fix it covers.** Two shapes, both
+shipped here, and the second was found only AFTER the first was written down.
 
-The check is one question: **name the line you changed, change it back, and say
-which named assertion fails.** If you cannot name the assertion BEFORE running the
-suite, the test is hollow.
+(1) HOLLOW: the test never reaches the fix through the door production uses — it
+calls a helper or the database directly, so it asserts a property of the HARNESS
+(that PGlite has a clock, that PGlite stores microseconds, that a shared helper
+agrees with the SQL beside it) and stays green when the fix is deleted. Five of
+these shipped. **Coverage cannot catch them**: the changed line runs — verified —
+but no assertion's truth value depends on it. A guard proving the harness can do X
+is not evidence the CODE does X, and the guard's presence is what makes it feel
+safe.
 
-The mechanical proxy, which is grep-able and belongs in review: **a regression test
-must reach the fix through the same door production does.** A test naming a route
-must import that route's handler; a test naming extraction must call extraction.
-All five skipped that door and asserted a property of the ENVIRONMENT, or of the
-fix's own internal consistency, instead — that PGlite has a clock, that PGlite
-stores microseconds, that a shared helper agrees with the SQL beside it, that a
-probe's log was non-empty. A guard proving the HARNESS can do X is not evidence
-that the CODE does X, and the guard's presence is exactly what makes it feel safe.
+(2) PREMISE-SHARING: the test drives the real path and DOES go red when the fix is
+removed, but rests on the same assumption the fix does. The import collision guard
+assumed "a batch is one restore"; the test posted one batch; the real client posts
+25 at a time. The test agreed with the bug instead of testing it, and it passed
+every check written for shape (1).
 
-So reverse-verify every fix — reintroduce the exact pre-fix expression, watch the
-named test go red, capture the message, restore — and prefer shipping the mutation
+The check for both: **derive the test from the THREAT, not from the fix.** A test
+written by looking at your change encodes your change's assumptions, including the
+wrong ones. Ask what the user actually does — restore a vault, which is many POSTs
+— and make the test do that. And: **a fix justified by a claim about a caller must
+be verified by READING that caller.** A claim about `page.tsx` asserted in a
+comment inside `route.ts` is not evidence; grep the caller.
+
+Then reverse-verify: reintroduce the exact pre-fix expression, watch the named test
+go red, capture the message, restore. Name the assertion that will fail BEFORE
+running the suite — if you cannot, the test is hollow. Prefer shipping the mutation
 WITH the test, the way `tests/smoke.test.ts` proves its own detector before
-trusting its scan. A check nobody has watched fail is a rule that may not be
-enforced at all; that is true of a test as much as of a scanner.
-ponytail: the unskippable version is a small registry of
+trusting its scan.
+ponytail: the unskippable version is a registry of
 `(file, anchor, pre-fix expression)` plus a CI job that applies each and requires
-the named test to go red. Worth building if a sixth one shows up.
+the named test to go red.
 
 **GOTCHA — do not run `npm run build` while `npm run dev` is running.** They share
 `.next/` and the build clobbers the dev webpack manifest → dev serves a blank page
@@ -686,9 +691,12 @@ written down.
   `trailing-`, a fullwidth or NFD spelling), `/api/export` writes `${slug}.md`, and
   `pathToSlug` folds it on the way back — so such a page comes back renamed. Links
   still resolve, because a path-shaped ref is compared by folded address. What is
-  NO LONGER possible is the destructive case: two files in one batch that fold to
-  one slug are reported as a collision instead of one silently overwriting the
-  other. Closing the rename half means either tightening `invalidSlug` (which
+  closed is the destructive case — two files that fold to one slug, one silently
+  overwriting the other — and it is closed in TWO places because it needs both:
+  `/api/import` reports an intra-batch collision, and `src/app/import/page.tsx`
+  folds the WHOLE file list before it slices. The server alone was not enough, and
+  an earlier version of this line claimed it was: the client posts `BATCH = 25`, so
+  a restore is many POSTs and only the client ever sees the whole restore. Closing the rename half means either tightening `invalidSlug` (which
   removes deliberately supported slugs) or carrying the true slug in exported
   frontmatter (which puts a generated key in user data); both want their own review.
 - **A fullwidth solidus makes `pathToSlug` and `refAddress` disagree** (`x-／-y.md`

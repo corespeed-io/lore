@@ -93,6 +93,27 @@ export function pathToSlug(path: string): string {
   return slugPath(path.replace(/\\/g, "/"));
 }
 
+// WHICH PATHS MEAN THE SAME PAGE. A restore is the whole file list, not one
+// request: /api/import can only see the batch it was handed, and the client posts
+// in slices of 25, so a server-side check closes the destructive case only when
+// the two colliding files happen to land in the same slice. `Projects/…` and
+// `projects/…` sort far apart, so in practice they do not.
+//
+// Pure, and here rather than in the page, because "the slug this path means" is
+// already decided here — a second fold in the client would be the two-readers bug
+// this file exists to have exactly one of.
+export function slugCollisions(paths: readonly string[]): Map<string, string[]> {
+  const bySlug = new Map<string, string[]>();
+  for (const path of paths) {
+    const slug = pathToSlug(path);
+    if (!slug) continue;
+    const seen = bySlug.get(slug);
+    if (seen) seen.push(path);
+    else bySlug.set(slug, [path]);
+  }
+  return new Map([...bySlug].filter(([, group]) => group.length > 1));
+}
+
 // The slug a path-shaped ref ADDRESSES — or null when the ref contains no
 // separator and is therefore a NAME, which any page answering to it may satisfy.
 //

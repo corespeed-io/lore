@@ -6,6 +6,7 @@
 // resolve, because an import that silently produces an edgeless graph is the
 // signature failure of a tool like this.
 
+import { slugCollisions } from "@/server/vault";
 import { useCallback, useRef, useState } from "react";
 
 interface FileResult {
@@ -30,6 +31,10 @@ export default function ImportPage() {
   const run = useCallback(
     async (picked: FileList) => {
       const files = [...picked].filter((f) => /\.(md|markdown)$/i.test(f.name));
+      // webkitRelativePath keeps the folder structure the user picked, which is
+      // what becomes the slug. Named once so the pre-flight fold below and the
+      // payload built inside the loop cannot disagree about a file's path.
+      const filePath = (f: File) => f.webkitRelativePath || f.name;
       setError("");
       setResults([]);
       setDone(0);
@@ -38,17 +43,41 @@ export default function ImportPage() {
         setError("No .md files in that folder.");
         return;
       }
+      // THE WHOLE LIST, BEFORE SLICING. The server can only see the batch it was
+      // handed, and this loop posts 25 at a time — so two files that mean one page
+      // land in different requests, each reports `created`, and the second
+      // silently overwrites the first. Only this side ever holds the whole
+      // restore, so this is the only place the check can be complete. The server
+      // keeps its intra-batch check as defence in depth.
+      const collisions = slugCollisions(files.map(filePath));
+      const collided = new Set<string>();
+      const preflight: FileResult[] = [];
+      for (const [slug, group] of collisions) {
+        for (const path of group) {
+          collided.add(path);
+          preflight.push({
+            path,
+            slug,
+            status: "failed",
+            detail: `collides with ${group.filter((p) => p !== path).join(", ")}: all name the page '${slug}'`,
+          });
+        }
+      }
       setRunning(true);
       cancelled.current = false;
-      const all: FileResult[] = [];
+      const all: FileResult[] = [...preflight];
+      if (preflight.length) setResults([...preflight]);
       try {
-        for (let i = 0; i < files.length && !cancelled.current; i += BATCH) {
-          const slice = files.slice(i, i + BATCH);
+        // Collided files are NOT posted: they are already reported, and posting
+        // one of a colliding pair would make it a silent winner.
+        const sendable = files.filter((f) => !collided.has(filePath(f)));
+        for (let i = 0; i < sendable.length && !cancelled.current; i += BATCH) {
+          const slice = sendable.slice(i, i + BATCH);
           const payload = await Promise.all(
             slice.map(async (f) => ({
               // webkitRelativePath keeps the folder structure the user picked,
               // which is what becomes the slug.
-              path: f.webkitRelativePath || f.name,
+              path: filePath(f),
               text: await f.text(),
             })),
           );
@@ -64,7 +93,7 @@ export default function ImportPage() {
           const body = (await res.json()) as { results: FileResult[] };
           all.push(...body.results);
           setResults([...all]);
-          setDone(Math.min(i + BATCH, files.length));
+          setDone(Math.min(i + BATCH, sendable.length) + preflight.length);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "import failed");
