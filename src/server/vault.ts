@@ -93,16 +93,36 @@ export function pathToSlug(path: string): string {
   return slugPath(path.replace(/\\/g, "/"));
 }
 
-// WHICH PATHS MEAN THE SAME PAGE. A restore is the whole file list, not one
-// request: /api/import can only see the batch it was handed, and the client posts
-// in slices of 25, so a server-side check closes the destructive case only when
-// the two colliding files happen to land in the same slice. `Projects/…` and
-// `projects/…` sort far apart, so in practice they do not.
+// WHICH FILES TO POST, AND WHICH TO REFUSE — the whole restore decided in one
+// pure function.
 //
-// Pure, and here rather than in the page, because "the slug this path means" is
-// already decided here — a second fold in the client would be the two-readers bug
-// this file exists to have exactly one of.
-export function slugCollisions(paths: readonly string[]): Map<string, string[]> {
+// A restore is the whole file list, not one request: /api/import can only see the
+// batch it was handed, and the client posts in slices of 25, so a server-side
+// check closes the destructive case only when the two colliding files happen to
+// land in the same slice. `Projects/…` and `projects/…` sort far apart, so in
+// practice they do not.
+//
+// Returned as a PLAN rather than done in the page, and that is the second lesson
+// this function carries. The first version put the fold, the exclusion and the
+// posting in the component, and the only thing a node test could reach was a
+// regex over the source — which asserted the PARTS existed and never that the
+// loop CONSUMED them. Leaving the fold and the filter intact while reconnecting
+// the loop to the unfiltered list passed the whole suite with the defect back.
+// A pure plan is behaviourally testable, so the untestable surface shrinks to one
+// line: does the page post what the plan said to post.
+//
+// Here rather than in the page for the usual reason too: "the slug this path
+// means" is already decided in this file, and a second fold in the client would
+// be the two-readers bug this file exists to have exactly one of.
+export interface RestorePlan {
+  /** Paths to post, in input order. */
+  send: string[];
+  /** Paths refused because another file names the same page. BOTH members of a
+   *  collision are refused — posting one would just make it a silent winner. */
+  collided: { path: string; slug: string; others: string[] }[];
+}
+
+export function planRestore(paths: readonly string[]): RestorePlan {
   const bySlug = new Map<string, string[]>();
   for (const path of paths) {
     const slug = pathToSlug(path);
@@ -111,7 +131,18 @@ export function slugCollisions(paths: readonly string[]): Map<string, string[]> 
     if (seen) seen.push(path);
     else bySlug.set(slug, [path]);
   }
-  return new Map([...bySlug].filter(([, group]) => group.length > 1));
+  const collided: RestorePlan["collided"] = [];
+  const refused = new Set<string>();
+  for (const [slug, group] of bySlug) {
+    if (group.length < 2) continue;
+    for (const path of group) {
+      refused.add(path);
+      collided.push({ path, slug, others: group.filter((p) => p !== path) });
+    }
+  }
+  // A path that yields no slug is left to the server to refuse and report, so
+  // this function never silently drops a file the caller handed it.
+  return { send: paths.filter((p) => !refused.has(p)), collided };
 }
 
 // The slug a path-shaped ref ADDRESSES — or null when the ref contains no

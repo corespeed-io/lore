@@ -6,7 +6,7 @@
 // resolve, because an import that silently produces an edgeless graph is the
 // signature failure of a tool like this.
 
-import { slugCollisions } from "@/server/vault";
+import { planRestore } from "@/server/vault";
 import { useCallback, useRef, useState } from "react";
 
 interface FileResult {
@@ -43,34 +43,28 @@ export default function ImportPage() {
         setError("No .md files in that folder.");
         return;
       }
-      // THE WHOLE LIST, BEFORE SLICING. The server can only see the batch it was
-      // handed, and this loop posts 25 at a time — so two files that mean one page
-      // land in different requests, each reports `created`, and the second
-      // silently overwrites the first. Only this side ever holds the whole
-      // restore, so this is the only place the check can be complete. The server
-      // keeps its intra-batch check as defence in depth.
-      const collisions = slugCollisions(files.map(filePath));
-      const collided = new Set<string>();
-      const preflight: FileResult[] = [];
-      for (const [slug, group] of collisions) {
-        for (const path of group) {
-          collided.add(path);
-          preflight.push({
-            path,
-            slug,
-            status: "failed",
-            detail: `collides with ${group.filter((p) => p !== path).join(", ")}: all name the page '${slug}'`,
-          });
-        }
-      }
+      // THE WHOLE LIST, BEFORE SLICING, and the decision itself is made by a pure
+      // function so it can be tested by behaviour rather than pinned by a regex.
+      // The server only sees the batch it was handed and this loop posts 25 at a
+      // time, so only this side ever holds the whole restore. The server keeps its
+      // intra-batch check as defence in depth.
+      const plan = planRestore(files.map(filePath));
+      const preflight: FileResult[] = plan.collided.map((c) => ({
+        path: c.path,
+        slug: c.slug,
+        status: "failed",
+        detail: `collides with ${c.others.join(", ")}: all name the page '${c.slug}'`,
+      }));
       setRunning(true);
       cancelled.current = false;
       const all: FileResult[] = [...preflight];
       if (preflight.length) setResults([...preflight]);
       try {
-        // Collided files are NOT posted: they are already reported, and posting
-        // one of a colliding pair would make it a silent winner.
-        const sendable = files.filter((f) => !collided.has(filePath(f)));
+        // THE ONE LINE A TEST CANNOT REACH: the page posts exactly what the plan
+        // said to post. Everything that decides WHICH files those are is in
+        // planRestore, where it is tested against a real 42-file threat list.
+        const send = new Set(plan.send);
+        const sendable = files.filter((f) => send.has(filePath(f)));
         for (let i = 0; i < sendable.length && !cancelled.current; i += BATCH) {
           const slice = sendable.slice(i, i + BATCH);
           const payload = await Promise.all(

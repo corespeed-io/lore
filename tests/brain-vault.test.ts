@@ -18,8 +18,8 @@ import {
   parseFrontmatter,
   parseNote,
   pathToSlug,
+  planRestore,
   refAddress,
-  slugCollisions,
 } from "../src/server/vault.js";
 
 const DIM = 8;
@@ -350,46 +350,71 @@ test("refAddress refuses to address by a spelling that DELETES a character", () 
   expect(refAddress('qq/"Quoted"')).toBe("qq/quoted");
 });
 
-// DERIVED FROM THE THREAT, NOT FROM THE FIX — which is the rule this finding
-// produced. The server-side collision guard was real and its test went red when
-// neutered, but both the guard and the test assumed "a batch is one restore". The
-// client posts BATCH=25 slices, so a restore is ceil(n/25) POSTs, and two files
-// meaning one page land in different requests: each reports `created`, the second
-// overwrites the first, and no server-side check can see it. `Projects/…` and
-// `projects/…` sort far apart, so in practice they separate.
+// DERIVED FROM THE THREAT, NOT FROM THE FIX. The server-side collision guard was
+// real and its test went red when neutered, but both the guard and the test
+// assumed "a batch is one restore". The client posts BATCH=25 slices, so a restore
+// is ceil(n/25) POSTs and two files meaning one page land in different requests:
+// each reports `created`, the second overwrites the first, and no server-side
+// check can see it. The threat is "a user restores a vault", so the decision
+// belongs where the whole restore is visible.
 //
-// The threat is "a user restores a vault", so the check belongs where the whole
-// restore is visible — the client, before it slices.
-test("slugCollisions folds a whole file list, however it would be batched", () => {
+// BEHAVIOUR, not a source regex. The first version of this pinned the fix's PARTS
+// — that the fold preceded the slice, that a filter expression existed — and a
+// reviewer defeated it by leaving every part intact and reconnecting only the loop
+// to the unfiltered list: suite green, defect back. A pin asserts tokens; this
+// asserts what the plan decides.
+test("planRestore refuses BOTH members of a collision, however the list would be batched", () => {
   const paths = [
     "Projects/Roadmap.md",
     ...Array.from({ length: 40 }, (_, i) => `notes/n${i}.md`),
     "projects/roadmap-.md",
   ];
-  // 42 files: with BATCH=25 the two colliding ones are in different slices.
+  // Non-vacuity: with BATCH=25 the colliding pair provably straddles a slice
+  // boundary, which is the whole reason a server-side check cannot see it.
   expect(paths.indexOf("Projects/Roadmap.md")).toBeLessThan(25);
   expect(paths.indexOf("projects/roadmap-.md")).toBeGreaterThanOrEqual(25);
 
-  const collisions = slugCollisions(paths);
-  expect([...collisions.keys()]).toEqual(["projects/roadmap"]);
-  expect(collisions.get("projects/roadmap")).toEqual([
+  const plan = planRestore(paths);
+  // NEITHER is posted — posting one would just make it a silent winner.
+  expect(plan.send).not.toContain("Projects/Roadmap.md");
+  expect(plan.send).not.toContain("projects/roadmap-.md");
+  expect(plan.send).toHaveLength(40);
+  expect(plan.collided.map((c) => c.path).sort()).toEqual([
     "Projects/Roadmap.md",
     "projects/roadmap-.md",
   ]);
-  // MIRROR: an ordinary vault has none, or every import would report failures.
-  expect(slugCollisions(["a/b.md", "a/c.md", "d.md"]).size).toBe(0);
+  // Each side names the other, so the report says what it collided WITH.
+  expect(plan.collided.find((c) => c.path === "Projects/Roadmap.md")?.others).toEqual([
+    "projects/roadmap-.md",
+  ]);
+  expect(plan.collided.every((c) => c.slug === "projects/roadmap")).toBe(true);
+
+  // MIRROR: an ordinary vault posts everything and reports nothing, or every
+  // import would start failing.
+  const clean = planRestore(["a/b.md", "a/c.md", "d.md"]);
+  expect(clean.send).toEqual(["a/b.md", "a/c.md", "d.md"]);
+  expect(clean.collided).toEqual([]);
+  // Order is preserved, because the page filters its File objects by this list.
+  expect(planRestore(["z.md", "a.md"]).send).toEqual(["z.md", "a.md"]);
+  // Three files meaning one page: all three refused, each naming the other two.
+  const triple = planRestore(["A/B.md", "a/b.md", "a/b-.md"]);
+  expect(triple.send).toEqual([]);
+  expect(triple.collided).toHaveLength(3);
+  expect(triple.collided[0].others).toHaveLength(2);
 });
 
-// A structural pin, because the whole-restore check lives in a React component
-// that a node test cannot drive. Same shape as the middleware-location test: where
-// a behavioural assertion cannot reach, pin the property of the code that matters.
-test("the import page folds the whole list BEFORE it slices, and posts no collided file", () => {
+// ONE LINE left that a node test cannot reach: that the page posts what the plan
+// returned. Everything deciding WHICH files those are is above, in behaviour. This
+// is the middleware-location shape — where an assertion cannot reach, pin the
+// property of the code that matters — and it is deliberately as small as it can be.
+test("the import page posts exactly what planRestore returned", () => {
   const src = readFileSync(new URL("../src/app/import/page.tsx", import.meta.url), "utf8");
-  const fold = src.indexOf("slugCollisions(");
-  const slice = src.indexOf("i += BATCH");
-  expect(fold, "the page does not fold paths to slugs at all").toBeGreaterThan(-1);
-  expect(fold, "the fold happens after the slicing loop starts").toBeLessThan(slice);
-  // ...and the collided files are excluded from what is posted, rather than one of
-  // them being allowed through as a silent winner.
-  expect(src).toMatch(/filter\(\(f\) => !collided\.has\(filePath\(f\)\)\)/);
+  const plan = src.indexOf("planRestore(");
+  const loop = src.indexOf("i += BATCH");
+  expect(plan, "the page does not call planRestore at all").toBeGreaterThan(-1);
+  expect(plan, "the plan is computed after the slicing loop starts").toBeLessThan(loop);
+  // The posted list is derived FROM the plan, not from the raw file list.
+  expect(src).toMatch(/const send = new Set\(plan\.send\)/);
+  expect(src).toMatch(/files\.filter\(\(f\) => send\.has\(filePath\(f\)\)\)/);
+  expect(src).toMatch(/sendable\.slice\(i, i \+ BATCH\)/);
 });
