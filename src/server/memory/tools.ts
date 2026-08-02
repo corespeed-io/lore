@@ -210,9 +210,7 @@ function resolveCallScope(a: Record<string, unknown>): CallScope {
   const stale = REMOVED_SCOPE_ARGS.filter((k) => a[k] !== undefined && a[k] !== null);
   if (stale.length) {
     throw new Error(
-      `${stale.join(", ")} ${stale.length > 1 ? "no longer exist" : "no longer exists"}: ` +
-        "lore has one brain and one scope. Drop them; use thread_id to group a " +
-        "conversation's events.",
+      `${stale.join(", ")} ${stale.length > 1 ? "no longer exist" : "no longer exists"}: lore has one brain and one scope. Drop them; use thread_id to group a conversation's events.`,
     );
   }
   return {
