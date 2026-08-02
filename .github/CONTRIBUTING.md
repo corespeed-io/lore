@@ -100,7 +100,7 @@ feat: add timeline visualization module
 
 The following items are deferred post-v1:
 
-1. **Timing-safe password comparison** — `password` auth mode compares with strict equality (`===`). A constant-time compare would mitigate timing attacks (see `src/lib/auth.ts`). Note `password` mode isn't the recommended deployment posture — prefer `proxy` (Cloudflare Access), whose JWT is fully verified.
+1. **Timing-safe password comparison** — `password` auth mode compares in constant time. A constant-time compare would mitigate timing attacks (see `src/lib/auth.ts`). Note `password` mode isn't the recommended deployment posture — prefer `gateway` (a JWT- or secret-verified proxy), whose JWT is fully verified.
 
 ## Questions?
 

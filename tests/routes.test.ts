@@ -850,3 +850,20 @@ test("GET /api/export fails closed and takes the WRITE token only", async () => 
   expect((await get(READ)).status).toBe(401);
   expect((await get(WRITE)).status).toBe(404);
 });
+
+// The route tests above stub callTool, so they cannot see whether the REAL one
+// still refuses. That gap is not theoretical: the mock carried its own `throw
+// new ToolNotAllowedError`, and when callTool stopped throwing it — every write
+// tool answering 502 "brain error" instead of 403 — the suite stayed green.
+// This asserts the decision itself, unmocked, off the same registry the
+// dispatcher reads.
+test("the real callTool refuses a write tool, so /api/call can answer 403", async () => {
+  const { callTool, ToolNotAllowedError } =
+    await vi.importActual<typeof import("../src/lib/tools.js")>("../src/lib/tools.js");
+  const { TOOLS } = await import("../src/server/mcp.js");
+
+  for (const name of Object.keys(TOOLS).filter((t) => TOOLS[t].access === "write")) {
+    await expect(callTool(name, {}), name).rejects.toBeInstanceOf(ToolNotAllowedError);
+  }
+  await expect(callTool("no_such_tool", {})).rejects.toBeInstanceOf(ToolNotAllowedError);
+});

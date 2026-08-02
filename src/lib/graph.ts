@@ -51,7 +51,7 @@ interface LinkRow {
 // outgoing — so a few deep reads cover the graph (see TRAVERSE_ROOTS above).
 //
 // `ok` distinguishes "this root genuinely reached no edges" from "the read
-// failed": collapsing both to [] is how a transient the brain hiccup silently
+// failed": collapsing both to [] is how a transient brain hiccup silently
 // turned the whole graph edgeless (every node degree 0 → uniform scatter).
 // A read counts as failed when the call threw, the brain flagged a tool-level
 // error (isError — callTool does NOT throw on those), the payload wasn't an

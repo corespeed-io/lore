@@ -2,30 +2,22 @@
 //
 // Three rules shape these signatures:
 //
-//   ONE SCOPE SHAPE. Every tool here — writer and reader alike — publishes the
-//   SAME four scope fields and resolves them with the SAME parser, and neither
-//   is done by the tool: `scoped()` bolts the fields onto the schema and runs
-//   the parse in front of the handler, and MEMORY_TOOLS is CONSTRUCTED from that
-//   wrapper rather than written out. A handler therefore never sees
-//   a.thread_id / a.scope_id at all; it is handed a resolved CallScope. That is
-//   the fix for write-only memory: a writer's parser and a reader's parser
-//   cannot drift apart when there is only one parser. What drifted before:
-//   `remember` published scope/scope_id/thread_id and stored under scope_id,
-//   while `recall` published thread_id/agent_id and read neither — so
-//   remember({scope_id:'x'}) answered saved:true with a memory that no spelling
-//   of recall, inspect_memory or get_page could ever return.
-//
-//   The server decides scope and filters. A caller asks for "agent scope" and
-//   names its agent; it cannot pass a database predicate, widen a scope, or
-//   select rows the policy would exclude. Anything an LLM controls is a request,
-//   not a query. Naming a scope WIDER than the one the call is working in
-//   (scope:'vault' alongside a thread_id) is refused rather than honoured: the
-//   vault is readable from every thread and every agent, so committing there is
-//   publishing, and publishing has to be the whole intent of the call.
+//   ONE SCOPE. There is one brain and one user, so a memory has nowhere else to
+//   be. This used to be a multi-tenant model — thread/agent/vault, four
+//   interchangeable argument spellings, thread ownership — and it could not work:
+//   the server has no independent source of identity, so `agent_id` was a claim a
+//   caller made about itself against a shared credential. The guard proved it, by
+//   only firing when a caller NAMED an agent; omitting the field read, wrote and
+//   revoked another thread's memories on a read-only token. `thread_id` survives
+//   as a grouping key for a conversation's events, never as a boundary, and the
+//   removed fields are REFUSED rather than ignored — a caller that still sends
+//   `agent_id` believes it is writing somewhere private.
 //
 //   `remember` never says "saved" when it did not save. Its result distinguishes
 //   committed / candidate / conflict / rejected, because an agent that believes a
-//   candidate was committed will confidently tell the user something untrue.
+//   candidate was committed will confidently tell the user something untrue. The
+//   same rule binds the BACKGROUND path: extraction writes the one scope too, or
+//   it produces memory that recall cannot see and search cannot find.
 //
 //   Nothing here claims to be the user. A tool call carries the caller's words,
 //   not the user's, so every write leaves these handlers non-explicit and every
@@ -62,7 +54,6 @@ const obj = (props: Record<string, unknown>, required: string[] = []): SchemaObj
   ...(required.length ? { required } : {}),
 });
 
-const SCOPE_ENUM = ["thread", "agent", "vault"];
 const TYPE_ENUM = ["semantic", "preference", "episodic", "procedural", "working_state"];
 
 // What a tool may append: everything whose implied actor is not the user. Taken
@@ -511,7 +502,7 @@ const SCOPED_MEMORY_TOOLS: Record<string, ScopedToolDef> = {
       // words" — and revokeMemory has taken `sourceEventIds` for exactly that
       // since it was written, but this handler never passed any. The rule
       // therefore had no satisfying case: `forget` always stamped `tool:forget`,
-      // it is the only revocation surface (READ_ONLY_TOOLS has no `forget`, and
+      // it is the only revocation surface (the console cannot reach `forget`, and
       // /api/maintenance never revokes), so a user-stated memory could not be
       // revoked by anyone, through anything, ever. AGENTS.md meanwhile documents
       // `forget` as THE recovery for a wrong memory.

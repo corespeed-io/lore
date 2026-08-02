@@ -316,3 +316,61 @@ test("opening a v3 brain sweeps the reserved namespace, and the ORDER is what ma
   ).toBe(2);
   await pg.close();
 });
+
+// The v5 scope collapse against the shape that made scopes worth having: the
+// SAME key live in two of them. `memory_items_active_key` is unique over
+// (scope_type, coalesce(scope_id,''), memory_type, memory_key) for committed
+// keyed rows, so collapsing those rows collides — and the failure is not a
+// skipped migration. migrate() throws, initSchema throws, schema_version stays
+// 4, and every subsequent open fails identically: the brain never opens again
+// and cannot repair itself. One `user.billing_email` per thread is the ordinary
+// case, so this is what an upgrade of a used brain actually looks like.
+test("v5 collapses a key that was live in two scopes without bricking the brain", async () => {
+  const lite = await PGlite.create({ extensions: { vector, pg_trgm } });
+  const db = pgliteDb(lite);
+  const meta = { embeddingModel: "m", embeddingDim: DIM };
+  await initSchema(db, meta);
+
+  const seed = async (scope: string, id: string | null, content: string, ago: string) =>
+    db.query(
+      `INSERT INTO memory_items
+         (id, scope_type, scope_id, memory_type, memory_key, content, status, fingerprint,
+          created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, 'semantic', 'user.billing_email', $3, 'committed',
+               md5($3), now() - $4::interval, now() - $4::interval)`,
+      [scope, id, content, ago],
+    );
+  await seed("thread", "t-a", "older@example.com", "2 days");
+  await seed("thread", "t-b", "newest@example.com", "0 days");
+  await seed("vault", null, "vault@example.com", "1 day");
+
+  // Re-run the ladder from before the collapse, exactly as an upgrade does.
+  await db.query("UPDATE meta SET schema_version = 4 WHERE id = 1");
+  await initSchema(db, meta);
+
+  const rows = (
+    await db.query(
+      "SELECT status, scope_type, scope_id, content FROM memory_items ORDER BY content",
+    )
+  ).rows as { status: string; scope_type: string; scope_id: string | null; content: string }[];
+
+  // Nothing is destroyed, everything is in the one scope, and exactly one row
+  // per key is live — newest wins.
+  expect(rows).toHaveLength(3);
+  for (const r of rows) {
+    expect(r.scope_type).toBe("vault");
+    expect(r.scope_id).toBeNull();
+  }
+  const live = rows.filter((r) => r.status === "committed");
+  expect(live.map((r) => r.content)).toEqual(["newest@example.com"]);
+  // Superseded, not deleted: the same verb a correction uses, so history stays
+  // readable through inspect_memory and `as_of` instead of dying in an upgrade.
+  expect(rows.filter((r) => r.status === "superseded")).toHaveLength(2);
+
+  // And the brain OPENS afterwards, which is the property the collision broke.
+  const after = (await db.query("SELECT schema_version FROM meta")).rows[0] as {
+    schema_version: number;
+  };
+  expect(Number(after.schema_version)).toBe(5);
+  await lite.close();
+});

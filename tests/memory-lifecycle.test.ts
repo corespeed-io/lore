@@ -1361,3 +1361,27 @@ test("a call still using the removed scope arguments is refused, not silently wi
   const ok = await tool("remember", { content: "grouped, not partitioned", thread_id: "t-ok" });
   expect(ok.outcome).toBe("committed");
 });
+
+// saved has to mean READABLE, for the background path too. Extraction used to
+// pass {scopeType:'thread'}, which after the scope collapse wrote where nothing
+// reads — recall's readable set is the one scope, and projectionSlug returns
+// null for anything else, so an extracted memory had neither a row recall could
+// see nor a page search could find. Write-only memory that reports success is
+// the exact failure the tool door exists to prevent; the background door must
+// not be allowed its own version of it.
+test("a memory the background extractor wrote is reachable by recall", async () => {
+  await say("t-extracted", "My deploy target is production-west.");
+  await runExtraction(db, deterministicExtractor, { threadId: "t-extracted" });
+
+  const rows = await db.query(
+    "SELECT scope_type, scope_id FROM memory_items WHERE status = 'committed'",
+  );
+  expect(rows.rows.length).toBeGreaterThan(0);
+  for (const r of rows.rows) {
+    expect(r.scope_type).toBe("vault");
+    expect(r.scope_id).toBeNull();
+  }
+
+  const back = await tool("recall", { query: "deploy target" });
+  expect(Number(back.count)).toBeGreaterThan(0);
+});

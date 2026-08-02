@@ -22,6 +22,15 @@ export async function callTool(
   tool: string,
   args: object,
 ): Promise<{ isError: boolean; text: string }> {
+  const { TOOLS } = await import("@/server/mcp");
+  // Refused HERE so /api/call can answer 403 and say why. The dispatcher would
+  // refuse it too — that is the boundary, and it stays the boundary — but it
+  // throws a plain Error, which the route reports as 502 "brain error": a
+  // caller naming a write tool was told the brain was broken. Read off the same
+  // registry the dispatcher reads, so this cannot become a second list.
+  if (!Object.hasOwn(TOOLS, tool) || TOOLS[tool].access !== "read") {
+    throw new ToolNotAllowedError(`tool '${tool}' not allowed (read-only)`);
+  }
   const { callLocalTool } = await import("@/server/local");
   return callLocalTool(tool, args);
 }

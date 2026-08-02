@@ -27,7 +27,7 @@ Two doors into the same store, and the split IS the security model:
   for read-only.
 
 This repo used to also proxy an external `the brain` and carry an admin console for
-it. Both are gone (~2200 lines): the admin surface hard-required a the brain
+it. Both are gone (~2200 lines): the admin surface hard-required a brain
 `/admin/api/*` backend, so no standalone deployment could turn it on. **Do not
 reintroduce a second backend mode** — one store, one path, is the point.
 
@@ -689,7 +689,7 @@ keep it that way.
 - `src/components/App.tsx` — root state machine. One `tab` (`overview` | `graph` |
   `search`) plus a single `openPage` overlay. Opening a memory from ANYWHERE
   (dashboard panels, Memories list, graph nodes, wikilinks) calls `openMemory(slug)`
-  → resolves via the brain → sets `openPage`. The page overlays the current tab; the
+  → resolves via brain → sets `openPage`. The page overlays the current tab; the
   back-button label is `TAB_LABELS[tab]` and back just clears `openPage`. Opening a
   page never switches tabs, so `tab` IS the origin. Don't reintroduce per-tab page state.
 - `src/app/api/graph/route.ts` + `src/lib/graph.ts` — `/api/graph` seeds a page
@@ -712,11 +712,10 @@ keep it that way.
   graph read failed. Slug == node id. Node `type` is dynamic: preserve the brain's returned `type` string
   and only infer `person` / `company` / `product` from slug prefixes when the backend
   did not return a type.
-- `src/app/api/call/route.ts` + `src/lib/the brain.ts` — `/api/call` proxies a the brain
-  MCP tool, gated by `READ_ONLY_TOOLS` (the security boundary — see Security). It
+- `src/app/api/call/route.ts` + `src/lib/tools.ts` — `/api/call` proxies a brain
+  MCP tool, gated by each tool's own `access` (the security boundary). It
   validates `tool` is a string and clamps unbounded args (`limit`/`depth`/…). Client
-  calls go through `src/lib/api.ts` `apiCall(tool, args)`. **To use a new the brain tool
-  client-side, add it to `READ_ONLY_TOOLS` first** — and only if it's read-only.
+  calls go through `src/lib/api.ts` `apiCall(tool, args)`. **A tool is reachable from the console iff its `access` is `read`** — there is no list to add it to.
 - `src/lib/viz/graph.ts` — d3 force graph. Exposes `mountGraph(el, data, opts)` →
   `{ destroy, highlight(idSet|null) }`. Zoom/pan (wheel + bg-drag), free node drag,
   auto-fit on settle (~70 ticks) + dbl-click to fit.
@@ -765,11 +764,19 @@ keep it that way.
   silently ignores a root-level `middleware.ts` in that layout (it shipped fail-OPEN
   that way once: empty middleware-manifest, no 403s, no rate limits — verify with
   `python3 -c "import json; print(json.load(open('.next/server/middleware-manifest.json'))['middleware'])"`
-  after a build if you touch it). `AUTH_MODE=proxy` verifies
-  the Cloudflare Access JWT with jose (signature against the team JWKS, `aud` ==
-  `ACCESS_AUD`, issuer == team domain, exp). `password` = HTTP Basic. `none` denies
-  unless `ALLOW_INSECURE=1`. A proxy deploy missing `ACCESS_AUD`/`ACCESS_TEAM_DOMAIN`
-  fails closed. `/api/health` is the only auth-exempt route (for the platform healthcheck).
+  after a build if you touch it). `gateway` is described above; `password` = HTTP
+  Basic, compared in constant time, and refused outright when `UI_PASSWORD` is
+  unset; `none` denies unless `ALLOW_INSECURE=1`. An UNKNOWN `AUTH_MODE` falls
+  back to `none`, which then fails closed on its own — so a deployment that still
+  says `proxy` after this change denies rather than opens, unless it also carries
+  `ALLOW_INSECURE=1`. `/api/health` is the only auth-exempt route (for the
+  platform healthcheck).
+- **The rate limiter keys on the right-most `x-forwarded-for` entry only.** It
+  used to prefer `cf-connecting-ip` whenever the auth mode declared a proxy,
+  which was safe only while that mode WAS Cloudflare Access — `gateway` covers
+  any ingress, none of which set or strip that header, so a caller could send one
+  and be handed a fresh bucket every request. Nothing was lost by dropping it:
+  Cloudflare appends the real client to `x-forwarded-for` too.
 - `/api/call` and `/api/graph` are rate-limited per user in middleware; `next.config.mjs`
   sets a strict CSP + security headers (`'unsafe-eval'` is dev-only).
 

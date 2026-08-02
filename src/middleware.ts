@@ -78,14 +78,18 @@ async function tokenId(token: string): Promise<string> {
 // The client address OUR infrastructure observed, or null when we cannot see
 // one. null — everyone shares a bucket — is the safe answer; inventing an
 // identity out of a header the caller types is not a limiter at all.
-function clientAddr(headers: Headers, behindGateway: boolean): string | null {
-  // A gateway sets (and overwrites) cf-connecting-ip for traffic that really
-  // arrives through it. AUTH_MODE=gateway is the operator declaring there IS
-  // one in front; anywhere else this header is just attacker input.
-  if (behindGateway) {
-    const ip = headers.get("cf-connecting-ip")?.trim();
-    if (ip) return ip;
-  }
+function clientAddr(headers: Headers): string | null {
+  // ONE rule, and it is the general one. This used to prefer `cf-connecting-ip`
+  // whenever the auth mode declared a proxy in front, which was a safe inference
+  // only while that mode WAS Cloudflare Access: `AUTH_MODE=gateway` now covers
+  // oauth2-proxy, Authelia and any ingress, and none of those set or strip that
+  // header — so a caller could simply send one and be handed a fresh bucket on
+  // every request, which is the limiter turned off. Measured before the change:
+  // 400 requests with a rotating cf-connecting-ip, 400 answered, zero 429s.
+  //
+  // Nothing is lost by dropping it: Cloudflare appends the real client to
+  // x-forwarded-for as well, so the right-most entry is the same address.
+  //
   // x-forwarded-for is a list and the caller controls the left-hand entries;
   // only the RIGHT-most entry was appended by the proxy nearest us. Reading it
   // at all is what unbreaks honest callers behind a router that sets nothing
@@ -110,7 +114,7 @@ export async function middleware(req: NextRequest) {
 
   const scope = scopeOf(path);
   const authorization = req.headers.get("authorization");
-  const addr = clientAddr(req.headers, loadConfig().authMode === "gateway");
+  const addr = clientAddr(req.headers);
 
   // AUTHENTICATE FIRST, THEN CHARGE. The old order did the opposite and it cost
   // two defects with one root: the middleware only checked that a Bearer header

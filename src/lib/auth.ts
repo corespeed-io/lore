@@ -75,10 +75,12 @@ async function checkGateway(headers: Headers, g: GatewayConfig): Promise<AuthRes
         issuer: g.issuer,
         audience: g.audience,
       });
-      // The JWT's own subject beats the identity header: it is signed, and the
-      // header beside it is not.
+      // The JWT's own subject IS the identity — it is signed, and the header
+      // beside it is not. A verified token that carries no usable subject falls
+      // back to NOTHING rather than to that header: silently preferring the
+      // unsigned value is how a "verified" identity becomes attacker-chosen.
       const sub = typeof payload.email === "string" ? payload.email : payload.sub;
-      return { ok: true, user: typeof sub === "string" ? sub : user() };
+      return { ok: true, user: typeof sub === "string" ? sub : undefined };
     } catch {
       return { ok: false, status: 403, detail: "gateway token invalid" };
     }

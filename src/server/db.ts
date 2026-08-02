@@ -263,6 +263,12 @@ async function migrate(db: Db, from: number): Promise<void> {
     // Without this, every memory written at 'thread' or 'agent' scope would be
     // stranded — the reads now look only at 'vault', so the rows would still be
     // there and never come back. Data loss by invisibility is still data loss.
+    //
+    // THE COLLAPSE MUST RETIRE DUPLICATES FIRST — see
+    // retireDuplicateKeysForScopeCollapse, which lives in items.ts because
+    // `status` has one writer and a migration is not a reason to open a second.
+    const { retireDuplicateKeysForScopeCollapse } = await import("./memory/items");
+    await retireDuplicateKeysForScopeCollapse(db);
     await db.query(
       "UPDATE memory_items SET scope_type = 'vault', scope_id = NULL WHERE scope_type <> 'vault'",
     );

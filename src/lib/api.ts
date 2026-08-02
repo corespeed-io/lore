@@ -1,6 +1,6 @@
 import { recordRequest } from "./request-log";
 
-// Shared client-side helper to invoke a the brain read-only tool via /api/call.
+// Shared client-side helper to invoke a brain read-only tool via /api/call.
 // The server route enforces the allowlist; this just unwraps the response.
 // Every call is timed and recorded into the session request log (observability).
 export async function apiCall(tool: string, args: Record<string, unknown> = {}): Promise<unknown> {

@@ -375,3 +375,28 @@ test("the bucket map is hard-capped, not just swept for expiry", async () => {
   // The victim's bucket was among the oldest, so a bounded map has dropped it.
   expect((await mw("/api/graph", victim)).status).toBe(200);
 }, 60_000);
+
+// The limiter must not be switchable off by a header the caller types. Preferring
+// cf-connecting-ip was safe only while the proxy mode WAS Cloudflare Access;
+// AUTH_MODE=gateway covers oauth2-proxy, Authelia and any ingress, none of which
+// set or strip it — so rotating it handed out a fresh bucket per request.
+test("rotating cf-connecting-ip does not buy a fresh rate-limit bucket", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.AUTH_GATEWAY_SHARED_SECRET = "gateway-secret-for-limiter-test";
+  const auth = { "x-auth-gateway-secret": "gateway-secret-for-limiter-test" };
+  let limited = 0;
+  for (let i = 0; i < 140; i++) {
+    const res = await middleware(
+      new NextRequest("http://x/api/call", {
+        method: "POST",
+        headers: {
+          ...auth,
+          "cf-connecting-ip": `203.0.113.${i}`,
+          "x-forwarded-for": "198.51.100.7",
+        },
+      }),
+    );
+    if (res.status === 429) limited++;
+  }
+  expect(limited).toBeGreaterThan(0);
+});
