@@ -8,6 +8,6 @@
 - [ ] `npm run lint` passes
 - [ ] `npm test` passes
 - [ ] `npm run build` passes
-- [ ] Preserves the read-only contract (no new write paths to gbrain; new gbrain
-      tools added to `READ_ONLY_TOOLS` only if read-only)
+- [ ] Keeps the console on the reading credential (a new tool's `access` is
+      honest; nothing was widened from `write` to `read` for convenience)
 - [ ] Updated `AGENTS.md` if I changed behavior agents rely on (commands, flows, gotchas)

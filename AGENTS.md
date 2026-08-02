@@ -9,21 +9,27 @@ text stub — set `git config core.symlinks true`.)
 
 ## What this is
 
-**Lore** is the product — a **unified gbrain console** (one shell, not a read-only viewer).
-`gbrain` is the backend engine (hybrid retrieval: vector + BM25 + RRF + rerank + a typed-edge
-graph). One sidebar mixes two kinds of surface:
+**Lore** is one small thing: a knowledge-graph console that serves its own brain.
+Postgres + pgvector holds the pages, the wikilink graph and the durable agent
+memories; there is no second backend to run, and no other service to configure.
 
-- **Read surfaces** (always on, read-only, safe-by-default): Dashboard/overview, force-directed
-  graph, Memories browse, hybrid search. They call only `READ_ONLY_TOOLS`. This is the full
-  OSS default experience — no admin config required. (The old "Lore never writes" contract
-  now scopes to *these* surfaces, not the whole app.)
-- **Admin surfaces** (optional, OFF by default, fail-closed): Requests, Access
-  (OAuth clients/API keys), Queue, Calibration — inspired by upstream gbrain's admin dashboard, and may perform
-  write/admin actions. They appear in the nav and work ONLY when admin mode is configured
-  (explicit env + admin credentials, server-gated behind a SEPARATE allowlist). Unconfigured ⇒
-  the admin nav is hidden and every `/api/admin/*` route 403s. Calibration is a read-only
-  profile/diagnostics view; regenerating a profile is still a host-side gbrain CLI action unless
-  upstream adds a dedicated admin HTTP endpoint. See **Admin mode** under Security.
+Two doors into the same store, and the split IS the security model:
+
+- **The console** (Dashboard, force-directed graph, Memories browse, hybrid search)
+  reaches the brain through `/api/call`, which passes `"read"` into the dispatcher.
+  `handleRpc` decides from each tool's own declared `access`, so a write tool is
+  unreachable from a browser session whatever it asks for. There is deliberately no
+  second hand-written allowlist — the one that existed had 13 of its 28 entries
+  naming tools that exist nowhere in this repo, which is what a second copy of a
+  registry always becomes.
+- **Agents** reach it through `POST /api/mcp` (plus `/import`, `/api/maintenance`,
+  `/api/export`) with a bearer: `BRAIN_WRITE_TOKEN` for read+write, `BRAIN_READ_TOKEN`
+  for read-only.
+
+This repo used to also proxy an external `the brain` and carry an admin console for
+it. Both are gone (~2200 lines): the admin surface hard-required a the brain
+`/admin/api/*` backend, so no standalone deployment could turn it on. **Do not
+reintroduce a second backend mode** — one store, one path, is the point.
 
 Branding split: the app is **Lore** (sidebar wordmark, `<title>` prefix). The brain
 it views is named by `APP_TITLE` (hero title, e.g. "CoreSpeed Library") and described
@@ -34,7 +40,7 @@ stays generic — don't hardcode a brand into components.
 
 - Next.js 15 (App Router) · React 19 · TypeScript
 - d3 (graph viz only — **no chart library**; the dashboard chart is hand-rolled SVG)
-- jose (Cloudflare Access JWT verification) · Biome (lint + format) · Vitest (tests)
+- jose (trusted-gateway JWT verification) · Biome (lint + format) · Vitest (tests)
 - Design system: Vercel/Geist — near-white `#fafafa` canvas, near-black `#171717`
   ink, `#ebebeb` hairlines, Geist Sans/Mono, mono uppercase eyebrows, flat 12px
   cards / 6px controls, the mesh gradient confined to the hero. Keep to it.
@@ -50,10 +56,10 @@ npm test           # vitest run
 npm run build      # next build (production)
 ```
 
-Required env (see `.env.example`): either `DATABASE_URL` (standalone brain, below)
-or `GBRAIN_MCP_URL` + `GBRAIN_TOKEN` (remote gbrain). **Auth fails closed**, so for
-local dev without Cloudflare Access set `AUTH_MODE=none` **and** `ALLOW_INSECURE=1`
-— otherwise every route returns 403. Before opening a PR, all of
+Required env (see `.env.example`): `DATABASE_URL` plus the `EMBEDDINGS_*` group —
+a write embeds BEFORE its transaction, so an unconfigured embeddings provider is a
+hard failure, not a degraded mode. **Auth fails closed**, so for local dev set
+`AUTH_MODE=none` **and** `ALLOW_INSECURE=1` — otherwise every route returns 403. Before opening a PR, all of
 typecheck + lint + test + build must pass (this is what CI runs).
 
 **GOTCHA — never write a raw control byte into source; write the `\uXXXX` escape.**
@@ -140,12 +146,10 @@ of the import pin without a reviewer having to find them by hand.
 (`__webpack_modules__[moduleId] is not a function`). To build: stop dev, `rm -rf
 .next`, build, then `rm -rf .next` and restart dev.
 
-## Standalone brain (no gbrain)
+## The brain
 
-Setting `DATABASE_URL` (Postgres + pgvector, e.g. Neon) with `GBRAIN_MCP_URL`
-unset flips lore into **standalone mode**: it serves its own single-tenant brain
-instead of proxying a gbrain. `src/lib/gbrain.ts` `isStandalone()` short-circuits
-`callTool` into `src/server/local.ts`, so every existing read path (dashboard,
+Postgres + pgvector (e.g. Neon, or a local one) holds everything. There is no
+backend-selection branch left to reason about — one store, one path.
 graph, search, page view) works unchanged.
 
 - `src/server/db.ts` — driver-free `Db` seam (`query` + `tx`) plus `initSchema`:
@@ -154,7 +158,13 @@ graph, search, page view) works unchanged.
   fails loud** (re-embed required); never weaken that assert.
 - `src/server/pipeline.ts` — chunking, `[[wikilink]]` extraction (fences
   stripped), OpenAI-compatible embeddings client (`EMBEDDINGS_URL/_API_KEY/
-  _MODEL/_DIM`).
+  _MODEL/_DIM`). `EmbedFn` takes a **role** (`"query"` | `"document"`, default
+  document): the strong 2026 retrieval models are trained asymmetrically and want
+  a one-line task instruction on the query only, so `EMBEDDINGS_QUERY_PREFIX` is
+  prepended for `"query"` and nothing else. Unset ⇒ byte-identical to before, so
+  a model that wants no instruction (bge-m3) is unaffected. The prefix is **not**
+  part of the pinned embedding space — it changes how a query is encoded, not
+  what is stored, so it needs no re-embed and must not reach the meta assert.
 - `src/server/store.ts` — the engine. Writes embed BEFORE the transaction (no
   half-written pages); `content_hash` short-circuit makes re-ingest free;
   deletes are soft (`deleted_at`); unresolved wikilinks park in `pending_links`
@@ -165,6 +175,16 @@ graph, search, page view) works unchanged.
   fields are preserved** (kind, frontmatter) rather than reset — otherwise
   editing a memory's body demotes it to a note and drops its category and
   `related_ids`, which are graph edges. `frontmatter: {}` clears deliberately.
+  **`body` is the exception and is `required`** — omitting it used to mean `""`
+  (`String(args.body ?? "")`), so `put_page{slug, title}` silently wiped a page's
+  body, chunks, embeddings and out-edges and answered `unchanged:false`,
+  `isError:false`. `handleRpc` now enforces every tool's declared `required` at
+  the door, so the schema is the list and no handler has to remember. **`null`
+  counts as absent; `""` does not** — most clients serialise an omitted optional
+  as `null`, so an `=== undefined` test fixed the spelling of the bug and not the
+  bug, while clearing a body IS a thing a caller may legitimately mean. The tool
+  description says so too, or the model reads only the old promise. Never drop a
+  field from a `required` array to make a call convenient.
   `list_pages` takes `kind` (`memory` | `note`) so a client can list memories
   without pulling every page. There is deliberately no bulk-wipe tool: a
   client loop over `delete_page` covers it, and an unrecoverable mass delete
@@ -246,6 +266,67 @@ graph, search, page view) works unchanged.
   `BRAIN_READ_TOKEN` (read-only), both ≥16 chars, fail-closed when unset;
   middleware exempts `/api/mcp` from viewer auth for exactly this reason —
   don't remove either side of that pairing.
+- **MCP revision: dual-era, `2026-07-28` + the 2025 handshake ones.** That
+  revision made MCP stateless, which cost lore nothing (a route handler with no
+  session table) and removed features a tools-only brain never had. What it did
+  owe: `server/discover` (a **MUST**), `resultType` on every result, `ttlMs` +
+  `cacheScope` on `tools/list`, deterministic tool order, and an **honest version
+  answer**. `initialize` used to return `params.protocolVersion ?? "…"` — it
+  ECHOED the request, so a client asking for a revision lore implements none of
+  was told yes. Modern clients declare the version per request in
+  `_meta["io.modelcontextprotocol/protocolVersion"]`; an unsupported one is
+  refused with `-32022` listing `SUPPORTED_VERSIONS`. `resultType` is stamped in
+  one place in `handleRpc` so a method added later cannot forget it, and
+  `cacheScope` on `tools/list` is **`private`** because the visible tool list
+  varies by bearer — a shared cache must never hand a write token's list to a
+  read token. `server/discover` is `public`: same answer for everyone, no tool
+  list in it.
+- **The HTTP status is part of the protocol, not decoration.** `-32022`
+  (UnsupportedProtocolVersion) and `-32020` (HeaderMismatch) MUST be `400`,
+  unknown method MUST be `404` — a dual-era client only inspects the BODY of a
+  `400` before deciding whether to fall back to `initialize`, so answering `200`
+  told it a legacy exchange had succeeded. `HTTP_STATUS_FOR_ERROR` maps them and
+  `/api/mcp` applies it; a new protocol error code needs an entry there too.
+- **Header/body agreement is checked in the route**, the only layer that sees
+  both (`headerRefusal`). The version refusal was bypassable while it read only
+  `_meta`: `MCP-Protocol-Version: 2099-01-01` with no `_meta` got the full tool
+  list. The spec's reason is the real one — an intermediary may route on the
+  header while the server executes on the body. **Deliberate deviation:** the
+  spec makes `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` REQUIRED and a
+  missing one a `-32020`; lore validates them when present but does not demand
+  them, because a 2025-era client predates the headers and `initialize` is still
+  here to serve it. Disagreement is refused, absence is not. A `Mcp-Name` in the
+  Base64 sentinel form (`=?base64?…?=`) is left to the body rather than compared
+  raw — comparing it would refuse a *conforming* client.
+- `bin/lore.mjs` — the terminal client, wired as the `lore` bin. **Zero
+  dependencies and no build step**: node 20+ is already the floor and has global
+  `fetch`, so it runs from a fresh checkout and there is no second dependency
+  tree to drift from the server's. It exists for the two things curl is bad at —
+  escaping a markdown body into JSON, and unwrapping `result.content[0].text` —
+  and it treats `isError` as the FAILURE it is (exit 1, message on stderr)
+  rather than printing the envelope and exiting 0. It speaks the modern
+  revision (per-request `_meta`, no `initialize`), which also makes it the
+  server's own conformance client — and `tests/cli.test.ts` spawns the real
+  script against a stub server so that claim is checked rather than asserted.
+  **Every request goes through the one `post()` door**: `sweep` used to call
+  `fetch` directly and so had none of the token/401/status guards — it printed
+  a refusal and exited 0, the exact failure the file's own comment condemns.
+  It does NOT install skills; `npx skills add` owns that path.
+- `skills/` — three `SKILL.md` files documenting lore's own tool surface:
+  `lore-brain` (which write/read door), `lore-memory` (scopes, supersession, the
+  event log), `lore-curate` (orphans, broken links, the background jobs). **Do
+  not invent tool names** — the surface here is 24 tools, and a skill that names
+  one that does not exist is worse than no skill.
+  **`skills/`, not `.claude/skills/`, and the distinction is the point**: a
+  vendor directory holds the skills a repo CONSUMES, and `skills/` holds the
+  ones it PUBLISHES. These are lore's manual for any agent, so they are neither
+  Claude Code's nor gitignorable. `skills/` is also the first path the
+  [vercel-labs/skills](https://github.com/vercel-labs/skills) installer scans,
+  which is what makes `npx skills add corespeed-io/lore` work with no npm
+  package and no per-agent layout (verified: `npx skills add <path> --list`
+  returns all three). Claude Code does not auto-load them from here — that is
+  the trade, and it costs one `npx skills add .`. `lore skills install <dir>`
+  is the same copy without the network.
 - Tests: `tests/brain-store.test.ts` (PGlite + pgvector + pg_trgm, pinned
   `@electric-sql/pglite@0.4.3` — 0.5 dropped the bundled vector extension),
   `tests/brain-mcp.test.ts` (envelope/contract), `tests/brain-route.test.ts`
@@ -308,7 +389,7 @@ floor and no autocut.
 ## Background job: mention linking
 
 `src/server/mentions.ts` + `POST /api/maintenance` — the one enrichment worth
-porting from gbrain's ~20-phase cycle, and the only occupant of the `auto` edge
+the only occupant of the `auto` edge
 lane. Deterministic, zero-LLM, and reversible: it writes only
 `lane='auto', kind='mention'`, so `{"action":"clear"}` (or
 `DELETE FROM edges WHERE lane='auto'`) undoes every inference it ever made.
@@ -608,16 +689,16 @@ keep it that way.
 - `src/components/App.tsx` — root state machine. One `tab` (`overview` | `graph` |
   `search`) plus a single `openPage` overlay. Opening a memory from ANYWHERE
   (dashboard panels, Memories list, graph nodes, wikilinks) calls `openMemory(slug)`
-  → resolves via gbrain → sets `openPage`. The page overlays the current tab; the
+  → resolves via the brain → sets `openPage`. The page overlays the current tab; the
   back-button label is `TAB_LABELS[tab]` and back just clears `openPage`. Opening a
   page never switches tabs, so `tab` IS the origin. Don't reintroduce per-tab page state.
 - `src/app/api/graph/route.ts` + `src/lib/graph.ts` — `/api/graph` seeds a page
-  set from `list_pages` plus the seed queries, then reads gbrain's **actual link graph**
+  set from `list_pages` plus the seed queries, then reads the brain's **actual link graph**
   via a FEW deep `traverse_graph(direction=both)` calls from the most-relevant roots
   (`TRAVERSE_ROOTS`, `TRAVERSE_DEPTH`) — one bulk call returns a whole reachable
-  neighborhood, so this covers the graph while keeping the gbrain request log quiet
+  neighborhood, so this covers the graph while keeping the brain request log quiet
   (the old `get_links`+`get_backlinks`-per-seed fan-out spammed it). `{nodes, links}`,
-  **1h cached**. Edges come from gbrain's typed/mentions/manual links — **not** a regex
+  **1h cached**. Edges come from the brain's typed/mentions/manual links — **not** a regex
   over the search snippet, which missed every link outside the matched chunk. **Drops
   hash-titled mem0 imports** (`isHashTitle`) but keeps legitimate isolated pages so the
   graph shows pages that currently have no edges. Failure handling: every upstream
@@ -628,13 +709,13 @@ keep it that way.
   survived + a failed read ⇒ served but NOT cached (next request retries); rebuilds are
   **single-flighted**, and a failed rebuild serves the last good expired graph **stale**
   rather than the 502. The dashboard renders the link stat as "—" (not 0) when the
-  graph read failed. Slug == node id. Node `type` is dynamic: preserve gbrain's returned `type` string
+  graph read failed. Slug == node id. Node `type` is dynamic: preserve the brain's returned `type` string
   and only infer `person` / `company` / `product` from slug prefixes when the backend
   did not return a type.
-- `src/app/api/call/route.ts` + `src/lib/gbrain.ts` — `/api/call` proxies a gbrain
+- `src/app/api/call/route.ts` + `src/lib/the brain.ts` — `/api/call` proxies a the brain
   MCP tool, gated by `READ_ONLY_TOOLS` (the security boundary — see Security). It
   validates `tool` is a string and clamps unbounded args (`limit`/`depth`/…). Client
-  calls go through `src/lib/api.ts` `apiCall(tool, args)`. **To use a new gbrain tool
+  calls go through `src/lib/api.ts` `apiCall(tool, args)`. **To use a new the brain tool
   client-side, add it to `READ_ONLY_TOOLS` first** — and only if it's read-only.
 - `src/lib/viz/graph.ts` — d3 force graph. Exposes `mountGraph(el, data, opts)` →
   `{ destroy, highlight(idSet|null) }`. Zoom/pan (wheel + bg-drag), free node drag,
@@ -644,36 +725,41 @@ keep it that way.
   `TopHubs`, `Sources`, `RecentActivity`, `GraphView`, `SearchResults` (Memories
   browse + type chips + ranked search), `PageView` (the memory page).
 
-## gbrain constraints (read-only token, no admin scope)
+## Brain constraints
 
-- `get_stats` / `get_health` / `get_status_snapshot` need **admin** scope → 403.
-  Don't build on them. Dashboard counts derive from `/api/graph` + `list_pages`.
 - `list_pages` returns `{slug, title, type, updated_at}` — **no per-page source_id**,
-  so you can't filter the Memories list by source. The public MCP operation also caps at
-  100 and does not expose `offset`; don't call the browse list "complete" unless gbrain
-  exposes real pagination first.
-- Search uses gbrain `search` (ranked chunks: `score`, `evidence`, `chunk_text`).
-  `query` adds LLM multi-query expansion (slower) — `search` is right for as-you-type.
+  so you can't filter the Memories list by source. It also caps at 100 and exposes no
+  `offset`; don't call the browse list "complete" until real pagination exists.
+- Search returns ranked chunks (`score`, `evidence`, `chunk_text`). `query` is a
+  **literal alias of `search`** — no LLM expansion, no reranker. If you add either,
+  give it its own tool name rather than quietly changing what `query` means.
 
 ## Security (it's a public repo serving a private brain — read this)
 
-- **Two server boundaries**, each enforced before the upstream call:
-  - **Viewer:** `READ_ONLY_TOOLS` in `src/lib/gbrain.ts` — the read-only allowlist.
-    Never add a mutating tool to it; the viewer can call nothing else.
-  - **Admin:** `ADMIN_ENDPOINTS` in `src/lib/admin.ts` — a SEPARATE explicit allowlist of
-    upstream gbrain `/admin/api/*` endpoints. Keep the two lists separate; never merge
-    admin endpoints into `READ_ONLY_TOOLS`.
-- **Admin mode is off + fail-closed by default.** `/api/admin/*` routes 403 unless
-  `adminEnabled(cfg)` holds: `ADMIN_MODE=1` **and** `ADMIN_GBRAIN_URL` **and**
-  `ADMIN_GBRAIN_TOKEN` are set — **and**, when `AUTH_MODE=none`, also `ADMIN_ALLOW_INSECURE=1`
-  (admin needs its own insecure opt-in even if the viewer is open locally). `/api/admin/status`
-  returns only `{enabled}` (no secrets) so the client can decide whether to show the Admin area.
-- **Credentials are server-only.** Read creds (`GBRAIN_TOKEN` / `GBRAIN_CLIENT_*`) live in
-  `gbrain.ts`; the admin bootstrap token (`ADMIN_GBRAIN_TOKEN`) lives in `admin.ts`. Both
-  guarded by `import "server-only"`. Never expose either to the client, never `NEXT_PUBLIC_*`,
-  never commit `.env`. Admin responses pass through `stripSecrets` so token/secret/`client_secret`
-  fields never reach the browser — except a create's **one-time** secret, which surfaces once and
-  the UI masks + treats as one-time sensitive output.
+- **One boundary, and it is the tool's own `access`.** `/api/call` (the console)
+  passes `"read"` into `handleRpc`, which refuses a `write` tool to a `"read"`
+  caller. There is deliberately NO second allowlist: the one that existed drifted
+  until 13 of its 28 entries named tools that do not exist. Never widen a tool from
+  `write` to `read` to make a console feature convenient.
+- **Agent credentials are separate from the viewer session.** `BRAIN_WRITE_TOKEN` /
+  `BRAIN_READ_TOKEN` (≥16 chars, constant-time compare) gate `/api/mcp`, `/import`,
+  `/api/maintenance` and `/api/export`. Export needs the **write** token even though
+  it only reads — a full dump bypasses the read surface's filter.
+- **Credentials are server-only**, guarded by `import "server-only"`. Never expose
+  one to the client, never `NEXT_PUBLIC_*`, never commit `.env`.
+- **A half-configured auth mode is a configuration ERROR, not an opening.**
+  `AUTH_MODE=password` with no `UI_PASSWORD` is refused — it used to fall through to
+  `allowInsecure`, so the documented local-dev pair silently served the whole console
+  the moment the password was forgotten.
+- **`AUTH_MODE=gateway` never trusts an identity header on its own.** A header is
+  typed by whoever is talking to us, so `X-Forwarded-User` alone is a login form with
+  no password. It is read ONLY after the gateway proves it is the gateway: a JWT
+  verified against `AUTH_GATEWAY_JWKS_URL` (signature + issuer + audience + exp), or
+  `AUTH_GATEWAY_SHARED_SECRET` compared in constant time. A configured JWKS decides
+  ALONE — setting both proofs must not let a failed token fall back to the weaker
+  one. Neither configured ⇒ every request is refused. **Do not add a "just trust the
+  header" option**; a deployment that wants one can put the proxy on localhost and
+  set a secret, which costs one env var and is not a footgun.
 - **Auth** lives in `src/middleware.ts` → `src/lib/auth.ts`. **GOTCHA: the middleware
   file MUST stay under `src/`** — this project keeps code in `src/`, and Next.js
   silently ignores a root-level `middleware.ts` in that layout (it shipped fail-OPEN
@@ -766,7 +852,7 @@ written down.
 - d3 click handlers need a real `MouseEvent` dispatched on the node (target by
   `circle.__data__.id`).
 - Date strings are UTC (`updated_at`); render labels with `timeZone: "UTC"`.
-- The dashboard renders all-zero until the client fetches gbrain (~1-2s); that's the
+- The dashboard renders all-zero until the client fetches the brain (~1-2s); that's the
   load state, not a bug.
 
 ## Commit / PR conventions
