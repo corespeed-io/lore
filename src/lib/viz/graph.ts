@@ -35,6 +35,25 @@ export function labelBoxesOverlap(a: LabelBox, b: LabelBox, pad = 0): boolean {
   return a.x0 - pad < b.x1 && a.x1 + pad > b.x0 && a.y0 - pad < b.y1 && a.y1 + pad > b.y0;
 }
 
+// A repaint shows `shown` and must hide whatever was on screen before and no
+// longer is. Returning that set — rather than "everything not shown" — is the
+// whole point: at rest 626 of 696 labels are ALREADY hidden, and an opacity
+// write to one of those changes nothing while costing the same as a real one.
+//
+// Extracted because the two ways to get this wrong fail in opposite directions
+// and neither is visible in review. Widening it to every not-shown label is a
+// silent 30x write amplification that looks identical on screen. Dropping the
+// second half leaves labels from the PREVIOUS hover on screen — a visual bug,
+// but only for whoever happens to be moving a pointer at the time.
+export function labelsToHide(
+  wasShown: Iterable<string>,
+  shown: { has(id: string): boolean },
+): Set<string> {
+  const hide = new Set<string>();
+  for (const id of wasShown) if (!shown.has(id)) hide.add(id);
+  return hide;
+}
+
 export interface GraphInstance {
   destroy(): void;
   fit(): void;
@@ -253,12 +272,25 @@ export function mountGraph(
     paintLabels(at);
   }
 
+  // ponytail: writes only what changed, and it is the single writer of
+  // labelVisible. Geometry goes to the SHOWN labels only — an x or y write on a
+  // <text> reflows its glyphs, and at rest 626 of 696 labels are hidden while a
+  // hover shows about five. Opacity goes only where visibility actually flipped,
+  // so a label that was hidden and stays hidden is not touched at all.
+  //
+  // Measured on this graph at 696 nodes: writing all four attributes to every
+  // label cost 4.5ms of a hover's 6.9ms, and pointermove arrives about every
+  // 8ms, so sweeping the pointer across the graph could never keep up.
   function paintLabels(at: Map<string, LabelPlacement>) {
+    const hide = labelsToHide(labelVisible, at);
+    labelVisible = new Set(at.keys());
     label
-      .attr("opacity", (d) => (at.has(d.id) ? 1 : 0))
+      .filter((d) => at.has(d.id))
+      .attr("opacity", 1)
       .attr("x", (d) => at.get(d.id)?.x ?? 0)
       .attr("y", (d) => at.get(d.id)?.y ?? 0)
       .attr("text-anchor", (d) => at.get(d.id)?.anchor ?? "middle");
+    label.filter((d) => hide.has(d.id)).attr("opacity", 0);
   }
 
   // ponytail: O(n²) in overlap tests — at ~1000 nodes this is ~470k rect tests
@@ -274,7 +306,6 @@ export function mountGraph(
     const minDegree = focus ? 1 : nodes.length > 64 ? 3 : nodes.length > 40 ? 2 : 1;
     const boxes: LabelBox[] = [];
     const placements = new Map<string, LabelPlacement>();
-    const visible = new Set<string>();
     const candidates = [...nodes]
       .filter((n) => (focus ? focus.has(n.id) : (deg[n.id] ?? 0) >= minDegree))
       .sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0));
@@ -286,9 +317,9 @@ export function mountGraph(
       if (!box) continue;
       boxes.push(box);
       placements.set(candidate.id, box);
-      visible.add(candidate.id);
     }
-    labelVisible = visible;
+    // paintLabels owns labelVisible and derives it from these keys — tracking a
+    // second `visible` set here would give that state two writers.
     paintLabels(placements);
   }
 
