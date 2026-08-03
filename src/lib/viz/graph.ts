@@ -76,13 +76,23 @@ export function mountGraph(
     .selectAll("line")
     .data(links)
     .join("line");
+  // ponytail: the edge-hover hit layer is a 14px transparent copy of EVERY edge,
+  // so it doubles the line count and the per-tick attribute writes. Measured at
+  // 1733 edges: 3466 <line> elements and 15,256 attribute writes per tick, which
+  // is 39ms of setAttribute alone before layout — the page's whole lag budget.
+  // Past this many edges the 14px strokes overlap each other so heavily that
+  // picking one edge is not a real interaction, so it is not drawn at all: an
+  // empty data join leaves the selection valid and every .attr()/.on() below a
+  // no-op, with no branch to keep in sync. Upgrade path: draw to a canvas and
+  // hit-test with the quadtree d3-force already builds.
+  const EDGE_HOVER_LIMIT = 600;
   const linkHit = view
     .append("g")
     .attr("stroke", "transparent")
     .attr("stroke-linecap", "round")
     .attr("stroke-width", 14)
     .selectAll("line")
-    .data(links)
+    .data(links.length <= EDGE_HOVER_LIMIT ? links : [])
     .join("line")
     .style("cursor", "default")
     .style("pointer-events", "stroke");
@@ -229,6 +239,35 @@ export function mountGraph(
     ];
   }
 
+  // Which labels the last collision pass chose to show, and where. Kept so the
+  // cheap per-frame pass can move them without redeciding.
+  let labelVisible = new Set<string>();
+
+  // O(n), no collision tests: every visible label follows its node's preferred
+  // placement. This is what runs on a tick.
+  function positionLabels() {
+    // One labelPlacements call per VISIBLE node — it allocates eight boxes, and
+    // reading it from inside four .attr() callbacks called it four times per node.
+    const at = new Map<string, LabelPlacement>();
+    for (const n of nodes) if (labelVisible.has(n.id)) at.set(n.id, labelPlacements(n)[0]);
+    paintLabels(at);
+  }
+
+  function paintLabels(at: Map<string, LabelPlacement>) {
+    label
+      .attr("opacity", (d) => (at.has(d.id) ? 1 : 0))
+      .attr("x", (d) => at.get(d.id)?.x ?? 0)
+      .attr("y", (d) => at.get(d.id)?.y ?? 0)
+      .attr("text-anchor", (d) => at.get(d.id)?.anchor ?? "middle");
+  }
+
+  // ponytail: O(n²) in overlap tests — at ~1000 nodes this is ~470k rect tests
+  // plus ~40k allocations, which is why it must never run on a tick. Verified in
+  // the browser at 973 nodes / 2205 edges: per-tick, frames exceeded 300ms and
+  // the renderer stopped answering at all. It runs on settle and on interaction
+  // (hover, select, highlight) — the moments the placement can actually change —
+  // and positionLabels() carries the labels in between. Upgrade path if a brain
+  // gets far larger: a grid index instead of the linear `boxes` scan.
   function layoutLabels() {
     const selectedFocus = selectedId ? (adj[selectedId] ?? new Set([selectedId])) : null;
     const focus = hover ?? selectedFocus ?? active;
@@ -249,12 +288,8 @@ export function mountGraph(
       placements.set(candidate.id, box);
       visible.add(candidate.id);
     }
-
-    label
-      .attr("x", (d) => (placements.get(d.id) ?? labelPlacements(d)[0]).x)
-      .attr("y", (d) => (placements.get(d.id) ?? labelPlacements(d)[0]).y)
-      .attr("text-anchor", (d) => (placements.get(d.id) ?? labelPlacements(d)[0]).anchor)
-      .attr("opacity", (d) => (visible.has(d.id) ? 1 : 0));
+    labelVisible = visible;
+    paintLabels(placements);
   }
 
   function paintDefault() {
@@ -381,8 +416,11 @@ export function mountGraph(
         .attr("y2", (d: any) => d.target.y);
       // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
       node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
-      layoutLabels();
-      if (++tickCount === 70) fitView(); // frame once the layout has settled
+      positionLabels();
+      if (++tickCount === 70) {
+        fitView(); // frame once the layout has settled
+        layoutLabels(); // and only now decide which labels fit
+      }
     });
 
   node.call(
