@@ -112,10 +112,12 @@ test("POST /api/call clamps an oversized limit before reaching the brain", async
       body: JSON.stringify({ tool: "list_pages", args: { limit: 1_000_000 } }),
     }),
   );
-  // MAX is 200 — hand-known from the route, not computed by the code under test.
+  // 1000 — hand-known, not computed by the code under test. The route imports
+  // the one clamp now rather than carrying its own copy of the number, which is
+  // how the two drifted: /api/call still said 200 while the tool allowed more.
   // biome-ignore lint/suspicious/noExplicitAny: reaching into the vi mock
   const lastArgs = (tools.callTool as any).mock.calls.at(-1)[1];
-  expect(lastArgs.limit).toBe(200);
+  expect(lastArgs.limit).toBe(1000);
 });
 
 test("POST /api/call rejects a missing/non-string tool with 400", async () => {

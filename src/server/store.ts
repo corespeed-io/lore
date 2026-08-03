@@ -211,7 +211,7 @@ export interface Store {
   findOrphans(args: { limit?: number }): Promise<{ slug: string; title: string }[]>;
   brokenLinks(args: { limit?: number }): Promise<{ from_slug: string; ref: string }[]>;
   getPage(args: { slug: string; fuzzy?: boolean }): Promise<Record<string, unknown>>;
-  listPages(args: { limit?: number; kind?: string }): Promise<PageHit[]>;
+  listPages(args: { limit?: number; offset?: number; kind?: string }): Promise<PageHit[]>;
   search(args: { query: string; limit?: number }): Promise<PageHit[]>;
   getBacklinks(args: { slug: string }): Promise<{ slug: string; title: string }[]>;
   traverseGraph(args: {
@@ -920,16 +920,23 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       };
     },
 
-    async listPages({ limit, kind }) {
-      const n = Math.min(Math.max(Number(limit) || 100, 1), 200);
+    async listPages({ limit, offset, kind }) {
+      // The 200 cap and the missing offset were gbrain's constraints, inherited
+      // when lore proxied it. This store has neither, and a brain of a few
+      // thousand pages makes the difference visible: the dashboard counted 100
+      // of 3,379 pages, and the graph had real titles for only the first 100 —
+      // every other node fell back to its slug's last segment, so a wall of
+      // pull requests rendered as the bare numbers 388, 216, 44.
+      const n = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+      const off = Math.max(Number(offset) || 0, 0);
       // kind narrows to notes or memories; anything else lists everything, so
       // lore's own unfiltered call is unaffected.
       const only = kind === "memory" || kind === "note" ? kind : null;
       const res = await db.query(
         `SELECT slug, kind, title, frontmatter, updated_at FROM pages
          WHERE deleted_at IS NULL AND ($2::text IS NULL OR kind = $2)
-         ORDER BY updated_at DESC LIMIT $1`,
-        [n, only],
+         ORDER BY updated_at DESC LIMIT $1 OFFSET $3`,
+        [n, only, off],
       );
       return res.rows.map((r) => ({
         slug: String(r.slug),

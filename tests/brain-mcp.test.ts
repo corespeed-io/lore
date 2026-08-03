@@ -554,12 +554,25 @@ test("a payload too deep to walk is refused, not waved through", async () => {
   expect("result" in rpc && rpc.result).toBeFalsy();
 });
 
-test("clampArgs bounds the unbounded knobs at 200", () => {
-  expect(clampArgs({ limit: 100000, depth: 50, query: "q" })).toEqual({
-    limit: 200,
+// Two knobs, two ceilings, and the difference is what a page list needs. A flat
+// 200 for `limit` truncated list_pages no matter what the tool allowed, so a
+// brain of 3,379 pages reported 100 on the dashboard and rendered most of its
+// graph as bare slug numbers. Depth still multiplies work rather than paging
+// through it, so it keeps the small cap. Numbers are hand-written here, not
+// imported from the module under test — a constant that computes itself agrees
+// with itself no matter what it says.
+test("clampArgs caps a page size high, a traversal depth low, and an offset at all", () => {
+  expect(clampArgs({ limit: 1_000_000, depth: 50, query: "q" })).toEqual({
+    limit: 1000,
     depth: 50,
     query: "q",
   });
+  expect(clampArgs({ depth: 5000 }).depth).toBe(200);
+  // An offset is a position, not a size: unbounded it is a cheap way to make
+  // the database seek through everything.
+  expect(clampArgs({ offset: 10_000_000 }).offset).toBe(100_000);
+  expect(clampArgs({ offset: -5 }).offset).toBe(0);
+  expect(clampArgs({ limit: 250, offset: 250 })).toEqual({ limit: 250, offset: 250 });
   expect(clampArgs(null)).toEqual({});
 });
 

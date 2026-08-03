@@ -12,6 +12,12 @@ const TTL_MS = 3_600_000;
 // the brain request log quiet (was 1 shallow call × up to 60 seeds = 60 reads/build;
 // now ~TRAVERSE_ROOTS reads/build). Roots are the most-relevant pages; depth 5
 // (the brain's default, cap 10) reaches across the connected brain.
+// Titles for the whole brain, paged. The cap is a backstop against a brain
+// large enough that resolving every title costs more than the graph is worth;
+// past it, nodes fall back to slug labels as they always did.
+const TITLE_PAGE = 1000;
+const TITLE_CAP = 20_000;
+
 const TRAVERSE_ROOTS = 8;
 const TRAVERSE_DEPTH = 5;
 let cache: { data: GraphData; at: number } | null = null;
@@ -115,10 +121,31 @@ async function rebuild(): Promise<GraphData> {
   );
   const titles = new Map<string, { title: string; type?: string }>();
   try {
-    const { isError, text } = await callTool("list_pages", { limit: 100, sort: "updated_desc" });
-    const pages = isError ? null : JSON.parse(text);
-    if (Array.isArray(pages)) {
-      for (const page of pages as PageHit[]) {
+    // EVERY page, not the first hundred. A node whose title is missing falls
+    // back to its slug's last segment, so on a brain of a few thousand pages a
+    // wall of pull requests rendered as the bare numbers 388, 216, 44 — the
+    // titles were in the database the whole time, and nothing had asked for them.
+    const pages: PageHit[] = [];
+    let isError = false;
+    for (let offset = 0; offset < TITLE_CAP; offset += TITLE_PAGE) {
+      const res = await callTool("list_pages", {
+        limit: TITLE_PAGE,
+        offset,
+        sort: "updated_desc",
+      });
+      if (res.isError) {
+        isError = true;
+        break;
+      }
+      const batch = JSON.parse(res.text);
+      if (!Array.isArray(batch) || !batch.length) break;
+      pages.push(...(batch as PageHit[]));
+      if (batch.length < TITLE_PAGE) break;
+    }
+    // An EMPTY brain is not a failed read. Treating "no pages" as a failure is
+    // how a fresh install started answering 502 instead of an empty graph.
+    if (!isError) {
+      for (const page of pages) {
         if (!page.slug || titles.has(page.slug)) continue;
         titles.set(page.slug, { title: page.title ?? page.slug, type: page.type });
       }

@@ -17,9 +17,13 @@ const TAB_LABELS: Record<Tab, string> = {
   search: "Memories",
 };
 
-// list_pages caps at 100 and exposes no offset, so the browse view treats
-// that as the honest page.
-const PAGE_LIST_LIMIT = 100;
+// One page of the browse list. `list_pages` takes an offset now — the 100-row
+// cap was gbrain's, inherited when lore proxied it — so the dashboard's PAGES
+// count is the real one rather than "the first hundred". It said 100 of 3,379.
+const PAGE_LIST_LIMIT = 1000;
+// A backstop, not a limit anyone should hit: past this the browse list stops
+// growing and says so, instead of pulling a brain of any size into the tab.
+const PAGE_LIST_CAP = 20_000;
 
 interface GraphStore {
   nodes: GraphData["nodes"];
@@ -327,9 +331,26 @@ export function App({ appTitle, appSubtitle }: AppProps) {
 
   // Load the page list once → the Memories browse (default, no query).
   useEffect(() => {
-    apiCall("list_pages", { limit: PAGE_LIST_LIMIT, sort: "updated_desc" })
-      .then((d) => setAllPages(Array.isArray(d) ? (d as PageHit[]) : []))
-      .catch(() => {});
+    let cancelled = false;
+    (async () => {
+      const all: PageHit[] = [];
+      for (let offset = 0; offset < PAGE_LIST_CAP; offset += PAGE_LIST_LIMIT) {
+        const batch = await apiCall("list_pages", {
+          limit: PAGE_LIST_LIMIT,
+          offset,
+          sort: "updated_desc",
+        }).catch(() => null);
+        if (cancelled || !Array.isArray(batch) || !batch.length) break;
+        all.push(...(batch as PageHit[]));
+        // Paint the first batch immediately; a big brain should not stare at
+        // zeros while the rest arrives.
+        setAllPages([...all]);
+        if ((batch as PageHit[]).length < PAGE_LIST_LIMIT) break;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const runSearch = useCallback(async (query: string) => {

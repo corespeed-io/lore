@@ -58,14 +58,22 @@ async function searchHandler(ctx: BrainCtx, args: Record<string, unknown>): Prom
 export const TOOLS: Record<string, ToolDef> = {
   list_pages: {
     access: "read",
-    description: "List pages, most recently updated first. kind narrows to 'memory' or 'note'.",
+    description:
+      "List pages, most recently updated first. kind narrows to 'memory' or 'note'. " +
+      "limit caps at 1000; offset pages through everything beyond that.",
     inputSchema: obj({
       limit: { type: "number" },
+      offset: { type: "number" },
       sort: { type: "string" },
       kind: { type: "string", enum: ["note", "memory"] },
     }),
     // ponytail: sort is accepted but always updated_desc — the only order lore asks for.
-    handler: (c, a) => c.store.listPages({ limit: a.limit as number, kind: a.kind as string }),
+    handler: (c, a) =>
+      c.store.listPages({
+        limit: a.limit as number,
+        offset: a.offset as number,
+        kind: a.kind as string,
+      }),
   },
   get_page: {
     access: "read",
@@ -260,14 +268,29 @@ mergeTools(TOOLS, MEMORY_TOOLS);
 
 export const READ_TOOL_NAMES = Object.keys(TOOLS).filter((t) => TOOLS[t].access === "read");
 
+// Two knobs, two ceilings. `limit` was capped at 200 for every tool, which is
+// right for a search and wrong for paging a page list: it silently truncated
+// list_pages to 200 rows, so a brain of 3,379 pages reported 100 on the
+// dashboard and rendered 74% of its graph nodes as bare slug numbers. The cap
+// exists to stop "give me a million rows", and 1000-per-request with an offset
+// does that without lying about how much there is.
+const MAX_LIMIT = 1000;
+// Depth and friends stay small: they multiply work rather than page through it.
 const MAX_BOUND = 200;
-const BOUNDED = ["limit", "depth", "max", "top_k", "k", "days"];
+// An offset is not a size, it is a position — unbounded it is a cheap way to
+// make the database seek through everything, so it gets a ceiling of its own.
+const MAX_OFFSET = 100_000;
+const BOUNDED = ["depth", "max", "top_k", "k", "days"];
 
 export function clampArgs(args: unknown): Record<string, unknown> {
   if (typeof args !== "object" || args === null) return {};
   const out = { ...(args as Record<string, unknown>) };
   for (const key of BOUNDED) {
     if (typeof out[key] === "number" && out[key] > MAX_BOUND) out[key] = MAX_BOUND;
+  }
+  if (typeof out.limit === "number" && out.limit > MAX_LIMIT) out.limit = MAX_LIMIT;
+  if (typeof out.offset === "number") {
+    out.offset = Math.min(Math.max(out.offset, 0), MAX_OFFSET);
   }
   return out;
 }
