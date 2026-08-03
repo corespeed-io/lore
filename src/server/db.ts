@@ -20,7 +20,7 @@ export interface BrainMeta {
   embeddingDim: number;
 }
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 // ONE definition, used by both the bootstrap in initSchema and the ddl list
 // below. Two copies drifted once already: the bootstrap created `meta` without
@@ -118,6 +118,13 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
         page_id BIGINT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
         seq INT NOT NULL,
         text TEXT NOT NULL,
+        -- The heading trail this chunk sits under, and whether it is prose or a
+        -- code fence. Both feed the EMBED call (see pipeline.ts embedInput) and
+        -- neither is part of the text column: the trigram arm, FTS and every
+        -- search snippet read that column, so baking context into it pollutes
+        -- three readers to help one.
+        context TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'prose',
         embedding vector(${dim}) NOT NULL,
         PRIMARY KEY (page_id, seq)
       )`,
@@ -271,6 +278,17 @@ async function migrate(db: Db, from: number): Promise<void> {
     await retireDuplicateKeysForScopeCollapse(db);
     await db.query(
       "UPDATE memory_items SET scope_type = 'vault', scope_id = NULL WHERE scope_type <> 'vault'",
+    );
+  }
+  if (from < 6) {
+    // Contextual retrieval: chunks carry the heading trail they sit under, and
+    // say whether they are prose or code. Additive with defaults, so existing
+    // rows stay valid — they read as un-contexted prose, which is what they are.
+    // Their embeddings are pre-context and stay that way until the page is
+    // re-put; a forced re-embed of the whole brain is not worth an upgrade.
+    await db.query("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS context TEXT NOT NULL DEFAULT ''");
+    await db.query(
+      "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prose'",
     );
   }
   await db.query("UPDATE meta SET schema_version = $1 WHERE id = 1", [SCHEMA_VERSION]);

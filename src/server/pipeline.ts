@@ -11,27 +11,163 @@ import { NOTE_EXT } from "./vault";
 // instruction (bge-m3) is unaffected, and so is a deployment that sets no prefix.
 export type EmbedFn = (texts: string[], role?: "query" | "document") => Promise<number[][]>;
 
-// Paragraph-accumulating splitter targeting ~1200 chars (≈400 tokens). Memories
-// are usually a single chunk; oversized paragraphs get hard-split.
-export function chunkBody(body: string, target = 1200): string[] {
-  const paras = body
-    .split(/\n{2,}/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  const out: string[] = [];
-  let cur = "";
-  for (const p of paras) {
-    if (cur && cur.length + p.length + 2 > target) {
-      out.push(cur);
-      cur = "";
+// A chunk is not just its text. `context` is the heading trail it sits under and
+// `source` says whether it is prose or a code fence — both decide how it gets
+// EMBEDDED without changing what gets STORED.
+export interface Chunk {
+  text: string;
+  /** Heading trail, injected at embed time only. Empty for code. */
+  context: string;
+  source: "prose" | "code";
+}
+
+// Contextual retrieval, the way Anthropic published it and gbrain implements it:
+// the wrapper is built JUST IN TIME at the embed call and NEVER persisted.
+//
+// That boundary is the whole trick. `chunks.text` is read by the trigram arm, by
+// FTS, and by every search result's snippet — bake "Overview › Architecture"
+// into it and you have polluted all three to help one. The embedding gets the
+// context; the readers get what the author wrote.
+//
+// Code fences skip it (gbrain's D20-T4): prepending a markdown page's heading to
+// a code block does not help cross-modal retrieval and spends embedding tokens
+// to do it.
+export function embedInput(c: Chunk): string {
+  if (c.source === "code" || !c.context) return c.text;
+  return `<context>\n${c.context}\n</context>\n${c.text}`;
+}
+
+// Structure-aware splitter targeting ~1200 chars (≈400 tokens). Memories are
+// usually a single chunk.
+//
+// It used to accumulate paragraphs and `slice(0, target)` anything oversized,
+// which is fine for a hand-written note and wrong for everything else. Measured
+// on one real 6k-char pull request: of 5 chunks, TWO cut a ``` fence in half —
+// so both halves are broken code, and the retrievable unit is a fragment nobody
+// wrote — and two more ended mid-line, one of them slicing a mermaid diagram at
+// `participant DB as MongoDB`. Documents that arrive from an importer are mostly
+// this shape: markdown with fences, diffs, tables.
+//
+// Three rules, in order of how much damage they prevent:
+//
+//   1. NEVER split inside a fenced block. A fence is one unit however long it
+//      is: half a code block embeds as noise and reads as garbage.
+//   2. Prefer a heading boundary, and carry the heading PATH into each chunk.
+//      A chunk that begins mid-document otherwise arrives with no idea what it
+//      is about — the section title is exactly the context the embedding needs,
+//      and it is free.
+//   3. Split an oversized run at a line break, then a sentence end, then (last
+//      resort) a hard slice. A cut between words costs a token the model then
+//      has to guess at.
+const FENCE = /^(```|~~~)/;
+const HEADING = /^(#{1,6}) +(.+?)\s*$/;
+
+// Blocks that must not be broken: a fenced run is atomic, everything else is a
+// paragraph. Also records the heading path each block sits under.
+function blocksOf(body: string): { text: string; path: string[]; atomic: boolean }[] {
+  const out: { text: string; path: string[]; atomic: boolean }[] = [];
+  const path: string[] = [];
+  const lines = body.split("\n");
+  let buf: string[] = [];
+  const flush = () => {
+    const text = buf.join("\n").trim();
+    if (text) out.push({ text, path: [...path], atomic: false });
+    buf = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fence = FENCE.exec(line.trim());
+    if (fence) {
+      flush();
+      const marker = fence[1];
+      const block = [line];
+      // Consume to the closing marker, or to EOF for an unterminated fence —
+      // which real markdown contains, and which must not swallow a rule below.
+      for (i++; i < lines.length; i++) {
+        block.push(lines[i]);
+        if (lines[i].trim().startsWith(marker)) break;
+      }
+      out.push({ text: block.join("\n"), path: [...path], atomic: true });
+      continue;
     }
-    cur = cur ? `${cur}\n\n${p}` : p;
-    while (cur.length > target * 2) {
-      out.push(cur.slice(0, target));
-      cur = cur.slice(target);
+    const heading = HEADING.exec(line);
+    if (heading) {
+      flush();
+      const depth = heading[1].length;
+      path.length = Math.min(path.length, depth - 1);
+      path[depth - 1] = heading[2];
+      for (let d = 0; d < depth - 1; d++) path[d] ??= "";
+      out.push({ text: line.trim(), path: [...path], atomic: false });
+      continue;
+    }
+    if (!line.trim()) flush();
+    else buf.push(line);
+  }
+  flush();
+  return out;
+}
+
+// Break a too-long run on the best boundary available, never mid-word.
+function softSplit(text: string, target: number): string[] {
+  const out: string[] = [];
+  let rest = text;
+  while (rest.length > target * 2) {
+    const window = rest.slice(0, target);
+    const at =
+      window.lastIndexOf("\n") > target * 0.4
+        ? window.lastIndexOf("\n")
+        : Math.max(window.lastIndexOf("。"), window.lastIndexOf(". "), window.lastIndexOf(" "));
+    const cut = at > target * 0.3 ? at + 1 : target;
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut);
+  }
+  if (rest.trim()) out.push(rest.trim());
+  return out;
+}
+
+export function chunkBody(body: string, target = 1200): Chunk[] {
+  const blocks = blocksOf(body);
+  if (!blocks.length) return [];
+  const out: Chunk[] = [];
+  let cur = "";
+  let curPath: string[] = [];
+
+  const trail = (path: string[]) => path.filter(Boolean).join(" › ");
+  const push = () => {
+    if (cur.trim()) out.push({ text: cur.trim(), context: trail(curPath), source: "prose" });
+    cur = "";
+  };
+
+  for (const b of blocks) {
+    // A fence is its OWN chunk, never mixed with the prose around it. gbrain's
+    // reason, and it is a measured one: ~40% of a brain is docs with inline
+    // code, and when a fence chunks as prose, "how do we import from engine"
+    // ranks the paragraph ABOUT the import above the import itself.
+    if (b.atomic) {
+      push();
+      curPath = b.path;
+      out.push({ text: b.text, context: "", source: "code" });
+      continue;
+    }
+
+    const changedSection = trail(curPath) !== trail(b.path);
+    // A new section starts a new chunk when there is already enough in hand;
+    // starting one for every heading would shatter a document of short sections.
+    if (
+      cur &&
+      (cur.length + b.text.length + 2 > target || (changedSection && cur.length > target * 0.5))
+    ) {
+      push();
+    }
+    curPath = b.path;
+    cur = cur ? `${cur}\n\n${b.text}` : b.text;
+    if (cur.length > target * 2) {
+      const parts = softSplit(cur, target);
+      cur = parts.pop() ?? "";
+      for (const p of parts) out.push({ text: p, context: trail(b.path), source: "prose" });
     }
   }
-  if (cur) out.push(cur);
+  push();
   return out;
 }
 

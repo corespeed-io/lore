@@ -9,6 +9,7 @@ import { GAZETTEER_PREFIXES, buildGazetteer, findMentions } from "./mentions";
 import {
   type EmbedFn,
   chunkBody,
+  embedInput,
   extractRefs,
   frontmatterAliases,
   normalizeRef,
@@ -628,7 +629,9 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // compensation machinery. ponytail: couples writes to embeddings-provider
     // uptime; add an indexed_at watermark + re-embed sweep if that ever bites.
     const chunks = chunkBody(args.body);
-    const vectors = await embed(chunks);
+    // The embedding sees the context wrapper; the row does not. See
+    // pipeline.ts embedInput for why that boundary is the whole point.
+    const vectors = await embed(chunks.map(embedInput));
 
     // Normalize declared aliases in place so the alias arm's @> containment
     // check compares like with like.
@@ -652,8 +655,16 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       await q("DELETE FROM chunks WHERE page_id = $1", [pageId]);
       for (let i = 0; i < chunks.length; i++) {
         await q(
-          "INSERT INTO chunks (page_id, seq, text, embedding) VALUES ($1, $2, $3, $4::vector)",
-          [pageId, i, chunks[i], JSON.stringify(vectors[i])],
+          `INSERT INTO chunks (page_id, seq, text, context, source, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6::vector)`,
+          [
+            pageId,
+            i,
+            chunks[i].text,
+            chunks[i].context,
+            chunks[i].source,
+            JSON.stringify(vectors[i]),
+          ],
         );
       }
 

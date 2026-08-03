@@ -63,7 +63,7 @@ test("a v1 database migrates in place, keeping its data", async () => {
   await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
 
   const one = async (sql: string) => (await db.query(sql)).rows[0] as Record<string, unknown>;
-  expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(5);
+  expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(6);
   // separators folded, so a ref typed "Robert Smith" can match the filename
   expect((await one("SELECT basename FROM pages WHERE slug='people/robert-smith'")).basename).toBe(
     "robert smith",
@@ -97,7 +97,7 @@ test("a fresh database initializes at the current version", async () => {
   const row = (await db.query("SELECT schema_version FROM meta")).rows[0] as {
     schema_version: number;
   };
-  expect(Number(row.schema_version)).toBe(5);
+  expect(Number(row.schema_version)).toBe(6);
   await pg.close();
 });
 
@@ -211,7 +211,7 @@ test("a real v3 database upgrades to v4 with everything intact", async () => {
   await initSchema(db, { embeddingModel: "fake", embeddingDim: DIM });
 
   const one = async (sql: string) => (await db.query(sql)).rows[0] as Record<string, unknown>;
-  expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(5);
+  expect(Number((await one("SELECT schema_version FROM meta")).schema_version)).toBe(6);
 
   // Nothing the previous release owned may be disturbed by an additive upgrade.
   expect(Number((await one("SELECT count(*)::int AS n FROM pages")).n)).toBe(3);
@@ -371,6 +371,6 @@ test("v5 collapses a key that was live in two scopes without bricking the brain"
   const after = (await db.query("SELECT schema_version FROM meta")).rows[0] as {
     schema_version: number;
   };
-  expect(Number(after.schema_version)).toBe(5);
+  expect(Number(after.schema_version)).toBe(6);
   await lite.close();
 });

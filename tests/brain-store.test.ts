@@ -7,7 +7,7 @@ import { initSchema } from "../src/server/db.js";
 import { rowToMemory } from "../src/server/memory/items.js";
 import { renderProjection } from "../src/server/memory/projection.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
-import { chunkBody, extractRefs, normalizeRef } from "../src/server/pipeline.js";
+import { chunkBody, embedInput, extractRefs, normalizeRef } from "../src/server/pipeline.js";
 import type { Store } from "../src/server/store.js";
 import { createStore, normalizePageSlug } from "../src/server/store.js";
 import { refAddress } from "../src/server/vault.js";
@@ -62,12 +62,50 @@ afterAll(async () => {
   await pg.close();
 });
 
-test("chunkBody splits on paragraphs and hard-splits oversized ones", () => {
+test("chunkBody keeps a fence whole, and never cuts inside one", () => {
+  const fence = `\`\`\`ts\n${"const x = 1;\n".repeat(400)}\`\`\``;
+  const chunks = chunkBody(`# Title\n\nsome prose\n\n${fence}\n\nmore prose`);
+  const code = chunks.filter((c) => c.source === "code");
+  // ONE chunk for the fence however long it is. Half a code block embeds as
+  // noise and reads as garbage; measured on a real PR, the old splitter cut
+  // two fences of five chunks in half.
+  expect(code).toHaveLength(1);
+  expect(code[0].text.startsWith("```ts")).toBe(true);
+  expect(code[0].text.endsWith("```")).toBe(true);
+  // No prose chunk may contain an unbalanced fence marker.
+  for (const c of chunks.filter((c) => c.source === "prose")) {
+    expect((c.text.match(/\`\`\`/g) ?? []).length % 2).toBe(0);
+  }
+});
+
+test("a chunk carries its heading trail as context, and the text stays clean", () => {
+  const body = `# Design\n\n## Storage\n\n${"detail. ".repeat(400)}`;
+  const chunks = chunkBody(body);
+  const prose = chunks.filter((c) => c.source === "prose");
+  expect(prose.length).toBeGreaterThan(1);
+  // Context is carried BESIDE the text, never inside it: chunks.text feeds the
+  // trigram arm, FTS and every search snippet, so baking the trail into it
+  // pollutes three readers to help one.
+  expect(prose.at(-1)?.context).toContain("Storage");
+  for (const c of prose) expect(c.text).not.toContain("›");
+});
+
+test("embedInput wraps prose with its context and leaves code alone", () => {
+  expect(embedInput({ text: "body", context: "A › B", source: "prose" })).toBe(
+    "<context>\nA › B\n</context>\nbody",
+  );
+  // gbrain's D20-T4: a markdown heading in front of a code block does not help
+  // cross-modal retrieval and spends embedding tokens to do it.
+  expect(embedInput({ text: "code", context: "A › B", source: "code" })).toBe("code");
+  expect(embedInput({ text: "body", context: "", source: "prose" })).toBe("body");
+});
+
+test("chunkBody splits long prose without cutting mid-word", () => {
   expect(chunkBody("")).toEqual([]);
-  expect(chunkBody("one para")).toEqual(["one para"]);
-  const chunks = chunkBody(`${"a".repeat(1000)}\n\n${"b".repeat(1000)}`);
-  expect(chunks.length).toBe(2);
-  expect(chunkBody("x".repeat(5000)).length).toBeGreaterThan(1);
+  expect(chunkBody("one para").map((c) => c.text)).toEqual(["one para"]);
+  const chunks = chunkBody("word ".repeat(2000));
+  expect(chunks.length).toBeGreaterThan(1);
+  for (const c of chunks.slice(0, -1)) expect(c.text.endsWith("word")).toBe(true);
 });
 
 test("extractRefs handles targets, sections, aliases, and skips fences", () => {
