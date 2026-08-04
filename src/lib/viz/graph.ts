@@ -357,17 +357,19 @@ export function mountGraph(
     link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
     layoutLabels();
   }
+  // A search MARKS its matches; it does not dim the graph around them. Ringing
+  // ~15 nodes and naming them with labels is enough to find them, and the
+  // alternative was pushing ~680 nodes to 0.1 and ~1700 edges to 0.04 — the most
+  // expensive repaint in this file, spent on the elements that are NOT the answer.
+  // Nothing about the rest of the graph changes, so the ring is a touch stronger
+  // than it was (2.4 against 2) to carry the emphasis on its own.
   function paintHighlight() {
     const M = active ?? new Set<string>();
     node
-      .attr("opacity", (d) => (M.has(d.id) ? 1 : 0.1))
+      .attr("opacity", 1)
       .attr("stroke", (d) => (M.has(d.id) ? labelFill : nodeStroke))
-      .attr("stroke-width", (d) => (M.has(d.id) ? 2 : 1.5));
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-      .attr("opacity", (l: any) => (M.has(l.source.id) && M.has(l.target.id) ? 0.9 : 0.04))
-      .attr("stroke", linkColor)
-      .attr("stroke-width", 1);
+      .attr("stroke-width", (d) => (M.has(d.id) ? 2.4 : 1.5));
+    link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
     layoutLabels();
   }
   function applyState() {
@@ -430,7 +432,33 @@ export function mountGraph(
     layoutLabels();
   }
 
-  let tickCount = 0;
+  // Write every moving coordinate into the DOM. Called per tick only while the
+  // simulation is actually running — which, after the headless settle below, is
+  // only during a drag.
+  function drawFrame() {
+    link
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x1", (d: any) => d.source.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y1", (d: any) => d.source.y)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x2", (d: any) => d.target.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y2", (d: any) => d.target.y);
+    linkHit
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x1", (d: any) => d.source.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y1", (d: any) => d.source.y)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x2", (d: any) => d.target.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y2", (d: any) => d.target.y);
+    // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+    node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
+    positionLabels();
+  }
+
   const sim = d3
     .forceSimulation(nodes)
     .force(
@@ -455,33 +483,7 @@ export function mountGraph(
         // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
         .radius((d: any) => d.r + 13),
     )
-    .on("tick", () => {
-      link
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x1", (d: any) => d.source.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y1", (d: any) => d.source.y)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x2", (d: any) => d.target.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y2", (d: any) => d.target.y);
-      linkHit
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x1", (d: any) => d.source.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y1", (d: any) => d.source.y)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x2", (d: any) => d.target.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y2", (d: any) => d.target.y);
-      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-      node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
-      positionLabels();
-      if (++tickCount === 70) {
-        fitView(); // frame once the layout has settled
-        layoutLabels(); // and only now decide which labels fit
-      }
-    });
+    .on("tick", drawFrame);
 
   node.call(
     d3
@@ -633,7 +635,7 @@ export function mountGraph(
     svg.transition("zoom").duration(140).ease(d3.easeCubicOut).call(zoom.scaleBy, factor, p);
   });
 
-  function fitView() {
+  function fitView(animate = true) {
     if (!nodes.length) return;
     // biome-ignore lint/suspicious/noExplicitAny: d3 node datum
     const ns = nodes as any[];
@@ -647,10 +649,12 @@ export function mountGraph(
     const scale = Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 1.5);
     const tx = W / 2 - (scale * (minX + maxX)) / 2;
     const ty = H / 2 - (scale * (minY + maxY)) / 2;
-    svg
-      .transition()
-      .duration(450)
-      .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+    const t = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    // The initial framing is instant. Animating it re-renders the whole graph
+    // for 450ms immediately after mount, which is the jank the headless settle
+    // below exists to remove — a double-click fit still animates.
+    if (!animate) svg.call(zoom.transform, t);
+    else svg.transition().duration(450).call(zoom.transform, t);
   }
   svg.on("dblclick", () => fitView());
 
@@ -661,6 +665,45 @@ export function mountGraph(
   function resetZoom() {
     svg.transition().duration(180).call(zoom.transform, d3.zoomIdentity);
   }
+
+  // ponytail: settle the layout HEADLESSLY, then draw it once. `sim.tick(n)`
+  // decays alpha per iteration and does NOT dispatch the tick event
+  // (d3-force/src/simulation.js:38-59), so the entire settle costs force
+  // computation and nothing else — no attribute writes, no rasterisation, no
+  // frames. The animated settle it replaces was ~300 frames each writing 8324
+  // coordinates and re-rendering 2400 vector elements, and hovering DURING it
+  // stacked a full-graph focus repaint onto that same frame budget, which is
+  // the worst case anyone reported. There is no longer a window to hover in:
+  // the graph is laid out before it is first drawn.
+  //
+  // Bounded by TIME, not by tick count, and the ceiling is the point. 300 ticks
+  // is where alphaDecay (1 - 0.001^(1/300)) stops on its own, but a tick here
+  // measured ~2.6ms at 696 nodes / 1733 edges, so insisting on all 300 would
+  // trade the settle animation for a ~780ms frozen main thread — a worse bug
+  // than the one being fixed. So it settles as far as it can inside the budget
+  // and draws whatever it reached: a not-quite-relaxed static layout is fine,
+  // and the alternative (finish the rest animated) would put back the exact
+  // window this removes. Ticks in small batches so the budget can be checked
+  // without paying a whole batch to overshoot it.
+  // 400ms because a block DURING MOUNT is not the same defect as a block during
+  // interaction: there is nothing on screen yet, so nobody can be interrupted by
+  // it — it reads as the page taking slightly longer to load, on a page that
+  // already waits on /api/graph. A tighter budget (150ms) bought only ~57 of the
+  // 300 ticks at the measured ~2.6ms each, which draws a layout that never
+  // finished spreading out. The ceiling is the point: a far bigger graph stops
+  // early and looks under-relaxed rather than freezing for seconds.
+  const SETTLE_TICKS = 300;
+  const SETTLE_BUDGET_MS = 400;
+  sim.stop(); // forceSimulation starts its timer on construction
+  const settleStart = performance.now();
+  let settled = 0;
+  while (settled < SETTLE_TICKS && performance.now() - settleStart < SETTLE_BUDGET_MS) {
+    sim.tick(10);
+    settled += 10;
+  }
+  drawFrame();
+  layoutLabels();
+  fitView(false);
 
   // Keep the graph sized to its container (window resize, panel changes) instead of
   // freezing at mount-time dimensions.
@@ -676,8 +719,14 @@ export function mountGraph(
     (sim.force("x") as any).x(W / 2);
     // biome-ignore lint/suspicious/noExplicitAny: d3 force accessor typing
     (sim.force("y") as any).y(H / 2);
-    sim.alpha(0.3).restart();
-    fitView();
+    // Headless again — an animated re-settle on every resize would put the
+    // window this file just removed back, once per drag of the panel divider.
+    sim.alpha(0.3);
+    const t0 = performance.now();
+    for (let i = 0; i < 120 && performance.now() - t0 < 80; i += 10) sim.tick(10);
+    drawFrame();
+    layoutLabels();
+    fitView(false);
   });
   ro.observe(el);
 
