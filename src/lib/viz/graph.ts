@@ -484,9 +484,20 @@ export function mountGraph(
   // add work. Read from the event rather than tracked with a "gesturing" flag on
   // purpose: a flag that misses its end event (an interrupted zoom transition,
   // a pointer released off-window) stays stuck and kills hover for good, while
-  // `buttons` cannot get out of sync with the pointer. pointerout is deliberately
-  // NOT guarded — it only arms a 110ms timer that later coalesces into one
-  // repaint, and skipping it would leave the pre-drag focus painted.
+  // `buttons` cannot get out of sync with the pointer.
+  //
+  // Guarding the two ACQUIRE handlers is not enough, and the asymmetry is the
+  // whole bug: d3-drag listens on the window, so a node the pointer merely
+  // crosses mid-drag still gets its own pointerover AND pointerout from the
+  // browser. Blocking only the pointerover left the pointerout to fire
+  // clearHoverSoon, which 110ms later wiped the focus of the node being DRAGGED
+  // — a node the pointer never left, erased by one it only passed over. So
+  // during a gesture only the node that HOLDS the focus may release it.
+  //
+  // That check is what keeps the focus from sticking, too. A pan while hovering
+  // A does leave A, so A's own pointerout still clears it; freezing hover
+  // wholesale for the gesture would have left A lit with nothing under the
+  // pointer and no event coming to fix it.
   // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
   const isGesture = (e: any) => Boolean(e?.buttons);
 
@@ -508,8 +519,10 @@ export function mountGraph(
       hoverNodeId = d.id;
       paintNodeHover(d.id);
     })
-    .on("pointerout", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+    .on("pointerout", (e: any, d: any) => {
       if (selectedId) return;
+      if (isGesture(e) && hoverNodeId !== d.id) return; // a crossed node, not the held one
       clearHoverSoon();
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
@@ -553,9 +566,13 @@ export function mountGraph(
       moveEdgeTooltip(event, l);
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-    .on("pointerout", (_event, l: any) => {
+    .on("pointerout", (_event: any, l: any) => {
       hideEdgeTooltip();
       if (selectedId) return;
+      // An edge crossed mid-gesture takes the `clearHoverNow` branch below, which
+      // has no 110ms coalescing at all — it would wipe the dragged node's focus
+      // instantly. The tooltip is still hidden above, which is right.
+      if (isGesture(_event)) return;
       if (hoverNodeId && edgeTouchesNode(l, hoverNodeId)) {
         clearHoverSoon();
         return;
