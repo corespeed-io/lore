@@ -50,4 +50,31 @@ describe("type colors", () => {
       expect(typeColor(type)).toBe(color);
     }
   });
+
+  // A generated color that equals a named one makes an unrelated type look like
+  // a `person` in the graph, the legend and the dashboard at once.
+  it("never hands an unnamed type one of the named colors", () => {
+    const named = new Set(Object.values(TYPE_COLORS));
+    for (const type of TYPES) {
+      if (type in TYPE_COLORS) continue;
+      expect(
+        named.has(typeColor(type)),
+        `"${type}" got the ${typeColor(type)} of a named type`,
+      ).toBe(false);
+    }
+  });
+
+  // Red reads as failure. It stays reachable by naming a type above, but a hash
+  // must never land on it — the largest type in a real brain is most of the
+  // nodes, and 92% of a graph in alarm red is what this replaced.
+  it("never generates a red", () => {
+    for (const type of TYPES) {
+      if (type in TYPE_COLORS) continue;
+      const hex = typeColor(type);
+      const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+      expect(r > 180 && g < 110 && b < 110, `"${type}" generated ${hex}, which is a red`).toBe(
+        false,
+      );
+    }
+  });
 });

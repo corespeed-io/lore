@@ -1,6 +1,5 @@
 // The node-type palette — the single source of truth for type colors across the
-// graph, its legend, and the dashboard breakdown. Unknown backend types get a
-// stable hash color, so the UI does not need a code change for every new type.
+// graph, its legend, and the dashboard breakdown.
 export const TYPE_COLORS: Record<string, string> = {
   person: "#0070f3",
   company: "#7928ca",
@@ -8,26 +7,54 @@ export const TYPE_COLORS: Record<string, string> = {
   concept: "#8f8f8f",
 };
 
-// An unnamed type gets a stable color derived from its name, so a deployment
-// whose backend invents a type needs no code change here. A FOUR-SLOT fallback
-// palette made that promise false: four types into four buckets collides ~91% of
-// the time, and it did — `specs` and `contribution` both landed on #ff4d4d, so a
-// legend listing four types showed three swatches and two classes of node were
-// the same color in the graph. Spreading the same hash over the hue circle keeps
-// the property and takes the buckets from 4 to 360.
+// A type this file does not name still needs a color, and it has to be a good
+// one: a deployment's own vocabulary (a `pr`, a `topic`, a `recipe`) is the
+// vocabulary most of its nodes carry, so the generated colors ARE the picture.
 //
-// Residual, stated rather than hidden: two names can still land within a few
-// degrees. Making it impossible means assigning by index over the set of types
-// present, which turns this pure function of one string into one that needs the
-// whole set — and then the graph, its legend and the dashboard breakdown must be
-// given the SAME set or they disagree about what blue means.
+// Two earlier versions got this wrong in opposite directions. A four-slot
+// fallback list collided constantly — four types into four buckets collide
+// about 91% of the time, and `specs` and `contribution` did, so the legend
+// listed four types and showed three swatches. Deriving a color arithmetically
+// instead (`hsl(hash % 360, 72%, 52%)`) removed the collisions and replaced
+// them with a worse problem: nothing chose the colors. The largest type in a
+// real brain landed on 346° — alarm red — across 92% of the nodes.
 //
-// Saturation and lightness are fixed so a generated color carries the same
-// weight as the four named ones on the near-white canvas. Comma syntax because
-// it is universally supported and this is not a place to be clever.
+// So: a hand-picked categorical palette. Every entry is a designed color that
+// sits at the same weight as the four named ones on the near-white canvas, no
+// entry duplicates a named one (a generated type must not be able to look like
+// a `person`), and RED IS DELIBERATELY ABSENT. Red means failure in a UI; it
+// should be reachable by naming it above, never by a hash landing on it.
+//
+// Honest about what this is: `PALETTE[hash % length]` means the palette's
+// CONTENTS AND ORDER decide which type gets which color. Adding an entry
+// reshuffles every unnamed type. That is the cost of keeping typeColor a pure
+// function of one string — which it must be, because the graph, its legend and
+// the dashboard breakdown each call it separately and have to agree. Assigning
+// by index over "the set of types present" would guarantee distinctness, but
+// those three callers do not see the same set (the graph drops isolated nodes),
+// so they would disagree about what a color means.
+//
+// Collisions are therefore still possible for a deployment with many types —
+// twelve slots, so four types collide about 43% of the time by chance.
+// tests/colors.test.ts pins the set this brain actually uses.
+const PALETTE = [
+  "#0ea5e9", // sky
+  "#0d9488", // teal
+  "#059669", // emerald
+  "#84cc16", // lime
+  "#ca8a04", // ochre
+  "#f59e0b", // amber
+  "#f97316", // orange
+  "#c026d3", // fuchsia
+  "#7c3aed", // violet
+  "#4f46e5", // indigo
+  "#0891b2", // cyan
+  "#64748b", // slate
+];
+
 export function typeColor(type: string): string {
   if (TYPE_COLORS[type]) return TYPE_COLORS[type];
   let hash = 0;
   for (const ch of type) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return `hsl(${hash % 360}, 72%, 52%)`;
+  return PALETTE[hash % PALETTE.length] ?? TYPE_COLORS.concept;
 }
