@@ -18,6 +18,9 @@ const TTL_MS = 3_600_000;
 const TITLE_PAGE = 1000;
 const TITLE_CAP = 20_000;
 
+// Isolated pages earn their place in a small brain and drown a large one.
+const ISOLATED_BUDGET = 400;
+
 const TRAVERSE_ROOTS = 8;
 const TRAVERSE_DEPTH = 5;
 let cache: { data: GraphData; at: number } | null = null;
@@ -202,13 +205,19 @@ async function rebuild(): Promise<GraphData> {
     const label = t ? t.title : (slug.split("/").pop() ?? slug).replace(/-/g, " ");
     nodes.set(slug, { id: slug, label, type: nodeType(slug, t?.type) });
   };
-  for (const slug of titles.keys()) ensure(slug);
   for (const { from_slug, to_slug } of rows) {
     if (!from_slug || !to_slug || from_slug === to_slug) continue;
     ensure(from_slug);
     ensure(to_slug);
     edges.add([from_slug, to_slug].sort().join("|"));
   }
+  // Isolated pages are shown only while there are few enough for "this page has
+  // no links yet" to be the useful reading. Past that they stop being
+  // information and become a halo: at 4,113 pages, 2,731 of the nodes had degree
+  // zero — 66% of the picture was a ring of dots that said nothing, drawn around
+  // the structure someone actually came to look at.
+  if (nodes.size <= ISOLATED_BUDGET) for (const slug of titles.keys()) ensure(slug);
+
   // 4. Drop hash-titled mem0 imports, but keep legitimate isolated pages. The
   // graph should show the brain's current page set, not only connected pages.
   const titled = new Map([...nodes].filter(([, n]) => !isHashTitle(n.label)));

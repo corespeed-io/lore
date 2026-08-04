@@ -174,6 +174,42 @@ test("traversal roots round-robin across seed queries (each query's top hit gets
   }
 });
 
+test("a big brain drops isolated pages; the connected structure stays intact", async () => {
+  clearGraphCache();
+  // 1 hub + 401 spokes = 402 connected nodes, past the 400 budget. The threat
+  // this pins: reverting the budget guard to an unconditional ensure() silently
+  // re-adds the halo of degree-zero dots (66% of the picture at 4k pages) and
+  // nothing else in the suite notices, because every other fixture is tiny.
+  const base = baseImpl(); // capture BEFORE swapping, or finally restores our own mock
+  const spokes = Array.from({ length: 401 }, (_, i) => `concepts/spoke-${i}`);
+  const EDGES = spokes.map((s) => ({ from_slug: "concepts/hub", to_slug: s }));
+  const PAGES = [
+    { slug: "concepts/hub", title: "Hub", type: "concept" },
+    { slug: "concepts/lonely", title: "Lonely Isolated Page", type: "concept" },
+  ];
+  vi.mocked(callTool).mockImplementation(async (tool: string, args?: object) => {
+    if (tool === "list_pages") return { isError: false, text: JSON.stringify(PAGES) };
+    if (tool === "query")
+      return { isError: false, text: JSON.stringify([{ slug: "concepts/hub", title: "Hub" }]) };
+    if (tool === "traverse_graph") {
+      const s = (args as { slug?: string })?.slug ?? "";
+      const incident = EDGES.filter((e) => e.from_slug === s || e.to_slug === s);
+      return { isError: false, text: JSON.stringify(incident) };
+    }
+    return { isError: false, text: "[]" };
+  });
+  try {
+    const g = await buildGraph();
+    const ids = new Set(g.nodes.map((n) => n.id));
+    expect(ids.size).toBe(402); // hub + 401 spokes, and nothing else
+    expect(ids.has("concepts/lonely")).toBe(false); // the halo is gone
+    expect(ids.has("concepts/hub")).toBe(true);
+    expect(g.links).toHaveLength(401); // dropping isolates must not cost edges
+  } finally {
+    vi.mocked(callTool).mockImplementation(base);
+  }
+});
+
 test("buildGraph serves a genuinely edgeless brain without throwing (and caches it)", async () => {
   clearGraphCache();
   const mocked = vi.mocked(callTool);
