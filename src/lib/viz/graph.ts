@@ -96,14 +96,17 @@ export function mountGraph(
     .data(links)
     .join("line");
   // ponytail: the edge-hover hit layer is a 14px transparent copy of EVERY edge,
-  // so it doubles the line count and the per-tick attribute writes. Measured at
-  // 1733 edges: 3466 <line> elements and 15,256 attribute writes per tick, which
-  // is 39ms of setAttribute alone before layout — the page's whole lag budget.
+  // so it doubles the line count and the per-tick attribute writes. At 1733
+  // edges that is 3466 <line> elements and 15,256 attribute writes per tick.
   // Past this many edges the 14px strokes overlap each other so heavily that
   // picking one edge is not a real interaction, so it is not drawn at all: an
   // empty data join leaves the selection valid and every .attr()/.on() below a
   // no-op, with no branch to keep in sync. Upgrade path: draw to a canvas and
-  // hit-test with the quadtree d3-force already builds.
+  // hit-test in code — note that `simulation.find` is a LINEAR scan over every
+  // node (d3-force/src/simulation.js:128), not a quadtree lookup; the quadtree
+  // d3-force builds is rebuilt per tick inside the charge force and is not
+  // exposed. A linear scan is fine at this size, but do not plan around an
+  // index that does not exist.
   const EDGE_HOVER_LIMIT = 600;
   const linkHit = view
     .append("g")
