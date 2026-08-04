@@ -162,10 +162,38 @@ export function mountGraph(
   let selectedId: string | null = null;
   let hoverNodeId: string | null = null;
   let hoverClearTimer: ReturnType<typeof setTimeout> | null = null;
-  // Whose neighbourhood is currently lit. paintNodeFocus lights only the
-  // neighbourhood instead of dimming everything else, so it has to know what to
-  // put back; the two full-reset paints below clear it because they cover it.
-  let litFocusId: string | null = null;
+  // What is currently LIT, so the next paint can put exactly that back. Since no
+  // paint dims the whole graph any more, nothing does a blanket restore, and a
+  // transition that forgets to undo its predecessor leaves visible residue —
+  // a graph stuck half-dimmed, or two neighbourhoods lit at once.
+  //
+  // It is ONE descriptor for every kind of focus (a node's neighbourhood, a
+  // single edge) precisely because two independent reset paths is how that
+  // residue survives: paintEdgeHover used to dim everything and knew nothing
+  // about the node focus, so hovering a node, then an edge, then the SAME node
+  // left the dim painted with no code left to remove it.
+  //
+  // `touching` is a predicate rather than a set so an edge focus can say "this
+  // exact pair" and a node focus "anything incident to this id" without either
+  // list being materialised.
+  // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+  type Lit = { nodes: Set<string>; touching: (l: any) => boolean };
+  let lit: Lit | null = null;
+
+  function clearLit() {
+    if (!lit) return;
+    const was = lit;
+    lit = null;
+    node
+      .filter((n) => was.nodes.has(n.id))
+      .attr("stroke", nodeStroke)
+      .attr("stroke-width", 1.5);
+    link
+      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+      .filter((l: any) => was.touching(l))
+      .attr("stroke", linkColor)
+      .attr("stroke-width", 1);
+  }
 
   // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
   function endpointId(value: any): string {
@@ -357,7 +385,7 @@ export function mountGraph(
   }
 
   function paintDefault() {
-    litFocusId = null; // the full reset below covers whatever was lit
+    lit = null; // the full reset below covers whatever was lit
     node.attr("opacity", 1).attr("stroke", nodeStroke).attr("stroke-width", 1.5);
     link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
     layoutLabels();
@@ -370,7 +398,7 @@ export function mountGraph(
   // than it was (2.4 against 2) to carry the emphasis on its own.
   function paintHighlight() {
     const M = active ?? new Set<string>();
-    litFocusId = null; // this writes every node's stroke, so nothing stays lit
+    lit = null; // this writes every node's stroke, so nothing stays lit
     node
       .attr("opacity", 1)
       .attr("stroke", (d) => (M.has(d.id) ? labelFill : nodeStroke))
@@ -391,9 +419,9 @@ export function mountGraph(
   // time. Now the neighbourhood LIGHTS UP and nothing else is touched: writes
   // drop from ~7300 to roughly twice the hovered node's degree.
   //
-  // Which means the previous focus has to be put back by hand, so `litFocusId`
-  // records whose neighbourhood is currently lit. The reset runs BEFORE the new
-  // light, so a node in both neighbourhoods ends up lit rather than reset.
+  // Which means the previous focus has to be put back by hand — clearLit() above
+  // is the single place that does it, and it runs BEFORE the new light, so a node
+  // in both neighbourhoods ends up lit rather than reset.
   //
   // The hovered node gains a ring it did not have before (2.2, against 2.4 for a
   // selected one). Losing the dim costs contrast, and the ring plus the tinted
@@ -401,21 +429,9 @@ export function mountGraph(
   function paintNodeFocus(id: string, selected: boolean) {
     const A = adj[id] ?? new Set([id]);
     const nodeColor = typeColor(nodeById.get(id)?.type ?? "");
-    const prev = litFocusId;
-    litFocusId = id;
-
-    if (prev && prev !== id) {
-      const P = adj[prev] ?? new Set([prev]);
-      node
-        .filter((n) => P.has(n.id))
-        .attr("stroke", nodeStroke)
-        .attr("stroke-width", 1.5);
-      link
-        // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-        .filter((l: any) => edgeTouchesNode(l, prev))
-        .attr("stroke", linkColor)
-        .attr("stroke-width", 1);
-    }
+    clearLit();
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    lit = { nodes: A, touching: (l: any) => edgeTouchesNode(l, id) };
     node
       .filter((n) => A.has(n.id))
       .attr("stroke", (n) => (n.id === id ? labelFill : nodeStroke))
@@ -445,23 +461,20 @@ export function mountGraph(
     const [source, target] = linkEndpointIds(l);
     const ids = new Set([source, target]);
     hover = ids;
-    node.attr("opacity", (n) => (ids.has(n.id) ? 1 : 0.12));
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("opacity", (edge: any) => {
-        const [edgeSource, edgeTarget] = linkEndpointIds(edge);
-        return edgeSource === source && edgeTarget === target ? 1 : 0.05;
-      })
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke", (edge: any) => {
-        const [edgeSource, edgeTarget] = linkEndpointIds(edge);
-        return edgeSource === source && edgeTarget === target ? labelFill : linkColor;
-      })
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke-width", (edge: any) => {
-        const [edgeSource, edgeTarget] = linkEndpointIds(edge);
-        return edgeSource === source && edgeTarget === target ? 1.8 : 1;
-      });
+    // The match stays DIRECTED and exact-pair, as it was: a reciprocal B->A edge
+    // is a different edge and is not lit, and every parallel duplicate A->B is.
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    const isThisEdge = (edge: any) => {
+      const [a, b] = linkEndpointIds(edge);
+      return a === source && b === target;
+    };
+    clearLit();
+    lit = { nodes: ids, touching: isThisEdge };
+    node
+      .filter((n) => ids.has(n.id))
+      .attr("stroke", labelFill)
+      .attr("stroke-width", 2);
+    link.filter(isThisEdge).attr("stroke", labelFill).attr("stroke-width", 1.8);
     layoutLabels();
   }
 
