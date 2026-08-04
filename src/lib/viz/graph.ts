@@ -475,18 +475,30 @@ export function mountGraph(
       }),
   );
 
+  // A pointer with a button held down is dragging a node or panning the canvas,
+  // not pointing at things — every node it crosses used to repaint the graph on
+  // top of the simulation the drag itself reheated, which is the worst moment to
+  // add work. Read from the event rather than tracked with a "gesturing" flag on
+  // purpose: a flag that misses its end event (an interrupted zoom transition,
+  // a pointer released off-window) stays stuck and kills hover for good, while
+  // `buttons` cannot get out of sync with the pointer. pointerout is deliberately
+  // NOT guarded — it only arms a 110ms timer that later coalesces into one
+  // repaint, and skipping it would leave the pre-drag focus painted.
+  // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+  const isGesture = (e: any) => Boolean(e?.buttons);
+
   node
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-    .on("pointerover", (_e, d: any) => {
-      if (selectedId) return;
+    .on("pointerover", (e: any, d: any) => {
+      if (selectedId || isGesture(e)) return;
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
       paintNodeHover(d.id);
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-    .on("pointermove", (_e, d: any) => {
-      if (selectedId) return;
+    .on("pointermove", (e: any, d: any) => {
+      if (selectedId || isGesture(e)) return;
       if (hoverNodeId === d.id) return;
       clearHoverTimer();
       hideEdgeTooltip();
@@ -509,6 +521,7 @@ export function mountGraph(
   linkHit
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointerover", (event, l: any) => {
+      if (isGesture(event)) return; // panning across edges is not pointing at them
       clearHoverTimer();
       if (selectedId) {
         applyState();
@@ -525,6 +538,7 @@ export function mountGraph(
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointermove", (event, l: any) => {
+      if (isGesture(event)) return;
       if (selectedId) {
         hideEdgeTooltip();
         return;
