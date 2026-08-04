@@ -707,8 +707,11 @@ keep it that way.
   read ⇒ buildGraph **fails loud** (throws → route 502, logged, uncached) instead of
   caching an edgeless "everything scattered" (or empty) graph for the 1h TTL; edges
   survived + a failed read ⇒ served but NOT cached (next request retries); rebuilds are
-  **single-flighted**, and a failed rebuild serves the last good expired graph **stale**
-  rather than the 502. The dashboard renders the link stat as "—" (not 0) when the
+  **single-flighted and stale-while-revalidate** — an expired graph is served stale
+  immediately while one background rebuild refreshes it (a rebuild is 10–48s of brain
+  traversals, and only the first-ever build blocks); a failed rebuild leaves the cache
+  expired, so the next request retries and is served stale again rather than the 502.
+  The dashboard renders the link stat as "—" (not 0) when the
   graph read failed. Slug == node id. Node `type` is dynamic: preserve the brain's returned `type` string
   and only infer `person` / `company` / `product` from slug prefixes when the backend
   did not return a type.

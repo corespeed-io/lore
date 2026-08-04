@@ -402,6 +402,30 @@ test("buildGraph serves the last good graph stale when a rebuild fails", async (
   }
 });
 
+test("an expired graph is served stale immediately, not after the rebuild", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  const good = await buildGraph(); // healthy build → cached
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(Date.now() + 3_600_001); // expire the TTL
+    let rebuildStarted = false;
+    mocked.mockImplementation(() => {
+      rebuildStarted = true;
+      return new Promise(() => {}); // a rebuild that never finishes
+    });
+    // The threat: reverting to await-then-serve makes this await hang on the
+    // never-settling rebuild and the test dies on its timeout — which is
+    // exactly what a visitor saw for 10-48s after every TTL expiry.
+    await expect(buildGraph()).resolves.toBe(good);
+    expect(rebuildStarted).toBe(true); // and the background refresh really began
+  } finally {
+    vi.useRealTimers();
+    mocked.mockImplementation(base);
+  }
+});
+
 test("concurrent cache misses share a single rebuild (single-flight)", async () => {
   clearGraphCache();
   const mocked = vi.mocked(callTool);

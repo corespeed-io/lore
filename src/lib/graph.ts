@@ -86,17 +86,24 @@ export async function buildGraph(): Promise<GraphData> {
   inflight ??= rebuild().finally(() => {
     inflight = null;
   });
-  try {
-    return await inflight;
-  } catch (err) {
-    // Stale beats 502: an expired-but-real graph is better than an error page,
-    // and it keeps a degraded the brain from being hammered with full rebuilds.
-    if (cache) {
-      console.warn("graph: rebuild failed — serving stale graph", err);
-      return cache.data;
-    }
-    throw err;
+  // Stale-while-revalidate: a rebuild takes 10-48s of brain traversals, and the
+  // pre-SWR shape made the first visitor after every TTL expiry stare at an
+  // empty graph for all of it — the largest single latency in the app, paid by
+  // whoever shows up at the wrong hour. An expired-but-real graph is served NOW
+  // and the (single-flighted) rebuild replaces it in the background; "stale
+  // beats 502" already conceded that an old graph is fine to show, so waiting
+  // was never buying correctness. A failed background rebuild just leaves the
+  // cache expired — the next request kicks off another attempt and is served
+  // stale again, which is the same "don't hammer a degraded brain" behaviour
+  // the failure path always had. Only the first-ever build (nothing to serve)
+  // still blocks.
+  if (cache) {
+    inflight.catch((err) => {
+      console.warn("graph: background rebuild failed — serving stale until one succeeds", err);
+    });
+    return cache.data;
   }
+  return await inflight;
 }
 
 async function rebuild(): Promise<GraphData> {
