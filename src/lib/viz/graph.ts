@@ -821,6 +821,13 @@ export function mountGraph(
       fitView();
     },
     highlight(ids: Set<string> | null) {
+      // The console calls this once per keystroke (title matches) and again when
+      // the debounced content search lands — usually with the SAME set, since
+      // title matches dominate. An unchanged set repainted every ring and re-ran
+      // the label collision pass for nothing, twice per pause.
+      if (ids && active && ids.size === active.size && [...ids].every((id) => active?.has(id)))
+        return;
+      if (!ids && !active) return;
       active = ids;
       if (!hover) applyState();
       else layoutLabels();

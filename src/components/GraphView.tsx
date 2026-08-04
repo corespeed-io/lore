@@ -174,19 +174,28 @@ export function GraphView({ data, focusSlug, onOpen, className, onResetFilter }:
       return;
     }
     const nodeIds = new Set(data.nodes.map((n) => n.id));
+    // clearTimeout only cancels a timer that has not FIRED — once the fetch is
+    // in flight, the cleanup couldn't stop its setContentIds from landing after
+    // the query had changed or been cleared. Those stale ids then ringed the
+    // WRONG nodes on the next query until its own fetch caught up.
+    let stale = false;
     const t = setTimeout(async () => {
       try {
         // Top hits only — the weak-semantic tail would light up half the graph.
         const hits = (await apiCall("search", { query, limit: 12 })) as PageHit[];
+        if (stale) return;
         const ids = (Array.isArray(hits) ? hits : [])
           .map((h) => h.slug)
           .filter((s) => nodeIds.has(s));
         setContentIds(new Set(ids));
       } catch {
-        setContentIds(new Set());
+        if (!stale) setContentIds(new Set());
       }
     }, 250);
-    return () => clearTimeout(t);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
   }, [q, data.nodes]);
 
   // Highlight set = (title ∪ content search, or focus) ∩ the legend type filter.

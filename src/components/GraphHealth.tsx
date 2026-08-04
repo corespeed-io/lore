@@ -24,12 +24,20 @@ interface Orphan {
 
 const SHOW = 5;
 
+// Same remount-survival cache as Overview's: without it every Dashboard visit
+// re-pulled 200+200 rows to re-render the same five-and-five list.
+let healthCache: { broken: BrokenLink[]; orphans: Orphan[] } | null = null;
+let healthFetchedAt = 0; // request-time stamp; see Overview's DASH_TTL_MS note
+const HEALTH_TTL_MS = 60_000;
+
 export function GraphHealth({ onOpen }: { onOpen: (slug: string) => void }) {
-  const [broken, setBroken] = useState<BrokenLink[] | null>(null);
-  const [orphans, setOrphans] = useState<Orphan[] | null>(null);
+  const [broken, setBroken] = useState<BrokenLink[] | null>(healthCache?.broken ?? null);
+  const [orphans, setOrphans] = useState<Orphan[] | null>(healthCache?.orphans ?? null);
   const [supported, setSupported] = useState(true);
 
   useEffect(() => {
+    if (Date.now() - healthFetchedAt < HEALTH_TTL_MS) return;
+    healthFetchedAt = Date.now();
     let live = true;
     Promise.all([
       apiCall("list_broken_links", { limit: 200 }),
@@ -37,8 +45,12 @@ export function GraphHealth({ onOpen }: { onOpen: (slug: string) => void }) {
     ])
       .then(([b, o]) => {
         if (!live) return;
-        setBroken(Array.isArray(b) ? (b as BrokenLink[]) : []);
-        setOrphans(Array.isArray(o) ? (o as Orphan[]) : []);
+        healthCache = {
+          broken: Array.isArray(b) ? (b as BrokenLink[]) : [],
+          orphans: Array.isArray(o) ? (o as Orphan[]) : [],
+        };
+        setBroken(healthCache.broken);
+        setOrphans(healthCache.orphans);
       })
       .catch(() => {
         if (live) setSupported(false);
