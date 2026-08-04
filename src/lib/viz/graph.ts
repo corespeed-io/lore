@@ -162,6 +162,10 @@ export function mountGraph(
   let selectedId: string | null = null;
   let hoverNodeId: string | null = null;
   let hoverClearTimer: ReturnType<typeof setTimeout> | null = null;
+  // Whose neighbourhood is currently lit. paintNodeFocus lights only the
+  // neighbourhood instead of dimming everything else, so it has to know what to
+  // put back; the two full-reset paints below clear it because they cover it.
+  let litFocusId: string | null = null;
 
   // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
   function endpointId(value: any): string {
@@ -353,6 +357,7 @@ export function mountGraph(
   }
 
   function paintDefault() {
+    litFocusId = null; // the full reset below covers whatever was lit
     node.attr("opacity", 1).attr("stroke", nodeStroke).attr("stroke-width", 1.5);
     link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
     layoutLabels();
@@ -365,6 +370,7 @@ export function mountGraph(
   // than it was (2.4 against 2) to carry the emphasis on its own.
   function paintHighlight() {
     const M = active ?? new Set<string>();
+    litFocusId = null; // this writes every node's stroke, so nothing stays lit
     node
       .attr("opacity", 1)
       .attr("stroke", (d) => (M.has(d.id) ? labelFill : nodeStroke))
@@ -378,20 +384,47 @@ export function mountGraph(
     else paintDefault();
   }
 
+  // The last full-graph repaint, and the one that was actually being felt. To
+  // point at a neighbourhood of a few dozen elements it pushed ~680 nodes to
+  // opacity 0.12 and ~1700 edges to 0.05 — every element in the picture changed
+  // on every pointer move, so the browser re-rendered the whole SVG layer each
+  // time. Now the neighbourhood LIGHTS UP and nothing else is touched: writes
+  // drop from ~7300 to roughly twice the hovered node's degree.
+  //
+  // Which means the previous focus has to be put back by hand, so `litFocusId`
+  // records whose neighbourhood is currently lit. The reset runs BEFORE the new
+  // light, so a node in both neighbourhoods ends up lit rather than reset.
+  //
+  // The hovered node gains a ring it did not have before (2.2, against 2.4 for a
+  // selected one). Losing the dim costs contrast, and the ring plus the tinted
+  // incident edges plus the labels have to carry the emphasis alone.
   function paintNodeFocus(id: string, selected: boolean) {
     const A = adj[id] ?? new Set([id]);
     const nodeColor = typeColor(nodeById.get(id)?.type ?? "");
+    const prev = litFocusId;
+    litFocusId = id;
+
+    if (prev && prev !== id) {
+      const P = adj[prev] ?? new Set([prev]);
+      node
+        .filter((n) => P.has(n.id))
+        .attr("stroke", nodeStroke)
+        .attr("stroke-width", 1.5);
+      link
+        // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+        .filter((l: any) => edgeTouchesNode(l, prev))
+        .attr("stroke", linkColor)
+        .attr("stroke-width", 1);
+    }
     node
-      .attr("opacity", (n) => (A.has(n.id) ? 1 : 0.12))
-      .attr("stroke", (n) => (selected && n.id === id ? labelFill : nodeStroke))
-      .attr("stroke-width", (n) => (selected && n.id === id ? 2.4 : 1.5));
+      .filter((n) => A.has(n.id))
+      .attr("stroke", (n) => (n.id === id ? labelFill : nodeStroke))
+      .attr("stroke-width", (n) => (n.id === id ? (selected ? 2.4 : 2.2) : 1.5));
     link
       // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("opacity", (l: any) => (edgeTouchesNode(l, id) ? 0.9 : 0.05))
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke", (l: any) => (edgeTouchesNode(l, id) ? nodeColor : linkColor))
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke-width", (l: any) => (edgeTouchesNode(l, id) ? (selected ? 1.9 : 1.6) : 1));
+      .filter((l: any) => edgeTouchesNode(l, id))
+      .attr("stroke", nodeColor)
+      .attr("stroke-width", selected ? 1.9 : 1.6);
     layoutLabels();
   }
 
