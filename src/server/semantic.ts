@@ -85,21 +85,26 @@ export async function runSemanticSweep(
   db: Db,
   args: SemanticSweepArgs = {},
 ): Promise<SemanticSweepResult> {
-  const floor = args.floor ?? FLOOR;
+  // Clamped like limit and perPage: floor 0 links near-everything to
+  // everything, and nothing upstream validates it (write-token only, so a
+  // footgun rather than a hole — but a cheap one to close).
+  const floor = Math.min(Math.max(args.floor ?? FLOOR, 0.3), 0.99);
   const k = Math.min(Math.max(args.perPage ?? PER_PAGE, 1), 20);
   const limit = Math.min(Math.max(args.limit ?? LIMIT, 1), 1000);
 
-  // Pages that have no semantic edge yet, oldest first — so repeated calls walk
-  // the brain instead of re-doing the same head every time.
+  // Pages the sweep has not considered yet, same shape as the mention sweep's
+  // mentions_scanned_at. The marker is a COLUMN on pages, deliberately not a
+  // row in `edges`: the first version marked progress with a self-edge
+  // (from=to) in the shared edge table, and every edge reader believed it —
+  // find_orphans answered [] forever after one sweep, get_backlinks listed
+  // each page as its own backlink, traverse_graph returned self-loops.
+  // Progress state never belongs in the data it measures.
   const todo = await db.query(
     `SELECT p.id, p.slug FROM pages p
      WHERE p.deleted_at IS NULL
        AND EXISTS (SELECT 1 FROM chunks c WHERE c.page_id = p.id)
-       AND NOT EXISTS (
-         SELECT 1 FROM edges e
-         WHERE e.lane = 'auto' AND e.kind = 'semantic' AND e.from_page_id = p.id
-       )
-     ORDER BY p.updated_at ASC
+       AND p.semantic_swept_at IS NULL
+     ORDER BY p.id
      LIMIT $1`,
     [limit],
   );
@@ -107,15 +112,30 @@ export async function runSemanticSweep(
   const pairs: SemanticSweepResult["pairs"] = [];
   let edgesAdded = 0;
 
+  // Memoised per sweep: the mutual check re-asks for a candidate's neighbours
+  // once per page that names it, and in a dense cluster that is the same
+  // GROUP BY/MAX(<=>) scan (which defeats HNSW) hundreds of times over —
+  // ~1,400 sequential scans per default-sized call. Within one sweep the
+  // vectors cannot change, so the answer cannot either.
+  const memo = new Map<number, Promise<{ id: number; score: number }[]>>();
+  const neighbours = (pageId: number) => {
+    let hit = memo.get(pageId);
+    if (!hit) {
+      hit = neighboursOf(db.query, pageId, floor, k);
+      memo.set(pageId, hit);
+    }
+    return hit;
+  };
+
   for (const row of todo.rows) {
     const id = Number(row.id);
     const slug = String(row.slug);
-    const near = await neighboursOf(db.query, id, floor, k);
+    const near = await neighbours(id);
 
     for (const n of near) {
       // MUTUAL: B must also have A among ITS neighbours. Without this a page
       // that is vaguely near everything collects an edge from everything.
-      const back = await neighboursOf(db.query, n.id, floor, k);
+      const back = await neighbours(n.id);
       if (!back.some((b) => b.id === id)) continue;
 
       const to = await db.query("SELECT slug FROM pages WHERE id = $1", [n.id]);
@@ -138,20 +158,13 @@ export async function runSemanticSweep(
       edgesAdded += ins.rows.length ? 1 : 0;
     }
 
-    // EVERY page gets the marker, not just the ones with no candidates. The
-    // `todo` query selects pages with no outgoing semantic edge, so a page whose
-    // candidates all failed the mutual test would be re-selected on the next
-    // call — and it did: fifteen consecutive batches re-swept the same hundred
-    // pages, reporting "scanned 100" each time while 781 pages were never
-    // reached. Marking on candidates-found rather than on WORK-DONE is the bug;
-    // the marker means "this page has been considered", not "this page is alone".
+    // EVERY page gets the marker, not just the ones that gained an edge — a
+    // page whose candidates all failed the mutual test must not be re-selected
+    // forever (that shipped once: fifteen consecutive batches re-swept the same
+    // hundred pages while 781 were never reached). The marker means "this page
+    // has been considered", not "this page is alone".
     if (!args.dryRun) {
-      await db.query(
-        `INSERT INTO edges (from_page_id, to_page_id, lane, kind)
-         VALUES ($1, $1, 'auto', 'semantic')
-         ON CONFLICT (from_page_id, to_page_id, lane) DO NOTHING`,
-        [id],
-      );
+      await db.query("UPDATE pages SET semantic_swept_at = now() WHERE id = $1", [id]);
     }
   }
 

@@ -240,7 +240,10 @@ graph, search, page view) works unchanged.
   target). CI runs on **PGlite 0.4.3, which is Postgres 17** — so a
   version-specific problem on a newer server would not show up there, which is
   why the migration and memory paths are also exercised against a real server.
-- Schema is at **v4**. The memory tables are declared in
+- Schema is at **v7** (v5 collapsed the memory scope, v6 added
+  `chunks.context`/`chunks.source` for contextual retrieval, v7 moved the
+  semantic sweep's progress marker out of the edge table and deleted the
+  self-edge rows it had written). The memory tables are declared in
   `src/server/memory/ddl.ts` and spliced into the ONE ddl list in `db.ts`; the
   v3→v4 step is additive (no existing table changes shape), so the same
   statements serve a fresh database and an upgrade. `tests/brain-migrate.test.ts`
@@ -386,13 +389,26 @@ Both landed only after the eval fixture existed, and their effect is recorded
 in it. There is deliberately no reranker, no query expansion, no similarity
 floor and no autocut.
 
-## Background job: mention linking
+## Background jobs: mention linking and the semantic sweep
 
-`src/server/mentions.ts` + `POST /api/maintenance` — the one enrichment worth
-the only occupant of the `auto` edge
-lane. Deterministic, zero-LLM, and reversible: it writes only
-`lane='auto', kind='mention'`, so `{"action":"clear"}` (or
-`DELETE FROM edges WHERE lane='auto'`) undoes every inference it ever made.
+Two enrichment jobs share the `auto` edge lane, `POST /api/maintenance`, and
+the same lease. Both are deterministic, zero-LLM, and reversible:
+`{"action":"clear"}` (or `DELETE FROM edges WHERE lane='auto'`) undoes every
+inference either ever made, and resets BOTH sweeps' progress markers so the
+next run actually re-runs.
+
+- **Mention linking** (`src/server/mentions.ts`, the default action) writes
+  `lane='auto', kind='mention'`: pages that NAME a typed page get an edge to it.
+- **Semantic sweep** (`src/server/semantic.ts`, `{"action":"semantic"}`) writes
+  `lane='auto', kind='semantic'`: pages that are ABOUT the same thing, by
+  mutual k-NN over the stored chunk vectors with a high floor (0.6, clamped to
+  [0.3, 0.99]) and a per-page cap. Mutuality is what stops a vaguely-near-
+  everything hub from becoming the centre of a meaningless star. **Progress
+  markers are COLUMNS on pages** (`mentions_scanned_at`, `semantic_swept_at`),
+  never rows in `edges`: the semantic sweep's first marker was a self-edge in
+  the shared edge table, and every edge reader believed it — find_orphans
+  answered [] forever, get_backlinks listed each page as its own backlink. The
+  v7 migration deletes those markers and backfills the column.
 
 Four choices carry the safety, none of them a tuned weight: the gazetteer is
 built only from slug-prefixed typed pages (`people/ companies/ entities/
@@ -700,8 +716,12 @@ keep it that way.
   (the old `get_links`+`get_backlinks`-per-seed fan-out spammed it). `{nodes, links}`,
   **1h cached**. Edges come from the brain's typed/mentions/manual links — **not** a regex
   over the search snippet, which missed every link outside the matched chunk. **Drops
-  hash-titled mem0 imports** (`isHashTitle`) but keeps legitimate isolated pages so the
-  graph shows pages that currently have no edges. Failure handling: every upstream
+  hash-titled mem0 imports** (`isHashTitle`); isolated pages are kept only while
+  the PROSPECTIVE total stays under `ISOLATED_BUDGET` (400) — measured before
+  adding them, because an edgeless brain has zero connected nodes and a
+  connected-only count sails under any budget exactly when the halo is worst.
+  At 4k pages, 66% of the picture was degree-zero dots around the structure
+  someone came to look at. Failure handling: every upstream
   read — seed queries, `list_pages`, traversals, including MCP `isError` results and
   non-edge-shaped payloads — feeds ONE failure signal. Zero fetched edges + any failed
   read ⇒ buildGraph **fails loud** (throws → route 502, logged, uncached) instead of
@@ -739,8 +759,11 @@ keep it that way.
 ## Brain constraints
 
 - `list_pages` returns `{slug, title, type, updated_at}` — **no per-page source_id**,
-  so you can't filter the Memories list by source. It also caps at 100 and exposes no
-  `offset`; don't call the browse list "complete" until real pagination exists.
+  so you can't filter the Memories list by source. It pages: `limit` (≤1000,
+  default 100) plus `offset`, ordered `updated_at DESC, id DESC` — the id
+  tiebreaker is load-bearing, because a batch import stamps hundreds of rows
+  with one updated_at and a tie spanning a page boundary otherwise duplicates
+  or drops rows. The console browse list pages to completion (cap 20,000).
 - Search returns ranked chunks (`score`, `evidence`, `chunk_text`). `query` is a
   **literal alias of `search`** — no LLM expansion, no reranker. If you add either,
   give it its own tool name rather than quietly changing what `query` means.

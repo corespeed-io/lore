@@ -69,6 +69,9 @@ export function Overview({
   useEffect(() => {
     if (Date.now() - dashFetchedAt < DASH_TTL_MS) return;
     dashFetchedAt = Date.now();
+    // (Unlike GraphHealth there is no live-flag early return here — both
+    // .then handlers always write their cache — so request-time stamping
+    // cannot strand an empty cache behind the TTL.)
     apiCall("sources_list")
       .then((d) => {
         const list = ((d as { sources?: SourceInfo[] })?.sources ?? []).filter(

@@ -62,6 +62,16 @@ export function embedInput(c: Chunk): string {
 const FENCE = /^(```|~~~)/;
 const HEADING = /^(#{1,6}) +(.+?)\s*$/;
 
+// Rule 1's ceiling. "A fence is one unit however long it is" was written for
+// fences people write; a 78 KB fence (a pasted log, a vendored bundle) made a
+// single chunk the embedding endpoint refuses — and putPage embeds BEFORE its
+// transaction, so the page became unwritable through every door (put_page,
+// /api/import, remember_note). 8,000 chars is ~2-3k tokens: far under any
+// embedding context, and comfortably above every fence in the measured corpus
+// (max ~2.2k), so real code blocks still embed whole and only the pathological
+// ones split — at line boundaries, still as code.
+const FENCE_CEILING = 8_000;
+
 // Blocks that must not be broken: a fenced run is atomic, everything else is a
 // paragraph. Also records the heading path each block sits under.
 function blocksOf(body: string): { text: string; path: string[]; atomic: boolean }[] {
@@ -81,13 +91,20 @@ function blocksOf(body: string): { text: string; path: string[]; atomic: boolean
       flush();
       const marker = fence[1];
       const block = [line];
-      // Consume to the closing marker, or to EOF for an unterminated fence —
-      // which real markdown contains, and which must not swallow a rule below.
+      // Consume to the closing marker. An UNTERMINATED fence — one stray ```
+      // mid-document — used to consume to EOF as a single atomic unit, turning
+      // the whole document tail into one context-less "code" chunk (measured:
+      // a 36 KB tail). An unmatched marker is not a fence: the run falls back
+      // to prose, keeping its heading context and the prose splitting rules.
+      let closed = false;
       for (i++; i < lines.length; i++) {
         block.push(lines[i]);
-        if (lines[i].trim().startsWith(marker)) break;
+        if (lines[i].trim().startsWith(marker)) {
+          closed = true;
+          break;
+        }
       }
-      out.push({ text: block.join("\n"), path: [...path], atomic: true });
+      out.push({ text: block.join("\n"), path: [...path], atomic: closed });
       continue;
     }
     const heading = HEADING.exec(line);
@@ -146,7 +163,14 @@ export function chunkBody(body: string, target = 1200): Chunk[] {
     if (b.atomic) {
       push();
       curPath = b.path;
-      out.push({ text: b.text, context: "", source: "code" });
+      // The ceiling: an oversized fence splits at line boundaries (softSplit
+      // prefers \n), each piece still code — see FENCE_CEILING for why.
+      if (b.text.length > FENCE_CEILING) {
+        for (const piece of softSplit(b.text, FENCE_CEILING / 2))
+          out.push({ text: piece, context: "", source: "code" });
+      } else {
+        out.push({ text: b.text, context: "", source: "code" });
+      }
       continue;
     }
 

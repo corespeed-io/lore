@@ -83,9 +83,21 @@ async function edgeRows(slug: string, depth: number): Promise<{ rows: LinkRow[];
 
 export async function buildGraph(): Promise<GraphData> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
-  inflight ??= rebuild().finally(() => {
-    inflight = null;
-  });
+  if (!inflight) {
+    inflight = rebuild().finally(() => {
+      inflight = null;
+    });
+    // One handler at creation — attaching per stale-served request logged N
+    // identical warnings for one failed rebuild. Cold-path awaiters still see
+    // the rejection through their own await; an extra .catch does not consume it.
+    inflight.catch((err) => {
+      // Only the stale path is silent about failures; the cold path surfaces
+      // its own error through the route. Don't claim "serving stale" when
+      // there is nothing to serve.
+      if (cache)
+        console.warn("graph: background rebuild failed — serving stale until one succeeds", err);
+    });
+  }
   // Stale-while-revalidate: a rebuild takes 10-48s of brain traversals, and the
   // pre-SWR shape made the first visitor after every TTL expiry stare at an
   // empty graph for all of it — the largest single latency in the app, paid by
@@ -97,12 +109,7 @@ export async function buildGraph(): Promise<GraphData> {
   // stale again, which is the same "don't hammer a degraded brain" behaviour
   // the failure path always had. Only the first-ever build (nothing to serve)
   // still blocks.
-  if (cache) {
-    inflight.catch((err) => {
-      console.warn("graph: background rebuild failed — serving stale until one succeeds", err);
-    });
-    return cache.data;
-  }
+  if (cache) return cache.data;
   return await inflight;
 }
 
@@ -223,7 +230,13 @@ async function rebuild(): Promise<GraphData> {
   // information and become a halo: at 4,113 pages, 2,731 of the nodes had degree
   // zero — 66% of the picture was a ring of dots that said nothing, drawn around
   // the structure someone actually came to look at.
-  if (nodes.size <= ISOLATED_BUDGET) for (const slug of titles.keys()) ensure(slug);
+  // Gate on what the graph WOULD become, not on the connected count alone:
+  // `nodes` holds only edge endpoints here, so an edgeless 4,000-page brain
+  // measured 0 and sailed under the budget — the guard was loosest exactly
+  // when the halo it exists to prevent was worst.
+  const isolatedCandidates = [...titles.keys()].filter((slug) => !nodes.has(slug));
+  if (nodes.size + isolatedCandidates.length <= ISOLATED_BUDGET)
+    for (const slug of isolatedCandidates) ensure(slug);
 
   // 4. Drop hash-titled mem0 imports, but keep legitimate isolated pages. The
   // graph should show the brain's current page set, not only connected pages.

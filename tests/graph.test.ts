@@ -437,3 +437,30 @@ test("concurrent cache misses share a single rebuild (single-flight)", async () 
   const listCalls = mocked.mock.calls.filter(([tool]) => tool === "list_pages").length;
   expect(listCalls).toBe(1);
 });
+
+test("a big EDGELESS brain drops the halo too — the budget measures the prospective total", async () => {
+  clearGraphCache();
+  // The inverted direction of the isolated-page budget, from the reviewer's
+  // round 1: `nodes` holds only edge endpoints when the gate runs, so an
+  // edgeless 4,000-page brain measured ZERO connected nodes and sailed under
+  // the budget — 4,000 isolated dots, settled by d3, in the PR that added the
+  // budget to prevent exactly that.
+  const base = baseImpl();
+  const PAGES = Array.from({ length: 500 }, (_, i) => ({
+    slug: `concepts/iso-${i}`,
+    title: `Isolated ${i}`,
+    type: "concept",
+  }));
+  vi.mocked(callTool).mockImplementation(async (tool: string) => {
+    if (tool === "list_pages") return { isError: false, text: JSON.stringify(PAGES) };
+    if (tool === "query") return { isError: false, text: JSON.stringify([PAGES[0]]) };
+    return { isError: false, text: "[]" }; // healthy, genuinely edgeless
+  });
+  try {
+    const g = await buildGraph();
+    expect(g.nodes).toHaveLength(0); // 500 candidates > 400 budget: no halo
+    expect(g.links).toHaveLength(0);
+  } finally {
+    vi.mocked(callTool).mockImplementation(base);
+  }
+});

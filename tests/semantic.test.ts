@@ -128,3 +128,71 @@ test("an unrelated page gets no semantic edge", async () => {
   expect(Number(far.rows[0].n)).toBe(0);
   await lite.close();
 });
+
+// The reviewer's round-1 P1, pinned from the threat side. The first marker
+// design wrote INSERT (from,to)=(id,id) into the shared edges table, and every
+// edge reader believed it: after ONE sweep over pages with nothing to link,
+// find_orphans answered [] forever, get_backlinks listed each page as its own
+// backlink, traverse_graph returned self-loops. The readers were never wrong —
+// the data was poisoned. So the pin is on the data: a real (non-dry) sweep
+// that links NOTHING must leave the edges table EMPTY, while still making
+// progress. The old code fails this with one row per page swept.
+test("a sweep that links nothing writes NO edge rows at all — progress lives outside the graph", async () => {
+  const { db, lite } = await fresh();
+  await seed(db, [
+    { slug: "alpha", axis: 0 },
+    { slug: "beta", axis: 3 },
+    { slug: "gamma", axis: 6 },
+  ]);
+  // floor 1.1: cosine similarity cannot reach it, so no real edge is possible.
+  const r = await runSemanticSweep(db, { limit: 10, floor: 1.1 });
+  expect(r.scanned).toBe(3);
+  expect(r.edgesAdded).toBe(0);
+  const edges = await db.query("SELECT count(*)::int AS n FROM edges");
+  expect(Number(edges.rows[0].n)).toBe(0); // not even a marker
+  // ...and the sweep still advanced: nothing is re-selected next call.
+  const again = await runSemanticSweep(db, { limit: 10, floor: 1.1 });
+  expect(again.scanned).toBe(0);
+  await lite.close();
+});
+
+// The v7 migration must clean a brain the old marker already poisoned:
+// self-edges deleted, REAL semantic edges kept, and the marker-holders'
+// progress backfilled into the column so a half-swept brain does not restart.
+test("v7 deletes the poisonous self-edge markers, keeps real edges, and keeps progress", async () => {
+  const { db, lite } = await fresh();
+  await seed(db, [
+    { slug: "swept", axis: 0 },
+    { slug: "other", axis: 1 },
+  ]);
+  const id = async (slug: string) =>
+    Number((await db.query("SELECT id FROM pages WHERE slug=$1", [slug])).rows[0].id);
+  const swept = await id("swept");
+  const other = await id("other");
+  // Recreate the v6 state by hand: a self-edge marker, a real edge, no column
+  // progress, and a meta row claiming v6 so initSchema runs the migration.
+  await db.query(
+    "INSERT INTO edges (from_page_id, to_page_id, lane, kind) VALUES ($1,$1,'auto','semantic'), ($1,$2,'auto','semantic')",
+    [swept, other],
+  );
+  await db.query("UPDATE pages SET semantic_swept_at = NULL");
+  await db.query("UPDATE meta SET schema_version = 6");
+  await initSchema(db, { embeddingModel: "m", embeddingDim: DIM });
+
+  const self = await db.query(
+    "SELECT count(*)::int AS n FROM edges WHERE from_page_id = to_page_id",
+  );
+  expect(Number(self.rows[0].n)).toBe(0); // poison gone
+  const real = await db.query(
+    "SELECT count(*)::int AS n FROM edges WHERE from_page_id <> to_page_id",
+  );
+  expect(Number(real.rows[0].n)).toBe(1); // inference kept
+  const marked = await db.query(
+    "SELECT semantic_swept_at IS NOT NULL AS m FROM pages WHERE id = $1",
+    [swept],
+  );
+  expect(marked.rows[0].m).toBe(true); // progress backfilled from the marker
+  const version = await db.query("SELECT schema_version FROM meta");
+  expect(Number(version.rows[0].schema_version)).toBe(7);
+  await lite.close();
+});

@@ -37,7 +37,6 @@ export function GraphHealth({ onOpen }: { onOpen: (slug: string) => void }) {
 
   useEffect(() => {
     if (Date.now() - healthFetchedAt < HEALTH_TTL_MS) return;
-    healthFetchedAt = Date.now();
     let live = true;
     Promise.all([
       apiCall("list_broken_links", { limit: 200 }),
@@ -45,6 +44,12 @@ export function GraphHealth({ onOpen }: { onOpen: (slug: string) => void }) {
     ])
       .then(([b, o]) => {
         if (!live) return;
+        // Stamp WITH the cache write, not at request time: leaving the tab
+        // mid-flight aborts the state write (live=false) but an early stamp
+        // would still block refetching — the panel then renders null for the
+        // whole TTL. StrictMode's double effect is still absorbed, because the
+        // second run's fetch resolves into the same cache.
+        healthFetchedAt = Date.now();
         healthCache = {
           broken: Array.isArray(b) ? (b as BrokenLink[]) : [],
           orphans: Array.isArray(o) ? (o as Orphan[]) : [],

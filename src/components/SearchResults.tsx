@@ -87,6 +87,11 @@ export function SearchResults({
   const listKey = `${typeFilter}|${allPages.length}`;
   // biome-ignore lint/correctness/useExhaustiveDependencies: listKey is the reset signal — a new filter or page set restarts the window.
   useEffect(() => setRowLimit(BROWSE_BATCH), [listKey]);
+  // Deps include `q` because the sentinel only exists in browse mode: coming
+  // back from a search must re-arm the observer on the fresh element. (With no
+  // dep array this re-ran on EVERY render, tearing down and rebuilding the
+  // observer each time.)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: listKey/q gate when the sentinel element can have changed.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -95,7 +100,7 @@ export function SearchResults({
     });
     io.observe(el);
     return () => io.disconnect();
-  });
+  }, [listKey, q]);
 
   // No query → Memories browse: the full page list, newest first, filterable by type.
   if (!q) {
@@ -116,7 +121,9 @@ export function SearchResults({
     const filtered =
       typeFilter === "all" ? allPages : allPages.filter((p) => p.type === typeFilter);
     const shown = filtered.slice(0, rowLimit);
-    const maybeLimited = allPages.length >= 100;
+    // True only when the browse list hit its hard cap — full paging made the
+    // old >=100 heuristic ("showing the first N") untrue the moment it shipped.
+    const maybeLimited = allPages.length >= 20_000;
     return (
       <div className="page-wrap">
         <div className="memories-head">

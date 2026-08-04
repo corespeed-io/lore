@@ -20,7 +20,7 @@ export interface BrainMeta {
   embeddingDim: number;
 }
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 // ONE definition, used by both the bootstrap in initSchema and the ddl list
 // below. Two copies drifted once already: the bootstrap created `meta` without
@@ -75,6 +75,13 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         -- When the mention sweep last looked at this page; NULL means never.
         mentions_scanned_at TIMESTAMPTZ,
+        -- Same, for the semantic sweep. A COLUMN, not a marker row in edges:
+        -- the sweep's first progress marker was a self-edge (from=to) in the
+        -- shared edge table, and every edge reader believed it — find_orphans
+        -- reported zero orphans forever, get_backlinks listed each page as its
+        -- own backlink, traverse_graph returned self-loops. Progress state
+        -- never belongs in the data it measures.
+        semantic_swept_at TIMESTAMPTZ,
         -- The last slug segment with separators folded to spaces, so a ref typed
         -- as [[Some Note]] finds notes/some-note. normalizeSlugish() is the JS
         -- half of this comparison; the two MUST agree.
@@ -107,9 +114,12 @@ function ddl(dim: number): { sql: string; optional?: boolean }[] {
     { sql: "CREATE INDEX IF NOT EXISTS pages_fts ON pages USING gin (fts)" },
     { sql: "CREATE INDEX IF NOT EXISTS pages_updated ON pages (updated_at DESC)" },
     { sql: "CREATE INDEX IF NOT EXISTS pages_basename ON pages (basename)" },
-    // The sweep asks for the least-recently-scanned pages.
+    // The sweeps ask for the least-recently-scanned pages.
     {
       sql: "CREATE INDEX IF NOT EXISTS pages_mentions_scanned ON pages (mentions_scanned_at NULLS FIRST)",
+    },
+    {
+      sql: "CREATE INDEX IF NOT EXISTS pages_semantic_swept ON pages (semantic_swept_at NULLS FIRST)",
     },
     // Containment lookups against frontmatter->'aliases'.
     { sql: "CREATE INDEX IF NOT EXISTS pages_frontmatter ON pages USING gin (frontmatter)" },
@@ -289,6 +299,25 @@ async function migrate(db: Db, from: number): Promise<void> {
     await db.query("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS context TEXT NOT NULL DEFAULT ''");
     await db.query(
       "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prose'",
+    );
+  }
+  if (from < 7) {
+    // The semantic sweep's progress marker moves out of the edge graph. Its
+    // first shape was a self-edge INSERT (from=to, lane auto, kind semantic),
+    // which every edge reader believed: find_orphans answered [] forever,
+    // get_backlinks listed a page as its own backlink, traverse_graph returned
+    // self-loops. Backfill the new column FROM the markers before deleting
+    // them, so a half-swept brain keeps its progress instead of restarting.
+    await db.query("ALTER TABLE pages ADD COLUMN IF NOT EXISTS semantic_swept_at TIMESTAMPTZ");
+    await db.query(
+      `UPDATE pages SET semantic_swept_at = now()
+       WHERE semantic_swept_at IS NULL AND id IN (
+         SELECT from_page_id FROM edges
+         WHERE lane = 'auto' AND kind = 'semantic' AND from_page_id = to_page_id
+       )`,
+    );
+    await db.query(
+      "DELETE FROM edges WHERE lane = 'auto' AND kind = 'semantic' AND from_page_id = to_page_id",
     );
   }
   await db.query("UPDATE meta SET schema_version = $1 WHERE id = 1", [SCHEMA_VERSION]);

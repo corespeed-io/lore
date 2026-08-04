@@ -432,33 +432,25 @@ export function mountGraph(
     paintLabels(placements);
   }
 
-  function paintDefault() {
-    lit = null; // the full reset below covers whatever was lit
-    undim();
-    svg.classed("gsel", false);
-    node.classed("lit hovered match", false);
-    link.classed("lit exact", false);
-    layoutLabels();
-  }
-  // A search MARKS its matches; it does not dim the graph around them. Ringing
-  // ~15 nodes and naming them with labels is enough to find them, and the
-  // alternative was pushing ~680 nodes to 0.1 and ~1700 edges to 0.04 — the most
-  // expensive repaint in this file, spent on the elements that are NOT the answer.
-  // Nothing about the rest of the graph changes, so the ring is a touch stronger
-  // than it was (2.4 against 2) to carry the emphasis on its own.
-  function paintHighlight() {
-    const M = active ?? new Set<string>();
+  // The one non-selected reset. `.match` is deliberately NOT touched here —
+  // highlight() below is its single writer, so the search rings hold across
+  // every route, including selection. (They didn't: paintNodeFocus never wrote
+  // .match and applyState routes to it whenever a node is selected, so
+  // search -> click a node -> clear the search left the rings painted with no
+  // writer left to remove them — the residue family the class model exists to
+  // kill, reintroduced by having two reset paints that each knew half the
+  // state. Now there is one.)
+  function paintBase() {
     lit = null; // the membership resets below cover whatever was lit
     undim(); // search marks its matches; it does not dim (asked for explicitly)
     svg.classed("gsel", false);
-    node.classed("lit hovered", false).classed("match", (d) => M.has(d.id));
+    node.classed("lit hovered", false);
     link.classed("lit exact", false);
     layoutLabels();
   }
   function applyState() {
     if (selectedId) paintSelectedNode(selectedId);
-    else if (active) paintHighlight();
-    else paintDefault();
+    else paintBase();
   }
 
   // The last full-graph repaint, and the one that was actually being felt. To
@@ -790,8 +782,9 @@ export function mountGraph(
   // than the one being fixed. So it settles as far as it can inside the budget
   // and draws whatever it reached: a not-quite-relaxed static layout is fine,
   // and the alternative (finish the rest animated) would put back the exact
-  // window this removes. Ticks in small batches so the budget can be checked
-  // without paying a whole batch to overshoot it.
+  // window this removes. Ticks run in batches of 10 with the budget checked
+  // BETWEEN batches, so the worst case is the budget plus one final batch
+  // (~26ms) — bounded, not exact.
   // 400ms because a block DURING MOUNT is not the same defect as a block during
   // interaction: there is nothing on screen yet, so nobody can be interrupted by
   // it — it reads as the page taking slightly longer to load, on a page that
@@ -858,6 +851,11 @@ export function mountGraph(
         return;
       if (!ids && !active) return;
       active = ids;
+      // THE single writer of `.match`. Reconciled here, not in a route paint,
+      // so the rings appear and disappear with the search whatever else is
+      // going on — hover, selection, or nothing.
+      const M = active ?? new Set<string>();
+      node.classed("match", (d) => M.has(d.id));
       if (!hover) applyState();
       else layoutLabels();
     },

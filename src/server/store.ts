@@ -935,7 +935,7 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       const res = await db.query(
         `SELECT slug, kind, title, frontmatter, updated_at FROM pages
          WHERE deleted_at IS NULL AND ($2::text IS NULL OR kind = $2)
-         ORDER BY updated_at DESC LIMIT $1 OFFSET $3`,
+         ORDER BY updated_at DESC, id DESC LIMIT $1 OFFSET $3`,
         [n, only, off],
       );
       return res.rows.map((r) => ({
@@ -1242,7 +1242,9 @@ export function createStore(db: Db, embed: EmbedFn): Store {
 
     async clearAutoEdges() {
       const res = await db.query("DELETE FROM edges WHERE lane = 'auto' RETURNING 1");
-      await db.query("UPDATE pages SET mentions_scanned_at = NULL");
+      // Both sweeps' progress resets with their output: "clear undoes every
+      // inference ever made" is only true if the next sweep actually re-runs.
+      await db.query("UPDATE pages SET mentions_scanned_at = NULL, semantic_swept_at = NULL");
       return { removed: res.rows.length };
     },
 
