@@ -15,6 +15,7 @@ import { grantFor } from "@/server/auth-bearer";
 //      { "limit": 50 }             -> batch size (default 50, max 200)
 //      { "dryRun": true }          -> report the edges it WOULD add, write none
 //      { "action": "clear" }       -> delete every auto edge and rescan later
+//      { "action": "semantic" }    -> link pages that are ABOUT the same thing
 //      { "action": "memory" }      -> summarize, extract, project, consolidate
 //      { "action": "health" }      -> backend health counters (no writes)
 //
@@ -46,6 +47,8 @@ export async function POST(req: Request) {
     dryRun?: boolean;
     action?: string;
     thread_id?: string;
+    floor?: number;
+    perPage?: number;
   };
 
   // The same credential screen the MCP dispatcher runs, over this body. This
@@ -119,6 +122,22 @@ export async function POST(req: Request) {
   // now plants a microsecond-bearing lease explicitly rather than trusting now().
   const held = String(lease.rows[0].maintenance_lease);
   try {
+    if (body.action === "semantic") {
+      // Under the SAME lease as the mention sweep: both write the auto lane, and
+      // two writers inferring edges at once is the thing the lease exists for.
+      const { runSemanticSweep } = await import("@/server/semantic");
+      const result = await runSemanticSweep(db, {
+        limit: body.limit,
+        floor: body.floor,
+        perPage: body.perPage,
+        dryRun: body.dryRun,
+      });
+      return NextResponse.json({
+        action: "semantic",
+        ...result,
+        pairs: body.dryRun ? result.pairs : undefined,
+      });
+    }
     if (body.action === "memory") {
       const { runMemoryMaintenance } = await import("@/server/memory/maintenance");
       return NextResponse.json({
