@@ -87,7 +87,7 @@ test("GET /api/graph maps a failed build to 502 and a healthy build to 200", asy
     throw new Error("brain down");
   });
   try {
-    const bad = await GET();
+    const bad = await GET(new Request("http://test/api/graph"));
     expect(bad.status).toBe(502);
     expect((await bad.json()).detail).toBe("couldn't reach the brain");
   } finally {
@@ -95,11 +95,22 @@ test("GET /api/graph maps a failed build to 502 and a healthy build to 200", asy
     error.mockRestore();
     clearGraphCache();
   }
-  const ok = await GET();
+  const ok = await GET(new Request("http://test/api/graph"));
   expect(ok.status).toBe(200);
   const body = await ok.json();
   expect(body.nodes).toEqual([]);
   expect(body.links).toEqual([]);
+
+  // The validator round trip. The threat is a silent revert: drop the
+  // If-None-Match check (or the etag header) and everything still works,
+  // except every page load downloads the full ~240 KB body again.
+  const etag = ok.headers.get("etag");
+  expect(etag).toBeTruthy();
+  const revalidated = await GET(
+    new Request("http://test/api/graph", { headers: { "if-none-match": etag as string } }),
+  );
+  expect(revalidated.status).toBe(304);
+  expect(await revalidated.text()).toBe("");
   clearGraphCache();
 });
 

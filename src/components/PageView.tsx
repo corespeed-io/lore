@@ -77,7 +77,10 @@ export function PageView({
   onOpen,
   onLocalGraph,
 }: PageViewProps) {
-  const bodyHtml = renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""));
+  // The markdown pipeline is a dozen regex passes over the whole body — pure in
+  // `body`, so re-running it when a hover or graph state re-renders the parent
+  // was pure waste on the largest string in the app.
+  const bodyHtml = useMemo(() => renderMarkdown(body.replace(/^#\s+.*\r?\n+/, "")), [body]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const hasGraphContext = related.length > 0;
   const relatedOnly = useMemo(() => {

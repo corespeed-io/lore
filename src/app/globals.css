@@ -1044,11 +1044,13 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--mute);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.95);
   border: 1px solid var(--hairline);
   padding: 6px 10px;
   border-radius: 6px;
-  backdrop-filter: blur(4px);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   top: 16px;
   left: 16px;
   display: flex;
@@ -1100,9 +1102,11 @@ body {
   display: flex;
   align-items: center;
   border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.95);
   border-radius: 6px;
-  backdrop-filter: blur(4px);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
 }
 
 .graph-tool {
@@ -1187,11 +1191,13 @@ body {
 .graph-reset {
   height: 30px;
   border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.95);
   color: var(--body);
   padding: 0 10px;
   border-radius: 6px;
-  backdrop-filter: blur(4px);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
@@ -1217,8 +1223,10 @@ body {
   padding: 14px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.95);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.08);
   animation: graph-preview-in 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
 }
@@ -1346,8 +1354,10 @@ body {
   left: 50%;
   transform: translateX(-50%);
   width: min(320px, 60%);
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(4px);
+  background: rgba(255, 255, 255, 0.95);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   border: 1px solid var(--hairline);
   color: var(--ink);
   padding: 7px 12px;
