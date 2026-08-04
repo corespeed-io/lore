@@ -180,14 +180,19 @@ export function mountGraph(
   type Lit = { nodes: Set<string>; touching: (l: any) => boolean };
   let lit: Lit | null = null;
 
+  // Restores to the BASE state, which is not always "default": a node in the
+  // `active` search set owns a 2.4 ring at rest, and resetting it to plain
+  // white meant a pointer sweeping the graph erased the search feedback ring by
+  // ring — they only snapped back when the hover fully ended and paintHighlight
+  // repainted everything.
   function clearLit() {
     if (!lit) return;
     const was = lit;
     lit = null;
     node
       .filter((n) => was.nodes.has(n.id))
-      .attr("stroke", nodeStroke)
-      .attr("stroke-width", 1.5);
+      .attr("stroke", (n) => (active?.has(n.id) ? labelFill : nodeStroke))
+      .attr("stroke-width", (n) => (active?.has(n.id) ? 2.4 : 1.5));
     link
       // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
       .filter((l: any) => was.touching(l))
@@ -322,14 +327,23 @@ export function mountGraph(
   // Which labels the last collision pass chose to show, and where. Kept so the
   // cheap per-frame pass can move them without redeciding.
   let labelVisible = new Set<string>();
+  // ...and WHICH of the eight candidate placements each one won. positionLabels
+  // used to re-derive candidate 0 for everybody, so the first tick of a drag
+  // snapped every label that had settled on candidate 3 back to candidate 0 —
+  // grabbing any node made all visible labels jump at once.
+  let labelChoice = new Map<string, number>();
 
-  // O(n), no collision tests: every visible label follows its node's preferred
-  // placement. This is what runs on a tick.
+  // O(n), no collision tests: every visible label follows its node at the
+  // placement the last collision pass chose for it. This is what runs on a tick.
   function positionLabels() {
     // One labelPlacements call per VISIBLE node — it allocates eight boxes, and
     // reading it from inside four .attr() callbacks called it four times per node.
     const at = new Map<string, LabelPlacement>();
-    for (const n of nodes) if (labelVisible.has(n.id)) at.set(n.id, labelPlacements(n)[0]);
+    for (const n of nodes) {
+      if (!labelVisible.has(n.id)) continue;
+      const options = labelPlacements(n);
+      at.set(n.id, options[labelChoice.get(n.id) ?? 0] ?? options[0]);
+    }
     paintLabels(at);
   }
 
@@ -371,14 +385,18 @@ export function mountGraph(
       .filter((n) => (focus ? focus.has(n.id) : (deg[n.id] ?? 0) >= minDegree))
       .sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0));
 
+    const choices = new Map<string, number>();
     for (const candidate of candidates) {
-      const box = labelPlacements(candidate).find((placement) =>
+      const options = labelPlacements(candidate);
+      const idx = options.findIndex((placement) =>
         boxes.every((existing) => !labelBoxesOverlap(placement, existing, focus ? 0.5 : 2)),
       );
-      if (!box) continue;
-      boxes.push(box);
-      placements.set(candidate.id, box);
+      if (idx < 0) continue;
+      boxes.push(options[idx]);
+      placements.set(candidate.id, options[idx]);
+      choices.set(candidate.id, idx);
     }
+    labelChoice = choices;
     // paintLabels owns labelVisible and derives it from these keys — tracking a
     // second `visible` set here would give that state two writers.
     paintLabels(placements);
@@ -434,8 +452,13 @@ export function mountGraph(
     lit = { nodes: A, touching: (l: any) => edgeTouchesNode(l, id) };
     node
       .filter((n) => A.has(n.id))
-      .attr("stroke", (n) => (n.id === id ? labelFill : nodeStroke))
-      .attr("stroke-width", (n) => (n.id === id ? (selected ? 2.4 : 2.2) : 1.5));
+      // A neighbourhood member that is ALSO a search match keeps its 2.4 ring —
+      // painting it plain white here is the same erase-the-search bug clearLit
+      // had, one step earlier.
+      .attr("stroke", (n) => (n.id === id || active?.has(n.id) ? labelFill : nodeStroke))
+      .attr("stroke-width", (n) =>
+        n.id === id ? (selected ? 2.4 : 2.2) : active?.has(n.id) ? 2.4 : 1.5,
+      );
     link
       // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
       .filter((l: any) => edgeTouchesNode(l, id))
@@ -529,7 +552,11 @@ export function mountGraph(
         // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
         .radius((d: any) => d.r + 13),
     )
-    .on("tick", drawFrame);
+    .on("tick", drawFrame)
+    // Once motion stops (a released drag has cooled), re-run the collision pass:
+    // positionLabels carried the labels along at their OLD winning placements,
+    // and the nodes have moved out from under those decisions.
+    .on("end", () => layoutLabels());
 
   node.call(
     d3
@@ -702,7 +729,13 @@ export function mountGraph(
     if (!animate) svg.call(zoom.transform, t);
     else svg.transition().duration(450).call(zoom.transform, t);
   }
-  svg.on("dblclick", () => fitView());
+  svg.on("dblclick", (event: MouseEvent) => {
+    // Double-clicking a NODE is two selection clicks, and flinging the viewport
+    // to whole-graph fit mid-inspection discards where the user was. Fit stays
+    // the double-click meaning for empty space only.
+    if ((event.target as Element)?.closest?.("circle")) return;
+    fitView();
+  });
 
   function zoomBy(scale: number) {
     svg.transition().duration(180).call(zoom.scaleBy, scale);
@@ -765,14 +798,13 @@ export function mountGraph(
     (sim.force("x") as any).x(W / 2);
     // biome-ignore lint/suspicious/noExplicitAny: d3 force accessor typing
     (sim.force("y") as any).y(H / 2);
-    // Headless again — an animated re-settle on every resize would put the
-    // window this file just removed back, once per drag of the panel divider.
-    sim.alpha(0.3);
-    const t0 = performance.now();
-    for (let i = 0; i < 120 && performance.now() - t0 < 80; i += 10) sim.tick(10);
-    drawFrame();
+    // A resize changes the CANVAS, not the graph: re-settling shuffled node
+    // positions and fitView(false) threw away the user's zoom/pan on every
+    // notification — dragging a panel divider erased the frame someone had
+    // navigated to. The forces above are updated so a FUTURE drag pulls toward
+    // the new centre; the layout and the transform are left exactly where the
+    // user had them. Labels re-decide once because side preference reads W.
     layoutLabels();
-    fitView(false);
   });
   ro.observe(el);
 
