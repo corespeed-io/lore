@@ -160,6 +160,11 @@ export function App({ appTitle, appSubtitle }: AppProps) {
 
   const searchRef = useRef<HTMLInputElement>(null);
   const graphRef = useRef<GraphStore | null>(null);
+  // Sticky "the graph tab has been visited": the persistent GraphView below
+  // mounts on first visit and is then hidden, never unmounted (see the comment
+  // at the render). A ref, not state — it only ever flips true during a render
+  // that is already showing the graph, so no extra render is needed.
+  const graphEverVisible = useRef(false);
   const applyingRouteRef = useRef(false);
   const openPageSlug = openPage?.slug;
   graphRef.current = graph;
@@ -190,17 +195,31 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     openPageRef.current?.(slug, g);
   }, []);
 
+  // Latest-wins: opening pages in quick succession raced their responses — the
+  // SLOWER open painted last and clobbered the page the user actually asked for,
+  // and a response landing after Back re-opened the page that was just closed.
+  // Every navigation bumps the sequence; a response that comes back to find a
+  // newer sequence belongs to an abandoned navigation and paints nothing.
+  const pageReq = useRef(0);
+
   const resolvePage = useCallback(
     async (slug: string, g: GraphStore | null) => {
+      const req = ++pageReq.current;
+      const fresh = () => pageReq.current === req;
       try {
-        const page = (await apiCall("get_page", { slug, fuzzy: true })) as {
-          title?: string;
-          slug: string;
-          type?: string;
-          compiled_truth?: string;
-          body?: string;
-        };
-        const back = await apiCall("get_backlinks", { slug }).catch(() => []);
+        // get_backlinks takes the same input slug, not get_page's result — the
+        // two are independent, and serial awaits doubled every page open.
+        const [page, back] = await Promise.all([
+          apiCall("get_page", { slug, fuzzy: true }) as Promise<{
+            title?: string;
+            slug: string;
+            type?: string;
+            compiled_truth?: string;
+            body?: string;
+          }>,
+          apiCall("get_backlinks", { slug }).catch(() => []),
+        ]);
+        if (!fresh()) return;
         const currentGraph = g ?? graphRef.current;
         const bl = normalizeBacklinks(back, currentGraph);
         const body = page.compiled_truth ?? page.body ?? "";
@@ -222,6 +241,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
               res.find((r) => r.slug?.split("/").pop() === slug.split("/").pop()))
             : undefined;
           if (hit) {
+            if (!fresh()) return;
             showPage(
               hit.title ?? hit.slug,
               hit.type ?? "",
@@ -236,6 +256,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         } catch (_) {
           // ignore fallback error
         }
+        if (!fresh()) return;
         const msg = (e as Error).message ?? "";
         const notFound = /not_found/.test(msg);
         showPage(notFound ? "Page not found" : "Couldn't load page", "", slug, "", [], [], []);
@@ -379,6 +400,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   }
 
   function handleTabChange(t: Tab) {
+    pageReq.current++; // abandon any in-flight page open — it must not pop in later
     setOpenPage(null); // any nav click leaves an open memory
     setLocalGraphSlug(null);
     setGraphFocus(undefined);
@@ -443,6 +465,20 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     return () => window.removeEventListener("popstate", onPopState);
   }, [applyRoute]);
 
+  // The graph, once shown, stays MOUNTED and is hidden with display:none rather
+  // than unmounted. Unmounting it made every tab switch and every page open
+  // destroy the whole d3 graph — and the return paid a fresh mount: a ~400ms
+  // headless settle, a re-fit, and the loss of whatever zoom/pan/selection the
+  // user had. display:none costs nothing per frame, and the mount effect's deps
+  // ([data, handleSelect]) don't change on a hide, so d3 state survives intact.
+  // Safe with the graph's own ResizeObserver: a hidden container measures 0 and
+  // mountGraph's `el.clientWidth || W` fallback turns that read into a no-op.
+  // Lazy on FIRST visit on purpose — someone who never opens the graph tab
+  // never pays the settle at all.
+  const graphReady = graphLoaded && !graphError && graphData.nodes.length > 0;
+  const graphVisible = tab === "graph" && !openPage && graphReady;
+  if (graphVisible) graphEverVisible.current = true; // monotonic latch, render-safe
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -453,76 +489,86 @@ export function App({ appTitle, appSubtitle }: AppProps) {
       />
 
       <main className="app-main">
-        <div className="view-anim" key={openPage ? `page:${openPage.slug}` : `tab:${tab}`}>
-          {openPage ? (
-            <PageView
-              title={openPage.title}
-              type={openPage.type}
-              slug={openPage.slug}
-              body={openPage.body}
-              backlinks={openPage.backlinks}
-              outgoing={openPage.outgoing}
-              related={openPage.related}
-              backLabel={TAB_LABELS[tab]}
-              onBack={() => {
-                setOpenPage(null);
-                setLocalGraphSlug(null);
-                writeRoute(currentBaseRoute(), "replace");
-              }}
+        {graphEverVisible.current && graphReady && (
+          <div className="view-anim" style={graphVisible ? undefined : { display: "none" }}>
+            <GraphView
+              data={graphData}
+              focusSlug={graphFocus}
               onOpen={openMemory}
-              onLocalGraph={setLocalGraphSlug}
+              onResetFilter={resetGraphFilter}
             />
-          ) : (
-            <>
-              {tab === "overview" && (
-                <Overview
-                  appTitle={appTitle}
-                  appSubtitle={appSubtitle}
-                  graphData={graphData}
-                  graphError={graphError}
-                  allPages={allPages}
-                  onOpen={openMemory}
-                  onType={drillType}
-                  onNavigate={handleTabChange}
-                />
-              )}
-
-              {tab === "graph" &&
-                (!graphLoaded ? (
-                  <div style={{ padding: "40px 24px", color: "var(--muted)" }}>Loading graph…</div>
-                ) : graphError ? (
-                  <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                    Couldn't reach the brain — {graphError}. Check that <code>DATABASE_URL</code>{" "}
-                    points at a running Postgres; the dashboard's Read API panel shows recent call
-                    status.
-                  </div>
-                ) : graphData.nodes.length === 0 ? (
-                  <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                    No linked pages in this brain yet. Lore graphs pages connected by
-                    <code>[[wikilinks]]</code> — add some, or import a folder at /import.
-                  </div>
-                ) : (
-                  <GraphView
-                    data={graphData}
-                    focusSlug={graphFocus}
+          </div>
+        )}
+        {!graphVisible && (
+          <div className="view-anim" key={openPage ? `page:${openPage.slug}` : `tab:${tab}`}>
+            {openPage ? (
+              <PageView
+                title={openPage.title}
+                type={openPage.type}
+                slug={openPage.slug}
+                body={openPage.body}
+                backlinks={openPage.backlinks}
+                outgoing={openPage.outgoing}
+                related={openPage.related}
+                backLabel={TAB_LABELS[tab]}
+                onBack={() => {
+                  pageReq.current++; // a response landing after Back must not re-open the page
+                  setOpenPage(null);
+                  setLocalGraphSlug(null);
+                  writeRoute(currentBaseRoute(), "replace");
+                }}
+                onOpen={openMemory}
+                onLocalGraph={setLocalGraphSlug}
+              />
+            ) : (
+              <>
+                {tab === "overview" && (
+                  <Overview
+                    appTitle={appTitle}
+                    appSubtitle={appSubtitle}
+                    graphData={graphData}
+                    graphError={graphError}
+                    allPages={allPages}
                     onOpen={openMemory}
-                    onResetFilter={resetGraphFilter}
+                    onType={drillType}
+                    onNavigate={handleTabChange}
                   />
-                ))}
+                )}
 
-              {tab === "search" && (
-                <SearchResults
-                  items={searchItems}
-                  allPages={allPages}
-                  query={searchQuery}
-                  typeFilter={memoryType}
-                  onTypeFilter={setMemoryType}
-                  onOpen={openMemory}
-                />
-              )}
-            </>
-          )}
-        </div>
+                {/* The ready graph renders in the persistent container above; only
+                  the placeholder states live here, where remounting is free. */}
+                {tab === "graph" &&
+                  (!graphLoaded ? (
+                    <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                      Loading graph…
+                    </div>
+                  ) : graphError ? (
+                    <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                      Couldn't reach the brain — {graphError}. Check that <code>DATABASE_URL</code>{" "}
+                      points at a running Postgres; the dashboard's Read API panel shows recent call
+                      status.
+                    </div>
+                  ) : graphData.nodes.length === 0 ? (
+                    <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                      No linked pages in this brain yet. Lore graphs pages connected by
+                      <code>[[wikilinks]]</code> — add some, or import a folder at /import.
+                    </div>
+                  ) : null)}
+
+                {tab === "search" && (
+                  <SearchResults
+                    items={searchItems}
+                    allPages={allPages}
+                    query={searchQuery}
+                    typeFilter={memoryType}
+                    onTypeFilter={setMemoryType}
+                    onOpen={openMemory}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        )}
       </main>
       {localGraphSlug && graphData.nodes.length > 0 && (
         <LocalGraphModal
