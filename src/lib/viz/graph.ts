@@ -71,9 +71,8 @@ export function mountGraph(
 ): GraphInstance {
   let W = Math.max(320, el.clientWidth || 640);
   let H = Math.max(320, el.clientHeight || 460);
-  const linkColor = "#ebebeb";
-  const nodeStroke = "#ffffff";
-  const labelFill = "#171717";
+  // Colours live in globals.css under `.lore-graph` now — the stylesheet is the
+  // paint table. Only layout numbers remain here.
   const labelHeight = 13;
   const labelGap = 7;
 
@@ -86,15 +85,18 @@ export function mountGraph(
   const links = data.links.map((l) => ({ ...l })) as (GraphLink &
     d3.SimulationLinkDatum<(typeof nodes)[number]>)[];
 
-  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H);
+  // Styling lives in globals.css under `.lore-graph` — the stylesheet is the
+  // paint table, JS only assigns membership classes (.match/.lit/.hovered) and
+  // geometry. Groups are class-scoped because SVG stroke inherits: a bare
+  // `line` rule would paint the transparent hit layer's lines visible.
+  const svg = d3
+    .select(el)
+    .append("svg")
+    .attr("class", "lore-graph")
+    .attr("width", W)
+    .attr("height", H);
   const view = svg.append("g"); // zoom/pan target
-  const link = view
-    .append("g")
-    .attr("stroke", linkColor)
-    .attr("stroke-width", 1)
-    .selectAll("line")
-    .data(links)
-    .join("line");
+  const link = view.append("g").attr("class", "glinks").selectAll("line").data(links).join("line");
   // ponytail: the edge-hover hit layer is a 14px transparent copy of EVERY edge,
   // so it doubles the line count and the per-tick attribute writes. At 1733
   // edges that is 3466 <line> elements and 15,256 attribute writes per tick.
@@ -120,28 +122,21 @@ export function mountGraph(
     .style("pointer-events", "stroke");
   const node = view
     .append("g")
+    .attr("class", "gnodes")
     .selectAll("circle")
     .data(nodes)
     .join("circle")
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .attr("r", (d: any) => d.r)
-    .attr("fill", (d) => typeColor(d.type))
-    .attr("stroke", nodeStroke)
-    .attr("stroke-width", 1.5)
-    .style("cursor", "pointer");
+    // fill stays an attribute: it is per-node dynamic (type palette), set once.
+    .attr("fill", (d) => typeColor(d.type));
   const label = view
     .append("g")
+    .attr("class", "glabels")
     .selectAll("text")
     .data(nodes)
     .join("text")
     .text((d) => graphLabelText(d.label))
-    .attr("font-size", 10.5)
-    .attr("fill", labelFill)
-    .attr("dominant-baseline", "middle")
-    .style("pointer-events", "none")
-    .style("paint-order", "stroke")
-    .style("stroke", nodeStroke)
-    .style("stroke-width", "3px")
     .attr("opacity", 0);
   const edgeTooltip = d3
     .select(el)
@@ -180,24 +175,19 @@ export function mountGraph(
   type Lit = { nodes: Set<string>; touching: (l: any) => boolean };
   let lit: Lit | null = null;
 
-  // Restores to the BASE state, which is not always "default": a node in the
-  // `active` search set owns a 2.4 ring at rest, and resetting it to plain
-  // white meant a pointer sweeping the graph erased the search feedback ring by
-  // ring — they only snapped back when the hover fully ended and paintHighlight
-  // repainted everything.
+  // Pure membership removal. There is deliberately NO restore logic here: the
+  // base look — including a search match's ring — is the stylesheet's, so
+  // removing the classes IS the restore. The bug family this file kept
+  // re-fixing (clearing to the wrong base, erasing search rings mid-sweep)
+  // existed because attribute writes are absolute and the clearer had to know
+  // what the base was. Classes compose; the clearer no longer knows anything.
   function clearLit() {
     if (!lit) return;
     const was = lit;
     lit = null;
-    node
-      .filter((n) => was.nodes.has(n.id))
-      .attr("stroke", (n) => (active?.has(n.id) ? labelFill : nodeStroke))
-      .attr("stroke-width", (n) => (active?.has(n.id) ? 2.4 : 1.5));
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .filter((l: any) => was.touching(l))
-      .attr("stroke", linkColor)
-      .attr("stroke-width", 1);
+    node.filter((n) => was.nodes.has(n.id)).classed("lit hovered", false);
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    link.filter((l: any) => was.touching(l)).classed("lit exact", false);
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
@@ -237,6 +227,46 @@ export function mountGraph(
     hoverClearTimer = null;
   }
 
+  // The dim is back, but as ONE class on the svg root — CSS dims every element,
+  // and the lit neighbourhood opts out via `.lit` (see globals.css). What was
+  // removed before was never the look; it was writing opacity onto 2400
+  // elements per pointermove. A class flip is one write; the browser's style
+  // pass does the rest.
+  //
+  // Engaged on DWELL, not on entry: dimming repaints every pixel of the layer,
+  // and doing that for every node a sweeping pointer crosses is exactly the
+  // per-frame full-raster this file spent a week removing. Rings light
+  // instantly while sweeping; resting on a node for DIM_DWELL_MS fades the rest
+  // of the graph back. Once engaged, moving between nodes keeps it engaged —
+  // the dwell gates entry, not continuation. A click dims immediately:
+  // selection is deliberate.
+  const DIM_DWELL_MS = 150;
+  let dimTimer: ReturnType<typeof setTimeout> | null = null;
+  let dimOn = false;
+
+  function cancelDimTimer() {
+    if (!dimTimer) return;
+    clearTimeout(dimTimer);
+    dimTimer = null;
+  }
+  function dimNow() {
+    cancelDimTimer();
+    if (dimOn) return;
+    dimOn = true;
+    svg.classed("graph-dimmed", true);
+  }
+  function armDim() {
+    if (dimOn) return; // already engaged — a move between nodes keeps it
+    cancelDimTimer();
+    dimTimer = setTimeout(dimNow, DIM_DWELL_MS);
+  }
+  function undim() {
+    cancelDimTimer();
+    if (!dimOn) return;
+    dimOn = false;
+    svg.classed("graph-dimmed", false);
+  }
+
   // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
   function edgeTouchesNode(l: any, id: string): boolean {
     const [source, target] = linkEndpointIds(l);
@@ -246,6 +276,7 @@ export function mountGraph(
   function clearHoverNow() {
     clearHoverTimer();
     cancelHoverPaint(); // a queued frame would repaint the focus we are clearing
+    undim(); // applyState below re-dims immediately if a selection is active
     hoverNodeId = null;
     hover = null;
     hideEdgeTooltip();
@@ -404,8 +435,10 @@ export function mountGraph(
 
   function paintDefault() {
     lit = null; // the full reset below covers whatever was lit
-    node.attr("opacity", 1).attr("stroke", nodeStroke).attr("stroke-width", 1.5);
-    link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
+    undim();
+    svg.classed("gsel", false);
+    node.classed("lit hovered match", false);
+    link.classed("lit exact", false);
     layoutLabels();
   }
   // A search MARKS its matches; it does not dim the graph around them. Ringing
@@ -416,12 +449,11 @@ export function mountGraph(
   // than it was (2.4 against 2) to carry the emphasis on its own.
   function paintHighlight() {
     const M = active ?? new Set<string>();
-    lit = null; // this writes every node's stroke, so nothing stays lit
-    node
-      .attr("opacity", 1)
-      .attr("stroke", (d) => (M.has(d.id) ? labelFill : nodeStroke))
-      .attr("stroke-width", (d) => (M.has(d.id) ? 2.4 : 1.5));
-    link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
+    lit = null; // the membership resets below cover whatever was lit
+    undim(); // search marks its matches; it does not dim (asked for explicitly)
+    svg.classed("gsel", false);
+    node.classed("lit hovered", false).classed("match", (d) => M.has(d.id));
+    link.classed("lit exact", false);
     layoutLabels();
   }
   function applyState() {
@@ -450,25 +482,22 @@ export function mountGraph(
     clearLit();
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     lit = { nodes: A, touching: (l: any) => edgeTouchesNode(l, id) };
+    // One property write carries the tint to every incident edge via CSS;
+    // .gsel on the root is what widens the hovered ring and edges when the
+    // focus is a selection rather than a hover.
+    svg.style("--focus-tint", nodeColor).classed("gsel", selected);
     node
       .filter((n) => A.has(n.id))
-      // A neighbourhood member that is ALSO a search match keeps its 2.4 ring —
-      // painting it plain white here is the same erase-the-search bug clearLit
-      // had, one step earlier.
-      .attr("stroke", (n) => (n.id === id || active?.has(n.id) ? labelFill : nodeStroke))
-      .attr("stroke-width", (n) =>
-        n.id === id ? (selected ? 2.4 : 2.2) : active?.has(n.id) ? 2.4 : 1.5,
-      );
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .filter((l: any) => edgeTouchesNode(l, id))
-      .attr("stroke", nodeColor)
-      .attr("stroke-width", selected ? 1.9 : 1.6);
+      .classed("lit", true)
+      .classed("hovered", (n) => n.id === id);
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    link.filter((l: any) => edgeTouchesNode(l, id)).classed("lit", true);
     layoutLabels();
   }
 
   function paintNodeHover(id: string) {
     hover = adj[id] ?? new Set([id]);
+    armDim();
     paintNodeFocus(id, false);
   }
 
@@ -476,6 +505,7 @@ export function mountGraph(
     hover = null;
     hoverNodeId = null;
     hideEdgeTooltip();
+    dimNow(); // a click is deliberate — no dwell
     paintNodeFocus(id, true);
   }
 
@@ -493,11 +523,10 @@ export function mountGraph(
     };
     clearLit();
     lit = { nodes: ids, touching: isThisEdge };
-    node
-      .filter((n) => ids.has(n.id))
-      .attr("stroke", labelFill)
-      .attr("stroke-width", 2);
-    link.filter(isThisEdge).attr("stroke", labelFill).attr("stroke-width", 1.8);
+    // `.exact` overrides the tint: an edge picked directly is marked in ink,
+    // not in either endpoint's colour. `.hovered` gives the endpoints rings.
+    node.filter((n) => ids.has(n.id)).classed("lit hovered", true);
+    link.filter(isThisEdge).classed("lit exact", true);
     layoutLabels();
   }
 
@@ -814,6 +843,7 @@ export function mountGraph(
       sim.stop();
       clearHoverTimer();
       cancelHoverPaint();
+      cancelDimTimer();
       edgeTooltip.remove();
       svg.remove();
     },

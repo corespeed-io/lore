@@ -721,7 +721,16 @@ keep it that way.
   calls go through `src/lib/api.ts` `apiCall(tool, args)`. **A tool is reachable from the console iff its `access` is `read`** — there is no list to add it to.
 - `src/lib/viz/graph.ts` — d3 force graph. Exposes `mountGraph(el, data, opts)` →
   `{ destroy, highlight(idSet|null) }`. Zoom/pan (wheel + bg-drag), free node drag,
-  auto-fit on settle (~70 ticks) + dbl-click to fit.
+  dbl-click on empty space to fit. Two load-bearing invariants: (1) the layout
+  settles HEADLESSLY at mount (`sim.tick` inside a time budget — no animated
+  settle phase exists), and (2) **no paint touches the whole graph**: JS assigns
+  membership classes only (`.match`/`.lit`/`.hovered`, `.graph-dimmed`/`.gsel` on
+  the root) and the stylesheet — the `.lore-graph` paint table in `globals.css` —
+  decides every visual, so removing a class IS the restore and there is no
+  restore code to get wrong. Geometry (`cx`/`x1`/label positions) stays JS: those
+  are attributes, not CSS properties. The hover dim engages on DWELL (150ms),
+  never while sweeping. Don't reintroduce per-element style/attr writes in paint
+  paths, and don't add a second reset path beside `clearLit()`.
 - Components: `Sidebar` (nav + omnibox), `Overview` (dashboard), `ActivityChart`
   (per-day activity **bars**, hand-rolled SVG, pure `dailyCounts()`), `Breakdown`,
   `TopHubs`, `Sources`, `RecentActivity`, `GraphView`, `SearchResults` (Memories
