@@ -208,6 +208,7 @@ export function mountGraph(
 
   function clearHoverNow() {
     clearHoverTimer();
+    cancelHoverPaint(); // a queued frame would repaint the focus we are clearing
     hoverNodeId = null;
     hover = null;
     hideEdgeTooltip();
@@ -217,6 +218,31 @@ export function mountGraph(
   function clearHoverSoon() {
     clearHoverTimer();
     hoverClearTimer = setTimeout(clearHoverNow, 110);
+  }
+
+  // ponytail: a hover repaint costs what it costs; what was unbounded is how
+  // OFTEN one was asked for. pointermove arrives about every 8ms, every node the
+  // pointer crosses asked for a full repaint, and a repaint that dims 690 nodes
+  // and 1729 edges does not finish in 8ms — so sweeping the pointer across the
+  // graph queued work faster than it could ever drain, and the lag was the
+  // backlog rather than any single paint. Coalescing to one paint per animation
+  // frame caps the rate at the display's, which is the most repaints that can
+  // ever be seen. hoverNodeId is still assigned SYNCHRONOUSLY, so the
+  // same-node early return and the pointerout ownership check keep working off
+  // the real pointer position rather than a frame-old copy.
+  let hoverFrame = 0;
+  function paintHoverSoon() {
+    if (hoverFrame) return;
+    hoverFrame = requestAnimationFrame(() => {
+      hoverFrame = 0;
+      if (selectedId || !hoverNodeId) return;
+      paintNodeHover(hoverNodeId);
+    });
+  }
+  function cancelHoverPaint() {
+    if (!hoverFrame) return;
+    cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
   }
 
   function labelPlacements(d: (typeof nodes)[number]): LabelPlacement[] {
@@ -508,7 +534,7 @@ export function mountGraph(
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
-      paintNodeHover(d.id);
+      paintHoverSoon();
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointermove", (e: any, d: any) => {
@@ -517,7 +543,7 @@ export function mountGraph(
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
-      paintNodeHover(d.id);
+      paintHoverSoon();
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointerout", (e: any, d: any) => {
@@ -545,7 +571,7 @@ export function mountGraph(
       }
       if (hoverNodeId && edgeTouchesNode(l, hoverNodeId)) {
         hideEdgeTooltip();
-        paintNodeHover(hoverNodeId);
+        paintHoverSoon();
       } else {
         hoverNodeId = null;
         paintEdgeHover(l);
@@ -660,6 +686,7 @@ export function mountGraph(
       ro.disconnect();
       sim.stop();
       clearHoverTimer();
+      cancelHoverPaint();
       edgeTooltip.remove();
       svg.remove();
     },
