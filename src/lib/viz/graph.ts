@@ -112,14 +112,13 @@ export function mountGraph(
   const EDGE_HOVER_LIMIT = 600;
   const linkHit = view
     .append("g")
+    .attr("class", "ghits")
     .attr("stroke", "transparent")
     .attr("stroke-linecap", "round")
     .attr("stroke-width", 14)
     .selectAll("line")
     .data(links.length <= EDGE_HOVER_LIMIT ? links : [])
-    .join("line")
-    .style("cursor", "default")
-    .style("pointer-events", "stroke");
+    .join("line");
   const node = view
     .append("g")
     .attr("class", "gnodes")

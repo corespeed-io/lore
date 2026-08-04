@@ -19,7 +19,7 @@ export function RecentActivity({ items, onOpen }: RecentActivityProps) {
     <div className="panel-card">
       <p className="panel-card-title">Recent activity</p>
       {items.length === 0 ? (
-        <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>Nothing recent.</p>
+        <p className="panel-empty">Nothing recent.</p>
       ) : (
         items.map((p) => (
           <button

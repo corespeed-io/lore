@@ -102,7 +102,7 @@ export function SearchResults({
     if (!allPages.length) {
       return (
         <div className="page-wrap">
-          <p style={{ color: "var(--muted)" }}>Loading memories…</p>
+          <p className="muted-note">Loading memories…</p>
         </div>
       );
     }
@@ -154,12 +154,8 @@ export function SearchResults({
                 {p.type && <span className="badge">{p.type}</span>}
               </div>
               <div className="search-row-foot">
-                <span className="search-row-slug" style={{ marginTop: 0 }}>
-                  {p.slug}
-                </span>
-                <span className="activity-date" style={{ marginLeft: "auto" }}>
-                  {shortDate(p.updated_at)}
-                </span>
+                <span className="search-row-slug">{p.slug}</span>
+                <span className="activity-date">{shortDate(p.updated_at)}</span>
               </div>
             </button>
           ))}
@@ -180,7 +176,7 @@ export function SearchResults({
   if (!items.length) {
     return (
       <div className="page-wrap">
-        <p style={{ color: "var(--muted)" }}>No matches for “{q}”.</p>
+        <p className="muted-note">No matches for “{q}”.</p>
       </div>
     );
   }

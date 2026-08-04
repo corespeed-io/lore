@@ -2809,3 +2809,34 @@ a.ext {
 .lore-graph.graph-dimmed .glinks line.lit {
   opacity: 0.9;
 }
+
+/* ── Shared static styles that lived as repeated inline style objects ─────────
+   (five identical empty-state <p>s, three identical view placeholders, two
+   layout nudges in the browse rows). Dynamic values — meter widths, type-dot
+   colours, tooltip geometry — stay inline: that is what inline style is FOR. */
+.panel-empty {
+  color: var(--muted-soft);
+  font-size: 13px;
+  margin: 0;
+}
+.view-placeholder {
+  padding: 40px 24px;
+  color: var(--muted);
+}
+.muted-note {
+  color: var(--muted);
+}
+.search-row-foot .search-row-slug {
+  margin-top: 0;
+}
+.search-row-foot .activity-date {
+  margin-left: auto;
+}
+/* The edge hit layer: transparent fat strokes that catch the pointer. */
+.lore-graph .ghits line {
+  cursor: default;
+  pointer-events: stroke;
+}
+.type-bar-fill-primary {
+  background: var(--primary);
+}

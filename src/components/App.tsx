@@ -539,17 +539,15 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   the placeholder states live here, where remounting is free. */}
                 {tab === "graph" &&
                   (!graphLoaded ? (
-                    <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
-                      Loading graph…
-                    </div>
+                    <div className="view-placeholder">Loading graph…</div>
                   ) : graphError ? (
-                    <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                    <div className="view-placeholder">
                       Couldn't reach the brain — {graphError}. Check that <code>DATABASE_URL</code>{" "}
                       points at a running Postgres; the dashboard's Read API panel shows recent call
                       status.
                     </div>
                   ) : graphData.nodes.length === 0 ? (
-                    <div style={{ padding: "40px 24px", color: "var(--muted)" }}>
+                    <div className="view-placeholder">
                       No linked pages in this brain yet. Lore graphs pages connected by
                       <code>[[wikilinks]]</code> — add some, or import a folder at /import.
                     </div>
