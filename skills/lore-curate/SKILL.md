@@ -39,16 +39,18 @@ it is off until you wire a scheduler (Workers Cron, Railway cron, a laptop cront
 
 | Body | Job |
 |---|---|
-| `{}` | Mention sweep — deterministic linking into the `auto` edge lane |
-| `{"limit": 50}` | Batch size (default 50, max 200) |
-| `{"dryRun": true}` | Report the edges it *would* add, write none |
-| `{"action": "clear"}` | Drop every auto edge and rescan later |
+| `{}` | Mention sweep — links pages that NAME a typed page, into the `auto` lane |
+| `{"action": "semantic"}` | Semantic sweep — links pages ABOUT the same thing (mutual k-NN over stored vectors; optional `floor`, `perPage`) |
+| `{"limit": 50}` | Batch size (mention default 50 max 200; semantic default 200 max 1000) |
+| `{"dryRun": true}` | Report the edges it *would* add, write none (both sweeps) |
+| `{"action": "clear"}` | Drop every auto edge and reset both sweeps to rescan |
 | `{"action": "memory"}` | Summarize, extract, project, consolidate |
 | `{"action": "health"}` | Backend health counters, no writes |
 
-Two lanes of edges: `declared` (a `[[wikilink]]` someone wrote) and `auto` (the
-mention sweep inferred it). Only `declared` edges count toward search's backlink
-boost — an inferred edge must not be able to promote a page.
+Two lanes of edges: `declared` (a `[[wikilink]]` someone wrote) and `auto` (a
+sweep inferred it — `kind` says which one: `mention` or `semantic`). Only
+`declared` edges count toward search's backlink boost — an inferred edge must
+not be able to promote a page.
 
 Start with `dryRun` on an unfamiliar brain. The memory job is deliberately not run
 after every message; a lease keeps exactly one writer at a time.

@@ -18,7 +18,7 @@ export function RecentRequests() {
     <div className="panel-card">
       <p className="panel-card-title">Recent requests · this session</p>
       {log.length === 0 ? (
-        <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>
+        <p className="panel-empty">
           No brain calls yet — browse the graph or search to see them here.
         </p>
       ) : (

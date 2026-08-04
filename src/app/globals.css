@@ -1044,11 +1044,13 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--mute);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.95);
   border: 1px solid var(--hairline);
   padding: 6px 10px;
   border-radius: 6px;
-  backdrop-filter: blur(4px);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   top: 16px;
   left: 16px;
   display: flex;
@@ -1100,9 +1102,11 @@ body {
   display: flex;
   align-items: center;
   border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.95);
   border-radius: 6px;
-  backdrop-filter: blur(4px);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
 }
 
 .graph-tool {
@@ -1187,11 +1191,13 @@ body {
 .graph-reset {
   height: 30px;
   border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.95);
   color: var(--body);
   padding: 0 10px;
   border-radius: 6px;
-  backdrop-filter: blur(4px);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
@@ -1217,8 +1223,10 @@ body {
   padding: 14px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.95);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.08);
   animation: graph-preview-in 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
 }
@@ -1346,8 +1354,10 @@ body {
   left: 50%;
   transform: translateX(-50%);
   width: min(320px, 60%);
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(4px);
+  background: rgba(255, 255, 255, 0.95);
+  /* no backdrop-filter: these float over the force graph, and a blur is
+     re-composited every frame the SVG beneath changes — five regions per
+     drag frame. The raised alpha keeps them readable instead. */
   border: 1px solid var(--hairline);
   color: var(--ink);
   padding: 7px 12px;
@@ -2723,4 +2733,110 @@ a.ext {
 .graph-health-src:hover {
   color: var(--link);
   text-decoration: underline;
+}
+
+/* ── Graph paint table ─────────────────────────────────────────────────────────
+   The stylesheet IS the paint logic. JS assigns membership only — .match (search
+   hit), .lit (focused neighbourhood), .hovered (the focus node), .graph-dimmed
+   and .gsel on the root — and every visual for every combination is decided
+   here. This is why removing a class needs no "restore" code: the base state
+   lives below, not in whatever JS last wrote. Scoped per group because SVG
+   stroke inherits — a bare `line` selector would also paint the transparent
+   hit-test layer's lines visible. Geometry (cx/x1/…) stays in JS: those are
+   attributes, not CSS properties. */
+
+.lore-graph .glinks line {
+  stroke: #ebebeb;
+  stroke-width: 1;
+}
+.lore-graph .gnodes circle {
+  cursor: pointer;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+.lore-graph .glabels text {
+  font-size: 10.5px;
+  fill: #171717;
+  dominant-baseline: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 3px;
+}
+
+/* Search matches carry their ring themselves — no dimming (asked for). */
+.lore-graph .gnodes circle.match {
+  stroke: #171717;
+  stroke-width: 2.4;
+}
+
+/* The focused neighbourhood. Incident edges take the focus node's type colour
+   via a custom property set once on the root — one write, not one per edge. */
+.lore-graph .glinks line.lit {
+  stroke: var(--focus-tint, #171717);
+  stroke-width: 1.6;
+}
+.lore-graph.gsel .glinks line.lit {
+  stroke-width: 1.9;
+}
+.lore-graph .glinks line.lit.exact {
+  stroke: #171717;
+  stroke-width: 1.8;
+}
+.lore-graph .gnodes circle.hovered {
+  stroke: #171717;
+  stroke-width: 2.2;
+}
+.lore-graph.gsel .gnodes circle.hovered {
+  stroke-width: 2.4;
+}
+
+/* The dim: one class on the root fades everything back; the lit neighbourhood
+   and the labels opt out. Fade-in only — undimming snaps, so leaving a hover
+   never pays transition frames. */
+.lore-graph.graph-dimmed .gnodes circle {
+  opacity: 0.12;
+  transition: opacity 0.12s ease-out;
+}
+.lore-graph.graph-dimmed .glinks line {
+  opacity: 0.05;
+  transition: opacity 0.12s ease-out;
+}
+.lore-graph.graph-dimmed .gnodes circle.lit,
+.lore-graph.graph-dimmed .gnodes circle.hovered {
+  opacity: 1;
+}
+.lore-graph.graph-dimmed .glinks line.lit {
+  opacity: 0.9;
+}
+
+/* ── Shared static styles that lived as repeated inline style objects ─────────
+   (five identical empty-state <p>s, three identical view placeholders, two
+   layout nudges in the browse rows). Dynamic values — meter widths, type-dot
+   colours, tooltip geometry — stay inline: that is what inline style is FOR. */
+.panel-empty {
+  color: var(--muted-soft);
+  font-size: 13px;
+  margin: 0;
+}
+.view-placeholder {
+  padding: 40px 24px;
+  color: var(--muted);
+}
+.muted-note {
+  color: var(--muted);
+}
+.search-row-foot .search-row-slug {
+  margin-top: 0;
+}
+.search-row-foot .activity-date {
+  margin-left: auto;
+}
+/* The edge hit layer: transparent fat strokes that catch the pointer. */
+.lore-graph .ghits line {
+  cursor: default;
+  pointer-events: stroke;
+}
+.type-bar-fill-primary {
+  background: var(--primary);
 }

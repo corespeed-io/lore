@@ -174,6 +174,42 @@ test("traversal roots round-robin across seed queries (each query's top hit gets
   }
 });
 
+test("a big brain drops isolated pages; the connected structure stays intact", async () => {
+  clearGraphCache();
+  // 1 hub + 401 spokes = 402 connected nodes, past the 400 budget. The threat
+  // this pins: reverting the budget guard to an unconditional ensure() silently
+  // re-adds the halo of degree-zero dots (66% of the picture at 4k pages) and
+  // nothing else in the suite notices, because every other fixture is tiny.
+  const base = baseImpl(); // capture BEFORE swapping, or finally restores our own mock
+  const spokes = Array.from({ length: 401 }, (_, i) => `concepts/spoke-${i}`);
+  const EDGES = spokes.map((s) => ({ from_slug: "concepts/hub", to_slug: s }));
+  const PAGES = [
+    { slug: "concepts/hub", title: "Hub", type: "concept" },
+    { slug: "concepts/lonely", title: "Lonely Isolated Page", type: "concept" },
+  ];
+  vi.mocked(callTool).mockImplementation(async (tool: string, args?: object) => {
+    if (tool === "list_pages") return { isError: false, text: JSON.stringify(PAGES) };
+    if (tool === "query")
+      return { isError: false, text: JSON.stringify([{ slug: "concepts/hub", title: "Hub" }]) };
+    if (tool === "traverse_graph") {
+      const s = (args as { slug?: string })?.slug ?? "";
+      const incident = EDGES.filter((e) => e.from_slug === s || e.to_slug === s);
+      return { isError: false, text: JSON.stringify(incident) };
+    }
+    return { isError: false, text: "[]" };
+  });
+  try {
+    const g = await buildGraph();
+    const ids = new Set(g.nodes.map((n) => n.id));
+    expect(ids.size).toBe(402); // hub + 401 spokes, and nothing else
+    expect(ids.has("concepts/lonely")).toBe(false); // the halo is gone
+    expect(ids.has("concepts/hub")).toBe(true);
+    expect(g.links).toHaveLength(401); // dropping isolates must not cost edges
+  } finally {
+    vi.mocked(callTool).mockImplementation(base);
+  }
+});
+
 test("buildGraph serves a genuinely edgeless brain without throwing (and caches it)", async () => {
   clearGraphCache();
   const mocked = vi.mocked(callTool);
@@ -366,6 +402,30 @@ test("buildGraph serves the last good graph stale when a rebuild fails", async (
   }
 });
 
+test("an expired graph is served stale immediately, not after the rebuild", async () => {
+  clearGraphCache();
+  const mocked = vi.mocked(callTool);
+  const base = baseImpl();
+  const good = await buildGraph(); // healthy build → cached
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(Date.now() + 3_600_001); // expire the TTL
+    let rebuildStarted = false;
+    mocked.mockImplementation(() => {
+      rebuildStarted = true;
+      return new Promise(() => {}); // a rebuild that never finishes
+    });
+    // The threat: reverting to await-then-serve makes this await hang on the
+    // never-settling rebuild and the test dies on its timeout — which is
+    // exactly what a visitor saw for 10-48s after every TTL expiry.
+    await expect(buildGraph()).resolves.toBe(good);
+    expect(rebuildStarted).toBe(true); // and the background refresh really began
+  } finally {
+    vi.useRealTimers();
+    mocked.mockImplementation(base);
+  }
+});
+
 test("concurrent cache misses share a single rebuild (single-flight)", async () => {
   clearGraphCache();
   const mocked = vi.mocked(callTool);
@@ -376,4 +436,31 @@ test("concurrent cache misses share a single rebuild (single-flight)", async () 
   // traversals — a second concurrent rebuild would double this
   const listCalls = mocked.mock.calls.filter(([tool]) => tool === "list_pages").length;
   expect(listCalls).toBe(1);
+});
+
+test("a big EDGELESS brain drops the halo too — the budget measures the prospective total", async () => {
+  clearGraphCache();
+  // The inverted direction of the isolated-page budget, from the reviewer's
+  // round 1: `nodes` holds only edge endpoints when the gate runs, so an
+  // edgeless 4,000-page brain measured ZERO connected nodes and sailed under
+  // the budget — 4,000 isolated dots, settled by d3, in the PR that added the
+  // budget to prevent exactly that.
+  const base = baseImpl();
+  const PAGES = Array.from({ length: 500 }, (_, i) => ({
+    slug: `concepts/iso-${i}`,
+    title: `Isolated ${i}`,
+    type: "concept",
+  }));
+  vi.mocked(callTool).mockImplementation(async (tool: string) => {
+    if (tool === "list_pages") return { isError: false, text: JSON.stringify(PAGES) };
+    if (tool === "query") return { isError: false, text: JSON.stringify([PAGES[0]]) };
+    return { isError: false, text: "[]" }; // healthy, genuinely edgeless
+  });
+  try {
+    const g = await buildGraph();
+    expect(g.nodes).toHaveLength(0); // 500 candidates > 400 budget: no halo
+    expect(g.links).toHaveLength(0);
+  } finally {
+    vi.mocked(callTool).mockImplementation(base);
+  }
 });

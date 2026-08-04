@@ -12,6 +12,15 @@ const TTL_MS = 3_600_000;
 // the brain request log quiet (was 1 shallow call × up to 60 seeds = 60 reads/build;
 // now ~TRAVERSE_ROOTS reads/build). Roots are the most-relevant pages; depth 5
 // (the brain's default, cap 10) reaches across the connected brain.
+// Titles for the whole brain, paged. The cap is a backstop against a brain
+// large enough that resolving every title costs more than the graph is worth;
+// past it, nodes fall back to slug labels as they always did.
+const TITLE_PAGE = 1000;
+const TITLE_CAP = 20_000;
+
+// Isolated pages earn their place in a small brain and drown a large one.
+const ISOLATED_BUDGET = 400;
+
 const TRAVERSE_ROOTS = 8;
 const TRAVERSE_DEPTH = 5;
 let cache: { data: GraphData; at: number } | null = null;
@@ -74,20 +83,34 @@ async function edgeRows(slug: string, depth: number): Promise<{ rows: LinkRow[];
 
 export async function buildGraph(): Promise<GraphData> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache.data;
-  inflight ??= rebuild().finally(() => {
-    inflight = null;
-  });
-  try {
-    return await inflight;
-  } catch (err) {
-    // Stale beats 502: an expired-but-real graph is better than an error page,
-    // and it keeps a degraded the brain from being hammered with full rebuilds.
-    if (cache) {
-      console.warn("graph: rebuild failed — serving stale graph", err);
-      return cache.data;
-    }
-    throw err;
+  if (!inflight) {
+    inflight = rebuild().finally(() => {
+      inflight = null;
+    });
+    // One handler at creation — attaching per stale-served request logged N
+    // identical warnings for one failed rebuild. Cold-path awaiters still see
+    // the rejection through their own await; an extra .catch does not consume it.
+    inflight.catch((err) => {
+      // Only the stale path is silent about failures; the cold path surfaces
+      // its own error through the route. Don't claim "serving stale" when
+      // there is nothing to serve.
+      if (cache)
+        console.warn("graph: background rebuild failed — serving stale until one succeeds", err);
+    });
   }
+  // Stale-while-revalidate: a rebuild takes 10-48s of brain traversals, and the
+  // pre-SWR shape made the first visitor after every TTL expiry stare at an
+  // empty graph for all of it — the largest single latency in the app, paid by
+  // whoever shows up at the wrong hour. An expired-but-real graph is served NOW
+  // and the (single-flighted) rebuild replaces it in the background; "stale
+  // beats 502" already conceded that an old graph is fine to show, so waiting
+  // was never buying correctness. A failed background rebuild just leaves the
+  // cache expired — the next request kicks off another attempt and is served
+  // stale again, which is the same "don't hammer a degraded brain" behaviour
+  // the failure path always had. Only the first-ever build (nothing to serve)
+  // still blocks.
+  if (cache) return cache.data;
+  return await inflight;
 }
 
 async function rebuild(): Promise<GraphData> {
@@ -115,10 +138,31 @@ async function rebuild(): Promise<GraphData> {
   );
   const titles = new Map<string, { title: string; type?: string }>();
   try {
-    const { isError, text } = await callTool("list_pages", { limit: 100, sort: "updated_desc" });
-    const pages = isError ? null : JSON.parse(text);
-    if (Array.isArray(pages)) {
-      for (const page of pages as PageHit[]) {
+    // EVERY page, not the first hundred. A node whose title is missing falls
+    // back to its slug's last segment, so on a brain of a few thousand pages a
+    // wall of pull requests rendered as the bare numbers 388, 216, 44 — the
+    // titles were in the database the whole time, and nothing had asked for them.
+    const pages: PageHit[] = [];
+    let isError = false;
+    for (let offset = 0; offset < TITLE_CAP; offset += TITLE_PAGE) {
+      const res = await callTool("list_pages", {
+        limit: TITLE_PAGE,
+        offset,
+        sort: "updated_desc",
+      });
+      if (res.isError) {
+        isError = true;
+        break;
+      }
+      const batch = JSON.parse(res.text);
+      if (!Array.isArray(batch) || !batch.length) break;
+      pages.push(...(batch as PageHit[]));
+      if (batch.length < TITLE_PAGE) break;
+    }
+    // An EMPTY brain is not a failed read. Treating "no pages" as a failure is
+    // how a fresh install started answering 502 instead of an empty graph.
+    if (!isError) {
+      for (const page of pages) {
         if (!page.slug || titles.has(page.slug)) continue;
         titles.set(page.slug, { title: page.title ?? page.slug, type: page.type });
       }
@@ -175,13 +219,25 @@ async function rebuild(): Promise<GraphData> {
     const label = t ? t.title : (slug.split("/").pop() ?? slug).replace(/-/g, " ");
     nodes.set(slug, { id: slug, label, type: nodeType(slug, t?.type) });
   };
-  for (const slug of titles.keys()) ensure(slug);
   for (const { from_slug, to_slug } of rows) {
     if (!from_slug || !to_slug || from_slug === to_slug) continue;
     ensure(from_slug);
     ensure(to_slug);
     edges.add([from_slug, to_slug].sort().join("|"));
   }
+  // Isolated pages are shown only while there are few enough for "this page has
+  // no links yet" to be the useful reading. Past that they stop being
+  // information and become a halo: at 4,113 pages, 2,731 of the nodes had degree
+  // zero — 66% of the picture was a ring of dots that said nothing, drawn around
+  // the structure someone actually came to look at.
+  // Gate on what the graph WOULD become, not on the connected count alone:
+  // `nodes` holds only edge endpoints here, so an edgeless 4,000-page brain
+  // measured 0 and sailed under the budget — the guard was loosest exactly
+  // when the halo it exists to prevent was worst.
+  const isolatedCandidates = [...titles.keys()].filter((slug) => !nodes.has(slug));
+  if (nodes.size + isolatedCandidates.length <= ISOLATED_BUDGET)
+    for (const slug of isolatedCandidates) ensure(slug);
+
   // 4. Drop hash-titled mem0 imports, but keep legitimate isolated pages. The
   // graph should show the brain's current page set, not only connected pages.
   const titled = new Map([...nodes].filter(([, n]) => !isHashTitle(n.label)));

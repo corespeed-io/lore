@@ -35,6 +35,25 @@ export function labelBoxesOverlap(a: LabelBox, b: LabelBox, pad = 0): boolean {
   return a.x0 - pad < b.x1 && a.x1 + pad > b.x0 && a.y0 - pad < b.y1 && a.y1 + pad > b.y0;
 }
 
+// A repaint shows `shown` and must hide whatever was on screen before and no
+// longer is. Returning that set — rather than "everything not shown" — is the
+// whole point: at rest 626 of 696 labels are ALREADY hidden, and an opacity
+// write to one of those changes nothing while costing the same as a real one.
+//
+// Extracted because the two ways to get this wrong fail in opposite directions
+// and neither is visible in review. Widening it to every not-shown label is a
+// silent 30x write amplification that looks identical on screen. Dropping the
+// second half leaves labels from the PREVIOUS hover on screen — a visual bug,
+// but only for whoever happens to be moving a pointer at the time.
+export function labelsToHide(
+  wasShown: Iterable<string>,
+  shown: { has(id: string): boolean },
+): Set<string> {
+  const hide = new Set<string>();
+  for (const id of wasShown) if (!shown.has(id)) hide.add(id);
+  return hide;
+}
+
 export interface GraphInstance {
   destroy(): void;
   fit(): void;
@@ -52,9 +71,8 @@ export function mountGraph(
 ): GraphInstance {
   let W = Math.max(320, el.clientWidth || 640);
   let H = Math.max(320, el.clientHeight || 460);
-  const linkColor = "#ebebeb";
-  const nodeStroke = "#ffffff";
-  const labelFill = "#171717";
+  // Colours live in globals.css under `.lore-graph` now — the stylesheet is the
+  // paint table. Only layout numbers remain here.
   const labelHeight = 13;
   const labelGap = 7;
 
@@ -67,49 +85,57 @@ export function mountGraph(
   const links = data.links.map((l) => ({ ...l })) as (GraphLink &
     d3.SimulationLinkDatum<(typeof nodes)[number]>)[];
 
-  const svg = d3.select(el).append("svg").attr("width", W).attr("height", H);
+  // Styling lives in globals.css under `.lore-graph` — the stylesheet is the
+  // paint table, JS only assigns membership classes (.match/.lit/.hovered) and
+  // geometry. Groups are class-scoped because SVG stroke inherits: a bare
+  // `line` rule would paint the transparent hit layer's lines visible.
+  const svg = d3
+    .select(el)
+    .append("svg")
+    .attr("class", "lore-graph")
+    .attr("width", W)
+    .attr("height", H);
   const view = svg.append("g"); // zoom/pan target
-  const link = view
-    .append("g")
-    .attr("stroke", linkColor)
-    .attr("stroke-width", 1)
-    .selectAll("line")
-    .data(links)
-    .join("line");
+  const link = view.append("g").attr("class", "glinks").selectAll("line").data(links).join("line");
+  // ponytail: the edge-hover hit layer is a 14px transparent copy of EVERY edge,
+  // so it doubles the line count and the per-tick attribute writes. At 1733
+  // edges that is 3466 <line> elements and 15,256 attribute writes per tick.
+  // Past this many edges the 14px strokes overlap each other so heavily that
+  // picking one edge is not a real interaction, so it is not drawn at all: an
+  // empty data join leaves the selection valid and every .attr()/.on() below a
+  // no-op, with no branch to keep in sync. Upgrade path: draw to a canvas and
+  // hit-test in code — note that `simulation.find` is a LINEAR scan over every
+  // node (d3-force/src/simulation.js:128), not a quadtree lookup; the quadtree
+  // d3-force builds is rebuilt per tick inside the charge force and is not
+  // exposed. A linear scan is fine at this size, but do not plan around an
+  // index that does not exist.
+  const EDGE_HOVER_LIMIT = 600;
   const linkHit = view
     .append("g")
+    .attr("class", "ghits")
     .attr("stroke", "transparent")
     .attr("stroke-linecap", "round")
     .attr("stroke-width", 14)
     .selectAll("line")
-    .data(links)
-    .join("line")
-    .style("cursor", "default")
-    .style("pointer-events", "stroke");
+    .data(links.length <= EDGE_HOVER_LIMIT ? links : [])
+    .join("line");
   const node = view
     .append("g")
+    .attr("class", "gnodes")
     .selectAll("circle")
     .data(nodes)
     .join("circle")
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .attr("r", (d: any) => d.r)
-    .attr("fill", (d) => typeColor(d.type))
-    .attr("stroke", nodeStroke)
-    .attr("stroke-width", 1.5)
-    .style("cursor", "pointer");
+    // fill stays an attribute: it is per-node dynamic (type palette), set once.
+    .attr("fill", (d) => typeColor(d.type));
   const label = view
     .append("g")
+    .attr("class", "glabels")
     .selectAll("text")
     .data(nodes)
     .join("text")
     .text((d) => graphLabelText(d.label))
-    .attr("font-size", 10.5)
-    .attr("fill", labelFill)
-    .attr("dominant-baseline", "middle")
-    .style("pointer-events", "none")
-    .style("paint-order", "stroke")
-    .style("stroke", nodeStroke)
-    .style("stroke-width", "3px")
     .attr("opacity", 0);
   const edgeTooltip = d3
     .select(el)
@@ -130,6 +156,38 @@ export function mountGraph(
   let selectedId: string | null = null;
   let hoverNodeId: string | null = null;
   let hoverClearTimer: ReturnType<typeof setTimeout> | null = null;
+  // What is currently LIT, so the next paint can put exactly that back. Since no
+  // paint dims the whole graph any more, nothing does a blanket restore, and a
+  // transition that forgets to undo its predecessor leaves visible residue —
+  // a graph stuck half-dimmed, or two neighbourhoods lit at once.
+  //
+  // It is ONE descriptor for every kind of focus (a node's neighbourhood, a
+  // single edge) precisely because two independent reset paths is how that
+  // residue survives: paintEdgeHover used to dim everything and knew nothing
+  // about the node focus, so hovering a node, then an edge, then the SAME node
+  // left the dim painted with no code left to remove it.
+  //
+  // `touching` is a predicate rather than a set so an edge focus can say "this
+  // exact pair" and a node focus "anything incident to this id" without either
+  // list being materialised.
+  // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+  type Lit = { nodes: Set<string>; touching: (l: any) => boolean };
+  let lit: Lit | null = null;
+
+  // Pure membership removal. There is deliberately NO restore logic here: the
+  // base look — including a search match's ring — is the stylesheet's, so
+  // removing the classes IS the restore. The bug family this file kept
+  // re-fixing (clearing to the wrong base, erasing search rings mid-sweep)
+  // existed because attribute writes are absolute and the clearer had to know
+  // what the base was. Classes compose; the clearer no longer knows anything.
+  function clearLit() {
+    if (!lit) return;
+    const was = lit;
+    lit = null;
+    node.filter((n) => was.nodes.has(n.id)).classed("lit hovered", false);
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    link.filter((l: any) => was.touching(l)).classed("lit exact", false);
+  }
 
   // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
   function endpointId(value: any): string {
@@ -168,6 +226,46 @@ export function mountGraph(
     hoverClearTimer = null;
   }
 
+  // The dim is back, but as ONE class on the svg root — CSS dims every element,
+  // and the lit neighbourhood opts out via `.lit` (see globals.css). What was
+  // removed before was never the look; it was writing opacity onto 2400
+  // elements per pointermove. A class flip is one write; the browser's style
+  // pass does the rest.
+  //
+  // Engaged on DWELL, not on entry: dimming repaints every pixel of the layer,
+  // and doing that for every node a sweeping pointer crosses is exactly the
+  // per-frame full-raster this file spent a week removing. Rings light
+  // instantly while sweeping; resting on a node for DIM_DWELL_MS fades the rest
+  // of the graph back. Once engaged, moving between nodes keeps it engaged —
+  // the dwell gates entry, not continuation. A click dims immediately:
+  // selection is deliberate.
+  const DIM_DWELL_MS = 150;
+  let dimTimer: ReturnType<typeof setTimeout> | null = null;
+  let dimOn = false;
+
+  function cancelDimTimer() {
+    if (!dimTimer) return;
+    clearTimeout(dimTimer);
+    dimTimer = null;
+  }
+  function dimNow() {
+    cancelDimTimer();
+    if (dimOn) return;
+    dimOn = true;
+    svg.classed("graph-dimmed", true);
+  }
+  function armDim() {
+    if (dimOn) return; // already engaged — a move between nodes keeps it
+    cancelDimTimer();
+    dimTimer = setTimeout(dimNow, DIM_DWELL_MS);
+  }
+  function undim() {
+    cancelDimTimer();
+    if (!dimOn) return;
+    dimOn = false;
+    svg.classed("graph-dimmed", false);
+  }
+
   // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
   function edgeTouchesNode(l: any, id: string): boolean {
     const [source, target] = linkEndpointIds(l);
@@ -176,6 +274,8 @@ export function mountGraph(
 
   function clearHoverNow() {
     clearHoverTimer();
+    cancelHoverPaint(); // a queued frame would repaint the focus we are clearing
+    undim(); // applyState below re-dims immediately if a selection is active
     hoverNodeId = null;
     hover = null;
     hideEdgeTooltip();
@@ -185,6 +285,31 @@ export function mountGraph(
   function clearHoverSoon() {
     clearHoverTimer();
     hoverClearTimer = setTimeout(clearHoverNow, 110);
+  }
+
+  // ponytail: a hover repaint costs what it costs; what was unbounded is how
+  // OFTEN one was asked for. pointermove arrives about every 8ms, every node the
+  // pointer crosses asked for a full repaint, and a repaint that dims 690 nodes
+  // and 1729 edges does not finish in 8ms — so sweeping the pointer across the
+  // graph queued work faster than it could ever drain, and the lag was the
+  // backlog rather than any single paint. Coalescing to one paint per animation
+  // frame caps the rate at the display's, which is the most repaints that can
+  // ever be seen. hoverNodeId is still assigned SYNCHRONOUSLY, so the
+  // same-node early return and the pointerout ownership check keep working off
+  // the real pointer position rather than a frame-old copy.
+  let hoverFrame = 0;
+  function paintHoverSoon() {
+    if (hoverFrame) return;
+    hoverFrame = requestAnimationFrame(() => {
+      hoverFrame = 0;
+      if (selectedId || !hoverNodeId) return;
+      paintNodeHover(hoverNodeId);
+    });
+  }
+  function cancelHoverPaint() {
+    if (!hoverFrame) return;
+    cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
   }
 
   function labelPlacements(d: (typeof nodes)[number]): LabelPlacement[] {
@@ -229,77 +354,141 @@ export function mountGraph(
     ];
   }
 
+  // Which labels the last collision pass chose to show, and where. Kept so the
+  // cheap per-frame pass can move them without redeciding.
+  let labelVisible = new Set<string>();
+  // ...and WHICH of the eight candidate placements each one won. positionLabels
+  // used to re-derive candidate 0 for everybody, so the first tick of a drag
+  // snapped every label that had settled on candidate 3 back to candidate 0 —
+  // grabbing any node made all visible labels jump at once.
+  let labelChoice = new Map<string, number>();
+
+  // O(n), no collision tests: every visible label follows its node at the
+  // placement the last collision pass chose for it. This is what runs on a tick.
+  function positionLabels() {
+    // One labelPlacements call per VISIBLE node — it allocates eight boxes, and
+    // reading it from inside four .attr() callbacks called it four times per node.
+    const at = new Map<string, LabelPlacement>();
+    for (const n of nodes) {
+      if (!labelVisible.has(n.id)) continue;
+      const options = labelPlacements(n);
+      at.set(n.id, options[labelChoice.get(n.id) ?? 0] ?? options[0]);
+    }
+    paintLabels(at);
+  }
+
+  // ponytail: writes only what changed, and it is the single writer of
+  // labelVisible. Geometry goes to the SHOWN labels only — an x or y write on a
+  // <text> reflows its glyphs, and at rest 626 of 696 labels are hidden while a
+  // hover shows about five. Opacity goes only where visibility actually flipped,
+  // so a label that was hidden and stays hidden is not touched at all.
+  //
+  // Measured on this graph at 696 nodes: writing all four attributes to every
+  // label cost 4.5ms of a hover's 6.9ms, and pointermove arrives about every
+  // 8ms, so sweeping the pointer across the graph could never keep up.
+  function paintLabels(at: Map<string, LabelPlacement>) {
+    const hide = labelsToHide(labelVisible, at);
+    labelVisible = new Set(at.keys());
+    label
+      .filter((d) => at.has(d.id))
+      .attr("opacity", 1)
+      .attr("x", (d) => at.get(d.id)?.x ?? 0)
+      .attr("y", (d) => at.get(d.id)?.y ?? 0)
+      .attr("text-anchor", (d) => at.get(d.id)?.anchor ?? "middle");
+    label.filter((d) => hide.has(d.id)).attr("opacity", 0);
+  }
+
+  // ponytail: O(n²) in overlap tests — at ~1000 nodes this is ~470k rect tests
+  // plus ~40k allocations, which is why it must never run on a tick. Verified in
+  // the browser at 973 nodes / 2205 edges: per-tick, frames exceeded 300ms and
+  // the renderer stopped answering at all. It runs on settle and on interaction
+  // (hover, select, highlight) — the moments the placement can actually change —
+  // and positionLabels() carries the labels in between. Upgrade path if a brain
+  // gets far larger: a grid index instead of the linear `boxes` scan.
   function layoutLabels() {
     const selectedFocus = selectedId ? (adj[selectedId] ?? new Set([selectedId])) : null;
     const focus = hover ?? selectedFocus ?? active;
     const minDegree = focus ? 1 : nodes.length > 64 ? 3 : nodes.length > 40 ? 2 : 1;
     const boxes: LabelBox[] = [];
     const placements = new Map<string, LabelPlacement>();
-    const visible = new Set<string>();
     const candidates = [...nodes]
       .filter((n) => (focus ? focus.has(n.id) : (deg[n.id] ?? 0) >= minDegree))
       .sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0));
 
+    const choices = new Map<string, number>();
     for (const candidate of candidates) {
-      const box = labelPlacements(candidate).find((placement) =>
+      const options = labelPlacements(candidate);
+      const idx = options.findIndex((placement) =>
         boxes.every((existing) => !labelBoxesOverlap(placement, existing, focus ? 0.5 : 2)),
       );
-      if (!box) continue;
-      boxes.push(box);
-      placements.set(candidate.id, box);
-      visible.add(candidate.id);
+      if (idx < 0) continue;
+      boxes.push(options[idx]);
+      placements.set(candidate.id, options[idx]);
+      choices.set(candidate.id, idx);
     }
-
-    label
-      .attr("x", (d) => (placements.get(d.id) ?? labelPlacements(d)[0]).x)
-      .attr("y", (d) => (placements.get(d.id) ?? labelPlacements(d)[0]).y)
-      .attr("text-anchor", (d) => (placements.get(d.id) ?? labelPlacements(d)[0]).anchor)
-      .attr("opacity", (d) => (visible.has(d.id) ? 1 : 0));
+    labelChoice = choices;
+    // paintLabels owns labelVisible and derives it from these keys — tracking a
+    // second `visible` set here would give that state two writers.
+    paintLabels(placements);
   }
 
-  function paintDefault() {
-    node.attr("opacity", 1).attr("stroke", nodeStroke).attr("stroke-width", 1.5);
-    link.attr("opacity", 1).attr("stroke", linkColor).attr("stroke-width", 1);
-    layoutLabels();
-  }
-  function paintHighlight() {
-    const M = active ?? new Set<string>();
-    node
-      .attr("opacity", (d) => (M.has(d.id) ? 1 : 0.1))
-      .attr("stroke", (d) => (M.has(d.id) ? labelFill : nodeStroke))
-      .attr("stroke-width", (d) => (M.has(d.id) ? 2 : 1.5));
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-      .attr("opacity", (l: any) => (M.has(l.source.id) && M.has(l.target.id) ? 0.9 : 0.04))
-      .attr("stroke", linkColor)
-      .attr("stroke-width", 1);
+  // The one non-selected reset. `.match` is deliberately NOT touched here —
+  // highlight() below is its single writer, so the search rings hold across
+  // every route, including selection. (They didn't: paintNodeFocus never wrote
+  // .match and applyState routes to it whenever a node is selected, so
+  // search -> click a node -> clear the search left the rings painted with no
+  // writer left to remove them — the residue family the class model exists to
+  // kill, reintroduced by having two reset paints that each knew half the
+  // state. Now there is one.)
+  function paintBase() {
+    lit = null; // the membership resets below cover whatever was lit
+    undim(); // search marks its matches; it does not dim (asked for explicitly)
+    svg.classed("gsel", false);
+    node.classed("lit hovered", false);
+    link.classed("lit exact", false);
     layoutLabels();
   }
   function applyState() {
     if (selectedId) paintSelectedNode(selectedId);
-    else if (active) paintHighlight();
-    else paintDefault();
+    else paintBase();
   }
 
+  // The last full-graph repaint, and the one that was actually being felt. To
+  // point at a neighbourhood of a few dozen elements it pushed ~680 nodes to
+  // opacity 0.12 and ~1700 edges to 0.05 — every element in the picture changed
+  // on every pointer move, so the browser re-rendered the whole SVG layer each
+  // time. Now the neighbourhood LIGHTS UP and nothing else is touched: writes
+  // drop from ~7300 to roughly twice the hovered node's degree.
+  //
+  // Which means the previous focus has to be put back by hand — clearLit() above
+  // is the single place that does it, and it runs BEFORE the new light, so a node
+  // in both neighbourhoods ends up lit rather than reset.
+  //
+  // The hovered node gains a ring it did not have before (2.2, against 2.4 for a
+  // selected one). Losing the dim costs contrast, and the ring plus the tinted
+  // incident edges plus the labels have to carry the emphasis alone.
   function paintNodeFocus(id: string, selected: boolean) {
     const A = adj[id] ?? new Set([id]);
     const nodeColor = typeColor(nodeById.get(id)?.type ?? "");
+    clearLit();
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    lit = { nodes: A, touching: (l: any) => edgeTouchesNode(l, id) };
+    // One property write carries the tint to every incident edge via CSS;
+    // .gsel on the root is what widens the hovered ring and edges when the
+    // focus is a selection rather than a hover.
+    svg.style("--focus-tint", nodeColor).classed("gsel", selected);
     node
-      .attr("opacity", (n) => (A.has(n.id) ? 1 : 0.12))
-      .attr("stroke", (n) => (selected && n.id === id ? labelFill : nodeStroke))
-      .attr("stroke-width", (n) => (selected && n.id === id ? 2.4 : 1.5));
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("opacity", (l: any) => (edgeTouchesNode(l, id) ? 0.9 : 0.05))
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke", (l: any) => (edgeTouchesNode(l, id) ? nodeColor : linkColor))
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke-width", (l: any) => (edgeTouchesNode(l, id) ? (selected ? 1.9 : 1.6) : 1));
+      .filter((n) => A.has(n.id))
+      .classed("lit", true)
+      .classed("hovered", (n) => n.id === id);
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    link.filter((l: any) => edgeTouchesNode(l, id)).classed("lit", true);
     layoutLabels();
   }
 
   function paintNodeHover(id: string) {
     hover = adj[id] ?? new Set([id]);
+    armDim();
     paintNodeFocus(id, false);
   }
 
@@ -307,6 +496,7 @@ export function mountGraph(
     hover = null;
     hoverNodeId = null;
     hideEdgeTooltip();
+    dimNow(); // a click is deliberate — no dwell
     paintNodeFocus(id, true);
   }
 
@@ -315,27 +505,49 @@ export function mountGraph(
     const [source, target] = linkEndpointIds(l);
     const ids = new Set([source, target]);
     hover = ids;
-    node.attr("opacity", (n) => (ids.has(n.id) ? 1 : 0.12));
-    link
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("opacity", (edge: any) => {
-        const [edgeSource, edgeTarget] = linkEndpointIds(edge);
-        return edgeSource === source && edgeTarget === target ? 1 : 0.05;
-      })
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke", (edge: any) => {
-        const [edgeSource, edgeTarget] = linkEndpointIds(edge);
-        return edgeSource === source && edgeTarget === target ? labelFill : linkColor;
-      })
-      // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-      .attr("stroke-width", (edge: any) => {
-        const [edgeSource, edgeTarget] = linkEndpointIds(edge);
-        return edgeSource === source && edgeTarget === target ? 1.8 : 1;
-      });
+    // The match stays DIRECTED and exact-pair, as it was: a reciprocal B->A edge
+    // is a different edge and is not lit, and every parallel duplicate A->B is.
+    // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
+    const isThisEdge = (edge: any) => {
+      const [a, b] = linkEndpointIds(edge);
+      return a === source && b === target;
+    };
+    clearLit();
+    lit = { nodes: ids, touching: isThisEdge };
+    // `.exact` overrides the tint: an edge picked directly is marked in ink,
+    // not in either endpoint's colour. `.hovered` gives the endpoints rings.
+    node.filter((n) => ids.has(n.id)).classed("lit hovered", true);
+    link.filter(isThisEdge).classed("lit exact", true);
     layoutLabels();
   }
 
-  let tickCount = 0;
+  // Write every moving coordinate into the DOM. Called per tick only while the
+  // simulation is actually running — which, after the headless settle below, is
+  // only during a drag.
+  function drawFrame() {
+    link
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x1", (d: any) => d.source.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y1", (d: any) => d.source.y)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x2", (d: any) => d.target.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y2", (d: any) => d.target.y);
+    linkHit
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x1", (d: any) => d.source.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y1", (d: any) => d.source.y)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("x2", (d: any) => d.target.x)
+      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+      .attr("y2", (d: any) => d.target.y);
+    // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+    node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
+    positionLabels();
+  }
+
   const sim = d3
     .forceSimulation(nodes)
     .force(
@@ -360,30 +572,11 @@ export function mountGraph(
         // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
         .radius((d: any) => d.r + 13),
     )
-    .on("tick", () => {
-      link
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x1", (d: any) => d.source.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y1", (d: any) => d.source.y)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x2", (d: any) => d.target.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y2", (d: any) => d.target.y);
-      linkHit
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x1", (d: any) => d.source.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y1", (d: any) => d.source.y)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("x2", (d: any) => d.target.x)
-        // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-        .attr("y2", (d: any) => d.target.y);
-      // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-      node.attr("cx", (d: any) => d.x).attr("cy", (d: any) => d.y);
-      layoutLabels();
-      if (++tickCount === 70) fitView(); // frame once the layout has settled
-    });
+    .on("tick", drawFrame)
+    // Once motion stops (a released drag has cooled), re-run the collision pass:
+    // positionLabels carried the labels along at their OLD winning placements,
+    // and the nodes have moved out from under those decisions.
+    .on("end", () => layoutLabels());
 
   node.call(
     d3
@@ -406,26 +599,51 @@ export function mountGraph(
       }),
   );
 
+  // A pointer with a button held down is dragging a node or panning the canvas,
+  // not pointing at things — every node it crosses used to repaint the graph on
+  // top of the simulation the drag itself reheated, which is the worst moment to
+  // add work. Read from the event rather than tracked with a "gesturing" flag on
+  // purpose: a flag that misses its end event (an interrupted zoom transition,
+  // a pointer released off-window) stays stuck and kills hover for good, while
+  // `buttons` cannot get out of sync with the pointer.
+  //
+  // Guarding the two ACQUIRE handlers is not enough, and the asymmetry is the
+  // whole bug: d3-drag listens on the window, so a node the pointer merely
+  // crosses mid-drag still gets its own pointerover AND pointerout from the
+  // browser. Blocking only the pointerover left the pointerout to fire
+  // clearHoverSoon, which 110ms later wiped the focus of the node being DRAGGED
+  // — a node the pointer never left, erased by one it only passed over. So
+  // during a gesture only the node that HOLDS the focus may release it.
+  //
+  // That check is what keeps the focus from sticking, too. A pan while hovering
+  // A does leave A, so A's own pointerout still clears it; freezing hover
+  // wholesale for the gesture would have left A lit with nothing under the
+  // pointer and no event coming to fix it.
+  // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+  const isGesture = (e: any) => Boolean(e?.buttons);
+
   node
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-    .on("pointerover", (_e, d: any) => {
-      if (selectedId) return;
+    .on("pointerover", (e: any, d: any) => {
+      if (selectedId || isGesture(e)) return;
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
-      paintNodeHover(d.id);
+      paintHoverSoon();
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
-    .on("pointermove", (_e, d: any) => {
-      if (selectedId) return;
+    .on("pointermove", (e: any, d: any) => {
+      if (selectedId || isGesture(e)) return;
       if (hoverNodeId === d.id) return;
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
-      paintNodeHover(d.id);
+      paintHoverSoon();
     })
-    .on("pointerout", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
+    .on("pointerout", (e: any, d: any) => {
       if (selectedId) return;
+      if (isGesture(e) && hoverNodeId !== d.id) return; // a crossed node, not the held one
       clearHoverSoon();
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
@@ -440,6 +658,7 @@ export function mountGraph(
   linkHit
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointerover", (event, l: any) => {
+      if (isGesture(event)) return; // panning across edges is not pointing at them
       clearHoverTimer();
       if (selectedId) {
         applyState();
@@ -447,7 +666,7 @@ export function mountGraph(
       }
       if (hoverNodeId && edgeTouchesNode(l, hoverNodeId)) {
         hideEdgeTooltip();
-        paintNodeHover(hoverNodeId);
+        paintHoverSoon();
       } else {
         hoverNodeId = null;
         paintEdgeHover(l);
@@ -456,6 +675,7 @@ export function mountGraph(
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointermove", (event, l: any) => {
+      if (isGesture(event)) return;
       if (selectedId) {
         hideEdgeTooltip();
         return;
@@ -467,9 +687,13 @@ export function mountGraph(
       moveEdgeTooltip(event, l);
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
-    .on("pointerout", (_event, l: any) => {
+    .on("pointerout", (_event: any, l: any) => {
       hideEdgeTooltip();
       if (selectedId) return;
+      // An edge crossed mid-gesture takes the `clearHoverNow` branch below, which
+      // has no 110ms coalescing at all — it would wipe the dragged node's focus
+      // instantly. The tooltip is still hidden above, which is right.
+      if (isGesture(_event)) return;
       if (hoverNodeId && edgeTouchesNode(l, hoverNodeId)) {
         clearHoverSoon();
         return;
@@ -504,7 +728,7 @@ export function mountGraph(
     svg.transition("zoom").duration(140).ease(d3.easeCubicOut).call(zoom.scaleBy, factor, p);
   });
 
-  function fitView() {
+  function fitView(animate = true) {
     if (!nodes.length) return;
     // biome-ignore lint/suspicious/noExplicitAny: d3 node datum
     const ns = nodes as any[];
@@ -518,12 +742,20 @@ export function mountGraph(
     const scale = Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 1.5);
     const tx = W / 2 - (scale * (minX + maxX)) / 2;
     const ty = H / 2 - (scale * (minY + maxY)) / 2;
-    svg
-      .transition()
-      .duration(450)
-      .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+    const t = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    // The initial framing is instant. Animating it re-renders the whole graph
+    // for 450ms immediately after mount, which is the jank the headless settle
+    // below exists to remove — a double-click fit still animates.
+    if (!animate) svg.call(zoom.transform, t);
+    else svg.transition().duration(450).call(zoom.transform, t);
   }
-  svg.on("dblclick", () => fitView());
+  svg.on("dblclick", (event: MouseEvent) => {
+    // Double-clicking a NODE is two selection clicks, and flinging the viewport
+    // to whole-graph fit mid-inspection discards where the user was. Fit stays
+    // the double-click meaning for empty space only.
+    if ((event.target as Element)?.closest?.("circle")) return;
+    fitView();
+  });
 
   function zoomBy(scale: number) {
     svg.transition().duration(180).call(zoom.scaleBy, scale);
@@ -532,6 +764,46 @@ export function mountGraph(
   function resetZoom() {
     svg.transition().duration(180).call(zoom.transform, d3.zoomIdentity);
   }
+
+  // ponytail: settle the layout HEADLESSLY, then draw it once. `sim.tick(n)`
+  // decays alpha per iteration and does NOT dispatch the tick event
+  // (d3-force/src/simulation.js:38-59), so the entire settle costs force
+  // computation and nothing else — no attribute writes, no rasterisation, no
+  // frames. The animated settle it replaces was ~300 frames each writing 8324
+  // coordinates and re-rendering 2400 vector elements, and hovering DURING it
+  // stacked a full-graph focus repaint onto that same frame budget, which is
+  // the worst case anyone reported. There is no longer a window to hover in:
+  // the graph is laid out before it is first drawn.
+  //
+  // Bounded by TIME, not by tick count, and the ceiling is the point. 300 ticks
+  // is where alphaDecay (1 - 0.001^(1/300)) stops on its own, but a tick here
+  // measured ~2.6ms at 696 nodes / 1733 edges, so insisting on all 300 would
+  // trade the settle animation for a ~780ms frozen main thread — a worse bug
+  // than the one being fixed. So it settles as far as it can inside the budget
+  // and draws whatever it reached: a not-quite-relaxed static layout is fine,
+  // and the alternative (finish the rest animated) would put back the exact
+  // window this removes. Ticks run in batches of 10 with the budget checked
+  // BETWEEN batches, so the worst case is the budget plus one final batch
+  // (~26ms) — bounded, not exact.
+  // 400ms because a block DURING MOUNT is not the same defect as a block during
+  // interaction: there is nothing on screen yet, so nobody can be interrupted by
+  // it — it reads as the page taking slightly longer to load, on a page that
+  // already waits on /api/graph. A tighter budget (150ms) bought only ~57 of the
+  // 300 ticks at the measured ~2.6ms each, which draws a layout that never
+  // finished spreading out. The ceiling is the point: a far bigger graph stops
+  // early and looks under-relaxed rather than freezing for seconds.
+  const SETTLE_TICKS = 300;
+  const SETTLE_BUDGET_MS = 400;
+  sim.stop(); // forceSimulation starts its timer on construction
+  const settleStart = performance.now();
+  let settled = 0;
+  while (settled < SETTLE_TICKS && performance.now() - settleStart < SETTLE_BUDGET_MS) {
+    sim.tick(10);
+    settled += 10;
+  }
+  drawFrame();
+  layoutLabels();
+  fitView(false);
 
   // Keep the graph sized to its container (window resize, panel changes) instead of
   // freezing at mount-time dimensions.
@@ -547,8 +819,13 @@ export function mountGraph(
     (sim.force("x") as any).x(W / 2);
     // biome-ignore lint/suspicious/noExplicitAny: d3 force accessor typing
     (sim.force("y") as any).y(H / 2);
-    sim.alpha(0.3).restart();
-    fitView();
+    // A resize changes the CANVAS, not the graph: re-settling shuffled node
+    // positions and fitView(false) threw away the user's zoom/pan on every
+    // notification — dragging a panel divider erased the frame someone had
+    // navigated to. The forces above are updated so a FUTURE drag pulls toward
+    // the new centre; the layout and the transform are left exactly where the
+    // user had them. Labels re-decide once because side preference reads W.
+    layoutLabels();
   });
   ro.observe(el);
 
@@ -557,6 +834,8 @@ export function mountGraph(
       ro.disconnect();
       sim.stop();
       clearHoverTimer();
+      cancelHoverPaint();
+      cancelDimTimer();
       edgeTooltip.remove();
       svg.remove();
     },
@@ -564,7 +843,19 @@ export function mountGraph(
       fitView();
     },
     highlight(ids: Set<string> | null) {
+      // The console calls this once per keystroke (title matches) and again when
+      // the debounced content search lands — usually with the SAME set, since
+      // title matches dominate. An unchanged set repainted every ring and re-ran
+      // the label collision pass for nothing, twice per pause.
+      if (ids && active && ids.size === active.size && [...ids].every((id) => active?.has(id)))
+        return;
+      if (!ids && !active) return;
       active = ids;
+      // THE single writer of `.match`. Reconciled here, not in a route paint,
+      // so the rings appear and disappear with the search whatever else is
+      // going on — hover, selection, or nothing.
+      const M = active ?? new Set<string>();
+      node.classed("match", (d) => M.has(d.id));
       if (!hover) applyState();
       else layoutLabels();
     },

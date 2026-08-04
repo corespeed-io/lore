@@ -7,7 +7,7 @@ import { initSchema } from "../src/server/db.js";
 import { rowToMemory } from "../src/server/memory/items.js";
 import { renderProjection } from "../src/server/memory/projection.js";
 import type { EmbedFn } from "../src/server/pipeline.js";
-import { chunkBody, extractRefs, normalizeRef } from "../src/server/pipeline.js";
+import { chunkBody, embedInput, extractRefs, normalizeRef } from "../src/server/pipeline.js";
 import type { Store } from "../src/server/store.js";
 import { createStore, normalizePageSlug } from "../src/server/store.js";
 import { refAddress } from "../src/server/vault.js";
@@ -62,12 +62,50 @@ afterAll(async () => {
   await pg.close();
 });
 
-test("chunkBody splits on paragraphs and hard-splits oversized ones", () => {
+test("chunkBody keeps a fence whole, and never cuts inside one", () => {
+  const fence = `\`\`\`ts\n${"const x = 1;\n".repeat(400)}\`\`\``;
+  const chunks = chunkBody(`# Title\n\nsome prose\n\n${fence}\n\nmore prose`);
+  const code = chunks.filter((c) => c.source === "code");
+  // ONE chunk for the fence however long it is. Half a code block embeds as
+  // noise and reads as garbage; measured on a real PR, the old splitter cut
+  // two fences of five chunks in half.
+  expect(code).toHaveLength(1);
+  expect(code[0].text.startsWith("```ts")).toBe(true);
+  expect(code[0].text.endsWith("```")).toBe(true);
+  // No prose chunk may contain an unbalanced fence marker.
+  for (const c of chunks.filter((c) => c.source === "prose")) {
+    expect((c.text.match(/\`\`\`/g) ?? []).length % 2).toBe(0);
+  }
+});
+
+test("a chunk carries its heading trail as context, and the text stays clean", () => {
+  const body = `# Design\n\n## Storage\n\n${"detail. ".repeat(400)}`;
+  const chunks = chunkBody(body);
+  const prose = chunks.filter((c) => c.source === "prose");
+  expect(prose.length).toBeGreaterThan(1);
+  // Context is carried BESIDE the text, never inside it: chunks.text feeds the
+  // trigram arm, FTS and every search snippet, so baking the trail into it
+  // pollutes three readers to help one.
+  expect(prose.at(-1)?.context).toContain("Storage");
+  for (const c of prose) expect(c.text).not.toContain("›");
+});
+
+test("embedInput wraps prose with its context and leaves code alone", () => {
+  expect(embedInput({ text: "body", context: "A › B", source: "prose" })).toBe(
+    "<context>\nA › B\n</context>\nbody",
+  );
+  // gbrain's D20-T4: a markdown heading in front of a code block does not help
+  // cross-modal retrieval and spends embedding tokens to do it.
+  expect(embedInput({ text: "code", context: "A › B", source: "code" })).toBe("code");
+  expect(embedInput({ text: "body", context: "", source: "prose" })).toBe("body");
+});
+
+test("chunkBody splits long prose without cutting mid-word", () => {
   expect(chunkBody("")).toEqual([]);
-  expect(chunkBody("one para")).toEqual(["one para"]);
-  const chunks = chunkBody(`${"a".repeat(1000)}\n\n${"b".repeat(1000)}`);
-  expect(chunks.length).toBe(2);
-  expect(chunkBody("x".repeat(5000)).length).toBeGreaterThan(1);
+  expect(chunkBody("one para").map((c) => c.text)).toEqual(["one para"]);
+  const chunks = chunkBody("word ".repeat(2000));
+  expect(chunks.length).toBeGreaterThan(1);
+  for (const c of chunks.slice(0, -1)) expect(c.text.endsWith("word")).toBe(true);
 });
 
 test("extractRefs handles targets, sections, aliases, and skips fences", () => {
@@ -1639,4 +1677,62 @@ test("no prefix configured leaves a query untouched", async () => {
     globalThis.fetch = orig;
   }
   expect(seen[0]).toEqual(["q"]);
+});
+
+// The reviewer's round-1 P1-2, pinned from the threat side: putPage embeds
+// BEFORE its transaction and makeEmbedFn throws on non-2xx, so ONE chunk larger
+// than the embedding model's context makes a page unwritable through every
+// door. The threat is the chunk SIZE, so the pin is a bound on every chunk.
+test("no fence, however huge, may produce a chunk the embedder cannot take", () => {
+  const fence = `\`\`\`ts\n${"const x = 1; // padding to make each line meaningfully long\n".repeat(1400)}\`\`\``;
+  expect(fence.length).toBeGreaterThan(70_000); // the measured real-world case was 78 KB
+  const chunks = chunkBody(`# Title\n\nsome prose\n\n${fence}\n\nmore prose`);
+  for (const c of chunks) expect(c.text.length).toBeLessThanOrEqual(8_000);
+  // ...and the pieces are still code, never mixed into the prose stream.
+  const code = chunks.filter((c) => c.source === "code");
+  expect(code.length).toBeGreaterThan(5);
+  expect(code[0].text.startsWith("```ts")).toBe(true);
+});
+
+test("an unterminated fence does not swallow the document tail as one code chunk", () => {
+  const tail = "tail prose. ".repeat(3000); // 36 KB after the stray marker
+  const body = `# Doc\n\n## Section\n\nintro\n\n\`\`\`\n${tail}`;
+  const chunks = chunkBody(body);
+  for (const c of chunks) expect(c.text.length).toBeLessThanOrEqual(8_000);
+  // An unmatched marker is not a fence: the tail keeps its heading context
+  // and the prose rules, instead of becoming context-less "code".
+  const last = chunks.at(-1);
+  expect(last?.source).toBe("prose");
+  expect(last?.context).toContain("Section");
+});
+
+// list_pages pages with LIMIT/OFFSET; without a unique tiebreaker, rows sharing
+// an updated_at (a batch import stamps hundreds identically) may duplicate or
+// vanish across a page boundary. A duplicate is a React key collision in the
+// browse list; a DROP is a page whose title never reaches the graph — the exact
+// bare-slug-label bug the paging was added to fix.
+test("list_pages paging is stable when updated_at ties span the page boundary", async () => {
+  const stamp = "2020-01-01T00:00:00Z"; // older than everything the suite writes
+  for (let i = 0; i < 7; i++) {
+    await store.putPage({ slug: `tie/p${i}`, title: `Tie ${i}`, body: `tie body ${i}` });
+  }
+  await pg.query(`UPDATE pages SET updated_at = '${stamp}' WHERE slug LIKE 'tie/%'`);
+  const seen: string[] = [];
+  // Page through the WHOLE store with a limit that puts a boundary inside the
+  // tied group (they sort last, being oldest — everything before them is the
+  // rest of this suite's writes, which is the realistic shape).
+  for (let off = 0; ; off += 3) {
+    const batch = await store.listPages({ limit: 3, offset: off });
+    if (!batch.length) break;
+    seen.push(...batch.map((p) => p.slug));
+  }
+  const ties = seen.filter((s) => s.startsWith("tie/"));
+  expect(ties).toHaveLength(7); // no drops
+  expect(new Set(ties).size).toBe(7); // no duplicates
+  // The order INSIDE the tied group must be deterministic, not whatever the
+  // planner's scan happens to produce — that determinism is the whole fix, and
+  // it is what makes the paging boundary safe on a real server where a seq
+  // scan and an index scan disagree. (PGlite's heap order is stable enough
+  // that drop/duplicate assertions alone cannot go red here.)
+  expect(ties).toEqual([6, 5, 4, 3, 2, 1, 0].map((i) => `tie/p${i}`));
 });

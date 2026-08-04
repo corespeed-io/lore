@@ -35,6 +35,18 @@ function countByType(items: Array<{ type?: string }>) {
   return counts;
 }
 
+// Module-level, on purpose: the keyed view container remounts Overview on every
+// visit to the tab, and refetching from zero made Sources / Recent Activity
+// render EMPTY and pop in a second later — four brain calls and a flicker per
+// tab switch, for data that rarely changes within a session. The last answer is
+// painted immediately; the refresh still runs behind it and repaints on change.
+let sourcesCache: SourceInfo[] = [];
+let salientCache: SalientPage[] = [];
+// Stamped at REQUEST time, not resolve time, so StrictMode's double-invoked
+// dev effect (and any two rapid visits) cannot both slip past the check.
+let dashFetchedAt = 0;
+const DASH_TTL_MS = 60_000;
+
 export function Overview({
   appTitle,
   appSubtitle,
@@ -47,24 +59,33 @@ export function Overview({
 }: OverviewProps) {
   const byCounts = countByType(allPages.length ? allPages : graphData.nodes);
   const linksUnknown = Boolean(graphError) && graphData.links.length === 0;
-  const [sources, setSources] = useState<SourceInfo[]>([]);
-  const [salient, setSalient] = useState<SalientPage[]>([]);
+  const [sources, setSources] = useState<SourceInfo[]>(sourcesCache);
+  const [salient, setSalient] = useState<SalientPage[]>(salientCache);
   const visibleSlugs = new Set(allPages.map((p) => p.slug));
   const recentItems = (
     visibleSlugs.size ? salient.filter((p) => visibleSlugs.has(p.slug)) : salient
   ).slice(0, 5);
 
   useEffect(() => {
+    if (Date.now() - dashFetchedAt < DASH_TTL_MS) return;
+    dashFetchedAt = Date.now();
+    // (Unlike GraphHealth there is no live-flag early return here — both
+    // .then handlers always write their cache — so request-time stamping
+    // cannot strand an empty cache behind the TTL.)
     apiCall("sources_list")
       .then((d) => {
         const list = ((d as { sources?: SourceInfo[] })?.sources ?? []).filter(
           (s) => s.page_count > 0,
         );
-        setSources(list.sort((a, b) => b.page_count - a.page_count));
+        sourcesCache = list.sort((a, b) => b.page_count - a.page_count);
+        setSources(sourcesCache);
       })
       .catch(() => {});
     apiCall("get_recent_salience", { days: 30, limit: 10 })
-      .then((d) => setSalient(Array.isArray(d) ? (d as SalientPage[]) : []))
+      .then((d) => {
+        salientCache = Array.isArray(d) ? (d as SalientPage[]) : [];
+        setSalient(salientCache);
+      })
       .catch(() => {});
   }, []);
 

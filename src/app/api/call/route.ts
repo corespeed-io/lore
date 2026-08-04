@@ -1,20 +1,10 @@
 import { ToolNotAllowedError, callTool } from "@/lib/tools";
+import { clampArgs } from "@/server/mcp";
 import { NextResponse } from "next/server";
 
-const MAX = 200;
-const BOUNDED = ["limit", "depth", "max", "top_k", "k"];
-
-// The allowlist gates the tool *name*; args are caller-controlled. Clamp the
-// common unbounded knobs so a client can't ask the brain for a million rows.
-function clampArgs(args: unknown): Record<string, unknown> {
-  if (typeof args !== "object" || args === null) return {};
-  const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
-  for (const k of BOUNDED) {
-    if (typeof out[k] === "number" && out[k] > MAX) out[k] = MAX;
-  }
-  return out;
-}
-
+// The clamp is imported, not restated. Two copies of "how big may a request be"
+// is how one of them stayed at 200 while the other moved, and list_pages got
+// truncated to 200 rows no matter what the tool allowed.
 export async function POST(req: Request) {
   let body: unknown;
   try {

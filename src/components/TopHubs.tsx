@@ -28,7 +28,7 @@ export function TopHubs({ nodes, links, unavailable, onOpen }: TopHubsProps) {
         </button>
       ))}
       {hubs.length === 0 && (
-        <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>
+        <p className="panel-empty">
           {unavailable
             ? "Link data unavailable — couldn't reach the brain."
             : "No connected nodes yet."}

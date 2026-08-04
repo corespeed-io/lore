@@ -87,7 +87,7 @@ test("GET /api/graph maps a failed build to 502 and a healthy build to 200", asy
     throw new Error("brain down");
   });
   try {
-    const bad = await GET();
+    const bad = await GET(new Request("http://test/api/graph"));
     expect(bad.status).toBe(502);
     expect((await bad.json()).detail).toBe("couldn't reach the brain");
   } finally {
@@ -95,11 +95,22 @@ test("GET /api/graph maps a failed build to 502 and a healthy build to 200", asy
     error.mockRestore();
     clearGraphCache();
   }
-  const ok = await GET();
+  const ok = await GET(new Request("http://test/api/graph"));
   expect(ok.status).toBe(200);
   const body = await ok.json();
   expect(body.nodes).toEqual([]);
   expect(body.links).toEqual([]);
+
+  // The validator round trip. The threat is a silent revert: drop the
+  // If-None-Match check (or the etag header) and everything still works,
+  // except every page load downloads the full ~240 KB body again.
+  const etag = ok.headers.get("etag");
+  expect(etag).toBeTruthy();
+  const revalidated = await GET(
+    new Request("http://test/api/graph", { headers: { "if-none-match": etag as string } }),
+  );
+  expect(revalidated.status).toBe(304);
+  expect(await revalidated.text()).toBe("");
   clearGraphCache();
 });
 
@@ -112,10 +123,12 @@ test("POST /api/call clamps an oversized limit before reaching the brain", async
       body: JSON.stringify({ tool: "list_pages", args: { limit: 1_000_000 } }),
     }),
   );
-  // MAX is 200 — hand-known from the route, not computed by the code under test.
+  // 1000 — hand-known, not computed by the code under test. The route imports
+  // the one clamp now rather than carrying its own copy of the number, which is
+  // how the two drifted: /api/call still said 200 while the tool allowed more.
   // biome-ignore lint/suspicious/noExplicitAny: reaching into the vi mock
   const lastArgs = (tools.callTool as any).mock.calls.at(-1)[1];
-  expect(lastArgs.limit).toBe(200);
+  expect(lastArgs.limit).toBe(1000);
 });
 
 test("POST /api/call rejects a missing/non-string tool with 400", async () => {

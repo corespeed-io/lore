@@ -20,11 +20,7 @@ export function Breakdown({ byCounts, onType }: BreakdownProps) {
   return (
     <div className="panel-card">
       <p className="panel-card-title">By type</p>
-      {entries.length === 0 && (
-        <p style={{ color: "var(--muted-soft)", fontSize: "13px", margin: 0 }}>
-          No typed memories.
-        </p>
-      )}
+      {entries.length === 0 && <p className="panel-empty">No typed memories.</p>}
       {entries.map(([key, count]) => (
         <button
           key={key}

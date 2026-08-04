@@ -9,6 +9,7 @@ import { GAZETTEER_PREFIXES, buildGazetteer, findMentions } from "./mentions";
 import {
   type EmbedFn,
   chunkBody,
+  embedInput,
   extractRefs,
   frontmatterAliases,
   normalizeRef,
@@ -210,7 +211,7 @@ export interface Store {
   findOrphans(args: { limit?: number }): Promise<{ slug: string; title: string }[]>;
   brokenLinks(args: { limit?: number }): Promise<{ from_slug: string; ref: string }[]>;
   getPage(args: { slug: string; fuzzy?: boolean }): Promise<Record<string, unknown>>;
-  listPages(args: { limit?: number; kind?: string }): Promise<PageHit[]>;
+  listPages(args: { limit?: number; offset?: number; kind?: string }): Promise<PageHit[]>;
   search(args: { query: string; limit?: number }): Promise<PageHit[]>;
   getBacklinks(args: { slug: string }): Promise<{ slug: string; title: string }[]>;
   traverseGraph(args: {
@@ -628,7 +629,9 @@ export function createStore(db: Db, embed: EmbedFn): Store {
     // compensation machinery. ponytail: couples writes to embeddings-provider
     // uptime; add an indexed_at watermark + re-embed sweep if that ever bites.
     const chunks = chunkBody(args.body);
-    const vectors = await embed(chunks);
+    // The embedding sees the context wrapper; the row does not. See
+    // pipeline.ts embedInput for why that boundary is the whole point.
+    const vectors = await embed(chunks.map(embedInput));
 
     // Normalize declared aliases in place so the alias arm's @> containment
     // check compares like with like.
@@ -652,8 +655,16 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       await q("DELETE FROM chunks WHERE page_id = $1", [pageId]);
       for (let i = 0; i < chunks.length; i++) {
         await q(
-          "INSERT INTO chunks (page_id, seq, text, embedding) VALUES ($1, $2, $3, $4::vector)",
-          [pageId, i, chunks[i], JSON.stringify(vectors[i])],
+          `INSERT INTO chunks (page_id, seq, text, context, source, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6::vector)`,
+          [
+            pageId,
+            i,
+            chunks[i].text,
+            chunks[i].context,
+            chunks[i].source,
+            JSON.stringify(vectors[i]),
+          ],
         );
       }
 
@@ -909,16 +920,23 @@ export function createStore(db: Db, embed: EmbedFn): Store {
       };
     },
 
-    async listPages({ limit, kind }) {
-      const n = Math.min(Math.max(Number(limit) || 100, 1), 200);
+    async listPages({ limit, offset, kind }) {
+      // The 200 cap and the missing offset were gbrain's constraints, inherited
+      // when lore proxied it. This store has neither, and a brain of a few
+      // thousand pages makes the difference visible: the dashboard counted 100
+      // of 3,379 pages, and the graph had real titles for only the first 100 —
+      // every other node fell back to its slug's last segment, so a wall of
+      // pull requests rendered as the bare numbers 388, 216, 44.
+      const n = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+      const off = Math.max(Number(offset) || 0, 0);
       // kind narrows to notes or memories; anything else lists everything, so
       // lore's own unfiltered call is unaffected.
       const only = kind === "memory" || kind === "note" ? kind : null;
       const res = await db.query(
         `SELECT slug, kind, title, frontmatter, updated_at FROM pages
          WHERE deleted_at IS NULL AND ($2::text IS NULL OR kind = $2)
-         ORDER BY updated_at DESC LIMIT $1`,
-        [n, only],
+         ORDER BY updated_at DESC, id DESC LIMIT $1 OFFSET $3`,
+        [n, only, off],
       );
       return res.rows.map((r) => ({
         slug: String(r.slug),
@@ -1224,7 +1242,9 @@ export function createStore(db: Db, embed: EmbedFn): Store {
 
     async clearAutoEdges() {
       const res = await db.query("DELETE FROM edges WHERE lane = 'auto' RETURNING 1");
-      await db.query("UPDATE pages SET mentions_scanned_at = NULL");
+      // Both sweeps' progress resets with their output: "clear undoes every
+      // inference ever made" is only true if the next sweep actually re-runs.
+      await db.query("UPDATE pages SET mentions_scanned_at = NULL, semantic_swept_at = NULL");
       return { removed: res.rows.length };
     },
 
