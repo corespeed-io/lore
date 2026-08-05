@@ -45,6 +45,23 @@ export function labelBoxesOverlap(a: LabelBox, b: LabelBox, pad = 0): boolean {
 // silent 30x write amplification that looks identical on screen. Dropping the
 // second half leaves labels from the PREVIOUS hover on screen — a visual bug,
 // but only for whoever happens to be moving a pointer at the time.
+// Where a post-drag focus hold ends, decided from the first REAL pointer
+// travel after release. Pure and exported for the same reason labelsToHide is:
+// the threat — "during the hold, nothing that MOVES under a stationary pointer
+// may take the focus, and the hold ends only by pointer travel" — has to be
+// testable without a browser. The travel threshold (6px, squared) absorbs
+// release jitter; where the pointer lands decides what happens to the focus:
+// a circle or an edge INCIDENT to the held focus keeps it (the ordinary hover
+// path keeps it there too), anything else clears.
+export type HoldTarget = "circle" | "incident-edge" | "other";
+export function holdVerdict(
+  travelSq: number,
+  target: HoldTarget,
+): "hold" | "release" | "release-clear" {
+  if (travelSq < 36) return "hold";
+  return target === "circle" || target === "incident-edge" ? "release" : "release-clear";
+}
+
 export function labelsToHide(
   wasShown: Iterable<string>,
   shown: { has(id: string): boolean },
@@ -578,6 +595,28 @@ export function mountGraph(
     // and the nodes have moved out from under those decisions.
     .on("end", () => layoutLabels());
 
+  // While a node drag is live, the drag OWNS the focus: the simulation reheats
+  // and the node chases the pointer, so the pointer transiently exits the
+  // circle between frames — its own pointerout used to fire, and 110ms later
+  // the hover (and the dim with it) vanished mid-drag, unrecoverable because
+  // re-entry is gesture-guarded. Grabbing a node is the strongest focus signal
+  // there is; nothing but release may take it away.
+  let draggingNode = false;
+  // ...and RELEASE doesn't take it away either. On release the springs pull
+  // the node out from under the stationary pointer, and Chrome fires a
+  // pointerout for an element that moved — not a pointer that did. The focus
+  // holds after a drag until the POINTER moves: onto another node (focus
+  // follows, normal path) or across empty space (clears). Stored as the
+  // release coordinates; null means no hold.
+  let postDragFrom: { x: number; y: number } | null = null;
+  // THE guard, one expression for every pointer handler on every layer. The
+  // first version guarded only the node layer — but the edge hit layer is a
+  // 14px transparent copy of every edge, repositioned each tick, and its
+  // unguarded handlers let a springing hit line kill or steal the focus after
+  // release. Invisible on this brain: above EDGE_HOVER_LIMIT the hit layer is
+  // an empty join, so only sub-600-edge deployments had the bug.
+  const focusHeld = () => draggingNode || postDragFrom !== null;
+
   node.call(
     d3
       // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
@@ -585,6 +624,16 @@ export function mountGraph(
       .on("start", (e, d) => {
         e.sourceEvent?.stopPropagation?.(); // don't let the pan gesture also fire
         if (!e.active) sim.alphaTarget(0.3).restart(); // reheat → springs on drag
+        draggingNode = true;
+        // Grabbing focuses and dims IMMEDIATELY — like a click, a grab is
+        // deliberate; the dwell exists for sweeps, not for this. Skipped while
+        // a selection is active, mirroring the hover handlers.
+        if (!selectedId) {
+          clearHoverTimer();
+          hoverNodeId = d.id;
+          paintNodeHover(d.id);
+          dimNow();
+        }
         d.fx = d.x;
         d.fy = d.y;
       })
@@ -594,10 +643,58 @@ export function mountGraph(
       })
       .on("end", (e, d) => {
         if (!e.active) sim.alphaTarget(0);
+        draggingNode = false;
+        // Touch end events carry no clientX — no hold there, honestly, rather
+        // than a NaN origin behind a cast that asserts otherwise. And a release
+        // over one of the floating overlays (legend, search, controls, node
+        // preview) arms no hold either: the svg's pointerleave already fired
+        // during the drag and was rightly swallowed, so with the pointer off
+        // the svg nothing could ever end it — the graph stayed dimmed while
+        // the user worked the toolbar.
+        const src = e.sourceEvent as
+          | { clientX?: number; clientY?: number; target?: Node }
+          | undefined;
+        const overSvg = src?.target ? (svg.node()?.contains(src.target) ?? false) : false;
+        postDragFrom =
+          overSvg && src && Number.isFinite(src.clientX) && Number.isFinite(src.clientY)
+            ? { x: src.clientX as number, y: src.clientY as number }
+            : null;
         d.fx = null;
         d.fy = null;
       }),
   );
+
+  // The post-drag hold's release valve: the first REAL pointer travel after a
+  // drag ends the hold, and where it lands decides the focus — holdVerdict is
+  // the (pure, tested) rule. A hit-layer line incident to the held focus
+  // counts as focus-bearing, because the ordinary edge-hover path deliberately
+  // keeps node focus there too.
+  svg.on("pointermove.postdrag", (event: PointerEvent) => {
+    if (!postDragFrom || draggingNode) return;
+    const dx = event.clientX - postDragFrom.x;
+    const dy = event.clientY - postDragFrom.y;
+    const el = event.target as Element | null;
+    let target: HoldTarget = "other";
+    if (el?.closest?.(".gnodes circle")) target = "circle";
+    else {
+      const hit = el?.closest?.(".ghits line");
+      // biome-ignore lint/suspicious/noExplicitAny: D3 binds the datum on the element.
+      const datum = hit ? (hit as any).__data__ : null;
+      if (datum && hoverNodeId && edgeTouchesNode(datum, hoverNodeId)) target = "incident-edge";
+    }
+    const verdict = holdVerdict(dx * dx + dy * dy, target);
+    if (verdict === "hold") return;
+    postDragFrom = null;
+    if (verdict === "release-clear") clearHoverSoon();
+  });
+
+  // Leaving the svg entirely also ends the hold — releasing near the container
+  // edge and exiting used to strand the dim until the pointer came back.
+  svg.on("pointerleave.postdrag", () => {
+    if (!postDragFrom || draggingNode) return;
+    postDragFrom = null;
+    clearHoverSoon();
+  });
 
   // A pointer with a button held down is dragging a node or panning the canvas,
   // not pointing at things — every node it crosses used to repaint the graph on
@@ -626,6 +723,18 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointerover", (e: any, d: any) => {
       if (selectedId || isGesture(e)) return;
+      // The acquire path asks the SAME question as everything else: did the
+      // POINTER travel, or did an element move under it? A circle's pointerover
+      // with no travel is the springs pushing a node (this one, or a
+      // neighbour) back across the stationary pointer — ending the hold there
+      // re-opened the post-release dim death through the last unguarded door,
+      // and contradicted holdVerdict(0, "circle") === "hold" outright.
+      if (postDragFrom) {
+        const dx = e.clientX - postDragFrom.x;
+        const dy = e.clientY - postDragFrom.y;
+        if (holdVerdict(dx * dx + dy * dy, "circle") === "hold") return;
+        postDragFrom = null; // real travel onto a circle: focus follows the pointer
+      }
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
@@ -634,6 +743,14 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointermove", (e: any, d: any) => {
       if (selectedId || isGesture(e)) return;
+      // Same rule as pointerover: sub-threshold "travel" onto an overlapping
+      // neighbour is jitter or element motion, never a focus change.
+      if (postDragFrom) {
+        const dx = e.clientX - postDragFrom.x;
+        const dy = e.clientY - postDragFrom.y;
+        if (holdVerdict(dx * dx + dy * dy, "circle") === "hold") return;
+        postDragFrom = null;
+      }
       if (hoverNodeId === d.id) return;
       clearHoverTimer();
       hideEdgeTooltip();
@@ -643,6 +760,13 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointerout", (e: any, d: any) => {
       if (selectedId) return;
+      // A live node drag owns the focus outright — the dragged node's own
+      // transient pointerouts (the pointer outrunning the node between frames)
+      // must not clear it. After release the HOLD owns it: the node springs
+      // out from under the stationary pointer and Chrome fires pointerout for
+      // an element that moved, not a pointer that did. A PAN keeps the old
+      // rule: leaving the held node really is leaving it.
+      if (draggingNode || postDragFrom) return;
       if (isGesture(e) && hoverNodeId !== d.id) return; // a crossed node, not the held one
       clearHoverSoon();
     })
@@ -655,10 +779,17 @@ export function mountGraph(
       opts.onSelect(d.id);
     });
 
+  // Every handler on this layer starts with focusHeld(): the hit lines are
+  // repositioned each tick, so during a drag — and during the post-release
+  // hold, while the springs are still moving — they sweep under the STATIONARY
+  // pointer and fire enter/leave events for elements that moved. The first
+  // version guarded only the node layer against this, and on any brain small
+  // enough to have a hit layer (<= EDGE_HOVER_LIMIT edges), a springing hit
+  // line killed the dim right after release or stole the focus outright.
   linkHit
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointerover", (event, l: any) => {
-      if (isGesture(event)) return; // panning across edges is not pointing at them
+      if (isGesture(event) || focusHeld()) return; // moving elements don't take focus
       clearHoverTimer();
       if (selectedId) {
         applyState();
@@ -675,7 +806,7 @@ export function mountGraph(
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointermove", (event, l: any) => {
-      if (isGesture(event)) return;
+      if (isGesture(event) || focusHeld()) return;
       if (selectedId) {
         hideEdgeTooltip();
         return;
@@ -692,8 +823,8 @@ export function mountGraph(
       if (selectedId) return;
       // An edge crossed mid-gesture takes the `clearHoverNow` branch below, which
       // has no 110ms coalescing at all — it would wipe the dragged node's focus
-      // instantly. The tooltip is still hidden above, which is right.
-      if (isGesture(_event)) return;
+      // instantly. Same for a hit line springing off the pointer post-release.
+      if (isGesture(_event) || focusHeld()) return;
       if (hoverNodeId && edgeTouchesNode(l, hoverNodeId)) {
         clearHoverSoon();
         return;
@@ -836,6 +967,7 @@ export function mountGraph(
       clearHoverTimer();
       cancelHoverPaint();
       cancelDimTimer();
+      postDragFrom = null;
       edgeTooltip.remove();
       svg.remove();
     },
@@ -863,6 +995,7 @@ export function mountGraph(
     select(id: string | null) {
       selectedId = id;
       clearHoverTimer();
+      postDragFrom = null;
       hover = null;
       hoverNodeId = null;
       applyState();

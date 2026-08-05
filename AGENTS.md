@@ -749,7 +749,12 @@ keep it that way.
   decides every visual, so removing a class IS the restore and there is no
   restore code to get wrong. Geometry (`cx`/`x1`/label positions) stays JS: those
   are attributes, not CSS properties. The hover dim engages on DWELL (150ms),
-  never while sweeping. Don't reintroduce per-element style/attr writes in paint
+  never while sweeping. A GRAB dims immediately and owns the focus through the
+  drag and after release: elements on BOTH pointer layers move under a
+  stationary pointer (the hit layer every tick, nodes whenever the springs
+  push one across it), so no boundary event may take or kill the focus during
+  the hold — only real pointer travel ends it, and `holdVerdict` (pure,
+  tested) is the one rule every handler consults. Don't reintroduce per-element style/attr writes in paint
   paths, and don't add a second reset path beside `clearLit()`.
 - Components: `Sidebar` (nav + omnibox), `Overview` (dashboard), `ActivityChart`
   (per-day activity **bars**, hand-rolled SVG, pure `dailyCounts()`), `Breakdown`,

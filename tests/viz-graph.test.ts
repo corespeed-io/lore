@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { degrees, graphLabelText, labelBoxesOverlap, labelsToHide } from "../src/lib/viz/graph.js";
+import {
+  degrees,
+  graphLabelText,
+  holdVerdict,
+  labelBoxesOverlap,
+  labelsToHide,
+} from "../src/lib/viz/graph.js";
 
 test("degrees counts undirected endpoints", () => {
   const d = degrees([
@@ -57,4 +63,27 @@ test("hiding is decided against the shown set, not against a stale copy of it", 
   expect([...labelsToHide(afterA, afterB)].sort()).toEqual(["a1", "a2"]);
   // ...and re-showing the same set hides nothing.
   expect(labelsToHide(afterB, afterB).size).toBe(0);
+});
+
+// The post-drag hold's release rule, derived from the THREAT, not the fix:
+// during the hold, nothing that MOVES under a stationary pointer may take the
+// focus — only real pointer travel ends the hold, and where it lands decides.
+// The rule is pure and lives in holdVerdict because the reviewer's round-1 P1s
+// were exactly a layer this decision forgot (the edge hit layer, which is an
+// empty join above 600 edges and therefore invisible on the author's brain).
+test("release jitter under 6px never ends the hold, whatever it lands on", () => {
+  for (const target of ["circle", "incident-edge", "other"] as const) {
+    expect(holdVerdict(35, target)).toBe("hold");
+    expect(holdVerdict(0, target)).toBe("hold");
+  }
+});
+
+test("real travel ends the hold; a focus-bearing landing keeps the focus", () => {
+  expect(holdVerdict(36, "circle")).toBe("release");
+  expect(holdVerdict(36, "incident-edge")).toBe("release");
+});
+
+test("real travel onto anything else clears — empty space and foreign edges alike", () => {
+  expect(holdVerdict(36, "other")).toBe("release-clear");
+  expect(holdVerdict(10_000, "other")).toBe("release-clear");
 });
