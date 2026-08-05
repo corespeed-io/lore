@@ -3,23 +3,31 @@
 import type { PageHit } from "@/lib/types";
 
 const DAY = 86_400_000;
+export const MAX_ACTIVITY_DAYS = 180;
 
-// Per-day activity count from the first activity day through `todayISO` (inclusive).
-// Pure + deterministic given inputs so it's unit-testable.
+// Per-day activity counts within a bounded recent window. The page list itself
+// is capped, so rendering years of zero-value SVG bars adds no useful signal.
+// Pure + deterministic given inputs so it is unit-testable.
 export function dailyCounts(
   dateStrs: string[],
   todayISO: string,
+  maxDays = MAX_ACTIVITY_DAYS,
 ): { label: string; count: number }[] {
   const perDay: Record<string, number> = {};
   for (const d of dateStrs) {
     const k = d.slice(0, 10);
     if (k) perDay[k] = (perDay[k] ?? 0) + 1;
   }
-  const days = Object.keys(perDay);
+  const end = new Date(`${todayISO}T00:00:00Z`).getTime();
+  const windowDays = Math.max(1, Math.floor(maxDays));
+  const cutoff = end - (windowDays - 1) * DAY;
+  const days = Object.keys(perDay).filter((day) => {
+    const time = new Date(`${day}T00:00:00Z`).getTime();
+    return time >= cutoff && time <= end;
+  });
   if (days.length < 2) return [];
   const start = days.reduce((a, b) => (a < b ? a : b));
   const out: { label: string; count: number }[] = [];
-  const end = new Date(`${todayISO}T00:00:00Z`).getTime();
   for (let t = new Date(`${start}T00:00:00Z`).getTime(); t <= end; t += DAY) {
     const k = new Date(t).toISOString().slice(0, 10);
     out.push({ label: k, count: perDay[k] ?? 0 });
@@ -53,7 +61,7 @@ export function ActivityChart({ pages }: { pages: PageHit[] }) {
 
   return (
     <div className="panel-card chart-card">
-      <p className="panel-card-title">Daily activity</p>
+      <p className="panel-card-title">Daily activity · last {MAX_ACTIVITY_DAYS} days</p>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="activity-chart"
