@@ -18,15 +18,18 @@ export function dailyCounts(
   const perDay: Record<string, number> = {};
   for (const d of dateStrs) {
     const k = d.slice(0, 10);
-    if (!k) continue;
-    const time = new Date(`${k}T00:00:00Z`).getTime();
-    if (time >= cutoff && time <= end) perDay[k] = (perDay[k] ?? 0) + 1;
+    if (k) perDay[k] = (perDay[k] ?? 0) + 1;
   }
-  if (Object.keys(perDay).length === 0) return [];
+  const recent: Record<string, number> = {};
+  for (const [day, count] of Object.entries(perDay)) {
+    const time = new Date(`${day}T00:00:00Z`).getTime();
+    if (time >= cutoff && time <= end) recent[day] = count;
+  }
+  if (Object.keys(recent).length === 0) return [];
   const out: { label: string; count: number }[] = [];
   for (let t = cutoff; t <= end; t += DAY) {
     const k = new Date(t).toISOString().slice(0, 10);
-    out.push({ label: k, count: perDay[k] ?? 0 });
+    out.push({ label: k, count: recent[k] ?? 0 });
   }
   return out;
 }
@@ -43,7 +46,7 @@ export function ActivityChart({ pages }: { pages: PageHit[] }) {
   const dates = pages.map((p) => p.updated_at ?? "").filter(Boolean);
   const today = new Date().toISOString().slice(0, 10);
   const series = dailyCounts(dates, today);
-  if (series.length < 2) return null;
+  if (!series.length) return null;
 
   const W = 600;
   const H = 150;
