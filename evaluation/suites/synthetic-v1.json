@@ -1,0 +1,56 @@
+{
+  "name": "Lore synthetic isolation and recall",
+  "version": 1,
+  "memories": [
+    {
+      "key": "release-freeze",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The deployment freeze begins Friday at 17:00 UTC."
+    },
+    {
+      "key": "private-draft",
+      "owner": "bob",
+      "scope": "private",
+      "content": "My private deployment freeze draft is confidential."
+    },
+    {
+      "key": "unrelated-note",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The design review happens on Tuesday morning."
+    },
+    {
+      "key": "incident-retro",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Incident 42 retrospective is scheduled Wednesday at 09:00 UTC."
+    },
+    {
+      "key": "private-incident-notes",
+      "owner": "bob",
+      "scope": "private",
+      "content": "Bob's private Incident 42 notes contain confidential customer details."
+    }
+  ],
+  "cases": [
+    {
+      "query": "deployment freeze Friday",
+      "expectedKeys": ["release-freeze"],
+      "forbiddenKeys": ["private-draft"],
+      "limit": 5
+    },
+    {
+      "query": "design review Tuesday",
+      "expectedKeys": ["unrelated-note"],
+      "forbiddenKeys": ["private-draft"],
+      "limit": 5
+    },
+    {
+      "query": "Incident 42 retrospective Wednesday",
+      "expectedKeys": ["incident-retro"],
+      "forbiddenKeys": ["private-incident-notes"],
+      "limit": 5
+    }
+  ]
+}

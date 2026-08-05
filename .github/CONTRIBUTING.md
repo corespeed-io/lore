@@ -4,11 +4,15 @@
 
 ## Development setup
 
+Use Bun 1.3.14 or newer, Node.js 24 LTS, and Postgres with pgvector.
+`bun.lock` is the only dependency lockfile; do not add `package-lock.json`,
+`pnpm-lock.yaml`, or `yarn.lock`.
+
 ```bash
 git clone https://github.com/corespeed-io/lore.git
 cd lore
-npm install
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
 
 The app runs at http://localhost:3000. Environment variables are loaded from `.env` (or `.env.local` for local overrides).
@@ -16,70 +20,50 @@ The app runs at http://localhost:3000. Environment variables are loaded from `.e
 ## Development commands
 
 ```bash
-npm run dev        # Start dev server with hot reload
-npm run lint       # Check code style with Biome
-npm run format     # Auto-format code with Biome
-npm run typecheck  # Type-check with TypeScript
-npm test           # Run tests with Vitest
-npm run build      # Build for production
+bun run dev        # Start dev server with hot reload
+bun run lint       # Check code style with Biome
+bun run format     # Auto-format code with Biome
+bun run typecheck  # Type-check with TypeScript
+bun run test       # Run tests with Vitest
+bun run build      # Build for production
+bun run preview:cloudflare # Preview the Workers build through workerd
 ```
 
-All commands must pass before opening a pull request:
+All core commands must pass before opening a pull request; changes to deployment or
+server runtime code must also pass the OpenNext/Wrangler dry run from `README.md`.
+
 ```bash
-npm run typecheck && npm run lint && npm test && npm run build
+bun run typecheck && bun run lint && bun run test && bun run build
 ```
 
 ## Code conventions
 
 ### Style
 
-- **Biome** for formatting and linting. Run `npm run format` to fix most issues automatically.
+- **Biome** for formatting and linting. Run `bun run format` to fix most issues automatically.
 - **TypeScript** with strict mode enabled. No `any` types without justification.
-- **Functional components** — use React hooks.
+- Prefer Server Components until browser state or effects are required.
 - **Kebab-case** for file names; PascalCase for React components.
 
-### The console reads; agents write
+### Memory and tenant safety
 
-Lore stores its own pages and memories, so "nothing writes" is not the rule. The
-rule is that **the browser console only ever holds the reading credential**:
-`/api/call` passes `"read"` into the dispatcher, which decides from each tool's
-own declared `access`. When adding a feature:
+Lore owns its Memory write and retrieval paths. All tenant-owned data must carry a
+Workspace, ownership, and scope from the first migration. When adding a feature:
 
-- ✓ Reach for a `read` tool from the console; add a `write` tool to the agent
-  surface (`POST /api/mcp`, bearer `BRAIN_WRITE_TOKEN`)
-- ✗ Never widen a tool from `write` to `read` to make a console feature work
+- ✓ Write through the Memory module and test observable behavior at its interface
+- ✓ Apply Workspace and private visibility filters before top-k retrieval
+- ✓ Add positive and negative RLS tests for every tenant-owned table
+- ✗ No unrestricted request-path service role or caller-trusted ownership fields
+- ✗ No generic upstream-tool passthrough
 
-See [SECURITY.md](SECURITY.md) for the full model.
+See `AGENTS.md` and `CONTEXT.md` for the complete invariants and vocabulary.
 
 ### Testing
 
 - Tests live in `tests/` and follow the naming convention `<feature>.test.ts`.
 - Use `vitest` for unit and integration tests.
 - Aim for >80% coverage on new logic.
-- Run `npm test` before committing.
-
-### Adding a visualization module
-
-1. Create `src/lib/viz/<name>.ts` exporting a mount function that returns a
-   handle the caller can tear down — see `src/lib/viz/graph.ts` for the shape:
-
-   ```typescript
-   import type { GraphData } from "@/lib/types";
-
-   export interface Instance {
-     destroy(): void;
-     highlight(ids: Set<string> | null): void;
-   }
-
-   export function mountName(el: HTMLElement, data: GraphData, opts: Opts): Instance {
-     // Render with d3, canvas, or DOM APIs
-   }
-   ```
-
-2. Import it directly in the view component and call `destroy()` on unmount —
-   there is no registry to register with.
-
-3. Write tests for the pure parts in `tests/viz-<name>.test.ts`.
+- Run `bun run test` before committing.
 
 ### Commits
 
@@ -89,18 +73,12 @@ See [SECURITY.md](SECURITY.md) for the full model.
 
 Example:
 ```
-feat: add timeline visualization module
+feat(memory): add source metadata
 
-- Render entity activity by date using d3-time-scale
-- Add viz-timeline.test.ts with 3 scenarios
-- Update README with module walkthrough
+- Persist source metadata through the Memory module
+- Enforce Workspace and private-scope visibility with RLS
+- Add positive and negative isolation tests
 ```
-
-## Known limitations / follow-ups
-
-The following items are deferred post-v1:
-
-1. **Timing-safe password comparison** — `password` auth mode compares in constant time. A constant-time compare would mitigate timing attacks (see `src/lib/auth.ts`). Note `password` mode isn't the recommended deployment posture — prefer `gateway` (a JWT- or secret-verified proxy), whose JWT is fully verified.
 
 ## Questions?
 

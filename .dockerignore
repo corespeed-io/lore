@@ -1,4 +1,14 @@
-node_modules
-.next
 .git
-.env*
+.worktrees
+.claude
+.gstack
+.superpowers
+.next
+.open-next
+node_modules
+.env
+.env.*
+*.log
+tmp
+lore-*.png
+lore-*.json

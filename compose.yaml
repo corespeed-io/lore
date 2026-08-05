@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg16-bookworm
+    environment:
+      POSTGRES_DB: lore
+      POSTGRES_USER: lore_admin
+      POSTGRES_PASSWORD: ${LORE_DB_ADMIN_PASSWORD:?Set LORE_DB_ADMIN_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lore_admin -d lore"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - lore-postgres:/var/lib/postgresql/data
+
+  migrate:
+    build: .
+    command: ["sh", "-c", "node scripts/migrate.mjs && node scripts/create-runtime-role.mjs"]
+    environment:
+      DATABASE_URL: postgres://lore_admin:${LORE_DB_ADMIN_PASSWORD:?Set LORE_DB_ADMIN_PASSWORD in .env}@postgres:5432/lore
+      LORE_RUNTIME_ROLE: lore_runtime
+      LORE_RUNTIME_PASSWORD: ${LORE_DB_RUNTIME_PASSWORD:?Set LORE_DB_RUNTIME_PASSWORD in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  lore:
+    build: .
+    ports:
+      - "${LORE_BIND_ADDRESS:-127.0.0.1}:${LORE_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: postgres://lore_runtime:${LORE_DB_RUNTIME_PASSWORD:?Set LORE_DB_RUNTIME_PASSWORD in .env}@postgres:5432/lore
+      AUTH_MODE: ${AUTH_MODE:-none}
+      ALLOW_INSECURE: ${ALLOW_INSECURE:-1}
+      UI_PASSWORD: ${UI_PASSWORD:-}
+      ACCESS_TEAM_DOMAIN: ${ACCESS_TEAM_DOMAIN:-}
+      ACCESS_AUD: ${ACCESS_AUD:-}
+      LORE_LOCAL_SUBJECT: ${LORE_LOCAL_SUBJECT:-local}
+      LORE_LOCAL_DISPLAY_NAME: ${LORE_LOCAL_DISPLAY_NAME:-Local User}
+      LORE_LOCAL_EMAIL: ${LORE_LOCAL_EMAIL:-}
+      APP_TITLE: ${APP_TITLE:-Memory for humans and agents}
+      APP_SUBTITLE: ${APP_SUBTITLE:-Durable recall inside a database-enforced boundary.}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  lore-postgres:
