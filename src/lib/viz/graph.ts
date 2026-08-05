@@ -578,6 +578,14 @@ export function mountGraph(
     // and the nodes have moved out from under those decisions.
     .on("end", () => layoutLabels());
 
+  // While a node drag is live, the drag OWNS the focus: the simulation reheats
+  // and the node chases the pointer, so the pointer transiently exits the
+  // circle between frames — its own pointerout used to fire, and 110ms later
+  // the hover (and the dim with it) vanished mid-drag, unrecoverable because
+  // re-entry is gesture-guarded. Grabbing a node is the strongest focus signal
+  // there is; nothing but release may take it away.
+  let draggingNode = false;
+
   node.call(
     d3
       // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
@@ -585,6 +593,16 @@ export function mountGraph(
       .on("start", (e, d) => {
         e.sourceEvent?.stopPropagation?.(); // don't let the pan gesture also fire
         if (!e.active) sim.alphaTarget(0.3).restart(); // reheat → springs on drag
+        draggingNode = true;
+        // Grabbing focuses and dims IMMEDIATELY — like a click, a grab is
+        // deliberate; the dwell exists for sweeps, not for this. Skipped while
+        // a selection is active, mirroring the hover handlers.
+        if (!selectedId) {
+          clearHoverTimer();
+          hoverNodeId = d.id;
+          paintNodeHover(d.id);
+          dimNow();
+        }
         d.fx = d.x;
         d.fy = d.y;
       })
@@ -594,6 +612,7 @@ export function mountGraph(
       })
       .on("end", (e, d) => {
         if (!e.active) sim.alphaTarget(0);
+        draggingNode = false;
         d.fx = null;
         d.fy = null;
       }),
@@ -643,6 +662,11 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointerout", (e: any, d: any) => {
       if (selectedId) return;
+      // A live node drag owns the focus outright — the dragged node's own
+      // transient pointerouts (the pointer outrunning the node between frames)
+      // must not clear it. A PAN keeps the old rule: leaving the held node
+      // really is leaving it, and only crossed nodes are ignored.
+      if (draggingNode) return;
       if (isGesture(e) && hoverNodeId !== d.id) return; // a crossed node, not the held one
       clearHoverSoon();
     })

@@ -2791,23 +2791,32 @@ a.ext {
   stroke-width: 2.4;
 }
 
-/* The dim: one class on the root fades everything back; the lit neighbourhood
-   and the labels opt out. Fade-in only — undimming snaps, so leaving a hover
-   never pays transition frames. */
-.lore-graph.graph-dimmed .gnodes circle {
-  opacity: 0.12;
-  transition: opacity 0.12s ease-out;
+/* The dim: one class on the root pulls everything back; the lit neighbourhood
+   and the labels opt out. NO transition, deliberately: a 0.12s opacity fade on
+   2,400 SVG elements re-rasterises the whole layer every frame of the fade —
+   and while dimmed, every hover move retriggers it on the ~100 elements whose
+   .lit flips, which is the per-frame full-layer cost this file's whole design
+   exists to avoid. An instant dim costs ONE repaint; the fade cost eight per
+   engage and then kept paying on every move. ("一dim就变得很卡" — measured by
+   the person using it.) */
+/* Dimmed elements are OPAQUE pale colours, not opacity — with 2,400 elements
+   at alpha 0.12, every frame of a drag paid per-element blending on top of the
+   full-layer raster ("dim拖拽的时候这么卡"). An opaque #e9edf0 over the #fafafa
+   canvas reads the same as 0.12-alpha colour, and opaque paint is the cheap
+   path. The type colour disappears from dimmed nodes — at 0.12 alpha it was
+   indistinguishable anyway. */
+/* The dim rules deliberately DON'T MATCH lit/hovered elements — those keep
+   their attribute fill and the rules further up, with no override juggling. */
+.lore-graph.graph-dimmed .gnodes circle:not(.lit):not(.hovered) {
+  fill: #e9edf0;
+  stroke: #fafafa;
 }
-.lore-graph.graph-dimmed .glinks line {
-  opacity: 0.05;
-  transition: opacity 0.12s ease-out;
+.lore-graph.graph-dimmed .glinks line:not(.lit) {
+  stroke: #f4f4f4;
 }
-.lore-graph.graph-dimmed .gnodes circle.lit,
-.lore-graph.graph-dimmed .gnodes circle.hovered {
-  opacity: 1;
-}
-.lore-graph.graph-dimmed .glinks line.lit {
-  opacity: 0.9;
+/* A dimmed search match recedes with the rest but keeps a readable ring. */
+.lore-graph.graph-dimmed .gnodes circle.match:not(.lit):not(.hovered) {
+  stroke: #dfe3e7;
 }
 
 /* ── Shared static styles that lived as repeated inline style objects ─────────
