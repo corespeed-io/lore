@@ -645,10 +645,18 @@ export function mountGraph(
         if (!e.active) sim.alphaTarget(0);
         draggingNode = false;
         // Touch end events carry no clientX — no hold there, honestly, rather
-        // than a NaN origin behind a cast that asserts otherwise.
-        const src = e.sourceEvent as { clientX?: number; clientY?: number } | undefined;
+        // than a NaN origin behind a cast that asserts otherwise. And a release
+        // over one of the floating overlays (legend, search, controls, node
+        // preview) arms no hold either: the svg's pointerleave already fired
+        // during the drag and was rightly swallowed, so with the pointer off
+        // the svg nothing could ever end it — the graph stayed dimmed while
+        // the user worked the toolbar.
+        const src = e.sourceEvent as
+          | { clientX?: number; clientY?: number; target?: Node }
+          | undefined;
+        const overSvg = src?.target ? (svg.node()?.contains(src.target) ?? false) : false;
         postDragFrom =
-          src && Number.isFinite(src.clientX) && Number.isFinite(src.clientY)
+          overSvg && src && Number.isFinite(src.clientX) && Number.isFinite(src.clientY)
             ? { x: src.clientX as number, y: src.clientY as number }
             : null;
         d.fx = null;
@@ -715,7 +723,18 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointerover", (e: any, d: any) => {
       if (selectedId || isGesture(e)) return;
-      postDragFrom = null; // focus follows the pointer; the hold is over
+      // The acquire path asks the SAME question as everything else: did the
+      // POINTER travel, or did an element move under it? A circle's pointerover
+      // with no travel is the springs pushing a node (this one, or a
+      // neighbour) back across the stationary pointer — ending the hold there
+      // re-opened the post-release dim death through the last unguarded door,
+      // and contradicted holdVerdict(0, "circle") === "hold" outright.
+      if (postDragFrom) {
+        const dx = e.clientX - postDragFrom.x;
+        const dy = e.clientY - postDragFrom.y;
+        if (holdVerdict(dx * dx + dy * dy, "circle") === "hold") return;
+        postDragFrom = null; // real travel onto a circle: focus follows the pointer
+      }
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
@@ -724,6 +743,14 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointermove", (e: any, d: any) => {
       if (selectedId || isGesture(e)) return;
+      // Same rule as pointerover: sub-threshold "travel" onto an overlapping
+      // neighbour is jitter or element motion, never a focus change.
+      if (postDragFrom) {
+        const dx = e.clientX - postDragFrom.x;
+        const dy = e.clientY - postDragFrom.y;
+        if (holdVerdict(dx * dx + dy * dy, "circle") === "hold") return;
+        postDragFrom = null;
+      }
       if (hoverNodeId === d.id) return;
       clearHoverTimer();
       hideEdgeTooltip();
