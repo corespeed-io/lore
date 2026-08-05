@@ -35,8 +35,11 @@ function fixture() {
     `:root { ${TOKENS.map((token) => `${token}: x;`).join(" ")} }`,
   );
   write(root, "src/components/lore-sidebar.tsx");
+  write(root, "src/components/memory-graph.tsx");
   write(root, "src/components/ui/button.tsx");
   write(root, "src/components/ui/icons.tsx");
+  write(root, "src/app/api/graph/route.ts");
+  write(root, "src/lib/graph.ts");
   return root;
 }
 

@@ -6,8 +6,11 @@ const REQUIRED_PATHS = [
   "DESIGN.md",
   "src/app/globals.css",
   "src/components/lore-sidebar.tsx",
+  "src/components/memory-graph.tsx",
   "src/components/ui/button.tsx",
   "src/components/ui/icons.tsx",
+  "src/app/api/graph/route.ts",
+  "src/lib/graph.ts",
 ];
 
 const REQUIRED_TOKENS = [

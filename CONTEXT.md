@@ -66,6 +66,20 @@ A Memory visible only to its owner User and that User's permitted Agents in the
 same Workspace.
 _Avoid_: Personal Memory, Agent-private Memory
 
+## Graph
+
+**Memory Graph**:
+An Actor-specific view of visible Memories and the relationships among them. A
+Memory Graph never contains a node or relationship whose endpoint the Actor
+cannot read.
+_Avoid_: Workspace graph, global graph, gbrain graph
+
+**Memory Affinity**:
+A derived, non-authoritative relationship between two visible Memories whose
+content is similar enough to help exploration. It is recalculated from the
+current authorized Memory set and is not itself a stored Memory.
+_Avoid_: Knowledge fact, explicit link, graph ownership
+
 ## Evaluation
 
 **Evaluation Suite**:

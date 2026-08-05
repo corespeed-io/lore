@@ -45,16 +45,16 @@ when the user is doing retrieval work.
 
 ### Responsive completeness
 
-Workspace selection, search, Memory browse, create, inspect, edit, scope change,
-and forget must all remain complete on mobile. The sidebar becomes a drawer; the
-product model does not change.
+Workspace selection, search, Memory browse, Graph exploration, create, inspect,
+edit, scope change, and forget must all remain complete on mobile. The sidebar
+becomes a drawer; the product model does not change.
 
 ## 3. Information architecture
 
 | Destination | User job | Primary content | Attention behavior |
 |---|---|---|---|
 | Memories | Capture and retrieve Memory | Searchable chronological rows | Errors render inline near the workflow |
-| Graph | Explore authorized Memory relationships | Deferred native graph surface | Navigation says `soon` |
+| Graph | Explore authorized Memory relationships | Interactive affinity map + selection inspector | Errors remain inside the Graph workspace |
 | Agents | Manage user-owned Agents | Deferred management surface | Navigation says `soon` |
 | Evaluation | Measure retrieval and isolation | Deferred suite surface | Navigation says `soon` |
 
@@ -122,6 +122,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 ## 8. Iconography
 
 - Canonical icons are local 16px outline SVG components in `src/components/ui/icons.tsx`.
+- Data visualizations may own semantic SVG markup; they do not become icon sources.
 - Use 1.5px strokes, round caps where appropriate, and `currentColor`.
 - Decorative icons are `aria-hidden`; icon-only controls require an accessible name.
 - `public/lore-mark.svg` is the product mark and may not be recolored decoratively.
@@ -131,6 +132,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `globals.css` owns tokens, reset, base rules, and documented component classes.
 - `src/components/ui` owns reusable buttons and icons.
 - `memory-console.tsx` owns data, state, workflow composition, and product copy.
+- `memory-graph.tsx` owns Graph fetching, filtering, selection, and inspection.
+- `src/lib/viz/graph.ts` owns the optimized D3 force layout, zoom/pan, node drag,
+  label collision, and neighborhood paint state.
 - `lore-sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
 - Route files only load runtime configuration and render the feature boundary.
 
@@ -141,6 +145,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Memory row | feature row | rest, hover, selected via detail, scope, search evidence |
 | Composer | feature panel | empty, ready, saving, error |
 | Detail | feature workspace | view/edit, saving, destructive, mobile stack |
+| Graph | `MemoryGraphView` | loading, empty, mapped, filtered, selected, error |
 
 ## 10. Workflow specifications
 
@@ -165,13 +170,25 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Creating a Workspace is available from the selector, including first-run onboarding.
 - Changing Workspace closes detail state and reloads visible Memory under new RLS context.
 
+### Explore Memory Graph
+
+- Entry: Graph navigation in the active Workspace.
+- Nodes are only Memories returned by the Actor-specific native Graph API.
+- Affinity links are derived from the current authorized node set and never name a hidden endpoint.
+- Search dims non-matches; selection keeps the chosen Memory and its neighbors prominent.
+- The graph supports free node drag, background pan, wheel/buttons zoom, fit-to-view,
+  hover focus, and empty-canvas/Escape deselection.
+- `Open Memory` enters the standard detail workspace; Back returns to Graph.
+- Scope uses the graph palette plus explicit text in the inspector and legend, never
+  color alone.
+
 ## 11. Loading, empty, error, and attention states
 
 - Initial loading uses the Lore mark and plain `Opening Lore…` status.
 - Empty collection invites the first Memory; empty search suggests changing the phrase.
 - Recoverable request errors appear inline with a Dismiss action and `role=alert`.
 - Disabled actions remain readable and do not use spinners as their only label.
-- Deferred product areas say `soon`; they do not fake data or success.
+- Deferred product areas say `soon`; Graph is no longer deferred.
 
 ## 12. Accessibility and interaction requirements
 
@@ -184,8 +201,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 ## 13. Anti-patterns
 
-- Do not restore the gbrain graph implementation or proxy assumptions. The Graph
-  destination remains visible until a native RLS-protected relationship model replaces it.
+- Do not restore the gbrain graph data implementation or proxy assumptions. The
+  optimized D3 renderer is intentionally retained, but it consumes the native
+  Actor-specific `/api/graph` read model.
 - Do not create a second visual track beside the restored Lore shell.
 - Do not use giant editorial headlines, pill-heavy ledgers, or colored scope decoration.
 - Do not expose User-level embedding model selection; retrieval configuration is Workspace-scoped.
@@ -207,3 +225,4 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 |---|---|---|---|
 | 2026-08-05 | Restore the pre-#56 Lore shell and Vercel/Geist language around the native Memory System | The backend rewrite did not authorize a parallel product identity | The temporary editorial Memory console |
 | 2026-08-05 | Use Workspace-scoped search and configuration | Workspace is Lore's only tenant and retrieval boundary | User-scoped UI configuration |
+| 2026-08-05 | Build Graph as an Actor-specific Memory-affinity read model | Preserve exploration without weakening RLS or reviving the deleted proxy | Deferred Graph placeholder |

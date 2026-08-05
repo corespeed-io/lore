@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LoreSidebar, type WorkspaceOption } from "./lore-sidebar";
+import { LoreSidebar, type LoreView, type WorkspaceOption } from "./lore-sidebar";
+import { MemoryGraphView } from "./memory-graph";
 import { Button } from "./ui/button";
 import { ArrowLeftIcon, CloseIcon, PlusIcon } from "./ui/icons";
 
@@ -73,6 +74,8 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [searchEvidence, setSearchEvidence] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
+  const [activeView, setActiveView] = useState<LoreView>("memories");
+  const [detailOrigin, setDetailOrigin] = useState<LoreView>("memories");
   const [loading, setLoading] = useState(true);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +107,7 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
       const stored = window.localStorage.getItem("lore.workspace");
       const next = loaded.find((workspace) => workspace.id === stored)?.id ?? loaded[0]?.id ?? "";
       setActiveWorkspaceId(next);
+      setActiveView("memories");
       setError(null);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -205,6 +209,7 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
       setWorkspaceName("");
       setCreatingWorkspace(false);
       setQuery("");
+      setActiveView("memories");
       setError(null);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -237,11 +242,17 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
     }
   }
 
-  function openMemory(memory: Memory) {
+  function openMemory(memory: Memory, origin: LoreView = activeView) {
+    setDetailOrigin(origin);
     setSelected(memory);
     setEditContent(memory.content);
     setEditScope(memory.scope);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function openMemoryById(memoryId: string) {
+    const memory = await requestJson<Memory>(`/api/memories/${memoryId}`, {}, activeWorkspaceId);
+    openMemory(memory, "graph");
   }
 
   async function updateMemory(event: React.FormEvent) {
@@ -358,16 +369,23 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspaceId}
         query={query}
+        activeView={activeView}
         onWorkspaceChange={(workspaceId) => {
           setActiveWorkspaceId(workspaceId);
           setQuery("");
+          setActiveView("memories");
         }}
         onQueryChange={(nextQuery) => {
           setQuery(nextQuery);
           setSelected(null);
+          setActiveView("memories");
         }}
         onCreateWorkspace={() => setCreatingWorkspace(true)}
-        onOpenMemories={() => setSelected(null)}
+        onNavigate={(view) => {
+          setActiveView(view);
+          setSelected(null);
+          if (view === "graph") setQuery("");
+        }}
       />
 
       <main className="app-main">
@@ -379,11 +397,19 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
             saving={saving}
             error={error}
             onBack={() => setSelected(null)}
+            backLabel={detailOrigin === "graph" ? "Graph" : "Memories"}
             onContentChange={setEditContent}
             onScopeChange={setEditScope}
             onSubmit={updateMemory}
             onForget={forgetMemory}
             onDismissError={() => setError(null)}
+          />
+        ) : activeView === "graph" && activeWorkspace ? (
+          <MemoryGraphView
+            workspaceId={activeWorkspaceId}
+            workspaceName={activeWorkspace.name}
+            appTitle={appTitle}
+            onOpenMemory={openMemoryById}
           />
         ) : (
           <section className="page-wrap view-anim" aria-labelledby="memories-title">
@@ -608,6 +634,7 @@ function MemoryDetail({
   scope,
   saving,
   error,
+  backLabel,
   onBack,
   onContentChange,
   onScopeChange,
@@ -620,6 +647,7 @@ function MemoryDetail({
   scope: Memory["scope"];
   saving: boolean;
   error: string | null;
+  backLabel: string;
   onBack: () => void;
   onContentChange: (content: string) => void;
   onScopeChange: (scope: Memory["scope"]) => void;
@@ -631,7 +659,7 @@ function MemoryDetail({
     <section className="page-wrap page-wrap-wide view-anim" aria-labelledby="memory-detail-title">
       <Button variant="ghost" className="back-link" onClick={onBack}>
         <ArrowLeftIcon />
-        Memories
+        {backLabel}
       </Button>
       {error && (
         <div className="inline-error" role="alert">

@@ -772,6 +772,424 @@ a:focus-visible {
   line-height: 1.55;
 }
 
+.graph-page {
+  max-width: 1440px;
+}
+
+.graph-page-header {
+  align-items: center;
+}
+
+.graph-counts {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.graph-counts strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.graph-counts span {
+  width: 1px;
+  height: 14px;
+  margin: 0 5px;
+  background: var(--hairline);
+}
+
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 0;
+}
+
+.graph-search {
+  width: min(420px, 100%);
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--mute);
+  background: var(--surface);
+}
+
+.graph-search:focus-within {
+  border-color: var(--mute);
+}
+
+.graph-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 13px;
+}
+
+.graph-search input::placeholder {
+  color: var(--faint);
+}
+
+.graph-search > span {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.graph-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.graph-tools .ui-button-ghost {
+  min-width: 34px;
+  padding-inline: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.graph-tools .ui-button-secondary {
+  margin-left: 6px;
+}
+
+.graph-error {
+  margin: 0 0 16px;
+}
+
+.graph-workspace {
+  min-height: 620px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 286px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.graph-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 620px;
+  overflow: hidden;
+  background:
+    linear-gradient(var(--hairline-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hairline-soft) 1px, transparent 1px), var(--canvas);
+  background-size: 32px 32px;
+}
+
+.graph-canvas > svg {
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-edge-tooltip {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  max-width: min(360px, calc(100vw - 48px));
+  pointer-events: none;
+  opacity: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.08);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 14px;
+  white-space: nowrap;
+  transition: opacity 80ms;
+}
+
+.lore-graph .glinks line {
+  stroke: #ebebeb;
+  stroke-width: 1;
+}
+
+.lore-graph .gnodes circle {
+  cursor: pointer;
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.lore-graph .glabels text {
+  fill: #171717;
+  stroke: #fff;
+  stroke-width: 3px;
+  pointer-events: none;
+  paint-order: stroke;
+  dominant-baseline: middle;
+  font-size: 10.5px;
+}
+
+.lore-graph .gnodes circle.match {
+  stroke: #171717;
+  stroke-width: 2.4;
+}
+
+.lore-graph .glinks line.lit {
+  stroke: var(--focus-tint, #171717);
+  stroke-width: 1.6;
+}
+
+.lore-graph.gsel .glinks line.lit {
+  stroke-width: 1.9;
+}
+
+.lore-graph .glinks line.lit.exact {
+  stroke: #171717;
+  stroke-width: 1.8;
+}
+
+.lore-graph .gnodes circle.hovered {
+  stroke: #171717;
+  stroke-width: 2.2;
+}
+
+.lore-graph.gsel .gnodes circle.hovered {
+  stroke-width: 2.4;
+}
+
+/* Keep dimming opaque: thousands of alpha-blended SVG elements made the old
+   graph noticeably slower while dragging. The D3 module only toggles classes;
+   this stylesheet remains the paint table. */
+.lore-graph.graph-dimmed .gnodes circle:not(.lit):not(.hovered) {
+  fill: #e9edf0;
+  stroke: var(--canvas);
+}
+
+.lore-graph.graph-dimmed .glinks line:not(.lit) {
+  stroke: #f4f4f4;
+}
+
+.lore-graph.graph-dimmed .gnodes circle.match:not(.lit):not(.hovered) {
+  stroke: #dfe3e7;
+}
+
+.lore-graph .ghits line {
+  cursor: default;
+  pointer-events: stroke;
+}
+
+.graph-inspector {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+  border-left: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.graph-inspector-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.graph-inspector h2,
+.graph-state h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.35px;
+}
+
+.graph-inspector > p,
+.graph-inspector-empty > p,
+.graph-state > p {
+  margin: 0;
+  color: var(--mute);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.graph-inspector dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.graph-inspector dl > div {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.graph-inspector dt {
+  color: var(--faint);
+  text-transform: uppercase;
+}
+
+.graph-inspector dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-related {
+  display: grid;
+  gap: 4px;
+}
+
+.graph-related h3 {
+  margin: 0 0 6px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.graph-related button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--hairline-soft);
+  color: var(--body);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.graph-related button:hover span {
+  color: var(--ink);
+}
+
+.graph-related button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-related button small {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.graph-inspector > .ui-button {
+  width: 100%;
+  margin-top: auto;
+}
+
+.graph-inspector-empty {
+  display: grid;
+  gap: 12px;
+  margin: auto 0;
+}
+
+.graph-legend {
+  display: flex;
+  gap: 16px;
+  padding-top: 10px;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-legend i {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  border: 1.5px solid transparent;
+  border-radius: 50%;
+}
+
+.graph-legend-shared {
+  background: #171717;
+}
+
+.graph-legend-private {
+  background: #0070f3;
+}
+
+.graph-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+}
+
+.graph-state-orbit {
+  width: 42px;
+  height: 42px;
+  position: relative;
+  display: block;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 50%;
+}
+
+.graph-state-orbit::before,
+.graph-state-orbit::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.graph-state-orbit::before {
+  top: -3px;
+  left: 17px;
+  width: 6px;
+  height: 6px;
+}
+
+.graph-state-orbit::after {
+  right: 4px;
+  bottom: 5px;
+  width: 4px;
+  height: 4px;
+}
+
 .modal-layer {
   position: fixed;
   inset: 0;
@@ -1098,6 +1516,16 @@ a:focus-visible {
   .memory-context {
     position: static;
   }
+
+  .graph-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-inspector {
+    min-height: 260px;
+    border-top: 1px solid var(--hairline);
+    border-left: 0;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1140,6 +1568,24 @@ a:focus-visible {
 
   .onboarding-form {
     margin: 40px auto;
+  }
+
+  .graph-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .graph-search {
+    width: 100%;
+  }
+
+  .graph-tools {
+    justify-content: flex-end;
+  }
+
+  .graph-canvas,
+  .memory-graph-svg {
+    min-height: 500px;
   }
 }
 
@@ -1210,6 +1656,28 @@ a:focus-visible {
 
   .onboarding-copy h1 {
     font-size: 48px;
+  }
+
+  .graph-counts {
+    justify-content: flex-start;
+  }
+
+  .graph-page-header {
+    align-items: flex-start;
+  }
+
+  .graph-canvas,
+  .memory-graph-svg {
+    min-height: 420px;
+  }
+
+  .graph-tools {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr) 1.5fr;
+  }
+
+  .graph-tools .ui-button-secondary {
+    margin-left: 2px;
   }
 }
 

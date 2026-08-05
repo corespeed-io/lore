@@ -10,24 +10,28 @@ export interface WorkspaceOption {
   role?: "owner" | "admin" | "member";
 }
 
+export type LoreView = "memories" | "graph";
+
 interface LoreSidebarProps {
   workspaces: WorkspaceOption[];
   activeWorkspaceId: string;
   query: string;
+  activeView: LoreView;
   onWorkspaceChange: (workspaceId: string) => void;
   onQueryChange: (query: string) => void;
   onCreateWorkspace: () => void;
-  onOpenMemories: () => void;
+  onNavigate: (view: LoreView) => void;
 }
 
 export function LoreSidebar({
   workspaces,
   activeWorkspaceId,
   query,
+  activeView,
   onWorkspaceChange,
   onQueryChange,
   onCreateWorkspace,
-  onOpenMemories,
+  onNavigate,
 }: LoreSidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -156,11 +160,11 @@ export function LoreSidebar({
         <nav className="nav-group" aria-label="Primary navigation">
           <button
             type="button"
-            className="nav-item nav-active"
-            aria-current="page"
+            className={`nav-item${activeView === "memories" ? " nav-active" : ""}`}
+            aria-current={activeView === "memories" ? "page" : undefined}
             onClick={() => {
               setMenuOpen(false);
-              onOpenMemories();
+              onNavigate("memories");
             }}
           >
             <span className="nav-icon">
@@ -168,12 +172,19 @@ export function LoreSidebar({
             </span>
             Memories
           </button>
-          <button type="button" className="nav-item nav-disabled" disabled>
+          <button
+            type="button"
+            className={`nav-item${activeView === "graph" ? " nav-active" : ""}`}
+            aria-current={activeView === "graph" ? "page" : undefined}
+            onClick={() => {
+              setMenuOpen(false);
+              onNavigate("graph");
+            }}
+          >
             <span className="nav-icon">
               <GraphIcon />
             </span>
             Graph
-            <span className="nav-status">soon</span>
           </button>
           <button type="button" className="nav-item nav-disabled" disabled>
             <span className="nav-icon">

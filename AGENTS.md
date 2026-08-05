@@ -30,11 +30,17 @@ been removed. Lore now has a native implementation:
   native routes built through the pure handler seam in `src/lib/http.ts`;
 - `src/components/memory-console.tsx` owns the native Memory workflow and
   `src/components/lore-sidebar.tsx` owns the restored Lore shell;
+- `src/lib/graph.ts` derives an Actor-specific Memory Graph only after the
+  Memory module and Postgres RLS have selected visible nodes; `/api/graph`
+  exposes that native read model without a gbrain dependency;
+- `src/lib/viz/graph.ts` is the restored, performance-tuned D3 renderer. Keep its
+  headless settle, delta-painted focus state, capped edge hit layer, label
+  collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
 - Docker/Compose targets OSS self-hosting; OpenNext + a cache-disabled Hyperdrive
   binding targets CoreSpeed Cloud on Cloudflare Workers.
 
 Still incomplete: production embedding providers, background retry/queue workers,
-derived graph storage, and full Agent/Evaluation management UI. Chunking and
+durable/explicit graph relationships, and full Agent/Evaluation management UI. Chunking and
 lexical indexing are synchronous; embedding failure is explicit (`NULL`) and never
 blocks a Memory write. The v1 pgvector column is fixed at 1536 dimensions so it can
 use an HNSW cosine index; every embedding adapter must emit exactly 1536 finite
@@ -56,9 +62,13 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 
 The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
 stylesheet (`src/app/globals.css`) and put reusable controls/icons in
-`src/components/ui`. Graph remains a visible primary navigation destination marked
-`soon` until native relationship storage and an RLS-safe node-and-edge API exist;
-never wire it back to the removed gbrain proxy.
+`src/components/ui`. Graph is a native Memory-affinity read surface. It may later
+gain durable explicit relationships, but never wire it back to the removed gbrain proxy.
+
+The native Graph endpoint currently caps reads at 100 visible Memories and three
+affinities per Memory, so the optimized SVG renderer is the deliberate v1 path.
+If those limits grow materially, preserve D3 as the layout engine but move static
+simulation to a Web Worker and links to Canvas before increasing the SVG DOM budget.
 
 Build the native domain modules directly. Compatibility adapters, if ever needed,
 must sit outside the Memory interface and may not weaken its ownership or RLS
@@ -200,6 +210,8 @@ surfaces:
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
   chunking, indexing, provenance, and permission invalidation.
+- **Graph module:** return visible Memory nodes and derived relationships while
+  guaranteeing that every edge endpoint is present in the same authorized read model.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
