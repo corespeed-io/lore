@@ -3,26 +3,33 @@
 import type { PageHit } from "@/lib/types";
 
 const DAY = 86_400_000;
+export const MAX_ACTIVITY_DAYS = 180;
 
-// Per-day activity count from the first activity day through `todayISO` (inclusive).
-// Pure + deterministic given inputs so it's unit-testable.
+// Per-day activity counts across one fixed recent window. A fixed scale makes
+// charts comparable and places a hard bound on the SVG bar count.
+// Pure + deterministic given inputs so it is unit-testable.
 export function dailyCounts(
   dateStrs: string[],
   todayISO: string,
 ): { label: string; count: number }[] {
+  const end = new Date(`${todayISO}T00:00:00Z`).getTime();
+  if (!Number.isFinite(end)) return [];
+  const cutoff = end - (MAX_ACTIVITY_DAYS - 1) * DAY;
   const perDay: Record<string, number> = {};
   for (const d of dateStrs) {
     const k = d.slice(0, 10);
     if (k) perDay[k] = (perDay[k] ?? 0) + 1;
   }
-  const days = Object.keys(perDay);
-  if (days.length < 2) return [];
-  const start = days.reduce((a, b) => (a < b ? a : b));
+  const recent: Record<string, number> = {};
+  for (const [day, count] of Object.entries(perDay)) {
+    const time = new Date(`${day}T00:00:00Z`).getTime();
+    if (time >= cutoff && time <= end) recent[day] = count;
+  }
+  if (Object.keys(recent).length === 0) return [];
   const out: { label: string; count: number }[] = [];
-  const end = new Date(`${todayISO}T00:00:00Z`).getTime();
-  for (let t = new Date(`${start}T00:00:00Z`).getTime(); t <= end; t += DAY) {
+  for (let t = cutoff; t <= end; t += DAY) {
     const k = new Date(t).toISOString().slice(0, 10);
-    out.push({ label: k, count: perDay[k] ?? 0 });
+    out.push({ label: k, count: recent[k] ?? 0 });
   }
   return out;
 }
@@ -39,7 +46,7 @@ export function ActivityChart({ pages }: { pages: PageHit[] }) {
   const dates = pages.map((p) => p.updated_at ?? "").filter(Boolean);
   const today = new Date().toISOString().slice(0, 10);
   const series = dailyCounts(dates, today);
-  if (series.length < 2) return null;
+  if (!series.length) return null;
 
   const W = 600;
   const H = 150;
@@ -53,7 +60,7 @@ export function ActivityChart({ pages }: { pages: PageHit[] }) {
 
   return (
     <div className="panel-card chart-card">
-      <p className="panel-card-title">Daily activity</p>
+      <p className="panel-card-title">Daily activity · last {MAX_ACTIVITY_DAYS} days</p>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="activity-chart"

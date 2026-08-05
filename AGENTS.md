@@ -757,7 +757,7 @@ keep it that way.
   tested) is the one rule every handler consults. Don't reintroduce per-element style/attr writes in paint
   paths, and don't add a second reset path beside `clearLit()`.
 - Components: `Sidebar` (nav + omnibox), `Overview` (dashboard), `ActivityChart`
-  (per-day activity **bars**, hand-rolled SVG, pure `dailyCounts()`), `Breakdown`,
+  (fixed recent 180-day activity **bars**, hand-rolled SVG, pure `dailyCounts()`), `Breakdown`,
   `TopHubs`, `Sources`, `RecentActivity`, `GraphView`, `SearchResults` (Memories
   browse + type chips + ranked search), `PageView` (the memory page).
 
