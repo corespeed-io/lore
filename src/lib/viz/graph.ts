@@ -585,6 +585,13 @@ export function mountGraph(
   // re-entry is gesture-guarded. Grabbing a node is the strongest focus signal
   // there is; nothing but release may take it away.
   let draggingNode = false;
+  // ...and RELEASE doesn't take it away either. On release the springs pull
+  // the node out from under the stationary pointer, and Chrome fires a
+  // pointerout for an element that moved — not a pointer that did. The focus
+  // holds after a drag until the POINTER moves: onto another node (focus
+  // follows, normal path) or across empty space (clears). Stored as the
+  // release coordinates; null means no hold.
+  let postDragFrom: { x: number; y: number } | null = null;
 
   node.call(
     d3
@@ -613,10 +620,25 @@ export function mountGraph(
       .on("end", (e, d) => {
         if (!e.active) sim.alphaTarget(0);
         draggingNode = false;
+        const src = e.sourceEvent as MouseEvent | undefined;
+        postDragFrom = src ? { x: src.clientX, y: src.clientY } : null;
         d.fx = null;
         d.fy = null;
       }),
   );
+
+  // The post-drag hold's release valve: the first REAL pointer travel after a
+  // drag either hands focus to whatever node it lands on (the normal hover
+  // path, which also ends the hold) or, over empty space, clears. 6px of
+  // travel so release jitter doesn't count as leaving.
+  svg.on("pointermove.postdrag", (event: PointerEvent) => {
+    if (!postDragFrom || draggingNode) return;
+    const dx = event.clientX - postDragFrom.x;
+    const dy = event.clientY - postDragFrom.y;
+    if (dx * dx + dy * dy < 36) return;
+    postDragFrom = null;
+    if (!(event.target as Element)?.closest?.("circle")) clearHoverSoon();
+  });
 
   // A pointer with a button held down is dragging a node or panning the canvas,
   // not pointing at things — every node it crosses used to repaint the graph on
@@ -645,6 +667,7 @@ export function mountGraph(
     // biome-ignore lint/suspicious/noExplicitAny: D3 typings require any
     .on("pointerover", (e: any, d: any) => {
       if (selectedId || isGesture(e)) return;
+      postDragFrom = null; // focus follows the pointer; the hold is over
       clearHoverTimer();
       hideEdgeTooltip();
       hoverNodeId = d.id;
@@ -664,9 +687,11 @@ export function mountGraph(
       if (selectedId) return;
       // A live node drag owns the focus outright — the dragged node's own
       // transient pointerouts (the pointer outrunning the node between frames)
-      // must not clear it. A PAN keeps the old rule: leaving the held node
-      // really is leaving it, and only crossed nodes are ignored.
-      if (draggingNode) return;
+      // must not clear it. After release the HOLD owns it: the node springs
+      // out from under the stationary pointer and Chrome fires pointerout for
+      // an element that moved, not a pointer that did. A PAN keeps the old
+      // rule: leaving the held node really is leaving it.
+      if (draggingNode || postDragFrom) return;
       if (isGesture(e) && hoverNodeId !== d.id) return; // a crossed node, not the held one
       clearHoverSoon();
     })
@@ -887,6 +912,7 @@ export function mountGraph(
     select(id: string | null) {
       selectedId = id;
       clearHoverTimer();
+      postDragFrom = null;
       hover = null;
       hoverNodeId = null;
       applyState();
