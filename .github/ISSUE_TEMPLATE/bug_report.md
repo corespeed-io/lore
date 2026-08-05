@@ -19,10 +19,10 @@ labels: bug
 
 **Environment**
 
-- Deploy: local / Railway / Vercel / other
+- Deploy: local / OSS self-host / CoreSpeed Cloud
 - `AUTH_MODE`: none / password / proxy
 - Browser:
 
 **Logs / screenshots**
 
-<!-- Console errors, server logs, screenshots. Never paste BRAIN_WRITE_TOKEN or other secrets. -->
+<!-- Console errors, server logs, screenshots. Never paste credentials, tokens, private Memories, or other secrets. -->

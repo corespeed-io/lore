@@ -1,6 +1,6 @@
 import "./globals.css";
-import { loadConfig } from "@/lib/config";
 import { Geist, Geist_Mono } from "next/font/google";
+import { loadConfig } from "@/lib/config";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -16,16 +16,11 @@ const geistMono = Geist_Mono({
   display: "swap",
 });
 
-// Render at request time, not build time. appTitle/appSubtitle come from
-// runtime env (APP_TITLE), but a Docker build has no service vars, so static
-// prerendering would bake the default title into the HTML and ignore the
-// runtime value. force-dynamic keeps this server-rendered (SSR) but per-request,
-// so the configured title actually shows. Applies to the whole route subtree.
-export const dynamic = "force-dynamic";
-
 export function generateMetadata() {
   const { appTitle } = loadConfig();
-  return { title: `Lore — ${appTitle}`, icons: { icon: "/favicon.svg" } };
+  return {
+    title: appTitle === "Lore" ? "Lore" : `Lore — ${appTitle}`,
+  };
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

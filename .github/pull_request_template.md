@@ -4,10 +4,13 @@
 
 ## Checklist
 
-- [ ] `npm run typecheck` passes
-- [ ] `npm run lint` passes
-- [ ] `npm test` passes
-- [ ] `npm run build` passes
-- [ ] Keeps the console on the reading credential (a new tool's `access` is
-      honest; nothing was widened from `write` to `read` for convenience)
+- [ ] `bun run typecheck` passes
+- [ ] `bun run lint` passes
+- [ ] `bun run test` passes
+- [ ] `bun run build` passes
+- [ ] Cloudflare adapter dry-run passes when deployment/runtime code changed
+- [ ] Tenant-owned data is covered by RLS and negative isolation tests
+- [ ] Retrieval filters Workspace/private visibility before ranking
+- [ ] No generic upstream-tool passthrough or unrestricted request-path service role
 - [ ] Updated `AGENTS.md` if I changed behavior agents rely on (commands, flows, gotchas)
+- [ ] Updated `CONTEXT.md` if I changed canonical domain language

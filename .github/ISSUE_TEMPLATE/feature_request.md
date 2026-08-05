@@ -6,10 +6,10 @@ labels: enhancement
 
 **Problem**
 
-<!-- What are you trying to do that Lore makes hard today? -->
+<!-- What are you trying to do that Lore makes difficult? -->
 
 **Proposed solution**
 
-<!-- What would you like to see? Keep in mind Lore is a read-only viewer. -->
+<!-- What would you like to see? Explain how it fits Lore's Memory, Workspace, Agent, or Evaluation model. -->
 
 **Alternatives considered**

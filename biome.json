@@ -1,6 +1,21 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "files": { "ignore": [".next", "node_modules", ".open-next", ".wrangler"] },
+  "$schema": "https://biomejs.dev/schemas/2.5.7/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/.next",
+      "!**/.open-next",
+      "!**/.wrangler",
+      "!**/.worktrees",
+      "!**/.claude",
+      "!**/.gstack",
+      "!**/.superpowers",
+      "!**/node_modules",
+      "!**/tmp",
+      "!**/conductor.json",
+      "!**/lore-*.json"
+    ]
+  },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "linter": { "enabled": true, "rules": { "recommended": true } }
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } }
 }

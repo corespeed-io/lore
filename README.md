@@ -4,160 +4,132 @@
 </h1>
 
 <p align="center">
-  <strong>Browse your knowledge graph in the browser.</strong><br/>
-  A knowledge-graph console and brain — force-directed graph, dashboard, hybrid search, and durable agent memory, on your own Postgres.
+  <strong>Open-source memory infrastructure for users and their agents.</strong>
 </p>
 
-<p align="center">
-  <a href="https://github.com/corespeed-io/lore/actions/workflows/ci.yml"><img src="https://github.com/corespeed-io/lore/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white" alt="Next.js 15">
-  <img src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white" alt="TypeScript">
-</p>
+Lore is a self-hostable Memory System built on Postgres. A Workspace is the only
+tenant boundary; Users can own multiple Agents, and private Memory belongs to the
+User rather than to one Agent.
 
-<p align="center">
-  <a href="#quickstart">Quickstart</a> &nbsp;·&nbsp;
-  <a href="#deploy-your-own">Deploy</a> &nbsp;·&nbsp;
-  <a href="#configuration">Configure</a> &nbsp;·&nbsp;
-  <a href=".github/CONTRIBUTING.md">Contribute</a>
-</p>
+The old generic gbrain/admin proxy has been removed. Lore now owns persistence,
+identity mapping, authorization, retrieval, and evaluation directly.
 
-<p align="center">
-  <img src="docs/graph.png" alt="Lore — a force-directed graph of a knowledge base" width="820">
-</p>
+## What works
 
-## What is Lore?
+- native Memory create, read, update, delete, list, provenance, and shared/private
+  scope;
+- lexical + optional vector retrieval with visibility filtered before top-k;
+- Users, Identities, Workspaces, Memberships, Agents, Workspace grants, and hashed
+  one-time Agent credentials;
+- Postgres RLS over all tenant-owned source, chunk, credential, and Evaluation data;
+- versioned Evaluation Suites with Recall@K, MRR, nDCG, latency, cost, and hard
+  isolation failures;
+- a working Memory console plus native HTTP APIs;
+- OSS Docker/Postgres deployment and a Cloudflare Workers + Hyperdrive adapter.
 
-Lore is a web console for a personal knowledge graph — your notes, people, projects, and the links that connect them — rendered as a force-directed graph, a dashboard, and hybrid search, so you can *see* and walk your knowledge instead of grepping it.
+AutoDream, automatic consolidation, summarization, and proactive insight generation
+are intentionally outside v1. Production embedding providers and background retry
+workers are the next retrieval-maintenance layer; writes already remain available
+when embeddings are unavailable.
 
-It serves its own brain out of Postgres + pgvector — no other backend to run. The browser console holds only the reading credential: every write (vault import, `put_page`, `remember`) needs an explicit bearer token and never rides your viewer session.
+## Run with Docker
 
-## Features
-
-- **Force-directed graph** — d3 node-link view with smooth zoom/pan, click-to-filter by type, and connection-walking from any node.
-- **Dashboard** — pages, links, sources, daily activity, top hubs, and recent memories at a glance.
-- **Hybrid search** — vector + keyword + trigram, rank-fused, as you type.
-- **Bring your Obsidian vault** — pick a folder at `/import`; files become pages, folders become slug prefixes, and `[[wikilinks]]` become edges (including the ones in frontmatter, Markdown-style links, and aliases). Export the whole brain back out as a tar of `slug.md` from `/api/export`.
-- **Agent memory** — an immutable event log, versioned thread summaries, and typed durable memories with provenance, supersession and historical (`as_of`) recall. Agents use `remember` / `recall` / `forget` / `inspect_memory`; memories are projected into the same graph and search as everything else, and a correction supersedes rather than overwrites.
-- **Graph health** — the dashboard names the two reasons a graph looks empty: links pointing at pages that don't exist, and pages nothing points at.
-- **Pluggable viz modules** — drop in a new `src/lib/viz/<name>.ts` to add a visualization.
-- **Fail-closed auth** — none (dev), HTTP Basic, or a trusted gateway (JWT- or secret-verified; never a bare identity header). The console holds only the reading credential; writes need their own `BRAIN_WRITE_TOKEN`.
-- **Deploy anywhere** — standalone Docker image; one-click to Vercel or Railway.
-
-<p align="center">
-  <img src="docs/dashboard.png" alt="Lore dashboard — counts, activity, top hubs and sources" width="820">
-</p>
-
-## Quickstart
-
-Bring only a Postgres with `pgvector` and `pg_trgm` (e.g. a free [Neon](https://neon.tech) database). PostgreSQL **12 or newer**; tested on 17 and 18. Lore serves its own brain: hybrid search (vector + keyword + trigram), a wikilink graph, and an MCP endpoint at `POST /api/mcp` your agents can write memories to (`put_page` / `remember_note` / `delete_page` for pages, `remember` for agent memory; bearer `BRAIN_WRITE_TOKEN`).
+Bun 1.3.14+, Node 24 LTS, and a Postgres distribution with pgvector are required. The fastest
+self-hosted setup is:
 
 ```bash
-git clone https://github.com/corespeed-io/lore.git && cd lore
-cp .env.example .env        # set DATABASE_URL + EMBEDDINGS_*
-npm install && npm run dev  # → http://localhost:3000
+cp .env.example .env
+# Set unique LORE_DB_ADMIN_PASSWORD and LORE_DB_RUNTIME_PASSWORD values in .env.
+docker compose up --build
 ```
 
-### Wire it to your agent
+Open [http://localhost:3000](http://localhost:3000). The Compose stack runs every
+SQL migration, provisions a separate non-owner runtime login, and starts Lore under
+the `lore_app` RLS role. The example binds to `127.0.0.1` and opts into
+unauthenticated local access; never expose `AUTH_MODE=none` or `ALLOW_INSECURE=1`
+to the internet.
 
-Lore exposes MCP at `POST /api/mcp` — spec revision **2026-07-28**, with the 2025 handshake revisions still served for older clients. Point any MCP client at it with the write bearer:
+For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
+Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username
+cannot be used to select or impersonate another internal User. Multi-user deployments
+should use a verified identity proxy such as Cloudflare Access.
+
+Lore keeps a single text lockfile, `bun.lock`. Bun owns dependency installation and
+script dispatch; self-hosted application and migration code still execute on Node 24,
+while the Cloudflare artifact executes on Workerd.
+
+## Local development
+
+Start Postgres/pgvector, then bootstrap the schema and runtime login with an admin
+connection:
 
 ```bash
-claude mcp add --transport http lore http://localhost:3000/api/mcp --header "Authorization: Bearer $BRAIN_WRITE_TOKEN"
+bun install --frozen-lockfile
+export DATABASE_URL=postgres://lore_admin:password@localhost:5432/lore
+export LORE_RUNTIME_ROLE=lore_runtime
+export LORE_RUNTIME_PASSWORD=runtime-password
+bun run db:bootstrap
 ```
 
-### From the terminal
-
-`bin/lore.mjs` is a zero-dependency CLI over the same endpoint — it reads `.env` from the working directory, so a checkout needs no configuration:
+Set `DATABASE_URL` to the new runtime login, copy the remaining local values from
+`.env.example`, and run:
 
 ```bash
-./bin/lore.mjs search "what did we decide about auth"
-./bin/lore.mjs put notes/standup --title "Standup" < notes.md
-./bin/lore.mjs health          # orphans + broken links
-./bin/lore.mjs sweep --dry     # what mention-linking would connect
+bun run dev
 ```
 
-`lore` with no arguments lists every command. Point it elsewhere with `LORE_URL` / `LORE_TOKEN`.
+## HTTP surface
 
-### Skills, for whichever agent you use
+Human requests select a Workspace using `x-lore-workspace-id`. Agents use
+`Authorization: Bearer lore_agent_…` plus the same Workspace header; the token is
+accepted only while both the credential and Workspace grant remain active.
 
-Lore ships three [SKILL.md](https://agentskills.io) files — an open standard read by 70+ agents, and the same file works in all of them.
+- `/api/workspaces`
+- `/api/memories` and `/api/memories/:id`
+- `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
+- `/api/evaluations/suites`, suite runs, and run results
+
+Agent tokens are returned only at creation time. Lore stores only their SHA-256
+hash and a short display prefix.
+
+## CoreSpeed Cloud / Cloudflare
+
+Cloudflare is the only managed deployment target. Lore uses OpenNext on Workers and
+a cache-disabled Hyperdrive binding to the same Postgres schema:
 
 ```bash
-npx skills add corespeed-io/lore
+# Run migrations from a trusted environment first.
+bun run db:migrate
+
+# Use the non-owner runtime database login created by db:bootstrap.
+bunx wrangler hyperdrive create lore \
+  --connection-string="postgres://lore_runtime:...@db.example.com:5432/lore" \
+  --caching-disabled
+
+# Put the returned id and Cloudflare Access values in wrangler.jsonc.
+bun run deploy:cloudflare
 ```
 
-That installs them into whichever agent you use — [vercel-labs/skills](https://github.com/vercel-labs/skills) reads `skills/` straight out of this repo, so there is no npm package and no clone. From a checkout, `npx skills add .` does the same thing.
+Do not enable Hyperdrive query caching for Lore. Authorization and RLS reads depend
+on transaction-local User/Workspace context and must always be fresh. The checked-in
+Hyperdrive id and Access values are deliberate placeholders.
 
-- **lore-brain** — which write door (`put_page` / `remember_note` / `remember`) and which read door (`search` / `recall` / the graph)
-- **lore-memory** — scopes, supersession, `as_of` recall, the event log
-- **lore-curate** — orphans, broken links, renames, the background jobs
-
-## Deploy your own
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/corespeed-io/lore&env=DATABASE_URL,EMBEDDINGS_URL,EMBEDDINGS_API_KEY,EMBEDDINGS_MODEL,EMBEDDINGS_DIM,BRAIN_WRITE_TOKEN,AUTH_MODE&envDescription=Point%20at%20your%20Postgres%2C%20then%20choose%20an%20auth%20mode&envLink=https://github.com/corespeed-io/lore/blob/main/.env.example)
-
-> **Lore [fails closed](#configuration).** A fresh deploy returns `403` until you set `AUTH_MODE` — `gateway` or `password`, or `none` **with** `ALLOW_INSECURE=1`. It will not serve a private brain by accident.
-
-Lore is a standard Next.js standalone app, so it also runs on **Railway** (Dockerfile auto-detected) or any container host:
+## Verify changes
 
 ```bash
-docker build -t lore . && docker run -p 3000:8080 --env-file .env lore
+bun run typecheck
+bun run lint
+bun run test
+bun run build
+bun audit --audit-level=high
+bunx opennextjs-cloudflare build
+bunx wrangler deploy --dry-run
 ```
 
-Or on **Cloudflare Workers** (via OpenNext) — put any Postgres behind a [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) binding (free plan included; see `wrangler.jsonc`):
-
-```bash
-npx wrangler hyperdrive create lore-db --caching-disabled --connection-string="postgres://…"
-npx wrangler secret put EMBEDDINGS_API_KEY   # + BRAIN_WRITE_TOKEN, UI_PASSWORD…
-npm run cf:deploy
-```
-
-## Configuration
-
-Config is entirely environment-driven — see [`.env.example`](.env.example) for the full list.
-
-| Variable | Required | Notes |
-|---|---|---|
-| `DATABASE_URL` | yes | Postgres 12+ with `vector` + `pg_trgm` |
-| `EMBEDDINGS_URL` / `_API_KEY` / `_MODEL` / `_DIM` | yes | Any OpenAI-compatible endpoint, including a local ollama |
-| `EMBEDDINGS_QUERY_PREFIX` | no | Prepended to queries only — the instruction the 2026 models want |
-| `BRAIN_WRITE_TOKEN` / `BRAIN_READ_TOKEN` | yes | Agents' bearer for the MCP endpoint; ≥16 chars or refused |
-| `APP_TITLE` / `APP_SUBTITLE` | no | Hero branding, per deployment |
-| `AUTH_MODE` | no | `none` · `password` · `gateway`. Defaults to `none` |
-| `ALLOW_INSECURE` | no | Required to actually run with `AUTH_MODE=none` (auth fails closed otherwise) |
-| `AUTH_GATEWAY_JWKS_URL` / `_ISSUER` / `_AUDIENCE` | for gateway | Verify a JWT the gateway signed — Cloudflare Access sends one already |
-| `AUTH_GATEWAY_SHARED_SECRET` | for gateway | Or a secret header, if your proxy can't sign a JWT |
-| `AUTH_GATEWAY_USER_HEADER` | no | Where identity arrives (default `X-Forwarded-User`), read only after a proof holds |
-
-**Auth fails closed, and a half-configured mode is an error rather than an opening** — `AUTH_MODE=password` with no `UI_PASSWORD` is refused, not downgraded. `gateway` never trusts an identity header on its own: it reads `X-Forwarded-User` only after verifying a JWT or a shared secret, and refuses every request if neither is configured. Never expose the origin with `ALLOW_INSECURE=1` to the internet.
-
-## Extending — add a visualization module
-
-```typescript
-// src/lib/viz/<name>.ts
-export function mountName(el: HTMLElement, data: GraphData, opts: Opts): Instance {
-  // render with d3, canvas, or the DOM; return { destroy, ... } for teardown
-}
-```
-
-Mount it from `src/components/GraphView.tsx` and add a test in `tests/`.
-
-## Development
-
-```bash
-npm run dev        # dev server (hot reload)
-npm run typecheck  # tsc --noEmit
-npm run lint       # biome
-npm test           # vitest
-npm run build      # production build
-```
-
-Working with an AI coding agent? **[`AGENTS.md`](AGENTS.md)** is the single source of truth — Claude Code, Codex, Cursor, Gemini, and Copilot all read it.
-
-## Contributing
-
-Issues, ideas, and PRs are welcome — start with [CONTRIBUTING.md](.github/CONTRIBUTING.md) or open a [discussion](https://github.com/corespeed-io/lore/discussions). Built and maintained by [CoreSpeed](https://github.com/corespeed-io).
+The deterministic synthetic benchmark is
+[`evaluation/suites/synthetic-v1.json`](evaluation/suites/synthetic-v1.json). See
+[`AGENTS.md`](AGENTS.md) for architecture and working agreements and
+[`CONTEXT.md`](CONTEXT.md) for canonical domain terminology.
 
 ## License
 

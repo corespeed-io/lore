@@ -1,3 +1,6 @@
+import { fileURLToPath } from "node:url";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+
 // Self-hosted, same-origin app: it only ever talks to its own /api/* routes and
 // serves self-hosted fonts/JS/CSS. The CSP keeps 'unsafe-inline' (Next injects
 // inline bootstrap scripts + React inline styles) but locks everything else to
@@ -30,7 +33,20 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 export default {
   output: "standalone",
+  outputFileTracingRoot: fileURLToPath(new URL(".", import.meta.url)),
+  // Next traces pg-cloudflare's Node fallback by default. OpenNext bundles under
+  // the `workerd` condition, so include the actual Worker socket implementation.
+  outputFileTracingIncludes: {
+    "/*": ["./node_modules/pg-cloudflare/dist/**/*", "./node_modules/pg-cloudflare/esm/**/*"],
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
 };
+
+if (
+  process.env.NODE_ENV === "development" &&
+  process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+) {
+  initOpenNextCloudflareForDev();
+}
