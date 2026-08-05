@@ -233,7 +233,7 @@ These commands remain the current verification loop:
 bun run dev        # localhost:3000
 bun run db:migrate # apply checksum-protected SQL migrations
 bun run db:bootstrap # migrate + provision a non-owner runtime login
-bun run typecheck  # tsc --noEmit
+bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
 bun run test       # vitest run
