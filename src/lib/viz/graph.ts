@@ -45,6 +45,23 @@ export function labelBoxesOverlap(a: LabelBox, b: LabelBox, pad = 0): boolean {
 // silent 30x write amplification that looks identical on screen. Dropping the
 // second half leaves labels from the PREVIOUS hover on screen — a visual bug,
 // but only for whoever happens to be moving a pointer at the time.
+// Where a post-drag focus hold ends, decided from the first REAL pointer
+// travel after release. Pure and exported for the same reason labelsToHide is:
+// the threat — "during the hold, nothing that MOVES under a stationary pointer
+// may take the focus, and the hold ends only by pointer travel" — has to be
+// testable without a browser. The travel threshold (6px, squared) absorbs
+// release jitter; where the pointer lands decides what happens to the focus:
+// a circle or an edge INCIDENT to the held focus keeps it (the ordinary hover
+// path keeps it there too), anything else clears.
+export type HoldTarget = "circle" | "incident-edge" | "other";
+export function holdVerdict(
+  travelSq: number,
+  target: HoldTarget,
+): "hold" | "release" | "release-clear" {
+  if (travelSq < 36) return "hold";
+  return target === "circle" || target === "incident-edge" ? "release" : "release-clear";
+}
+
 export function labelsToHide(
   wasShown: Iterable<string>,
   shown: { has(id: string): boolean },
@@ -592,6 +609,13 @@ export function mountGraph(
   // follows, normal path) or across empty space (clears). Stored as the
   // release coordinates; null means no hold.
   let postDragFrom: { x: number; y: number } | null = null;
+  // THE guard, one expression for every pointer handler on every layer. The
+  // first version guarded only the node layer — but the edge hit layer is a
+  // 14px transparent copy of every edge, repositioned each tick, and its
+  // unguarded handlers let a springing hit line kill or steal the focus after
+  // release. Invisible on this brain: above EDGE_HOVER_LIMIT the hit layer is
+  // an empty join, so only sub-600-edge deployments had the bug.
+  const focusHeld = () => draggingNode || postDragFrom !== null;
 
   node.call(
     d3
@@ -620,24 +644,48 @@ export function mountGraph(
       .on("end", (e, d) => {
         if (!e.active) sim.alphaTarget(0);
         draggingNode = false;
-        const src = e.sourceEvent as MouseEvent | undefined;
-        postDragFrom = src ? { x: src.clientX, y: src.clientY } : null;
+        // Touch end events carry no clientX — no hold there, honestly, rather
+        // than a NaN origin behind a cast that asserts otherwise.
+        const src = e.sourceEvent as { clientX?: number; clientY?: number } | undefined;
+        postDragFrom =
+          src && Number.isFinite(src.clientX) && Number.isFinite(src.clientY)
+            ? { x: src.clientX as number, y: src.clientY as number }
+            : null;
         d.fx = null;
         d.fy = null;
       }),
   );
 
   // The post-drag hold's release valve: the first REAL pointer travel after a
-  // drag either hands focus to whatever node it lands on (the normal hover
-  // path, which also ends the hold) or, over empty space, clears. 6px of
-  // travel so release jitter doesn't count as leaving.
+  // drag ends the hold, and where it lands decides the focus — holdVerdict is
+  // the (pure, tested) rule. A hit-layer line incident to the held focus
+  // counts as focus-bearing, because the ordinary edge-hover path deliberately
+  // keeps node focus there too.
   svg.on("pointermove.postdrag", (event: PointerEvent) => {
     if (!postDragFrom || draggingNode) return;
     const dx = event.clientX - postDragFrom.x;
     const dy = event.clientY - postDragFrom.y;
-    if (dx * dx + dy * dy < 36) return;
+    const el = event.target as Element | null;
+    let target: HoldTarget = "other";
+    if (el?.closest?.(".gnodes circle")) target = "circle";
+    else {
+      const hit = el?.closest?.(".ghits line");
+      // biome-ignore lint/suspicious/noExplicitAny: D3 binds the datum on the element.
+      const datum = hit ? (hit as any).__data__ : null;
+      if (datum && hoverNodeId && edgeTouchesNode(datum, hoverNodeId)) target = "incident-edge";
+    }
+    const verdict = holdVerdict(dx * dx + dy * dy, target);
+    if (verdict === "hold") return;
     postDragFrom = null;
-    if (!(event.target as Element)?.closest?.("circle")) clearHoverSoon();
+    if (verdict === "release-clear") clearHoverSoon();
+  });
+
+  // Leaving the svg entirely also ends the hold — releasing near the container
+  // edge and exiting used to strand the dim until the pointer came back.
+  svg.on("pointerleave.postdrag", () => {
+    if (!postDragFrom || draggingNode) return;
+    postDragFrom = null;
+    clearHoverSoon();
   });
 
   // A pointer with a button held down is dragging a node or panning the canvas,
@@ -704,10 +752,17 @@ export function mountGraph(
       opts.onSelect(d.id);
     });
 
+  // Every handler on this layer starts with focusHeld(): the hit lines are
+  // repositioned each tick, so during a drag — and during the post-release
+  // hold, while the springs are still moving — they sweep under the STATIONARY
+  // pointer and fire enter/leave events for elements that moved. The first
+  // version guarded only the node layer against this, and on any brain small
+  // enough to have a hit layer (<= EDGE_HOVER_LIMIT edges), a springing hit
+  // line killed the dim right after release or stole the focus outright.
   linkHit
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointerover", (event, l: any) => {
-      if (isGesture(event)) return; // panning across edges is not pointing at them
+      if (isGesture(event) || focusHeld()) return; // moving elements don't take focus
       clearHoverTimer();
       if (selectedId) {
         applyState();
@@ -724,7 +779,7 @@ export function mountGraph(
     })
     // biome-ignore lint/suspicious/noExplicitAny: D3 mutates link endpoints from ids to node objects.
     .on("pointermove", (event, l: any) => {
-      if (isGesture(event)) return;
+      if (isGesture(event) || focusHeld()) return;
       if (selectedId) {
         hideEdgeTooltip();
         return;
@@ -741,8 +796,8 @@ export function mountGraph(
       if (selectedId) return;
       // An edge crossed mid-gesture takes the `clearHoverNow` branch below, which
       // has no 110ms coalescing at all — it would wipe the dragged node's focus
-      // instantly. The tooltip is still hidden above, which is right.
-      if (isGesture(_event)) return;
+      // instantly. Same for a hit line springing off the pointer post-release.
+      if (isGesture(_event) || focusHeld()) return;
       if (hoverNodeId && edgeTouchesNode(l, hoverNodeId)) {
         clearHoverSoon();
         return;
@@ -885,6 +940,7 @@ export function mountGraph(
       clearHoverTimer();
       cancelHoverPaint();
       cancelDimTimer();
+      postDragFrom = null;
       edgeTooltip.remove();
       svg.remove();
     },

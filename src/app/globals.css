@@ -2764,7 +2764,10 @@ a.ext {
   stroke-width: 3px;
 }
 
-/* Search matches carry their ring themselves — no dimming (asked for). */
+/* Search matches carry their ring themselves — a bare search never dims the
+   graph (asked for). When a hover/grab dim IS active, a match outside the
+   focused neighbourhood recedes with everything else and keeps a pale ring
+   (the .graph-dimmed .match rule below). */
 .lore-graph .gnodes circle.match {
   stroke: #171717;
   stroke-width: 2.4;
@@ -2809,7 +2812,7 @@ a.ext {
    their attribute fill and the rules further up, with no override juggling. */
 .lore-graph.graph-dimmed .gnodes circle:not(.lit):not(.hovered) {
   fill: #e9edf0;
-  stroke: #fafafa;
+  stroke: var(--canvas);
 }
 .lore-graph.graph-dimmed .glinks line:not(.lit) {
   stroke: #f4f4f4;
