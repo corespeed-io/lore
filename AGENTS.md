@@ -21,8 +21,9 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001`–`0011` define identity, tenancy, user-private Agents, Memory/chunks,
-  pgvector state, and versioned Evaluation tables with RLS;
+- the pre-release schema is squashed into `0001_initial.sql`, which defines identity,
+  tenancy, user-private Agents, Memory/chunks, pgvector state, and versioned
+  Evaluation tables with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
@@ -264,3 +265,13 @@ do not treat generated `.next` or `.open-next` output as source or commit it.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
   same PR. Update [`CONTEXT.md`](CONTEXT.md) whenever canonical domain language
   changes.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
