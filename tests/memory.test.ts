@@ -101,6 +101,15 @@ test("Only the Memory owner can forget a Memory", async () => {
   await expect(memories.forget(testContext.bob, created.id)).resolves.toBe(false);
   await expect(memories.forget(testContext.alice, created.id)).resolves.toBe(true);
   await expect(memories.retrieve(testContext.alice, created.id)).resolves.toBeNull();
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await expect(
+      transaction.query("SELECT id FROM memory_chunks WHERE memory_id = $1", [created.id]),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+  await expect(
+    memories.search(testContext.alice, { query: "Temporary", limit: 10 }),
+  ).resolves.toEqual([]);
 
   await testContext.close();
 });
@@ -269,13 +278,35 @@ test("Changing Memory scope invalidates and rebuilds derived chunks", async () =
   await testContext.close();
 });
 
+test("RLS denies direct access to another User's private Memory chunks", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const created = await memories.remember(testContext.alice, {
+    content: "Alice private evidence text.",
+    scope: "private",
+  });
+
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.bob);
+    await expect(
+      transaction.query("SELECT id, content FROM memory_chunks WHERE memory_id = $1", [created.id]),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+});
+
 test("Hybrid search finds semantically related visible Memory without lexical overlap", async () => {
   const testContext = await createMemoryTestContext();
+  const fixtureVector = (index: number) =>
+    Array.from({ length: 1536 }, (_, vectorIndex) => (vectorIndex === index ? 1 : 0));
   const embeddingProvider = {
     model: "fixture-embedding-v1",
     async embed(texts: string[]) {
       return texts.map((text) =>
-        /cat|feline/i.test(text) ? [1, 0, 0] : /rocket|orbital/i.test(text) ? [0, 1, 0] : [0, 0, 1],
+        /cat|feline/i.test(text)
+          ? fixtureVector(0)
+          : /rocket|orbital/i.test(text)
+            ? fixtureVector(1)
+            : fixtureVector(2),
       );
     },
   };

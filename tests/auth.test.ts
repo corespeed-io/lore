@@ -76,7 +76,7 @@ test("password mode accepts the right password (any username)", async () => {
   const h = new Headers({ authorization: `Basic ${btoa("x:secret")}` });
   expect(await checkAuth(h, cookies())).toMatchObject({
     ok: true,
-    principal: { provider: "password", subject: "local", displayName: "Local User" },
+    principal: { provider: "local", subject: "local", displayName: "Local User" },
   });
 });
 
@@ -97,9 +97,20 @@ test("password mode does not let the Basic username select another User identity
 
   expect(alice.principal).toEqual(bob.principal);
   expect(alice.principal).toMatchObject({
-    provider: "password",
+    provider: "local",
     subject: "self-hosted-operator",
     displayName: "Operator",
+  });
+});
+
+test("invalid mode never downgrades to insecure access", async () => {
+  process.env.AUTH_MODE = "gateway";
+  process.env.ALLOW_INSECURE = "1";
+
+  await expect(checkAuth(new Headers(), cookies())).resolves.toMatchObject({
+    ok: false,
+    status: 403,
+    detail: expect.stringMatching(/AUTH_MODE/),
   });
 });
 

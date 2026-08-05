@@ -1,10 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { checkAuth } from "./src/lib/auth";
 
-export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"] };
+export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg).*)"] };
 
-function json(detail: string, status: number, extra: Record<string, string> = {}) {
-  return new NextResponse(JSON.stringify({ detail }), {
+function json(error: string, status: number, extra: Record<string, string> = {}) {
+  return new NextResponse(JSON.stringify({ error }), {
     status,
     headers: { "content-type": "application/json", ...extra },
   });
@@ -15,7 +15,8 @@ export async function middleware(req: NextRequest) {
   if (path === "/api/health") return NextResponse.next();
 
   const authorization = req.headers.get("authorization") ?? "";
-  const agentRequest = path.startsWith("/api/") && authorization.startsWith("Bearer lore_agent_");
+  const agentRequest =
+    path.startsWith("/api/") && /^Bearer lore_agent_[0-9a-f]{64}$/.test(authorization);
   if (!agentRequest) {
     const r = await checkAuth(req.headers, req.cookies);
     if (!r.ok) {

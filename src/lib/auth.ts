@@ -123,11 +123,19 @@ export async function checkAuth(
       };
     }
     return checkPassword(headers, cfg.uiPassword, {
-      provider: "password",
+      provider: "local",
       subject: cfg.localSubject,
       displayName: cfg.localDisplayName,
       email: cfg.localEmail || undefined,
     });
+  }
+
+  if (cfg.authMode === "invalid") {
+    return {
+      ok: false,
+      status: 403,
+      detail: "AUTH_MODE must be one of: none, password, proxy",
+    };
   }
 
   // Only explicit no-auth mode may use the local-development escape hatch.

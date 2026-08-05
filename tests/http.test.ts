@@ -121,6 +121,67 @@ test("Memory HTTP resource supports retrieve, update, and forget", async () => {
   await testContext.close();
 });
 
+test("HTTP handlers reject malformed UUIDs and null characters before Postgres", async () => {
+  const testContext = await createMemoryTestContext();
+  const request = new Request("http://lore.local/api/resource", {
+    headers: { "x-lore-workspace-id": testContext.alice.workspaceId },
+  });
+
+  const responses = await Promise.all([
+    createMemoryByIdHandlers(testContext.database).GET(request, "not-a-uuid"),
+    createAgentCredentialHandlers(testContext.database).POST(request, "not-a-uuid"),
+    createAgentCredentialByIdHandlers(testContext.database).DELETE(request, "not-a-uuid"),
+    createAgentGrantHandlers(testContext.database).DELETE(request, "not-a-uuid"),
+    createEvaluationRunHandlers(testContext.database).POST(request, "not-a-uuid"),
+    createEvaluationRunByIdHandlers(testContext.database).GET(request, "not-a-uuid"),
+    createMemoryHandlers(testContext.database).GET(
+      new Request("http://lore.local/api/memories", {
+        headers: { "x-lore-workspace-id": "not-a-uuid" },
+      }),
+    ),
+  ]);
+
+  expect(responses.map((response) => response.status)).toEqual([400, 400, 400, 400, 400, 400, 400]);
+});
+
+test("Memory HTTP input rejects null characters in queries, content, and metadata", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-null-user";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const memories = createMemoryHandlers(testContext.database);
+  const workspace = (await (
+    await workspaces.POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Input Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+
+  const responses = await Promise.all([
+    memories.GET(new Request("http://lore.local/api/memories?q=%00secret", { headers })),
+    memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "before\0after" }),
+      }),
+    ),
+    memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "valid", metadata: { note: "before\0after" } }),
+      }),
+    ),
+  ]);
+
+  expect(responses.map((response) => response.status)).toEqual([400, 400, 400]);
+});
+
 test("Agent HTTP resource provisions a grant and issues a revocable one-time token", async () => {
   process.env.AUTH_MODE = "none";
   process.env.ALLOW_INSECURE = "1";

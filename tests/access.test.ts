@@ -140,6 +140,46 @@ test("Revoked Agent Workspace Grant invalidates every credential", async () => {
   await testContext.close();
 });
 
+test("User can reactivate a revoked Agent Workspace Grant", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Release assistant" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  await access.revokeAgentGrant(testContext.alice, agent.id);
+
+  const reactivated = await access.grantAgent(testContext.alice, agent.id, {
+    permission: "write",
+  });
+
+  expect(reactivated).toMatchObject({ status: "active", permission: "write" });
+  await expect(
+    access.authenticateAgent(credential.token, testContext.alice.workspaceId),
+  ).resolves.toMatchObject({ agentId: agent.id });
+});
+
+test("Workspace owner can reactivate a suspended Membership", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  await testContext.suspendMembership(testContext.bob);
+
+  const membership = await access.addMember(testContext.alice, testContext.bob.userId, {
+    role: "member",
+  });
+
+  expect(membership).toMatchObject({
+    userId: testContext.bob.userId,
+    status: "active",
+    role: "member",
+  });
+  await expect(
+    access.selectWorkspace(
+      { userId: testContext.bob.userId },
+      testContext.bob.workspaceId.toUpperCase(),
+    ),
+  ).resolves.toEqual(testContext.bob);
+});
+
 test("User cannot grant another User's Agent", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);

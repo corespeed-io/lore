@@ -30,7 +30,8 @@ identity mapping, authorization, retrieval, and evaluation directly.
 AutoDream, automatic consolidation, summarization, and proactive insight generation
 are intentionally outside v1. Production embedding providers and background retry
 workers are the next retrieval-maintenance layer; writes already remain available
-when embeddings are unavailable.
+when embeddings are unavailable. The v1 embedding contract is 1536 dimensions,
+backed by an HNSW cosine index.
 
 ## Run with Docker
 

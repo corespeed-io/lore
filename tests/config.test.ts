@@ -8,8 +8,8 @@ test("defaults are applied when env is empty", () => {
   expect(c.authMode).toBe("none");
 });
 
-test("invalid AUTH_MODE falls back to none", () => {
-  expect(loadConfig({ AUTH_MODE: "bogus" }).authMode).toBe("none");
+test("invalid AUTH_MODE remains invalid instead of downgrading to none", () => {
+  expect(loadConfig({ AUTH_MODE: "bogus" }).authMode).toBe("invalid");
 });
 
 test("branding passes through", () => {

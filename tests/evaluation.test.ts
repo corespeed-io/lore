@@ -26,6 +26,21 @@ test("Ranking metrics calculate Recall@K, MRR, and nDCG deterministically", () =
   });
 });
 
+test("Isolation scans every retrieved id even beyond ranking K", () => {
+  expect(
+    evaluateRanking({
+      retrievedMemoryIds: ["expected-a", "expected-b", "private-leak"],
+      expectedMemoryIds: ["expected-a", "expected-b"],
+      forbiddenMemoryIds: ["private-leak"],
+      limit: 2,
+    }),
+  ).toMatchObject({
+    recallAtK: 1,
+    isolationPassed: false,
+    forbiddenRetrievedIds: ["private-leak"],
+  });
+});
+
 test("Evaluation run persists repeatable metrics without retrieving private neighbors", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -79,6 +94,10 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
     metrics: { isolationPassed: true, forbiddenRetrievedIds: [] },
   });
   await expect(evaluations.getSuite(testContext.carol, suite.id)).resolves.toBeNull();
+  await expect(evaluations.getSuite(testContext.bob, suite.id)).resolves.toBeNull();
+  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual([]);
+  await expect(evaluations.getRun(testContext.bob, run.id)).resolves.toBeNull();
+  await expect(evaluations.runSuite(testContext.bob, suite.id)).rejects.toBeInstanceOf(Error);
   for (const table of [
     "evaluation_suites",
     "evaluation_cases",
@@ -92,12 +111,14 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
       );
       expect(Number(visible.rows[0].count)).toBeGreaterThan(0);
     });
-    await testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.carol);
-      await expect(transaction.query(`SELECT id FROM ${table}`)).resolves.toMatchObject({
-        rows: [],
+    for (const deniedActor of [testContext.bob, testContext.carol]) {
+      await testContext.database.transaction(async (transaction) => {
+        await installActorContext(transaction, deniedActor);
+        await expect(transaction.query(`SELECT id FROM ${table}`)).resolves.toMatchObject({
+          rows: [],
+        });
       });
-    });
+    }
   }
 
   await testContext.close();
@@ -142,4 +163,41 @@ test("Any forbidden retrieval hard-fails the Evaluation run", async () => {
   });
 
   await testContext.close();
+});
+
+test("A crashed Evaluation run records fail-closed isolation metrics", async () => {
+  const testContext = await createMemoryTestContext();
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: {
+      async search() {
+        throw new Error("provider unavailable");
+      },
+    },
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Provider failure",
+    cases: [
+      {
+        query: "failure",
+        expectedMemoryIds: ["40000000-0000-4000-8000-000000000003"],
+      },
+    ],
+  });
+
+  await expect(evaluations.runSuite(testContext.alice, suite.id)).rejects.toThrow(
+    "provider unavailable",
+  );
+  const runId = await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    const result = await transaction.query<{ id: string }>(
+      "SELECT id FROM evaluation_runs WHERE suite_id = $1",
+      [suite.id],
+    );
+    return result.rows[0].id;
+  });
+
+  await expect(evaluations.getRun(testContext.alice, runId)).resolves.toMatchObject({
+    status: "failed",
+    metrics: { isolationPassed: false, hardFailureCount: 1 },
+  });
 });

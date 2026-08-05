@@ -14,6 +14,18 @@ export class WorkspaceAccessError extends Error {
   readonly status = 403;
 }
 
+export class RequestInputError extends Error {
+  override name = "RequestInputError";
+  readonly status = 400;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function normalizeUuid(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  return UUID_PATTERN.test(normalized) ? normalized : null;
+}
+
 function requestCookies(request: Request) {
   const values = new Map<string, string>();
   for (const part of (request.headers.get("cookie") ?? "").split(";")) {
@@ -37,8 +49,10 @@ function bearerToken(request: Request): string | null {
 }
 
 function requestedWorkspace(request: Request): string {
-  const workspaceId = request.headers.get("x-lore-workspace-id")?.trim();
-  if (!workspaceId) throw new WorkspaceAccessError("x-lore-workspace-id is required");
+  const requested = request.headers.get("x-lore-workspace-id")?.trim();
+  if (!requested) throw new WorkspaceAccessError("x-lore-workspace-id is required");
+  const workspaceId = normalizeUuid(requested);
+  if (!workspaceId) throw new RequestInputError("x-lore-workspace-id must be a UUID");
   return workspaceId;
 }
 

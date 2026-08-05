@@ -9,7 +9,9 @@ import {
 import { createMemoryModule, MemoryAccessDeniedError, type MemoryScope } from "./memory";
 import {
   createRequestContextResolver,
+  normalizeUuid,
   RequestAuthenticationError,
+  RequestInputError,
   WorkspaceAccessError,
 } from "./request-context";
 
@@ -20,6 +22,7 @@ class BadRequestError extends Error {
 function errorResponse(error: unknown): Response {
   if (
     error instanceof BadRequestError ||
+    error instanceof RequestInputError ||
     error instanceof RequestAuthenticationError ||
     error instanceof WorkspaceAccessError
   ) {
@@ -31,6 +34,7 @@ function errorResponse(error: unknown): Response {
   if (error instanceof EvaluationSuiteNotFoundError) {
     return Response.json({ error: error.message }, { status: 404 });
   }
+  console.error("Unhandled Lore request error", error);
   return Response.json({ error: "Internal server error" }, { status: 500 });
 }
 
@@ -52,6 +56,9 @@ function requiredString(value: unknown, name: string, maximumLength: number): st
     throw new BadRequestError(`${name} is required`);
   }
   const normalized = value.trim();
+  if (normalized.includes("\0")) {
+    throw new BadRequestError(`${name} contains an invalid null character`);
+  }
   if (normalized.length > maximumLength) {
     throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
   }
@@ -69,7 +76,31 @@ function metadata(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new BadRequestError("metadata must be an object");
   }
+  validateJsonStrings(value, "metadata");
   return value as Record<string, unknown>;
+}
+
+function validateJsonStrings(value: unknown, path: string): void {
+  if (typeof value === "string") {
+    if (value.includes("\0")) {
+      throw new BadRequestError(`${path} contains an invalid null character`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      validateJsonStrings(item, `${path}[${index}]`);
+    }
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.includes("\0")) {
+        throw new BadRequestError(`${path} contains an invalid null character`);
+      }
+      validateJsonStrings(item, `${path}.${key}`);
+    }
+  }
 }
 
 function agentPermission(value: unknown): AgentGrantPermission {
@@ -79,10 +110,9 @@ function agentPermission(value: unknown): AgentGrantPermission {
 
 function uuidString(value: unknown, name: string): string {
   const result = requiredString(value, name, 36);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result)) {
-    throw new BadRequestError(`${name} must be a UUID`);
-  }
-  return result;
+  const normalized = normalizeUuid(result);
+  if (!normalized) throw new BadRequestError(`${name} must be a UUID`);
+  return normalized;
 }
 
 function uuidArray(value: unknown, name: string, allowEmpty: boolean): string[] {
@@ -194,8 +224,11 @@ export function createAgentCredentialHandlers(database: PostgresDatabase) {
   return {
     async POST(request: Request, agentId: string): Promise<Response> {
       try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
         const actor = requireHumanActor(await resolver.resolveActor(request));
-        return Response.json(await access.issueAgentCredential(actor, agentId), { status: 201 });
+        return Response.json(await access.issueAgentCredential(actor, normalizedAgentId), {
+          status: 201,
+        });
       } catch (error) {
         return errorResponse(error);
       }
@@ -209,8 +242,9 @@ export function createAgentCredentialByIdHandlers(database: PostgresDatabase) {
   return {
     async DELETE(request: Request, credentialId: string): Promise<Response> {
       try {
+        const normalizedCredentialId = uuidString(credentialId, "credentialId");
         const actor = requireHumanActor(await resolver.resolveActor(request));
-        const revoked = await access.revokeAgentCredential(actor, credentialId);
+        const revoked = await access.revokeAgentCredential(actor, normalizedCredentialId);
         return revoked
           ? new Response(null, { status: 204 })
           : Response.json({ error: "Agent credential not found" }, { status: 404 });
@@ -227,8 +261,9 @@ export function createAgentGrantHandlers(database: PostgresDatabase) {
   return {
     async DELETE(request: Request, agentId: string): Promise<Response> {
       try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
         const actor = requireHumanActor(await resolver.resolveActor(request));
-        const revoked = await access.revokeAgentGrant(actor, agentId);
+        const revoked = await access.revokeAgentGrant(actor, normalizedAgentId);
         return revoked
           ? new Response(null, { status: 204 })
           : Response.json({ error: "Active Agent grant not found" }, { status: 404 });
@@ -283,8 +318,9 @@ export function createEvaluationRunHandlers(database: PostgresDatabase) {
   return {
     async POST(request: Request, suiteId: string): Promise<Response> {
       try {
+        const normalizedSuiteId = uuidString(suiteId, "suiteId");
         const actor = requireHumanActor(await resolver.resolveActor(request));
-        return Response.json(await evaluations.runSuite(actor, suiteId), { status: 201 });
+        return Response.json(await evaluations.runSuite(actor, normalizedSuiteId), { status: 201 });
       } catch (error) {
         return errorResponse(error);
       }
@@ -298,8 +334,9 @@ export function createEvaluationRunByIdHandlers(database: PostgresDatabase) {
   return {
     async GET(request: Request, runId: string): Promise<Response> {
       try {
+        const normalizedRunId = uuidString(runId, "runId");
         const actor = requireHumanActor(await resolver.resolveActor(request));
-        const run = await evaluations.getRun(actor, runId);
+        const run = await evaluations.getRun(actor, normalizedRunId);
         return run
           ? Response.json(run)
           : Response.json({ error: "Evaluation run not found" }, { status: 404 });
@@ -318,7 +355,8 @@ export function createMemoryHandlers(database: PostgresDatabase) {
       try {
         const actor = await resolver.resolveActor(request);
         const url = new URL(request.url);
-        const query = url.searchParams.get("q")?.trim() ?? "";
+        const requestedQuery = url.searchParams.get("q");
+        const query = requestedQuery?.trim() ? requiredString(requestedQuery, "q", 10_000) : "";
         const requestedLimit = Number(url.searchParams.get("limit") ?? "50");
         const limit = Number.isFinite(requestedLimit) ? requestedLimit : 50;
         return Response.json(
@@ -354,8 +392,9 @@ export function createMemoryByIdHandlers(database: PostgresDatabase) {
   return {
     async GET(request: Request, id: string): Promise<Response> {
       try {
+        const memoryId = uuidString(id, "memoryId");
         const actor = await resolver.resolveActor(request);
-        const memory = await memories.retrieve(actor, id);
+        const memory = await memories.retrieve(actor, memoryId);
         return memory
           ? Response.json(memory)
           : Response.json({ error: "Memory not found" }, { status: 404 });
@@ -366,12 +405,13 @@ export function createMemoryByIdHandlers(database: PostgresDatabase) {
 
     async PATCH(request: Request, id: string): Promise<Response> {
       try {
+        const memoryId = uuidString(id, "memoryId");
         const actor = await resolver.resolveActor(request);
         const body = await jsonObject(request);
         if (body.content === undefined && body.scope === undefined && body.metadata === undefined) {
           throw new BadRequestError("At least one Memory field is required");
         }
-        const memory = await memories.update(actor, id, {
+        const memory = await memories.update(actor, memoryId, {
           content:
             body.content === undefined
               ? undefined
@@ -389,8 +429,9 @@ export function createMemoryByIdHandlers(database: PostgresDatabase) {
 
     async DELETE(request: Request, id: string): Promise<Response> {
       try {
+        const memoryId = uuidString(id, "memoryId");
         const actor = await resolver.resolveActor(request);
-        const forgotten = await memories.forget(actor, id);
+        const forgotten = await memories.forget(actor, memoryId);
         return forgotten
           ? new Response(null, { status: 204 })
           : Response.json({ error: "Memory not found" }, { status: 404 });

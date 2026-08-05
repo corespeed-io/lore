@@ -6,5 +6,9 @@ export default defineConfig({
       "@": new URL("./src", import.meta.url).pathname,
     },
   },
-  test: { environment: "node", include: ["tests/**/*.test.ts"] },
+  test: {
+    environment: "node",
+    include: ["tests/**/*.test.ts"],
+    testTimeout: 30_000,
+  },
 });

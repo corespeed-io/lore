@@ -3,7 +3,7 @@
 export interface Config {
   appTitle: string;
   appSubtitle: string;
-  authMode: "none" | "password" | "proxy";
+  authMode: "none" | "password" | "proxy" | "invalid";
   uiPassword: string;
   accessTeamDomain: string;
   accessAud: string;
@@ -19,12 +19,18 @@ type Env = Record<string, string | undefined>;
 
 export function loadConfig(env: Env = process.env): Config {
   const mode = env.AUTH_MODE;
+  const authMode =
+    mode === undefined || mode === "" || mode === "none"
+      ? "none"
+      : mode === "password" || mode === "proxy"
+        ? mode
+        : "invalid";
   return {
     appTitle: env.APP_TITLE ?? "Memory for humans and agents",
     appSubtitle:
       env.APP_SUBTITLE ??
       "Store, isolate, and retrieve durable memory across users, workspaces, and agents.",
-    authMode: mode === "password" || mode === "proxy" ? mode : "none",
+    authMode,
     uiPassword: env.UI_PASSWORD ?? "",
     accessTeamDomain: env.ACCESS_TEAM_DOMAIN ?? "",
     accessAud: env.ACCESS_AUD ?? "",

@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
+import { onTestFinished } from "vitest";
 import type { PostgresDatabase } from "@/lib/db";
 import type { ActorContext } from "@/lib/memory";
 
@@ -61,7 +62,8 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
   );
   await postgres.exec("SET ROLE lore_app");
 
-  return {
+  let closePromise: Promise<void> | undefined;
+  const context: MemoryTestContext = {
     database: {
       transaction: (use) =>
         postgres.transaction((transaction) =>
@@ -95,6 +97,11 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
         await postgres.exec("SET ROLE lore_app");
       }
     },
-    close: () => postgres.close(),
+    close: () => {
+      closePromise ??= postgres.close();
+      return closePromise;
+    },
   };
+  onTestFinished(() => context.close());
+  return context;
 }

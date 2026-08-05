@@ -139,7 +139,8 @@ export function evaluateRanking(input: {
   forbiddenMemoryIds?: string[];
   limit: number;
 }): RankingMetrics {
-  const retrieved = unique(input.retrievedMemoryIds).slice(0, Math.max(0, input.limit));
+  const allRetrieved = unique(input.retrievedMemoryIds);
+  const retrieved = allRetrieved.slice(0, Math.max(0, input.limit));
   const expected = new Set(unique(input.expectedMemoryIds));
   const forbidden = new Set(unique(input.forbiddenMemoryIds ?? []));
   const relevantRanks = retrieved.flatMap((id, index) => (expected.has(id) ? [index + 1] : []));
@@ -149,7 +150,7 @@ export function evaluateRanking(input: {
     { length: idealHitCount },
     (_, index) => 1 / Math.log2(index + 2),
   ).reduce((total, value) => total + value, 0);
-  const forbiddenRetrievedIds = retrieved.filter((id) => forbidden.has(id));
+  const forbiddenRetrievedIds = allRetrieved.filter((id) => forbidden.has(id));
   return {
     recallAtK: expected.size ? relevantRanks.length / expected.size : 0,
     reciprocalRank: relevantRanks[0] ? 1 / relevantRanks[0] : 0,
@@ -205,7 +206,7 @@ function toRun(row: RunRow, results: EvaluationResult[]): EvaluationRun {
       recallAtK: 0,
       reciprocalRank: 0,
       ndcgAtK: 0,
-      isolationPassed: true,
+      isolationPassed: false,
       hardFailureCount: 0,
       caseCount: 0,
       averageLatencyMs: 0,
@@ -230,19 +231,46 @@ export function createEvaluationModule(
     return database.transaction(async (transaction) => {
       await installActorContext(transaction, actor);
       const suiteResult = await transaction.query<SuiteRow>(
-        "SELECT * FROM evaluation_suites WHERE workspace_id = $1 AND id = $2",
-        [actor.workspaceId, suiteId],
+        `SELECT * FROM evaluation_suites
+         WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $3`,
+        [actor.workspaceId, suiteId, actor.userId],
       );
       const suite = suiteResult.rows[0];
       if (!suite) return null;
       const caseResult = await transaction.query<CaseRow>(
         `SELECT id, ordinal, query, expected_memory_ids, forbidden_memory_ids, result_limit
          FROM evaluation_cases
-         WHERE workspace_id = $1 AND suite_id = $2
+         WHERE workspace_id = $1 AND suite_id = $2 AND created_by_user_id = $3
          ORDER BY ordinal, id`,
-        [actor.workspaceId, suiteId],
+        [actor.workspaceId, suiteId, actor.userId],
       );
       return toSuite(suite, caseResult.rows.map(toCase));
+    });
+  }
+
+  async function getRun(actor: ActorContext, runId: string): Promise<EvaluationRun | null> {
+    return database.transaction(async (transaction) => {
+      await installActorContext(transaction, actor);
+      const runResult = await transaction.query<RunRow>(
+        `SELECT * FROM evaluation_runs
+         WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $3`,
+        [actor.workspaceId, runId, actor.userId],
+      );
+      const run = runResult.rows[0];
+      if (!run) return null;
+      const resultRows = await transaction.query<ResultRow>(
+        `SELECT result.*
+         FROM evaluation_results result
+         JOIN evaluation_cases evaluation_case
+           ON evaluation_case.id = result.case_id
+          AND evaluation_case.created_by_user_id = result.created_by_user_id
+         WHERE result.workspace_id = $1
+           AND result.run_id = $2
+           AND result.created_by_user_id = $3
+         ORDER BY evaluation_case.ordinal, result.id`,
+        [actor.workspaceId, runId, actor.userId],
+      );
+      return toRun(run, resultRows.rows.map(toResult));
     });
   }
 
@@ -277,15 +305,16 @@ export function createEvaluationModule(
           }
           const result = await transaction.query<CaseRow>(
             `INSERT INTO evaluation_cases (
-               id, workspace_id, suite_id, ordinal, query,
+               id, workspace_id, suite_id, created_by_user_id, ordinal, query,
                expected_memory_ids, forbidden_memory_ids, result_limit
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING
                id, ordinal, query, expected_memory_ids, forbidden_memory_ids, result_limit`,
             [
               crypto.randomUUID(),
               actor.workspaceId,
               suiteId,
+              actor.userId,
               ordinal,
               evaluationCase.query,
               unique(evaluationCase.expectedMemoryIds),
@@ -307,9 +336,9 @@ export function createEvaluationModule(
         const result = await transaction.query<{ id: string }>(
           `SELECT id
            FROM evaluation_suites
-           WHERE workspace_id = $1
+           WHERE workspace_id = $1 AND created_by_user_id = $2
            ORDER BY updated_at DESC, id`,
-          [actor.workspaceId],
+          [actor.workspaceId, actor.userId],
         );
         return result.rows.map((row) => row.id);
       });
@@ -317,26 +346,7 @@ export function createEvaluationModule(
       return suites.filter((suite): suite is EvaluationSuite => suite !== null);
     },
 
-    async getRun(actor: ActorContext, runId: string): Promise<EvaluationRun | null> {
-      return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
-        const runResult = await transaction.query<RunRow>(
-          "SELECT * FROM evaluation_runs WHERE workspace_id = $1 AND id = $2",
-          [actor.workspaceId, runId],
-        );
-        const run = runResult.rows[0];
-        if (!run) return null;
-        const resultRows = await transaction.query<ResultRow>(
-          `SELECT result.*
-           FROM evaluation_results result
-           JOIN evaluation_cases evaluation_case ON evaluation_case.id = result.case_id
-           WHERE result.workspace_id = $1 AND result.run_id = $2
-           ORDER BY evaluation_case.ordinal, result.id`,
-          [actor.workspaceId, runId],
-        );
-        return toRun(run, resultRows.rows.map(toResult));
-      });
-    },
+    getRun,
 
     async runSuite(actor: ActorContext, suiteId: string): Promise<EvaluationRun> {
       const suite = await getSuite(actor, suiteId);
@@ -345,9 +355,9 @@ export function createEvaluationModule(
       await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         await transaction.query(
-          `INSERT INTO evaluation_runs (id, workspace_id, suite_id)
-           VALUES ($1, $2, $3)`,
-          [runId, actor.workspaceId, suiteId],
+          `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id)
+           VALUES ($1, $2, $3, $4)`,
+          [runId, actor.workspaceId, suiteId, actor.userId],
         );
       });
 
@@ -360,10 +370,7 @@ export function createEvaluationModule(
             limit: evaluationCase.limit,
           });
           const latencyMs = Math.max(0, now() - startedAt);
-          const retrievedMemoryIds = unique(searchResults.map((result) => result.memory.id)).slice(
-            0,
-            evaluationCase.limit,
-          );
+          const retrievedMemoryIds = unique(searchResults.map((result) => result.memory.id));
           const metrics = evaluateRanking({
             retrievedMemoryIds,
             expectedMemoryIds: evaluationCase.expectedMemoryIds,
@@ -382,14 +389,15 @@ export function createEvaluationModule(
             await installActorContext(transaction, actor);
             await transaction.query(
               `INSERT INTO evaluation_results (
-                 id, workspace_id, run_id, case_id, retrieved_memory_ids,
+                 id, workspace_id, run_id, case_id, created_by_user_id, retrieved_memory_ids,
                  metrics, latency_ms, estimated_cost_usd
-               ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
               [
                 resultId,
                 actor.workspaceId,
                 runId,
                 evaluationCase.id,
+                actor.userId,
                 retrievedMemoryIds,
                 JSON.stringify(metrics),
                 latencyMs,
@@ -432,24 +440,43 @@ export function createEvaluationModule(
           await transaction.query(
             `UPDATE evaluation_runs
              SET status = $3, metrics = $4::jsonb, error = $5, completed_at = now()
-             WHERE workspace_id = $1 AND id = $2`,
-            [actor.workspaceId, runId, status, JSON.stringify(metrics), error],
+             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $6`,
+            [actor.workspaceId, runId, status, JSON.stringify(metrics), error, actor.userId],
           );
         });
       } catch (error) {
+        const failedMetrics: EvaluationRunMetrics = {
+          recallAtK: mean(completedResults.map((result) => result.metrics.recallAtK)),
+          reciprocalRank: mean(completedResults.map((result) => result.metrics.reciprocalRank)),
+          ndcgAtK: mean(completedResults.map((result) => result.metrics.ndcgAtK)),
+          isolationPassed: false,
+          hardFailureCount: 1,
+          caseCount: completedResults.length,
+          averageLatencyMs: mean(completedResults.map((result) => result.latencyMs)),
+          estimatedCostUsd: completedResults.reduce(
+            (total, result) => total + result.estimatedCostUsd,
+            0,
+          ),
+        };
         await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           await transaction.query(
             `UPDATE evaluation_runs
-             SET status = 'failed', error = $3, completed_at = now()
-             WHERE workspace_id = $1 AND id = $2`,
-            [actor.workspaceId, runId, error instanceof Error ? error.message : String(error)],
+             SET status = 'failed', metrics = $3::jsonb, error = $4, completed_at = now()
+             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $5`,
+            [
+              actor.workspaceId,
+              runId,
+              JSON.stringify(failedMetrics),
+              error instanceof Error ? error.message : String(error),
+              actor.userId,
+            ],
           );
         });
         throw error;
       }
 
-      const completedRun = await this.getRun(actor, runId);
+      const completedRun = await getRun(actor, runId);
       if (!completedRun) throw new Error("Completed Evaluation run could not be loaded");
       return completedRun;
     },

@@ -188,6 +188,16 @@ function toWorkspaceSummary(row: WorkspaceSummaryRow): WorkspaceSummary {
 }
 
 export function createAccessModule(database: PostgresDatabase) {
+  async function listWorkspaces(user: UserContext): Promise<WorkspaceSummary[]> {
+    return database.transaction(async (transaction) => {
+      await installUserContext(transaction, user);
+      const result = await transaction.query<WorkspaceSummaryRow>(
+        "SELECT * FROM lore.list_workspaces()",
+      );
+      return result.rows.map(toWorkspaceSummary);
+    });
+  }
+
   return {
     async createWorkspace(user: UserContext, input: { name: string }): Promise<Workspace> {
       return translateAccessError(() =>
@@ -202,20 +212,13 @@ export function createAccessModule(database: PostgresDatabase) {
       );
     },
 
-    async listWorkspaces(user: UserContext): Promise<WorkspaceSummary[]> {
-      return database.transaction(async (transaction) => {
-        await installUserContext(transaction, user);
-        const result = await transaction.query<WorkspaceSummaryRow>(
-          "SELECT * FROM lore.list_workspaces()",
-        );
-        return result.rows.map(toWorkspaceSummary);
-      });
-    },
+    listWorkspaces,
 
     async selectWorkspace(user: UserContext, workspaceId: string): Promise<ActorContext | null> {
-      const workspaces = await this.listWorkspaces(user);
-      return workspaces.some((workspace) => workspace.id === workspaceId)
-        ? { userId: user.userId, workspaceId }
+      const normalizedWorkspaceId = workspaceId.toLowerCase();
+      const workspaces = await listWorkspaces(user);
+      return workspaces.some((workspace) => workspace.id === normalizedWorkspaceId)
+        ? { userId: user.userId, workspaceId: normalizedWorkspaceId }
         : null;
     },
 
@@ -230,6 +233,8 @@ export function createAccessModule(database: PostgresDatabase) {
           const result = await transaction.query<MembershipRow>(
             `INSERT INTO memberships (workspace_id, user_id, role)
              VALUES ($1, $2, $3)
+             ON CONFLICT (workspace_id, user_id) DO UPDATE
+             SET role = EXCLUDED.role, status = 'active', updated_at = now()
              RETURNING *`,
             [actor.workspaceId, userId, input.role],
           );
@@ -270,6 +275,8 @@ export function createAccessModule(database: PostgresDatabase) {
           const grantResult = await transaction.query<AgentGrantRow>(
             `INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
              VALUES ($1, $2, $3)
+             ON CONFLICT (workspace_id, agent_id) DO UPDATE
+             SET permission = EXCLUDED.permission, status = 'active', updated_at = now()
              RETURNING *`,
             [actor.workspaceId, agentId, input.permission],
           );
@@ -315,6 +322,8 @@ export function createAccessModule(database: PostgresDatabase) {
           const result = await transaction.query<AgentGrantRow>(
             `INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
              VALUES ($1, $2, $3)
+             ON CONFLICT (workspace_id, agent_id) DO UPDATE
+             SET permission = EXCLUDED.permission, status = 'active', updated_at = now()
              RETURNING *`,
             [actor.workspaceId, agentId, input.permission],
           );

@@ -55,6 +55,8 @@ export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
 }
 
+export const EMBEDDING_DIMENSIONS = 1536;
+
 export interface MemoryModuleOptions {
   embeddingProvider?: EmbeddingProvider;
   semanticDistanceThreshold?: number;
@@ -106,7 +108,7 @@ function chunkContent(content: string, maximumLength = 1_200): string[] {
 }
 
 function vectorLiteral(vector: number[]): string {
-  if (vector.length === 0 || vector.some((value) => !Number.isFinite(value))) {
+  if (vector.length !== EMBEDDING_DIMENSIONS || vector.some((value) => !Number.isFinite(value))) {
     throw new Error("Embedding provider returned an invalid vector");
   }
   return `[${vector.join(",")}]`;
@@ -147,7 +149,7 @@ async function insertChunks(
       `INSERT INTO memory_chunks (
          id, workspace_id, memory_id, ordinal, content, embedding, embedding_model, embedded_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6::vector, $7,
+         $1, $2, $3, $4, $5, $6::vector(1536), $7,
          CASE WHEN $6::text IS NULL THEN NULL ELSE now() END
        )`,
       [
@@ -313,51 +315,47 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<SearchRow>(
-          `WITH visible_chunks AS MATERIALIZED (
+          `WITH lexical_candidates AS (
              SELECT
                chunk.id AS chunk_id,
-               chunk.content AS evidence,
-               chunk.search_vector,
-               chunk.embedding,
-               chunk.embedding_model,
-               memory.*
+               memory.id AS memory_id,
+               row_number() OVER (
+                 ORDER BY ts_rank_cd(
+                   chunk.search_vector,
+                   websearch_to_tsquery('simple', $1),
+                   32
+                 ) DESC, chunk.id
+               ) AS candidate_rank
              FROM memory_chunks chunk
              JOIN memories memory
                ON memory.id = chunk.memory_id
               AND memory.workspace_id = chunk.workspace_id
              WHERE chunk.workspace_id = $2
-           ),
-           lexical_candidates AS (
-             SELECT
-               chunk_id,
-               id AS memory_id,
-               row_number() OVER (
-                 ORDER BY ts_rank_cd(
-                   search_vector,
-                   websearch_to_tsquery('simple', $1),
-                   32
-                 ) DESC, chunk_id
-               ) AS candidate_rank
-             FROM visible_chunks
-             WHERE search_vector @@ websearch_to_tsquery('simple', $1)
+               AND chunk.search_vector @@ websearch_to_tsquery('simple', $1)
              ORDER BY ts_rank_cd(
-               search_vector,
+               chunk.search_vector,
                websearch_to_tsquery('simple', $1),
                32
-             ) DESC, chunk_id
+             ) DESC, chunk.id
              LIMIT $4
            ),
            semantic_candidates AS (
              SELECT
-               chunk_id,
-               id AS memory_id,
-               row_number() OVER (ORDER BY embedding <=> $3::vector, chunk_id) AS candidate_rank
-             FROM visible_chunks
+               chunk.id AS chunk_id,
+               memory.id AS memory_id,
+               row_number() OVER (
+                 ORDER BY chunk.embedding <=> $3::vector(1536), chunk.id
+               ) AS candidate_rank
+             FROM memory_chunks chunk
+             JOIN memories memory
+               ON memory.id = chunk.memory_id
+              AND memory.workspace_id = chunk.workspace_id
              WHERE $3::text IS NOT NULL
-               AND embedding IS NOT NULL
-               AND embedding_model = $7
-               AND (embedding <=> $3::vector) <= $5
-             ORDER BY embedding <=> $3::vector, chunk_id
+               AND chunk.workspace_id = $2
+               AND chunk.embedding IS NOT NULL
+               AND chunk.embedding_model = $7
+               AND (chunk.embedding <=> $3::vector(1536)) <= $5
+             ORDER BY chunk.embedding <=> $3::vector(1536), chunk.id
              LIMIT $4
            ),
            reciprocal_rank AS (
@@ -383,23 +381,27 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              LIMIT $6
            )
            SELECT
-             visible_chunks.id,
-             visible_chunks.workspace_id,
-             visible_chunks.owner_user_id,
-             visible_chunks.created_by_agent_id,
-             visible_chunks.scope,
-             visible_chunks.content,
-             visible_chunks.metadata,
-             visible_chunks.version,
-             visible_chunks.created_at,
-             visible_chunks.updated_at,
+             memory.id,
+             memory.workspace_id,
+             memory.owner_user_id,
+             memory.created_by_agent_id,
+             memory.scope,
+             memory.content,
+             memory.metadata,
+             memory.version,
+             memory.created_at,
+             memory.updated_at,
              ranked_memories.score,
-             visible_chunks.evidence
+             chunk.content AS evidence
            FROM ranked_memories
-           JOIN visible_chunks
-             ON visible_chunks.id = ranked_memories.memory_id
-            AND visible_chunks.chunk_id = ranked_memories.evidence_chunk_id
-           ORDER BY ranked_memories.score DESC, visible_chunks.updated_at DESC, visible_chunks.id`,
+           JOIN memories memory
+             ON memory.id = ranked_memories.memory_id
+            AND memory.workspace_id = $2
+           JOIN memory_chunks chunk
+             ON chunk.id = ranked_memories.evidence_chunk_id
+            AND chunk.memory_id = memory.id
+            AND chunk.workspace_id = $2
+           ORDER BY ranked_memories.score DESC, memory.updated_at DESC, memory.id`,
           [
             query,
             actor.workspaceId,

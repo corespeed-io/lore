@@ -35,7 +35,9 @@ been removed. Lore now has a native implementation:
 Still incomplete: production embedding providers, background retry/queue workers,
 derived graph storage, and full Agent/Evaluation management UI. Chunking and
 lexical indexing are synchronous; embedding failure is explicit (`NULL`) and never
-blocks a Memory write.
+blocks a Memory write. The v1 pgvector column is fixed at 1536 dimensions so it can
+use an HNSW cosine index; every embedding adapter must emit exactly 1536 finite
+values or Lore records an explicit missing-embedding state.
 
 Do not:
 
