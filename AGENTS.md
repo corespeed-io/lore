@@ -28,7 +28,8 @@ been removed. Lore now has a native implementation:
   context for every request transaction;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   native routes built through the pure handler seam in `src/lib/http.ts`;
-- `src/components/memory-console.tsx` is the working Memory console;
+- `src/components/memory-console.tsx` owns the native Memory workflow and
+  `src/components/lore-sidebar.tsx` owns the restored Lore shell;
 - Docker/Compose targets OSS self-hosting; OpenNext + a cache-disabled Hyperdrive
   binding targets CoreSpeed Cloud on Cloudflare Workers.
 
@@ -52,6 +53,12 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 - the visual design, shell, memory browse/search UI, and Markdown rendering;
 - security-header and Cloudflare Access JWT-verification techniques;
 - pure utilities and tests whose behavior remains part of the new product.
+
+The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
+stylesheet (`src/app/globals.css`) and put reusable controls/icons in
+`src/components/ui`. Graph remains a visible primary navigation destination marked
+`soon` until native relationship storage and an RLS-safe node-and-edge API exist;
+never wire it back to the removed gbrain proxy.
 
 Build the native domain modules directly. Compatibility adapters, if ever needed,
 must sit outside the Memory interface and may not weaken its ownership or RLS
@@ -238,13 +245,14 @@ bun run db:bootstrap # migrate + provision a non-owner runtime login
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
+bun run design:check # enforce and self-test the Lore UI contract
 bun run test       # vitest run
 bun run build      # next build (production)
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```
 
-Before opening a PR, typecheck, lint, test, and build must all pass.
+Before opening a PR, design:check, typecheck, lint, test, and build must all pass.
 
 Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but
@@ -264,3 +272,13 @@ do not treat generated `.next` or `.open-next` output as source or commit it.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
   same PR. Update [`CONTEXT.md`](CONTEXT.md) whenever canonical domain language
   changes.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

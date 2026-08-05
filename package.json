@@ -34,6 +34,7 @@
     "preview:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "design:check": "node scripts/check-design-system.mjs . && node --test scripts/check-design-system.test.mjs",
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "vitest run",

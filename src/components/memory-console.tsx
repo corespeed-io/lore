@@ -1,17 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LoreSidebar, type WorkspaceOption } from "./lore-sidebar";
+import { Button } from "./ui/button";
+import { ArrowLeftIcon, CloseIcon, PlusIcon } from "./ui/icons";
 
 interface MemoryConsoleProps {
   appTitle: string;
   appSubtitle: string;
-}
-
-interface Workspace {
-  id: string;
-  name: string;
-  role?: "owner" | "admin" | "member";
 }
 
 interface Memory {
@@ -50,26 +47,34 @@ async function requestJson<Result>(
   return response.json() as Promise<Result>;
 }
 
+const DATE_FORMAT = new Intl.DateTimeFormat("en", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
 function displayDate(value: string): string {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(value));
+  return DATE_FORMAT.format(new Date(value));
 }
 
-function memoryPreview(content: string): string {
-  return content.length > 240 ? `${content.slice(0, 237).trimEnd()}…` : content;
+function memoryPreview(content: string, limit = 220): string {
+  const compact = content.replace(/\s+/g, " ").trim();
+  return compact.length > limit ? `${compact.slice(0, limit - 1).trimEnd()}…` : compact;
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [memories, setMemories] = useState<Memory[]>([]);
   const [searchEvidence, setSearchEvidence] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [resultsLoading, setResultsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspaceName, setWorkspaceName] = useState("");
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
@@ -80,6 +85,11 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
   const [selected, setSelected] = useState<Memory | null>(null);
   const [editContent, setEditContent] = useState("");
   const [editScope, setEditScope] = useState<Memory["scope"]>("shared");
+  const newMemoryButtonRef = useRef<HTMLButtonElement>(null);
+  const composerDialogRef = useRef<HTMLDialogElement>(null);
+  const workspaceDialogRef = useRef<HTMLDialogElement>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const workspaceNameRef = useRef<HTMLInputElement>(null);
 
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
@@ -89,14 +99,14 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
   const loadWorkspaces = useCallback(async () => {
     setLoading(true);
     try {
-      const loaded = await requestJson<Workspace[]>("/api/workspaces");
+      const loaded = await requestJson<WorkspaceOption[]>("/api/workspaces");
       setWorkspaces(loaded);
       const stored = window.localStorage.getItem("lore.workspace");
       const next = loaded.find((workspace) => workspace.id === stored)?.id ?? loaded[0]?.id ?? "";
       setActiveWorkspaceId(next);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setLoading(false);
     }
@@ -119,6 +129,7 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
     const controller = new AbortController();
     const timer = window.setTimeout(
       async () => {
+        setResultsLoading(true);
         try {
           const path = query.trim()
             ? `/api/memories?q=${encodeURIComponent(query.trim())}&limit=50`
@@ -140,9 +151,9 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
           }
           setError(null);
         } catch (cause) {
-          if ((cause as Error).name !== "AbortError") {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          }
+          if ((cause as Error).name !== "AbortError") setError(errorMessage(cause));
+        } finally {
+          if (!controller.signal.aborted) setResultsLoading(false);
         }
       },
       query ? 220 : 0,
@@ -153,12 +164,39 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
     };
   }, [activeWorkspaceId, query]);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isEditing = target?.matches("input, textarea, select, [contenteditable=true]");
+      if (event.key === "/" && !isEditing && !document.querySelector("dialog[open]")) {
+        event.preventDefault();
+        document.querySelector<HTMLInputElement>("#memory-search")?.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!composerOpen) return;
+    const dialog = composerDialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    draftRef.current?.focus();
+  }, [composerOpen]);
+
+  useEffect(() => {
+    if (!creatingWorkspace) return;
+    const dialog = workspaceDialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    workspaceNameRef.current?.focus();
+  }, [creatingWorkspace]);
+
   async function createWorkspace(event: React.FormEvent) {
     event.preventDefault();
     if (!workspaceName.trim()) return;
     setSaving(true);
     try {
-      const workspace = await requestJson<Workspace>("/api/workspaces", {
+      const workspace = await requestJson<WorkspaceOption>("/api/workspaces", {
         method: "POST",
         body: JSON.stringify({ name: workspaceName }),
       });
@@ -166,9 +204,10 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
       setActiveWorkspaceId(workspace.id);
       setWorkspaceName("");
       setCreatingWorkspace(false);
+      setQuery("");
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setSaving(false);
     }
@@ -190,8 +229,9 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
       setComposerOpen(false);
       setQuery("");
       setError(null);
+      newMemoryButtonRef.current?.focus();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setSaving(false);
     }
@@ -201,6 +241,7 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
     setSelected(memory);
     setEditContent(memory.content);
     setEditScope(memory.scope);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function updateMemory(event: React.FormEvent) {
@@ -210,10 +251,7 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
     try {
       const updated = await requestJson<Memory>(
         `/api/memories/${selected.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ content: editContent, scope: editScope }),
-        },
+        { method: "PATCH", body: JSON.stringify({ content: editContent, scope: editScope }) },
         activeWorkspaceId,
       );
       setMemories((current) =>
@@ -222,7 +260,7 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
       setSelected(updated);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setSaving(false);
     }
@@ -241,15 +279,29 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
       setSelected(null);
       setError(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setSaving(false);
     }
   }
 
+  function closeComposer() {
+    setComposerOpen(false);
+    window.setTimeout(() => newMemoryButtonRef.current?.focus(), 0);
+  }
+
+  function closeWorkspaceCreator() {
+    setCreatingWorkspace(false);
+    setWorkspaceName("");
+    window.setTimeout(
+      () => document.querySelector<HTMLButtonElement>(".sidebar-create")?.focus(),
+      0,
+    );
+  }
+
   if (loading) {
     return (
-      <main className="memory-loading">
+      <main className="app-loading" aria-live="polite">
         <Image src="/lore-mark.svg" alt="" width={30} height={30} priority />
         <span>Opening Lore…</span>
       </main>
@@ -259,19 +311,26 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
   if (!workspaces.length) {
     return (
       <main className="onboarding-shell">
-        <section className="onboarding-copy">
-          <a className="memory-brand" href="/" aria-label="Lore home">
-            <Image src="/lore-mark.svg" alt="" width={28} height={28} priority />
-            <span>Lore</span>
+        <section className="onboarding-hero">
+          <div className="hero-mesh" aria-hidden="true" />
+          <a className="wordmark onboarding-wordmark" href="/" aria-label="Lore home">
+            <Image src="/lore-mark.svg" alt="" width={24} height={24} priority />
+            <span className="wordmark-title">Lore</span>
           </a>
-          <p className="memory-eyebrow">Your first memory boundary</p>
-          <h1>Create a Workspace.</h1>
-          <p>
-            A Workspace is Lore&apos;s only tenant. It contains members, permitted Agents, and the
-            Memories they are allowed to see.
-          </p>
+          <div className="onboarding-copy">
+            <p className="page-eyebrow">Your first memory boundary</p>
+            <h1>Create a Workspace.</h1>
+            <p className="onboarding-description">
+              A Workspace contains members, permitted Agents, and the Memories they are allowed to
+              see. It is Lore&apos;s only tenant boundary.
+            </p>
+          </div>
         </section>
         <form className="onboarding-form" onSubmit={createWorkspace}>
+          <div>
+            <p className="page-eyebrow">Get started</p>
+            <h2>Name this Workspace</h2>
+          </div>
           <label htmlFor="workspace-name">Workspace name</label>
           <input
             id="workspace-name"
@@ -280,257 +339,374 @@ export function MemoryConsole({ appTitle, appSubtitle }: MemoryConsoleProps) {
             placeholder="Acme Research"
             maxLength={120}
           />
-          <button type="submit" disabled={saving || !workspaceName.trim()}>
+          <Button variant="primary" type="submit" disabled={saving || !workspaceName.trim()}>
             {saving ? "Creating…" : "Create Workspace"}
-          </button>
-          {error && <p className="form-error">{error}</p>}
+          </Button>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
         </form>
       </main>
     );
   }
 
   return (
-    <div className="memory-shell">
-      <aside className="memory-rail">
-        <a className="memory-brand" href="/" aria-label="Lore home">
-          <Image src="/lore-mark.svg" alt="" width={26} height={26} priority />
-          <span>Lore</span>
-        </a>
+    <div className="app-shell">
+      <LoreSidebar
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        query={query}
+        onWorkspaceChange={(workspaceId) => {
+          setActiveWorkspaceId(workspaceId);
+          setQuery("");
+        }}
+        onQueryChange={(nextQuery) => {
+          setQuery(nextQuery);
+          setSelected(null);
+        }}
+        onCreateWorkspace={() => setCreatingWorkspace(true)}
+        onOpenMemories={() => setSelected(null)}
+      />
 
-        <div className="workspace-picker">
-          <label htmlFor="workspace-picker">Workspace</label>
-          <select
-            id="workspace-picker"
-            value={activeWorkspaceId}
-            onChange={(event) => setActiveWorkspaceId(event.target.value)}
-          >
-            {workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.name}
-              </option>
-            ))}
-          </select>
-          <button
-            className="text-button"
-            type="button"
-            onClick={() => setCreatingWorkspace((current) => !current)}
-          >
-            + New Workspace
-          </button>
-        </div>
-
-        {creatingWorkspace && (
-          <form className="rail-workspace-form" onSubmit={createWorkspace}>
-            <input
-              aria-label="New Workspace name"
-              value={workspaceName}
-              onChange={(event) => setWorkspaceName(event.target.value)}
-              placeholder="Workspace name"
-              maxLength={120}
-            />
-            <button type="submit" disabled={saving || !workspaceName.trim()}>
-              Add
-            </button>
-          </form>
-        )}
-
-        <nav className="memory-nav" aria-label="Main navigation">
-          <span className="memory-nav-item active">
-            <span className="nav-dot" /> Memories
-          </span>
-          <span className="memory-nav-item disabled">
-            Agents <small>soon</small>
-          </span>
-          <span className="memory-nav-item disabled">
-            Evaluation <small>soon</small>
-          </span>
-        </nav>
-
-        <div className="rail-foot">
-          <span className="rail-signal" />
-          Native Postgres · RLS
-        </div>
-      </aside>
-
-      <main className="memory-main">
-        <header className="memory-header">
-          <div>
-            <p className="memory-eyebrow">{activeWorkspace?.name ?? "Workspace"}</p>
-            <h1>{appTitle}</h1>
-            <p>{appSubtitle}</p>
-          </div>
-          <button className="primary-button" type="button" onClick={() => setComposerOpen(true)}>
-            New Memory
-          </button>
-        </header>
-
-        <section className="memory-toolbar" aria-label="Memory tools">
-          <label className="memory-search">
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-              <circle cx="7" cy="7" r="4.5" />
-              <path d="m10.4 10.4 3.1 3.1" />
-            </svg>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search this Workspace…"
-              aria-label="Search Memories"
-            />
-          </label>
-          <span className="memory-count">{memories.length} shown</span>
-        </section>
-
-        {composerOpen && (
-          <form className="memory-composer" onSubmit={createMemory}>
-            <div className="composer-topline">
-              <span className="memory-eyebrow">Capture Memory</span>
-              <button className="icon-button" type="button" onClick={() => setComposerOpen(false)}>
-                ×<span className="sr-only">Close composer</span>
-              </button>
-            </div>
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="What should humans and agents remember?"
-              rows={5}
-              maxLength={1_000_000}
-            />
-            <div className="composer-actions">
-              <fieldset className="scope-switch">
-                <legend className="sr-only">Memory scope</legend>
-                {(["shared", "private"] as const).map((scope) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={draftScope === scope ? "selected" : ""}
-                    onClick={() => setDraftScope(scope)}
-                  >
-                    {scope}
-                  </button>
-                ))}
-              </fieldset>
-              <button className="primary-button" type="submit" disabled={saving || !draft.trim()}>
-                {saving ? "Remembering…" : "Remember"}
-              </button>
-            </div>
-          </form>
-        )}
-
-        {error && (
-          <div className="memory-error" role="alert">
-            <strong>Couldn&apos;t complete that request.</strong>
-            <span>{error}</span>
-            <button type="button" onClick={() => setError(null)}>
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        <section className="memory-ledger" aria-live="polite">
-          <div className="ledger-heading">
-            <span>{query ? "Ranked recall" : "Recent memory"}</span>
-            <span>Scope</span>
-            <span>Updated</span>
-          </div>
-          {memories.map((memory, index) => (
-            <button
-              className="memory-row"
-              type="button"
-              key={memory.id}
-              onClick={() => openMemory(memory)}
-            >
-              <span className="memory-index">{String(index + 1).padStart(2, "0")}</span>
-              <span className="memory-copy">
-                {memoryPreview(searchEvidence[memory.id] ?? memory.content)}
-                {memory.createdByAgentId && <small>Agent provenance</small>}
-              </span>
-              <span className={`scope-pill ${memory.scope}`}>{memory.scope}</span>
-              <span className="memory-date">{displayDate(memory.updatedAt)}</span>
-            </button>
-          ))}
-          {!memories.length && (
-            <div className="memory-empty">
-              <span className="empty-glyph">○</span>
-              <h2>{query ? "Nothing recalled." : "No Memories yet."}</h2>
-              <p>
-                {query
-                  ? "Try a different phrase. Visibility is filtered before ranking."
-                  : "Capture the first durable fact for this Workspace."}
-              </p>
-            </div>
-          )}
-        </section>
-      </main>
-
-      {selected && (
-        <dialog open className="memory-drawer" aria-label="Edit Memory">
-          <button className="drawer-scrim" type="button" onClick={() => setSelected(null)}>
-            <span className="sr-only">Close Memory</span>
-          </button>
-          <form className="drawer-panel" onSubmit={updateMemory}>
-            <div className="drawer-head">
+      <main className="app-main">
+        {selected ? (
+          <MemoryDetail
+            memory={selected}
+            content={editContent}
+            scope={editScope}
+            saving={saving}
+            error={error}
+            onBack={() => setSelected(null)}
+            onContentChange={setEditContent}
+            onScopeChange={setEditScope}
+            onSubmit={updateMemory}
+            onForget={forgetMemory}
+            onDismissError={() => setError(null)}
+          />
+        ) : (
+          <section className="page-wrap view-anim" aria-labelledby="memories-title">
+            <header className="page-header">
               <div>
-                <p className="memory-eyebrow">Memory · v{selected.version}</p>
-                <p className="drawer-id">{selected.id}</p>
+                <p className="page-eyebrow">
+                  {activeWorkspace?.name} · {appTitle}
+                </p>
+                <h1 id="memories-title">Memories</h1>
+                <p className="page-description">{appSubtitle}</p>
               </div>
-              <button className="icon-button" type="button" onClick={() => setSelected(null)}>
-                ×<span className="sr-only">Close</span>
-              </button>
+              <Button
+                ref={newMemoryButtonRef}
+                variant="primary"
+                onClick={() => setComposerOpen(true)}
+              >
+                <PlusIcon />
+                New Memory
+              </Button>
+            </header>
+
+            {error && (
+              <div className="inline-error" role="alert">
+                <div>
+                  <strong>Couldn&apos;t complete that request.</strong>
+                  <span>{error}</span>
+                </div>
+                <Button variant="ghost" onClick={() => setError(null)}>
+                  Dismiss
+                </Button>
+              </div>
+            )}
+
+            <div className="results-heading">
+              <div>
+                <span>{query ? "Ranked recall" : "Recent memory"}</span>
+                {query && <strong>“{query}”</strong>}
+              </div>
+              <span>{resultsLoading ? "Searching…" : `${memories.length} shown`}</span>
             </div>
-            <label htmlFor="memory-content">Content</label>
-            <textarea
-              id="memory-content"
-              value={editContent}
-              onChange={(event) => setEditContent(event.target.value)}
-              rows={14}
-            />
-            <p className="field-label">Scope</p>
-            <div className="scope-switch drawer-scope">
-              {(["shared", "private"] as const).map((scope) => (
+
+            <div className="memory-list" aria-live="polite" aria-busy={resultsLoading}>
+              {memories.map((memory) => (
                 <button
-                  key={scope}
+                  className="memory-row"
                   type="button"
-                  className={editScope === scope ? "selected" : ""}
-                  onClick={() => setEditScope(scope)}
+                  key={memory.id}
+                  onClick={() => openMemory(memory)}
                 >
-                  {scope}
+                  <span className="memory-row-copy">
+                    <strong>{memoryPreview(searchEvidence[memory.id] ?? memory.content)}</strong>
+                    <small>
+                      {memory.createdByAgentId ? "Agent provenance" : "Created by user"}
+                    </small>
+                  </span>
+                  <span className="memory-scope">{memory.scope}</span>
+                  <span className="memory-date">{displayDate(memory.updatedAt)}</span>
                 </button>
               ))}
+
+              {!memories.length && !resultsLoading && (
+                <div className="empty-state">
+                  <span className="empty-mark" aria-hidden="true">
+                    ○
+                  </span>
+                  <h2>{query ? "Nothing recalled." : "No Memories yet."}</h2>
+                  <p>
+                    {query
+                      ? "Try a different phrase. Visibility is filtered before ranking."
+                      : "Capture the first durable fact for this Workspace."}
+                  </p>
+                  {!query && (
+                    <Button variant="secondary" onClick={() => setComposerOpen(true)}>
+                      <PlusIcon />
+                      New Memory
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
-            <dl className="memory-meta">
+          </section>
+        )}
+      </main>
+
+      {composerOpen && (
+        <dialog
+          ref={composerDialogRef}
+          className="modal-layer"
+          aria-labelledby="composer-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            closeComposer();
+          }}
+        >
+          <button
+            className="modal-scrim"
+            type="button"
+            tabIndex={-1}
+            aria-label="Close composer"
+            onClick={closeComposer}
+          />
+          <form className="composer-panel" onSubmit={createMemory}>
+            <header className="panel-header">
               <div>
-                <dt>Owner</dt>
-                <dd>{selected.ownerUserId}</dd>
+                <p className="page-eyebrow">Capture</p>
+                <h2 id="composer-title">New Memory</h2>
               </div>
+              <Button variant="icon" aria-label="Close composer" onClick={closeComposer}>
+                <CloseIcon />
+              </Button>
+            </header>
+            <label htmlFor="memory-draft">What should humans and agents remember?</label>
+            <textarea
+              ref={draftRef}
+              id="memory-draft"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              rows={8}
+              maxLength={1_000_000}
+              placeholder="Write a durable fact, decision, preference, or piece of context…"
+            />
+            <div className="panel-actions">
+              <ScopeControl value={draftScope} onChange={setDraftScope} label="Memory scope" />
               <div>
-                <dt>Created by</dt>
-                <dd>{selected.createdByAgentId ?? "User"}</dd>
+                <Button variant="ghost" onClick={closeComposer}>
+                  Cancel
+                </Button>
+                <Button variant="primary" type="submit" disabled={saving || !draft.trim()}>
+                  {saving ? "Remembering…" : "Remember"}
+                </Button>
               </div>
+            </div>
+          </form>
+        </dialog>
+      )}
+
+      {creatingWorkspace && (
+        <dialog
+          ref={workspaceDialogRef}
+          className="modal-layer"
+          aria-labelledby="workspace-dialog-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            closeWorkspaceCreator();
+          }}
+        >
+          <button
+            className="modal-scrim"
+            type="button"
+            tabIndex={-1}
+            aria-label="Close Workspace creator"
+            onClick={closeWorkspaceCreator}
+          />
+          <form className="workspace-dialog" onSubmit={createWorkspace}>
+            <header className="panel-header">
               <div>
-                <dt>Updated</dt>
-                <dd>{displayDate(selected.updatedAt)}</dd>
+                <p className="page-eyebrow">Memory boundary</p>
+                <h2 id="workspace-dialog-title">New Workspace</h2>
               </div>
-            </dl>
-            <div className="drawer-actions">
-              <button
-                className="danger-button"
-                type="button"
-                onClick={forgetMemory}
-                disabled={saving}
+              <Button
+                variant="icon"
+                aria-label="Close Workspace creator"
+                onClick={closeWorkspaceCreator}
               >
-                Forget
-              </button>
-              <button
-                className="primary-button"
-                type="submit"
-                disabled={saving || !editContent.trim()}
-              >
-                {saving ? "Saving…" : "Save changes"}
-              </button>
+                <CloseIcon />
+              </Button>
+            </header>
+            <label htmlFor="new-workspace-name">Workspace name</label>
+            <input
+              ref={workspaceNameRef}
+              id="new-workspace-name"
+              value={workspaceName}
+              onChange={(event) => setWorkspaceName(event.target.value)}
+              placeholder="Acme Research"
+              maxLength={120}
+            />
+            <div className="dialog-actions">
+              <Button variant="ghost" onClick={closeWorkspaceCreator}>
+                Cancel
+              </Button>
+              <Button variant="primary" type="submit" disabled={saving || !workspaceName.trim()}>
+                {saving ? "Creating…" : "Create Workspace"}
+              </Button>
             </div>
           </form>
         </dialog>
       )}
     </div>
+  );
+}
+
+function ScopeControl({
+  value,
+  label,
+  onChange,
+}: {
+  value: Memory["scope"];
+  label: string;
+  onChange: (scope: Memory["scope"]) => void;
+}) {
+  return (
+    <fieldset className="scope-control">
+      <legend>{label}</legend>
+      {(["shared", "private"] as const).map((scope) => (
+        <button
+          key={scope}
+          type="button"
+          aria-pressed={value === scope}
+          className={value === scope ? "scope-selected" : ""}
+          onClick={() => onChange(scope)}
+        >
+          {scope}
+        </button>
+      ))}
+    </fieldset>
+  );
+}
+
+function MemoryDetail({
+  memory,
+  content,
+  scope,
+  saving,
+  error,
+  onBack,
+  onContentChange,
+  onScopeChange,
+  onSubmit,
+  onForget,
+  onDismissError,
+}: {
+  memory: Memory;
+  content: string;
+  scope: Memory["scope"];
+  saving: boolean;
+  error: string | null;
+  onBack: () => void;
+  onContentChange: (content: string) => void;
+  onScopeChange: (scope: Memory["scope"]) => void;
+  onSubmit: (event: React.FormEvent) => void;
+  onForget: () => void;
+  onDismissError: () => void;
+}) {
+  return (
+    <section className="page-wrap page-wrap-wide view-anim" aria-labelledby="memory-detail-title">
+      <Button variant="ghost" className="back-link" onClick={onBack}>
+        <ArrowLeftIcon />
+        Memories
+      </Button>
+      {error && (
+        <div className="inline-error" role="alert">
+          <div>
+            <strong>Couldn&apos;t complete that request.</strong>
+            <span>{error}</span>
+          </div>
+          <Button variant="ghost" onClick={onDismissError}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+      <div className="memory-detail-grid">
+        <form className="memory-detail-panel" onSubmit={onSubmit}>
+          <header>
+            <p className="page-eyebrow">Memory · v{memory.version}</p>
+            <h1 id="memory-detail-title">Memory detail</h1>
+            <p className="memory-id">{memory.id}</p>
+          </header>
+          <label htmlFor="memory-content">Content</label>
+          <textarea
+            id="memory-content"
+            value={content}
+            onChange={(event) => onContentChange(event.target.value)}
+            rows={16}
+          />
+          <footer className="detail-actions">
+            <Button variant="danger" onClick={onForget} disabled={saving}>
+              Forget
+            </Button>
+            <Button variant="primary" type="submit" disabled={saving || !content.trim()}>
+              {saving ? "Saving…" : "Save changes"}
+            </Button>
+          </footer>
+        </form>
+
+        <aside className="memory-context" aria-label="Memory context">
+          <section className="context-section">
+            <div className="context-heading">
+              <h2>Properties</h2>
+            </div>
+            <ScopeControl value={scope} onChange={onScopeChange} label="Scope" />
+            <dl className="property-list">
+              <div>
+                <dt>Owner</dt>
+                <dd>{memory.ownerUserId}</dd>
+              </div>
+              <div>
+                <dt>Created by</dt>
+                <dd>{memory.createdByAgentId ?? "User"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{displayDate(memory.createdAt)}</dd>
+              </div>
+              <div>
+                <dt>Updated</dt>
+                <dd>{displayDate(memory.updatedAt)}</dd>
+              </div>
+              <div>
+                <dt>Version</dt>
+                <dd>v{memory.version}</dd>
+              </div>
+            </dl>
+          </section>
+          <section className="context-section">
+            <div className="context-heading">
+              <h2>Retrieval</h2>
+            </div>
+            <p className="context-note">
+              Visibility is enforced by Postgres before this Memory can enter a ranked result.
+            </p>
+          </section>
+        </aside>
+      </div>
+    </section>
   );
 }
