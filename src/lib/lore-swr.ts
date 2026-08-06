@@ -18,6 +18,7 @@ import {
 import type { Memory, MemoryScope } from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
+export const MAX_MEMORY_PAGES = 50;
 
 export const loreKeys = {
   workspaces: ["lore", "workspaces"] as const,
@@ -34,14 +35,33 @@ export const loreKeys = {
     ["lore", "mutation", "forget-memory", workspaceId] as const,
 };
 
-export function upsertMemoryPages(
-  pages: Memory[][] | undefined,
-  saved: Memory,
-): Memory[][] | undefined {
-  if (!pages?.length) return pages;
+export function upsertMemoryPages(pages: Memory[][] | undefined, saved: Memory): Memory[][] {
+  if (!pages?.length) return [[saved]];
   const memories = [saved, ...pages.flat().filter((memory) => memory.id !== saved.id)];
   return pages.map((_, pageIndex) =>
     memories.slice(pageIndex * MEMORY_PAGE_SIZE, (pageIndex + 1) * MEMORY_PAGE_SIZE),
+  );
+}
+
+interface MemoryPageAdvanceState {
+  hasData: boolean;
+  hasError: boolean;
+  isValidating: boolean;
+  lastPageLength: number;
+  pageCount: number;
+  requestedSize: number;
+  workspaceId: string;
+}
+
+export function shouldLoadNextMemoryPage(state: MemoryPageAdvanceState): boolean {
+  return Boolean(
+    state.workspaceId &&
+      state.hasData &&
+      !state.hasError &&
+      !state.isValidating &&
+      state.requestedSize === state.pageCount &&
+      state.pageCount < MAX_MEMORY_PAGES &&
+      state.lastPageLength === MEMORY_PAGE_SIZE,
   );
 }
 
@@ -63,7 +83,13 @@ export function useLoreWorkspaces() {
 export function useLoreMemories(workspaceId: string) {
   const swr = useSWRInfinite(
     (pageIndex, previousPage: Memory[] | null) => {
-      if (!workspaceId || (previousPage && previousPage.length < MEMORY_PAGE_SIZE)) return null;
+      if (
+        !workspaceId ||
+        pageIndex >= MAX_MEMORY_PAGES ||
+        (previousPage && previousPage.length < MEMORY_PAGE_SIZE)
+      ) {
+        return null;
+      }
       return loreKeys.memories(workspaceId, pageIndex);
     },
     ([, , scopedWorkspaceId, pageIndex]) =>
@@ -78,19 +104,32 @@ export function useLoreMemories(workspaceId: string) {
   const lastPageLength = swr.data?.at(-1)?.length ?? 0;
 
   // Keep fetching API-sized pages until the Workspace is exhausted. The cache
-  // remains page-addressable, so one component does not need a bespoke 20k cap.
+  // remains page-addressable and the 5k client budget matches the Graph read
+  // model; ranked search still reaches Memories outside the browse window.
   useEffect(() => {
     if (
-      !workspaceId ||
-      !swr.data ||
-      swr.isValidating ||
-      swr.size !== pageCount ||
-      lastPageLength < MEMORY_PAGE_SIZE
-    ) {
+      !shouldLoadNextMemoryPage({
+        workspaceId,
+        hasData: Boolean(swr.data),
+        hasError: Boolean(swr.error),
+        isValidating: swr.isValidating,
+        requestedSize: swr.size,
+        pageCount,
+        lastPageLength,
+      })
+    )
       return;
-    }
     void swr.setSize(pageCount + 1);
-  }, [lastPageLength, pageCount, swr.data, swr.isValidating, swr.setSize, swr.size, workspaceId]);
+  }, [
+    lastPageLength,
+    pageCount,
+    swr.data,
+    swr.error,
+    swr.isValidating,
+    swr.setSize,
+    swr.size,
+    workspaceId,
+  ]);
 
   const memories = useMemo(() => {
     const seen = new Set<string>();
@@ -108,7 +147,9 @@ export function useLoreMemories(workspaceId: string) {
     isLoadingMore:
       Boolean(workspaceId) &&
       Boolean(swr.data) &&
+      pageCount < MAX_MEMORY_PAGES &&
       (swr.isValidating || lastPageLength === MEMORY_PAGE_SIZE),
+    isCapped: pageCount === MAX_MEMORY_PAGES && lastPageLength === MEMORY_PAGE_SIZE,
   };
 }
 

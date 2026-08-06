@@ -35,7 +35,9 @@ been removed. Lore now has a native implementation:
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
-  active search and graph keys;
+  paged list plus active search and graph keys. Browse eagerly fills at most 5,000
+  Memories (50 × 100-row pages), aligned with the Graph read budget; ranked search
+  is the access path beyond that browse window;
 - `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
   `/memories`, and Memory detail deep links so browser refresh never loses the
   client route;

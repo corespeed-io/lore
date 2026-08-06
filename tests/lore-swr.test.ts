@@ -1,8 +1,10 @@
 import { expect, test } from "vitest";
 import {
   loreKeys,
+  MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
   removeMemoryFromPages,
+  shouldLoadNextMemoryPage,
   upsertMemoryPages,
 } from "@/lib/lore-swr";
 import type { Memory } from "@/lib/types";
@@ -48,6 +50,10 @@ test("upserting a Memory preserves page boundaries without duplicates", () => {
   expect(updated?.flat().filter((item) => item.id === saved.id)).toHaveLength(1);
 });
 
+test("upserting before the first page arrives seeds the cache", () => {
+  expect(upsertMemoryPages(undefined, memory(0))).toEqual([[memory(0)]]);
+});
+
 test("removing a Memory compacts cached pages", () => {
   const pages = [
     Array.from({ length: MEMORY_PAGE_SIZE }, (_, index) => memory(index)),
@@ -59,4 +65,28 @@ test("removing a Memory compacts cached pages", () => {
   expect(updated?.[0]).toHaveLength(MEMORY_PAGE_SIZE);
   expect(updated?.[0]?.at(-1)?.id).toBe(memory(MEMORY_PAGE_SIZE).id);
   expect(updated?.[1]).toEqual([]);
+});
+
+test("Memory pagination advances only from a settled full page inside the browse budget", () => {
+  const ready = {
+    workspaceId,
+    hasData: true,
+    hasError: false,
+    isValidating: false,
+    requestedSize: 2,
+    pageCount: 2,
+    lastPageLength: MEMORY_PAGE_SIZE,
+  };
+
+  expect(shouldLoadNextMemoryPage(ready)).toBe(true);
+  expect(shouldLoadNextMemoryPage({ ...ready, hasError: true })).toBe(false);
+  expect(shouldLoadNextMemoryPage({ ...ready, requestedSize: 3 })).toBe(false);
+  expect(shouldLoadNextMemoryPage({ ...ready, lastPageLength: 99 })).toBe(false);
+  expect(
+    shouldLoadNextMemoryPage({
+      ...ready,
+      requestedSize: MAX_MEMORY_PAGES,
+      pageCount: MAX_MEMORY_PAGES,
+    }),
+  ).toBe(false);
 });

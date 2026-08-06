@@ -9,6 +9,7 @@ import type { Memory, MemorySearchResult } from "@/lib/types";
 interface SearchResultsProps {
   results: MemorySearchResult[];
   memories: Memory[];
+  capped: boolean;
   loading: boolean;
   error: string | null;
   query: string;
@@ -51,6 +52,7 @@ function shortDate(value: string): string {
 export function SearchResults({
   results,
   memories,
+  capped,
   loading,
   error,
   query,
@@ -118,6 +120,7 @@ export function SearchResults({
             Showing {filtered.length}
             {typeFilter !== "all" ? ` of ${memories.length}` : ""} memories
           </p>
+          {capped && <span>Browse is limited to 5,000 Memories. Search covers the Workspace.</span>}
         </div>
         <div className="chip-row">
           {chips.map(([key, label]) => (

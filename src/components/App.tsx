@@ -141,6 +141,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const {
     memories,
     error: memoriesRequestError,
+    isCapped: memoriesCapped,
     isLoading: memoriesLoading,
     mutate: mutateMemories,
   } = useLoreMemories(activeWorkspaceId);
@@ -320,7 +321,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
       await mutations.mutateCache(loreKeys.memory(activeWorkspaceId, saved.id), saved, {
         revalidate: false,
       });
-      await mutateMemories((pages) => upsertMemoryPages(pages, saved), { revalidate: false });
+      await mutateMemories((pages) => upsertMemoryPages(pages, saved), { revalidate: true });
       if (searchQuery) void mutateSearch();
       void mutateGraph();
       setEditor(null);
@@ -343,7 +344,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         revalidate: false,
       });
       await mutateMemories((pages) => removeMemoryFromPages(pages, memoryId), {
-        revalidate: false,
+        revalidate: true,
       });
       if (searchQuery) void mutateSearch();
       void mutateGraph();
@@ -523,6 +524,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   <SearchResults
                     results={searchResults}
                     memories={memories}
+                    capped={memoriesCapped}
                     loading={searchQuery ? searchLoading : memoriesLoading}
                     error={searchRequestError ? errorMessage(searchRequestError) : null}
                     query={searchQuery}
