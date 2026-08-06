@@ -99,6 +99,11 @@ the active space before semantic top-k, favoring correct isolation over ANN
 acceleration while incompatible spaces coexist. Automated background re-indexing is
 not implemented yet.
 
+Invalid deployment embedding configuration disables semantic embedding with a
+server-side warning instead of blocking Memory reads or writes. Provider request
+failures are also warned server-side; writes preserve the Memory and store an
+explicit `NULL` vector for later re-indexing.
+
 For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
 Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username
 cannot be used to select or impersonate another internal User. Multi-user deployments

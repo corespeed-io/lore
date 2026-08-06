@@ -7,7 +7,7 @@ interface RouteContext {
 }
 
 export async function GET(request: Request, context: RouteContext) {
-  return createMemoryByIdHandlers(await getRuntimeDatabase(), getRuntimeMemoryModuleOptions()).GET(
+  return createMemoryByIdHandlers(await getRuntimeDatabase()).GET(
     request,
     (await context.params).id,
   );
@@ -21,8 +21,8 @@ export async function PATCH(request: Request, context: RouteContext) {
 }
 
 export async function DELETE(request: Request, context: RouteContext) {
-  return createMemoryByIdHandlers(
-    await getRuntimeDatabase(),
-    getRuntimeMemoryModuleOptions(),
-  ).DELETE(request, (await context.params).id);
+  return createMemoryByIdHandlers(await getRuntimeDatabase()).DELETE(
+    request,
+    (await context.params).id,
+  );
 }

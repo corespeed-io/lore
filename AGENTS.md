@@ -54,6 +54,8 @@ management UI. Chunking and lexical indexing are synchronous; the Ollama, Google
 Gemini, and OpenAI adapters are configured once per deployment, and embedding
 failure is explicit (`NULL`) and never blocks a Memory write. Local deployment
 defaults are Qwen3-Embedding 0.6B at 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
+Invalid embedding configuration and provider request failures must warn server-side
+and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
 The pgvector column and HNSW index are fixed at 1024 dimensions. Self-host operators
 choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
 preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless

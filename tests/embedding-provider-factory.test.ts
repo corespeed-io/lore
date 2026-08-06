@@ -1,0 +1,59 @@
+import { expect, test, vi } from "vitest";
+import { createEmbeddingProviderFromEnvironment } from "@/lib/embedding/provider-factory";
+
+test("embedding provider factory builds the default local provider", () => {
+  const warnings: string[] = [];
+  const provider = createEmbeddingProviderFromEnvironment({}, (message) => warnings.push(message));
+
+  expect(provider).toMatchObject({
+    provider: "ollama",
+    model: "qwen3-embedding:0.6b",
+    dimensions: 1024,
+    revision: "lore-embedding-v1",
+  });
+  expect(warnings).toEqual([]);
+});
+
+test.each([
+  ["a missing Google credential", { LORE_EMBEDDING_PROVIDER: "google" }],
+  ["a missing OpenAI credential", { LORE_EMBEDDING_PROVIDER: "openai" }],
+  ["an unsupported provider", { LORE_EMBEDDING_PROVIDER: "gogle" }],
+  [
+    "an unsupported Google model",
+    {
+      LORE_EMBEDDING_PROVIDER: "google",
+      LORE_EMBEDDING_MODEL: "text-embedding-004",
+      GEMINI_API_KEY: "test-key",
+    },
+  ],
+  ["a stale dimension override", { LORE_EMBEDDING_DIMENSIONS: "1536" }],
+  ["an invalid Ollama URL", { OLLAMA_BASE_URL: "localhost:11434" }],
+])("embedding provider factory degrades safely for %s", (_case, env) => {
+  const warnings: string[] = [];
+
+  expect(createEmbeddingProviderFromEnvironment(env, (message) => warnings.push(message))).toBe(
+    undefined,
+  );
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toMatch(/^Lore embeddings disabled: /);
+});
+
+test("embedding provider factory reports runtime failures without swallowing them", async () => {
+  const warnings: string[] = [];
+  vi.stubGlobal("fetch", async () => new Response("invalid request", { status: 400 }));
+  try {
+    const provider = createEmbeddingProviderFromEnvironment(
+      { OLLAMA_BASE_URL: "http://ollama.test", LORE_EMBEDDING_TIMEOUT_MS: "1000" },
+      (message) => warnings.push(message),
+    );
+
+    await expect(provider?.embed(["memory"], "document")).rejects.toThrow(
+      "Ollama embedding request failed (400)",
+    );
+    expect(warnings).toEqual([
+      "Lore ollama/qwen3-embedding:0.6b document embedding failed; continuing without a vector",
+    ]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
