@@ -31,6 +31,7 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:bootstrap": "node scripts/migrate.mjs && node scripts/create-runtime-role.mjs",
     "benchmark:graph:seed": "node scripts/seed-graph-benchmark.mjs",
+    "prototype:graph-scale": "BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_graph_benchmark next dev",
     "start": "next start",
     "preview:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
