@@ -28,12 +28,23 @@ been removed. Lore now has a native implementation:
   context for every request transaction;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   native routes built through the pure handler seam in `src/lib/http.ts`;
-- `src/components/memory-console.tsx` is the working Memory console;
+- `src/components/App.tsx` owns the native Memory workflow and client routing,
+  `src/components/Sidebar.tsx` owns the Lore shell, and
+  `src/lib/lore-api.ts` is the typed browser client for native routes;
+- `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
+  `/memories`, and Memory detail deep links so browser refresh never loses the
+  client route;
+- `src/lib/graph.ts` derives an Actor-specific Memory Graph only after the
+  Memory module and Postgres RLS have selected visible nodes; `/api/graph`
+  exposes that native read model without a gbrain dependency;
+- `src/lib/viz/graph.ts` is the restored, performance-tuned D3 renderer. Keep its
+  headless settle, delta-painted focus state, capped edge hit layer, label
+  collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
 - Docker/Compose targets OSS self-hosting; OpenNext + a cache-disabled Hyperdrive
   binding targets CoreSpeed Cloud on Cloudflare Workers.
 
 Still incomplete: production embedding providers, background retry/queue workers,
-derived graph storage, and full Agent/Evaluation management UI. Chunking and
+durable/explicit graph relationships, and full Agent/Evaluation management UI. Chunking and
 lexical indexing are synchronous; embedding failure is explicit (`NULL`) and never
 blocks a Memory write. The v1 pgvector column is fixed at 1536 dimensions so it can
 use an HNSW cosine index; every embedding adapter must emit exactly 1536 finite
@@ -52,6 +63,20 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 - the visual design, shell, memory browse/search UI, and Markdown rendering;
 - security-header and Cloudflare Access JWT-verification techniques;
 - pure utilities and tests whose behavior remains part of the new product.
+
+The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
+stylesheet (`src/app/globals.css`). Graph is a native Memory-affinity read surface. It may later
+gain durable explicit relationships, but never wire it back to the removed gbrain proxy.
+
+The restored Dashboard/Graph/Memories interface consumes native `Workspace`,
+`Memory`, `MemorySearchResult`, and `MemoryGraph` types directly. Do not add a
+tool-shaped compatibility client, page/slug view model, `/api/call`, or any
+generic upstream adapter to support the historical component structure.
+
+The native Graph endpoint currently caps reads at 100 visible Memories and three
+affinities per Memory, so the optimized SVG renderer is the deliberate v1 path.
+If those limits grow materially, preserve D3 as the layout engine but move static
+simulation to a Web Worker and links to Canvas before increasing the SVG DOM budget.
 
 Build the native domain modules directly. Compatibility adapters, if ever needed,
 must sit outside the Memory interface and may not weaken its ownership or RLS
@@ -193,6 +218,8 @@ surfaces:
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
   chunking, indexing, provenance, and permission invalidation.
+- **Graph module:** return visible Memory nodes and derived relationships while
+  guaranteeing that every edge endpoint is present in the same authorized read model.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
@@ -235,16 +262,31 @@ These commands remain the current verification loop:
 bun run dev        # localhost:3000
 bun run db:migrate # apply checksum-protected SQL migrations
 bun run db:bootstrap # migrate + provision a non-owner runtime login
+bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
+bun run design:check # enforce and self-test the Lore UI contract
 bun run test       # vitest run
 bun run build      # next build (production)
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```
 
-Before opening a PR, typecheck, lint, test, and build must all pass.
+The renderer stress dataset is intentionally separate from the product schema.
+Create a disposable database whose name contains `bench` or `benchmark`, then run:
+
+```bash
+BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_graph_benchmark \
+  bun run benchmark:graph:seed
+```
+
+The default dataset contains 5,000 nodes and 105,000 unique undirected links in
+the `graph_benchmark` schema. The seeder refuses to rebuild its schema in a
+database without `bench` or `benchmark` in the name. It is renderer load data,
+not a persisted Memory Affinity model and not an Evaluation Suite.
+
+Before opening a PR, design:check, typecheck, lint, test, and build must all pass.
 
 Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but
@@ -264,3 +306,13 @@ do not treat generated `.next` or `.open-next` output as source or commit it.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
   same PR. Update [`CONTEXT.md`](CONTEXT.md) whenever canonical domain language
   changes.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

@@ -6,6 +6,7 @@ import {
   type EvaluationCaseInput,
   EvaluationSuiteNotFoundError,
 } from "./evaluation";
+import { createMemoryGraphModule } from "./graph";
 import { createMemoryModule, MemoryAccessDeniedError, type MemoryScope } from "./memory";
 import {
   createRequestContextResolver,
@@ -359,10 +360,12 @@ export function createMemoryHandlers(database: PostgresDatabase) {
         const query = requestedQuery?.trim() ? requiredString(requestedQuery, "q", 10_000) : "";
         const requestedLimit = Number(url.searchParams.get("limit") ?? "50");
         const limit = Number.isFinite(requestedLimit) ? requestedLimit : 50;
+        const requestedOffset = Number(url.searchParams.get("offset") ?? "0");
+        const offset = Number.isFinite(requestedOffset) ? requestedOffset : 0;
         return Response.json(
           query
             ? await memories.search(actor, { query, limit })
-            : await memories.list(actor, { limit }),
+            : await memories.list(actor, { limit, offset }),
         );
       } catch (error) {
         return errorResponse(error);
@@ -379,6 +382,26 @@ export function createMemoryHandlers(database: PostgresDatabase) {
           metadata: metadata(body.metadata),
         });
         return Response.json(memory, { status: 201 });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createGraphHandlers(database: PostgresDatabase) {
+  const graph = createMemoryGraphModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const url = new URL(request.url);
+        const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
+        const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
+        return Response.json(await graph.read(actor, { limit }), {
+          headers: { "cache-control": "private, no-store" },
+        });
       } catch (error) {
         return errorResponse(error);
       }

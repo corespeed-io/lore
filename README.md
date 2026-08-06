@@ -132,6 +132,18 @@ The deterministic synthetic benchmark is
 [`AGENTS.md`](AGENTS.md) for architecture and working agreements and
 [`CONTEXT.md`](CONTEXT.md) for canonical domain terminology.
 
+For graph renderer stress testing, use a separate disposable PostgreSQL database:
+
+```bash
+createdb lore_graph_benchmark
+BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_graph_benchmark \
+  bun run benchmark:graph:seed
+```
+
+This creates 5,000 deterministic nodes and 105,000 unique links under the
+`graph_benchmark` schema. The dataset is deliberately separate from product
+Memories, tenant authorization, and retrieval evaluation.
+
 ## License
 
 [MIT](LICENSE) © CoreSpeed

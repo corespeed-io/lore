@@ -349,3 +349,17 @@ test("Memory list contains shared and owner-private Memories but no private neig
   expect(new Set(listed.map((memory) => memory.id))).toEqual(new Set([shared.id, bobPrivate.id]));
   await testContext.close();
 });
+
+test("Memory list supports stable offset paging inside the authorized result set", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  await memories.remember(testContext.alice, { content: "First paging memory." });
+  await memories.remember(testContext.alice, { content: "Second paging memory." });
+  await memories.remember(testContext.alice, { content: "Third paging memory." });
+
+  const full = await memories.list(testContext.alice, { limit: 10 });
+  const page = await memories.list(testContext.alice, { limit: 1, offset: 1 });
+
+  expect(page).toEqual(full.slice(1, 2));
+  await testContext.close();
+});

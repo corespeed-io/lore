@@ -8,6 +8,7 @@ import {
   createEvaluationRunByIdHandlers,
   createEvaluationRunHandlers,
   createEvaluationSuiteHandlers,
+  createGraphHandlers,
   createMemoryByIdHandlers,
   createMemoryHandlers,
   createWorkspaceHandlers,
@@ -27,6 +28,7 @@ test("Human can create a Workspace then write and list native Memories over HTTP
   const testContext = await createMemoryTestContext();
   const workspaces = createWorkspaceHandlers(testContext.database);
   const memories = createMemoryHandlers(testContext.database);
+  const graph = createGraphHandlers(testContext.database);
 
   const workspaceResponse = await workspaces.POST(
     new Request("http://lore.local/api/workspaces", {
@@ -54,12 +56,23 @@ test("Human can create a Workspace then write and list native Memories over HTTP
     }),
   );
   const listed = (await listResponse.json()) as Array<{ id: string }>;
+  const graphResponse = await graph.GET(
+    new Request("http://lore.local/api/graph", {
+      headers: { "x-lore-workspace-id": workspace.id },
+    }),
+  );
 
   expect(workspaceResponse.status).toBe(201);
   expect(createResponse.status).toBe(201);
   expect(created.scope).toBe("private");
   expect(listResponse.status).toBe(200);
   expect(listed.map((memory) => memory.id)).toEqual([created.id]);
+  expect(graphResponse.status).toBe(200);
+  expect(graphResponse.headers.get("cache-control")).toBe("private, no-store");
+  await expect(graphResponse.json()).resolves.toMatchObject({
+    nodes: [expect.objectContaining({ id: created.id, scope: "private" })],
+    links: [],
+  });
   await testContext.close();
 });
 
