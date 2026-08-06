@@ -379,13 +379,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              ) DESC, chunk.id
              LIMIT $4
            ),
-           semantic_candidates AS (
+           active_semantic_chunks AS MATERIALIZED (
              SELECT
-               chunk.id AS chunk_id,
-               memory.id AS memory_id,
-               row_number() OVER (
-                 ORDER BY chunk.embedding <=> $3::vector(1024), chunk.id
-               ) AS candidate_rank
+               chunk.id,
+               chunk.memory_id,
+               chunk.embedding
              FROM memory_chunks chunk
              JOIN memories memory
                ON memory.id = chunk.memory_id
@@ -396,7 +394,16 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
                AND chunk.embedding_provider = $7
                AND chunk.embedding_model = $8
                AND chunk.embedding_revision = $9
-               AND (chunk.embedding <=> $3::vector(1024)) <= $5
+           ),
+           semantic_candidates AS (
+             SELECT
+               chunk.id AS chunk_id,
+               chunk.memory_id,
+               row_number() OVER (
+                 ORDER BY chunk.embedding <=> $3::vector(1024), chunk.id
+               ) AS candidate_rank
+             FROM active_semantic_chunks chunk
+             WHERE (chunk.embedding <=> $3::vector(1024)) <= $5
              ORDER BY chunk.embedding <=> $3::vector(1024), chunk.id
              LIMIT $4
            ),

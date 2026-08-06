@@ -94,8 +94,10 @@ Google adapter distinguishes document indexing from retrieval queries using the
 model's documented retrieval preprocessing; OpenAI and Ollama use the same text
 for both roles. Every adapter must return exactly 1024 values. Changing a running
 deployment's provider or model creates a different embedding space, so existing
-vectors are excluded from semantic retrieval until re-embedded. Automated
-background re-indexing is not implemented yet.
+vectors are excluded from semantic retrieval until re-embedded. Lore materializes
+the active space before semantic top-k, favoring correct isolation over ANN
+acceleration while incompatible spaces coexist. Automated background re-indexing is
+not implemented yet.
 
 For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
 Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username

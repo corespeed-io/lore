@@ -33,7 +33,11 @@ test("Ollama adapter sends the deployment model, dimensions, and unload policy",
   });
 });
 
-test("Ollama adapter rejects malformed responses", async () => {
+test.each([
+  ["a malformed vector", ["not-a-vector"]],
+  ["the wrong dimensions", [[0.5]]],
+  ["a non-finite value", [[Number.NaN, ...Array.from({ length: 1023 }, () => 0.5)]]],
+])("Ollama adapter rejects %s", async (_case, embeddings) => {
   const provider = createOllamaEmbeddingProvider(
     {
       provider: "ollama",
@@ -41,7 +45,7 @@ test("Ollama adapter rejects malformed responses", async () => {
       dimensions: 1024,
       revision: "lore-embedding-v1",
     },
-    { fetch: async () => Response.json({ embeddings: ["not-a-vector"] }) },
+    { fetch: async () => Response.json({ embeddings }) },
   );
 
   await expect(provider.embed(["query"], "query")).rejects.toThrow("invalid embedding");

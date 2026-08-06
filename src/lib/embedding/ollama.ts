@@ -20,12 +20,16 @@ function endpoint(baseUrl: string): string {
   return new URL("api/embed", `${url.toString().replace(/\/$/, "")}/`).toString();
 }
 
-function embeddingsFrom(payload: OllamaEmbedResponse): number[][] {
+function embeddingsFrom(payload: OllamaEmbedResponse, dimensions: number): number[][] {
   if (!Array.isArray(payload.embeddings)) {
     throw new Error("Ollama returned no embeddings");
   }
   return payload.embeddings.map((embedding) => {
-    if (!Array.isArray(embedding) || embedding.some((value) => typeof value !== "number")) {
+    if (
+      !Array.isArray(embedding) ||
+      embedding.length !== dimensions ||
+      embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))
+    ) {
       throw new Error("Ollama returned an invalid embedding");
     }
     return embedding as number[];
@@ -66,7 +70,10 @@ export function createOllamaEmbeddingProvider(
           `Ollama embedding request failed (${response.status})${detail ? `: ${detail}` : ""}`,
         );
       }
-      const embeddings = embeddingsFrom((await response.json()) as OllamaEmbedResponse);
+      const embeddings = embeddingsFrom(
+        (await response.json()) as OllamaEmbedResponse,
+        configuration.dimensions,
+      );
       if (embeddings.length !== texts.length) {
         throw new Error("Ollama returned the wrong number of embeddings");
       }

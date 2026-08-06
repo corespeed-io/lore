@@ -6,3 +6,8 @@ with every vector. Ollama, Google Gemini, and OpenAI adapters must all satisfy t
 contract; an incompatible model fails validation instead of changing the schema.
 Changing provider, model, dimension, or preprocessing revision requires an explicit
 re-embedding migration and must never mix old and new vector spaces.
+
+Until vector storage is partitioned by embedding space, retrieval materializes only
+the active provider/model/revision rows before distance ordering and top-k. This is
+an intentional exact-search fallback: a global HNSW graph containing incompatible
+spaces must not participate in candidate traversal.

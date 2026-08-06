@@ -58,7 +58,9 @@ The pgvector column and HNSW index are fixed at 1024 dimensions. Self-host opera
 choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
 preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless
 provider, model, and revision all match the active deployment. Embedding model
-selection is not a Workspace/User product setting.
+selection is not a Workspace/User product setting. Until embedding storage is
+partitioned by space, the semantic query must keep its `MATERIALIZED` active-space
+CTE so global HNSW traversal cannot mix incompatible spaces before top-k.
 
 Do not:
 
