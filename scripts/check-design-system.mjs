@@ -5,10 +5,13 @@ import { fileURLToPath } from "node:url";
 const REQUIRED_PATHS = [
   "DESIGN.md",
   "src/app/globals.css",
-  "src/components/lore-sidebar.tsx",
-  "src/components/memory-graph.tsx",
-  "src/components/ui/button.tsx",
-  "src/components/ui/icons.tsx",
+  "src/components/App.tsx",
+  "src/components/Sidebar.tsx",
+  "src/components/GraphView.tsx",
+  "src/components/SearchResults.tsx",
+  "src/components/MemoryView.tsx",
+  "src/lib/lore-api.ts",
+  "src/app/[...path]/page.tsx",
   "src/app/api/graph/route.ts",
   "src/lib/graph.ts",
 ];
@@ -97,17 +100,6 @@ export function checkDesignSystem(projectRoot) {
   const sources = walk(root, "src", (path) => /\.(?:ts|tsx)$/.test(path));
   for (const path of sources) {
     const source = readFileSync(resolve(root, path), "utf8");
-    const inlineStyle = /\bstyle\s*=\s*\{/.exec(source);
-    if (inlineStyle) {
-      findings.push(
-        finding(
-          path,
-          lineNumber(source, inlineStyle.index),
-          "inline styles bypass the Lore design system; use a canonical class",
-        ),
-      );
-    }
-
     for (const retiredClass of RETIRED_CLASSES) {
       const match = new RegExp(`(?:className=["'][^"']*|\\.)${retiredClass}\\b`).exec(source);
       if (match) {

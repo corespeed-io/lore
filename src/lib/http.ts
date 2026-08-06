@@ -360,10 +360,12 @@ export function createMemoryHandlers(database: PostgresDatabase) {
         const query = requestedQuery?.trim() ? requiredString(requestedQuery, "q", 10_000) : "";
         const requestedLimit = Number(url.searchParams.get("limit") ?? "50");
         const limit = Number.isFinite(requestedLimit) ? requestedLimit : 50;
+        const requestedOffset = Number(url.searchParams.get("offset") ?? "0");
+        const offset = Number.isFinite(requestedOffset) ? requestedOffset : 0;
         return Response.json(
           query
             ? await memories.search(actor, { query, limit })
-            : await memories.list(actor, { limit }),
+            : await memories.list(actor, { limit, offset }),
         );
       } catch (error) {
         return errorResponse(error);

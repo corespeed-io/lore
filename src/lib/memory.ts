@@ -42,6 +42,7 @@ export interface SearchMemory {
 
 export interface ListMemory {
   limit?: number;
+  offset?: number;
 }
 
 export interface MemorySearchResult {
@@ -284,6 +285,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
 
     async list(actor: ActorContext, input: ListMemory = {}): Promise<Memory[]> {
       const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
@@ -291,8 +293,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
            FROM memories
            WHERE workspace_id = $1
            ORDER BY updated_at DESC, id
-           LIMIT $2`,
-          [actor.workspaceId, limit],
+           LIMIT $2
+           OFFSET $3`,
+          [actor.workspaceId, limit, offset],
         );
         return result.rows.map(toMemory);
       });

@@ -28,8 +28,12 @@ been removed. Lore now has a native implementation:
   context for every request transaction;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   native routes built through the pure handler seam in `src/lib/http.ts`;
-- `src/components/memory-console.tsx` owns the native Memory workflow and
-  `src/components/lore-sidebar.tsx` owns the restored Lore shell;
+- `src/components/App.tsx` owns the native Memory workflow and client routing,
+  `src/components/Sidebar.tsx` owns the Lore shell, and
+  `src/lib/lore-api.ts` is the typed browser client for native routes;
+- `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
+  `/memories`, and Memory detail deep links so browser refresh never loses the
+  client route;
 - `src/lib/graph.ts` derives an Actor-specific Memory Graph only after the
   Memory module and Postgres RLS have selected visible nodes; `/api/graph`
   exposes that native read model without a gbrain dependency;
@@ -61,9 +65,13 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 - pure utilities and tests whose behavior remains part of the new product.
 
 The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
-stylesheet (`src/app/globals.css`) and put reusable controls/icons in
-`src/components/ui`. Graph is a native Memory-affinity read surface. It may later
+stylesheet (`src/app/globals.css`). Graph is a native Memory-affinity read surface. It may later
 gain durable explicit relationships, but never wire it back to the removed gbrain proxy.
+
+The restored Dashboard/Graph/Memories interface consumes native `Workspace`,
+`Memory`, `MemorySearchResult`, and `MemoryGraph` types directly. Do not add a
+tool-shaped compatibility client, page/slug view model, `/api/call`, or any
+generic upstream adapter to support the historical component structure.
 
 The native Graph endpoint currently caps reads at 100 visible Memories and three
 affinities per Memory, so the optimized SVG renderer is the deliberate v1 path.
