@@ -30,7 +30,12 @@ been removed. Lore now has a native implementation:
   native routes built through the pure handler seam in `src/lib/http.ts`;
 - `src/components/App.tsx` owns the native Memory workflow and client routing,
   `src/components/Sidebar.tsx` owns the Lore shell, and
-  `src/lib/lore-api.ts` is the typed browser client for native routes;
+  `src/lib/lore-api.ts` is the typed browser transport for native routes;
+- `src/lib/lore-swr.ts` owns Workspace-scoped SWR keys and hooks for Workspaces,
+  paged Memories, search, Memory detail, graph reads, and mutations. Keep server
+  data in this cache instead of restoring component-level `loaded`, request-id, or
+  revision state. Memory writes patch the paged/detail cache and revalidate the
+  active search and graph keys;
 - `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
   `/memories`, and Memory detail deep links so browser refresh never loses the
   client route;
@@ -264,7 +269,7 @@ The existing application uses:
 
 - Next.js 16 (App Router), React 19, Bun 1.3.14+ for package management,
   Node 24 LTS for self-hosted execution, and TypeScript 7;
-- jose, Biome, and Vitest;
+- SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
 

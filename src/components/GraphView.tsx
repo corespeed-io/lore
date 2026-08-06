@@ -2,7 +2,7 @@
 
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { typeColor } from "@/lib/colors";
-import { searchMemories } from "@/lib/lore-api";
+import { useLoreSearch } from "@/lib/lore-swr";
 import { typeSort } from "@/lib/type-display";
 import type { GraphData, GraphNode } from "@/lib/types";
 import { type GraphInstance, mountGraph } from "@/lib/viz/graph";
@@ -108,7 +108,7 @@ export function GraphView({
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<GraphInstance | null>(null);
   const [q, setQ] = useState("");
-  const [contentIds, setContentIds] = useState<Set<string>>(new Set());
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
@@ -128,7 +128,16 @@ export function GraphView({
     () => (selectedNode ? selectedNodeSummary(data, selectedNode) : null),
     [data, selectedNode],
   );
-  const hasQuery = q.trim().length > 0;
+  const normalizedQuery = q.trim();
+  const { data: contentResults = [] } = useLoreSearch(workspaceId, debouncedQuery, 12);
+  const contentIds = useMemo(() => {
+    if (!normalizedQuery || normalizedQuery !== debouncedQuery) return new Set<string>();
+    const nodeIds = new Set(data.nodes.map((node) => node.id));
+    return new Set(
+      contentResults.map((result) => result.memory.id).filter((memoryId) => nodeIds.has(memoryId)),
+    );
+  }, [contentResults, data.nodes, debouncedQuery, normalizedQuery]);
+  const hasQuery = normalizedQuery.length > 0;
   const hasResettableFocus = Boolean(localFocus && onResetFilter);
   const hasActiveFilter =
     hasQuery || hasResettableFocus || Boolean(selectedNode) || Boolean(typeFilter);
@@ -174,37 +183,17 @@ export function GraphView({
     setSelectedId(null);
   }, [data.nodes, selectedId]);
 
-  // Workspace-scoped hybrid recall, debounced to visible graph node ids.
+  // Workspace-scoped hybrid recall. The debounced value becomes the SWR cache
+  // key, so overlapping searches are deduplicated and stale responses cannot
+  // write into the next query's state.
   useEffect(() => {
-    const query = q.trim();
-    if (!query) {
-      setContentIds(new Set());
+    if (!normalizedQuery) {
+      setDebouncedQuery("");
       return;
     }
-    const nodeIds = new Set(data.nodes.map((n) => n.id));
-    // clearTimeout only cancels a timer that has not FIRED — once the fetch is
-    // in flight, the cleanup couldn't stop its setContentIds from landing after
-    // the query had changed or been cleared. Those stale ids then ringed the
-    // WRONG nodes on the next query until its own fetch caught up.
-    let stale = false;
-    const t = setTimeout(async () => {
-      try {
-        // Top hits only — the weak-semantic tail would light up half the graph.
-        const hits = await searchMemories(workspaceId, query, 12);
-        if (stale) return;
-        const ids = (Array.isArray(hits) ? hits : [])
-          .map((hit) => hit.memory.id)
-          .filter((id) => nodeIds.has(id));
-        setContentIds(new Set(ids));
-      } catch {
-        if (!stale) setContentIds(new Set());
-      }
-    }, 250);
-    return () => {
-      stale = true;
-      clearTimeout(t);
-    };
-  }, [q, data.nodes, workspaceId]);
+    const timeout = window.setTimeout(() => setDebouncedQuery(normalizedQuery), 250);
+    return () => window.clearTimeout(timeout);
+  }, [normalizedQuery]);
 
   // Highlight set = (title ∪ content search, or focus) ∩ the legend type filter.
   // null means "everything lit". Search/focus/type-filter all feed one highlight.
@@ -231,7 +220,6 @@ export function GraphView({
 
   function resetFilter() {
     setQ("");
-    setContentIds(new Set());
     setTypeFilter(null);
     setSelectedId(null);
     onResetFilter?.();

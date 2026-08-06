@@ -10,6 +10,7 @@ interface SearchResultsProps {
   results: MemorySearchResult[];
   memories: Memory[];
   loading: boolean;
+  error: string | null;
   query: string;
   typeFilter: string;
   onTypeFilter: (type: string) => void;
@@ -51,6 +52,7 @@ export function SearchResults({
   results,
   memories,
   loading,
+  error,
   query,
   typeFilter,
   onTypeFilter,
@@ -116,9 +118,6 @@ export function SearchResults({
             Showing {filtered.length}
             {typeFilter !== "all" ? ` of ${memories.length}` : ""} memories
           </p>
-          {memories.length >= 20_000 && (
-            <span>Showing the first {memories.length} Memories. Use search for older matches.</span>
-          )}
         </div>
         <div className="chip-row">
           {chips.map(([key, label]) => (
@@ -163,6 +162,22 @@ export function SearchResults({
     .split(/\s+/)
     .map((term) => term.trim())
     .filter((term) => term.length >= 2);
+
+  if (loading) {
+    return (
+      <div className="page-wrap">
+        <p className="muted-note">Searching memories…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="page-wrap">
+        <p className="muted-note">Couldn&apos;t search this Workspace — {error}.</p>
+      </div>
+    );
+  }
 
   if (!results.length) {
     return (

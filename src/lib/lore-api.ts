@@ -89,21 +89,6 @@ export function listMemories(
   });
 }
 
-export async function listAllMemories(
-  workspaceId: string,
-  signal?: AbortSignal,
-): Promise<Memory[]> {
-  const pageSize = 100;
-  const cap = 20_000;
-  const memories: Memory[] = [];
-  for (let offset = 0; offset < cap; offset += pageSize) {
-    const batch = await listMemories(workspaceId, { limit: pageSize, offset, signal });
-    memories.push(...batch);
-    if (batch.length < pageSize) break;
-  }
-  return memories;
-}
-
 export function searchMemories(
   workspaceId: string,
   query: string,
