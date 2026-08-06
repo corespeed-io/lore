@@ -100,5 +100,19 @@ an important distinction between throughput and interaction latency:
   wait (about 0.3ms observed by the drag harness).
 
 These are hardware- and dataset-specific Lore measurements, not thresholds claimed
-by D3. They support using full Worker force calculation for initial layout and a
-bounded local spatial query for direct manipulation at this scale.
+by D3. The local spatial query proved technically fast, but user testing rejected
+it because it removed velocity, inertia, and multi-hop particle motion.
+
+The accepted prototype direction gives the main thread sole authority over the
+actively dragged node and runs a moving D3 particle field in the Worker. The full
+force set lays out the graph once; interaction then builds a bounded simulation
+from real nodes around the drag path with `forceCollide`, velocity, and weak anchor
+springs. Worker frames carry the locked node id so stale coordinates cannot pull
+the pointer-owned node backward.
+
+This followed two rejected experiments: a direct quadtree displacement was fast
+but had no inertia, while reheating all 5,000 nodes reproduced the desired particle
+motion but made roughly 4,000 nodes visibly tremble. The bounded particle field
+kept the same velocity and cooling behavior while a measured drag activated about
+524 of 5,000 nodes, produced 55 physics frames, and kept Canvas drawing around
+1.6–2.2ms.
