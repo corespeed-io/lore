@@ -5,6 +5,7 @@ const TARGET_MEMORY_ID = "e6f22a12-8b29-57ef-bbdf-ce11121303c7";
 
 test("esc neutralizes raw HTML", () => {
   expect(esc("<img src=x onerror=alert(1)>")).toBe("&lt;img src=x onerror=alert(1)&gt;");
+  expect(esc(42)).toBe("42");
 });
 
 test("renderMarkdown resolves wikilinks to native Memory ids", () => {

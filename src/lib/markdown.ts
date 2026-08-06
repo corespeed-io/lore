@@ -1,6 +1,6 @@
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
-export function esc(s: string): string {
-  return (s ?? "").replace(/[&<>"]/g, (c) => ESC[c]);
+export function esc(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"]/g, (character) => ESC[character]);
 }
 
 export function plain(s: string): string {
