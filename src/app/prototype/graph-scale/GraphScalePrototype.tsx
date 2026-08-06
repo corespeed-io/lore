@@ -17,6 +17,7 @@ interface PositionedNode extends GraphNode {
 interface RenderMetrics {
   drawMs: number;
   collisionMs: number;
+  pushedNodes: number;
   frames: number;
 }
 
@@ -30,6 +31,7 @@ const LAYOUT_WIDTH = 1_600;
 const LAYOUT_HEIGHT = 1_000;
 const NODE_RADIUS = 2.3;
 const COLLISION_RADIUS = NODE_RADIUS + 13;
+const DRAG_COLLISION_RADIUS = COLLISION_RADIUS * 4;
 const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
   {
     id: "canvas",
@@ -101,8 +103,8 @@ function CanvasRenderer({
       .addAll(mutableNodes);
 
     const resolveDraggedCollision = () => {
-      if (!dragged) return;
-      const collisionDistance = COLLISION_RADIUS * 2;
+      if (!dragged) return 0;
+      const collisionDistance = DRAG_COLLISION_RADIUS + COLLISION_RADIUS;
       const minX = dragged.x - collisionDistance;
       const minY = dragged.y - collisionDistance;
       const maxX = dragged.x + collisionDistance;
@@ -143,6 +145,7 @@ function CanvasRenderer({
         next.node.y = next.y;
         spatialIndex.add(next.node);
       }
+      return moved.length;
     };
 
     const layoutBounds = mutableNodes.reduce(
@@ -158,9 +161,10 @@ function CanvasRenderer({
     const draw = () => {
       frame = 0;
       let collisionMs = 0;
+      let pushedNodes = 0;
       if (dragged) {
         const collisionStartedAt = performance.now();
-        resolveDraggedCollision();
+        pushedNodes = resolveDraggedCollision();
         collisionMs = performance.now() - collisionStartedAt;
       }
       const drawStartedAt = performance.now();
@@ -194,6 +198,14 @@ function CanvasRenderer({
 
       if (dragged) {
         context.beginPath();
+        context.arc(dragged.x, dragged.y, DRAG_COLLISION_RADIUS, 0, Math.PI * 2);
+        context.fillStyle = "rgba(23, 23, 23, 0.035)";
+        context.fill();
+        context.strokeStyle = "rgba(23, 23, 23, 0.26)";
+        context.lineWidth = 1 / transform.k;
+        context.stroke();
+
+        context.beginPath();
         context.arc(dragged.x, dragged.y, 5.5 / transform.k, 0, Math.PI * 2);
         context.strokeStyle = "#171717";
         context.lineWidth = 1.5 / transform.k;
@@ -205,7 +217,12 @@ function CanvasRenderer({
       const now = performance.now();
       if (now - lastMetricAt > 250 || frameCount === 1) {
         lastMetricAt = now;
-        onMetrics({ drawMs: now - drawStartedAt, collisionMs, frames: frameCount });
+        onMetrics({
+          drawMs: now - drawStartedAt,
+          collisionMs,
+          pushedNodes,
+          frames: frameCount,
+        });
       }
     };
 
@@ -321,6 +338,7 @@ function StaticCanvasVariant({ data }: { data: GraphData }) {
   const [metrics, setMetrics] = useState<RenderMetrics>({
     drawMs: 0,
     collisionMs: 0,
+    pushedNodes: 0,
     frames: 0,
   });
   const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
@@ -330,6 +348,8 @@ function StaticCanvasVariant({ data }: { data: GraphData }) {
       <div className="graph-scale-render-state">
         <span>static layout</span>
         <span>{metrics.collisionMs.toFixed(1)}ms collide</span>
+        <span>{metrics.pushedNodes} pushed</span>
+        <span>{DRAG_COLLISION_RADIUS.toFixed(1)} drag radius</span>
         <span>{metrics.drawMs.toFixed(1)}ms draw</span>
         <span>{metrics.frames} frames</span>
       </div>
@@ -345,6 +365,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
   const [metrics, setMetrics] = useState<RenderMetrics>({
     drawMs: 0,
     collisionMs: 0,
+    pushedNodes: 0,
     frames: 0,
   });
   const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
@@ -394,6 +415,8 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         <span>{layoutMs === null ? "main thread free" : `${layoutMs.toFixed(0)}ms layout`}</span>
         <span>{COLLISION_RADIUS.toFixed(1)}px collision</span>
         <span>{metrics.collisionMs.toFixed(1)}ms collide</span>
+        <span>{metrics.pushedNodes} pushed</span>
+        <span>{DRAG_COLLISION_RADIUS.toFixed(1)} drag radius</span>
         <span>{metrics.drawMs.toFixed(1)}ms draw</span>
         <span>{metrics.frames} frames</span>
       </div>
