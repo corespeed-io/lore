@@ -1,5 +1,6 @@
 "use client";
 
+import * as d3 from "d3";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { typeColor } from "@/lib/colors";
@@ -18,11 +19,15 @@ interface RenderMetrics {
   frames: number;
 }
 
-type NodeDragEvent =
-  | { phase: "start" | "move"; id: string; x: number; y: number }
-  | { phase: "end"; id: string };
+type NodeDragEvent = { phase: "start" | "move" | "end"; id: string; x: number; y: number };
 
-type PositionSink = (positions: Float32Array) => void;
+type PositionSink = (positions: Float32Array, animate?: boolean) => void;
+
+interface CanvasDragSubject {
+  node: PositionedNode;
+  x: number;
+  y: number;
+}
 
 const LAYOUT_WIDTH = 1_600;
 const LAYOUT_HEIGHT = 1_000;
@@ -37,7 +42,7 @@ const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] =
   {
     id: "worker",
     label: "Canvas + Worker",
-    description: "D3 force runs off the main thread, then Canvas owns interaction.",
+    description: "D3 drag/zoom stays direct; Worker returns one settled layout after release.",
   },
   {
     id: "svg",
@@ -94,9 +99,9 @@ function CanvasRenderer({
     let frame = 0;
     let frameCount = 0;
     let lastMetricAt = 0;
-    let transform = { x: 0, y: 0, k: 1 };
+    let positionTween = 0;
+    let transform = d3.zoomIdentity;
     let dragged: PositionedNode | null = null;
-    let panFrom: { x: number; y: number; tx: number; ty: number } | null = null;
 
     const layoutBounds = mutableNodes.reduce(
       (bounds, node) => ({
@@ -160,7 +165,7 @@ function CanvasRenderer({
       if (!frame) frame = requestAnimationFrame(draw);
     };
 
-    registerPositionSink?.((positions) => {
+    const applyPositions = (positions: Float32Array) => {
       for (let index = 0; index < mutableNodes.length; index += 1) {
         const node = mutableNodes[index];
         if (!node) continue;
@@ -168,7 +173,103 @@ function CanvasRenderer({
         node.y = positions[index * 2 + 1] ?? node.y;
       }
       scheduleDraw();
+    };
+
+    registerPositionSink?.((positions, animate = false) => {
+      if (positionTween) cancelAnimationFrame(positionTween);
+      if (!animate) {
+        applyPositions(positions);
+        return;
+      }
+      const from = new Float32Array(mutableNodes.length * 2);
+      for (let index = 0; index < mutableNodes.length; index += 1) {
+        from[index * 2] = mutableNodes[index]?.x ?? 0;
+        from[index * 2 + 1] = mutableNodes[index]?.y ?? 0;
+      }
+      const startedAt = performance.now();
+      const animatePositions = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / 280);
+        const eased = 1 - (1 - progress) ** 3;
+        for (let index = 0; index < mutableNodes.length; index += 1) {
+          const node = mutableNodes[index];
+          if (!node) continue;
+          const x = positions[index * 2] ?? node.x;
+          const y = positions[index * 2 + 1] ?? node.y;
+          node.x = (from[index * 2] ?? node.x) + (x - (from[index * 2] ?? node.x)) * eased;
+          node.y = (from[index * 2 + 1] ?? node.y) + (y - (from[index * 2 + 1] ?? node.y)) * eased;
+        }
+        scheduleDraw();
+        positionTween = progress < 1 ? requestAnimationFrame(animatePositions) : 0;
+      };
+      positionTween = requestAnimationFrame(animatePositions);
     });
+
+    const findNode = (x: number, y: number, radius: number) => {
+      let nearest: PositionedNode | null = null;
+      let nearestDistance = radius * radius;
+      for (const node of mutableNodes) {
+        const dx = node.x - x;
+        const dy = node.y - y;
+        const distance = dx * dx + dy * dy;
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearest = node;
+        }
+      }
+      return nearest;
+    };
+
+    const selection = d3.select<HTMLCanvasElement, unknown>(canvas);
+    let pendingSubject: CanvasDragSubject | null = null;
+    const dragBehavior = d3
+      .drag<HTMLCanvasElement, unknown, CanvasDragSubject>()
+      .container(canvas)
+      .filter((event) => {
+        if (event.ctrlKey || event.button) return false;
+        const [screenX, screenY] = d3.pointer(event, canvas);
+        const [worldX, worldY] = transform.invert([screenX, screenY]);
+        const node = findNode(worldX, worldY, 10 / transform.k);
+        pendingSubject = node
+          ? {
+              node,
+              x: transform.applyX(node.x),
+              y: transform.applyY(node.y),
+            }
+          : null;
+        return pendingSubject !== null;
+      })
+      .subject(() => pendingSubject as CanvasDragSubject)
+      .on("start", (event) => {
+        const node = event.subject.node;
+        dragged = node;
+        onNodeDrag?.({
+          phase: "start",
+          id: node.id,
+          x: node.x,
+          y: node.y,
+        });
+        scheduleDraw();
+      })
+      .on("drag", (event) => {
+        const [x, y] = transform.invert([event.x, event.y]);
+        event.subject.node.x = x;
+        event.subject.node.y = y;
+        onNodeDrag?.({ phase: "move", id: event.subject.node.id, x, y });
+        scheduleDraw();
+      })
+      .on("end", (event) => {
+        const node = event.subject.node;
+        onNodeDrag?.({ phase: "end", id: node.id, x: node.x, y: node.y });
+        dragged = null;
+        scheduleDraw();
+      });
+    const zoomBehavior = d3
+      .zoom<HTMLCanvasElement, unknown>()
+      .scaleExtent([0.08, 8])
+      .on("zoom", (event) => {
+        transform = event.transform;
+        scheduleDraw();
+      });
 
     const fitCanvas = () => {
       const padding = 42;
@@ -178,12 +279,13 @@ function CanvasRenderer({
         (width - padding * 2) / layoutWidth,
         (height - padding * 2) / layoutHeight,
       );
-      transform = {
-        x: (width - layoutWidth * scale) / 2 - layoutBounds.minX * scale,
-        y: (height - layoutHeight * scale) / 2 - layoutBounds.minY * scale,
-        k: scale,
-      };
-      scheduleDraw();
+      const nextTransform = d3.zoomIdentity
+        .translate(
+          (width - layoutWidth * scale) / 2 - layoutBounds.minX * scale,
+          (height - layoutHeight * scale) / 2 - layoutBounds.minY * scale,
+        )
+        .scale(scale);
+      selection.call(zoomBehavior.transform, nextTransform);
     };
 
     const resize = () => {
@@ -196,109 +298,17 @@ function CanvasRenderer({
       fitCanvas();
     };
 
-    const worldPoint = (event: PointerEvent | WheelEvent) => {
-      const box = canvas.getBoundingClientRect();
-      return {
-        x: (event.clientX - box.left - transform.x) / transform.k,
-        y: (event.clientY - box.top - transform.y) / transform.k,
-      };
-    };
-
-    const pointerDown = (event: PointerEvent) => {
-      const world = worldPoint(event);
-      const hitRadius = 10 / transform.k;
-      let nearestDistance = hitRadius * hitRadius;
-      dragged = null;
-      panFrom = null;
-      for (const node of mutableNodes) {
-        const dx = node.x - world.x;
-        const dy = node.y - world.y;
-        const distance = dx * dx + dy * dy;
-        if (distance < nearestDistance) {
-          nearestDistance = distance;
-          dragged = node;
-        }
-      }
-      if (!dragged) {
-        panFrom = {
-          x: event.clientX,
-          y: event.clientY,
-          tx: transform.x,
-          ty: transform.y,
-        };
-      } else {
-        onNodeDrag?.({ phase: "start", id: dragged.id, x: world.x, y: world.y });
-      }
-      canvas.setPointerCapture(event.pointerId);
-      scheduleDraw();
-    };
-
-    const pointerMove = (event: PointerEvent) => {
-      if (dragged) {
-        const world = worldPoint(event);
-        dragged.x = world.x;
-        dragged.y = world.y;
-        onNodeDrag?.({ phase: "move", id: dragged.id, x: world.x, y: world.y });
-      } else if (panFrom) {
-        transform.x = panFrom.tx + event.clientX - panFrom.x;
-        transform.y = panFrom.ty + event.clientY - panFrom.y;
-      } else {
-        return;
-      }
-      scheduleDraw();
-    };
-
-    const finishPointer = (pointerId?: number) => {
-      const released = dragged;
-      dragged = null;
-      panFrom = null;
-      if (released) onNodeDrag?.({ phase: "end", id: released.id });
-      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
-        canvas.releasePointerCapture(pointerId);
-      }
-      scheduleDraw();
-    };
-
-    const pointerUp = (event: PointerEvent) => finishPointer(event.pointerId);
-    const lostPointerCapture = () => finishPointer();
-    const windowBlur = () => finishPointer();
-
-    const wheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const box = canvas.getBoundingClientRect();
-      const cursorX = event.clientX - box.left;
-      const cursorY = event.clientY - box.top;
-      const nextScale = Math.max(0.08, Math.min(8, transform.k * Math.exp(-event.deltaY * 0.0015)));
-      const ratio = nextScale / transform.k;
-      transform.x = cursorX - (cursorX - transform.x) * ratio;
-      transform.y = cursorY - (cursorY - transform.y) * ratio;
-      transform.k = nextScale;
-      scheduleDraw();
-    };
-
     const observer = new ResizeObserver(resize);
+    selection.call(dragBehavior).call(zoomBehavior);
     observer.observe(canvas);
-    canvas.addEventListener("pointerdown", pointerDown);
-    canvas.addEventListener("pointermove", pointerMove);
-    canvas.addEventListener("pointerup", pointerUp);
-    canvas.addEventListener("pointercancel", pointerUp);
-    canvas.addEventListener("lostpointercapture", lostPointerCapture);
-    canvas.addEventListener("wheel", wheel, { passive: false });
-    window.addEventListener("blur", windowBlur);
     resize();
 
     return () => {
       observer.disconnect();
       registerPositionSink?.(null);
       if (frame) cancelAnimationFrame(frame);
-      canvas.removeEventListener("pointerdown", pointerDown);
-      canvas.removeEventListener("pointermove", pointerMove);
-      canvas.removeEventListener("pointerup", pointerUp);
-      canvas.removeEventListener("pointercancel", pointerUp);
-      canvas.removeEventListener("lostpointercapture", lostPointerCapture);
-      canvas.removeEventListener("wheel", wheel);
-      window.removeEventListener("blur", windowBlur);
-      if (dragged) onNodeDrag?.({ phase: "end", id: dragged.id });
+      if (positionTween) cancelAnimationFrame(positionTween);
+      selection.on(".drag", null).on(".zoom", null);
     };
   }, [data.links, nodes, onMetrics, onNodeDrag, registerPositionSink]);
 
@@ -325,9 +335,11 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
   const fallback = useMemo(() => staticPositions(data.nodes), [data.nodes]);
   const workerRef = useRef<Worker | null>(null);
   const positionSinkRef = useRef<PositionSink | null>(null);
+  const settleRequestRef = useRef(0);
   const [nodes, setNodes] = useState(fallback);
   const [progress, setProgress] = useState(0);
   const [layoutMs, setLayoutMs] = useState<number | null>(null);
+  const [settleMs, setSettleMs] = useState<number | null>(null);
   const [physicsState, setPhysicsState] = useState<"dragging" | "settling" | "settled">("settled");
   const [metrics, setMetrics] = useState<RenderMetrics>({ drawMs: 0, frames: 0 });
   const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
@@ -335,7 +347,21 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
     positionSinkRef.current = sink;
   }, []);
   const dragNode = useCallback((event: NodeDragEvent) => {
-    workerRef.current?.postMessage({ type: `drag-${event.phase}`, ...event });
+    if (event.phase === "start") {
+      setPhysicsState("dragging");
+      return;
+    }
+    if (event.phase !== "end") return;
+    setPhysicsState("settling");
+    const requestId = settleRequestRef.current + 1;
+    settleRequestRef.current = requestId;
+    workerRef.current?.postMessage({
+      type: "settle",
+      requestId,
+      id: event.id,
+      x: event.x,
+      y: event.y,
+    });
   }, []);
 
   useEffect(() => {
@@ -344,21 +370,19 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
     worker.onmessage = (
       event: MessageEvent<
         | { type: "progress"; progress: number }
-        | { type: "done"; positions: Float32Array; layoutMs: number }
-        | { type: "frame"; positions: Float32Array }
-        | { type: "status"; state: "dragging" | "settling" | "settled" }
+        | { type: "ready"; positions: Float32Array; layoutMs: number }
+        | { type: "settled"; positions: Float32Array; requestId: number; settleMs: number }
       >,
     ) => {
       if (event.data.type === "progress") {
         setProgress(event.data.progress);
         return;
       }
-      if (event.data.type === "frame") {
-        positionSinkRef.current?.(event.data.positions);
-        return;
-      }
-      if (event.data.type === "status") {
-        setPhysicsState(event.data.state);
+      if (event.data.type === "settled") {
+        if (event.data.requestId !== settleRequestRef.current) return;
+        positionSinkRef.current?.(event.data.positions, true);
+        setSettleMs(event.data.settleMs);
+        setPhysicsState("settled");
         return;
       }
       const result = event.data;
@@ -403,6 +427,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
               : `worker ${physicsState}`}
         </span>
         <span>{layoutMs === null ? "main thread free" : `${layoutMs.toFixed(0)}ms layout`}</span>
+        {settleMs !== null && <span>{settleMs.toFixed(0)}ms settle</span>}
         <span>{COLLISION_RADIUS.toFixed(1)}px collision</span>
         <span>{metrics.drawMs.toFixed(1)}ms draw</span>
         <span>{metrics.frames} frames</span>
