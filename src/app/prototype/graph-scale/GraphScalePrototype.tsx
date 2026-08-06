@@ -44,7 +44,7 @@ const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] =
   {
     id: "worker",
     label: "Canvas + Worker",
-    description: "A moving D3 particle field runs in Worker; the dragged node stays pointer-owned.",
+    description: "The full D3 force graph runs in Worker; only nearby particles are released.",
   },
   {
     id: "svg",
@@ -416,7 +416,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         </span>
         <span>{physicsFrames} physics frames</span>
         <span>{activeParticles} active particles</span>
-        <span>{activeLinks} attractive links</span>
+        <span>{activeLinks} influencing links</span>
         <span>{metrics.drawMs.toFixed(1)}ms draw</span>
         <span>{metrics.frames} frames</span>
       </div>

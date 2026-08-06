@@ -104,22 +104,26 @@ by D3. The local spatial query proved technically fast, but user testing rejecte
 it because it removed velocity, inertia, and multi-hop particle motion.
 
 The accepted prototype direction gives the main thread sole authority over the
-actively dragged node and runs a moving D3 particle field in the Worker. The full
-force set lays out the graph once; interaction then builds a bounded simulation
-from real nodes around the drag path and a three-hop graph neighbourhood. It uses
-the SVG control's interaction parameters: degree-scaled 4–16px visible nodes,
-17–29px collision bodies, `forceLink` at distance 78 / strength 0.25,
-`forceManyBody(-180)`, velocity decay 0.4, and drag alpha target 0.3. Per-node
-anchor springs stand in for edges cut by the local-field boundary; without that
-constraint the induced subgraph peels away under charge. Worker frames carry the
-locked node id so stale coordinates cannot pull the pointer-owned node backward.
+actively dragged node and runs the complete D3 force graph in the Worker. The
+initial layout is frozen; interaction releases only real nodes around the drag
+path and a three-hop graph neighbourhood while every distant node remains fixed
+at its settled position. All 20,000 links and all 5,000 collision/charge bodies
+stay in the simulation, so active nodes retain their real boundary constraints
+instead of approximating missing edges with anchor springs. It uses the SVG
+control's parameters: degree-scaled 4–16px visible nodes, 17–29px collision bodies,
+`forceLink` at distance 78 / strength 0.25, `forceManyBody(-180)`, velocity decay
+0.4, and drag alpha target 0.3. Worker frames carry the locked node id so stale
+coordinates cannot pull the pointer-owned node backward.
 
 This followed two rejected experiments: a direct quadtree displacement was fast
 but had no inertia, while reheating all 5,000 nodes reproduced the desired particle
-motion but made roughly 4,000 nodes visibly tremble. An early bounded field moved
-only about 60 nodes because it selected particles spatially and used much weaker
-forces than the SVG control. After force, radius, and multi-hop propagation parity,
-a measured central drag activated about 477 of 5,000 nodes and 1,522 internal
-links, while Canvas drawing stayed around 1.1–1.6ms. The active-node ceiling is
-900, so this restores the local particle wave without returning to whole-graph
-motion.
+motion but made roughly 4,000 nodes visibly tremble. An early bounded induced
+subgraph moved only about 60 nodes with weaker forces; after parameter parity it
+still peeled away because 780 boundary-crossing links were absent from a measured
+central field. Keeping the complete force graph while pinning distant nodes fixed
+that structural mismatch: the same drag released about 477 of 5,000 nodes and
+retained 2,302 influencing links, while Canvas drawing stayed around 1.0–1.1ms.
+The active-node ceiling is 900. Full-force Worker throughput was about 23–25 ticks
+per second on the development machine; if that visual cadence is insufficient,
+the next experiment is an active field plus fixed one-hop boundary halo, preserving
+all links that influence active nodes without calculating distant charge/collision.
