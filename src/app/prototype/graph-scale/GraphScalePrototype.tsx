@@ -12,6 +12,7 @@ export type PrototypeVariant = "canvas" | "worker" | "svg";
 interface PositionedNode extends GraphNode {
   x: number;
   y: number;
+  radius: number;
 }
 
 interface RenderMetrics {
@@ -31,8 +32,9 @@ interface CanvasDragSubject {
 
 const LAYOUT_WIDTH = 1_600;
 const LAYOUT_HEIGHT = 1_000;
-const NODE_RADIUS = 2.3;
-const COLLISION_RADIUS = NODE_RADIUS + 13;
+const COLLISION_GAP = 13;
+const MIN_COLLISION_RADIUS = 4 + COLLISION_GAP;
+const MAX_COLLISION_RADIUS = 16 + COLLISION_GAP;
 const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
   {
     id: "canvas",
@@ -51,15 +53,26 @@ const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] =
   },
 ];
 
-function staticPositions(nodes: GraphNode[]): PositionedNode[] {
+function nodeDegrees(data: GraphData) {
+  const degrees = new Map<string, number>();
+  for (const link of data.links) {
+    degrees.set(link.source, (degrees.get(link.source) ?? 0) + 1);
+    degrees.set(link.target, (degrees.get(link.target) ?? 0) + 1);
+  }
+  return degrees;
+}
+
+function staticPositions(data: GraphData): PositionedNode[] {
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-  return nodes.map((node, index) => {
+  const degrees = nodeDegrees(data);
+  return data.nodes.map((node, index) => {
     const radius = 8.2 * Math.sqrt(index);
     const angle = index * goldenAngle;
     return {
       ...node,
       x: LAYOUT_WIDTH / 2 + Math.cos(angle) * radius,
       y: LAYOUT_HEIGHT / 2 + Math.sin(angle) * radius,
+      radius: 4 + Math.min(12, (degrees.get(node.id) ?? 0) * 1.1),
     };
   });
 }
@@ -104,10 +117,10 @@ function CanvasRenderer({
 
     const layoutBounds = mutableNodes.reduce(
       (bounds, node) => ({
-        minX: Math.min(bounds.minX, node.x - COLLISION_RADIUS),
-        minY: Math.min(bounds.minY, node.y - COLLISION_RADIUS),
-        maxX: Math.max(bounds.maxX, node.x + COLLISION_RADIUS),
-        maxY: Math.max(bounds.maxY, node.y + COLLISION_RADIUS),
+        minX: Math.min(bounds.minX, node.x - MAX_COLLISION_RADIUS),
+        minY: Math.min(bounds.minY, node.y - MAX_COLLISION_RADIUS),
+        maxX: Math.max(bounds.maxX, node.x + MAX_COLLISION_RADIUS),
+        maxY: Math.max(bounds.maxY, node.y + MAX_COLLISION_RADIUS),
       }),
       { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
     );
@@ -136,8 +149,8 @@ function CanvasRenderer({
       for (const [type, typedNodes] of groups) {
         context.beginPath();
         for (const node of typedNodes) {
-          context.moveTo(node.x + NODE_RADIUS, node.y);
-          context.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2);
+          context.moveTo(node.x + node.radius, node.y);
+          context.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
         }
         context.fillStyle = typeColor(type);
         context.fill();
@@ -280,7 +293,7 @@ function CanvasRenderer({
 }
 
 function StaticCanvasVariant({ data }: { data: GraphData }) {
-  const nodes = useMemo(() => staticPositions(data.nodes), [data.nodes]);
+  const nodes = useMemo(() => staticPositions(data), [data]);
   const [metrics, setMetrics] = useState<RenderMetrics>({ drawMs: 0, frames: 0 });
   const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
   return (
@@ -296,7 +309,7 @@ function StaticCanvasVariant({ data }: { data: GraphData }) {
 }
 
 function WorkerCanvasVariant({ data }: { data: GraphData }) {
-  const fallback = useMemo(() => staticPositions(data.nodes), [data.nodes]);
+  const fallback = useMemo(() => staticPositions(data), [data]);
   const workerRef = useRef<Worker | null>(null);
   const positionSinkRef = useRef<PositionSink | null>(null);
   const [nodes, setNodes] = useState(fallback);
@@ -360,6 +373,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         ...node,
         x: result.positions[index * 2] ?? 0,
         y: result.positions[index * 2 + 1] ?? 0,
+        radius: fallback[index]?.radius ?? 4,
       }));
       setNodes(positioned);
       setProgress(1);
@@ -371,13 +385,13 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
       links: data.links.map((link) => ({ source: link.source, target: link.target })),
       width: LAYOUT_WIDTH,
       height: LAYOUT_HEIGHT,
-      collisionRadius: COLLISION_RADIUS,
+      collisionGap: COLLISION_GAP,
     });
     return () => {
       workerRef.current = null;
       worker.terminate();
     };
-  }, [data]);
+  }, [data, fallback]);
 
   return (
     <div className="graph-scale-stage">
@@ -397,7 +411,9 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
               : `particles ${physicsState}`}
         </span>
         <span>{layoutMs === null ? "main thread free" : `${layoutMs.toFixed(0)}ms layout`}</span>
-        <span>{COLLISION_RADIUS.toFixed(1)}px collision</span>
+        <span>
+          {MIN_COLLISION_RADIUS}–{MAX_COLLISION_RADIUS}px collision
+        </span>
         <span>{physicsFrames} physics frames</span>
         <span>{activeParticles} active particles</span>
         <span>{activeLinks} attractive links</span>

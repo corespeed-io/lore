@@ -106,15 +106,20 @@ it because it removed velocity, inertia, and multi-hop particle motion.
 The accepted prototype direction gives the main thread sole authority over the
 actively dragged node and runs a moving D3 particle field in the Worker. The full
 force set lays out the graph once; interaction then builds a bounded simulation
-from real nodes around the drag path with `forceCollide`, velocity, weak anchor
-springs, and `forceLink` for graph edges whose two endpoints are both in the active
-field. Worker frames carry the locked node id so stale coordinates cannot pull the
-pointer-owned node backward. Limiting link attraction to this induced subgraph
-preserves connected-node pull without reheating distant nodes.
+from real nodes around the drag path and a three-hop graph neighbourhood. It uses
+the SVG control's interaction parameters: degree-scaled 4–16px visible nodes,
+17–29px collision bodies, `forceLink` at distance 78 / strength 0.25,
+`forceManyBody(-180)`, velocity decay 0.4, and drag alpha target 0.3. Per-node
+anchor springs stand in for edges cut by the local-field boundary; without that
+constraint the induced subgraph peels away under charge. Worker frames carry the
+locked node id so stale coordinates cannot pull the pointer-owned node backward.
 
 This followed two rejected experiments: a direct quadtree displacement was fast
 but had no inertia, while reheating all 5,000 nodes reproduced the desired particle
-motion but made roughly 4,000 nodes visibly tremble. The bounded particle field
-kept the same velocity and cooling behavior while a measured drag activated about
-524 of 5,000 nodes, produced 55 physics frames, and kept Canvas drawing around
-1.6–2.2ms.
+motion but made roughly 4,000 nodes visibly tremble. An early bounded field moved
+only about 60 nodes because it selected particles spatially and used much weaker
+forces than the SVG control. After force, radius, and multi-hop propagation parity,
+a measured central drag activated about 477 of 5,000 nodes and 1,522 internal
+links, while Canvas drawing stayed around 1.1–1.6ms. The active-node ceiling is
+900, so this restores the local particle wave without returning to whole-graph
+motion.
