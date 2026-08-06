@@ -305,6 +305,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
   const [physicsState, setPhysicsState] = useState<"dragging" | "settling" | "settled">("settled");
   const [physicsFrames, setPhysicsFrames] = useState(0);
   const [activeParticles, setActiveParticles] = useState(0);
+  const [activeLinks, setActiveLinks] = useState(0);
   const [metrics, setMetrics] = useState<RenderMetrics>({ drawMs: 0, frames: 0 });
   const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
   const registerPositionSink = useCallback((sink: PositionSink | null) => {
@@ -327,6 +328,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
             frame: number;
             lockedId: string | null;
             activeNodes: number;
+            activeLinks: number;
           }
         | { type: "status"; state: "dragging" | "settling" | "settled" }
       >,
@@ -340,6 +342,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         if (event.data.frame % 6 === 0 || event.data.activeNodes === 0) {
           setPhysicsFrames(event.data.frame);
           setActiveParticles(event.data.activeNodes);
+          setActiveLinks(event.data.activeLinks);
         }
         return;
       }
@@ -347,6 +350,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         if (event.data.state === "dragging") {
           setPhysicsFrames(0);
           setActiveParticles(0);
+          setActiveLinks(0);
         }
         setPhysicsState(event.data.state);
         return;
@@ -396,6 +400,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         <span>{COLLISION_RADIUS.toFixed(1)}px collision</span>
         <span>{physicsFrames} physics frames</span>
         <span>{activeParticles} active particles</span>
+        <span>{activeLinks} attractive links</span>
         <span>{metrics.drawMs.toFixed(1)}ms draw</span>
         <span>{metrics.frames} frames</span>
       </div>

@@ -13,6 +13,11 @@ interface WorkerLink extends d3.SimulationLinkDatum<WorkerNode> {
   target: string | WorkerNode;
 }
 
+interface LinkPair {
+  source: string;
+  target: string;
+}
+
 interface InitRequest {
   type: "init";
   nodes: { id: string }[];
@@ -41,7 +46,10 @@ type WorkerRequest = InitRequest | DragPointRequest | DragEndRequest;
 let nodes: WorkerNode[] = [];
 let nodeById = new Map<string, WorkerNode>();
 let layoutSimulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
-let particleSimulation: d3.Simulation<WorkerNode, undefined> | null = null;
+let particleSimulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
+let graphLinks: LinkPair[] = [];
+let particleLinks: WorkerLink[] = [];
+let particleLinkForce: d3.ForceLink<WorkerNode, WorkerLink> | null = null;
 let activeNodes: WorkerNode[] = [];
 let activeIds = new Set<string>();
 let draggedNode: WorkerNode | null = null;
@@ -60,7 +68,13 @@ function positionsSnapshot() {
 function postPositions(
   message:
     | { type: "ready"; layoutMs: number }
-    | { type: "frame"; frame: number; lockedId: string | null; activeNodes: number },
+    | {
+        type: "frame";
+        frame: number;
+        lockedId: string | null;
+        activeNodes: number;
+        activeLinks: number;
+      },
 ) {
   const positions = positionsSnapshot();
   self.postMessage({ ...message, positions }, { transfer: [positions.buffer] });
@@ -75,9 +89,12 @@ function initialize(request: InitRequest) {
   nodeById = new Map(nodes.map((node) => [node.id, node]));
   activeNodes = [];
   activeIds = new Set();
+  particleLinks = [];
+  particleLinkForce = null;
   draggedNode = null;
   physicsFrame = 0;
-  const links: WorkerLink[] = request.links.map((link) => ({ ...link }));
+  graphLinks = request.links.map((link) => ({ ...link }));
+  const links: WorkerLink[] = graphLinks.map((link) => ({ ...link }));
   layoutSimulation = d3
     .forceSimulation(nodes)
     .force(
@@ -111,6 +128,15 @@ function initialize(request: InitRequest) {
   postPositions({ type: "ready", layoutMs: performance.now() - startedAt });
 }
 
+function rebuildParticleLinks() {
+  particleLinks = [];
+  for (const link of graphLinks) {
+    if (!activeIds.has(link.source) || !activeIds.has(link.target)) continue;
+    particleLinks.push({ ...link });
+  }
+  particleLinkForce?.links(particleLinks);
+}
+
 function addNearbyNodes(x: number, y: number) {
   const fieldRadius = collisionRadius * 12;
   const fieldRadiusSquared = fieldRadius * fieldRadius;
@@ -126,7 +152,10 @@ function addNearbyNodes(x: number, y: number) {
     node.vy = 0;
     changed = true;
   }
-  if (changed && particleSimulation) particleSimulation.nodes(activeNodes);
+  if (changed && particleSimulation) {
+    particleSimulation.nodes(activeNodes);
+    rebuildParticleLinks();
+  }
 }
 
 function postParticleFrame() {
@@ -142,11 +171,14 @@ function postParticleFrame() {
     frame: physicsFrame,
     lockedId: draggedNode?.id ?? null,
     activeNodes: movingNodes,
+    activeLinks: particleLinks.length,
   });
 }
 
 function startParticleField(node: WorkerNode, x: number, y: number) {
   particleSimulation?.stop();
+  particleSimulation = null;
+  particleLinkForce = null;
   if (draggedNode && draggedNode !== node) {
     draggedNode.fx = null;
     draggedNode.fy = null;
@@ -165,18 +197,32 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
   node.fx = x;
   node.fy = y;
 
+  rebuildParticleLinks();
+  particleLinkForce = d3
+    .forceLink<WorkerNode, WorkerLink>(particleLinks)
+    .id((particle) => particle.id)
+    .distance(28)
+    .strength(0.12);
+
   particleSimulation = d3
-    .forceSimulation<WorkerNode>(activeNodes)
+    .forceSimulation<WorkerNode, WorkerLink>(activeNodes)
     .velocityDecay(0.28)
     .alphaDecay(0.055)
+    .force("link", particleLinkForce)
     .force("collide", d3.forceCollide<WorkerNode>(collisionRadius).strength(1).iterations(1))
-    .force("x", d3.forceX<WorkerNode>((particle) => particle.anchorX).strength(0.012))
-    .force("y", d3.forceY<WorkerNode>((particle) => particle.anchorY).strength(0.012))
+    .force("x", d3.forceX<WorkerNode>((particle) => particle.anchorX).strength(0.006))
+    .force("y", d3.forceY<WorkerNode>((particle) => particle.anchorY).strength(0.006))
     .alpha(0.32)
     .alphaTarget(0.14)
     .on("tick", postParticleFrame)
     .on("end", () => {
-      postPositions({ type: "frame", frame: physicsFrame, lockedId: null, activeNodes: 0 });
+      postPositions({
+        type: "frame",
+        frame: physicsFrame,
+        lockedId: null,
+        activeNodes: 0,
+        activeLinks: 0,
+      });
       self.postMessage({ type: "status", state: "settled" });
     });
   self.postMessage({ type: "status", state: "dragging" });

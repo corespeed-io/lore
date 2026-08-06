@@ -106,9 +106,11 @@ it because it removed velocity, inertia, and multi-hop particle motion.
 The accepted prototype direction gives the main thread sole authority over the
 actively dragged node and runs a moving D3 particle field in the Worker. The full
 force set lays out the graph once; interaction then builds a bounded simulation
-from real nodes around the drag path with `forceCollide`, velocity, and weak anchor
-springs. Worker frames carry the locked node id so stale coordinates cannot pull
-the pointer-owned node backward.
+from real nodes around the drag path with `forceCollide`, velocity, weak anchor
+springs, and `forceLink` for graph edges whose two endpoints are both in the active
+field. Worker frames carry the locked node id so stale coordinates cannot pull the
+pointer-owned node backward. Limiting link attraction to this induced subgraph
+preserves connected-node pull without reheating distant nodes.
 
 This followed two rejected experiments: a direct quadtree displacement was fast
 but had no inertia, while reheating all 5,000 nodes reproduced the desired particle
