@@ -160,7 +160,7 @@ export function forgetMemory(workspaceId: string, id: string): Promise<void> {
 }
 
 export function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
-  return requestJson("/api/graph?limit=100", {
+  return requestJson("/api/graph?limit=5000", {
     workspaceId,
     operation: "GET /api/graph",
     signal,

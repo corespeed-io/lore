@@ -1,9 +1,10 @@
-import type { ActorContext } from "./actor-context";
+import { type ActorContext, installActorContext } from "./actor-context";
 import type { PostgresDatabase } from "./db";
-import { createMemoryModule, type Memory, type MemoryScope } from "./memory";
+import type { Memory, MemoryScope } from "./memory";
 
 export interface MemoryGraphNode {
   id: string;
+  reference: string;
   label: string;
   preview: string;
   scope: MemoryScope;
@@ -14,7 +15,7 @@ export interface MemoryGraphNode {
 export interface MemoryGraphLink {
   source: string;
   target: string;
-  kind: "affinity";
+  kind: string;
   weight: number;
 }
 
@@ -23,10 +24,55 @@ export interface MemoryGraph {
   links: MemoryGraphLink[];
 }
 
+export interface MemoryLink {
+  id: string;
+  workspaceId: string;
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  kind: string;
+  weight: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectMemories {
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  kind?: string;
+  weight?: number;
+  metadata?: Record<string, unknown>;
+}
+
 export interface ReadMemoryGraph {
   limit?: number;
   maxNeighbors?: number;
   minimumAffinity?: number;
+}
+
+interface MemoryRow {
+  id: string;
+  workspace_id: string;
+  owner_user_id: string;
+  created_by_agent_id: string | null;
+  scope: MemoryScope;
+  content: string;
+  metadata: Record<string, unknown>;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MemoryLinkRow {
+  id: string;
+  workspace_id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  kind: string;
+  weight: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 }
 
 const STOP_WORDS = new Set([
@@ -71,16 +117,42 @@ const STOP_WORDS = new Set([
   "would",
   "your",
 ]);
+const AFFINITY_NODE_CAP = 500;
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const integer = Number.isFinite(value) ? Math.floor(value ?? fallback) : fallback;
+  return Math.max(minimum, Math.min(integer, maximum));
+}
 
 function memoryPreview(content: string, limit: number): string {
   const compact = content.replace(/\s+/g, " ").trim();
   return compact.length > limit ? `${compact.slice(0, limit - 1).trimEnd()}…` : compact;
 }
 
-function memoryLabel(content: string): string {
-  const firstLine = content.split(/\r?\n/, 1)[0];
+function memoryLabel(memory: Memory): string {
+  const configured = memory.metadata.title;
+  if (typeof configured === "string" && configured.trim()) {
+    return memoryPreview(configured, 96);
+  }
+  const firstLine = memory.content.split(/\r?\n/, 1)[0];
   const firstSentence = firstLine.split(/(?<=[.!?。！？])\s/u, 1)[0];
-  return memoryPreview(firstSentence || content, 72);
+  return memoryPreview(firstSentence || memory.content, 72);
+}
+
+function memoryReference(memory: Memory): string {
+  const configured = memory.metadata.reference;
+  if (typeof configured === "string" && configured.trim()) return configured.trim();
+  const legacy = memory.metadata.legacy;
+  if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
+    const slug = (legacy as Record<string, unknown>).slug;
+    if (typeof slug === "string" && slug.trim()) return slug.trim();
+  }
+  return memory.id;
 }
 
 function termsFor(content: string): Set<string> {
@@ -111,21 +183,42 @@ function affinity(left: Set<string>, right: Set<string>) {
   return intersection / Math.sqrt(left.size * right.size);
 }
 
-function buildGraph(memories: Memory[], input: ReadMemoryGraph): MemoryGraph {
-  const nodes = memories.map((memory) => ({
-    id: memory.id,
-    label: memoryLabel(memory.content),
-    preview: memoryPreview(memory.content, 240),
-    scope: memory.scope,
-    type:
-      typeof memory.metadata.type === "string" && memory.metadata.type.trim()
-        ? memory.metadata.type.trim()
-        : memory.scope,
-    updatedAt: new Date(memory.updatedAt).toISOString(),
-  }));
+function toMemory(row: MemoryRow): Memory {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    ownerUserId: row.owner_user_id,
+    createdByAgentId: row.created_by_agent_id,
+    scope: row.scope,
+    content: row.content,
+    metadata: row.metadata,
+    version: row.version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toMemoryLink(row: MemoryLinkRow): MemoryLink {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    sourceMemoryId: row.source_memory_id,
+    targetMemoryId: row.target_memory_id,
+    kind: row.kind,
+    weight: row.weight,
+    metadata: row.metadata,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function affinityLinks(memories: Memory[], input: ReadMemoryGraph): MemoryGraphLink[] {
   const termSets = new Map(memories.map((memory) => [memory.id, termsFor(memory.content)]));
-  const minimumAffinity = Math.max(0, Math.min(input.minimumAffinity ?? 0.16, 1));
-  const maxNeighbors = Math.max(1, Math.min(input.maxNeighbors ?? 3, 8));
+  const requestedAffinity = input.minimumAffinity ?? 0.16;
+  const minimumAffinity = Number.isFinite(requestedAffinity)
+    ? Math.max(0, Math.min(requestedAffinity, 1))
+    : 0.16;
+  const maxNeighbors = boundedInteger(input.maxNeighbors, 3, 1, 8);
   const candidates: MemoryGraphLink[] = [];
   for (let leftIndex = 0; leftIndex < memories.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < memories.length; rightIndex += 1) {
@@ -157,25 +250,103 @@ function buildGraph(memories: Memory[], input: ReadMemoryGraph): MemoryGraph {
     neighbors.set(candidate.source, sourceNeighbors + 1);
     neighbors.set(candidate.target, targetNeighbors + 1);
   }
+  return candidates.filter((candidate) =>
+    selectedPairs.has(`${candidate.source}:${candidate.target}`),
+  );
+}
 
+function buildGraph(
+  memories: Memory[],
+  storedLinks: MemoryLinkRow[],
+  input: ReadMemoryGraph,
+): MemoryGraph {
+  const nodes = memories.map((memory) => ({
+    id: memory.id,
+    reference: memoryReference(memory),
+    label: memoryLabel(memory),
+    preview: memoryPreview(memory.content, 240),
+    scope: memory.scope,
+    type:
+      typeof memory.metadata.type === "string" && memory.metadata.type.trim()
+        ? memory.metadata.type.trim()
+        : memory.scope,
+    updatedAt: new Date(memory.updatedAt).toISOString(),
+  }));
+  const explicitLinks = storedLinks.map((link) => ({
+    source: link.source_memory_id,
+    target: link.target_memory_id,
+    kind: link.kind,
+    weight: Number(link.weight),
+  }));
+  const explicitlyLinkedIds = new Set(explicitLinks.flatMap((link) => [link.source, link.target]));
+  const isolatedMemories = memories
+    .filter((memory) => !explicitlyLinkedIds.has(memory.id))
+    .slice(0, AFFINITY_NODE_CAP);
   return {
     nodes,
-    links: candidates.filter((candidate) =>
-      selectedPairs.has(`${candidate.source}:${candidate.target}`),
-    ),
+    links: [...explicitLinks, ...affinityLinks(isolatedMemories, input)],
   };
 }
 
 /**
- * Native Memory Graph read model. RLS is applied by the Memory module before
- * affinity links are derived, so an edge can never name an invisible endpoint.
+ * Native Memory Graph and durable Memory Link module. Every operation installs
+ * Actor context before Postgres RLS selects nodes and links. Link policies require
+ * both endpoints to be visible, so hidden-neighbor ids and degree never leak.
  */
 export function createMemoryGraphModule(database: PostgresDatabase) {
-  const memories = createMemoryModule(database);
   return {
+    async connect(actor: ActorContext, input: ConnectMemories): Promise<MemoryLink> {
+      const kind = input.kind?.trim() || "related";
+      const requestedWeight = input.weight ?? 1;
+      const weight = Number.isFinite(requestedWeight)
+        ? Math.max(0, Math.min(requestedWeight, 1))
+        : 1;
+      return database.transaction(async (transaction) => {
+        await installActorContext(transaction, actor);
+        const result = await transaction.query<MemoryLinkRow>(
+          `INSERT INTO memory_links (
+             id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+           RETURNING *`,
+          [
+            crypto.randomUUID(),
+            actor.workspaceId,
+            input.sourceMemoryId,
+            input.targetMemoryId,
+            kind,
+            weight,
+            JSON.stringify(input.metadata ?? {}),
+          ],
+        );
+        return toMemoryLink(result.rows[0]);
+      });
+    },
+
     async read(actor: ActorContext, input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
-      const limit = Math.max(1, Math.min(input.limit ?? 100, 100));
-      return buildGraph(await memories.list(actor, { limit }), input);
+      const limit = boundedInteger(input.limit, 5_000, 1, 5_000);
+      return database.transaction(async (transaction) => {
+        await installActorContext(transaction, actor);
+        const memoryResult = await transaction.query<MemoryRow>(
+          `SELECT *
+           FROM memories
+           WHERE workspace_id = $1
+           ORDER BY updated_at DESC, id
+           LIMIT $2`,
+          [actor.workspaceId, limit],
+        );
+        if (memoryResult.rows.length === 0) return { nodes: [], links: [] };
+        const memoryIds = memoryResult.rows.map((memory) => memory.id);
+        const linkResult = await transaction.query<MemoryLinkRow>(
+          `SELECT *
+           FROM memory_links
+           WHERE workspace_id = $1
+             AND source_memory_id = ANY($2::uuid[])
+             AND target_memory_id = ANY($2::uuid[])
+           ORDER BY created_at, id`,
+          [actor.workspaceId, memoryIds],
+        );
+        return buildGraph(memoryResult.rows.map(toMemory), linkResult.rows, input);
+      });
     },
   };
 }

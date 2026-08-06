@@ -21,8 +21,8 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001`–`0011` define identity, tenancy, user-private Agents, Memory/chunks,
-  pgvector state, and versioned Evaluation tables with RLS;
+- migrations `0001`–`0012` define identity, tenancy, user-private Agents,
+  Memory/chunks/links, pgvector state, and versioned Evaluation tables with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
@@ -34,9 +34,15 @@ been removed. Lore now has a native implementation:
 - `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
   `/memories`, and Memory detail deep links so browser refresh never loses the
   client route;
-- `src/lib/graph.ts` derives an Actor-specific Memory Graph only after the
-  Memory module and Postgres RLS have selected visible nodes; `/api/graph`
-  exposes that native read model without a gbrain dependency;
+- `src/lib/graph.ts` returns RLS-filtered, durable Memory Links and derives
+  affinity only among otherwise isolated visible Memories; `/api/graph` exposes
+  that native read model without a gbrain dependency. Graph nodes expose an
+  Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
+  the Memory UUID) for native wikilink navigation;
+- `src/lib/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
+  when that reference resolves to one visible graph node. `MemoryView` intercepts
+  the resulting native Memory-id link for client routing; unresolved or ambiguous
+  references remain inert, and raw HTML stays escaped;
 - `src/lib/viz/graph.ts` is the restored, performance-tuned D3 renderer. Keep its
   headless settle, delta-painted focus state, capped edge hit layer, label
   collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
@@ -44,8 +50,8 @@ been removed. Lore now has a native implementation:
   binding targets CoreSpeed Cloud on Cloudflare Workers.
 
 Still incomplete: production embedding providers, background retry/queue workers,
-durable/explicit graph relationships, and full Agent/Evaluation management UI. Chunking and
-lexical indexing are synchronous; embedding failure is explicit (`NULL`) and never
+and full Agent/Evaluation management UI. Chunking and lexical indexing are
+synchronous; embedding failure is explicit (`NULL`) and never
 blocks a Memory write. The v1 pgvector column is fixed at 1536 dimensions so it can
 use an HNSW cosine index; every embedding adapter must emit exactly 1536 finite
 values or Lore records an explicit missing-embedding state.
@@ -65,17 +71,19 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 - pure utilities and tests whose behavior remains part of the new product.
 
 The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
-stylesheet (`src/app/globals.css`). Graph is a native Memory-affinity read surface. It may later
-gain durable explicit relationships, but never wire it back to the removed gbrain proxy.
+stylesheet (`src/app/globals.css`). Graph combines native durable Memory Links with
+derived affinity for isolated Memories; never wire it back to the removed gbrain proxy.
 
 The restored Dashboard/Graph/Memories interface consumes native `Workspace`,
 `Memory`, `MemorySearchResult`, and `MemoryGraph` types directly. Do not add a
 tool-shaped compatibility client, page/slug view model, `/api/call`, or any
 generic upstream adapter to support the historical component structure.
 
-The native Graph endpoint currently caps reads at 100 visible Memories and three
-affinities per Memory, so the optimized SVG renderer is the deliberate v1 path.
-If those limits grow materially, preserve D3 as the layout engine but move static
+The native Graph endpoint caps reads at 5,000 visible Memories. It returns all
+RLS-visible Memory Links whose endpoints are in that node set, then derives at most
+three affinities per Memory among the first 500 otherwise isolated nodes. The
+optimized SVG renderer is measured against the migrated ~1,000-node / ~2,200-link
+graph. At benchmark scale, preserve D3 as the layout engine but move static
 simulation to a Web Worker and links to Canvas before increasing the SVG DOM budget.
 
 Build the native domain modules directly. Compatibility adapters, if ever needed,
@@ -137,7 +145,7 @@ The relational model centers on:
 
 - `users`, `identities`, `workspaces`, `memberships`;
 - `agents`, `agent_workspace_grants`, `agent_credentials`;
-- `memories`, `memory_chunks`, and embedding/index state;
+- `memories`, `memory_chunks`, `memory_links`, and embedding/index state;
 - `evaluation_suites`, `evaluation_cases`, `evaluation_runs`, and
   `evaluation_results`.
 
@@ -218,8 +226,9 @@ surfaces:
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
   chunking, indexing, provenance, and permission invalidation.
-- **Graph module:** return visible Memory nodes and derived relationships while
-  guaranteeing that every edge endpoint is present in the same authorized read model.
+- **Graph module:** return visible Memory nodes, durable Memory Links, and derived
+  affinities while guaranteeing that every relationship endpoint is present in the
+  same authorized read model.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 

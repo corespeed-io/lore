@@ -55,6 +55,7 @@ export async function readGraphScaleBenchmark(): Promise<GraphData> {
     return {
       nodes: nodeResult.rows.map((node) => ({
         id: node.id,
+        reference: node.id,
         label: node.label,
         preview: node.preview,
         type: node.type,

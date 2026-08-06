@@ -18,6 +18,8 @@ identity mapping, authorization, retrieval, and evaluation directly.
 
 - native Memory create, read, update, delete, list, provenance, and shared/private
   scope;
+- durable directed Memory Links, clickable `[[reference]]` wikilinks, and derived
+  affinity for otherwise isolated Memories;
 - lexical + optional vector retrieval with visibility filtered before top-k;
 - Users, Identities, Workspaces, Memberships, Agents, Workspace grants, and hashed
   one-time Agent credentials;

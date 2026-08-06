@@ -14,6 +14,7 @@ interface MemoryViewProps {
   type: string;
   id: string;
   body: string;
+  wikilinkTargets: Readonly<Record<string, string>>;
   scope: MemoryScope;
   ownerUserId: string;
   createdByAgentId: string | null;
@@ -82,6 +83,7 @@ export function MemoryView({
   type,
   id,
   body,
+  wikilinkTargets,
   scope,
   ownerUserId,
   createdByAgentId,
@@ -98,12 +100,27 @@ export function MemoryView({
   onEdit,
   onForget,
 }: MemoryViewProps) {
-  const bodyHtml = useMemo(() => renderMarkdown(body.replace(/^#\s+.*\r?\n+/, "")), [body]);
+  const bodyHtml = useMemo(
+    () => renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""), wikilinkTargets),
+    [body, wikilinkTargets],
+  );
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (bodyRef.current) bodyRef.current.innerHTML = bodyHtml;
-  }, [bodyHtml]);
+    const bodyElement = bodyRef.current;
+    if (!bodyElement) return;
+    bodyElement.innerHTML = bodyHtml;
+    const handleClick = (event: globalThis.MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const anchor = event.target.closest<HTMLAnchorElement>("a.wl[data-memory-id]");
+      const memoryId = anchor?.dataset.memoryId;
+      if (!memoryId) return;
+      event.preventDefault();
+      onOpen(memoryId);
+    };
+    bodyElement.addEventListener("click", handleClick);
+    return () => bodyElement.removeEventListener("click", handleClick);
+  }, [bodyHtml, onOpen]);
 
   return (
     <div className="page-wrap page-wrap-wide">

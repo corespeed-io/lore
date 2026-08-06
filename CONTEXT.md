@@ -66,6 +66,13 @@ A Memory visible only to its owner User and that User's permitted Agents in the
 same Workspace.
 _Avoid_: Personal Memory, Agent-private Memory
 
+**Memory Reference**:
+An Actor-visible identifier used by inline `[[reference]]` navigation. A Memory may
+define a human-readable `metadata.reference`; imports may preserve their source
+reference in provenance metadata; otherwise its UUID is the reference. Ambiguous
+or unreadable references never resolve.
+_Avoid_: Global slug, authorization key, gbrain page slug
+
 ## Graph
 
 **Memory Graph**:
@@ -74,11 +81,16 @@ Memory Graph never contains a node or relationship whose endpoint the Actor
 cannot read.
 _Avoid_: Workspace graph, global graph, gbrain graph
 
+**Memory Link**:
+A durable, directed relationship from one Memory to another Memory in the same
+Workspace, visible only when the Actor can read both endpoints.
+_Avoid_: Edge, gbrain link, Memory Affinity
+
 **Memory Affinity**:
 A derived, non-authoritative relationship between two visible Memories whose
 content is similar enough to help exploration. It is recalculated from the
 current authorized Memory set and is not itself a stored Memory.
-_Avoid_: Knowledge fact, explicit link, graph ownership
+_Avoid_: Knowledge fact, Memory Link, graph ownership
 
 **Benchmark Graph Dataset**:
 A deterministic, synthetic node-and-link dataset used only to stress graph layout

@@ -1805,6 +1805,24 @@ mark.hl {
 }
 
 /* ── Links ──────────────────────────────────────────────────────────────────── */
+a.wl {
+  color: var(--link);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.wl:hover,
+a.wl:focus-visible {
+  color: var(--link-deep);
+  text-decoration: underline;
+}
+
+.wl-unresolved {
+  color: var(--muted);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
 a.ext {
   color: var(--link);
 }

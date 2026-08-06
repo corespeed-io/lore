@@ -397,8 +397,8 @@ export function createGraphHandlers(database: PostgresDatabase) {
       try {
         const actor = await resolver.resolveActor(request);
         const url = new URL(request.url);
-        const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
-        const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
+        const requestedLimit = Number(url.searchParams.get("limit") ?? "5000");
+        const limit = Number.isFinite(requestedLimit) ? requestedLimit : 5000;
         return Response.json(await graph.read(actor, { limit }), {
           headers: { "cache-control": "private, no-store" },
         });

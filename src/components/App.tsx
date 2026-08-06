@@ -39,6 +39,7 @@ interface GraphStore {
   nodes: GraphData["nodes"];
   links: GraphData["links"];
   byId: Record<string, GraphData["nodes"][number]>;
+  byReference: Record<string, string>;
   adj: Record<string, Set<string>>;
 }
 
@@ -68,10 +69,22 @@ interface EditorState {
 
 function buildGraph(data: GraphData): GraphStore {
   const byId: GraphStore["byId"] = {};
+  const byReference: GraphStore["byReference"] = {};
+  const ambiguousReferences = new Set<string>();
   const adj: GraphStore["adj"] = {};
   for (const node of data.nodes) {
     byId[node.id] = node;
     adj[node.id] = new Set([node.id]);
+    for (const reference of new Set([node.id, node.reference])) {
+      if (!reference || ambiguousReferences.has(reference)) continue;
+      const existing = byReference[reference];
+      if (existing && existing !== node.id) {
+        delete byReference[reference];
+        ambiguousReferences.add(reference);
+      } else {
+        byReference[reference] = node.id;
+      }
+    }
   }
   for (const link of data.links) {
     if (!adj[link.source]) adj[link.source] = new Set();
@@ -79,7 +92,7 @@ function buildGraph(data: GraphData): GraphStore {
     adj[link.source].add(link.target);
     adj[link.target].add(link.source);
   }
-  return { nodes: data.nodes, links: data.links, byId, adj };
+  return { nodes: data.nodes, links: data.links, byId, byReference, adj };
 }
 
 function graphNeighbors(graph: GraphStore | null, id: string): MemoryLink[] {
@@ -529,6 +542,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 type={selectedMemory.type}
                 id={selectedMemory.id}
                 body={selectedMemory.body}
+                wikilinkTargets={graph?.byReference ?? {}}
                 scope={selectedMemory.memory.scope}
                 ownerUserId={selectedMemory.memory.ownerUserId}
                 createdByAgentId={selectedMemory.memory.createdByAgentId}
@@ -580,7 +594,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   ) : graphData.nodes.length === 0 ? (
                     <div className="view-placeholder">
                       No visible Memories to graph yet. Capture a few related facts and Lore will
-                      derive affinity links inside this Workspace.
+                      find Memory Links or derive affinities inside this Workspace.
                     </div>
                   ) : null)}
 
