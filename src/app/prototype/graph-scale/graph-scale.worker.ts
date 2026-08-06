@@ -20,18 +20,7 @@ interface InitRequest {
   collisionRadius: number;
 }
 
-interface SettleRequest {
-  type: "settle";
-  requestId: number;
-  id: string;
-  x: number;
-  y: number;
-}
-
-type WorkerRequest = InitRequest | SettleRequest;
-
 let nodes: WorkerNode[] = [];
-let nodeById = new Map<string, WorkerNode>();
 let simulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
 
 function positionsSnapshot() {
@@ -43,11 +32,7 @@ function positionsSnapshot() {
   return positions;
 }
 
-function postPositions(
-  message:
-    | { type: "ready"; layoutMs: number }
-    | { type: "settled"; requestId: number; settleMs: number },
-) {
+function postPositions(message: { type: "ready"; layoutMs: number }) {
   const positions = positionsSnapshot();
   self.postMessage({ ...message, positions }, { transfer: [positions.buffer] });
 }
@@ -56,7 +41,6 @@ function initialize(request: InitRequest) {
   simulation?.stop();
   const startedAt = performance.now();
   nodes = request.nodes.map((node) => ({ ...node }));
-  nodeById = new Map(nodes.map((node) => [node.id, node]));
   const links: WorkerLink[] = request.links.map((link) => ({ ...link }));
   simulation = d3
     .forceSimulation(nodes)
@@ -85,31 +69,4 @@ function initialize(request: InitRequest) {
   postPositions({ type: "ready", layoutMs: performance.now() - startedAt });
 }
 
-function settle(request: SettleRequest) {
-  const node = nodeById.get(request.id);
-  if (!node || !simulation) return;
-  const startedAt = performance.now();
-  simulation.stop().alpha(0.28).alphaTarget(0);
-
-  // Hold the directly manipulated node briefly so collide/link forces push its
-  // neighborhood out of the way, then release it and let the graph cool.
-  node.x = request.x;
-  node.y = request.y;
-  node.fx = request.x;
-  node.fy = request.y;
-  simulation.tick(18);
-  node.fx = null;
-  node.fy = null;
-  simulation.tick(42);
-
-  postPositions({
-    type: "settled",
-    requestId: request.requestId,
-    settleMs: performance.now() - startedAt,
-  });
-}
-
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
-  if (event.data.type === "init") initialize(event.data);
-  else settle(event.data);
-};
+self.onmessage = (event: MessageEvent<InitRequest>) => initialize(event.data);

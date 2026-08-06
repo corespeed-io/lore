@@ -85,3 +85,20 @@ This separates D3-backed facts above from our design choice:
    transferable coordinate buffers, and dragged-node coordinate authority; that
    protocol is ours, not “the D3-recommended approach.”
 
+## Lore prototype measurements
+
+Local development measurements on the 5,000-node / 20,000-link benchmark exposed
+an important distinction between throughput and interaction latency:
+
+- Running 60 full-graph force ticks in the Worker after release kept Canvas fast,
+  but withheld collision feedback for about 1.06 seconds.
+- Moving a full `forceCollide` tick onto every drag frame removed that wait, but the
+  collision pass itself cost about 9.2ms and reduced a 120Hz interaction to roughly
+  86 frames per second.
+- Keeping the Worker static and using a D3 quadtree to resolve only collisions near
+  the dragged node measured about 0.4ms for collision and removed the post-release
+  wait (about 0.3ms observed by the drag harness).
+
+These are hardware- and dataset-specific Lore measurements, not thresholds claimed
+by D3. They support using full Worker force calculation for initial layout and a
+bounded local spatial query for direct manipulation at this scale.
