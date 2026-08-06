@@ -30,6 +30,7 @@
     "build": "next build",
     "db:migrate": "node scripts/migrate.mjs",
     "db:bootstrap": "node scripts/migrate.mjs && node scripts/create-runtime-role.mjs",
+    "benchmark:graph:seed": "node scripts/seed-graph-benchmark.mjs",
     "start": "next start",
     "preview:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",

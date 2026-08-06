@@ -80,6 +80,11 @@ content is similar enough to help exploration. It is recalculated from the
 current authorized Memory set and is not itself a stored Memory.
 _Avoid_: Knowledge fact, explicit link, graph ownership
 
+**Benchmark Graph Dataset**:
+A deterministic, synthetic node-and-link dataset used only to stress graph layout
+and rendering. It is not a Memory Graph and carries no product authorization semantics.
+_Avoid_: Memory Affinity, production Workspace, evaluation suite
+
 ## Evaluation
 
 **Evaluation Suite**:

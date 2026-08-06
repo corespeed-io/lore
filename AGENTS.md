@@ -262,6 +262,7 @@ These commands remain the current verification loop:
 bun run dev        # localhost:3000
 bun run db:migrate # apply checksum-protected SQL migrations
 bun run db:bootstrap # migrate + provision a non-owner runtime login
+bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
@@ -271,6 +272,19 @@ bun run build      # next build (production)
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```
+
+The renderer stress dataset is intentionally separate from the product schema.
+Create a disposable database whose name contains `bench` or `benchmark`, then run:
+
+```bash
+BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_graph_benchmark \
+  bun run benchmark:graph:seed
+```
+
+The default dataset contains 5,000 nodes and 105,000 unique undirected links in
+the `graph_benchmark` schema. The seeder refuses to rebuild its schema in a
+database without `bench` or `benchmark` in the name. It is renderer load data,
+not a persisted Memory Affinity model and not an Evaluation Suite.
 
 Before opening a PR, design:check, typecheck, lint, test, and build must all pass.
 
