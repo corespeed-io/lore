@@ -49,8 +49,10 @@ export function renderMarkdown(
   h = h.replace(/@@WIKILINK(\d+)@@/g, (_match, rawIndex: string) => {
     const wikilink = wikilinks[Number(rawIndex)];
     if (!wikilink) return "";
-    const targetMemoryId = wikilinkTargets[wikilink.reference];
-    if (!targetMemoryId) {
+    const targetMemoryId = Object.hasOwn(wikilinkTargets, wikilink.reference)
+      ? wikilinkTargets[wikilink.reference]
+      : undefined;
+    if (typeof targetMemoryId !== "string" || !targetMemoryId) {
       return `<span class="wl-unresolved" data-reference="${esc(wikilink.reference)}" title="Memory reference not found">${esc(wikilink.label)}</span>`;
     }
     return `<a class="wl" href="/memory/${encodeURIComponent(targetMemoryId)}" data-memory-id="${esc(targetMemoryId)}" data-reference="${esc(wikilink.reference)}">${esc(wikilink.label)}</a>`;

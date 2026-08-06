@@ -69,7 +69,7 @@ interface EditorState {
 
 function buildGraph(data: GraphData): GraphStore {
   const byId: GraphStore["byId"] = {};
-  const byReference: GraphStore["byReference"] = {};
+  const byReference = Object.create(null) as GraphStore["byReference"];
   const ambiguousReferences = new Set<string>();
   const adj: GraphStore["adj"] = {};
   for (const node of data.nodes) {

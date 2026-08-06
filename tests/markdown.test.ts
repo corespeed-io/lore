@@ -27,6 +27,26 @@ test("renderMarkdown keeps unresolved wikilinks inert and XSS-safe", () => {
   expect(html).not.toContain("<a");
 });
 
+test("renderMarkdown never resolves inherited object properties as Memory ids", () => {
+  expect(() => renderMarkdown("[[constructor]] [[__proto__]]", {})).not.toThrow();
+  const html = renderMarkdown("[[constructor]] [[__proto__]]", {});
+
+  expect(html.match(/class="wl-unresolved"/g)).toHaveLength(2);
+  expect(html).not.toContain("<a");
+});
+
+test("renderMarkdown can safely resolve a reference named like an object property", () => {
+  const targets = Object.create(null) as Record<string, string>;
+  Object.defineProperty(targets, "constructor", {
+    value: TARGET_MEMORY_ID,
+    enumerable: true,
+  });
+
+  expect(renderMarkdown("[[constructor]]", targets)).toContain(
+    `data-memory-id="${TARGET_MEMORY_ID}"`,
+  );
+});
+
 test("plain uses wikilink labels", () => {
   expect(plain("# H\n**b** [[a/b|c]] `x`")).toBe("H b c x");
 });
