@@ -55,6 +55,8 @@ let activeIds = new Set<string>();
 let activeLinkCount = 0;
 let draggedNode: WorkerNode | null = null;
 let physicsFrame = 0;
+let physicsStartedAt = 0;
+let physicsTimer: ReturnType<typeof setInterval> | null = null;
 let maxCollisionRadius = 0;
 let layoutWidth = 0;
 let layoutHeight = 0;
@@ -62,6 +64,14 @@ let layoutHeight = 0;
 // The SVG control reheats all 5,000 nodes. This keeps its multi-hop propagation
 // while bounding Worker interaction cost and preventing graph-wide tremble.
 const MAX_ACTIVE_NODES = 900;
+// Measured compromise: preserves the full charge field while making Barnes–Hut
+// approximation coarse enough for a 60Hz interaction budget at 5,000 nodes.
+const MANY_BODY_THETA = 1.4;
+// A fixed interval avoids adding timer delay after every expensive force tick.
+const TARGET_TICK_MS = 1_000 / 60;
+// The old D3 timer sustained about 25 ticks/s at alpha 0.3. At 60Hz, 0.12
+// preserves roughly the same post-release energy per wall-clock second.
+const RELEASE_ALPHA = 0.12;
 
 function positionsSnapshot() {
   const positions = new Float32Array(nodes.length * 2);
@@ -81,6 +91,7 @@ function postPositions(
         lockedId: string | null;
         activeNodes: number;
         activeLinks: number;
+        physicsFps: number;
       },
 ) {
   const positions = positionsSnapshot();
@@ -88,6 +99,7 @@ function postPositions(
 }
 
 function initialize(request: InitRequest) {
+  stopPhysicsLoop();
   particleSimulation?.stop();
   layoutSimulation?.stop();
   const startedAt = performance.now();
@@ -112,6 +124,7 @@ function initialize(request: InitRequest) {
   activeLinkCount = 0;
   draggedNode = null;
   physicsFrame = 0;
+  physicsStartedAt = 0;
   adjacentIds = new Map(nodes.map((node) => [node.id, new Set<string>()]));
   for (const link of graphLinks) {
     adjacentIds.get(link.source)?.add(link.target);
@@ -128,7 +141,7 @@ function initialize(request: InitRequest) {
         .distance(78)
         .strength(0.25),
     )
-    .force("charge", d3.forceManyBody<WorkerNode>().strength(-180))
+    .force("charge", d3.forceManyBody<WorkerNode>().strength(-180).theta(MANY_BODY_THETA))
     .force("center", d3.forceCenter(request.width / 2, request.height / 2))
     .force("x", d3.forceX(request.width / 2).strength(0.05))
     .force("y", d3.forceY(request.height / 2).strength(0.07))
@@ -236,10 +249,43 @@ function postParticleFrame() {
     lockedId: draggedNode?.id ?? null,
     activeNodes: movingNodes,
     activeLinks: activeLinkCount,
+    physicsFps:
+      physicsFrame > 1 ? ((physicsFrame - 1) * 1_000) / (performance.now() - physicsStartedAt) : 0,
   });
 }
 
+function stopPhysicsLoop() {
+  if (physicsTimer !== null) clearInterval(physicsTimer);
+  physicsTimer = null;
+}
+
+function finishParticleField(simulation: d3.Simulation<WorkerNode, WorkerLink>) {
+  if (particleSimulation !== simulation) return;
+  stopPhysicsLoop();
+  freezeActiveNodes();
+  postPositions({
+    type: "frame",
+    frame: physicsFrame,
+    lockedId: null,
+    activeNodes: 0,
+    activeLinks: 0,
+    physicsFps:
+      physicsFrame > 1 ? ((physicsFrame - 1) * 1_000) / (performance.now() - physicsStartedAt) : 0,
+  });
+  self.postMessage({ type: "status", state: "settled" });
+}
+
+function runPhysicsTick(simulation: d3.Simulation<WorkerNode, WorkerLink>) {
+  if (particleSimulation !== simulation) return;
+  simulation.tick();
+  postParticleFrame();
+  if (simulation.alphaTarget() === 0 && simulation.alpha() < simulation.alphaMin()) {
+    finishParticleField(simulation);
+  }
+}
+
 function startParticleField(node: WorkerNode, x: number, y: number) {
+  stopPhysicsLoop();
   particleSimulation?.stop();
   particleSimulation = null;
   freezeActiveNodes();
@@ -247,6 +293,7 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
   activeIds = new Set();
   activeLinkCount = 0;
   physicsFrame = 0;
+  physicsStartedAt = performance.now();
   draggedNode = node;
   activateNode(node);
   const nearby = addNearbyNodes(x, y);
@@ -274,7 +321,7 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
         .distance(78)
         .strength(0.25),
     )
-    .force("charge", d3.forceManyBody<WorkerNode>().strength(-180))
+    .force("charge", d3.forceManyBody<WorkerNode>().strength(-180).theta(MANY_BODY_THETA))
     .force(
       "collide",
       d3
@@ -286,20 +333,9 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
     .force("y", d3.forceY<WorkerNode>(layoutHeight / 2).strength(0.07))
     .alpha(0.3)
     .alphaTarget(0.3)
-    .on("tick", postParticleFrame)
-    .on("end", () => {
-      if (particleSimulation !== simulation) return;
-      freezeActiveNodes();
-      postPositions({
-        type: "frame",
-        frame: physicsFrame,
-        lockedId: null,
-        activeNodes: 0,
-        activeLinks: 0,
-      });
-      self.postMessage({ type: "status", state: "settled" });
-    });
+    .stop();
   particleSimulation = simulation;
+  physicsTimer = setInterval(() => runPhysicsTick(simulation), TARGET_TICK_MS);
   self.postMessage({ type: "status", state: "dragging" });
 }
 
@@ -320,7 +356,7 @@ function dragPoint(request: DragPointRequest) {
   node.y = request.y;
   node.fx = request.x;
   node.fy = request.y;
-  particleSimulation.alpha(Math.max(particleSimulation.alpha(), 0.3)).alphaTarget(0.3).restart();
+  particleSimulation.alpha(Math.max(particleSimulation.alpha(), 0.3)).alphaTarget(0.3);
 }
 
 function dragEnd(request: DragEndRequest) {
@@ -331,7 +367,7 @@ function dragEnd(request: DragEndRequest) {
   node.fx = null;
   node.fy = null;
   draggedNode = null;
-  particleSimulation.alphaTarget(0).restart();
+  particleSimulation.alpha(Math.min(particleSimulation.alpha(), RELEASE_ALPHA)).alphaTarget(0);
   self.postMessage({ type: "status", state: "settling" });
 }
 

@@ -123,7 +123,16 @@ still peeled away because 780 boundary-crossing links were absent from a measure
 central field. Keeping the complete force graph while pinning distant nodes fixed
 that structural mismatch: the same drag released about 477 of 5,000 nodes and
 retained 2,302 influencing links, while Canvas drawing stayed around 1.0–1.1ms.
-The active-node ceiling is 900. Full-force Worker throughput was about 23–25 ticks
-per second on the development machine; if that visual cadence is insufficient,
-the next experiment is an active field plus fixed one-hop boundary halo, preserving
-all links that influence active nodes without calculating distant charge/collision.
+The active-node ceiling is 900. Full-force Worker throughput initially measured
+about 23–25 ticks per second. A fixed one-hop boundary halo reached about 45 ticks
+per second but was rejected because removing distant charge changed the settled
+force balance. Keeping the complete graph, increasing the documented Barnes–Hut
+`theta` approximation from 0.9 to 1.4, and driving manual `simulation.tick()` calls
+on a fixed 16.7ms Worker interval preserved the shape while reaching 59fps during
+drag and 61fps while settling. The same run drew Canvas in 1.0–1.2ms and reduced
+the 120-tick initial layout from roughly 2.2s to 1.52s. These are development
+machine measurements, not general D3 thresholds. Because the faster scheduler
+also applied release forces more often per second, post-release alpha is capped at
+0.12 while drag alpha remains 0.3. In a deterministic 180-unit drag, the selected
+node moved about 67 units after release instead of roughly 155, while the Worker
+held 61.7fps; collision response during the drag is unchanged.
