@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
-import { createMemoryModule, MemoryAccessDeniedError } from "@/lib/memory";
+import { createMemoryModule, type EmbeddingTask, MemoryAccessDeniedError } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
 test("Memory owner can remember and retrieve a private Memory", async () => {
@@ -297,10 +297,15 @@ test("RLS denies direct access to another User's private Memory chunks", async (
 test("Hybrid search finds semantically related visible Memory without lexical overlap", async () => {
   const testContext = await createMemoryTestContext();
   const fixtureVector = (index: number) =>
-    Array.from({ length: 1536 }, (_, vectorIndex) => (vectorIndex === index ? 1 : 0));
+    Array.from({ length: 1024 }, (_, vectorIndex) => (vectorIndex === index ? 1 : 0));
+  const embeddingTasks: EmbeddingTask[] = [];
   const embeddingProvider = {
+    provider: "fixture",
     model: "fixture-embedding-v1",
-    async embed(texts: string[]) {
+    dimensions: 1024 as const,
+    revision: "fixture-v1",
+    async embed(texts: string[], task: EmbeddingTask) {
+      embeddingTasks.push(task);
       return texts.map((text) =>
         /cat|feline/i.test(text)
           ? fixtureVector(0)
@@ -328,6 +333,8 @@ test("Hybrid search finds semantically related visible Memory without lexical ov
   const results = await memories.search(testContext.bob, { query: "cat", limit: 10 });
 
   expect(results.map((result) => result.memory.id)).toEqual([visible.id]);
+  expect(embeddingTasks).toContain("document");
+  expect(embeddingTasks.at(-1)).toBe("query");
   await testContext.close();
 });
 

@@ -92,6 +92,13 @@ content is similar enough to help exploration. It is recalculated from the
 current authorized Memory set and is not itself a stored Memory.
 _Avoid_: Knowledge fact, Memory Link, graph ownership
 
+**Embedding Configuration**:
+The deployment-wide provider and model selected by a self-host operator for indexing
+and searching Memories. Lore v1 fixes the vector dimension and preprocessing
+revision as protocol invariants; they are not operator, User, Workspace, or Agent
+settings.
+_Avoid_: Workspace Retrieval Profile, User embedding model, Agent retrieval setting
+
 **Benchmark Graph Dataset**:
 A deterministic, synthetic node-and-link dataset used only to stress graph layout
 and rendering. It is not a Memory Graph and carries no product authorization semantics.

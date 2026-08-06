@@ -21,7 +21,7 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001`–`0012` define identity, tenancy, user-private Agents,
+- migrations `0001`–`0013` define identity, tenancy, user-private Agents,
   Memory/chunks/links, pgvector state, and versioned Evaluation tables with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
@@ -49,12 +49,16 @@ been removed. Lore now has a native implementation:
 - Docker/Compose targets OSS self-hosting; OpenNext + a cache-disabled Hyperdrive
   binding targets CoreSpeed Cloud on Cloudflare Workers.
 
-Still incomplete: production embedding providers, background retry/queue workers,
-and full Agent/Evaluation management UI. Chunking and lexical indexing are
-synchronous; embedding failure is explicit (`NULL`) and never
-blocks a Memory write. The v1 pgvector column is fixed at 1536 dimensions so it can
-use an HNSW cosine index; every embedding adapter must emit exactly 1536 finite
-values or Lore records an explicit missing-embedding state.
+Still incomplete: background retry/re-index queue workers and full Agent/Evaluation
+management UI. Chunking and lexical indexing are synchronous; the Ollama, Google
+Gemini, and OpenAI adapters are configured once per deployment, and embedding
+failure is explicit (`NULL`) and never blocks a Memory write. Local deployment
+defaults are Qwen3-Embedding 0.6B at 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
+The pgvector column and HNSW index are fixed at 1024 dimensions. Self-host operators
+choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
+preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless
+provider, model, and revision all match the active deployment. Embedding model
+selection is not a Workspace/User product setting.
 
 Do not:
 
