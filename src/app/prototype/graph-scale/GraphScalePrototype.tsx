@@ -18,8 +18,16 @@ interface RenderMetrics {
   frames: number;
 }
 
+type NodeDragEvent =
+  | { phase: "start" | "move"; id: string; x: number; y: number }
+  | { phase: "end"; id: string };
+
+type PositionSink = (positions: Float32Array) => void;
+
 const LAYOUT_WIDTH = 1_600;
 const LAYOUT_HEIGHT = 1_000;
+const NODE_RADIUS = 2.3;
+const COLLISION_RADIUS = NODE_RADIUS + 13;
 const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
   {
     id: "canvas",
@@ -55,10 +63,14 @@ function CanvasRenderer({
   data,
   nodes,
   onMetrics,
+  onNodeDrag,
+  registerPositionSink,
 }: {
   data: GraphData;
   nodes: PositionedNode[];
   onMetrics: (metrics: RenderMetrics) => void;
+  onNodeDrag?: (event: NodeDragEvent) => void;
+  registerPositionSink?: (sink: PositionSink | null) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -86,6 +98,16 @@ function CanvasRenderer({
     let dragged: PositionedNode | null = null;
     let panFrom: { x: number; y: number; tx: number; ty: number } | null = null;
 
+    const layoutBounds = mutableNodes.reduce(
+      (bounds, node) => ({
+        minX: Math.min(bounds.minX, node.x - COLLISION_RADIUS),
+        minY: Math.min(bounds.minY, node.y - COLLISION_RADIUS),
+        maxX: Math.max(bounds.maxX, node.x + COLLISION_RADIUS),
+        maxY: Math.max(bounds.maxY, node.y + COLLISION_RADIUS),
+      }),
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+    );
+
     const draw = () => {
       frame = 0;
       const startedAt = performance.now();
@@ -110,8 +132,8 @@ function CanvasRenderer({
       for (const [type, typedNodes] of groups) {
         context.beginPath();
         for (const node of typedNodes) {
-          context.moveTo(node.x + 2.3, node.y);
-          context.arc(node.x, node.y, 2.3, 0, Math.PI * 2);
+          context.moveTo(node.x + NODE_RADIUS, node.y);
+          context.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2);
         }
         context.fillStyle = typeColor(type);
         context.fill();
@@ -138,15 +160,27 @@ function CanvasRenderer({
       if (!frame) frame = requestAnimationFrame(draw);
     };
 
+    registerPositionSink?.((positions) => {
+      for (let index = 0; index < mutableNodes.length; index += 1) {
+        const node = mutableNodes[index];
+        if (!node) continue;
+        node.x = positions[index * 2] ?? node.x;
+        node.y = positions[index * 2 + 1] ?? node.y;
+      }
+      scheduleDraw();
+    });
+
     const fitCanvas = () => {
       const padding = 42;
+      const layoutWidth = Math.max(1, layoutBounds.maxX - layoutBounds.minX);
+      const layoutHeight = Math.max(1, layoutBounds.maxY - layoutBounds.minY);
       const scale = Math.min(
-        (width - padding * 2) / LAYOUT_WIDTH,
-        (height - padding * 2) / LAYOUT_HEIGHT,
+        (width - padding * 2) / layoutWidth,
+        (height - padding * 2) / layoutHeight,
       );
       transform = {
-        x: (width - LAYOUT_WIDTH * scale) / 2,
-        y: (height - LAYOUT_HEIGHT * scale) / 2,
+        x: (width - layoutWidth * scale) / 2 - layoutBounds.minX * scale,
+        y: (height - layoutHeight * scale) / 2 - layoutBounds.minY * scale,
         k: scale,
       };
       scheduleDraw();
@@ -174,6 +208,8 @@ function CanvasRenderer({
       const world = worldPoint(event);
       const hitRadius = 10 / transform.k;
       let nearestDistance = hitRadius * hitRadius;
+      dragged = null;
+      panFrom = null;
       for (const node of mutableNodes) {
         const dx = node.x - world.x;
         const dy = node.y - world.y;
@@ -190,6 +226,8 @@ function CanvasRenderer({
           tx: transform.x,
           ty: transform.y,
         };
+      } else {
+        onNodeDrag?.({ phase: "start", id: dragged.id, x: world.x, y: world.y });
       }
       canvas.setPointerCapture(event.pointerId);
       scheduleDraw();
@@ -200,6 +238,7 @@ function CanvasRenderer({
         const world = worldPoint(event);
         dragged.x = world.x;
         dragged.y = world.y;
+        onNodeDrag?.({ phase: "move", id: dragged.id, x: world.x, y: world.y });
       } else if (panFrom) {
         transform.x = panFrom.tx + event.clientX - panFrom.x;
         transform.y = panFrom.ty + event.clientY - panFrom.y;
@@ -209,12 +248,20 @@ function CanvasRenderer({
       scheduleDraw();
     };
 
-    const pointerUp = (event: PointerEvent) => {
+    const finishPointer = (pointerId?: number) => {
+      const released = dragged;
       dragged = null;
       panFrom = null;
-      if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      if (released) onNodeDrag?.({ phase: "end", id: released.id });
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        canvas.releasePointerCapture(pointerId);
+      }
       scheduleDraw();
     };
+
+    const pointerUp = (event: PointerEvent) => finishPointer(event.pointerId);
+    const lostPointerCapture = () => finishPointer();
+    const windowBlur = () => finishPointer();
 
     const wheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -235,19 +282,25 @@ function CanvasRenderer({
     canvas.addEventListener("pointermove", pointerMove);
     canvas.addEventListener("pointerup", pointerUp);
     canvas.addEventListener("pointercancel", pointerUp);
+    canvas.addEventListener("lostpointercapture", lostPointerCapture);
     canvas.addEventListener("wheel", wheel, { passive: false });
+    window.addEventListener("blur", windowBlur);
     resize();
 
     return () => {
       observer.disconnect();
+      registerPositionSink?.(null);
       if (frame) cancelAnimationFrame(frame);
       canvas.removeEventListener("pointerdown", pointerDown);
       canvas.removeEventListener("pointermove", pointerMove);
       canvas.removeEventListener("pointerup", pointerUp);
       canvas.removeEventListener("pointercancel", pointerUp);
+      canvas.removeEventListener("lostpointercapture", lostPointerCapture);
       canvas.removeEventListener("wheel", wheel);
+      window.removeEventListener("blur", windowBlur);
+      if (dragged) onNodeDrag?.({ phase: "end", id: dragged.id });
     };
-  }, [data.links, nodes, onMetrics]);
+  }, [data.links, nodes, onMetrics, onNodeDrag, registerPositionSink]);
 
   return <canvas ref={canvasRef} className="graph-scale-canvas" aria-label="Graph benchmark" />;
 }
@@ -270,22 +323,42 @@ function StaticCanvasVariant({ data }: { data: GraphData }) {
 
 function WorkerCanvasVariant({ data }: { data: GraphData }) {
   const fallback = useMemo(() => staticPositions(data.nodes), [data.nodes]);
+  const workerRef = useRef<Worker | null>(null);
+  const positionSinkRef = useRef<PositionSink | null>(null);
   const [nodes, setNodes] = useState(fallback);
   const [progress, setProgress] = useState(0);
   const [layoutMs, setLayoutMs] = useState<number | null>(null);
+  const [physicsState, setPhysicsState] = useState<"dragging" | "settling" | "settled">("settled");
   const [metrics, setMetrics] = useState<RenderMetrics>({ drawMs: 0, frames: 0 });
   const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
+  const registerPositionSink = useCallback((sink: PositionSink | null) => {
+    positionSinkRef.current = sink;
+  }, []);
+  const dragNode = useCallback((event: NodeDragEvent) => {
+    workerRef.current?.postMessage({ type: `drag-${event.phase}`, ...event });
+  }, []);
 
   useEffect(() => {
     const worker = new Worker(new URL("./graph-scale.worker.ts", import.meta.url));
+    workerRef.current = worker;
     worker.onmessage = (
       event: MessageEvent<
         | { type: "progress"; progress: number }
         | { type: "done"; positions: Float32Array; layoutMs: number }
+        | { type: "frame"; positions: Float32Array }
+        | { type: "status"; state: "dragging" | "settling" | "settled" }
       >,
     ) => {
       if (event.data.type === "progress") {
         setProgress(event.data.progress);
+        return;
+      }
+      if (event.data.type === "frame") {
+        positionSinkRef.current?.(event.data.positions);
+        return;
+      }
+      if (event.data.type === "status") {
+        setPhysicsState(event.data.state);
         return;
       }
       const result = event.data;
@@ -299,23 +372,40 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
       setLayoutMs(result.layoutMs);
     };
     worker.postMessage({
+      type: "init",
       nodes: data.nodes.map((node) => ({ id: node.id })),
       links: data.links.map((link) => ({ source: link.source, target: link.target })),
       width: LAYOUT_WIDTH,
       height: LAYOUT_HEIGHT,
+      collisionRadius: COLLISION_RADIUS,
     });
-    return () => worker.terminate();
+    return () => {
+      workerRef.current = null;
+      worker.terminate();
+    };
   }, [data]);
 
   return (
     <div className="graph-scale-stage">
-      <CanvasRenderer data={data} nodes={nodes} onMetrics={updateMetrics} />
+      <CanvasRenderer
+        data={data}
+        nodes={nodes}
+        onMetrics={updateMetrics}
+        onNodeDrag={dragNode}
+        registerPositionSink={registerPositionSink}
+      />
       <div className="graph-scale-render-state">
         <span>
-          {layoutMs === null ? `worker ${(progress * 100).toFixed(0)}%` : "worker complete"}
+          {layoutMs === null
+            ? `worker ${(progress * 100).toFixed(0)}%`
+            : physicsState === "settled"
+              ? "worker complete"
+              : `worker ${physicsState}`}
         </span>
         <span>{layoutMs === null ? "main thread free" : `${layoutMs.toFixed(0)}ms layout`}</span>
+        <span>{COLLISION_RADIUS.toFixed(1)}px collision</span>
         <span>{metrics.drawMs.toFixed(1)}ms draw</span>
+        <span>{metrics.frames} frames</span>
       </div>
     </div>
   );
