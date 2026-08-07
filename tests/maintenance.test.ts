@@ -73,6 +73,25 @@ test("Memory writes enqueue document embeddings without waiting for the provider
   });
 });
 
+test("metadata-only updates do not send a Queue wake-up without a new job", async () => {
+  const testContext = await createMemoryTestContext();
+  const notifications: string[] = [];
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: provider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  const created = await memories.remember(testContext.alice, { content: "Already embedded." });
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+  });
+  await expect(maintenance.run(notifications[0])).resolves.toMatchObject({ status: "complete" });
+
+  await memories.update(testContext.alice, created.id, { metadata: { reviewed: true } });
+
+  expect(notifications).toHaveLength(1);
+});
+
 test("failed providers release the lease with exponential retry state", async () => {
   const testContext = await createMemoryTestContext();
   const notifications: string[] = [];
@@ -129,6 +148,29 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
   await expect(maintenance.run()).resolves.toMatchObject({ status: "dead" });
   await expect(maintenance.seedStale()).resolves.toEqual([]);
   await expect(maintenance.run()).resolves.toMatchObject({ status: "idle" });
+});
+
+test("deployment sweeps prune expired terminal job history", async () => {
+  const testContext = await createMemoryTestContext();
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
+  await memories.remember(testContext.alice, { content: "Prune completed history." });
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+  });
+  await expect(maintenance.run()).resolves.toMatchObject({ status: "complete" });
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      "UPDATE memory_embedding_jobs SET completed_at = now() - interval '8 days'",
+    );
+  });
+
+  await expect(maintenance.seedStale()).resolves.toEqual([]);
+
+  const jobs = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("SELECT id FROM memory_embedding_jobs"),
+  );
+  expect(jobs.rows).toEqual([]);
 });
 
 test("stale jobs cannot write chunks after a Memory version changes", async () => {

@@ -108,6 +108,28 @@ failures are also warned server-side; writes preserve the Memory with an explici
 survive process restarts, and a short lease prevents two workers from completing the
 same attempt.
 
+After eight failed attempts a job remains `dead` for operator inspection instead of
+retrying forever. Updating that Memory or changing the deployment embedding space
+creates a fresh versioned job. After fixing a transient outage, a database operator
+can explicitly retry that same version:
+
+```sql
+UPDATE memory_embedding_jobs
+SET status = 'pending',
+    attempt_count = 0,
+    available_at = now(),
+    lease_token = NULL,
+    leased_at = NULL,
+    last_error = NULL,
+    completed_at = NULL,
+    updated_at = now()
+WHERE id = 'replace-with-exact-job-id'
+  AND status = 'dead';
+```
+
+The deployment sweep prunes succeeded/cancelled history after 7 days and dead-job
+diagnostics after 30 days.
+
 For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
 Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username
 cannot be used to select or impersonate another internal User. Multi-user deployments

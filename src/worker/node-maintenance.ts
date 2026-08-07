@@ -47,28 +47,41 @@ function requestStop(): void {
 process.once("SIGINT", requestStop);
 process.once("SIGTERM", requestStop);
 
-async function waitForNextPoll(): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 try {
   let nextSweepAt = 0;
+  let infrastructureBackoffMs = pollIntervalMs;
   while (!stopping) {
-    if (Date.now() >= nextSweepAt) {
-      const seeded = await maintenance.seedStale(1_000);
-      console.log(
+    try {
+      if (Date.now() >= nextSweepAt) {
+        const seeded = await maintenance.seedStale(1_000);
+        console.log(
+          JSON.stringify({
+            component: "memory-maintenance",
+            event: "sweep_complete",
+            seededJobs: seeded.length,
+          }),
+        );
+        nextSweepAt = Date.now() + sweepIntervalMs;
+      }
+
+      const result = await maintenance.run();
+      infrastructureBackoffMs = pollIntervalMs;
+      if (result.status === "idle" || result.status === "retry") {
+        await wait(pollIntervalMs);
+      }
+    } catch {
+      console.error(
         JSON.stringify({
           component: "memory-maintenance",
-          event: "sweep_complete",
-          seededJobs: seeded.length,
+          event: "infrastructure_error",
         }),
       );
-      nextSweepAt = Date.now() + sweepIntervalMs;
-    }
-
-    const result = await maintenance.run();
-    if (result.status === "idle" || result.status === "retry") {
-      await waitForNextPoll();
+      await wait(infrastructureBackoffMs);
+      infrastructureBackoffMs = Math.min(infrastructureBackoffMs * 2, 60_000);
     }
   }
 } finally {

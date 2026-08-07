@@ -330,6 +330,10 @@ Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but
 do not treat generated `.next` or `.open-next` output as source or commit it.
 
+`cloudflare-env.d.ts` is the exception: it is the checked-in generated binding and
+Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
+`wrangler.jsonc` or `.dev.vars.example`.
+
 ## Existing UI/test gotchas
 
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's

@@ -43,9 +43,13 @@ async function getCloudflareMaintenanceNotifier(): Promise<MemoryMaintenanceNoti
   }
 }
 
-export async function getRuntimeMemoryModuleOptions(): Promise<MemoryModuleOptions> {
+export async function getRuntimeMemoryModuleOptions(
+  options: { maintenanceNotifications?: boolean } = {},
+): Promise<MemoryModuleOptions> {
   return {
     embeddingProvider: getRuntimeEmbeddingProvider(),
-    maintenanceNotifier: await getCloudflareMaintenanceNotifier(),
+    maintenanceNotifier: options.maintenanceNotifications
+      ? await getCloudflareMaintenanceNotifier()
+      : undefined,
   };
 }

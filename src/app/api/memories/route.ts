@@ -12,6 +12,6 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   return createMemoryHandlers(
     await getRuntimeDatabase(),
-    await getRuntimeMemoryModuleOptions(),
+    await getRuntimeMemoryModuleOptions({ maintenanceNotifications: true }),
   ).POST(request);
 }

@@ -95,12 +95,13 @@ export function createMemoryMaintenanceModule(
   async function finishFailure(
     job: ClaimedJobRow,
     leaseToken: string,
+    failureDetail: "Embedding provider request failed" | "Embedding maintenance transaction failed",
   ): Promise<MemoryMaintenanceResult> {
     const delay = retryDelay(job.attempt_count);
     const status = await database.transaction(async (transaction) => {
       const result = await transaction.query<{ status: "pending" | "dead" | null }>(
         `SELECT lore.finish_memory_embedding_job($1, $2, $3, $4) AS status`,
-        [job.id, leaseToken, "Embedding provider request failed", delay],
+        [job.id, leaseToken, failureDetail, delay],
       );
       return result.rows[0]?.status ?? null;
     });
@@ -179,7 +180,7 @@ export function createMemoryMaintenanceModule(
           chunks.length,
         );
       } catch {
-        return finishFailure(claimed, leaseToken);
+        return finishFailure(claimed, leaseToken, "Embedding provider request failed");
       }
 
       try {
@@ -218,7 +219,7 @@ export function createMemoryMaintenanceModule(
           }
         });
       } catch {
-        return finishFailure(claimed, leaseToken);
+        return finishFailure(claimed, leaseToken, "Embedding maintenance transaction failed");
       }
 
       logger({

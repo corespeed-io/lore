@@ -30,7 +30,7 @@ CREATE TABLE memory_embedding_jobs (
   available_at timestamptz NOT NULL DEFAULT now(),
   lease_token uuid,
   leased_at timestamptz,
-  last_error text CHECK (last_error IS NULL OR length(last_error) <= 1_000),
+  last_error text CHECK (last_error IS NULL OR length(last_error) <= 1000),
   completed_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -72,6 +72,10 @@ CREATE INDEX memory_embedding_jobs_pending_idx
     id
   )
   WHERE status IN ('pending', 'processing');
+
+CREATE INDEX memory_embedding_jobs_terminal_completed_idx
+  ON memory_embedding_jobs (completed_at)
+  WHERE status IN ('succeeded', 'dead', 'cancelled');
 
 CREATE FUNCTION lore.current_maintenance_job_id()
 RETURNS uuid
@@ -143,7 +147,7 @@ BEGIN
     OR btrim(active_embedding_revision) = '' THEN
     RAISE EXCEPTION 'Active embedding identity is required';
   END IF;
-  IF lease_timeout_seconds NOT BETWEEN 30 AND 3_600 THEN
+  IF lease_timeout_seconds NOT BETWEEN 30 AND 3600 THEN
     RAISE EXCEPTION 'Lease timeout must be between 30 and 3600 seconds';
   END IF;
 
@@ -255,7 +259,7 @@ AS $$
 DECLARE
   final_status memory_embedding_job_status;
 BEGIN
-  IF retry_delay_seconds NOT BETWEEN 1 AND 86_400 THEN
+  IF retry_delay_seconds NOT BETWEEN 1 AND 86400 THEN
     RAISE EXCEPTION 'Retry delay must be between 1 and 86400 seconds';
   END IF;
 
@@ -274,7 +278,7 @@ BEGIN
       leased_at = NULL,
       last_error = CASE
         WHEN failure_detail IS NULL THEN NULL
-        ELSE left(failure_detail, 1_000)
+        ELSE left(failure_detail, 1000)
       END,
       completed_at = CASE
         WHEN failure_detail IS NULL OR job.attempt_count >= job.max_attempts THEN now()
@@ -307,9 +311,19 @@ BEGIN
     OR btrim(active_embedding_revision) = '' THEN
     RAISE EXCEPTION 'Active embedding identity is required';
   END IF;
-  IF job_limit NOT BETWEEN 1 AND 10_000 THEN
+  IF job_limit NOT BETWEEN 1 AND 10000 THEN
     RAISE EXCEPTION 'Job limit must be between 1 and 10000';
   END IF;
+
+  DELETE FROM memory_embedding_jobs job
+  WHERE (
+      job.status IN ('succeeded', 'cancelled')
+      AND job.completed_at < now() - interval '7 days'
+    )
+    OR (
+      job.status = 'dead'
+      AND job.completed_at < now() - interval '30 days'
+    );
 
   UPDATE memory_embedding_jobs job
   SET status = 'cancelled',

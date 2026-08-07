@@ -184,9 +184,8 @@ async function enqueueEmbeddingJob(
       onlyWhenStale,
     ],
   );
-  // Metadata-only updates can enqueue a harmless wake-up for a non-existent
-  // job. The worker treats that id as idle, while the request role never needs
-  // SELECT access to the private maintenance table.
+  // The request role deliberately cannot SELECT this private table, so callers
+  // use the allocated id only when the write guarantees that a job was inserted.
   return jobId;
 }
 
@@ -346,7 +345,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             : null;
         return { memory: updated ? toMemory(updated) : null, jobId };
       });
-      notifyMaintenance(updatedResult.jobId);
+      // Metadata-only updates can leave an existing stale job for the scheduled
+      // sweep without billing a Queue message for an already-embedded Memory.
+      notifyMaintenance(chunks ? updatedResult.jobId : null);
       return updatedResult.memory;
     },
 
