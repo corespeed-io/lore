@@ -137,8 +137,11 @@ revealed Memory count to drive its bar without displaying a numeric counter. Eac
 newly visible node grows from zero to its final radius over a short ease-out
 transition, while reduced-motion actors get no growth animation. The final Worker
 frame releases any remaining nodes and waits for that last transition before
-enabling the settled graph. The Canvas instance is preserved and its existing camera
-eases into the final fit, avoiding a renderer reset or overview snap.
+enabling the settled graph. Once a meaningful first batch is visible, the camera
+fits those real positions instead of the hidden fallback coordinates; completion
+preserves the Canvas instance and eases that camera into the final fit. Reduced-motion
+actors receive both the final radius and camera fit immediately. The loading overlay
+blocks pointer input so drag messages cannot queue behind the synchronous cold layout.
 
 This followed two rejected experiments: a direct quadtree displacement was fast
 but had no inertia, while reheating all 5,000 nodes reproduced the desired particle

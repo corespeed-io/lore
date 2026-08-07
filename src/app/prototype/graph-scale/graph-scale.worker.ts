@@ -380,7 +380,7 @@ function particleTopology(): { nodes: WorkerNode[]; links: WorkerLink[] } {
   const links: WorkerLink[] = [];
   for (const linkIndex of activeLinkIndices) {
     const link = graphLinks[linkIndex];
-    if (!link) continue;
+    if (!link || !nodeById.has(link.source) || !nodeById.has(link.target)) continue;
     const missingBoundaryIds = [link.source, link.target].filter(
       (id) => !activeIds.has(id) && !boundaryIds.has(id),
     );

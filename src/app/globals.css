@@ -348,7 +348,7 @@ body {
   position: absolute;
   inset: -20%;
   z-index: 0;
-  pointer-events: none;
+  pointer-events: auto;
   filter: blur(36px) saturate(1.1);
   opacity: 0.5;
   background:
@@ -3273,6 +3273,7 @@ a.ext {
 
 .graph-scale-layout-curtain-ready {
   opacity: 0;
+  pointer-events: none;
 }
 
 .graph-scale-layout-loader {

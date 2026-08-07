@@ -47,6 +47,8 @@ const MIN_COLLISION_RADIUS = 4 + COLLISION_GAP;
 const MAX_COLLISION_RADIUS = 16 + COLLISION_GAP;
 const MAX_RENDERED_LINKS = 40_000;
 const LAYOUT_REVEAL_TRANSITION_MS = 220;
+const INITIAL_REVEAL_FIT_RATIO = 0.02;
+const INITIAL_REVEAL_FIT_MIN_NODES = 64;
 const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
   {
     id: "canvas",
@@ -139,15 +141,20 @@ function CanvasRenderer({
     let lastMetricAt = 0;
     let transform = d3.zoomIdentity;
     let dragged: PositionedNode | null = null;
+    let revealedNodeCount = 0;
+    let previewFitStarted = false;
 
-    const currentLayoutBounds = () =>
+    const currentLayoutBounds = (visibleOnly = false) =>
       mutableNodes.reduce(
-        (bounds, node) => ({
-          minX: Math.min(bounds.minX, node.x - MAX_COLLISION_RADIUS),
-          minY: Math.min(bounds.minY, node.y - MAX_COLLISION_RADIUS),
-          maxX: Math.max(bounds.maxX, node.x + MAX_COLLISION_RADIUS),
-          maxY: Math.max(bounds.maxY, node.y + MAX_COLLISION_RADIUS),
-        }),
+        (bounds, node, index) =>
+          visibleOnly && visibleNodeMask && !visibleNodeMask[index]
+            ? bounds
+            : {
+                minX: Math.min(bounds.minX, node.x - MAX_COLLISION_RADIUS),
+                minY: Math.min(bounds.minY, node.y - MAX_COLLISION_RADIUS),
+                maxX: Math.max(bounds.maxX, node.x + MAX_COLLISION_RADIUS),
+                maxY: Math.max(bounds.maxY, node.y + MAX_COLLISION_RADIUS),
+              },
         { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
       );
 
@@ -279,8 +286,20 @@ function CanvasRenderer({
         node.y = positions[deltaIndex * 2 + 1] ?? node.y;
         if (!visibleNodeMask[nodeIndex] && revealStartedAt) {
           revealStartedAt[nodeIndex] = reduceMotion ? 0 : performance.now();
+          revealedNodeCount += 1;
         }
         visibleNodeMask[nodeIndex] = 1;
+      }
+      const previewFitThreshold = Math.min(
+        mutableNodes.length,
+        Math.max(
+          INITIAL_REVEAL_FIT_MIN_NODES,
+          Math.ceil(mutableNodes.length * INITIAL_REVEAL_FIT_RATIO),
+        ),
+      );
+      if (!previewFitStarted && revealedNodeCount >= previewFitThreshold) {
+        previewFitStarted = true;
+        fitCanvas(true, true);
       }
       scheduleDraw();
     });
@@ -348,27 +367,30 @@ function CanvasRenderer({
         scheduleDraw();
       });
 
-    const fitCanvas = (animate = false) => {
+    const fitCanvas = (animate = false, visibleOnly = false) => {
       const padding = 42;
-      const layoutBounds = currentLayoutBounds();
+      const layoutBounds = currentLayoutBounds(visibleOnly);
       const layoutWidth = Math.max(1, layoutBounds.maxX - layoutBounds.minX);
       const layoutHeight = Math.max(1, layoutBounds.maxY - layoutBounds.minY);
       const scale = Math.min(
         (width - padding * 2) / layoutWidth,
         (height - padding * 2) / layoutHeight,
       );
-      zoomBehavior.scaleExtent([Math.max(0.0001, Math.min(scale, 1)), 8]);
+      zoomBehavior.scaleExtent([layoutPending ? 0.0001 : Math.max(0.0001, Math.min(scale, 1)), 8]);
       const nextTransform = d3.zoomIdentity
         .translate(
           (width - layoutWidth * scale) / 2 - layoutBounds.minX * scale,
           (height - layoutHeight * scale) / 2 - layoutBounds.minY * scale,
         )
         .scale(scale);
+      if (fitFrame) {
+        cancelAnimationFrame(fitFrame);
+        fitFrame = 0;
+      }
       if (!animate || reduceMotion) {
         selection.call(zoomBehavior.transform, nextTransform);
         return;
       }
-      if (fitFrame) cancelAnimationFrame(fitFrame);
       const startedAt = performance.now();
       const startTransform = transform;
       const animateFit = (now: number) => {

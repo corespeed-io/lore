@@ -58,6 +58,7 @@ function printableMetrics(metrics: ReturnType<typeof aggregateRetrievalBenchmark
 }
 
 const providerWarnings: string[] = [];
+const thresholds = benchmarkThresholds();
 const embeddingProvider = createEmbeddingProviderFromEnvironment(process.env, (message) => {
   providerWarnings.push(message);
   console.error(message);
@@ -236,7 +237,7 @@ try {
   const variants: Awaited<ReturnType<typeof runVariant>>[] = [
     await runVariant({ label: "lexical", useEmbeddings: false }),
   ];
-  for (const threshold of benchmarkThresholds()) {
+  for (const threshold of thresholds) {
     variants.push(
       await runVariant({
         label: `hybrid@${threshold}`,

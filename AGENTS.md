@@ -118,9 +118,10 @@ nodes that remain visually still across consecutive Worker ticks are progressive
 revealed; the centered status card visualizes progress without a numeric counter,
 and only relationships whose endpoints are both visible may appear. Newly revealed
 nodes grow from zero to their final radius with a short non-bouncy Canvas transition;
-reduced-motion actors receive the final radius immediately. Completion preserves
-the same Canvas and eases its existing camera into the final fit instead of resetting
-the renderer or snapping to a new overview.
+the first meaningful revealed batch receives a visible-bounds camera fit, and
+completion preserves the same Canvas while easing into the final fit. Reduced-motion
+actors receive the final radius and camera fit immediately. Layout-time pointer input
+stays blocked so drag messages cannot queue behind the synchronous cold simulation.
 
 Build the native domain modules directly. Compatibility adapters, if ever needed,
 must sit outside the Memory interface and may not weaken its ownership or RLS
