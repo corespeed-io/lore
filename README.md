@@ -228,10 +228,37 @@ bunx opennextjs-cloudflare build
 bunx wrangler deploy --dry-run
 ```
 
-The deterministic synthetic benchmark is
-[`evaluation/suites/synthetic-v1.json`](evaluation/suites/synthetic-v1.json). See
-[`AGENTS.md`](AGENTS.md) for architecture and working agreements and
-[`CONTEXT.md`](CONTEXT.md) for canonical domain terminology.
+The deterministic Evaluation fixture is
+[`evaluation/suites/synthetic-v1.json`](evaluation/suites/synthetic-v1.json). The
+end-to-end retrieval benchmark uses
+[`evaluation/suites/retrieval-v1.json`](evaluation/suites/retrieval-v1.json) to
+measure paraphrase retrieval, multilingual retrieval, no-answer abstention, RLS
+isolation, and warm latency against the configured deployment embedding model.
+
+Run it only against a fresh disposable database:
+
+```bash
+createdb lore_retrieval_benchmark
+DATABASE_URL=postgres://localhost:5432/lore_retrieval_benchmark \
+  bun run db:migrate
+BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_retrieval_benchmark \
+  OLLAMA_KEEP_ALIVE=5m \
+  bun run benchmark:retrieval
+dropdb lore_retrieval_benchmark
+```
+
+The runner refuses database names without `bench` or `benchmark`, resets all User
+and Workspace data in that database, exercises native Memory writes and leased
+embedding maintenance, then compares lexical search with the suite's hybrid
+distance thresholds. Override the sweep with comma-separated cosine distances in
+`LORE_BENCHMARK_THRESHOLDS`. Any private-memory retrieval or embedding-provider
+failure exits non-zero. The connection must be able to `SET ROLE lore_app` and
+`lore_maintenance`; a local Postgres owner works for this disposable workflow.
+
+Query/document preprocessing is part of the versioned embedding protocol. Testing
+a different preprocessing strategy requires a new revision and re-index, not a
+hidden benchmark-only prompt. See [`AGENTS.md`](AGENTS.md) for architecture and
+working agreements and [`CONTEXT.md`](CONTEXT.md) for canonical domain terminology.
 
 For graph renderer stress testing, use a separate disposable PostgreSQL database:
 

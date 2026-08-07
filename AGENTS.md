@@ -106,6 +106,21 @@ three affinities per Memory among the first 500 otherwise isolated nodes. The
 optimized SVG renderer is measured against the migrated ~1,000-node / ~2,200-link
 graph. At benchmark scale, preserve D3 as the layout engine but move static
 simulation to a Web Worker and links to Canvas before increasing the SVG DOM budget.
+The throwaway `/prototype/graph-scale` benchmark uses one compact radial layout and
+one adaptive interaction model at every scale: at most 900 active nodes plus
+pinned real boundary endpoints. Its Worker frames contain active coordinate deltas,
+while Canvas culls the viewport and caps rendered links at 40,000. Do not describe
+the interactive field as exact far-field physics; the initial Worker layout still
+uses the complete D3 graph and remains the stress bottleneck. Cold layout starts
+from a deterministic, collision-spaced low-discrepancy disk and runs at most 48
+force ticks with accelerated alpha decay. Pre-layout coordinates stay hidden while
+nodes that remain visually still across consecutive Worker ticks are progressively
+revealed; the centered status card visualizes progress without a numeric counter,
+and only relationships whose endpoints are both visible may appear. Newly revealed
+nodes grow from zero to their final radius with a short non-bouncy Canvas transition;
+reduced-motion actors receive the final radius immediately. Completion preserves
+the same Canvas and eases its existing camera into the final fit instead of resetting
+the renderer or snapping to a new overview.
 
 Build the native domain modules directly. Compatibility adapters, if ever needed,
 must sit outside the Memory interface and may not weaken its ownership or RLS
@@ -271,6 +286,15 @@ Benchmark is part of the product quality system even without AutoDream.
 
 - Keep a deterministic synthetic suite in the repository for CI and version
   comparisons.
+- `evaluation/suites/retrieval-v1.json` is the end-to-end retrieval fixture. Run
+  `bun run benchmark:retrieval` only with `BENCHMARK_DATABASE_URL` pointing to a
+  disposable migrated database whose name contains `bench` or `benchmark`; the
+  runner resets tenant data, writes through the native Memory module, embeds through
+  leased maintenance, and searches under RLS.
+- The retrieval runner reports Recall@1, Recall@K, MRR, nDCG, no-answer accuracy,
+  false-result count, warm mean/p50/p95 latency, misses, and threshold sweeps for
+  the active deployment embedding space. Bob-owned private fixture Memories are
+  forbidden tripwires in every query and any leak exits non-zero.
 - Retrieval metrics may include Recall@K, MRR, and nDCG; isolation failures are
   hard failures, not a score that can be averaged away.
 - Workspace-owned evaluation suites follow the same RLS rules as Memories.
@@ -300,6 +324,7 @@ bun run dev        # localhost:3000
 bun run db:migrate # apply checksum-protected SQL migrations
 bun run db:bootstrap # migrate + provision separate request/maintenance logins
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
+bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .

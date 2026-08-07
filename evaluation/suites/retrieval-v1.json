@@ -1,0 +1,256 @@
+{
+  "name": "Lore retrieval paraphrase, abstention, and isolation",
+  "version": 1,
+  "description": "Deterministic multilingual retrieval fixture with paraphrases, close distractors, no-answer queries, and user-private tripwires.",
+  "thresholds": [0.35, 0.4, 0.45, 0.5],
+  "memories": [
+    {
+      "key": "release",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Production deployments stop every Friday at 17:00 UTC for the weekend release freeze."
+    },
+    {
+      "key": "contact",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Urgent personal outreach should use the encrypted Signal messenger; email is not monitored after hours."
+    },
+    {
+      "key": "planning",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Quarterly roadmap planning starts on the first Monday of October in the Harbor conference room."
+    },
+    {
+      "key": "backup",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Database snapshots remain recoverable for thirty-five days before automatic expiration."
+    },
+    {
+      "key": "milk",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The third-floor kitchen always stocks oat milk in the refrigerator beside the coffee machine."
+    },
+    {
+      "key": "invoice",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Priya gave final approval to pay supplier invoice ACME-4821 after the tax review."
+    },
+    {
+      "key": "polaris",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "北极星项目每周四下午三点举行同步会议，地点是二楼的松树会议室。"
+    },
+    {
+      "key": "allergy",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Kenji must avoid peanuts and sesame because both can trigger a severe allergic reaction."
+    },
+    {
+      "key": "incident",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Before restoring traffic after a security incident, rotate every exposed API key and invalidate active sessions."
+    },
+    {
+      "key": "studio",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The recording studio is reserved from 14:30 until 16:00 on Wednesdays for the product podcast."
+    },
+    {
+      "key": "travel",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "For the Berlin offsite, the team booked the ICE train departing Munich at 08:47."
+    },
+    {
+      "key": "design",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Accessibility review requires keyboard navigation, visible focus rings, and a minimum contrast ratio of 4.5 to 1."
+    },
+    {
+      "key": "distractor-release",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The release engineering training session happens Tuesday at 17:00 UTC."
+    },
+    {
+      "key": "distractor-contact",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Routine vendor questions should be sent to the shared procurement email inbox."
+    },
+    {
+      "key": "distractor-planning",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Weekly sprint planning occurs every Monday in the Delta room."
+    },
+    {
+      "key": "distractor-backup",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Application logs are retained for fourteen days for debugging."
+    },
+    {
+      "key": "distractor-milk",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The lobby cafe sells soy milk but does not stock it overnight."
+    },
+    {
+      "key": "distractor-invoice",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Omar rejected invoice ACME-4812 because its purchase order was missing."
+    },
+    {
+      "key": "distractor-incident",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The fire drill playbook asks everyone to meet outside before re-entering the building."
+    },
+    {
+      "key": "distractor-studio",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "The photography room is open Thursday mornings for employee portraits."
+    },
+    {
+      "key": "private-release-tripwire",
+      "owner": "bob",
+      "scope": "private",
+      "content": "Deployments stop before the weekend at 19:30 according to Bob's confidential private release draft."
+    },
+    {
+      "key": "private-invoice-tripwire",
+      "owner": "bob",
+      "scope": "private",
+      "content": "Bob privately recorded that Morgan authorized the supplier bill after tax checks."
+    },
+    {
+      "key": "private-allergy-tripwire",
+      "owner": "bob",
+      "scope": "private",
+      "content": "Bob's confidential note says Kenji cannot eat shellfish."
+    }
+  ],
+  "cases": [
+    {
+      "key": "release",
+      "query": "What time do deployments stop before the weekend?",
+      "expectedKeys": ["release"],
+      "limit": 5
+    },
+    {
+      "key": "contact",
+      "query": "Which encrypted app should be used for an urgent after-hours message?",
+      "expectedKeys": ["contact"],
+      "limit": 5
+    },
+    {
+      "key": "planning",
+      "query": "When and where does the team prepare the next quarterly roadmap?",
+      "expectedKeys": ["planning"],
+      "limit": 5
+    },
+    {
+      "key": "backup",
+      "query": "How much restore history is available for the database?",
+      "expectedKeys": ["backup"],
+      "limit": 5
+    },
+    {
+      "key": "milk",
+      "query": "Where can someone find a non-dairy option for coffee?",
+      "expectedKeys": ["milk"],
+      "limit": 5
+    },
+    {
+      "key": "invoice",
+      "query": "Who authorized payment of the supplier bill after tax checks?",
+      "expectedKeys": ["invoice"],
+      "limit": 5
+    },
+    {
+      "key": "polaris",
+      "query": "When and where is the Polaris weekly sync?",
+      "expectedKeys": ["polaris"],
+      "limit": 5
+    },
+    {
+      "key": "allergy",
+      "query": "Kenji 不能吃哪些食物？",
+      "expectedKeys": ["allergy"],
+      "limit": 5
+    },
+    {
+      "key": "incident",
+      "query": "What credentials must change before service is brought back after a breach?",
+      "expectedKeys": ["incident"],
+      "limit": 5
+    },
+    {
+      "key": "studio",
+      "query": "When is the room booked for producing the company audio show?",
+      "expectedKeys": ["studio"],
+      "limit": 5
+    },
+    {
+      "key": "travel",
+      "query": "How is the team getting from Munich to the Berlin retreat?",
+      "expectedKeys": ["travel"],
+      "limit": 5
+    },
+    {
+      "key": "design",
+      "query": "What visual and interaction checks are required for an accessible interface?",
+      "expectedKeys": ["design"],
+      "limit": 5
+    },
+    {
+      "key": "no-wifi",
+      "query": "What is the office Wi-Fi password?",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-hotel",
+      "query": "Which hotel is booked for the Tokyo conference?",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-medication",
+      "query": "What medication dosage should the patient take?",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-ceo",
+      "query": "Who is the company's chief executive officer?",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-bonus",
+      "query": "When will the annual employee bonus be paid?",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-recovery-key",
+      "query": "Where are the disaster-recovery encryption keys stored?",
+      "expectedKeys": [],
+      "limit": 5
+    }
+  ]
+}

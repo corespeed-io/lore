@@ -32,6 +32,7 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:bootstrap": "node scripts/migrate.mjs && node scripts/create-runtime-role.mjs",
     "benchmark:graph:seed": "node scripts/seed-graph-benchmark.mjs",
+    "benchmark:retrieval": "bun scripts/benchmark-retrieval.ts",
     "prototype:graph-scale": "BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_graph_benchmark next dev",
     "start": "next start",
     "start:maintenance": "node .worker/maintenance-worker.js",

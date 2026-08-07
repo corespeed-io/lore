@@ -3259,6 +3259,107 @@ a.ext {
   cursor: grabbing;
 }
 
+.graph-scale-layout-curtain {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.graph-scale-layout-curtain-ready {
+  opacity: 0;
+}
+
+.graph-scale-layout-loader {
+  display: grid;
+  grid-template-columns: 28px minmax(150px, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+  width: min(250px, calc(100% - 48px));
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: rgba(250, 250, 250, 0.9);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+  font-family: var(--font-mono);
+  backdrop-filter: blur(8px);
+}
+
+.graph-scale-layout-spinner {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d4d4d4;
+  border-radius: 50%;
+}
+
+.graph-scale-layout-spinner::after {
+  position: absolute;
+  inset: -1px;
+  border: 1px solid transparent;
+  border-top-color: var(--ink);
+  border-radius: inherit;
+  content: "";
+  animation: graph-scale-spin 720ms linear infinite;
+}
+
+.graph-scale-layout-loader > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.graph-scale-layout-loader strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-scale-layout-progress {
+  grid-column: 1 / -1;
+  display: block;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--hairline);
+}
+
+.graph-scale-layout-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ink);
+  transition: width 120ms ease-out;
+}
+
+@keyframes graph-scale-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-scale-layout-spinner::after {
+    animation: none;
+  }
+
+  .graph-scale-layout-curtain,
+  .graph-scale-layout-progress span {
+    transition: none;
+  }
+}
+
 .graph-scale-render-state {
   position: absolute;
   top: 14px;
