@@ -29,6 +29,7 @@ export interface MemorySearchResult {
 
 export interface GraphNode {
   id: string;
+  reference: string;
   label: string;
   type: string;
   preview: string;
@@ -39,7 +40,7 @@ export interface GraphNode {
 export interface GraphLink {
   source: string;
   target: string;
-  kind: "affinity";
+  kind: string;
   weight: number;
 }
 

@@ -1,6 +1,7 @@
 import { type ActorContext, installActorContext } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
+import { EMBEDDING_DIMENSIONS, type EmbeddingDimensions } from "./embedding-config";
 
 export type { ActorContext } from "./actor-context";
 
@@ -52,11 +53,14 @@ export interface MemorySearchResult {
 }
 
 export interface EmbeddingProvider {
+  provider: string;
   model: string;
-  embed(texts: string[]): Promise<number[][]>;
+  dimensions: EmbeddingDimensions;
+  revision: string;
+  embed(texts: string[], task: EmbeddingTask): Promise<number[][]>;
 }
 
-export const EMBEDDING_DIMENSIONS = 1536;
+export type EmbeddingTask = "document" | "query";
 
 export interface MemoryModuleOptions {
   embeddingProvider?: EmbeddingProvider;
@@ -122,7 +126,7 @@ async function prepareChunks(
   const contents = chunkContent(content);
   if (!embeddingProvider) return contents.map((chunk) => ({ content: chunk, embedding: null }));
   try {
-    const embeddings = await embeddingProvider.embed(contents);
+    const embeddings = await embeddingProvider.embed(contents, "document");
     if (embeddings.length !== contents.length) {
       throw new Error("Embedding provider returned the wrong number of vectors");
     }
@@ -143,14 +147,15 @@ async function insertChunks(
   workspaceId: string,
   memoryId: string,
   chunks: PreparedChunk[],
-  embeddingModel?: string,
+  embeddingProvider?: EmbeddingProvider,
 ): Promise<void> {
   for (const [ordinal, chunk] of chunks.entries()) {
     await transaction.query(
       `INSERT INTO memory_chunks (
-         id, workspace_id, memory_id, ordinal, content, embedding, embedding_model, embedded_at
+         id, workspace_id, memory_id, ordinal, content, embedding,
+         embedding_provider, embedding_model, embedding_revision, embedded_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6::vector(1536), $7,
+         $1, $2, $3, $4, $5, $6::vector(1024), $7, $8, $9,
          CASE WHEN $6::text IS NULL THEN NULL ELSE now() END
        )`,
       [
@@ -160,7 +165,9 @@ async function insertChunks(
         ordinal,
         chunk.content,
         chunk.embedding,
-        chunk.embedding ? embeddingModel : null,
+        chunk.embedding ? embeddingProvider?.provider : null,
+        chunk.embedding ? embeddingProvider?.model : null,
+        chunk.embedding ? embeddingProvider?.revision : null,
       ],
     );
   }
@@ -184,10 +191,40 @@ function toMemory(row: MemoryRow): Memory {
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
   const embeddingProvider = options.embeddingProvider;
   const semanticDistanceThreshold = options.semanticDistanceThreshold ?? 0.35;
+
+  async function canWriteWorkspace(actor: ActorContext): Promise<boolean> {
+    return database.transaction(async (transaction) => {
+      await installActorContext(transaction, actor);
+      const result = await transaction.query<{ allowed: boolean }>(
+        "SELECT lore.can_write_memory($1, $2) AS allowed",
+        [actor.workspaceId, actor.userId],
+      );
+      return result.rows[0]?.allowed === true;
+    });
+  }
+
+  async function writableMemoryContent(actor: ActorContext, id: string): Promise<string | null> {
+    return database.transaction(async (transaction) => {
+      await installActorContext(transaction, actor);
+      const result = await transaction.query<{ content: string }>(
+        `SELECT content
+         FROM memories
+         WHERE id = $1
+           AND workspace_id = $2
+           AND lore.can_write_memory(workspace_id, owner_user_id)`,
+        [id, actor.workspaceId],
+      );
+      return result.rows[0]?.content ?? null;
+    });
+  }
+
   return {
     async remember(actor: ActorContext, input: RememberMemory): Promise<Memory> {
-      const chunks = await prepareChunks(input.content, embeddingProvider);
       try {
+        if (!(await canWriteWorkspace(actor))) {
+          throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
+        }
+        const chunks = await prepareChunks(input.content, embeddingProvider);
         return await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const id = crypto.randomUUID();
@@ -206,7 +243,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               JSON.stringify(input.metadata ?? {}),
             ],
           );
-          await insertChunks(transaction, actor.workspaceId, id, chunks, embeddingProvider?.model);
+          await insertChunks(transaction, actor.workspaceId, id, chunks, embeddingProvider);
           return toMemory(result.rows[0]);
         });
       } catch (error) {
@@ -236,8 +273,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       ) {
         return this.retrieve(actor, id);
       }
-      let chunks =
-        input.content === undefined ? null : await prepareChunks(input.content, embeddingProvider);
+      const currentContent = await writableMemoryContent(actor, id);
+      if (currentContent === null) return null;
+      const contentToEmbed = input.content ?? (input.scope === undefined ? null : currentContent);
+      const chunks =
+        contentToEmbed === null ? null : await prepareChunks(contentToEmbed, embeddingProvider);
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
@@ -258,15 +298,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           ],
         );
         const updated = result.rows[0];
-        if (updated && input.scope !== undefined && chunks === null) {
-          chunks = await prepareChunks(updated.content, embeddingProvider);
-        }
         if (updated && chunks) {
           await transaction.query(
             "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
             [actor.workspaceId, id],
           );
-          await insertChunks(transaction, actor.workspaceId, id, chunks, embeddingProvider?.model);
+          await insertChunks(transaction, actor.workspaceId, id, chunks, embeddingProvider);
         }
         return updated ? toMemory(updated) : null;
       });
@@ -309,7 +346,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       let queryEmbedding: string | null = null;
       if (embeddingProvider) {
         try {
-          const vectors = await embeddingProvider.embed([query]);
+          const vectors = await embeddingProvider.embed([query], "query");
           queryEmbedding = vectors[0] ? vectorLiteral(vectors[0]) : null;
         } catch {
           queryEmbedding = null;
@@ -342,13 +379,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              ) DESC, chunk.id
              LIMIT $4
            ),
-           semantic_candidates AS (
+           active_semantic_chunks AS MATERIALIZED (
              SELECT
-               chunk.id AS chunk_id,
-               memory.id AS memory_id,
-               row_number() OVER (
-                 ORDER BY chunk.embedding <=> $3::vector(1536), chunk.id
-               ) AS candidate_rank
+               chunk.id,
+               chunk.memory_id,
+               chunk.embedding
              FROM memory_chunks chunk
              JOIN memories memory
                ON memory.id = chunk.memory_id
@@ -356,9 +391,20 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              WHERE $3::text IS NOT NULL
                AND chunk.workspace_id = $2
                AND chunk.embedding IS NOT NULL
-               AND chunk.embedding_model = $7
-               AND (chunk.embedding <=> $3::vector(1536)) <= $5
-             ORDER BY chunk.embedding <=> $3::vector(1536), chunk.id
+               AND chunk.embedding_provider = $7
+               AND chunk.embedding_model = $8
+               AND chunk.embedding_revision = $9
+           ),
+           semantic_candidates AS (
+             SELECT
+               chunk.id AS chunk_id,
+               chunk.memory_id,
+               row_number() OVER (
+                 ORDER BY chunk.embedding <=> $3::vector(1024), chunk.id
+               ) AS candidate_rank
+             FROM active_semantic_chunks chunk
+             WHERE (chunk.embedding <=> $3::vector(1024)) <= $5
+             ORDER BY chunk.embedding <=> $3::vector(1024), chunk.id
              LIMIT $4
            ),
            reciprocal_rank AS (
@@ -412,7 +458,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             candidateLimit,
             semanticDistanceThreshold,
             limit,
+            embeddingProvider?.provider ?? "",
             embeddingProvider?.model ?? "",
+            embeddingProvider?.revision ?? "",
           ],
         );
         return result.rows.map((row) => ({

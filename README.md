@@ -18,6 +18,8 @@ identity mapping, authorization, retrieval, and evaluation directly.
 
 - native Memory create, read, update, delete, list, provenance, and shared/private
   scope;
+- durable directed Memory Links, clickable `[[reference]]` wikilinks, and derived
+  affinity for otherwise isolated Memories;
 - lexical + optional vector retrieval with visibility filtered before top-k;
 - Users, Identities, Workspaces, Memberships, Agents, Workspace grants, and hashed
   one-time Agent credentials;
@@ -28,10 +30,11 @@ identity mapping, authorization, retrieval, and evaluation directly.
 - OSS Docker/Postgres deployment and a Cloudflare Workers + Hyperdrive adapter.
 
 AutoDream, automatic consolidation, summarization, and proactive insight generation
-are intentionally outside v1. Production embedding providers and background retry
-workers are the next retrieval-maintenance layer; writes already remain available
-when embeddings are unavailable. The v1 embedding contract is 1536 dimensions,
-backed by an HNSW cosine index.
+are intentionally outside v1. Lore includes Ollama, Google Gemini, and OpenAI
+embedding adapters; background retry and re-index workers are the next
+retrieval-maintenance layer, and writes remain available when embeddings are
+unavailable. Embedding configuration is set once per deployment. Local deployments
+default to Qwen3-Embedding 0.6B at 1024 dimensions.
 
 ## Run with Docker
 
@@ -49,6 +52,57 @@ SQL migration, provisions a separate non-owner runtime login, and starts Lore un
 the `lore_app` RLS role. The example binds to `127.0.0.1` and opts into
 unauthenticated local access; never expose `AUTH_MODE=none` or `ALLOW_INSECURE=1`
 to the internet.
+
+For local semantic retrieval, install Ollama on the host and pull the lightweight
+default model before starting Lore:
+
+```bash
+ollama pull qwen3-embedding:0.6b
+```
+
+The example configuration uses `OLLAMA_KEEP_ALIVE=0`, so Ollama unloads the model
+after each request instead of holding roughly 1.4 GB of unified memory. Set a
+duration such as `5m` when lower query latency matters more than idle RAM.
+
+Self-host operators choose the deployment-wide provider and model. Lore v1 fixes
+the vector protocol at 1024 dimensions, so the database and every adapter share
+one exact storage contract. The default local recipe is:
+
+```bash
+LORE_EMBEDDING_PROVIDER=ollama
+LORE_EMBEDDING_MODEL=qwen3-embedding:0.6b
+```
+
+Google Gemini is a native alternative and does not require Ollama:
+
+```bash
+LORE_EMBEDDING_PROVIDER=google
+LORE_EMBEDDING_MODEL=gemini-embedding-2
+GEMINI_API_KEY=replace-with-a-server-side-key
+```
+
+OpenAI is also available through its native Embeddings API:
+
+```bash
+LORE_EMBEDDING_PROVIDER=openai
+LORE_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_API_KEY=replace-with-a-server-side-key
+```
+
+Lore calls each provider directly and sends API keys only from the server. The
+Google adapter distinguishes document indexing from retrieval queries using the
+model's documented retrieval preprocessing; OpenAI and Ollama use the same text
+for both roles. Every adapter must return exactly 1024 values. Changing a running
+deployment's provider or model creates a different embedding space, so existing
+vectors are excluded from semantic retrieval until re-embedded. Lore materializes
+the active space before semantic top-k, favoring correct isolation over ANN
+acceleration while incompatible spaces coexist. Automated background re-indexing is
+not implemented yet.
+
+Invalid deployment embedding configuration disables semantic embedding with a
+server-side warning instead of blocking Memory reads or writes. Provider request
+failures are also warned server-side; writes preserve the Memory and store an
+explicit `NULL` vector for later re-indexing.
 
 For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
 Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username
@@ -91,7 +145,8 @@ accepted only while both the credential and Workspace grant remain active.
 - `/api/evaluations/suites`, suite runs, and run results
 
 Agent tokens are returned only at creation time. Lore stores only their SHA-256
-hash and a short display prefix.
+hash and a short display prefix. Embedding selection is deployment-wide and is not
+exposed to Workspace members or Agents.
 
 ## CoreSpeed Cloud / Cloudflare
 

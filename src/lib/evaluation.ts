@@ -1,6 +1,6 @@
 import { type ActorContext, installActorContext } from "./actor-context";
 import type { PostgresDatabase } from "./db";
-import { createMemoryModule } from "./memory";
+import { createMemoryModule, type MemoryModuleOptions } from "./memory";
 
 export type EvaluationRunStatus = "running" | "completed" | "failed";
 
@@ -81,6 +81,7 @@ export interface EvaluationSearchProvider {
 
 export interface EvaluationModuleOptions {
   searchProvider?: EvaluationSearchProvider;
+  memoryOptions?: MemoryModuleOptions;
   now?: () => number;
   estimateCostUsd?: (input: { query: string; retrievedCount: number }) => number;
 }
@@ -223,7 +224,8 @@ export function createEvaluationModule(
   database: PostgresDatabase,
   options: EvaluationModuleOptions = {},
 ) {
-  const searchProvider = options.searchProvider ?? createMemoryModule(database);
+  const searchProvider =
+    options.searchProvider ?? createMemoryModule(database, options.memoryOptions);
   const now = options.now ?? (() => performance.now());
   const estimateCostUsd = options.estimateCostUsd ?? (() => 0);
 

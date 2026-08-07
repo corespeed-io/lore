@@ -25,7 +25,7 @@ interface OverviewProps {
 }
 
 function countByType(memories: Memory[]) {
-  const counts: Record<string, number> = {};
+  const counts = Object.create(null) as Record<string, number>;
   for (const memory of memories) {
     const type = memoryType(memory);
     counts[type] = (counts[type] ?? 0) + 1;

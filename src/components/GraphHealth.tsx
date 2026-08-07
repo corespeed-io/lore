@@ -21,7 +21,7 @@ export function GraphHealth({
       <p className="panel-card-title">Graph health</p>
       <p className="graph-health-line">
         <strong>{isolated.length}</strong> {isolated.length === 1 ? "Memory has" : "Memories have"}{" "}
-        no derived affinity links
+        no Memory Links or derived affinities
       </p>
       <ul className="graph-health-list">
         {isolated.slice(0, SHOW).map((node) => (

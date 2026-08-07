@@ -29,6 +29,12 @@ describe("type colors", () => {
     for (const type of TYPES) expect(typeColor(type)).toBe(typeColor(type));
   });
 
+  it("treats inherited object property names as ordinary untrusted types", () => {
+    for (const type of ["constructor", "toString", "valueOf", "__proto__"]) {
+      expect(typeColor(type)).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+  });
+
   it("keeps named types on their designed colors", () => {
     for (const [type, color] of Object.entries(TYPE_COLORS)) {
       expect(typeColor(type)).toBe(color);

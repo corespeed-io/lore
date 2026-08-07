@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { listAllMemories, listWorkspaces } from "@/lib/lore-api";
+import { listMemories, listWorkspaces } from "@/lib/lore-api";
 import { clearRequestLog, getRequestLog } from "@/lib/request-log";
 import type { Memory } from "@/lib/types";
 
@@ -23,31 +23,23 @@ afterEach(() => {
   clearRequestLog();
 });
 
-test("native browser client pages through Memory resources with Workspace context", async () => {
-  const firstBatch = Array.from({ length: 100 }, (_, index) => memory(index));
-  const finalBatch = [memory(100)];
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(Response.json(firstBatch))
-    .mockResolvedValueOnce(Response.json(finalBatch));
+test("native browser client reads a Memory page with Workspace context", async () => {
+  const batch = Array.from({ length: 100 }, (_, index) => memory(index));
+  const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(batch));
   vi.stubGlobal("fetch", fetchMock);
 
   const workspaceId = "10000000-0000-4000-8000-000000000001";
-  const memories = await listAllMemories(workspaceId);
+  const memories = await listMemories(workspaceId, { limit: 100, offset: 200 });
 
-  expect(memories).toHaveLength(101);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(String(fetchMock.mock.calls[0][0])).toContain("offset=0");
-  expect(String(fetchMock.mock.calls[1][0])).toContain("offset=100");
+  expect(memories).toHaveLength(100);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(String(fetchMock.mock.calls[0][0])).toContain("offset=200");
   const firstRequest = fetchMock.mock.calls[0][1];
   expect(firstRequest).toBeDefined();
   expect((firstRequest?.headers as Headers | undefined)?.get("x-lore-workspace-id")).toBe(
     workspaceId,
   );
-  expect(getRequestLog().map((entry) => entry.operation)).toEqual([
-    "GET /api/memories",
-    "GET /api/memories",
-  ]);
+  expect(getRequestLog().map((entry) => entry.operation)).toEqual(["GET /api/memories"]);
 });
 
 test("intentional request cancellation is not reported as an API failure", async () => {

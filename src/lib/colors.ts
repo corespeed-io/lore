@@ -52,7 +52,7 @@ const PALETTE = [
 ];
 
 export function typeColor(type: string): string {
-  if (TYPE_COLORS[type]) return TYPE_COLORS[type];
+  if (Object.hasOwn(TYPE_COLORS, type)) return TYPE_COLORS[type];
   let hash = 0;
   for (const ch of type) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
   return PALETTE[hash % PALETTE.length] ?? TYPE_COLORS.concept;

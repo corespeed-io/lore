@@ -9,7 +9,9 @@ import type { Memory, MemorySearchResult } from "@/lib/types";
 interface SearchResultsProps {
   results: MemorySearchResult[];
   memories: Memory[];
+  capped: boolean;
   loading: boolean;
+  error: string | null;
   query: string;
   typeFilter: string;
   onTypeFilter: (type: string) => void;
@@ -50,7 +52,9 @@ function shortDate(value: string): string {
 export function SearchResults({
   results,
   memories,
+  capped,
   loading,
+  error,
   query,
   typeFilter,
   onTypeFilter,
@@ -93,7 +97,7 @@ export function SearchResults({
       );
     }
 
-    const counts: Record<string, number> = {};
+    const counts = Object.create(null) as Record<string, number>;
     for (const memory of memories) {
       const type = memoryType(memory);
       counts[type] = (counts[type] ?? 0) + 1;
@@ -116,9 +120,7 @@ export function SearchResults({
             Showing {filtered.length}
             {typeFilter !== "all" ? ` of ${memories.length}` : ""} memories
           </p>
-          {memories.length >= 20_000 && (
-            <span>Showing the first {memories.length} Memories. Use search for older matches.</span>
-          )}
+          {capped && <span>Browse is limited to 5,000 Memories. Search covers the Workspace.</span>}
         </div>
         <div className="chip-row">
           {chips.map(([key, label]) => (
@@ -163,6 +165,22 @@ export function SearchResults({
     .split(/\s+/)
     .map((term) => term.trim())
     .filter((term) => term.length >= 2);
+
+  if (loading) {
+    return (
+      <div className="page-wrap">
+        <p className="muted-note">Searching memories…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="page-wrap">
+        <p className="muted-note">Couldn&apos;t search this Workspace — {error}.</p>
+      </div>
+    );
+  }
 
   if (!results.length) {
     return (

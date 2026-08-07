@@ -7,27 +7,20 @@ import { MemoryView } from "@/components/MemoryView";
 import { Overview } from "@/components/Overview";
 import { SearchResults } from "@/components/SearchResults";
 import { Sidebar } from "@/components/Sidebar";
+import { memoryTitle, memoryType } from "@/lib/lore-api";
 import {
-  createWorkspace,
-  forgetMemory,
-  getMemory,
-  listAllMemories,
-  listWorkspaces,
-  memoryTitle,
-  memoryType,
-  readGraph,
-  rememberMemory,
-  searchMemories,
-  updateMemory,
-} from "@/lib/lore-api";
+  loreKeys,
+  removeMemoryFromPages,
+  upsertMemoryPages,
+  useLoreGraph,
+  useLoreMemories,
+  useLoreMemory,
+  useLoreMutations,
+  useLoreSearch,
+  useLoreWorkspaces,
+} from "@/lib/lore-swr";
 import { parseRoute, type RouteState, routeUrl, type Tab } from "@/lib/route";
-import type {
-  GraphData,
-  Memory,
-  MemoryScope,
-  MemorySearchResult,
-  WorkspaceSummary,
-} from "@/lib/types";
+import type { GraphData, Memory, MemoryScope } from "@/lib/types";
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
@@ -35,10 +28,13 @@ const TAB_LABELS: Record<Tab, string> = {
   search: "Memories",
 };
 
+const EMPTY_GRAPH: GraphData = { nodes: [], links: [] };
+
 interface GraphStore {
   nodes: GraphData["nodes"];
   links: GraphData["links"];
   byId: Record<string, GraphData["nodes"][number]>;
+  byReference: Record<string, string>;
   adj: Record<string, Set<string>>;
 }
 
@@ -68,10 +64,22 @@ interface EditorState {
 
 function buildGraph(data: GraphData): GraphStore {
   const byId: GraphStore["byId"] = {};
+  const byReference = Object.create(null) as GraphStore["byReference"];
+  const ambiguousReferences = new Set<string>();
   const adj: GraphStore["adj"] = {};
   for (const node of data.nodes) {
     byId[node.id] = node;
     adj[node.id] = new Set([node.id]);
+    for (const reference of new Set([node.id, node.reference])) {
+      if (!reference || ambiguousReferences.has(reference)) continue;
+      const existing = byReference[reference];
+      if (existing && existing !== node.id) {
+        delete byReference[reference];
+        ambiguousReferences.add(reference);
+      } else {
+        byReference[reference] = node.id;
+      }
+    }
   }
   for (const link of data.links) {
     if (!adj[link.source]) adj[link.source] = new Set();
@@ -79,7 +87,7 @@ function buildGraph(data: GraphData): GraphStore {
     adj[link.source].add(link.target);
     adj[link.target].add(link.source);
   }
-  return { nodes: data.nodes, links: data.links, byId, adj };
+  return { nodes: data.nodes, links: data.links, byId, byReference, adj };
 }
 
 function graphNeighbors(graph: GraphStore | null, id: string): MemoryLink[] {
@@ -90,13 +98,6 @@ function graphNeighbors(graph: GraphStore | null, id: string): MemoryLink[] {
       id: neighborId,
       label: graph.byId[neighborId]?.label ?? neighborId,
     }));
-}
-
-function sameLinks(left: MemoryLink[], right: MemoryLink[]): boolean {
-  if (left.length !== right.length) return false;
-  return left.every(
-    (link, index) => link.id === right[index]?.id && link.label === right[index]?.label,
-  );
 }
 
 function memoryDetailState(memory: Memory, graph: GraphStore | null): MemoryDetailState {
@@ -115,37 +116,64 @@ function errorMessage(cause: unknown): string {
 }
 
 export function App({ appTitle, appSubtitle }: AppProps) {
-  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
-  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
-  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-
   const [tab, setTab] = useState<Tab>("overview");
-  const [graph, setGraph] = useState<GraphStore | null>(null);
-  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
-  const [graphError, setGraphError] = useState<string | null>(null);
-  const [graphLoaded, setGraphLoaded] = useState(false);
-  const [graphRevision, setGraphRevision] = useState(0);
   const [graphFocus, setGraphFocus] = useState<string | undefined>();
   const [localGraphId, setLocalGraphId] = useState<string | null>(null);
-  const [selectedMemory, setSelectedMemory] = useState<MemoryDetailState | null>(null);
-  const [searchResults, setSearchResults] = useState<MemorySearchResult[]>([]);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [memories, setMemories] = useState<Memory[]>([]);
-  const [memoriesLoaded, setMemoriesLoaded] = useState(false);
   const [memoryTypeFilter, setMemoryTypeFilter] = useState("all");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [dismissedWorkspaceError, setDismissedWorkspaceError] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
-  const graphRef = useRef<GraphStore | null>(null);
   const graphEverVisible = useRef(false);
   const applyingRouteRef = useRef(false);
-  const detailRequest = useRef(0);
-  const searchRequest = useRef(0);
-  graphRef.current = graph;
+
+  const {
+    data: workspaces = [],
+    error: workspacesRequestError,
+    isLoading: workspacesLoading,
+    mutate: mutateWorkspaces,
+  } = useLoreWorkspaces();
+  const {
+    memories,
+    error: memoriesRequestError,
+    isCapped: memoriesCapped,
+    isLoading: memoriesLoading,
+    mutate: mutateMemories,
+  } = useLoreMemories(activeWorkspaceId);
+  const {
+    data: graphData = EMPTY_GRAPH,
+    error: graphRequestError,
+    isLoading: graphLoading,
+    mutate: mutateGraph,
+  } = useLoreGraph(activeWorkspaceId);
+  const {
+    data: searchResults = [],
+    error: searchRequestError,
+    isLoading: searchLoading,
+    mutate: mutateSearch,
+  } = useLoreSearch(activeWorkspaceId, searchQuery, 25);
+  const { data: selectedMemoryData, error: selectedMemoryRequestError } = useLoreMemory(
+    activeWorkspaceId,
+    selectedMemoryId,
+  );
+  const mutations = useLoreMutations(activeWorkspaceId);
+  const saving = mutations.isMutating;
+  const graph = useMemo(() => buildGraph(graphData), [graphData]);
+  const selectedMemory = useMemo(
+    () => (selectedMemoryData ? memoryDetailState(selectedMemoryData, graph) : null),
+    [graph, selectedMemoryData],
+  );
+  const graphError = graphRequestError ? errorMessage(graphRequestError) : null;
+  const graphLoaded = !activeWorkspaceId || !graphLoading;
+  const workspaceRequestError = workspacesRequestError ?? memoriesRequestError;
+  const workspaceErrorMessage = workspaceRequestError ? errorMessage(workspaceRequestError) : null;
+  const workspaceError =
+    workspaceErrorMessage === dismissedWorkspaceError ? null : workspaceErrorMessage;
 
   const activeWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null,
@@ -153,120 +181,29 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   );
 
   useEffect(() => {
-    const controller = new AbortController();
-    void listWorkspaces(controller.signal)
-      .then((loaded) => {
-        setWorkspaces(loaded);
-        const remembered = window.localStorage.getItem("lore.workspace");
-        const next = loaded.find((workspace) => workspace.id === remembered)?.id ?? loaded[0]?.id;
-        setActiveWorkspaceId(next ?? "");
-        setWorkspaceError(null);
-      })
-      .catch((cause) => {
-        if ((cause as Error).name !== "AbortError") setWorkspaceError(errorMessage(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setWorkspacesLoaded(true);
-      });
-    return () => controller.abort();
-  }, []);
+    if (!workspaces.length) {
+      if (activeWorkspaceId) setActiveWorkspaceId("");
+      return;
+    }
+    if (workspaces.some((workspace) => workspace.id === activeWorkspaceId)) return;
+    const remembered = window.localStorage.getItem("lore.workspace");
+    const next =
+      workspaces.find((workspace) => workspace.id === remembered)?.id ?? workspaces[0]?.id;
+    setActiveWorkspaceId(next ?? "");
+  }, [activeWorkspaceId, workspaces]);
 
   useEffect(() => {
     if (activeWorkspaceId) {
       window.localStorage.setItem("lore.workspace", activeWorkspaceId);
     }
-    detailRequest.current += 1;
-    searchRequest.current += 1;
-    setSelectedMemory(null);
+    setSelectedMemoryId(null);
     setLocalGraphId(null);
     setGraphFocus(undefined);
-    setSearchResults([]);
     setSearchQuery("");
     setMemoryTypeFilter("all");
-    setMemories([]);
-    setMemoriesLoaded(false);
-    setGraph(null);
-    setGraphData({ nodes: [], links: [] });
-    setGraphLoaded(false);
-    setGraphError(null);
+    setMutationError(null);
     if (searchRef.current) searchRef.current.value = "";
   }, [activeWorkspaceId]);
-
-  useEffect(() => {
-    if (!activeWorkspaceId) return;
-    const controller = new AbortController();
-    setMemoriesLoaded(false);
-    void listAllMemories(activeWorkspaceId, controller.signal)
-      .then((loadedMemories) => setMemories(loadedMemories))
-      .catch((cause) => {
-        if ((cause as Error).name !== "AbortError") setWorkspaceError(errorMessage(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setMemoriesLoaded(true);
-      });
-    return () => controller.abort();
-  }, [activeWorkspaceId]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: graphRevision explicitly invalidates the derived graph after a Memory mutation.
-  useEffect(() => {
-    if (!activeWorkspaceId) return;
-    const controller = new AbortController();
-    setGraphLoaded(false);
-    setGraphError(null);
-    void readGraph(activeWorkspaceId, controller.signal)
-      .then((data) => {
-        const store = buildGraph(data);
-        setGraph(store);
-        setGraphData(data);
-      })
-      .catch((cause) => {
-        if ((cause as Error).name !== "AbortError") setGraphError(errorMessage(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setGraphLoaded(true);
-      });
-    return () => controller.abort();
-  }, [activeWorkspaceId, graphRevision]);
-
-  useEffect(() => {
-    if (!graph || !selectedMemory) return;
-    setSelectedMemory((current) => {
-      if (!current) return current;
-      const related = graphNeighbors(graph, current.id);
-      return sameLinks(current.related, related) ? current : { ...current, related };
-    });
-  }, [graph, selectedMemory]);
-
-  const resolveMemory = useCallback(
-    async (id: string, currentGraph: GraphStore | null) => {
-      if (!activeWorkspaceId) return;
-      const request = ++detailRequest.current;
-      try {
-        const memory = await getMemory(activeWorkspaceId, id);
-        if (detailRequest.current !== request) return;
-        setSelectedMemory(memoryDetailState(memory, currentGraph ?? graphRef.current));
-        window.scrollTo(0, 0);
-      } catch (cause) {
-        if (detailRequest.current !== request) return;
-        setMutationError(errorMessage(cause));
-      }
-    },
-    [activeWorkspaceId],
-  );
-
-  const runSearch = useCallback(
-    async (query: string) => {
-      if (!activeWorkspaceId) return;
-      const request = ++searchRequest.current;
-      try {
-        const items = await searchMemories(activeWorkspaceId, query, 25);
-        if (searchRequest.current === request) setSearchResults(items);
-      } catch {
-        if (searchRequest.current === request) setSearchResults([]);
-      }
-    },
-    [activeWorkspaceId],
-  );
 
   const writeRoute = useCallback((route: RouteState, mode: "push" | "replace" = "push") => {
     if (applyingRouteRef.current) return;
@@ -293,36 +230,31 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     (id: string) => {
       if (!id) return;
       writeRoute({ ...currentBaseRoute(), memoryId: id });
-      void resolveMemory(id, graphRef.current);
+      setSelectedMemoryId(id);
+      setMutationError(null);
+      window.scrollTo(0, 0);
     },
-    [currentBaseRoute, resolveMemory, writeRoute],
+    [currentBaseRoute, writeRoute],
   );
 
-  const applyRoute = useCallback(
-    (route: RouteState) => {
-      applyingRouteRef.current = true;
-      detailRequest.current += 1;
-      setSelectedMemory(null);
-      setLocalGraphId(null);
-      setTab(route.tab);
-      setGraphFocus(route.tab === "graph" ? route.focusId : undefined);
+  const applyRoute = useCallback((route: RouteState) => {
+    applyingRouteRef.current = true;
+    setSelectedMemoryId(route.memoryId ?? null);
+    setLocalGraphId(null);
+    setTab(route.tab);
+    setGraphFocus(route.tab === "graph" ? route.focusId : undefined);
 
-      const query = (route.q ?? "").trim();
-      const type = route.type ?? "all";
-      setSearchQuery(query);
-      setMemoryTypeFilter(type);
-      if (searchRef.current) searchRef.current.value = query;
-      if (query) void runSearch(query);
-      else setSearchResults([]);
-      if (route.memoryId) void resolveMemory(route.memoryId, graphRef.current);
-      else window.scrollTo(0, 0);
+    const query = (route.q ?? "").trim();
+    const type = route.type ?? "all";
+    setSearchQuery(query);
+    setMemoryTypeFilter(type);
+    if (searchRef.current) searchRef.current.value = query;
+    window.scrollTo(0, 0);
 
-      window.setTimeout(() => {
-        applyingRouteRef.current = false;
-      }, 0);
-    },
-    [resolveMemory, runSearch],
-  );
+    window.setTimeout(() => {
+      applyingRouteRef.current = false;
+    }, 0);
+  }, []);
 
   useEffect(() => {
     if (!activeWorkspaceId) return;
@@ -341,32 +273,25 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     setLocalGraphId(null);
     setSearchQuery(query);
     if (!query) {
-      searchRequest.current += 1;
-      setSearchResults([]);
-      if (tab === "search" && !selectedMemory) {
+      if (tab === "search" && !selectedMemoryId) {
         writeRoute({ tab: "search", type: memoryTypeFilter }, "replace");
       }
       return;
     }
-    detailRequest.current += 1;
-    setSelectedMemory(null);
+    setSelectedMemoryId(null);
     setTab("search");
     writeRoute(
       { tab: "search", q: query },
-      tab === "search" && !selectedMemory ? "replace" : "push",
+      tab === "search" && !selectedMemoryId ? "replace" : "push",
     );
-    void runSearch(query);
   }
 
   function handleTabChange(nextTab: Tab) {
-    detailRequest.current += 1;
-    setSelectedMemory(null);
+    setSelectedMemoryId(null);
     setLocalGraphId(null);
     setGraphFocus(undefined);
     if (nextTab === "search") {
-      searchRequest.current += 1;
       setSearchQuery("");
-      setSearchResults([]);
       setMemoryTypeFilter("all");
       if (searchRef.current) searchRef.current.value = "";
     }
@@ -375,11 +300,9 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   }
 
   function drillType(type: string) {
-    detailRequest.current += 1;
-    setSelectedMemory(null);
+    setSelectedMemoryId(null);
     setLocalGraphId(null);
     setSearchQuery("");
-    setSearchResults([]);
     setMemoryTypeFilter(type);
     setTab("search");
     if (searchRef.current) searchRef.current.value = "";
@@ -388,69 +311,64 @@ export function App({ appTitle, appSubtitle }: AppProps) {
 
   async function saveEditor(content: string, scope: MemoryScope) {
     if (!activeWorkspaceId || !editor) return;
-    setSaving(true);
     setMutationError(null);
     try {
-      const saved = editor.memory
-        ? await updateMemory(activeWorkspaceId, editor.memory.id, { content, scope })
-        : await rememberMemory(activeWorkspaceId, { content, scope });
-      setMemories((current) => [saved, ...current.filter((memory) => memory.id !== saved.id)]);
-      setSearchResults((current) =>
-        current.map((result) =>
-          result.memory.id === saved.id ? { ...result, memory: saved } : result,
-        ),
-      );
+      const saved = await mutations.saveMemory.trigger({
+        id: editor.memory?.id,
+        content,
+        scope,
+      });
+      await mutations.mutateCache(loreKeys.memory(activeWorkspaceId, saved.id), saved, {
+        revalidate: false,
+      });
+      await mutateMemories((pages) => upsertMemoryPages(pages, saved), { revalidate: true });
+      if (searchQuery) void mutateSearch();
+      void mutateGraph();
       setEditor(null);
-      setSelectedMemory(memoryDetailState(saved, graphRef.current));
+      setSelectedMemoryId(saved.id);
       setTab("search");
       writeRoute({ tab: "search", memoryId: saved.id });
-      setGraphRevision((revision) => revision + 1);
     } catch (cause) {
       setMutationError(errorMessage(cause));
-    } finally {
-      setSaving(false);
     }
   }
 
   async function removeOpenMemory() {
     if (!activeWorkspaceId || !selectedMemory) return;
     if (!window.confirm("Forget this Memory? This cannot be undone.")) return;
-    setSaving(true);
     setMutationError(null);
+    const memoryId = selectedMemory.id;
     try {
-      await forgetMemory(activeWorkspaceId, selectedMemory.id);
-      setMemories((current) => current.filter((memory) => memory.id !== selectedMemory.id));
-      setSearchResults((current) =>
-        current.filter((result) => result.memory.id !== selectedMemory.id),
-      );
-      setSelectedMemory(null);
+      await mutations.forgetMemory.trigger(memoryId);
+      await mutations.mutateCache(loreKeys.memory(activeWorkspaceId, memoryId), undefined, {
+        revalidate: false,
+      });
+      await mutateMemories((pages) => removeMemoryFromPages(pages, memoryId), {
+        revalidate: true,
+      });
+      if (searchQuery) void mutateSearch();
+      void mutateGraph();
+      setSelectedMemoryId(null);
       writeRoute({ tab }, "replace");
-      setGraphRevision((revision) => revision + 1);
     } catch (cause) {
       setMutationError(errorMessage(cause));
-    } finally {
-      setSaving(false);
     }
   }
 
   async function addWorkspace(name: string) {
-    setSaving(true);
     setMutationError(null);
     try {
-      const created = await createWorkspace(name);
-      setWorkspaces((current) => [...current, created]);
+      const created = await mutations.createWorkspace.trigger(name);
+      await mutateWorkspaces((current = []) => [...current, created], { revalidate: false });
       setActiveWorkspaceId(created.id);
       setWorkspaceDialogOpen(false);
-      setWorkspaceError(null);
       writeRoute({ tab: "overview" }, "replace");
     } catch (cause) {
       setMutationError(errorMessage(cause));
-    } finally {
-      setSaving(false);
     }
   }
 
-  if (!workspacesLoaded) {
+  if (workspacesLoading || (workspaces.length > 0 && !activeWorkspaceId)) {
     return <main className="app-loading">Opening Lore…</main>;
   }
 
@@ -466,7 +384,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   }
 
   const graphReady = graphLoaded && !graphError && graphData.nodes.length > 0;
-  const graphVisible = tab === "graph" && !selectedMemory && graphReady;
+  const graphVisible = tab === "graph" && !selectedMemoryId && graphReady;
   if (graphVisible) graphEverVisible.current = true;
 
   return (
@@ -497,7 +415,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         {workspaceError && (
           <div className="native-error" role="alert">
             <span>{workspaceError}</span>
-            <button type="button" onClick={() => setWorkspaceError(null)}>
+            <button type="button" onClick={() => setDismissedWorkspaceError(workspaceError)}>
               Dismiss
             </button>
           </div>
@@ -521,7 +439,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         {!graphVisible && (
           <div
             className="view-anim"
-            key={selectedMemory ? `memory:${selectedMemory.id}` : `tab:${tab}`}
+            key={selectedMemoryId ? `memory:${selectedMemoryId}` : `tab:${tab}`}
           >
             {selectedMemory ? (
               <MemoryView
@@ -529,6 +447,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 type={selectedMemory.type}
                 id={selectedMemory.id}
                 body={selectedMemory.body}
+                wikilinkTargets={graph?.byReference ?? {}}
                 scope={selectedMemory.memory.scope}
                 ownerUserId={selectedMemory.memory.ownerUserId}
                 createdByAgentId={selectedMemory.memory.createdByAgentId}
@@ -540,8 +459,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 saving={saving}
                 error={mutationError}
                 onBack={() => {
-                  detailRequest.current += 1;
-                  setSelectedMemory(null);
+                  setSelectedMemoryId(null);
                   setLocalGraphId(null);
                   setMutationError(null);
                   writeRoute(currentBaseRoute(), "replace");
@@ -554,6 +472,24 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 }}
                 onForget={() => void removeOpenMemory()}
               />
+            ) : selectedMemoryId ? (
+              <div className="page-wrap">
+                <button
+                  type="button"
+                  className="back-link"
+                  onClick={() => {
+                    setSelectedMemoryId(null);
+                    writeRoute(currentBaseRoute(), "replace");
+                  }}
+                >
+                  ← {TAB_LABELS[tab]}
+                </button>
+                <div className="view-placeholder">
+                  {selectedMemoryRequestError
+                    ? `Couldn't load this Memory — ${errorMessage(selectedMemoryRequestError)}.`
+                    : "Loading Memory…"}
+                </div>
+              </div>
             ) : (
               <>
                 {tab === "overview" && (
@@ -580,7 +516,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   ) : graphData.nodes.length === 0 ? (
                     <div className="view-placeholder">
                       No visible Memories to graph yet. Capture a few related facts and Lore will
-                      derive affinity links inside this Workspace.
+                      find Memory Links or derive affinities inside this Workspace.
                     </div>
                   ) : null)}
 
@@ -588,7 +524,9 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                   <SearchResults
                     results={searchResults}
                     memories={memories}
-                    loading={!memoriesLoaded}
+                    capped={memoriesCapped}
+                    loading={searchQuery ? searchLoading : memoriesLoading}
+                    error={searchRequestError ? errorMessage(searchRequestError) : null}
                     query={searchQuery}
                     typeFilter={memoryTypeFilter}
                     onTypeFilter={setMemoryTypeFilter}
@@ -611,7 +549,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
           onOpen={openMemory}
           onOpenGraph={(id) => {
             setLocalGraphId(null);
-            setSelectedMemory(null);
+            setSelectedMemoryId(null);
             setTab("graph");
             setGraphFocus(id);
             writeRoute({ tab: "graph", focusId: id });

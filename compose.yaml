@@ -41,6 +41,15 @@ services:
       LORE_LOCAL_EMAIL: ${LORE_LOCAL_EMAIL:-}
       APP_TITLE: ${APP_TITLE:-Memory for humans and agents}
       APP_SUBTITLE: ${APP_SUBTITLE:-Durable recall inside a database-enforced boundary.}
+      LORE_EMBEDDING_PROVIDER: ${LORE_EMBEDDING_PROVIDER:-ollama}
+      LORE_EMBEDDING_MODEL: ${LORE_EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${LORE_DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-0}
+      LORE_EMBEDDING_TIMEOUT_MS: ${LORE_EMBEDDING_TIMEOUT_MS:-120000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully

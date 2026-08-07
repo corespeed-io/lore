@@ -201,7 +201,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   proxy calls, page/slug models, or generic upstream passthroughs.
 - Do not create a second visual track beside the restored Lore shell.
 - Do not use giant editorial headlines, pill-heavy ledgers, or colored scope decoration.
-- Do not expose User-level embedding model selection; retrieval configuration is Workspace-scoped.
+- Do not expose embedding model selection in product UI; it is deployment configuration.
 - Do not add feature-local stylesheets or third-party default UI. Inline styles
   are limited to dynamic visualization geometry/color/meter values and the
   persistent Graph mount visibility optimization.
@@ -221,5 +221,5 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
 | 2026-08-05 | Restore Lore's complete Dashboard/Graph/Memories shell and optimized graph interaction around native Memory types | Preserve the product's mature interface without importing an external domain model | The temporary simplified Memory console |
-| 2026-08-05 | Use Workspace-scoped search and configuration | Workspace is Lore's only tenant and retrieval boundary | User-scoped UI configuration |
+| 2026-08-06 | Fix Lore v1 at 1024 dimensions while allowing one provider/model per deployment | Self-host operators retain model choice without turning the database vector protocol into runtime configuration | Workspace/User model selection |
 | 2026-08-05 | Build Graph as an Actor-specific Memory-affinity read model | Preserve exploration without weakening RLS or reviving the deleted proxy | Deferred Graph placeholder |

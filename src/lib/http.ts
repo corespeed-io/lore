@@ -4,10 +4,16 @@ import type { PostgresDatabase } from "./db";
 import {
   createEvaluationModule,
   type EvaluationCaseInput,
+  type EvaluationModuleOptions,
   EvaluationSuiteNotFoundError,
 } from "./evaluation";
 import { createMemoryGraphModule } from "./graph";
-import { createMemoryModule, MemoryAccessDeniedError, type MemoryScope } from "./memory";
+import {
+  createMemoryModule,
+  MemoryAccessDeniedError,
+  type MemoryModuleOptions,
+  type MemoryScope,
+} from "./memory";
 import {
   createRequestContextResolver,
   normalizeUuid,
@@ -275,8 +281,11 @@ export function createAgentGrantHandlers(database: PostgresDatabase) {
   };
 }
 
-export function createEvaluationSuiteHandlers(database: PostgresDatabase) {
-  const evaluations = createEvaluationModule(database);
+export function createEvaluationSuiteHandlers(
+  database: PostgresDatabase,
+  options: EvaluationModuleOptions = {},
+) {
+  const evaluations = createEvaluationModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async GET(request: Request): Promise<Response> {
@@ -313,8 +322,11 @@ export function createEvaluationSuiteHandlers(database: PostgresDatabase) {
   };
 }
 
-export function createEvaluationRunHandlers(database: PostgresDatabase) {
-  const evaluations = createEvaluationModule(database);
+export function createEvaluationRunHandlers(
+  database: PostgresDatabase,
+  options: EvaluationModuleOptions = {},
+) {
+  const evaluations = createEvaluationModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async POST(request: Request, suiteId: string): Promise<Response> {
@@ -329,8 +341,11 @@ export function createEvaluationRunHandlers(database: PostgresDatabase) {
   };
 }
 
-export function createEvaluationRunByIdHandlers(database: PostgresDatabase) {
-  const evaluations = createEvaluationModule(database);
+export function createEvaluationRunByIdHandlers(
+  database: PostgresDatabase,
+  options: EvaluationModuleOptions = {},
+) {
+  const evaluations = createEvaluationModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async GET(request: Request, runId: string): Promise<Response> {
@@ -348,8 +363,11 @@ export function createEvaluationRunByIdHandlers(database: PostgresDatabase) {
   };
 }
 
-export function createMemoryHandlers(database: PostgresDatabase) {
-  const memories = createMemoryModule(database);
+export function createMemoryHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
+  const memories = createMemoryModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async GET(request: Request): Promise<Response> {
@@ -397,8 +415,8 @@ export function createGraphHandlers(database: PostgresDatabase) {
       try {
         const actor = await resolver.resolveActor(request);
         const url = new URL(request.url);
-        const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
-        const limit = Number.isFinite(requestedLimit) ? requestedLimit : 100;
+        const requestedLimit = Number(url.searchParams.get("limit") ?? "5000");
+        const limit = Number.isFinite(requestedLimit) ? requestedLimit : 5000;
         return Response.json(await graph.read(actor, { limit }), {
           headers: { "cache-control": "private, no-store" },
         });
@@ -409,8 +427,11 @@ export function createGraphHandlers(database: PostgresDatabase) {
   };
 }
 
-export function createMemoryByIdHandlers(database: PostgresDatabase) {
-  const memories = createMemoryModule(database);
+export function createMemoryByIdHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
+  const memories = createMemoryModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async GET(request: Request, id: string): Promise<Response> {

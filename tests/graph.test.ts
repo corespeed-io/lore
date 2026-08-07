@@ -39,6 +39,154 @@ test("Memory Graph derives affinity only between visible Memories", async () => 
   );
 });
 
+test("Memory Graph returns a durable directed Memory Link instead of affinity", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const source = await memories.remember(testContext.alice, {
+    content: "Orbital launch checklist for the shared mission.",
+    metadata: { title: "Launch checklist", reference: "launch/checklist" },
+  });
+  const target = await memories.remember(testContext.alice, {
+    content: "Orbital launch timeline for the shared mission.",
+    metadata: { title: "Launch timeline", legacy: { slug: "launch/timeline" } },
+  });
+
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: "wikilink",
+    metadata: { source: "test" },
+  });
+  const result = await graph.read(testContext.alice);
+
+  expect(result.nodes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: source.id,
+        label: "Launch checklist",
+        reference: "launch/checklist",
+      }),
+      expect.objectContaining({
+        id: target.id,
+        label: "Launch timeline",
+        reference: "launch/timeline",
+      }),
+    ]),
+  );
+  expect(result.links).toEqual([
+    expect.objectContaining({
+      source: source.id,
+      target: target.id,
+      kind: "wikilink",
+      weight: 1,
+    }),
+  ]);
+});
+
+test("Memory Link RLS hides a private endpoint and its relationship", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const shared = await memories.remember(testContext.alice, {
+    content: "Shared incident plan.",
+  });
+  const alicePrivate = await memories.remember(testContext.alice, {
+    content: "Alice private incident detail.",
+    scope: "private",
+  });
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: shared.id,
+    targetMemoryId: alicePrivate.id,
+    kind: "wikilink",
+  });
+
+  await expect(graph.read(testContext.alice)).resolves.toMatchObject({
+    nodes: expect.arrayContaining([
+      expect.objectContaining({ id: shared.id }),
+      expect.objectContaining({ id: alicePrivate.id }),
+    ]),
+    links: [expect.objectContaining({ source: shared.id, target: alicePrivate.id })],
+  });
+  await expect(graph.read(testContext.bob)).resolves.toMatchObject({
+    nodes: [expect.objectContaining({ id: shared.id })],
+    links: [],
+  });
+});
+
+test("Memory Link appears after both endpoints become visible", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const source = await memories.remember(testContext.alice, {
+    content: "Shared launch decision.",
+  });
+  const target = await memories.remember(testContext.alice, {
+    content: "Private launch rationale.",
+    scope: "private",
+  });
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: "semantic",
+  });
+
+  expect((await graph.read(testContext.bob)).links).toEqual([]);
+  await memories.update(testContext.alice, target.id, { scope: "shared" });
+  await expect(graph.read(testContext.bob)).resolves.toMatchObject({
+    links: [expect.objectContaining({ source: source.id, target: target.id, kind: "semantic" })],
+  });
+});
+
+test("Deleting either endpoint cascades its Memory Links", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const source = await memories.remember(testContext.alice, { content: "Source Memory." });
+  const target = await memories.remember(testContext.alice, { content: "Target Memory." });
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: "wikilink",
+  });
+
+  await memories.forget(testContext.alice, target.id);
+
+  await expect(graph.read(testContext.alice)).resolves.toMatchObject({
+    nodes: [expect.objectContaining({ id: source.id })],
+    links: [],
+  });
+});
+
+test("Memory Link creation rejects invisible and cross-Workspace targets", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const aliceMemory = await memories.remember(testContext.alice, {
+    content: "Operations source.",
+  });
+  const bobPrivate = await memories.remember(testContext.bob, {
+    content: "Bob private target.",
+    scope: "private",
+  });
+  const researchMemory = await memories.remember(testContext.carol, {
+    content: "Research target.",
+  });
+
+  await expect(
+    graph.connect(testContext.alice, {
+      sourceMemoryId: aliceMemory.id,
+      targetMemoryId: bobPrivate.id,
+    }),
+  ).rejects.toThrow();
+  await expect(
+    graph.connect(testContext.alice, {
+      sourceMemoryId: aliceMemory.id,
+      targetMemoryId: researchMemory.id,
+    }),
+  ).rejects.toThrow();
+});
+
 test("Memory Graph reflects scope changes without stale links", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -70,7 +218,17 @@ test("Suspended Membership removes every Memory Graph node and link", async () =
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const graph = createMemoryGraphModule(testContext.database);
-  await memories.remember(testContext.alice, { content: "Shared operating context." });
+  const source = await memories.remember(testContext.alice, {
+    content: "Shared operating context.",
+  });
+  const target = await memories.remember(testContext.alice, {
+    content: "Shared operating decision.",
+  });
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: "wikilink",
+  });
 
   await testContext.suspendMembership(testContext.bob);
 
@@ -90,6 +248,11 @@ test("A permitted Agent receives its owner's private Memory Graph", async () => 
     content: "Alice private launch schedule.",
     scope: "private",
   });
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: first.id,
+    targetMemoryId: second.id,
+    kind: "wikilink",
+  });
   const reader = await access.createAgent(testContext.alice, { name: "Reader" });
   await access.grantAgent(testContext.alice, reader.id, { permission: "read" });
   const credential = await access.issueAgentCredential(testContext.alice, reader.id);
@@ -102,7 +265,9 @@ test("A permitted Agent receives its owner's private Memory Graph", async () => 
   const result = await graph.read(readerActor);
 
   expect(new Set(result.nodes.map((node) => node.id))).toEqual(new Set([first.id, second.id]));
-  expect(result.links).toHaveLength(1);
+  expect(result.links).toEqual([
+    expect.objectContaining({ source: first.id, target: second.id, kind: "wikilink" }),
+  ]);
 });
 
 test("Memory Graph enforces the per-node affinity budget", async () => {
