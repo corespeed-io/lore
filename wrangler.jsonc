@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "lore",
-  "main": ".open-next/worker.js",
+  "main": "worker.ts",
   "compatibility_date": "2026-08-05",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
@@ -10,17 +10,45 @@
   },
   "placement": { "mode": "smart" },
   "observability": { "enabled": true },
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "queues": {
+    "producers": [
+      {
+        "binding": "MEMORY_MAINTENANCE_QUEUE",
+        "queue": "lore-memory-maintenance"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "lore-memory-maintenance",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 8,
+        "dead_letter_queue": "lore-memory-maintenance-dead-letter",
+        "max_concurrency": 4
+      }
+    ]
+  },
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
       // Replace this with a Hyperdrive configuration created with
       // `--caching-disabled`. RLS/auth reads must never use query caching.
       "id": "00000000000000000000000000000000"
+    },
+    {
+      "binding": "MAINTENANCE_HYPERDRIVE",
+      // Create this second cache-disabled configuration with the separate
+      // login that is a member of only the `lore_maintenance` role.
+      "id": "11111111111111111111111111111111"
     }
   ],
   "vars": {
     "AUTH_MODE": "proxy",
     "ACCESS_TEAM_DOMAIN": "replace-me.cloudflareaccess.com",
-    "ACCESS_AUD": "replace-with-access-audience"
+    "ACCESS_AUD": "replace-with-access-audience",
+    "LORE_EMBEDDING_PROVIDER": "google",
+    "LORE_EMBEDDING_MODEL": "gemini-embedding-2",
+    "LORE_EMBEDDING_TIMEOUT_MS": "120000"
   }
 }

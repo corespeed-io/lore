@@ -20,6 +20,8 @@ services:
       DATABASE_URL: postgres://lore_admin:${LORE_DB_ADMIN_PASSWORD:?Set LORE_DB_ADMIN_PASSWORD in .env}@postgres:5432/lore
       LORE_RUNTIME_ROLE: lore_runtime
       LORE_RUNTIME_PASSWORD: ${LORE_DB_RUNTIME_PASSWORD:?Set LORE_DB_RUNTIME_PASSWORD in .env}
+      LORE_MAINTENANCE_ROLE: lore_maintenance_runtime
+      LORE_MAINTENANCE_PASSWORD: ${LORE_DB_MAINTENANCE_PASSWORD:?Set LORE_DB_MAINTENANCE_PASSWORD in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +43,28 @@ services:
       LORE_LOCAL_EMAIL: ${LORE_LOCAL_EMAIL:-}
       APP_TITLE: ${APP_TITLE:-Memory for humans and agents}
       APP_SUBTITLE: ${APP_SUBTITLE:-Durable recall inside a database-enforced boundary.}
+      LORE_EMBEDDING_PROVIDER: ${LORE_EMBEDDING_PROVIDER:-ollama}
+      LORE_EMBEDDING_MODEL: ${LORE_EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${LORE_DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-0}
+      LORE_EMBEDDING_TIMEOUT_MS: ${LORE_EMBEDDING_TIMEOUT_MS:-120000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  maintenance:
+    build: .
+    command: ["node", ".worker/maintenance-worker.js"]
+    environment:
+      LORE_MAINTENANCE_DATABASE_URL: postgres://lore_maintenance_runtime:${LORE_DB_MAINTENANCE_PASSWORD:?Set LORE_DB_MAINTENANCE_PASSWORD in .env}@postgres:5432/lore
+      LORE_MAINTENANCE_POOL_SIZE: ${LORE_MAINTENANCE_POOL_SIZE:-2}
+      LORE_MAINTENANCE_POLL_MS: ${LORE_MAINTENANCE_POLL_MS:-1000}
+      LORE_MAINTENANCE_SWEEP_MS: ${LORE_MAINTENANCE_SWEEP_MS:-300000}
       LORE_EMBEDDING_PROVIDER: ${LORE_EMBEDDING_PROVIDER:-ollama}
       LORE_EMBEDDING_MODEL: ${LORE_EMBEDDING_MODEL:-qwen3-embedding:0.6b}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

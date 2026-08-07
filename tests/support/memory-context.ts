@@ -25,6 +25,8 @@ async function migrate(postgres: PGlite): Promise<void> {
 
 export interface MemoryTestContext {
   database: PostgresDatabase;
+  maintenanceDatabase: PostgresDatabase;
+  adminDatabase: PostgresDatabase;
   alice: ActorContext;
   bob: ActorContext;
   carol: ActorContext;
@@ -62,16 +64,23 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
   );
   await postgres.exec("SET ROLE lore_app");
 
+  function databaseForRole(role: "lore_app" | "lore_maintenance" | "NONE"): PostgresDatabase {
+    return {
+      transaction: (use) =>
+        postgres.transaction(async (transaction) => {
+          await transaction.query(`SET LOCAL ROLE ${role}`);
+          return use({
+            query: (sql, params) => transaction.query(sql, params),
+          });
+        }),
+    };
+  }
+
   let closePromise: Promise<void> | undefined;
   const context: MemoryTestContext = {
-    database: {
-      transaction: (use) =>
-        postgres.transaction((transaction) =>
-          use({
-            query: (sql, params) => transaction.query(sql, params),
-          }),
-        ),
-    },
+    database: databaseForRole("lore_app"),
+    maintenanceDatabase: databaseForRole("lore_maintenance"),
+    adminDatabase: databaseForRole("NONE"),
     alice: {
       workspaceId: OPERATIONS_WORKSPACE_ID,
       userId: ALICE_USER_ID,

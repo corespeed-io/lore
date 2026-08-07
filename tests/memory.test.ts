@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
+import { createMemoryMaintenanceModule } from "@/lib/maintenance";
 import { createMemoryModule, type EmbeddingTask, MemoryAccessDeniedError } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
@@ -329,6 +330,13 @@ test("Hybrid search finds semantically related visible Memory without lexical ov
   await memories.remember(testContext.alice, {
     content: "The orbital vehicle completed its burn.",
   });
+
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider,
+  });
+  while ((await maintenance.run()).status === "complete") {
+    // Drain the four deterministic document jobs before semantic search.
+  }
 
   const results = await memories.search(testContext.bob, { query: "cat", limit: 10 });
 

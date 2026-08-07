@@ -26,15 +26,16 @@ identity mapping, authorization, retrieval, and evaluation directly.
 - Postgres RLS over all tenant-owned source, chunk, credential, and Evaluation data;
 - versioned Evaluation Suites with Recall@K, MRR, nDCG, latency, cost, and hard
   isolation failures;
+- crash-safe background embedding, retry, and deployment-wide model re-indexing;
 - a working Memory console plus native HTTP APIs;
 - OSS Docker/Postgres deployment and a Cloudflare Workers + Hyperdrive adapter.
 
 AutoDream, automatic consolidation, summarization, and proactive insight generation
 are intentionally outside v1. Lore includes Ollama, Google Gemini, and OpenAI
-embedding adapters; background retry and re-index workers are the next
-retrieval-maintenance layer, and writes remain available when embeddings are
-unavailable. Embedding configuration is set once per deployment. Local deployments
-default to Qwen3-Embedding 0.6B at 1024 dimensions.
+embedding adapters. Chunking and lexical indexing complete inside the Memory write;
+document embedding runs asynchronously and never blocks that write. Embedding
+configuration is set once per deployment. Local deployments default to
+Qwen3-Embedding 0.6B at 1024 dimensions.
 
 ## Run with Docker
 
@@ -43,13 +44,14 @@ self-hosted setup is:
 
 ```bash
 cp .env.example .env
-# Set unique LORE_DB_ADMIN_PASSWORD and LORE_DB_RUNTIME_PASSWORD values in .env.
+# Set unique admin, request-runtime, and maintenance passwords in .env.
 docker compose up --build
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The Compose stack runs every
-SQL migration, provisions a separate non-owner runtime login, and starts Lore under
-the `lore_app` RLS role. The example binds to `127.0.0.1` and opts into
+SQL migration, provisions separate non-owner request and maintenance logins, and
+starts both Lore and its embedding worker under narrow RLS roles. The example binds
+to `127.0.0.1` and opts into
 unauthenticated local access; never expose `AUTH_MODE=none` or `ALLOW_INSECURE=1`
 to the internet.
 
@@ -96,13 +98,15 @@ for both roles. Every adapter must return exactly 1024 values. Changing a runnin
 deployment's provider or model creates a different embedding space, so existing
 vectors are excluded from semantic retrieval until re-embedded. Lore materializes
 the active space before semantic top-k, favoring correct isolation over ANN
-acceleration while incompatible spaces coexist. Automated background re-indexing is
-not implemented yet.
+acceleration while incompatible spaces coexist. The maintenance sweep detects the
+stale space and re-embeds those Memories in the background.
 
 Invalid deployment embedding configuration disables semantic embedding with a
 server-side warning instead of blocking Memory reads or writes. Provider request
-failures are also warned server-side; writes preserve the Memory and store an
-explicit `NULL` vector for later re-indexing.
+failures are also warned server-side; writes preserve the Memory with an explicit
+`NULL` vector while the database-backed job retries with exponential backoff. Jobs
+survive process restarts, and a short lease prevents two workers from completing the
+same attempt.
 
 For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
 Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username
@@ -123,6 +127,8 @@ bun install --frozen-lockfile
 export DATABASE_URL=postgres://lore_admin:password@localhost:5432/lore
 export LORE_RUNTIME_ROLE=lore_runtime
 export LORE_RUNTIME_PASSWORD=runtime-password
+export LORE_MAINTENANCE_ROLE=lore_maintenance_runtime
+export LORE_MAINTENANCE_PASSWORD=maintenance-password
 bun run db:bootstrap
 ```
 
@@ -131,6 +137,14 @@ Set `DATABASE_URL` to the new runtime login, copy the remaining local values fro
 
 ```bash
 bun run dev
+```
+
+Run the self-host maintenance process in a second terminal using its own login:
+
+```bash
+bun run build:maintenance
+LORE_MAINTENANCE_DATABASE_URL=postgres://lore_maintenance_runtime:maintenance-password@localhost:5432/lore \
+  bun run start:maintenance
 ```
 
 ## HTTP surface
@@ -150,8 +164,9 @@ exposed to Workspace members or Agents.
 
 ## CoreSpeed Cloud / Cloudflare
 
-Cloudflare is the only managed deployment target. Lore uses OpenNext on Workers and
-a cache-disabled Hyperdrive binding to the same Postgres schema:
+Cloudflare is the only managed deployment target. Lore uses OpenNext on Workers,
+Queues for low-latency job wake-ups, and two cache-disabled Hyperdrive bindings to
+the same Postgres schema:
 
 ```bash
 # Run migrations from a trusted environment first.
@@ -162,13 +177,22 @@ bunx wrangler hyperdrive create lore \
   --connection-string="postgres://lore_runtime:...@db.example.com:5432/lore" \
   --caching-disabled
 
+bunx wrangler hyperdrive create lore-maintenance \
+  --connection-string="postgres://lore_maintenance_runtime:...@db.example.com:5432/lore" \
+  --caching-disabled
+
+bunx wrangler queues create lore-memory-maintenance
+bunx wrangler queues create lore-memory-maintenance-dead-letter
+
 # Put the returned id and Cloudflare Access values in wrangler.jsonc.
 bun run deploy:cloudflare
 ```
 
-Do not enable Hyperdrive query caching for Lore. Authorization and RLS reads depend
-on transaction-local User/Workspace context and must always be fresh. The checked-in
-Hyperdrive id and Access values are deliberate placeholders.
+Do not enable Hyperdrive query caching for either Lore binding. Authorization, job
+leases, and RLS reads depend on transaction-local context and must always be fresh.
+The checked-in Hyperdrive ids and Access values are deliberate placeholders. Set
+provider API keys with `wrangler secret put`; `.dev.vars.example` is only a local
+Workerd template.
 
 ## Verify changes
 

@@ -1,6 +1,7 @@
 node_modules
 .next
 .open-next
+.worker
 .wrangler
 .env
 .env.local

@@ -6,7 +6,7 @@ COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
-RUN node node_modules/next/dist/bin/next build
+RUN bun run build
 
 FROM node:24-bookworm-slim AS runner
 WORKDIR /app
@@ -16,6 +16,7 @@ ENV PORT=3000
 
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/.worker ./.worker
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/db ./db
 COPY --from=builder /app/scripts ./scripts

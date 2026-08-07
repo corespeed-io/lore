@@ -21,8 +21,9 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- the squashed `0001_initial.sql` migration defines identity, tenancy, user-private
-  Agents, Memory/chunks/links, pgvector state, and versioned Evaluation tables with RLS;
+- the squashed `0001_initial.sql` migration plus `0002_memory_embedding_jobs.sql`
+  define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
+  state, versioned Evaluation tables, and leased embedding jobs with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
@@ -53,14 +54,19 @@ been removed. Lore now has a native implementation:
 - `src/lib/viz/graph.ts` is the restored, performance-tuned D3 renderer. Keep its
   headless settle, delta-painted focus state, capped edge hit layer, label
   collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
-- Docker/Compose targets OSS self-hosting; OpenNext + a cache-disabled Hyperdrive
-  binding targets CoreSpeed Cloud on Cloudflare Workers.
+- `src/lib/maintenance.ts` owns leased, idempotent document embedding and
+  deployment-wide re-index discovery. Postgres is the durable job source; the
+  self-host Node worker polls it, while Cloudflare Queues are wake-up hints with a
+  scheduled database sweep as the delivery backstop;
+- Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
+  bindings target CoreSpeed Cloud on Cloudflare Workers.
 
-Still incomplete: background retry/re-index queue workers and full Agent/Evaluation
-management UI. Chunking and lexical indexing are synchronous; the Ollama, Google
-Gemini, and OpenAI adapters are configured once per deployment, and embedding
-failure is explicit (`NULL`) and never blocks a Memory write. Local deployment
-defaults are Qwen3-Embedding 0.6B at 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
+Still incomplete: full Agent/Evaluation management UI. Chunking and lexical indexing
+are synchronous; document embedding, retry, and deployment-wide re-indexing are
+background maintenance. The Ollama, Google Gemini, and OpenAI adapters are
+configured once per deployment, and embedding failure is explicit (`NULL`) and
+never blocks a Memory write. Local deployment defaults are Qwen3-Embedding 0.6B at
+1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
 Invalid embedding configuration and provider request failures must warn server-side
 and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
 The pgvector column and HNSW index are fixed at 1024 dimensions. Self-host operators
@@ -226,6 +232,9 @@ Cloudflare specifics:
 - Migrations and runtime credentials stay separate. Run migrations from a trusted
   environment, then connect Hyperdrive with a non-owner login that can `SET ROLE
   lore_app`.
+- Use a second cache-disabled Hyperdrive configuration whose distinct non-owner
+  login can `SET ROLE lore_maintenance` but not `lore_app`. Queue payloads contain
+  only a job id; job identity, tenant scope, attempts, and leases live in Postgres.
 
 Cloud-specific code is an adapter around shared domain modules. Do not make the
 core depend on CoreSpeed control-plane tenancy, and do not create abstractions for
@@ -244,6 +253,10 @@ surfaces:
 - **Graph module:** return visible Memory nodes, durable Memory Links, and derived
   affinities while guaranteeing that every relationship endpoint is present in the
   same authorized read model.
+- **Maintenance module:** claim versioned embedding jobs with a short lease, update
+  only the claimed Memory's chunks, retry provider failures deterministically, and
+  discover stale deployment-wide embedding spaces without exposing job state to
+  request actors.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
@@ -285,7 +298,7 @@ These commands remain the current verification loop:
 ```bash
 bun run dev        # localhost:3000
 bun run db:migrate # apply checksum-protected SQL migrations
-bun run db:bootstrap # migrate + provision a non-owner runtime login
+bun run db:bootstrap # migrate + provision separate request/maintenance logins
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
@@ -293,6 +306,7 @@ bun run format     # biome check --write .
 bun run design:check # enforce and self-test the Lore UI contract
 bun run test       # vitest run
 bun run build      # next build (production)
+bun run build:maintenance # bundle the self-host Node maintenance entrypoint
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```

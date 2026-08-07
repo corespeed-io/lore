@@ -3,13 +3,15 @@ import { getRuntimeDatabase } from "@/lib/runtime/database";
 import { getRuntimeMemoryModuleOptions } from "@/lib/runtime/embedding";
 
 export async function GET(request: Request) {
-  return createMemoryHandlers(await getRuntimeDatabase(), getRuntimeMemoryModuleOptions()).GET(
-    request,
-  );
+  return createMemoryHandlers(
+    await getRuntimeDatabase(),
+    await getRuntimeMemoryModuleOptions(),
+  ).GET(request);
 }
 
 export async function POST(request: Request) {
-  return createMemoryHandlers(await getRuntimeDatabase(), getRuntimeMemoryModuleOptions()).POST(
-    request,
-  );
+  return createMemoryHandlers(
+    await getRuntimeDatabase(),
+    await getRuntimeMemoryModuleOptions(),
+  ).POST(request);
 }
