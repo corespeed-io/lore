@@ -1,6 +1,6 @@
 FROM oven/bun:1.3.14 AS bun
 
-FROM node:24-bookworm-slim AS builder
+FROM node:25-bookworm-slim AS builder
 WORKDIR /app
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
@@ -8,7 +8,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-FROM node:24-bookworm-slim AS runner
+FROM node:25-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
