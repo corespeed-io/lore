@@ -103,17 +103,45 @@ These are hardware- and dataset-specific Lore measurements, not thresholds claim
 by D3. The local spatial query proved technically fast, but user testing rejected
 it because it removed velocity, inertia, and multi-hop particle motion.
 
-The accepted prototype direction gives the main thread sole authority over the
-actively dragged node and runs the complete D3 force graph in the Worker. The
-initial layout is frozen; interaction releases only real nodes around the drag
-path and a three-hop graph neighbourhood while every distant node remains fixed
-at its settled position. All 20,000 links and all 5,000 collision/charge bodies
-stay in the simulation, so active nodes retain their real boundary constraints
-instead of approximating missing edges with anchor springs. It uses the SVG
-control's parameters: degree-scaled 4–16px visible nodes, 17–29px collision bodies,
-`forceLink` at distance 78 / strength 0.25, `forceManyBody(-180)`, velocity decay
-0.4, and drag alpha target 0.3. Worker frames carry the locked node id so stale
-coordinates cannot pull the pointer-owned node backward.
+The accepted prototype direction is adaptive. The main thread has sole authority
+over the actively dragged node and the initial complete D3 layout is frozen in a
+Worker. At every graph size, interaction simulates at most 900 active nodes plus
+at most 4,000 real, pinned boundary endpoints and every available incident link
+between those nodes. This preserves local collision and link constraints without
+paying the many-body cost for every distant particle; far-field charge is
+intentionally approximated by omission, with a weak spring toward each particle's
+settled coordinate supplying the missing low-frequency field. The common compact
+profile uses degree-scaled 4–16px visible nodes, 17–29px collision bodies, link
+distance 62 / strength 0.25, charge -100, symmetric radial attraction, velocity
+decay 0.4, and drag alpha target 0.3. Worker frames carry the locked node id so
+stale coordinates cannot pull the pointer-owned node backward.
+
+The interaction path avoids full-dataset work between frames. A settled uniform
+grid replaces an O(nodes) scan when the drag path activates nearby particles, an
+incremental incident-link set replaces repeated O(links) influence counts, and
+each frame transfers only active node indexes and coordinates. Canvas culls
+offscreen geometry and deterministically caps rendered links at 40,000; the
+physics graph and rendered graph are therefore deliberately separate budgets.
+
+Cold layout no longer relies on D3's dense default seed followed by 120 fixed
+ticks. Nodes start on a deterministic low-discrepancy disk spaced from the largest
+collision body, then the complete graph runs at most 48 ticks with alpha decay
+adjusted to reach the same terminal range in fewer iterations. The first rejected
+warm-start used graph traversal over a Hilbert curve; it was fast but visibly
+imprinted the synthetic graph's id adjacency as serpentine bands. The disk seed
+preserves the compact field without exposing that ordering artifact. While the
+Worker runs, the pre-layout coordinates stay hidden. A node is progressively
+revealed only after remaining visually still across consecutive ticks, and a link
+appears only when both endpoints are visible. The centered status card uses the real
+revealed Memory count to drive its bar without displaying a numeric counter. Each
+newly visible node grows from zero to its final radius over a short ease-out
+transition, while reduced-motion actors get no growth animation. The final Worker
+frame releases any remaining nodes and waits for that last transition before
+enabling the settled graph. Once a meaningful first batch is visible, the camera
+fits those real positions instead of the hidden fallback coordinates; completion
+preserves the Canvas instance and eases that camera into the final fit. Reduced-motion
+actors receive both the final radius and camera fit immediately. The loading overlay
+blocks pointer input so drag messages cannot queue behind the synchronous cold layout.
 
 This followed two rejected experiments: a direct quadtree displacement was fast
 but had no inertia, while reheating all 5,000 nodes reproduced the desired particle
@@ -136,3 +164,19 @@ also applied release forces more often per second, post-release alpha is capped 
 0.12 while drag alpha remains 0.3. In a deterministic 180-unit drag, the selected
 node moved about 67 units after release instead of roughly 155, while the Worker
 held 61.7fps; collision response during the drag is unchanged.
+
+The adaptive path was also measured against a disposable 20,000-node / 80,000-link
+API payload. Keeping all 20,000 bodies in the interactive simulation reached only
+about 14 physics frames per second. The bounded active field reached about 62fps
+with 1,560 simulated nodes, 4,418 exact local links, and 900 coordinate deltas per
+frame; Canvas drew the capped 40,000-link view in about 2.9ms. On the same class of
+local development run, the final disk-seeded 48-tick cold layout took about 3.7
+seconds versus roughly 8.0 seconds for the earlier 120-tick layout. These figures
+are local development measurements, not product guarantees.
+
+After unifying the compact layout and bounded interaction path across graph sizes,
+a sampled 5,000-node drag simulated 542 nodes and 1,662 incident links at 62fps
+with a 1.4ms Canvas draw. A sampled 20,000-node drag simulated 282 nodes and 842
+links at 62fps with a 3.1ms draw. The selected field depends on where the drag
+starts, so these counts are diagnostics rather than fixed budgets; only the 900
+active-node and 4,000-boundary-node ceilings are invariants.

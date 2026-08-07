@@ -4,9 +4,12 @@ import * as d3 from "d3";
 
 interface WorkerNode extends d3.SimulationNodeDatum {
   id: string;
+  sourceIndex: number;
   anchorX: number;
   anchorY: number;
   collisionRadius: number;
+  layoutStableTicks: number;
+  layoutRevealed: boolean;
 }
 
 interface WorkerLink extends d3.SimulationLinkDatum<WorkerNode> {
@@ -48,54 +51,142 @@ let nodes: WorkerNode[] = [];
 let nodeById = new Map<string, WorkerNode>();
 let layoutSimulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
 let particleSimulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
+let particleLinkForce: d3.ForceLink<WorkerNode, WorkerLink> | null = null;
 let graphLinks: LinkPair[] = [];
 let adjacentIds = new Map<string, Set<string>>();
+let incidentLinkIndices = new Map<string, number[]>();
 let activeNodes: WorkerNode[] = [];
 let activeIds = new Set<string>();
+let activeLinkIndices = new Set<number>();
 let activeLinkCount = 0;
+let simulatedNodeCount = 0;
+let simulatedLinkCount = 0;
 let draggedNode: WorkerNode | null = null;
 let physicsFrame = 0;
 let physicsStartedAt = 0;
 let physicsTimer: ReturnType<typeof setInterval> | null = null;
 let maxCollisionRadius = 0;
-let layoutWidth = 0;
-let layoutHeight = 0;
+let settledGrid = new Map<string, WorkerNode[]>();
+let gridCellSize = 1;
 
-// The SVG control reheats all 5,000 nodes. This keeps its multi-hop propagation
-// while bounding Worker interaction cost and preventing graph-wide tremble.
+// Every scale uses the same bounded interaction field so drag behavior remains
+// consistent and never reheats unrelated particles across the full graph.
 const MAX_ACTIVE_NODES = 900;
-// Measured compromise: preserves the full charge field while making Barnes–Hut
-// approximation coarse enough for a 60Hz interaction budget at 5,000 nodes.
+const MAX_BOUNDARY_NODES = 4_000;
+const COMPACT_LINK_DISTANCE = 62;
+const COMPACT_CHARGE_STRENGTH = -100;
+const COMPACT_RADIAL_STRENGTH = 0.055;
+// A coarse Barnes–Hut approximation keeps the local field inside a 60Hz budget.
 const MANY_BODY_THETA = 1.4;
+const LAYOUT_MAX_TICKS = 48;
+const LAYOUT_MIN_TICKS = 36;
+const LAYOUT_STABLE_SPEED_SQUARED = 0.04;
+// At the fitted overview scale, two layout units are well below one screen
+// pixel. Requiring two consecutive quiet ticks keeps the progressive reveal
+// honest without waiting for the entire field to reach its terminal alpha.
+const LAYOUT_REVEAL_SPEED_SQUARED = 4;
+const LAYOUT_REVEAL_STABLE_TICKS = 2;
 // A fixed interval avoids adding timer delay after every expensive force tick.
 const TARGET_TICK_MS = 1_000 / 60;
 // The old D3 timer sustained about 25 ticks/s at alpha 0.3. At 60Hz, 0.12
 // preserves roughly the same post-release energy per wall-clock second.
 const RELEASE_ALPHA = 0.12;
+// Local interaction omits distant charge bodies. A weak spring to each particle's
+// settled coordinate supplies the missing low-frequency field.
+const PARTICLE_ANCHOR_STRENGTH = 0.012;
 
-function positionsSnapshot() {
-  const positions = new Float32Array(nodes.length * 2);
-  for (let index = 0; index < nodes.length; index += 1) {
-    positions[index * 2] = nodes[index]?.x ?? 0;
-    positions[index * 2 + 1] = nodes[index]?.y ?? 0;
-  }
-  return positions;
+function postReady(layoutMs: number, layoutTicks: number) {
+  self.postMessage({ type: "ready", layoutMs, layoutTicks });
 }
 
-function postPositions(
-  message:
-    | { type: "ready"; layoutMs: number }
-    | {
-        type: "frame";
-        frame: number;
-        lockedId: string | null;
-        activeNodes: number;
-        activeLinks: number;
-        physicsFps: number;
-      },
-) {
-  const positions = positionsSnapshot();
-  self.postMessage({ ...message, positions }, { transfer: [positions.buffer] });
+function postLayoutProgress(tick: number, revealAll = false) {
+  if (revealAll) {
+    for (const node of nodes) node.layoutRevealed = true;
+  }
+  const revealed = nodes.filter((node) => node.layoutRevealed);
+  const nodeIndices = new Uint32Array(revealed.length);
+  const positions = new Float32Array(revealed.length * 2);
+  for (let index = 0; index < revealed.length; index += 1) {
+    const node = revealed[index];
+    if (!node) continue;
+    nodeIndices[index] = node.sourceIndex;
+    positions[index * 2] = node.x ?? 0;
+    positions[index * 2 + 1] = node.y ?? 0;
+  }
+  self.postMessage(
+    {
+      type: "progress",
+      tick,
+      totalTicks: LAYOUT_MAX_TICKS,
+      revealedNodes: revealed.length,
+      nodeIndices,
+      positions,
+    },
+    { transfer: [nodeIndices.buffer, positions.buffer] },
+  );
+}
+
+function postFrame(message: {
+  frame: number;
+  lockedId: string | null;
+  activeNodes: number;
+  activeLinks: number;
+  physicsFps: number;
+}) {
+  const nodeIndices = new Uint32Array(activeNodes.length);
+  const positions = new Float32Array(activeNodes.length * 2);
+  for (let index = 0; index < activeNodes.length; index += 1) {
+    const node = activeNodes[index];
+    if (!node) continue;
+    nodeIndices[index] = node.sourceIndex;
+    positions[index * 2] = node.x ?? 0;
+    positions[index * 2 + 1] = node.y ?? 0;
+  }
+  self.postMessage(
+    {
+      type: "frame",
+      ...message,
+      transferredNodes: activeNodes.length,
+      simulatedNodes: simulatedNodeCount,
+      simulatedLinks: simulatedLinkCount,
+      nodeIndices,
+      positions,
+    },
+    { transfer: [nodeIndices.buffer, positions.buffer] },
+  );
+}
+
+function gridKey(column: number, row: number): string {
+  return `${column}:${row}`;
+}
+
+function rebuildSettledGrid() {
+  gridCellSize = Math.max(1, maxCollisionRadius * 4);
+  const nextGrid = new Map<string, WorkerNode[]>();
+  for (const node of nodes) {
+    const column = Math.floor((node.anchorX ?? 0) / gridCellSize);
+    const row = Math.floor((node.anchorY ?? 0) / gridCellSize);
+    const key = gridKey(column, row);
+    const cell = nextGrid.get(key) ?? [];
+    cell.push(node);
+    nextGrid.set(key, cell);
+  }
+  settledGrid = nextGrid;
+}
+
+function seedLayoutPositions(width: number, height: number) {
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const spacing = maxCollisionRadius * 1.12;
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (!node) continue;
+    const radius = spacing * Math.sqrt(index + 0.5);
+    const angle = index * goldenAngle;
+    node.x = width / 2 + Math.cos(angle) * radius;
+    node.y = height / 2 + Math.sin(angle) * radius;
+    node.vx = 0;
+    node.vy = 0;
+  }
 }
 
 function initialize(request: InitRequest) {
@@ -103,33 +194,41 @@ function initialize(request: InitRequest) {
   particleSimulation?.stop();
   layoutSimulation?.stop();
   const startedAt = performance.now();
-  layoutWidth = request.width;
-  layoutHeight = request.height;
   graphLinks = request.links.map((link) => ({ ...link }));
   const degrees = new Map<string, number>();
   for (const link of graphLinks) {
     degrees.set(link.source, (degrees.get(link.source) ?? 0) + 1);
     degrees.set(link.target, (degrees.get(link.target) ?? 0) + 1);
   }
-  nodes = request.nodes.map((node) => ({
+  nodes = request.nodes.map((node, sourceIndex) => ({
     ...node,
+    sourceIndex,
     anchorX: 0,
     anchorY: 0,
     collisionRadius: 4 + Math.min(12, (degrees.get(node.id) ?? 0) * 1.1) + request.collisionGap,
+    layoutStableTicks: 0,
+    layoutRevealed: false,
   }));
   maxCollisionRadius = Math.max(...nodes.map((node) => node.collisionRadius));
   nodeById = new Map(nodes.map((node) => [node.id, node]));
   activeNodes = [];
   activeIds = new Set();
+  activeLinkIndices = new Set();
   activeLinkCount = 0;
+  simulatedNodeCount = 0;
+  simulatedLinkCount = 0;
   draggedNode = null;
   physicsFrame = 0;
   physicsStartedAt = 0;
   adjacentIds = new Map(nodes.map((node) => [node.id, new Set<string>()]));
-  for (const link of graphLinks) {
+  incidentLinkIndices = new Map(nodes.map((node) => [node.id, []]));
+  for (const [linkIndex, link] of graphLinks.entries()) {
     adjacentIds.get(link.source)?.add(link.target);
     adjacentIds.get(link.target)?.add(link.source);
+    incidentLinkIndices.get(link.source)?.push(linkIndex);
+    incidentLinkIndices.get(link.target)?.push(linkIndex);
   }
+  seedLayoutPositions(request.width, request.height);
   const links: WorkerLink[] = graphLinks.map((link) => ({ ...link }));
   layoutSimulation = d3
     .forceSimulation(nodes)
@@ -138,26 +237,60 @@ function initialize(request: InitRequest) {
       d3
         .forceLink<WorkerNode, WorkerLink>(links)
         .id((node) => node.id)
-        .distance(78)
+        .distance(COMPACT_LINK_DISTANCE)
         .strength(0.25),
     )
-    .force("charge", d3.forceManyBody<WorkerNode>().strength(-180).theta(MANY_BODY_THETA))
+    .force(
+      "charge",
+      d3.forceManyBody<WorkerNode>().strength(COMPACT_CHARGE_STRENGTH).theta(MANY_BODY_THETA),
+    )
     .force("center", d3.forceCenter(request.width / 2, request.height / 2))
-    .force("x", d3.forceX(request.width / 2).strength(0.05))
-    .force("y", d3.forceY(request.height / 2).strength(0.07))
+    .force("x", d3.forceX(request.width / 2).strength(0.015))
+    .force("y", d3.forceY(request.height / 2).strength(0.015))
+    .force(
+      "radial",
+      d3
+        .forceRadial<WorkerNode>(0, request.width / 2, request.height / 2)
+        .strength(COMPACT_RADIAL_STRENGTH),
+    )
     .force(
       "collide",
       d3.forceCollide<WorkerNode>((node) => node.collisionRadius),
     )
+    .alphaDecay(1 - 0.01 ** (1 / LAYOUT_MAX_TICKS))
     .stop();
 
-  const totalTicks = 120;
-  for (let tick = 0; tick < totalTicks; tick += 1) {
+  let layoutTicks = 0;
+  let stableChecks = 0;
+  postLayoutProgress(0);
+  for (let tick = 0; tick < LAYOUT_MAX_TICKS; tick += 1) {
     layoutSimulation.tick();
-    if ((tick + 1) % 12 === 0) {
-      self.postMessage({ type: "progress", progress: (tick + 1) / totalTicks });
+    layoutTicks = tick + 1;
+    for (const node of nodes) {
+      const vx = node.vx ?? 0;
+      const vy = node.vy ?? 0;
+      if (vx * vx + vy * vy <= LAYOUT_REVEAL_SPEED_SQUARED) {
+        node.layoutStableTicks += 1;
+        if (node.layoutStableTicks >= LAYOUT_REVEAL_STABLE_TICKS) node.layoutRevealed = true;
+      } else if (!node.layoutRevealed) {
+        node.layoutStableTicks = 0;
+      }
+    }
+    postLayoutProgress(layoutTicks);
+    if (layoutTicks % 6 === 0) {
+      if (layoutTicks >= LAYOUT_MIN_TICKS) {
+        const meanSpeedSquared =
+          nodes.reduce((total, node) => {
+            const vx = node.vx ?? 0;
+            const vy = node.vy ?? 0;
+            return total + vx * vx + vy * vy;
+          }, 0) / Math.max(1, nodes.length);
+        stableChecks = meanSpeedSquared <= LAYOUT_STABLE_SPEED_SQUARED ? stableChecks + 1 : 0;
+        if (stableChecks >= 2) break;
+      }
     }
   }
+  postLayoutProgress(layoutTicks, true);
   for (const node of nodes) {
     node.anchorX = node.x ?? 0;
     node.anchorY = node.y ?? 0;
@@ -166,7 +299,8 @@ function initialize(request: InitRequest) {
     node.fx = node.x;
     node.fy = node.y;
   }
-  postPositions({ type: "ready", layoutMs: performance.now() - startedAt });
+  rebuildSettledGrid();
+  postReady(performance.now() - startedAt, layoutTicks);
 }
 
 function activateNode(node: WorkerNode) {
@@ -177,6 +311,10 @@ function activateNode(node: WorkerNode) {
   node.vy = 0;
   node.fx = null;
   node.fy = null;
+  for (const linkIndex of incidentLinkIndices.get(node.id) ?? []) {
+    activeLinkIndices.add(linkIndex);
+  }
+  activeLinkCount = activeLinkIndices.size;
   return true;
 }
 
@@ -184,12 +322,21 @@ function addNearbyNodes(x: number, y: number) {
   const fieldRadius = maxCollisionRadius * 12;
   const fieldRadiusSquared = fieldRadius * fieldRadius;
   const added: WorkerNode[] = [];
-  for (const node of nodes) {
-    if (activeNodes.length >= MAX_ACTIVE_NODES) break;
-    const dx = (node.x ?? 0) - x;
-    const dy = (node.y ?? 0) - y;
-    if (dx * dx + dy * dy > fieldRadiusSquared) continue;
-    if (activateNode(node)) added.push(node);
+  const minimumColumn = Math.floor((x - fieldRadius) / gridCellSize);
+  const maximumColumn = Math.floor((x + fieldRadius) / gridCellSize);
+  const minimumRow = Math.floor((y - fieldRadius) / gridCellSize);
+  const maximumRow = Math.floor((y + fieldRadius) / gridCellSize);
+  for (let column = minimumColumn; column <= maximumColumn; column += 1) {
+    for (let row = minimumRow; row <= maximumRow; row += 1) {
+      for (const node of settledGrid.get(gridKey(column, row)) ?? []) {
+        if (activeNodes.length >= MAX_ACTIVE_NODES) return added;
+        if (activeIds.has(node.id)) continue;
+        const dx = node.anchorX - x;
+        const dy = node.anchorY - y;
+        if (dx * dx + dy * dy > fieldRadiusSquared) continue;
+        if (activateNode(node)) added.push(node);
+      }
+    }
   }
   return added;
 }
@@ -217,13 +364,6 @@ function addLinkedNeighborhood(seedIds: string[], maxDepth: number) {
   return changed;
 }
 
-function updateActiveLinkCount() {
-  activeLinkCount = 0;
-  for (const link of graphLinks) {
-    if (activeIds.has(link.source) || activeIds.has(link.target)) activeLinkCount += 1;
-  }
-}
-
 function freezeActiveNodes() {
   for (const node of activeNodes) {
     node.anchorX = node.x ?? node.anchorX;
@@ -235,6 +375,42 @@ function freezeActiveNodes() {
   }
 }
 
+function particleTopology(): { nodes: WorkerNode[]; links: WorkerLink[] } {
+  const boundaryIds = new Set<string>();
+  const links: WorkerLink[] = [];
+  for (const linkIndex of activeLinkIndices) {
+    const link = graphLinks[linkIndex];
+    if (!link || !nodeById.has(link.source) || !nodeById.has(link.target)) continue;
+    const missingBoundaryIds = [link.source, link.target].filter(
+      (id) => !activeIds.has(id) && !boundaryIds.has(id),
+    );
+    if (boundaryIds.size + missingBoundaryIds.length > MAX_BOUNDARY_NODES) continue;
+    for (const id of missingBoundaryIds) boundaryIds.add(id);
+    links.push({ ...link });
+  }
+  const boundaryNodes = [...boundaryIds].flatMap((id) => {
+    const node = nodeById.get(id);
+    if (!node) return [];
+    node.fx = node.anchorX;
+    node.fy = node.anchorY;
+    node.vx = 0;
+    node.vy = 0;
+    return [node];
+  });
+  const particleNodes = [...activeNodes, ...boundaryNodes];
+  simulatedNodeCount = particleNodes.length;
+  simulatedLinkCount = links.length;
+  return { nodes: particleNodes, links };
+}
+
+function syncParticleTopology(simulation: d3.Simulation<WorkerNode, WorkerLink>) {
+  const topology = particleTopology();
+  // Clear mutated D3 link endpoints before replacing the simulation node map.
+  particleLinkForce?.links([]);
+  simulation.nodes(topology.nodes);
+  particleLinkForce?.links(topology.links);
+}
+
 function postParticleFrame() {
   physicsFrame += 1;
   let movingNodes = 0;
@@ -243,8 +419,7 @@ function postParticleFrame() {
     const vy = node.vy ?? 0;
     if (vx * vx + vy * vy > 0.0025) movingNodes += 1;
   }
-  postPositions({
-    type: "frame",
+  postFrame({
     frame: physicsFrame,
     lockedId: draggedNode?.id ?? null,
     activeNodes: movingNodes,
@@ -263,8 +438,10 @@ function finishParticleField(simulation: d3.Simulation<WorkerNode, WorkerLink>) 
   if (particleSimulation !== simulation) return;
   stopPhysicsLoop();
   freezeActiveNodes();
-  postPositions({
-    type: "frame",
+  rebuildSettledGrid();
+  simulatedNodeCount = 0;
+  simulatedLinkCount = 0;
+  postFrame({
     frame: physicsFrame,
     lockedId: null,
     activeNodes: 0,
@@ -289,9 +466,13 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
   particleSimulation?.stop();
   particleSimulation = null;
   freezeActiveNodes();
+  rebuildSettledGrid();
   activeNodes = [];
   activeIds = new Set();
+  activeLinkIndices = new Set();
   activeLinkCount = 0;
+  simulatedNodeCount = 0;
+  simulatedLinkCount = 0;
   physicsFrame = 0;
   physicsStartedAt = performance.now();
   draggedNode = node;
@@ -306,22 +487,22 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
   node.y = y;
   node.fx = x;
   node.fy = y;
-  updateActiveLinkCount();
 
-  const links: WorkerLink[] = graphLinks.map((link) => ({ ...link }));
+  const topology = particleTopology();
+  particleLinkForce = d3
+    .forceLink<WorkerNode, WorkerLink>(topology.links)
+    .id((particle) => particle.id)
+    .distance(COMPACT_LINK_DISTANCE)
+    .strength(0.25);
 
   const simulation = d3
-    .forceSimulation<WorkerNode, WorkerLink>(nodes)
+    .forceSimulation<WorkerNode, WorkerLink>(topology.nodes)
     .velocityDecay(0.4)
+    .force("link", particleLinkForce)
     .force(
-      "link",
-      d3
-        .forceLink<WorkerNode, WorkerLink>(links)
-        .id((particle) => particle.id)
-        .distance(78)
-        .strength(0.25),
+      "charge",
+      d3.forceManyBody<WorkerNode>().strength(COMPACT_CHARGE_STRENGTH).theta(MANY_BODY_THETA),
     )
-    .force("charge", d3.forceManyBody<WorkerNode>().strength(-180).theta(MANY_BODY_THETA))
     .force(
       "collide",
       d3
@@ -329,8 +510,14 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
         .strength(1)
         .iterations(1),
     )
-    .force("x", d3.forceX<WorkerNode>(layoutWidth / 2).strength(0.05))
-    .force("y", d3.forceY<WorkerNode>(layoutHeight / 2).strength(0.07))
+    .force(
+      "x",
+      d3.forceX<WorkerNode>((particle) => particle.anchorX).strength(PARTICLE_ANCHOR_STRENGTH),
+    )
+    .force(
+      "y",
+      d3.forceY<WorkerNode>((particle) => particle.anchorY).strength(PARTICLE_ANCHOR_STRENGTH),
+    )
     .alpha(0.3)
     .alphaTarget(0.3)
     .stop();
@@ -351,7 +538,7 @@ function dragPoint(request: DragPointRequest) {
     nearby.map((particle) => particle.id),
     1,
   );
-  if (nearby.length > 0 || changed) updateActiveLinkCount();
+  if (nearby.length > 0 || changed) syncParticleTopology(particleSimulation);
   node.x = request.x;
   node.y = request.y;
   node.fx = request.x;
