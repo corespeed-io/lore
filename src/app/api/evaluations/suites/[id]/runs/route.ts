@@ -8,6 +8,6 @@ interface RouteContext {
 
 export async function POST(request: Request, context: RouteContext) {
   return createEvaluationRunHandlers(await getRuntimeDatabase(), {
-    memoryOptions: getRuntimeMemoryModuleOptions(),
+    memoryOptions: await getRuntimeMemoryModuleOptions(),
   }).POST(request, (await context.params).id);
 }

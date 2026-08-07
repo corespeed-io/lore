@@ -1,7 +1,8 @@
 import { type ActorContext, installActorContext } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
-import { EMBEDDING_DIMENSIONS, type EmbeddingDimensions } from "./embedding-config";
+import { embeddingVectorLiteral } from "./embedding/vector";
+import type { EmbeddingDimensions } from "./embedding-config";
 
 export type { ActorContext } from "./actor-context";
 
@@ -64,7 +65,16 @@ export type EmbeddingTask = "document" | "query";
 
 export interface MemoryModuleOptions {
   embeddingProvider?: EmbeddingProvider;
+  maintenanceNotifier?: MemoryMaintenanceNotifier;
   semanticDistanceThreshold?: number;
+}
+
+export interface MemoryEmbeddingJobMessage {
+  jobId: string;
+}
+
+export interface MemoryMaintenanceNotifier {
+  notify(message: MemoryEmbeddingJobMessage): void;
 }
 
 interface MemoryRow {
@@ -87,7 +97,6 @@ interface SearchRow extends MemoryRow {
 
 interface PreparedChunk {
   content: string;
-  embedding: string | null;
 }
 
 function chunkContent(content: string, maximumLength = 1_200): string[] {
@@ -112,34 +121,8 @@ function chunkContent(content: string, maximumLength = 1_200): string[] {
   return chunks;
 }
 
-function vectorLiteral(vector: number[]): string {
-  if (vector.length !== EMBEDDING_DIMENSIONS || vector.some((value) => !Number.isFinite(value))) {
-    throw new Error("Embedding provider returned an invalid vector");
-  }
-  return `[${vector.join(",")}]`;
-}
-
-async function prepareChunks(
-  content: string,
-  embeddingProvider?: EmbeddingProvider,
-): Promise<PreparedChunk[]> {
-  const contents = chunkContent(content);
-  if (!embeddingProvider) return contents.map((chunk) => ({ content: chunk, embedding: null }));
-  try {
-    const embeddings = await embeddingProvider.embed(contents, "document");
-    if (embeddings.length !== contents.length) {
-      throw new Error("Embedding provider returned the wrong number of vectors");
-    }
-    return contents.map((chunk, index) => ({
-      content: chunk,
-      embedding: vectorLiteral(embeddings[index]),
-    }));
-  } catch {
-    // Memory writes remain available when an embedding provider is unavailable.
-    // Null embedding state is explicit and can be picked up by deterministic
-    // maintenance without changing the source Memory.
-    return contents.map((chunk) => ({ content: chunk, embedding: null }));
-  }
+function prepareChunks(content: string): PreparedChunk[] {
+  return chunkContent(content).map((chunk) => ({ content: chunk }));
 }
 
 async function insertChunks(
@@ -147,7 +130,6 @@ async function insertChunks(
   workspaceId: string,
   memoryId: string,
   chunks: PreparedChunk[],
-  embeddingProvider?: EmbeddingProvider,
 ): Promise<void> {
   for (const [ordinal, chunk] of chunks.entries()) {
     await transaction.query(
@@ -155,22 +137,56 @@ async function insertChunks(
          id, workspace_id, memory_id, ordinal, content, embedding,
          embedding_provider, embedding_model, embedding_revision, embedded_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6::vector(1024), $7, $8, $9,
-         CASE WHEN $6::text IS NULL THEN NULL ELSE now() END
+         $1, $2, $3, $4, $5, NULL, NULL, NULL, NULL, NULL
        )`,
-      [
-        crypto.randomUUID(),
-        workspaceId,
-        memoryId,
-        ordinal,
-        chunk.content,
-        chunk.embedding,
-        chunk.embedding ? embeddingProvider?.provider : null,
-        chunk.embedding ? embeddingProvider?.model : null,
-        chunk.embedding ? embeddingProvider?.revision : null,
-      ],
+      [crypto.randomUUID(), workspaceId, memoryId, ordinal, chunk.content],
     );
   }
+}
+
+async function enqueueEmbeddingJob(
+  transaction: PostgresTransaction,
+  memory: MemoryRow,
+  embeddingProvider: EmbeddingProvider,
+  onlyWhenStale = false,
+): Promise<string | null> {
+  const jobId = crypto.randomUUID();
+  await transaction.query(
+    `INSERT INTO memory_embedding_jobs (
+       id, workspace_id, memory_id, owner_user_id, memory_scope,
+       memory_version, embedding_provider, embedding_model, embedding_revision
+     )
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+     WHERE NOT $10::boolean
+        OR EXISTS (
+          SELECT 1
+          FROM memory_chunks chunk
+          WHERE chunk.workspace_id = $2
+            AND chunk.memory_id = $3
+            AND (
+              chunk.embedding IS NULL
+              OR chunk.embedding_provider <> $7
+              OR chunk.embedding_model <> $8
+              OR chunk.embedding_revision <> $9
+            )
+        )
+    `,
+    [
+      jobId,
+      memory.workspace_id,
+      memory.id,
+      memory.owner_user_id,
+      memory.scope,
+      memory.version,
+      embeddingProvider.provider,
+      embeddingProvider.model,
+      embeddingProvider.revision,
+      onlyWhenStale,
+    ],
+  );
+  // The request role deliberately cannot SELECT this private table, so callers
+  // use the allocated id only when the write guarantees that a job was inserted.
+  return jobId;
 }
 
 function toMemory(row: MemoryRow): Memory {
@@ -190,7 +206,18 @@ function toMemory(row: MemoryRow): Memory {
 
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
   const embeddingProvider = options.embeddingProvider;
+  const maintenanceNotifier = options.maintenanceNotifier;
   const semanticDistanceThreshold = options.semanticDistanceThreshold ?? 0.35;
+
+  function notifyMaintenance(jobId: string | null): void {
+    if (!jobId || !maintenanceNotifier) return;
+    try {
+      maintenanceNotifier.notify({ jobId });
+    } catch {
+      // The durable Postgres job remains discoverable by the maintenance sweep.
+      // A queue notification is only a latency optimization.
+    }
+  }
 
   async function canWriteWorkspace(actor: ActorContext): Promise<boolean> {
     return database.transaction(async (transaction) => {
@@ -224,8 +251,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         if (!(await canWriteWorkspace(actor))) {
           throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
         }
-        const chunks = await prepareChunks(input.content, embeddingProvider);
-        return await database.transaction(async (transaction) => {
+        const chunks = prepareChunks(input.content);
+        const created = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const id = crypto.randomUUID();
           const result = await transaction.query<MemoryRow>(
@@ -243,12 +270,20 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               JSON.stringify(input.metadata ?? {}),
             ],
           );
-          await insertChunks(transaction, actor.workspaceId, id, chunks, embeddingProvider);
-          return toMemory(result.rows[0]);
+          const memory = result.rows[0];
+          await insertChunks(transaction, actor.workspaceId, id, chunks);
+          const jobId = embeddingProvider
+            ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)
+            : null;
+          return { memory: toMemory(memory), jobId };
         });
+        notifyMaintenance(created.jobId);
+        return created.memory;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
-          throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
+          throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace", {
+            cause: error,
+          });
         }
         throw error;
       }
@@ -276,9 +311,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       const currentContent = await writableMemoryContent(actor, id);
       if (currentContent === null) return null;
       const contentToEmbed = input.content ?? (input.scope === undefined ? null : currentContent);
-      const chunks =
-        contentToEmbed === null ? null : await prepareChunks(contentToEmbed, embeddingProvider);
-      return database.transaction(async (transaction) => {
+      const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
+      const updatedResult = await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
           `UPDATE memories
@@ -303,10 +337,18 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
             [actor.workspaceId, id],
           );
-          await insertChunks(transaction, actor.workspaceId, id, chunks, embeddingProvider);
+          await insertChunks(transaction, actor.workspaceId, id, chunks);
         }
-        return updated ? toMemory(updated) : null;
+        const jobId =
+          updated && embeddingProvider
+            ? await enqueueEmbeddingJob(transaction, updated, embeddingProvider, chunks === null)
+            : null;
+        return { memory: updated ? toMemory(updated) : null, jobId };
       });
+      // Metadata-only updates can leave an existing stale job for the scheduled
+      // sweep without billing a Queue message for an already-embedded Memory.
+      notifyMaintenance(chunks ? updatedResult.jobId : null);
+      return updatedResult.memory;
     },
 
     async forget(actor: ActorContext, id: string): Promise<boolean> {
@@ -347,7 +389,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       if (embeddingProvider) {
         try {
           const vectors = await embeddingProvider.embed([query], "query");
-          queryEmbedding = vectors[0] ? vectorLiteral(vectors[0]) : null;
+          queryEmbedding = vectors[0] ? embeddingVectorLiteral(vectors[0]) : null;
         } catch {
           queryEmbedding = null;
         }

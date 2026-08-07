@@ -5,6 +5,23 @@ export interface RuntimePostgresDatabase extends PostgresDatabase {
   close(): Promise<void>;
 }
 
+export type LoreDatabaseRole = "lore_app" | "lore_maintenance";
+
+export interface PostgresDatabaseOptions {
+  role?: LoreDatabaseRole;
+}
+
+function setLocalRoleSql(role: LoreDatabaseRole): string {
+  switch (role) {
+    case "lore_app":
+      return "SET LOCAL ROLE lore_app";
+    case "lore_maintenance":
+      return "SET LOCAL ROLE lore_maintenance";
+    default:
+      throw new Error("Unsupported Lore database role");
+  }
+}
+
 function asTransaction(client: PoolClient): PostgresTransaction {
   return {
     async query<Row>(sql: string, params: unknown[] = []): Promise<PostgresQueryResult<Row>> {
@@ -17,13 +34,14 @@ function asTransaction(client: PoolClient): PostgresTransaction {
 async function runRlsTransaction<Result>(
   client: Pick<PoolClient, "query">,
   use: (transaction: PostgresTransaction) => Promise<Result>,
+  role: LoreDatabaseRole,
 ): Promise<Result> {
   try {
     await client.query("BEGIN");
-    // The connection user must be a member of the NOLOGIN lore_app role.
+    // The connection user must be a member of the selected NOLOGIN Lore role.
     // SET LOCAL makes every request transaction fail closed under RLS and
     // automatically resets the role at COMMIT/ROLLBACK.
-    await client.query("SET LOCAL ROLE lore_app");
+    await client.query(setLocalRoleSql(role));
     const result = await use(asTransaction(client as PoolClient));
     await client.query("COMMIT");
     return result;
@@ -33,14 +51,18 @@ async function runRlsTransaction<Result>(
   }
 }
 
-export function createPostgresDatabase(config: PoolConfig): RuntimePostgresDatabase {
+export function createPostgresDatabase(
+  config: PoolConfig,
+  options: PostgresDatabaseOptions = {},
+): RuntimePostgresDatabase {
   const pool = new Pool(config);
+  const role = options.role ?? "lore_app";
 
   return {
     async transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>) {
       const client = await pool.connect();
       try {
-        return await runRlsTransaction(client, use);
+        return await runRlsTransaction(client, use, role);
       } finally {
         client.release();
       }
@@ -54,13 +76,17 @@ export function createPostgresDatabase(config: PoolConfig): RuntimePostgresDatab
  * Hyperdrive performs the origin pooling, so each domain transaction creates and
  * closes a short-lived pg Client inside the current request.
  */
-export function createRequestPostgresDatabase(config: ClientConfig): RuntimePostgresDatabase {
+export function createRequestPostgresDatabase(
+  config: ClientConfig,
+  options: PostgresDatabaseOptions = {},
+): RuntimePostgresDatabase {
+  const role = options.role ?? "lore_app";
   return {
     async transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>) {
       const client = new Client(config);
       await client.connect();
       try {
-        return await runRlsTransaction(client, use);
+        return await runRlsTransaction(client, use, role);
       } finally {
         await client.end();
       }

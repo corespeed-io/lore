@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local Workerd preview only. Production secrets are set
+# with `wrangler secret put`; never commit the populated file.
+GEMINI_API_KEY=replace-with-a-server-side-key
+OPENAI_API_KEY=replace-with-a-server-side-key
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_KEEP_ALIVE=0

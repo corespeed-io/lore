@@ -5,6 +5,7 @@
       "**",
       "!**/.next",
       "!**/.open-next",
+      "!**/.worker",
       "!**/.wrangler",
       "!**/.worktrees",
       "!**/.claude",
@@ -13,6 +14,7 @@
       "!**/node_modules",
       "!**/tmp",
       "!**/conductor.json",
+      "!**/cloudflare-env.d.ts",
       "!**/lore-*.json"
     ]
   },

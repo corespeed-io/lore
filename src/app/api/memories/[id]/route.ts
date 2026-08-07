@@ -16,7 +16,7 @@ export async function GET(request: Request, context: RouteContext) {
 export async function PATCH(request: Request, context: RouteContext) {
   return createMemoryByIdHandlers(
     await getRuntimeDatabase(),
-    getRuntimeMemoryModuleOptions(),
+    await getRuntimeMemoryModuleOptions({ maintenanceNotifications: true }),
   ).PATCH(request, (await context.params).id);
 }
 

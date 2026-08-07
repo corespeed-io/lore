@@ -1,6 +1,6 @@
 import "server-only";
 import { createEmbeddingProviderFromEnvironment } from "../embedding/provider-factory";
-import type { EmbeddingProvider, MemoryModuleOptions } from "../memory";
+import type { EmbeddingProvider, MemoryMaintenanceNotifier, MemoryModuleOptions } from "../memory";
 
 let runtimeEmbeddingProvider: EmbeddingProvider | undefined;
 let runtimeEmbeddingProviderInitialized = false;
@@ -20,6 +20,36 @@ export function getRuntimeEmbeddingProvider(
   return runtimeEmbeddingProvider;
 }
 
-export function getRuntimeMemoryModuleOptions(): MemoryModuleOptions {
-  return { embeddingProvider: getRuntimeEmbeddingProvider() };
+async function getCloudflareMaintenanceNotifier(): Promise<MemoryMaintenanceNotifier | undefined> {
+  try {
+    const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+    const context = await getCloudflareContext({ async: true });
+    const queue = context.env.MEMORY_MAINTENANCE_QUEUE;
+    if (!queue) return undefined;
+    return {
+      notify(message) {
+        context.ctx.waitUntil(
+          queue
+            .send(message)
+            .catch(() =>
+              console.warn("Lore maintenance queue notification failed; sweep will retry"),
+            ),
+        );
+      },
+    };
+  } catch {
+    // The Node/Docker worker polls the durable job table directly.
+    return undefined;
+  }
+}
+
+export async function getRuntimeMemoryModuleOptions(
+  options: { maintenanceNotifications?: boolean } = {},
+): Promise<MemoryModuleOptions> {
+  return {
+    embeddingProvider: getRuntimeEmbeddingProvider(),
+    maintenanceNotifier: options.maintenanceNotifications
+      ? await getCloudflareMaintenanceNotifier()
+      : undefined,
+  };
 }
