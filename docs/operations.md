@@ -159,9 +159,10 @@ LORE_EMBEDDING_BUILD_MODEL=gemini-embedding-2
 
 The scheduled sweep discovers every missing chunk. Inspect exact coverage with:
 
-Each bounded discovery sweep takes a brief database write barrier on `memories`
-while it reconciles stale jobs and seeds at most the configured batch. Embedding
-HTTP work runs after that transaction and never holds the barrier.
+Each discovery sweep scans without blocking Memory writes, then locks only the
+bounded cleanup/candidate Memory rows in UUID order. It reconciles at most one
+configured batch each of terminal jobs, stale jobs, and new candidates. Embedding
+HTTP work runs after that transaction and holds none of those locks.
 
 ```bash
 LORE_MAINTENANCE_DATABASE_URL=postgres://... \

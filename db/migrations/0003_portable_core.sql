@@ -745,17 +745,104 @@ SET search_path = pg_catalog, public
 AS $$
 DECLARE
   target_generation_id uuid;
+  terminal_job_ids uuid[];
+  stale_job_ids uuid[];
+  candidate_memory_ids uuid[];
+  target_job_id uuid;
+  target_memory_id uuid;
 BEGIN
   IF job_limit NOT BETWEEN 1 AND 10000 THEN
     RAISE EXCEPTION 'Job limit must be between 1 and 10000';
   END IF;
 
-  -- Request writes take a ROW EXCLUSIVE memory-table lock before changing
-  -- chunks, generations, or jobs. Serialize deployment sweeps at that same
-  -- first boundary so global job cleanup cannot hold a child job while a
-  -- concurrent Memory delete holds its parent row. This sweep is bounded and
-  -- runs outside the request path.
-  LOCK TABLE memories IN SHARE ROW EXCLUSIVE MODE;
+  SELECT generation.id INTO target_generation_id
+  FROM embedding_generations generation
+  WHERE generation.embedding_provider = active_embedding_provider
+    AND generation.embedding_model = active_embedding_model
+    AND generation.embedding_dimensions = 1024
+    AND generation.embedding_revision = active_embedding_revision;
+
+  SELECT COALESCE(array_agg(candidate.id ORDER BY candidate.id), ARRAY[]::uuid[])
+  INTO terminal_job_ids
+  FROM (
+    SELECT job.id
+    FROM memory_embedding_jobs job
+    WHERE (job.status IN ('succeeded', 'cancelled')
+        AND job.completed_at < now() - interval '7 days')
+       OR (job.status = 'dead' AND job.completed_at < now() - interval '30 days')
+    ORDER BY job.id
+    LIMIT job_limit
+  ) candidate;
+
+  SELECT COALESCE(array_agg(candidate.id ORDER BY candidate.id), ARRAY[]::uuid[])
+  INTO stale_job_ids
+  FROM (
+    SELECT job.id
+    FROM memory_embedding_jobs job
+    JOIN memories memory
+      ON memory.workspace_id = job.workspace_id
+     AND memory.id = job.memory_id
+    WHERE job.status IN ('pending', 'processing')
+      AND (
+        memory.version <> job.memory_version
+        OR memory.owner_user_id <> job.owner_user_id
+        OR memory.scope <> job.memory_scope
+      )
+    ORDER BY job.id
+    LIMIT job_limit
+  ) candidate;
+
+  SELECT COALESCE(array_agg(candidate.id ORDER BY candidate.id), ARRAY[]::uuid[])
+  INTO candidate_memory_ids
+  FROM (
+    SELECT memory.id
+    FROM memories memory
+    WHERE EXISTS (
+      SELECT 1
+      FROM memory_chunks chunk
+      WHERE chunk.workspace_id = memory.workspace_id
+        AND chunk.memory_id = memory.id
+        AND (
+          target_generation_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM memory_chunk_embeddings embedded
+            WHERE embedded.generation_id = target_generation_id
+              AND embedded.chunk_id = chunk.id
+          )
+        )
+    )
+      AND (
+        target_generation_id IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM memory_embedding_jobs existing_job
+          WHERE existing_job.workspace_id = memory.workspace_id
+            AND existing_job.memory_id = memory.id
+            AND existing_job.memory_version = memory.version
+            AND existing_job.generation_id = target_generation_id
+            AND existing_job.status IN ('pending', 'processing', 'dead')
+        )
+      )
+    ORDER BY memory.updated_at, memory.id
+    LIMIT job_limit
+  ) candidate;
+
+  -- Request writes lock the parent Memory before chunks, generations, and jobs.
+  -- Discover bounded ids without locks, then lock every affected parent in one
+  -- deterministic order before touching any generation or job row.
+  PERFORM memory.id
+  FROM memories memory
+  WHERE memory.id = ANY(candidate_memory_ids)
+    OR EXISTS (
+      SELECT 1
+      FROM memory_embedding_jobs job
+      WHERE job.workspace_id = memory.workspace_id
+        AND job.memory_id = memory.id
+        AND job.id = ANY(terminal_job_ids || stale_job_ids)
+    )
+  ORDER BY memory.id
+  FOR KEY SHARE;
 
   SELECT generation.id INTO target_generation_id
   FROM lore.ensure_embedding_generation(
@@ -766,7 +853,7 @@ BEGIN
   ) generation;
 
   -- Retention locks generation before jobs. Hold the target generation before
-  -- global terminal/stale-job cleanup so seed and prune cannot invert that order.
+  -- bounded terminal/stale-job cleanup so seed and prune cannot invert that order.
   PERFORM generation.id
   FROM embedding_generations generation
   WHERE generation.id = target_generation_id
@@ -775,39 +862,57 @@ BEGIN
     RETURN;
   END IF;
 
-  DELETE FROM memory_embedding_jobs job
-  WHERE (job.status IN ('succeeded', 'cancelled') AND job.completed_at < now() - interval '7 days')
-     OR (job.status = 'dead' AND job.completed_at < now() - interval '30 days');
+  FOREACH target_job_id IN ARRAY terminal_job_ids LOOP
+    DELETE FROM memory_embedding_jobs job
+    WHERE job.id = target_job_id
+      AND (
+        (job.status IN ('succeeded', 'cancelled')
+          AND job.completed_at < now() - interval '7 days')
+        OR (job.status = 'dead' AND job.completed_at < now() - interval '30 days')
+      );
+  END LOOP;
 
-  UPDATE memory_embedding_jobs job
-  SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
-      completed_at = now(), updated_at = now()
-  FROM memories memory
-  WHERE memory.workspace_id = job.workspace_id
-    AND memory.id = job.memory_id
-    AND job.status IN ('pending', 'processing')
-    AND (
-      memory.version <> job.memory_version
-      OR memory.owner_user_id <> job.owner_user_id
-      OR memory.scope <> job.memory_scope
-    );
-
-  RETURN QUERY
-  WITH candidates AS (
-    SELECT memory.workspace_id, memory.id AS memory_id, memory.version
+  FOREACH target_job_id IN ARRAY stale_job_ids LOOP
+    UPDATE memory_embedding_jobs job
+    SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
+        completed_at = now(), updated_at = now()
     FROM memories memory
-    WHERE EXISTS (
-      SELECT 1
-      FROM memory_chunks chunk
-      WHERE chunk.workspace_id = memory.workspace_id
-        AND chunk.memory_id = memory.id
-        AND NOT EXISTS (
-          SELECT 1
-          FROM memory_chunk_embeddings embedded
-          WHERE embedded.generation_id = target_generation_id
-            AND embedded.chunk_id = chunk.id
-        )
+    WHERE job.id = target_job_id
+      AND memory.workspace_id = job.workspace_id
+      AND memory.id = job.memory_id
+      AND job.status IN ('pending', 'processing')
+      AND (
+        memory.version <> job.memory_version
+        OR memory.owner_user_id <> job.owner_user_id
+        OR memory.scope <> job.memory_scope
+      );
+  END LOOP;
+
+  FOREACH target_memory_id IN ARRAY candidate_memory_ids LOOP
+    RETURN QUERY
+    INSERT INTO memory_embedding_jobs (
+      id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
+      embedding_provider, embedding_model, embedding_revision, generation_id
     )
+    SELECT
+      gen_random_uuid(), memory.workspace_id, memory.id,
+      memory.owner_user_id, memory.scope, memory.version,
+      active_embedding_provider, active_embedding_model, active_embedding_revision,
+      target_generation_id
+    FROM memories memory
+    WHERE memory.id = target_memory_id
+      AND EXISTS (
+        SELECT 1
+        FROM memory_chunks chunk
+        WHERE chunk.workspace_id = memory.workspace_id
+          AND chunk.memory_id = memory.id
+          AND NOT EXISTS (
+            SELECT 1
+            FROM memory_chunk_embeddings embedded
+            WHERE embedded.generation_id = target_generation_id
+              AND embedded.chunk_id = chunk.id
+          )
+      )
       AND NOT EXISTS (
         SELECT 1
         FROM memory_embedding_jobs existing_job
@@ -817,31 +922,16 @@ BEGIN
           AND existing_job.generation_id = target_generation_id
           AND existing_job.status IN ('pending', 'processing', 'dead')
       )
-    ORDER BY memory.updated_at, memory.id
-    LIMIT job_limit
-  )
-  INSERT INTO memory_embedding_jobs (
-    id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
-    embedding_provider, embedding_model, embedding_revision, generation_id
-  )
-  SELECT
-    gen_random_uuid(), candidate.workspace_id, candidate.memory_id,
-    memory.owner_user_id, memory.scope, candidate.version,
-    active_embedding_provider, active_embedding_model, active_embedding_revision,
-    target_generation_id
-  FROM candidates candidate
-  JOIN memories memory
-    ON memory.workspace_id = candidate.workspace_id
-   AND memory.id = candidate.memory_id
-  ON CONFLICT (
-    workspace_id, memory_id, memory_version,
-    embedding_provider, embedding_model, embedding_revision
-  ) DO UPDATE
-  SET status = 'pending', attempt_count = 0, available_at = now(),
-      lease_token = NULL, leased_at = NULL, last_error = NULL,
-      completed_at = NULL, generation_id = target_generation_id, updated_at = now()
-  WHERE memory_embedding_jobs.status IN ('succeeded', 'cancelled')
-  RETURNING memory_embedding_jobs.id;
+    ON CONFLICT (
+      workspace_id, memory_id, memory_version,
+      embedding_provider, embedding_model, embedding_revision
+    ) DO UPDATE
+    SET status = 'pending', attempt_count = 0, available_at = now(),
+        lease_token = NULL, leased_at = NULL, last_error = NULL,
+        completed_at = NULL, generation_id = target_generation_id, updated_at = now()
+    WHERE memory_embedding_jobs.status IN ('succeeded', 'cancelled')
+    RETURNING memory_embedding_jobs.id;
+  END LOOP;
 END
 $$;
 
