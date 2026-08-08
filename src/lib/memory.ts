@@ -3,6 +3,8 @@ import { isPostgresAccessDenied } from "./database-errors";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiteral } from "./embedding/vector";
 import type { EmbeddingDimensions } from "./embedding-config";
+import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
+import { chunkMemoryContent } from "./memory-chunking";
 
 export type { ActorContext } from "./actor-context";
 
@@ -10,6 +12,18 @@ export type MemoryScope = "shared" | "private";
 
 export class MemoryAccessDeniedError extends Error {
   override name = "MemoryAccessDeniedError";
+}
+
+export class MemoryVersionConflictError extends Error {
+  override name = "MemoryVersionConflictError";
+  readonly status = 412;
+
+  constructor(
+    readonly expectedVersion: number,
+    readonly actualVersion: number,
+  ) {
+    super(`Memory version changed (expected ${expectedVersion}, found ${actualVersion})`);
+  }
 }
 
 export interface Memory {
@@ -37,12 +51,18 @@ export interface UpdateMemory {
   metadata?: Record<string, unknown>;
 }
 
+export interface MemoryMutationOptions {
+  expectedVersion?: number;
+  idempotency?: IdempotencyRequest;
+}
+
 export interface SearchMemory {
   query: string;
   limit?: number;
 }
 
 export interface ListMemory {
+  cursor?: { id: string; updatedAt: string };
   limit?: number;
   offset?: number;
 }
@@ -99,30 +119,8 @@ interface PreparedChunk {
   content: string;
 }
 
-function chunkContent(content: string, maximumLength = 1_200): string[] {
-  const remainingWords = content.trim().split(/\s+/).filter(Boolean);
-  const chunks: string[] = [];
-  let current = "";
-  for (const word of remainingWords) {
-    if (current && current.length + word.length + 1 > maximumLength) {
-      chunks.push(current);
-      current = "";
-    }
-    if (word.length > maximumLength) {
-      if (current) chunks.push(current);
-      for (let index = 0; index < word.length; index += maximumLength) {
-        chunks.push(word.slice(index, index + maximumLength));
-      }
-      continue;
-    }
-    current = current ? `${current} ${word}` : word;
-  }
-  if (current) chunks.push(current);
-  return chunks;
-}
-
 function prepareChunks(content: string): PreparedChunk[] {
-  return chunkContent(content).map((chunk) => ({ content: chunk }));
+  return chunkMemoryContent(content).map((chunk) => ({ content: chunk }));
 }
 
 async function insertChunks(
@@ -150,24 +148,37 @@ async function enqueueEmbeddingJob(
   embeddingProvider: EmbeddingProvider,
   onlyWhenStale = false,
 ): Promise<string | null> {
+  const generation = await transaction.query<{ id: string }>(
+    `SELECT id
+     FROM lore.ensure_embedding_generation($1, $2, $3, $4)`,
+    [
+      embeddingProvider.provider,
+      embeddingProvider.model,
+      embeddingProvider.dimensions,
+      embeddingProvider.revision,
+    ],
+  );
+  const generationId = generation.rows[0]?.id;
+  if (!generationId) throw new Error("Embedding generation could not be resolved");
   const jobId = crypto.randomUUID();
   await transaction.query(
     `INSERT INTO memory_embedding_jobs (
        id, workspace_id, memory_id, owner_user_id, memory_scope,
-       memory_version, embedding_provider, embedding_model, embedding_revision
+       memory_version, embedding_provider, embedding_model, embedding_revision,
+       generation_id
      )
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $11
      WHERE NOT $10::boolean
         OR EXISTS (
           SELECT 1
           FROM memory_chunks chunk
           WHERE chunk.workspace_id = $2
             AND chunk.memory_id = $3
-            AND (
-              chunk.embedding IS NULL
-              OR chunk.embedding_provider <> $7
-              OR chunk.embedding_model <> $8
-              OR chunk.embedding_revision <> $9
+            AND NOT EXISTS (
+              SELECT 1
+              FROM memory_chunk_embeddings embedded
+              WHERE embedded.generation_id = $11
+                AND embedded.chunk_id = chunk.id
             )
         )
     `,
@@ -182,11 +193,17 @@ async function enqueueEmbeddingJob(
       embeddingProvider.model,
       embeddingProvider.revision,
       onlyWhenStale,
+      generationId,
     ],
   );
   // The request role deliberately cannot SELECT this private table, so callers
   // use the allocated id only when the write guarantees that a job was inserted.
   return jobId;
+}
+
+function serializedTimestamp(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
 }
 
 function toMemory(row: MemoryRow): Memory {
@@ -199,8 +216,8 @@ function toMemory(row: MemoryRow): Memory {
     content: row.content,
     metadata: row.metadata,
     version: row.version,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: serializedTimestamp(row.created_at),
+    updatedAt: serializedTimestamp(row.updated_at),
   };
 }
 
@@ -219,41 +236,31 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     }
   }
 
-  async function canWriteWorkspace(actor: ActorContext): Promise<boolean> {
-    return database.transaction(async (transaction) => {
-      await installActorContext(transaction, actor);
-      const result = await transaction.query<{ allowed: boolean }>(
-        "SELECT lore.can_write_memory($1, $2) AS allowed",
-        [actor.workspaceId, actor.userId],
-      );
-      return result.rows[0]?.allowed === true;
-    });
-  }
-
-  async function writableMemoryContent(actor: ActorContext, id: string): Promise<string | null> {
-    return database.transaction(async (transaction) => {
-      await installActorContext(transaction, actor);
-      const result = await transaction.query<{ content: string }>(
-        `SELECT content
-         FROM memories
-         WHERE id = $1
-           AND workspace_id = $2
-           AND lore.can_write_memory(workspace_id, owner_user_id)`,
-        [id, actor.workspaceId],
-      );
-      return result.rows[0]?.content ?? null;
-    });
-  }
-
   return {
-    async remember(actor: ActorContext, input: RememberMemory): Promise<Memory> {
+    async remember(
+      actor: ActorContext,
+      input: RememberMemory,
+      options: MemoryMutationOptions = {},
+    ): Promise<Memory> {
       try {
-        if (!(await canWriteWorkspace(actor))) {
-          throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
-        }
         const chunks = prepareChunks(input.content);
         const created = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
+          const claim = await beginMutation<{ memory: Memory }>(
+            transaction,
+            actor,
+            options.idempotency,
+          );
+          if (claim.replay) {
+            return { memory: claim.replay.body.memory, jobId: null, replayed: true };
+          }
+          const access = await transaction.query<{ allowed: boolean }>(
+            "SELECT lore.can_write_memory($1, $2) AS allowed",
+            [actor.workspaceId, actor.userId],
+          );
+          if (access.rows[0]?.allowed !== true) {
+            throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
+          }
           const id = crypto.randomUUID();
           const result = await transaction.query<MemoryRow>(
             `INSERT INTO memories (
@@ -275,9 +282,17 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           const jobId = embeddingProvider
             ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)
             : null;
-          return { memory: toMemory(memory), jobId };
+          const createdMemory = toMemory(memory);
+          await completeMutation(
+            transaction,
+            claim.requestId,
+            201,
+            { memory: createdMemory },
+            Boolean(options.idempotency),
+          );
+          return { memory: createdMemory, jobId, replayed: false };
         });
-        notifyMaintenance(created.jobId);
+        if (!created.replayed) notifyMaintenance(created.jobId);
         return created.memory;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
@@ -300,7 +315,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       });
     },
 
-    async update(actor: ActorContext, id: string, input: UpdateMemory): Promise<Memory | null> {
+    async update(
+      actor: ActorContext,
+      id: string,
+      input: UpdateMemory,
+      options: MemoryMutationOptions = {},
+    ): Promise<Memory | null> {
       if (
         input.content === undefined &&
         input.scope === undefined &&
@@ -308,12 +328,45 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       ) {
         return this.retrieve(actor, id);
       }
-      const currentContent = await writableMemoryContent(actor, id);
-      if (currentContent === null) return null;
-      const contentToEmbed = input.content ?? (input.scope === undefined ? null : currentContent);
-      const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
       const updatedResult = await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
+        const claim = await beginMutation<{ memory: Memory | null }>(
+          transaction,
+          actor,
+          options.idempotency,
+        );
+        if (claim.replay) {
+          return { memory: claim.replay.body.memory, jobId: null, chunksChanged: false };
+        }
+        const current = await transaction.query<MemoryRow>(
+          `SELECT *
+           FROM memories
+           WHERE id = $1
+             AND workspace_id = $2
+             AND lore.can_write_memory(workspace_id, owner_user_id)
+           FOR UPDATE`,
+          [id, actor.workspaceId],
+        );
+        const currentMemory = current.rows[0];
+        if (!currentMemory) {
+          await completeMutation(
+            transaction,
+            claim.requestId,
+            404,
+            { memory: null },
+            Boolean(options.idempotency),
+          );
+          return { memory: null, jobId: null, chunksChanged: false };
+        }
+        if (
+          options.expectedVersion !== undefined &&
+          currentMemory.version !== options.expectedVersion
+        ) {
+          throw new MemoryVersionConflictError(options.expectedVersion, currentMemory.version);
+        }
+        const contentToEmbed =
+          input.content ?? (input.scope === undefined ? null : currentMemory.content);
+        const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
         const result = await transaction.query<MemoryRow>(
           `UPDATE memories
            SET content = COALESCE($3::text, content),
@@ -321,7 +374,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
                metadata = COALESCE($5::jsonb, metadata),
                version = version + 1,
                updated_at = now()
-           WHERE id = $1 AND workspace_id = $2
+           WHERE id = $1
+             AND workspace_id = $2
+             AND version = $6
            RETURNING *`,
           [
             id,
@@ -329,9 +384,13 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             input.content ?? null,
             input.scope ?? null,
             input.metadata === undefined ? null : JSON.stringify(input.metadata),
+            currentMemory.version,
           ],
         );
         const updated = result.rows[0];
+        if (!updated) {
+          throw new MemoryVersionConflictError(currentMemory.version, currentMemory.version + 1);
+        }
         if (updated && chunks) {
           await transaction.query(
             "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
@@ -343,22 +402,73 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           updated && embeddingProvider
             ? await enqueueEmbeddingJob(transaction, updated, embeddingProvider, chunks === null)
             : null;
-        return { memory: updated ? toMemory(updated) : null, jobId };
+        const updatedMemory = toMemory(updated);
+        await completeMutation(
+          transaction,
+          claim.requestId,
+          200,
+          { memory: updatedMemory },
+          Boolean(options.idempotency),
+        );
+        return { memory: updatedMemory, jobId, chunksChanged: chunks !== null };
       });
       // Metadata-only updates can leave an existing stale job for the scheduled
       // sweep without billing a Queue message for an already-embedded Memory.
-      notifyMaintenance(chunks ? updatedResult.jobId : null);
+      notifyMaintenance(updatedResult.chunksChanged ? updatedResult.jobId : null);
       return updatedResult.memory;
     },
 
-    async forget(actor: ActorContext, id: string): Promise<boolean> {
+    async forget(
+      actor: ActorContext,
+      id: string,
+      options: MemoryMutationOptions = {},
+    ): Promise<boolean> {
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<{ id: string }>(
-          "DELETE FROM memories WHERE id = $1 AND workspace_id = $2 RETURNING id",
+        const claim = await beginMutation<{ deleted: boolean }>(
+          transaction,
+          actor,
+          options.idempotency,
+        );
+        if (claim.replay) return claim.replay.body.deleted;
+        const current = await transaction.query<{ version: number }>(
+          `SELECT version
+           FROM memories
+           WHERE id = $1
+             AND workspace_id = $2
+             AND lore.can_write_memory(workspace_id, owner_user_id)
+           FOR UPDATE`,
           [id, actor.workspaceId],
         );
-        return result.rows.length === 1;
+        const currentVersion = current.rows[0]?.version;
+        if (currentVersion === undefined) {
+          await completeMutation(
+            transaction,
+            claim.requestId,
+            404,
+            { deleted: false },
+            Boolean(options.idempotency),
+          );
+          return false;
+        }
+        if (options.expectedVersion !== undefined && currentVersion !== options.expectedVersion) {
+          throw new MemoryVersionConflictError(options.expectedVersion, currentVersion);
+        }
+        const result = await transaction.query<{ id: string }>(
+          `DELETE FROM memories
+           WHERE id = $1 AND workspace_id = $2 AND version = $3
+           RETURNING id`,
+          [id, actor.workspaceId, currentVersion],
+        );
+        const deleted = result.rows.length === 1;
+        await completeMutation(
+          transaction,
+          claim.requestId,
+          deleted ? 204 : 404,
+          { deleted },
+          Boolean(options.idempotency),
+        );
+        return deleted;
       });
     },
 
@@ -368,13 +478,38 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
-          `SELECT *
+          `WITH cursor_position AS MATERIALIZED (
+             SELECT COALESCE(
+               (
+                 SELECT cursor_memory.updated_at
+                 FROM memories cursor_memory
+                 WHERE cursor_memory.workspace_id = $1
+                   AND cursor_memory.id = $5::uuid
+               ),
+               $4::timestamptz
+             ) AS updated_at
+           )
+           SELECT *
            FROM memories
            WHERE workspace_id = $1
+             AND (
+               $4::timestamptz IS NULL
+               OR updated_at < (SELECT cursor_position.updated_at FROM cursor_position)
+               OR (
+                 updated_at = (SELECT cursor_position.updated_at FROM cursor_position)
+                 AND id > $5::uuid
+               )
+             )
            ORDER BY updated_at DESC, id
            LIMIT $2
            OFFSET $3`,
-          [actor.workspaceId, limit, offset],
+          [
+            actor.workspaceId,
+            limit,
+            offset,
+            input.cursor?.updatedAt ?? null,
+            input.cursor?.id ?? null,
+          ],
         );
         return result.rows.map(toMemory);
       });
@@ -425,17 +560,24 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              SELECT
                chunk.id,
                chunk.memory_id,
-               chunk.embedding
+               embedded.embedding
              FROM memory_chunks chunk
              JOIN memories memory
                ON memory.id = chunk.memory_id
               AND memory.workspace_id = chunk.workspace_id
+             JOIN memory_chunk_embeddings embedded
+               ON embedded.workspace_id = chunk.workspace_id
+              AND embedded.memory_id = chunk.memory_id
+              AND embedded.chunk_id = chunk.id
+             JOIN embedding_generations generation
+               ON generation.id = embedded.generation_id
              WHERE $3::text IS NOT NULL
                AND chunk.workspace_id = $2
-               AND chunk.embedding IS NOT NULL
-               AND chunk.embedding_provider = $7
-               AND chunk.embedding_model = $8
-               AND chunk.embedding_revision = $9
+               AND generation.embedding_provider = $7
+               AND generation.embedding_model = $8
+               AND generation.embedding_revision = $9
+               AND generation.embedding_dimensions = 1024
+               AND generation.status IN ('active', 'retiring')
            ),
            semantic_candidates AS (
              SELECT

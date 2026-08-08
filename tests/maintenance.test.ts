@@ -230,13 +230,13 @@ test("maintenance role cannot mutate private chunks without the claimed lease co
     expect(result.rows).toEqual([]);
   });
 
-  await testContext.maintenanceDatabase.transaction(async (transaction) => {
-    const result = await transaction.query<{ id: string }>(
-      "DELETE FROM memory_chunks WHERE memory_id = $1 RETURNING id",
-      [created.id],
-    );
-    expect(result.rows).toEqual([]);
-  });
+  await expect(
+    testContext.maintenanceDatabase.transaction((transaction) =>
+      transaction.query("DELETE FROM memory_chunks WHERE memory_id = $1 RETURNING id", [
+        created.id,
+      ]),
+    ),
+  ).rejects.toMatchObject({ code: "42501" });
 
   await expect(
     testContext.maintenanceDatabase.transaction((transaction) =>
@@ -299,7 +299,7 @@ test("embedding revisions build beside the active generation and cut over atomic
   const testContext = await createMemoryTestContext();
   const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
   const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
-  const content = "0. Ada founded Acme.\n1. Grace acquired Acme.\n2. Lin leads Acme.";
+  const content = "Ada founded Acme. Grace acquired Acme. Lin leads Acme.";
   const created = await memories.remember(testContext.alice, { content, scope: "private" });
   const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
     embeddingProvider: firstProvider,
@@ -317,8 +317,8 @@ test("embedding revisions build beside the active generation and cut over atomic
   });
   await expect(replacementMaintenance.generationReport()).resolves.toMatchObject({
     status: "building",
-    eligibleChunks: 3,
-    embeddedChunks: 3,
+    eligibleChunks: 1,
+    embeddedChunks: 1,
     missingChunks: 0,
     pendingJobs: 0,
     deadJobs: 0,
@@ -347,11 +347,7 @@ test("embedding revisions build beside the active generation and cut over atomic
       [created.id],
     ),
   );
-  expect(chunks.rows).toEqual([
-    { ordinal: 0, content: "0. Ada founded Acme." },
-    { ordinal: 1, content: "1. Grace acquired Acme." },
-    { ordinal: 2, content: "2. Lin leads Acme." },
-  ]);
+  expect(chunks.rows).toEqual([{ ordinal: 0, content }]);
 
   const afterActivation = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ embedding_revision: string; status: string }>(

@@ -118,6 +118,7 @@ export function rememberMemory(
   return requestJson("/api/memories", {
     method: "POST",
     body: JSON.stringify(input),
+    headers: { "idempotency-key": crypto.randomUUID() },
     workspaceId,
     operation: "POST /api/memories",
   });
@@ -127,18 +128,31 @@ export function updateMemory(
   workspaceId: string,
   id: string,
   input: { content?: string; scope?: MemoryScope; metadata?: Record<string, unknown> },
+  expectedVersion: number,
 ): Promise<Memory> {
   return requestJson(`/api/memories/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
+    headers: {
+      "idempotency-key": crypto.randomUUID(),
+      "if-match": `"memory-v${expectedVersion}"`,
+    },
     workspaceId,
     operation: "PATCH /api/memories/:id",
   });
 }
 
-export function forgetMemory(workspaceId: string, id: string): Promise<void> {
+export function forgetMemory(
+  workspaceId: string,
+  id: string,
+  expectedVersion: number,
+): Promise<void> {
   return requestJson(`/api/memories/${encodeURIComponent(id)}`, {
     method: "DELETE",
+    headers: {
+      "idempotency-key": crypto.randomUUID(),
+      "if-match": `"memory-v${expectedVersion}"`,
+    },
     workspaceId,
     operation: "DELETE /api/memories/:id",
   });

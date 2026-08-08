@@ -4,6 +4,7 @@ node_modules
 .worker
 .wrangler
 .env
+backups/
 .env.local
 .dev.vars
 .dev.vars.*

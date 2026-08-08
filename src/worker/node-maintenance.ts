@@ -4,6 +4,10 @@ import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
 } from "../lib/maintenance";
+import { registerLoreTelemetry } from "../lib/register-telemetry";
+import { observeOperation } from "../lib/telemetry";
+
+registerLoreTelemetry();
 
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -15,7 +19,17 @@ if (!connectionString) {
   throw new Error("LORE_MAINTENANCE_DATABASE_URL is required by the maintenance worker");
 }
 
-const embeddingProvider = createEmbeddingProviderFromEnvironment(process.env, (message) =>
+const buildProvider = process.env.LORE_EMBEDDING_BUILD_PROVIDER?.trim();
+const buildModel = process.env.LORE_EMBEDDING_BUILD_MODEL?.trim();
+const embeddingEnvironment =
+  buildProvider || buildModel
+    ? {
+        ...process.env,
+        LORE_EMBEDDING_PROVIDER: buildProvider || process.env.LORE_EMBEDDING_PROVIDER || "ollama",
+        LORE_EMBEDDING_MODEL: buildModel || process.env.LORE_EMBEDDING_MODEL,
+      }
+    : process.env;
+const embeddingProvider = createEmbeddingProviderFromEnvironment(embeddingEnvironment, (message) =>
   console.warn(message),
 );
 if (!embeddingProvider) {
@@ -38,6 +52,10 @@ const maintenance = createMemoryMaintenanceModule(database, {
 });
 const pollIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_POLL_MS, 1_000);
 const sweepIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_SWEEP_MS, 300_000);
+const embeddingRollbackSeconds = positiveInteger(
+  process.env.LORE_EMBEDDING_ROLLBACK_SECONDS,
+  604_800,
+);
 let stopping = false;
 
 function requestStop(): void {
@@ -57,18 +75,34 @@ try {
   while (!stopping) {
     try {
       if (Date.now() >= nextSweepAt) {
-        const seeded = await maintenance.seedStale(1_000);
+        const sweep = await observeOperation("maintenance.sweep", async () => {
+          const seeded = await maintenance.seedStale(1_000);
+          const purged = await maintenance.purgeExpired();
+          const prunedEmbeddingGenerations =
+            await maintenance.pruneRetiringGenerations(embeddingRollbackSeconds);
+          const generation = await maintenance.generationReport();
+          return { generation, prunedEmbeddingGenerations, purged, seeded };
+        });
         console.log(
           JSON.stringify({
             component: "memory-maintenance",
             event: "sweep_complete",
-            seededJobs: seeded.length,
+            seededJobs: sweep.seeded.length,
+            purgedIdempotencyRecords: sweep.purged.idempotencyRecords,
+            purgedMemoryEvents: sweep.purged.memoryEvents,
+            prunedEmbeddingGenerations: sweep.prunedEmbeddingGenerations,
+            generationStatus: sweep.generation.status,
+            generationEligibleChunks: sweep.generation.eligibleChunks,
+            generationEmbeddedChunks: sweep.generation.embeddedChunks,
+            generationMissingChunks: sweep.generation.missingChunks,
+            generationPendingJobs: sweep.generation.pendingJobs,
+            generationDeadJobs: sweep.generation.deadJobs,
           }),
         );
         nextSweepAt = Date.now() + sweepIntervalMs;
       }
 
-      const result = await maintenance.run();
+      const result = await observeOperation("maintenance.job", () => maintenance.run());
       infrastructureBackoffMs = pollIntervalMs;
       if (result.status === "idle" || result.status === "retry") {
         await wait(pollIntervalMs);

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
-import { LEGACY_BASELINE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
 import { migrationHistoryStatus } from "../scripts/lib/migration-preflight.mjs";
+import { LEGACY_BASELINE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
 
 const currentMigrations = [{ id: "0001_initial.sql", checksum: "current" }];
 
