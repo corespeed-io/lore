@@ -8,7 +8,7 @@ test("Ollama adapter sends the deployment model, dimensions, and unload policy",
       provider: "ollama",
       model: "qwen3-embedding:0.6b",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v3",
     },
     {
       baseUrl: "http://ollama.local:11434/",
@@ -33,6 +33,56 @@ test("Ollama adapter sends the deployment model, dimensions, and unload policy",
   });
 });
 
+test("Ollama adapter applies the official Qwen3 retrieval instruction only to queries", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const provider = createOllamaEmbeddingProvider(
+    {
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      revision: "lore-embedding-v3",
+    },
+    {
+      fetch: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Response.json({ embeddings: [Array.from({ length: 1024 }, () => 0.5)] });
+      },
+    },
+  );
+
+  await provider.embed(["A stored Memory."], "document");
+  await provider.embed(["Who bought the rights?"], "query");
+
+  expect(requests.map((request) => request.input)).toEqual([
+    ["A stored Memory."],
+    [
+      "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:Who bought the rights?",
+    ],
+  ]);
+});
+
+test("Ollama adapter leaves non-Qwen query text unchanged", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const provider = createOllamaEmbeddingProvider(
+    {
+      provider: "ollama",
+      model: "nomic-embed-text",
+      dimensions: 1024,
+      revision: "lore-embedding-v2",
+    },
+    {
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Response.json({ embeddings: [Array.from({ length: 1024 }, () => 0.5)] });
+      },
+    },
+  );
+
+  await provider.embed(["Who bought the rights?"], "query");
+
+  expect(requestBody?.input).toEqual(["Who bought the rights?"]);
+});
+
 test.each([
   ["a malformed vector", ["not-a-vector"]],
   ["the wrong dimensions", [[0.5]]],
@@ -43,7 +93,7 @@ test.each([
       provider: "ollama",
       model: "qwen3-embedding:4b",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v3",
     },
     { fetch: async () => Response.json({ embeddings }) },
   );

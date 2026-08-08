@@ -1,5 +1,6 @@
 export const EMBEDDING_DIMENSIONS = 1024 as const;
-export const EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v1";
+export const EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v2";
+export const QWEN3_EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v3";
 
 export type EmbeddingDimensions = typeof EMBEDDING_DIMENSIONS;
 export type EmbeddingProviderName = "google" | "ollama" | "openai";
@@ -21,8 +22,18 @@ export const DEFAULT_EMBEDDING_CONFIGURATION: EmbeddingConfiguration = {
   provider: "ollama",
   model: DEFAULT_EMBEDDING_MODELS.ollama,
   dimensions: EMBEDDING_DIMENSIONS,
-  revision: EMBEDDING_PROTOCOL_REVISION,
+  revision: QWEN3_EMBEDDING_PROTOCOL_REVISION,
 };
+
+export function isQwen3EmbeddingModel(model: string): boolean {
+  return /qwen3-embedding(?:[:/_-]|$)/iu.test(model);
+}
+
+function embeddingProtocolRevision(provider: EmbeddingProviderName, model: string): string {
+  return provider === "ollama" && isQwen3EmbeddingModel(model)
+    ? QWEN3_EMBEDDING_PROTOCOL_REVISION
+    : EMBEDDING_PROTOCOL_REVISION;
+}
 
 export function embeddingProviderName(value: string): EmbeddingProviderName {
   const provider = value.trim();
@@ -44,7 +55,7 @@ export function embeddingConfiguration(input: {
     provider,
     model,
     dimensions: EMBEDDING_DIMENSIONS,
-    revision: EMBEDDING_PROTOCOL_REVISION,
+    revision: embeddingProtocolRevision(provider, model),
   };
 }
 

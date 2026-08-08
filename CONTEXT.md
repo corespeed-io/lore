@@ -96,26 +96,65 @@ _Avoid_: Knowledge fact, Memory Link, graph ownership
 The deployment-wide provider and model selected by a self-host operator for indexing
 and searching Memories. Lore v1 fixes the vector dimension and preprocessing
 revision as protocol invariants; they are not operator, User, Workspace, or Agent
-settings.
+settings. Candidate distance is a separately calibrated retrieval parameter and
+does not define the embedding space. `lore-embedding-v2` makes numbered and Markdown
+list items independent semantic chunks for every provider. The Qwen3/Ollama
+`lore-embedding-v3` protocol additionally applies Qwen3-Embedding's official
+retrieval instruction to query texts while leaving indexed document text unchanged;
+unrelated provider/model spaces remain on v2.
 _Avoid_: Workspace Retrieval Profile, User embedding model, Agent retrieval setting
 
 **Embedding Generation**:
-One immutable provider/model/dimension/preprocessing-revision vector space. A new
-generation is built beside the active one, validated for exact coverage, activated
-atomically, and retained briefly for rollback before retirement.
-_Avoid_: Mixed embedding space, in-place model replacement
+One immutable deployment-wide vector space identified by provider, model, fixed
+dimension, and preprocessing revision. A replacement is built beside the active
+generation, becomes active only after exact coverage validation, and leaves the old
+generation retiring for a bounded rollback window.
+_Avoid_: Mixed vector space, Workspace embedding profile, in-place model overwrite
 
 **Memory Mutation Event**:
 A content-free, expiring outbox record committed in the same transaction as a
-Memory or Memory Link change. It may contain resource/version metadata and content
-hashes, but never Memory content, query text, credentials, or provider payloads.
-_Avoid_: Permanent audit copy, Memory revision body
+Memory or Memory Link create/update/delete. It may contain bounded ids, versions,
+changed-field names, and content hashes, but never Memory content, query text,
+credentials, or provider payloads.
+_Avoid_: Permanent audit copy, Memory revision, AutoDream result
 
 **Workspace Archive**:
-A checksummed logical export containing only Memories and Links visible to one
-human Actor under RLS. Import is bounded, dry-runnable, explicitly owner-remapped,
-and records source provenance; it is not an operational PostgreSQL backup.
-_Avoid_: Database backup, unrestricted tenant dump
+A checksummed, versioned export of only the Memories and Links visible to one human
+Actor under RLS. Import is bounded, dry-runnable, requires explicit source-owner
+remapping, and records source provenance. It is distinct from a full PostgreSQL
+backup.
+_Avoid_: Database dump, Workspace clone, cross-tenant admin export
+
+**Reranking Configuration**:
+The optional deployment-wide provider, model, candidate budget, instruction, and
+calibrated rank-fusion/abstention/diversity settings used to reorder only the
+candidate evidence passages already authorized and retrieved by Lore. A calibrated
+local temporal rank-fusion weight may share that candidate budget without a model.
+A reranker is never allowed to broaden visibility or become a User, Workspace, or
+Agent setting; provider failure falls back to deterministic fused retrieval.
+_Avoid_: Workspace reranker, global candidate search, authorization filter
+
+**Query Planning Configuration**:
+The optional deployment-wide chat model, instruction, and bounded query budget used
+to decompose a recall question into distinct evidence queries. The planner sees only
+the question; Lore retains the original query and applies the same Actor/RLS boundary
+to every expansion before fusing results. Failure falls back to the original query.
+_Avoid_: Workspace query planner, answer generation, Memory-aware planner prompt
+
+**Benchmark Reader and Judge**:
+Versioned, evaluation-only model roles. The Reader answers from only the evidence
+returned by Lore; the Judge applies a dataset's pinned scoring rubric to that answer.
+Their provider/model/revision, latency, and token use belong in the evaluation report
+and are never deployment retrieval settings. An unresolved judge case is excluded
+from accuracy and makes the score incomplete.
+_Avoid_: production answer model, hidden evaluator, partial leaderboard score
+
+**Conflict Resolution Evaluation**:
+An evaluation in which ordered observations may supersede earlier facts and an
+answer may require multiple current facts. It measures whether ingestion preserves
+sequence and retrieval supplies enough authorized evidence for the Reader to select
+the current chain; it does not authorize automatic production-Memory rewriting.
+_Avoid_: AutoDream, destructive deduplication, newest timestamp always wins
 
 **Benchmark Graph Dataset**:
 A deterministic, synthetic node-and-link dataset used only to stress graph layout

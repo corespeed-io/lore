@@ -1,4 +1,5 @@
 import type { EmbeddingConfiguration } from "../embedding-config";
+import { isQwen3EmbeddingModel } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
 
 export interface OllamaEmbeddingOptions {
@@ -10,6 +11,14 @@ export interface OllamaEmbeddingOptions {
 
 interface OllamaEmbedResponse {
   embeddings?: unknown;
+}
+
+export const QWEN3_RETRIEVAL_INSTRUCTION =
+  "Given a web search query, retrieve relevant passages that answer the query";
+
+function retrievalText(text: string, task: EmbeddingTask, model: string): string {
+  if (task === "document" || !isQwen3EmbeddingModel(model)) return text;
+  return `Instruct: ${QWEN3_RETRIEVAL_INSTRUCTION}\nQuery:${text}`;
 }
 
 function endpoint(baseUrl: string): string {
@@ -51,14 +60,14 @@ export function createOllamaEmbeddingProvider(
     model: configuration.model,
     dimensions: configuration.dimensions,
     revision: configuration.revision,
-    async embed(texts: string[], _task: EmbeddingTask): Promise<number[][]> {
+    async embed(texts: string[], task: EmbeddingTask): Promise<number[][]> {
       if (!texts.length) return [];
       const response = await fetchImplementation(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           model: configuration.model,
-          input: texts,
+          input: texts.map((text) => retrievalText(text, task, configuration.model)),
           dimensions: configuration.dimensions,
           keep_alive: options.keepAlive ?? 0,
         }),

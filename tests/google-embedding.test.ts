@@ -10,7 +10,7 @@ test("Google adapter sends document embeddings through the batch API", async () 
       provider: "google",
       model: "gemini-embedding-2",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v2",
     },
     {
       apiKey: "test-google-key",
@@ -50,7 +50,7 @@ test("Google adapter distinguishes query embeddings", async () => {
       provider: "google",
       model: "models/gemini-embedding-2",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v2",
     },
     {
       apiKey: "test-google-key",
@@ -79,7 +79,7 @@ test("Google adapter keeps task types for the legacy text-only model", async () 
       provider: "google",
       model: "gemini-embedding-001",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v2",
     },
     {
       apiKey: "test-google-key",
@@ -102,7 +102,7 @@ test("Google adapter splits requests into bounded batches without reordering", a
       provider: "google",
       model: "gemini-embedding-2",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v2",
     },
     {
       apiKey: "test-google-key",
@@ -137,7 +137,7 @@ test("Google adapter fails closed when its credential or response is invalid", a
         provider: "google",
         model: "gemini-embedding-001",
         dimensions: 1024,
-        revision: "lore-embedding-v1",
+        revision: "lore-embedding-v2",
       },
       { apiKey: "" },
     ),
@@ -148,7 +148,7 @@ test("Google adapter fails closed when its credential or response is invalid", a
       provider: "google",
       model: "gemini-embedding-2",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v2",
     },
     {
       apiKey: "test-google-key",
@@ -166,7 +166,7 @@ test("Google adapter retries transient failures with bounded backoff", async () 
       provider: "google",
       model: "gemini-embedding-2",
       dimensions: 1024,
-      revision: "lore-embedding-v1",
+      revision: "lore-embedding-v2",
     },
     {
       apiKey: "test-google-key",

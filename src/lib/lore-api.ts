@@ -76,12 +76,24 @@ export async function createWorkspace(name: string): Promise<WorkspaceSummary> {
 
 export function listMemories(
   workspaceId: string,
-  input: { limit?: number; offset?: number; signal?: AbortSignal } = {},
+  input: {
+    limit?: number;
+    metadataFilter?: Record<string, unknown>;
+    offset?: number;
+    scope?: MemoryScope;
+    updatedAfter?: string;
+    updatedBefore?: string;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Memory[]> {
   const params = new URLSearchParams({
     limit: String(input.limit ?? 100),
     offset: String(input.offset ?? 0),
   });
+  if (input.scope) params.set("scope", input.scope);
+  if (input.metadataFilter) params.set("metadata", JSON.stringify(input.metadataFilter));
+  if (input.updatedAfter) params.set("updated_after", input.updatedAfter);
+  if (input.updatedBefore) params.set("updated_before", input.updatedBefore);
   return requestJson(`/api/memories?${params}`, {
     workspaceId,
     operation: "GET /api/memories",
@@ -94,8 +106,18 @@ export function searchMemories(
   query: string,
   limit = 25,
   signal?: AbortSignal,
+  filters: {
+    metadataFilter?: Record<string, unknown>;
+    scope?: MemoryScope;
+    updatedAfter?: string;
+    updatedBefore?: string;
+  } = {},
 ): Promise<MemorySearchResult[]> {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (filters.metadataFilter) params.set("metadata", JSON.stringify(filters.metadataFilter));
+  if (filters.scope) params.set("scope", filters.scope);
+  if (filters.updatedAfter) params.set("updated_after", filters.updatedAfter);
+  if (filters.updatedBefore) params.set("updated_before", filters.updatedBefore);
   return requestJson<MemorySearchResult[]>(`/api/memories?${params}`, {
     workspaceId,
     operation: "GET /api/memories?q",

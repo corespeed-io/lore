@@ -17,7 +17,7 @@ test("embedding provider factory builds the default local provider", () => {
     provider: "ollama",
     model: "qwen3-embedding:0.6b",
     dimensions: 1024,
-    revision: "lore-embedding-v1",
+    revision: "lore-embedding-v3",
   });
   expect(warnings).toEqual([]);
 });

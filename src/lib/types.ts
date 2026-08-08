@@ -24,6 +24,7 @@ export interface Memory {
 export interface MemorySearchResult {
   memory: Memory;
   score: number;
+  rerankScore?: number;
   evidence: string;
 }
 

@@ -21,10 +21,11 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0003_portable_core.sql` define identity,
-  tenancy, user-private Agents, Memory/chunks/links, pgvector state, versioned
-  Evaluation tables, leased embedding jobs, replay-safe mutations, a content-free
-  event outbox, Workspace portability, and embedding generations with RLS;
+- migrations `0001_initial.sql` through `0007_memory_chunk_entity_aliases.sql`
+  define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
+  state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
+  a content-free event outbox, Workspace portability, and embedding generations
+  with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
@@ -70,6 +71,28 @@ been removed. Lore now has a native implementation:
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
   `/readyz`, and `/api/v1/capabilities` are the stable operational surface;
+- Node/self-host exports privacy-filtered OTLP only when explicitly configured.
+  Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
+  SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
+  orchestration health does not depend on application auth or rendering;
+- native Ollama query planning uses `/api/chat` with thinking disabled,
+  deterministic decoding, a 4K default context, and a 256-token output cap; match
+  `LORE_QUERY_PLANNER_NUM_CTX` to any benchmark reader sharing the same model server
+  so Ollama does not reload between calls. Do not route local Qwen planners through
+  the less controllable OpenAI-compatible surface;
+- `src/lib/reranking.ts` defines the deployment-level second-stage contract;
+  `src/lib/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
+  plus vLLM-Metal `/score`, while `src/lib/reranking/hosted.ts` has concrete Cohere
+  v2, Memos MemReranker, and Voyage v1 adapters. Search fuses exact simple/English
+  FTS, a two-term relaxed
+  English recall channel with query-side proper-name/identifier specificity
+  weighting, and dense candidates before reranking only authorized evidence
+  passages. Do not replace that bounded query heuristic with per-request corpus
+  frequency scans; under RLS the measured scan doubled hybrid latency;
+- `src/lib/query-planning.ts` defines optional deployment-level multi-query planning.
+  Its OpenAI/vLLM and Google adapters see only the original question; search keeps
+  that question, runs every generated query under the same Actor/RLS transaction,
+  fuses only visible results, and then optionally reranks them;
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers.
 
@@ -79,8 +102,77 @@ background maintenance. The Ollama, Google Gemini, and OpenAI adapters are
 configured once per deployment, and embedding failure is explicit (`NULL`) and
 never blocks a Memory write. Local deployment defaults are Qwen3-Embedding 0.6B at
 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
+The self-host worker defaults to one leased embedding job at a time; optional
+`LORE_MAINTENANCE_CONCURRENCY` uses independent leases and must be sized with the
+database pool and provider capacity. Keep local Ollama at one unless measured.
 Invalid embedding configuration and provider request failures must warn server-side
 and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
+Optional reranking is configured once per deployment. The llama.cpp, vLLM,
+vLLM-Metal score, Cohere, Memos, and Voyage adapters consume their concrete official
+rerank contracts; the Memory module must finish RLS-filtered candidate
+retrieval before calling it, pass evidence passages rather than unrestricted Memory
+content, and fail open to deterministic fused order on any reranker failure. Managed
+reranking exports those authorized passages to the configured provider and therefore
+requires an explicit operator privacy/compliance decision; use HTTPS outside localhost. A
+llama.cpp reranker uses its GGUF model's embedded template and must never claim that
+`LORE_RERANK_INSTRUCTION` was sent to or honored by that server. A
+calibrated `LORE_RERANK_MIN_SCORE` may abstain after successful reranking, while
+`LORE_RERANK_DIVERSITY_LAMBDA` may apply MMR-style lexical evidence diversity; both
+default to behavior-neutral values and must be justified by versioned evaluation.
+Require exactly one finite `[0,1]` score for every authorized rerank candidate;
+duplicate, missing, foreign, or unnormalized results must fail open to the
+deterministic first-stage order rather than enter calibration or rank fusion.
+Rerank only the compact best authorized chunk plus configured neighbors; returned
+answer evidence may be wider, but must not inflate the cross-encoder input.
+Pin `RETRIEVAL_EVIDENCE_POLICY` in every benchmark report when either behavior
+changes, so historical quality and latency remain comparable.
+Treat provider, model, reranking revision, instruction, candidate budget, minimum
+score, diversity lambda, and weighted first-stage/reranker rank fusion as one
+reproducible deployment configuration. `LORE_RERANK_WEIGHT=1` is pure reranking;
+smaller calibrated values retain more of the deterministic hybrid order.
+`LORE_EVIDENCE_NEIGHBOR_CHUNKS` may include zero to two adjacent chunks around the
+authorized anchor chunk for returned/reranked context. It defaults to zero and must
+stay inside the same visible Memory; calibrate its quality/token tradeoff locally.
+`LORE_EVIDENCE_TOP_CHUNKS` may retain one to five independently ranked chunks from
+that visible Memory before neighbor expansion. It defaults to one; calibrate it on
+evidence-level answer recall rather than Memory-id recall, and keep the bounded
+reader/reranker context cost in evaluation metadata.
+If `topChunks * (2 * neighborChunks + 1)` covers a visible Memory's entire chunk
+count, evidence may include that whole Memory in ordinal order; never cross the
+Memory/RLS boundary, and do not make this expansion unbounded. Evaluate this with
+exact answer-evidence recall rather than treating a parent Memory-id hit as an
+answerable result.
+Equal lexical/dense candidate scores and final top-k scores prefer newer
+`memory.updated_at`, then higher chunk ordinal, then id so ordered Memory logs keep
+their latest equal-scoring fact. Optional
+`LORE_RETRIEVAL_RECENCY_WEIGHT` widens to the configured second-stage candidate
+budget and reciprocal-rank fuses relevance with visible Memory recency. It defaults
+off and must be justified by a temporal/conflict-resolution benchmark; never enable
+an unconditional recency boost for archival or timeless factual search.
+`LORE_RETRIEVAL_FEEDBACK_QUERIES` is a zero-to-three deterministic chain-depth
+budget. Each round extends the accumulated query with the strongest-overlap sentence
+from one newly retrieved RLS-visible passage, excludes every prior anchor Memory,
+and reapplies Actor context, Workspace, scope, time, metadata, and RLS filters.
+Append only novel candidates without disturbing retained first-pass order. Keep the
+leading 80% when the candidate pool is full, reserve at most the trailing 20% for
+feedback, and never exceed the configured candidate budget; an explicitly configured
+reranker may then reorder the expanded pool. It defaults to zero because
+pseudo-relevance feedback can drift; benchmark each depth as a separate variant.
+Optional query planning is configured once per deployment and defaults off. Keep the
+original query, cap the total query count at five, deduplicate generated queries, and
+run every expansion through the ordinary RLS-filtered candidate query. The planner
+must never receive Memory content or broaden authorization. Planning failure must
+fall back to the original query. Treat its provider, model, revision, instruction,
+and query budget as versioned Evaluation metadata rather than a User/Workspace option.
+Memory search/list may constrain `scope`, `updatedAfter`, and exclusive
+`updatedBefore`, plus JSONB-containment `metadataFilter`. Apply these predicates to
+every lexical and dense candidate source before top-k and keep them in the Actor/RLS
+transaction; reranking must never restore a filtered result. Keep the GIN metadata
+index when changing benchmark or application filter paths.
+Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
+`LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
+raise it merely to inflate candidate recall: no-answer false results are part of the
+same quality gate.
 The generation-scoped pgvector column and HNSW index are fixed at 1024 dimensions. Self-host operators
 choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
 preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless
@@ -88,6 +180,13 @@ provider, model, and revision all match one active or rolling-deploy-compatible
 generation. Embedding model selection is not a Workspace/User product setting. The
 semantic query must keep its `MATERIALIZED` exact-generation CTE so global HNSW
 traversal cannot mix incompatible spaces before top-k.
+`lore-embedding-v2` applies structured list-item chunking for every provider.
+`lore-embedding-v3` is scoped to Qwen3/Ollama and additionally applies
+Qwen3-Embedding's fixed official retrieval instruction to query texts only; Qwen
+document texts remain unchanged. Google, OpenAI, and non-Qwen Ollama models retain
+the v2 revision until their own preprocessing changes. Treat any future
+query/document preprocessing change as a new protocol revision and deployment-wide
+re-index, never as a benchmark-only or operator-tunable prompt.
 
 Do not:
 
@@ -232,7 +331,8 @@ database invariant, not a UI convention.
   validate its checksum and limits, dry-run cleanly, require explicit owner remap,
   and record source provenance. It is not a PostgreSQL backup.
 - Mutation events and deletion tombstones never retain Memory content, query text,
-  credentials, or provider payloads and must expire.
+  credentials, or provider payloads and must expire. A future change feed/webhook/
+  AutoDream consumer reads this outbox; it must not weaken source-table RLS.
 - Credentials and secrets stay server-only, are stored hashed or encrypted as
   appropriate, and never use `NEXT_PUBLIC_*` variables.
 - `AUTH_MODE=none` is only acceptable for explicit local development with
@@ -321,12 +421,139 @@ Benchmark is part of the product quality system even without AutoDream.
   false-result count, warm mean/p50/p95 latency, misses, and threshold sweeps for
   the active deployment embedding space. Bob-owned private fixture Memories are
   forbidden tripwires in every query and any leak exits non-zero.
+- When a reranker is configured, the runner also measures the pre-rerank candidate
+  pool and can sweep minimum scores and diversity lambdas in one indexed run via
+  `LORE_BENCHMARK_RERANK_MIN_SCORES` and
+  `LORE_BENCHMARK_RERANK_DIVERSITY_LAMBDAS`; rank fusion uses
+  `LORE_BENCHMARK_RERANK_WEIGHTS`, candidate depth uses
+  `LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS`, and identical reranker calls are
+  memoized only inside the benchmark process. That cache uses hashed keys and a
+  bounded LRU (`LORE_BENCHMARK_CACHE_ENTRIES`, default 2,000) so large sweeps cannot
+  retain every candidate passage in key strings.
+- Every retrieval variant records its provider calls and benchmark-cache deltas in
+  `providerExecution`. Quality metrics remain valid on a cache hit, but only variants
+  with `latencyComparableToOnline=true` may be reported as live provider latency.
+- `LORE_BENCHMARK_RETRIEVAL_FEEDBACK_QUERIES=1..3` adds hybrid feedback,
+  planner+feedback, reranker+feedback, and combined variants while preserving the
+  no-feedback baselines and RLS hard gate.
+- Benchmark reports record exact planner/reranker instructions and retrieval knobs,
+  plus actual embedding, planning, and reranking request/input character counts as
+  provider-neutral cost drivers. Reader and judge transports report provider token
+  counts when their APIs return usage; character counts are not presented as billing tokens.
+- `LORE_BENCHMARK_RETRIEVAL_LIMITS` adds first-stage depth variants without a
+  reranker. Use it to measure candidate recall ceilings before spending model time
+  on wider cross-encoder pools; it is a benchmark setting, not a deployment limit.
+- LongMemEval-V2 `--retrieval-only` is a local diagnostic over questions with a
+  literal reference-answer trajectory anchor. It reports anchor Recall@1/Recall@K/MRR,
+  leaves reader/accuracy null and `scoreComplete=false`, and must never be presented
+  as the official end-answer benchmark score.
+- `bun run benchmark:memoryagentbench:accurate` runs a pinned Accurate Retrieval
+  diagnostic. RULER `Document N` boundaries are preserved before each document is
+  split into independent 1,200-character Lore Memories, preventing cross-document
+  false anchors; other sources use ordinary 1,200-character chunking. It chooses one
+  literal-answer anchor using query overlap, the most specific accepted reference,
+  answer/query proximity, and conservative English subject normalization; it skips
+  nonliteral questions and records anchor
+  coverage. The default is one 20-question RULER row; do not present its retrieval
+  metrics as the official generated-answer score.
+- External benchmark answer tripwires are Bob-private RLS canaries. Keep their exact
+  synchronous chunks and ownership validation, but do not enqueue document embeddings
+  for evidence the evaluating Alice Actor is forbidden to see.
+- Synthetic benchmark reruns may set `LORE_BENCHMARK_REUSE_INDEXED=1`; the runner
+  validates exact content/owner/scope and active embedding-space completeness before
+  reusing data. LongMemEval exposes the same behavior as `--reuse-indexed`.
+- `bun run benchmark:longmemeval` runs the official cleaned LongMemEval data fully
+  locally through the same native benchmark path. Dataset manifests pin the
+  upstream revision, byte length, SHA-256, license, and session granularity;
+  downloaded data stays ignored under `evaluation/datasets/`. Every question is a
+  separate Workspace, every conversation session is an Alice-owned private Memory,
+  and a Bob-owned private answer tripwire preserves the RLS hard gate. The oracle
+  split is only a low-cost smoke test; comparable retrieval scores use the `s` or
+  `m` cleaned haystack split. `--reuse-indexed` verifies the exact selected corpus
+  before rerunning retrieval-only ablations. Official retrieval comparison skips 30 abstention
+  questions; Lore reports positive retrieval and no-answer accuracy separately.
+- `evaluation/external/longmemeval-v2.json` pins the newer V2 questions, haystacks,
+  and 1.2 GB textual trajectory file. `benchmark:longmemeval-v2:fetch` defaults to
+  metadata-only and requires an explicit `small`/`medium` argument before fetching
+  trajectories. `benchmark:longmemeval-v2` is a local fixed-reader run: it deduplicates
+  shared trajectories, constrains each question with the pre-top-k metadata filter,
+  uses Bob-private tripwires, and reports deterministic answer accuracy, latency,
+  and tokens. Metadata fetches also pin and verify all 29 question screenshots. It
+  defaults to all 295 deterministic cases, including the one image-backed case. The reader's
+  domain-specific protocol and the abstention/gotcha judge rubrics are pinned to an
+  upstream commit. Under `--include-judge-cases`, a separately configured benchmark
+  judge adds all 128 abstention cases and 28 image-backed gotcha cases (451 total)
+  and records its model, latency, reasons, and tokens. Fixed-reader adapters send
+  verified question images inline to vision-capable OpenAI-compatible or Google
+  models; without a judge, judge cases remain unresolved and `scoreComplete` is false.
+  The built-in `lore-portable-deterministic-v2` reader profile uses a character
+  budget and temperature 0, so reports must not label it as the paper's sampled,
+  Qwen-token-budgeted official reader. Record prompt hashes, decoding, transport,
+  image routing, and context-budget units in every result.
+- `evaluation/external/memoryagentbench.json` pins the MIT-licensed
+  MemoryAgentBench Conflict Resolution split. The fetcher materializes only its
+  verified 3.2 MB JSONL form. The local runner preserves fact order in incremental
+  private Memories, alternates multi-hop/single-hop sources by default, plants
+  Bob-private answer tripwires, and reports the official normalized
+  `substring_exact_match`. Full 800-question runs are explicit; the default plan is
+  a low-resource 40-question / 58-Memory evaluation. `--retrieval-only` requires no
+  generative reader and reports the latest literal-answer fact Memory's Recall@1,
+  Recall@K, and MRR as a non-official retrieval diagnostic; all public questions
+  have a verified literal anchor.
+- `evaluation/external/locomo.json` pins the final ACL 2024 ten-conversation
+  LoCoMo release by commit, byte length, and SHA-256. The CC BY-NC 4.0 dataset
+  remains under ignored local benchmark storage and requires license review for
+  commercial evaluation. `benchmark:locomo:retrieval` maps dialog turns to
+  Alice-private Memories and runs annotated-evidence retrieval variants. The
+  canonical `benchmark:locomo` profile scores only categories 1-4 (1,540 cases)
+  with the original normalized token-F1 semantics and an NLTK 3.8.1-compatible
+  Porter stemmer; it is not the complete three-task LoCoMo benchmark. Category 5
+  must run alone as the explicitly named repaired-adversarial protocol because
+  444 of 446 upstream rows omit the `answer` field and the released option order
+  is unseeded. Preserve raw and unresolved evidence annotations, report retrieval
+  recall separately from answer F1, and never fold the repaired profile into an
+  unlabeled “official” overall score. `--skip-retrieval-diagnostic` may avoid a
+  duplicate setup sweep only when an exact retrieval report is retained
+  separately; the QA run must still execute real search for every question and
+  must record `setupDiagnosticSkipped: true` rather than importing unverified
+  setup metrics.
+- The pinned local 4B LoCoMo ablation found Qwen3-Reranker-0.6B Q8 improved answer
+  F1 on both `conv-26` and held-out `conv-30`, while planner+reranker was slower and
+  worse than reranker alone. Treat this as a named 35-question quality profile, not
+  a deployment default; reranking still regressed the Conflict workload.
+- LoCoMo may run the off-by-default explicit context-group ablation with source
+  `sessionNumber` plus numeric `sessionTurn`. It preserves a configured count of
+  ordinary hybrid candidates, expands only groups seeded by visible results, and
+  reapplies Workspace, scope, time, metadata, and RLS filters. This is a Lore
+  adaptation of HiGMem's natural hierarchy idea, not its generated Event hierarchy;
+  do not generalize it into a deployment default until full-category retrieval and
+  answer runs pass without hiding multi-hop regressions.
+- `ollama-listwise` is an experimental deployment-wide reranker, adapted from
+  HiGMem's flat evidence selector without its automatic Event summaries. It sends
+  only authorized compact passages under opaque ids, requires exactly one finite
+  `[0,1]` score per id, pins deterministic Ollama controls, and fails open. Keep it
+  off by default until a versioned suite proves quality, latency, and resident-memory
+  gains over the 0.6B pairwise profile.
 - Retrieval metrics may include Recall@K, MRR, and nDCG; isolation failures are
   hard failures, not a score that can be averaged away.
 - Workspace-owned evaluation suites follow the same RLS rules as Memories.
 - Never centralize or export private production Memories for evaluation by default.
 - Evaluation runs are read-only against production data. Any write/replay test uses
   an isolated evaluation Workspace or disposable database.
+- Benchmark-only readers support native Ollama. Pin its model digest and deterministic
+  request controls in the report, require loopback plus a locally listed non-cloud
+  model, use bounded residency during warm runs, explicitly unload on exit, and never
+  download a model as an implicit benchmark side effect.
+- MemoryAgentBench may enable benchmark-only structured post-retrieval assembly for
+  explicitly versioned current-value questions. Compact only RLS-authorized
+  returned Memory evidence to a fact-level BM25 top-10 pool, validate copied fact text
+  against that pool, derive freshness serials from source evidence rather than trusting
+  model-generated numbers, and then apply max(serial) deterministically. Multi-hop CAR
+  must run a fresh RLS-authorized Lore search for every resolved hop and cap the
+  decomposition at six hops. Reports retain decomposition, per-hop trace, extra search
+  latency, raw extraction, source/pool counts, and the original paper plus official-code
+  commit. Do not apply it to general temporal questions or present this evaluator path
+  as automatic production consolidation.
 
 ## Current stack and development loop
 
@@ -352,8 +579,19 @@ bun run db:preflight # validate server/schema/history before migration
 bun run db:bootstrap # migrate + provision separate request/maintenance logins
 bun run db:backup # create an operator-owned PostgreSQL custom-format backup
 bun run db:restore # restore into an explicitly named target database
+bun run db:pitr:check # verify PostgreSQL WAL/PITR prerequisites
+bun run db:embedding:report # report build-generation coverage
+bun run db:embedding:activate # atomically activate one complete generation
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
+bun run benchmark:longmemeval:fetch # download and verify the pinned cleaned S split
+bun run benchmark:longmemeval # run LongMemEval-S locally against Lore
+bun run benchmark:longmemeval-v2:fetch # fetch pinned V2 metadata or an explicit trajectory tier
+bun run benchmark:longmemeval-v2 # run the fixed-reader V2 profile locally
+bun run benchmark:locomo:fetch # fetch the pinned CC BY-NC ACL 2024 dataset
+bun run benchmark:locomo # run the local categories 1-4 QA/F1 profile
+bun run benchmark:memoryagentbench:fetch # fetch the pinned Conflict Resolution slice
+bun run benchmark:memoryagentbench # run the local conflict/multi-hop profile
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
