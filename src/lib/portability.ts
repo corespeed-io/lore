@@ -113,6 +113,38 @@ function metadata(value: unknown, name: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new PortabilityValidationError(`${name} must be an object`);
   }
+  const pending: Array<{ depth: number; path: string; value: unknown }> = [
+    { depth: 0, path: name, value },
+  ];
+  let visited = 0;
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current) break;
+    visited += 1;
+    if (visited > 10_000) {
+      throw new PortabilityValidationError(`${name} exceeds 10000 values`);
+    }
+    if (current.depth > 32) {
+      throw new PortabilityValidationError(`${name} exceeds 32 levels`);
+    }
+    if (typeof current.value === "string" && current.value.includes("\0")) {
+      throw new PortabilityValidationError(`${current.path} contains an invalid null character`);
+    }
+    if (Array.isArray(current.value)) {
+      for (const [index, item] of current.value.entries()) {
+        pending.push({ depth: current.depth + 1, path: `${current.path}[${index}]`, value: item });
+      }
+    } else if (current.value && typeof current.value === "object") {
+      for (const [key, item] of Object.entries(current.value)) {
+        if (key.includes("\0")) {
+          throw new PortabilityValidationError(
+            `${current.path} contains an invalid null character`,
+          );
+        }
+        pending.push({ depth: current.depth + 1, path: `${current.path}.${key}`, value: item });
+      }
+    }
+  }
   if (canonicalJson(value).length > 100_000) {
     throw new PortabilityValidationError(`${name} exceeds 100000 characters`);
   }
@@ -168,6 +200,7 @@ function validateArchiveShape(archive: WorkspaceArchive): void {
     if (
       typeof memory.content !== "string" ||
       !memory.content.trim() ||
+      memory.content.includes("\0") ||
       memory.content.length > 1_000_000
     ) {
       throw new PortabilityValidationError(`memories[${index}].content is invalid`);
@@ -186,7 +219,12 @@ function validateArchiveShape(archive: WorkspaceArchive): void {
     if (!memoryIds.has(source) || !memoryIds.has(target) || source === target) {
       throw new PortabilityValidationError(`links[${index}] has invalid endpoints`);
     }
-    if (typeof link.kind !== "string" || !link.kind.trim() || link.kind.length > 64) {
+    if (
+      typeof link.kind !== "string" ||
+      !link.kind.trim() ||
+      link.kind.includes("\0") ||
+      link.kind.length > 64
+    ) {
       throw new PortabilityValidationError(`links[${index}].kind is invalid`);
     }
     if (!Number.isFinite(link.weight) || link.weight < 0 || link.weight > 1) {
@@ -385,10 +423,9 @@ export function createPortabilityModule(database: PostgresDatabase) {
           if (conflictPolicy === "skip" && conflictingIds.has(memory.id)) {
             continue;
           }
-          const targetId =
-            conflictPolicy === "remap" || conflictingIds.has(memory.id)
-              ? crypto.randomUUID()
-              : memory.id;
+          // Always assign a fresh id. Trying to preserve an apparently unused
+          // source id would let a primary-key conflict reveal an RLS-hidden Memory.
+          const targetId = crypto.randomUUID();
           memoryIdMap[memory.id] = targetId;
           await transaction.query(
             `INSERT INTO memories (

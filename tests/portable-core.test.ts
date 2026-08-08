@@ -346,6 +346,38 @@ test("Workspace export is actor-visible, checksummed, dry-runnable, and replay-s
   ).rejects.toBeInstanceOf(PortabilityValidationError);
 });
 
+test("Workspace import cannot reveal an RLS-hidden Memory id collision", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const portability = createPortabilityModule(testContext.database);
+  const hidden = await memories.remember(testContext.bob, {
+    content: "Bob's private collision sentinel.",
+    scope: "private",
+  });
+  await memories.remember(testContext.carol, { content: "Portable source Memory." });
+  const archive = await portability.exportWorkspace(testContext.carol);
+  const sourceOwner = archive.memories[0].ownerUserId;
+  archive.memories[0].id = hidden.id;
+  const { checksum: _checksum, ...manifest } = archive.manifest;
+  archive.manifest.checksum = await mutationRequestHash({
+    manifest,
+    memories: archive.memories,
+    links: archive.links,
+  });
+
+  const imported = await portability.importWorkspace(testContext.alice, {
+    archive,
+    conflictPolicy: "error",
+    ownerMap: { [sourceOwner]: testContext.alice.userId },
+  });
+
+  expect(imported.memoryIdMap[hidden.id]).not.toBe(hidden.id);
+  await expect(memories.retrieve(testContext.alice, hidden.id)).resolves.toBeNull();
+  await expect(
+    memories.retrieve(testContext.alice, imported.memoryIdMap[hidden.id]),
+  ).resolves.toMatchObject({ content: "Portable source Memory." });
+});
+
 test("Portable Core readiness checks schema, vector, and the RLS request role", async () => {
   const testContext = await createMemoryTestContext();
   const operations = createOperationsModule(testContext.database, { embeddingConfigured: true });
