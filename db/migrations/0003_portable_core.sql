@@ -577,15 +577,50 @@ AS $$
 DECLARE
   target_generation_id uuid;
 BEGIN
-  SELECT generation.id INTO target_generation_id
-  FROM lore.ensure_embedding_generation(
-    active_embedding_provider,
-    active_embedding_model,
-    1024,
-    active_embedding_revision
-  ) generation;
   IF lease_timeout_seconds NOT BETWEEN 30 AND 3600 THEN
     RAISE EXCEPTION 'Lease timeout must be between 30 and 3600 seconds';
+  END IF;
+
+  IF requested_job_id IS NULL THEN
+    SELECT generation.id INTO target_generation_id
+    FROM lore.ensure_embedding_generation(
+      active_embedding_provider,
+      active_embedding_model,
+      1024,
+      active_embedding_revision
+    ) generation;
+  ELSE
+    -- Queue hints may arrive after rollback retention has deleted their job and
+    -- generation. Resolve an existing identity instead of recreating an empty
+    -- building generation. Lock generation before job, matching retention prune
+    -- and embedding completion, so their transactions cannot deadlock.
+    SELECT job.generation_id INTO target_generation_id
+    FROM memory_embedding_jobs job
+    WHERE job.id = requested_job_id;
+    IF target_generation_id IS NULL THEN
+      RETURN;
+    END IF;
+
+    PERFORM generation.id
+    FROM embedding_generations generation
+    WHERE generation.id = target_generation_id
+      AND generation.embedding_provider = active_embedding_provider
+      AND generation.embedding_model = active_embedding_model
+      AND generation.embedding_dimensions = 1024
+      AND generation.embedding_revision = active_embedding_revision
+    FOR KEY SHARE;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
+
+    PERFORM job.id
+    FROM memory_embedding_jobs job
+    WHERE job.id = requested_job_id
+      AND job.generation_id = target_generation_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
   END IF;
 
   UPDATE memory_embedding_jobs job
@@ -962,6 +997,16 @@ BEGIN
   IF retention_seconds < 3600 THEN
     RAISE EXCEPTION 'Embedding rollback retention must be at least one hour';
   END IF;
+
+  -- Completion obtains a generation FK lock before it updates its job. Take the
+  -- same generation -> job order here so a late completion and retention sweep
+  -- serialize instead of deadlocking.
+  PERFORM generation.id
+  FROM embedding_generations generation
+  WHERE generation.status = 'retiring'
+    AND generation.retired_at <= now() - retention_seconds * interval '1 second'
+  ORDER BY generation.id
+  FOR UPDATE;
 
   -- A retired generation is no longer claimed by the active deployment. Cancel
   -- work that never started, plus processing work whose lease has exceeded the

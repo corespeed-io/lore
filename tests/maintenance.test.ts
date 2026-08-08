@@ -479,9 +479,23 @@ test("expired retiring generations cancel abandoned pending jobs before pruning"
     );
   });
 
+  const retiredJob = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ id: string }>(
+      `SELECT job.id
+       FROM memory_embedding_jobs job
+       JOIN embedding_generations generation ON generation.id = job.generation_id
+       WHERE generation.status = 'retiring'`,
+    ),
+  );
+  expect(retiredJob.rows).toHaveLength(1);
+
   await expect(
     pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
   ).resolves.toBe(1);
+  await expect(firstMaintenance.run(retiredJob.rows[0].id)).resolves.toEqual({
+    status: "idle",
+    jobId: retiredJob.rows[0].id,
+  });
   const retiredState = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ generation_count: string; job_count: string }>(
       `SELECT
