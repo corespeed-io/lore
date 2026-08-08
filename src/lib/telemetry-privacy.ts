@@ -26,17 +26,31 @@ export function privacySafeSpanName(name: string): string {
 
 export function scrubSpanForPrivacy(span: ReadableSpan): void {
   const mutable = span as ReadableSpan & {
+    attributes: Record<string, unknown>;
     name: string;
     status: { code: number; message?: string };
   };
   mutable.name = privacySafeSpanName(mutable.name);
   for (const key of Object.keys(mutable.attributes)) {
-    if (!SAFE_SPAN_ATTRIBUTES.has(key)) delete mutable.attributes[key];
+    if (!SAFE_SPAN_ATTRIBUTES.has(key)) {
+      delete mutable.attributes[key];
+      continue;
+    }
+    const value = mutable.attributes[key];
+    if (typeof value === "string") {
+      mutable.attributes[key] = privacySafeSpanName(value);
+    } else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      mutable.attributes[key] = value.map(privacySafeSpanName);
+    }
   }
   if (mutable.status.message) delete mutable.status.message;
   for (const event of mutable.events) {
     for (const key of Object.keys(event.attributes ?? {})) {
-      if (key !== "exception.type") delete event.attributes?.[key];
+      if (key !== "exception.type") {
+        delete event.attributes?.[key];
+      } else if (typeof event.attributes?.[key] === "string") {
+        event.attributes[key] = privacySafeSpanName(event.attributes[key]);
+      }
     }
   }
   for (const link of mutable.links) {

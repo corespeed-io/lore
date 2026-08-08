@@ -11,7 +11,7 @@ test("telemetry removes query, content, tenant, resource, and provider details",
       "http.target": "/api/v1/memories/id?q=private+question",
       "lore.operation": "memory.search",
       "memory.content": "secret",
-      "next.route": "/api/v1/memories/[id]",
+      "next.route": "/api/v1/memories/5f3739f8-4baa-4964-978e-c93c6c4eaca5",
       "workspace.id": "tenant-secret",
     },
     status: { code: 2, message: "provider response included secret content" },
@@ -39,7 +39,7 @@ test("telemetry removes query, content, tenant, resource, and provider details",
     "error.type": "ProviderError",
     "http.method": "GET",
     "lore.operation": "memory.search",
-    "next.route": "/api/v1/memories/[id]",
+    "next.route": "/api/v1/memories/:id",
   });
   expect(span.status.message).toBeUndefined();
   expect(span.events[0]?.attributes).toEqual({ "exception.type": "ProviderError" });
