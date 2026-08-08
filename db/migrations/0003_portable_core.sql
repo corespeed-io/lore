@@ -660,7 +660,7 @@ BEGIN
       OR memory.owner_user_id <> job.owner_user_id
       OR memory.scope <> job.memory_scope
     )
-    AND (requested_job_id IS NULL OR job.id = requested_job_id)
+    AND job.id = requested_job_id
     AND job.status IN ('pending', 'processing');
 
   UPDATE memory_embedding_jobs job
@@ -668,7 +668,7 @@ BEGIN
       last_error = COALESCE(job.last_error, 'Embedding job lease expired'),
       completed_at = now(), updated_at = now()
   WHERE job.status = 'processing'
-    AND (requested_job_id IS NULL OR job.id = requested_job_id)
+    AND job.id = requested_job_id
     AND job.leased_at <= now() - lease_timeout_seconds * interval '1 second'
     AND job.attempt_count >= job.max_attempts;
 
@@ -782,12 +782,18 @@ BEGIN
     JOIN memories memory
       ON memory.workspace_id = job.workspace_id
      AND memory.id = job.memory_id
-    WHERE job.status IN ('pending', 'processing')
+    WHERE (
+      job.status IN ('pending', 'processing')
       AND (
         memory.version <> job.memory_version
         OR memory.owner_user_id <> job.owner_user_id
         OR memory.scope <> job.memory_scope
       )
+    ) OR (
+      job.status = 'processing'
+      AND job.attempt_count >= job.max_attempts
+      AND job.leased_at <= now() - interval '1 hour'
+    )
     ORDER BY job.id
     LIMIT job_limit
   ) candidate;
@@ -874,17 +880,39 @@ BEGIN
 
   FOREACH target_job_id IN ARRAY stale_job_ids LOOP
     UPDATE memory_embedding_jobs job
-    SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
+    SET status = CASE
+          WHEN memory.version <> job.memory_version
+            OR memory.owner_user_id <> job.owner_user_id
+            OR memory.scope <> job.memory_scope
+            THEN 'cancelled'::memory_embedding_job_status
+          ELSE 'dead'::memory_embedding_job_status
+        END,
+        lease_token = NULL, leased_at = NULL,
+        last_error = CASE
+          WHEN memory.version <> job.memory_version
+            OR memory.owner_user_id <> job.owner_user_id
+            OR memory.scope <> job.memory_scope
+            THEN job.last_error
+          ELSE COALESCE(job.last_error, 'Embedding job lease expired')
+        END,
         completed_at = now(), updated_at = now()
     FROM memories memory
     WHERE job.id = target_job_id
       AND memory.workspace_id = job.workspace_id
       AND memory.id = job.memory_id
-      AND job.status IN ('pending', 'processing')
       AND (
-        memory.version <> job.memory_version
-        OR memory.owner_user_id <> job.owner_user_id
-        OR memory.scope <> job.memory_scope
+        (
+          job.status IN ('pending', 'processing')
+          AND (
+            memory.version <> job.memory_version
+            OR memory.owner_user_id <> job.owner_user_id
+            OR memory.scope <> job.memory_scope
+          )
+        ) OR (
+          job.status = 'processing'
+          AND job.attempt_count >= job.max_attempts
+          AND job.leased_at <= now() - interval '1 hour'
+        )
       );
   END LOOP;
 

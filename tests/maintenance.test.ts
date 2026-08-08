@@ -157,6 +157,29 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
   await expect(maintenance.run()).resolves.toMatchObject({ status: "idle" });
 });
 
+test("deployment sweeps bound and retire exhausted processing leases", async () => {
+  const testContext = await createMemoryTestContext();
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
+  await memories.remember(testContext.alice, { content: "An abandoned final attempt." });
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE memory_embedding_jobs
+       SET status = 'processing', attempt_count = max_attempts,
+           lease_token = gen_random_uuid(), leased_at = now() - interval '2 hours'`,
+    ),
+  );
+
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+  });
+  await expect(maintenance.seedStale(1)).resolves.toEqual([]);
+  const job = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ status: string }>("SELECT status::text FROM memory_embedding_jobs"),
+  );
+  expect(job.rows).toEqual([{ status: "dead" }]);
+});
+
 test("deployment sweeps prune expired terminal job history", async () => {
   const testContext = await createMemoryTestContext();
   const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
