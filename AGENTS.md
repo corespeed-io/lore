@@ -60,8 +60,11 @@ been removed. Lore now has a native implementation:
   generation-scoped vectors beside the active generation without rewriting
   canonical chunks. Activation requires exact coverage and atomically moves the
   prior active generation to bounded rollback. Postgres is the durable job source;
-  the self-host Node worker polls it, while Cloudflare Queues are wake-up hints with
-  a scheduled database sweep as the delivery backstop;
+  rollout maintenance drains both the serving and explicitly configured building
+  provider/model generations, because request writes continue to enqueue serving
+  jobs until cutover. The self-host Node worker polls both sequentially by default,
+  while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
+  database sweep as the delivery backstop;
 - `src/lib/idempotency.ts`, `portability.ts`, `operations.ts`, and `telemetry.ts`
   own the Portable Core seams. Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves

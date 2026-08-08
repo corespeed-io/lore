@@ -276,9 +276,6 @@ WHERE generation.embedding_provider = job.embedding_provider
   AND generation.embedding_model = job.embedding_model
   AND generation.embedding_revision = job.embedding_revision;
 
-ALTER TABLE memory_embedding_jobs
-  ALTER COLUMN generation_id SET NOT NULL;
-
 CREATE INDEX memory_embedding_jobs_generation_status_idx
   ON memory_embedding_jobs (generation_id, status, available_at, created_at, id);
 
@@ -794,6 +791,11 @@ BEGIN
       job.status = 'processing'
       AND job.attempt_count >= job.max_attempts
       AND job.leased_at <= now() - interval '1 hour'
+    ) OR (
+      job.generation_id IS NULL
+      AND job.embedding_provider = active_embedding_provider
+      AND job.embedding_model = active_embedding_model
+      AND job.embedding_revision = active_embedding_revision
     )
     ORDER BY job.id
     LIMIT job_limit
@@ -882,6 +884,20 @@ BEGIN
         OR (job.status = 'dead' AND job.completed_at < now() - interval '30 days')
       );
     IF NOT FOUND THEN
+      -- Migration 0003 is additive so an older application instance may still
+      -- enqueue without generation_id during a rolling deployment. Adopt that
+      -- job in place without changing its valid status, lease, or completion
+      -- fields; the ordinary stale-state recheck below still handles an obsolete
+      -- Memory identity or an exhausted processing lease in the same sweep.
+      UPDATE memory_embedding_jobs job
+      SET generation_id = target_generation_id,
+          updated_at = now()
+      WHERE job.id = target_job_id
+        AND job.generation_id IS NULL
+        AND job.embedding_provider = active_embedding_provider
+        AND job.embedding_model = active_embedding_model
+        AND job.embedding_revision = active_embedding_revision;
+
       UPDATE memory_embedding_jobs job
       SET status = CASE
             WHEN memory.version <> job.memory_version
@@ -1238,6 +1254,10 @@ AS $$
       'workspacePortability', true,
       'embeddingGenerations', true,
       'cursorPagination', true
+    ),
+    'limits', jsonb_build_object(
+      'workspaceArchiveMemories', 10000,
+      'workspaceArchiveLinks', 50000
     ),
     'activeEmbeddingGeneration', (
       SELECT jsonb_build_object(

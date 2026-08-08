@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 
 const migrations = new URL("../db/migrations/", import.meta.url);
 
-test("Portable Core adopts multiple job-only embedding spaces with one active generation", async () => {
+test("Portable Core adopts jobs written during the additive generation rollout", async () => {
   const postgres = new PGlite({ extensions: { vector } });
   try {
     await postgres.waitReady;
@@ -31,6 +31,12 @@ test("Portable Core adopts multiple job-only embedding spaces with one active ge
           '20000000-0000-4000-8000-000000000001',
           '10000000-0000-4000-8000-000000000001',
           'Second Memory'
+        ),
+        (
+          '30000000-0000-4000-8000-000000000003',
+          '20000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          'Memory written during the rolling deployment'
         );
       INSERT INTO memory_embedding_jobs (
         id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
@@ -53,16 +59,56 @@ test("Portable Core adopts multiple job-only embedding spaces with one active ge
     `);
 
     await postgres.exec(await readFile(new URL("0003_portable_core.sql", migrations), "utf8"));
+    const expandedColumn = await postgres.query<{ is_nullable: string }>(
+      `SELECT is_nullable
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'memory_embedding_jobs'
+         AND column_name = 'generation_id'`,
+    );
+    expect(expandedColumn.rows).toEqual([{ is_nullable: "YES" }]);
+
+    // A pre-Portable-Core instance may still enqueue a generation-less job while
+    // the additive migration and generation-aware application overlap.
+    await postgres.exec(`
+      INSERT INTO memory_embedding_jobs (
+        id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
+        embedding_provider, embedding_model, embedding_revision
+      ) VALUES (
+        '40000000-0000-4000-8000-000000000003',
+        '20000000-0000-4000-8000-000000000001',
+        '30000000-0000-4000-8000-000000000003',
+        '10000000-0000-4000-8000-000000000001',
+        'shared', 1, 'ollama', 'model-c', 'revision-c'
+      );
+    `);
+
+    await postgres.query("SELECT * FROM lore.enqueue_stale_memory_embedding_jobs($1, $2, $3, $4)", [
+      "ollama",
+      "model-c",
+      "revision-c",
+      100,
+    ]);
     const generations = await postgres.query<{ status: string }>(
       "SELECT status::text FROM embedding_generations ORDER BY status, embedding_provider",
     );
-    const jobs = await postgres.query<{ generation_id: string | null }>(
-      "SELECT generation_id FROM memory_embedding_jobs",
+    const jobs = await postgres.query<{
+      generation_id: string | null;
+      id: string;
+      status: string;
+    }>("SELECT id, generation_id, status::text FROM memory_embedding_jobs ORDER BY id");
+    const state = await postgres.query<{ schema_revision: number }>(
+      "SELECT schema_revision FROM lore_system_state WHERE singleton",
     );
 
     expect(generations.rows.filter((row) => row.status === "active")).toHaveLength(1);
-    expect(generations.rows.filter((row) => row.status === "building")).toHaveLength(1);
+    expect(generations.rows.filter((row) => row.status === "building")).toHaveLength(2);
     expect(jobs.rows.every((row) => row.generation_id !== null)).toBe(true);
+    expect(jobs.rows.at(-1)).toMatchObject({
+      id: "40000000-0000-4000-8000-000000000003",
+      status: "pending",
+    });
+    expect(state.rows).toEqual([{ schema_revision: 3 }]);
   } finally {
     await postgres.close();
   }

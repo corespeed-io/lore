@@ -1,4 +1,5 @@
 import { LORE_API_VERSION } from "./operations";
+import { MAX_WORKSPACE_ARCHIVE_LINKS, MAX_WORKSPACE_ARCHIVE_MEMORIES } from "./portability";
 
 const errorSchema = {
   type: "object",
@@ -17,6 +18,7 @@ const errorSchema = {
         "not_found",
         "precondition_required",
         "version_conflict",
+        "workspace_export_limit_exceeded",
       ],
     },
     error: { type: "string" },
@@ -405,6 +407,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             "200": jsonResponse("Versioned actor-visible Workspace archive", {
               $ref: "#/components/schemas/WorkspaceArchive",
             }),
+            "409": { $ref: "#/components/responses/Error" },
           },
         },
       },
@@ -424,6 +427,8 @@ export function loreOpenApiDocument(): Record<string, unknown> {
       "/api/v1/capabilities": {
         get: {
           operationId: "getCapabilities",
+          security: actorSecurity,
+          parameters: [workspaceHeader],
           responses: {
             "200": jsonResponse("Deployment capabilities without tenant data", {
               $ref: "#/components/schemas/Capabilities",
@@ -819,8 +824,16 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             checksum: { type: "string", pattern: "^[0-9a-f]{64}$" },
             exportedAt: { type: "string", format: "date-time" },
             format: { const: "lore-workspace-v1" },
-            memoryCount: { type: "integer", minimum: 0, maximum: 10_000 },
-            linkCount: { type: "integer", minimum: 0, maximum: 50_000 },
+            memoryCount: {
+              type: "integer",
+              minimum: 0,
+              maximum: MAX_WORKSPACE_ARCHIVE_MEMORIES,
+            },
+            linkCount: {
+              type: "integer",
+              minimum: 0,
+              maximum: MAX_WORKSPACE_ARCHIVE_LINKS,
+            },
             sourceDeploymentId: { type: "string", format: "uuid" },
             sourceWorkspaceId: { type: "string", format: "uuid" },
             visibility: { const: "actor-visible" },
@@ -834,12 +847,12 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             manifest: { $ref: "#/components/schemas/WorkspaceArchiveManifest" },
             memories: {
               type: "array",
-              maxItems: 10_000,
+              maxItems: MAX_WORKSPACE_ARCHIVE_MEMORIES,
               items: { $ref: "#/components/schemas/WorkspaceArchiveMemory" },
             },
             links: {
               type: "array",
-              maxItems: 50_000,
+              maxItems: MAX_WORKSPACE_ARCHIVE_LINKS,
               items: { $ref: "#/components/schemas/WorkspaceArchiveLink" },
             },
           },
@@ -891,6 +904,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             "schemaRevision",
             "deploymentId",
             "features",
+            "limits",
             "activeEmbeddingGeneration",
           ],
           properties: {
@@ -915,6 +929,15 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 workspacePortability: { const: true },
                 embeddingGenerations: { const: true },
                 cursorPagination: { const: true },
+              },
+            },
+            limits: {
+              type: "object",
+              additionalProperties: false,
+              required: ["workspaceArchiveMemories", "workspaceArchiveLinks"],
+              properties: {
+                workspaceArchiveMemories: { const: MAX_WORKSPACE_ARCHIVE_MEMORIES },
+                workspaceArchiveLinks: { const: MAX_WORKSPACE_ARCHIVE_LINKS },
               },
             },
             activeEmbeddingGeneration: {

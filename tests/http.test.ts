@@ -5,6 +5,7 @@ import {
   createAgentCredentialHandlers,
   createAgentGrantHandlers,
   createAgentHandlers,
+  createCapabilitiesHandlers,
   createEvaluationRunByIdHandlers,
   createEvaluationRunHandlers,
   createEvaluationSuiteHandlers,
@@ -74,6 +75,36 @@ test("Human can create a Workspace then write and list native Memories over HTTP
     links: [],
   });
   await testContext.close();
+});
+
+test("Capabilities verifies Agent credentials and Workspace grants in the handler", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Capabilities Agent" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const capabilities = createCapabilitiesHandlers(testContext.database, {
+    embeddingConfigured: false,
+  });
+  const request = (token: string) =>
+    new Request("http://lore.local/api/v1/capabilities", {
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-lore-workspace-id": testContext.alice.workspaceId,
+      },
+    });
+
+  const accepted = await capabilities.GET(request(credential.token));
+  const shapeOnly = await capabilities.GET(request(`lore_agent_${"0".repeat(64)}`));
+  await access.revokeAgentCredential(testContext.alice, credential.id);
+  const revoked = await capabilities.GET(request(credential.token));
+
+  expect(accepted.status).toBe(200);
+  expect(accepted.headers.get("cache-control")).toBe("private, no-store");
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 3 });
+  expect(shapeOnly.status).toBe(403);
+  await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
+  expect(revoked.status).toBe(403);
 });
 
 test("Memory HTTP resource supports retrieve, update, and forget", async () => {

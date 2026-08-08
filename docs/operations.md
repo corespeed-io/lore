@@ -14,9 +14,17 @@ a Workspace export.
 
 `/api/v1` is the stable API prefix. `/openapi.json` publishes the OpenAPI 3.1.1
 document, while `GET /api/v1/capabilities` reports the live schema revision and
-active embedding generation without tenant data. Existing unversioned routes remain
-available to the bundled UI, but clients should generate integrations from the v1
-document.
+active embedding generation without tenant data. Capabilities still requires a
+verified Actor and `x-lore-workspace-id`; a bearer token's shape alone never grants
+access. Existing unversioned routes remain available to the bundled UI, but clients
+should generate integrations from the v1 document.
+
+Migration `0003` adds and backfills nullable job generation ids so legacy writers
+can overlap with the generation-aware application. The bounded maintenance sweep
+adopts generation-less jobs for its configured embedding identity. A future
+contract migration may enforce `NOT NULL` only after generation-aware application
+instances have replaced every legacy writer; schema revision 3 remains current
+during this additive rollout.
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
@@ -38,6 +46,12 @@ Memory browse pagination accepts an opaque `cursor` and returns the next value i
 - shared Memories plus private Memories owned by the requesting User;
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
+
+An archive is bounded to 10,000 visible Memories and 50,000 visible Links, matching
+the import contract. Export reads only a one-row sentinel beyond each bound, so a
+Worker never materializes an unbounded number of Workspace rows. If either bound
+is exceeded, export returns `workspace_export_limit_exceeded` (409) and does not
+emit a partial archive. The same limits are published by `/api/v1/capabilities`.
 
 It never includes another member's private Memory, credentials, Memberships,
 Agents, embeddings, jobs, evaluations, idempotency records, or mutation events.

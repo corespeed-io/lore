@@ -1,13 +1,80 @@
 import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
+import type { PostgresDatabase } from "@/lib/db";
 import { createMemoryGraphModule } from "@/lib/graph";
 import { IdempotencyConflictError, mutationRequestHash } from "@/lib/idempotency";
 import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
 import { createMemoryModule, MemoryVersionConflictError } from "@/lib/memory";
 import { createOperationsModule } from "@/lib/operations";
-import { createPortabilityModule, PortabilityValidationError } from "@/lib/portability";
+import {
+  createPortabilityModule,
+  MAX_WORKSPACE_ARCHIVE_LINKS,
+  MAX_WORKSPACE_ARCHIVE_MEMORIES,
+  PortabilityValidationError,
+  WorkspaceExportLimitError,
+} from "@/lib/portability";
 import { markDependencyFailure, markDependencySuccess } from "@/lib/telemetry";
 import { createMemoryTestContext } from "./support/memory-context";
+
+const EXPORT_TEST_DEPLOYMENT_ID = "30000000-0000-4000-8000-000000000001";
+
+function exportLimitDatabase(options: {
+  linkCount?: number;
+  memoryCount: number;
+  queries: string[];
+}): PostgresDatabase {
+  const memory = {
+    id: "40000000-0000-4000-8000-000000000001",
+    owner_user_id: "10000000-0000-4000-8000-000000000001",
+    scope: "shared",
+    content: "Bounded export sentinel.",
+    metadata: {},
+    version: 1,
+    created_at: "2026-08-08T00:00:00.000Z",
+    updated_at: "2026-08-08T00:00:00.000Z",
+  };
+  const link = {
+    id: "50000000-0000-4000-8000-000000000001",
+    source_memory_id: memory.id,
+    target_memory_id: memory.id,
+    kind: "related",
+    weight: 1,
+    metadata: {},
+    created_at: "2026-08-08T00:00:00.000Z",
+    updated_at: "2026-08-08T00:00:00.000Z",
+  };
+  return {
+    transaction: (use) =>
+      use({
+        async query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }> {
+          options.queries.push(sql);
+          if (sql.includes("set_config('lore.workspace_id'")) return { rows: [] };
+          if (sql.includes("portable_core_capabilities")) {
+            return {
+              rows: [
+                { capabilities: { deploymentId: EXPORT_TEST_DEPLOYMENT_ID } },
+              ] as unknown as Row[],
+            };
+          }
+          if (sql.includes("FROM memories")) {
+            expect(sql).toContain("LIMIT $2");
+            expect(params?.[1]).toBe(MAX_WORKSPACE_ARCHIVE_MEMORIES + 1);
+            return {
+              rows: Array(options.memoryCount).fill(memory) as unknown as Row[],
+            };
+          }
+          if (sql.includes("FROM memory_links")) {
+            expect(sql).toContain("LIMIT $3");
+            expect(params?.[2]).toBe(MAX_WORKSPACE_ARCHIVE_LINKS + 1);
+            return {
+              rows: Array(options.linkCount ?? 0).fill(link) as unknown as Row[],
+            };
+          }
+          throw new Error(`Unexpected export test query: ${sql}`);
+        },
+      }),
+  };
+}
 
 test("Memory create replays the same Idempotency-Key and rejects a changed payload", async () => {
   const testContext = await createMemoryTestContext();
@@ -377,6 +444,43 @@ test("Workspace export is actor-visible, checksummed, dry-runnable, and replay-s
   ).rejects.toBeInstanceOf(PortabilityValidationError);
 });
 
+test("Workspace export stops at the visible Memory sentinel before querying Links", async () => {
+  const queries: string[] = [];
+  const portability = createPortabilityModule(
+    exportLimitDatabase({ memoryCount: MAX_WORKSPACE_ARCHIVE_MEMORIES + 1, queries }),
+  );
+
+  await expect(
+    portability.exportWorkspace({
+      workspaceId: "20000000-0000-4000-8000-000000000001",
+      userId: "10000000-0000-4000-8000-000000000001",
+    }),
+  ).rejects.toMatchObject({
+    code: "workspace_export_limit_exceeded",
+    status: 409,
+  } satisfies Partial<WorkspaceExportLimitError>);
+  expect(queries.some((query) => query.includes("FROM memory_links"))).toBe(false);
+});
+
+test("Workspace export stops at the visible Link sentinel", async () => {
+  const queries: string[] = [];
+  const portability = createPortabilityModule(
+    exportLimitDatabase({
+      linkCount: MAX_WORKSPACE_ARCHIVE_LINKS + 1,
+      memoryCount: 1,
+      queries,
+    }),
+  );
+
+  await expect(
+    portability.exportWorkspace({
+      workspaceId: "20000000-0000-4000-8000-000000000001",
+      userId: "10000000-0000-4000-8000-000000000001",
+    }),
+  ).rejects.toBeInstanceOf(WorkspaceExportLimitError);
+  expect(queries.filter((query) => query.includes("FROM memory_links"))).toHaveLength(1);
+});
+
 test("Workspace import cannot reveal an RLS-hidden Memory id collision", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -482,6 +586,10 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
       idempotency: true,
       optimisticConcurrency: true,
       transactionalOutbox: true,
+    },
+    limits: {
+      workspaceArchiveLinks: MAX_WORKSPACE_ARCHIVE_LINKS,
+      workspaceArchiveMemories: MAX_WORKSPACE_ARCHIVE_MEMORIES,
     },
   });
   await expect(operations.readiness()).resolves.toMatchObject({

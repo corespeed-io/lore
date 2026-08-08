@@ -20,11 +20,13 @@ import {
   type MemoryScope,
   MemoryVersionConflictError,
 } from "./memory";
+import { createOperationsModule } from "./operations";
 import {
   createPortabilityModule,
   type ImportWorkspaceArchive,
   PortabilityAccessDeniedError,
   PortabilityValidationError,
+  WorkspaceExportLimitError,
 } from "./portability";
 import {
   createRequestContextResolver,
@@ -47,6 +49,7 @@ function errorCode(error: unknown): string {
   if (error instanceof PreconditionRequiredError) return "precondition_required";
   if (error instanceof MemoryVersionConflictError) return "version_conflict";
   if (error instanceof IdempotencyConflictError) return "idempotency_conflict";
+  if (error instanceof WorkspaceExportLimitError) return error.code;
   if (error instanceof BadRequestError || error instanceof RequestInputError)
     return "invalid_request";
   if (error instanceof RequestAuthenticationError) return "authentication_required";
@@ -73,7 +76,8 @@ function errorResponse(error: unknown): Response {
     error instanceof MemoryVersionConflictError ||
     error instanceof IdempotencyConflictError ||
     error instanceof PortabilityValidationError ||
-    error instanceof PortabilityAccessDeniedError
+    error instanceof PortabilityAccessDeniedError ||
+    error instanceof WorkspaceExportLimitError
   ) {
     return Response.json(
       { code: errorCode(error), error: error.message },
@@ -312,6 +316,26 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
 function requireHumanActor(actor: ActorContext): ActorContext {
   if (actor.agentId) throw new AccessDeniedError("Agent administration requires a User");
   return actor;
+}
+
+export function createCapabilitiesHandlers(
+  database: PostgresDatabase,
+  options: { embeddingConfigured: boolean },
+) {
+  const operations = createOperationsModule(database, options);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        await resolver.resolveActor(request);
+        return Response.json(await operations.capabilities(), {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
 }
 
 export function createWorkspaceHandlers(database: PostgresDatabase) {

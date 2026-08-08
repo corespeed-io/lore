@@ -101,10 +101,15 @@ model's documented retrieval preprocessing; OpenAI and Ollama use the same text
 for both roles. Every adapter must return exactly 1024 values. Changing a running
 deployment's provider or model creates a separate embedding generation. Set
 `LORE_EMBEDDING_BUILD_PROVIDER` and `LORE_EMBEDDING_BUILD_MODEL` on the maintenance
-process to build it beside the active generation. After exact coverage validation,
-`bun run db:embedding:activate` atomically switches generations and retains the
-prior space for bounded rollback. Lore never compares vectors across incompatible
-generations.
+process as a complete pair to build it beside the active generation. Keep the
+serving `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`, their credentials, and
+any provider endpoint available to that process too: during rollout, request writes
+still enqueue the serving generation while the maintenance worker drains both
+serving and building generations. The self-host worker keeps one sequential drain
+loop by default. Cloudflare Queue hints and the scheduled database sweep cover both
+generations. After exact coverage validation, `bun run db:embedding:activate`
+atomically switches generations and retains the prior space for bounded rollback.
+Lore never compares vectors across incompatible generations.
 
 Invalid deployment embedding configuration disables semantic embedding with a
 server-side warning instead of blocking Memory reads or writes. Provider request
@@ -185,7 +190,7 @@ accepted only while both the credential and Workspace grant remain active.
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
 - `/api/evaluations/suites`, suite runs, and run results
 - stable aliases under `/api/v1`, with `/openapi.json` and
-  `/api/v1/capabilities`
+  `/api/v1/capabilities` (verified Actor plus `x-lore-workspace-id`)
 - `/livez` for process liveness and `/readyz` for database, role, schema, vector,
   and RLS readiness
 

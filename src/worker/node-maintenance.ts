@@ -1,6 +1,7 @@
 import { createPostgresDatabase } from "../lib/db/postgres";
-import { createEmbeddingProviderFromEnvironment } from "../lib/embedding/provider-factory";
+import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../lib/embedding/provider-factory";
 import {
+  createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
@@ -21,18 +22,9 @@ if (!connectionString) {
   throw new Error("LORE_MAINTENANCE_DATABASE_URL is required by the maintenance worker");
 }
 
-const buildProvider = process.env.LORE_EMBEDDING_BUILD_PROVIDER?.trim();
-const buildModel = process.env.LORE_EMBEDDING_BUILD_MODEL?.trim();
-const embeddingEnvironment =
-  buildProvider || buildModel
-    ? {
-        ...process.env,
-        LORE_EMBEDDING_PROVIDER: buildProvider || process.env.LORE_EMBEDDING_PROVIDER || "ollama",
-        LORE_EMBEDDING_MODEL: buildModel || process.env.LORE_EMBEDDING_MODEL,
-      }
-    : process.env;
-const embeddingProvider = createEmbeddingProviderFromEnvironment(embeddingEnvironment, (message) =>
-  console.warn(message),
+const embeddingProviders = createMaintenanceEmbeddingProvidersFromEnvironment(
+  process.env,
+  (message) => console.warn(message),
 );
 
 const database = createPostgresDatabase(
@@ -42,15 +34,26 @@ const database = createPostgresDatabase(
   },
   { role: "lore_maintenance" },
 );
-const maintenance = embeddingProvider
-  ? createMemoryMaintenanceModule(database, {
-      embeddingProvider,
-      leaseSeconds: embeddingMaintenanceLeaseSeconds(
-        positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
+const maintenanceModules = embeddingProviders.map((embeddingProvider) =>
+  createMemoryMaintenanceModule(database, {
+    embeddingProvider,
+    leaseSeconds: embeddingMaintenanceLeaseSeconds(
+      positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
+    ),
+    logger: (entry) =>
+      console.log(
+        JSON.stringify({
+          component: "memory-maintenance",
+          embeddingProvider: embeddingProvider.provider,
+          embeddingModel: embeddingProvider.model,
+          embeddingRevision: embeddingProvider.revision,
+          ...entry,
+        }),
       ),
-      logger: (entry) => console.log(JSON.stringify({ component: "memory-maintenance", ...entry })),
-    })
-  : null;
+  }),
+);
+const maintenance =
+  maintenanceModules.length > 0 ? createMemoryMaintenanceCoordinator(maintenanceModules) : null;
 const pollIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_POLL_MS, 1_000);
 const sweepIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_SWEEP_MS, 300_000);
 const embeddingRollbackSeconds = positiveInteger(
@@ -83,8 +86,8 @@ try {
             embeddingRollbackSeconds,
           );
           const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
-          const generation = maintenance ? await maintenance.generationReport() : null;
-          return { generation, prunedEmbeddingGenerations, purged, seeded };
+          const generations = maintenance ? await maintenance.generationReports() : [];
+          return { generations, prunedEmbeddingGenerations, purged, seeded };
         });
         console.log(
           JSON.stringify({
@@ -94,13 +97,8 @@ try {
             purgedIdempotencyRecords: sweep.purged.idempotencyRecords,
             purgedMemoryEvents: sweep.purged.memoryEvents,
             prunedEmbeddingGenerations: sweep.prunedEmbeddingGenerations,
-            embeddingStatus: sweep.generation ? "configured" : "disabled",
-            generationStatus: sweep.generation?.status,
-            generationEligibleChunks: sweep.generation?.eligibleChunks,
-            generationEmbeddedChunks: sweep.generation?.embeddedChunks,
-            generationMissingChunks: sweep.generation?.missingChunks,
-            generationPendingJobs: sweep.generation?.pendingJobs,
-            generationDeadJobs: sweep.generation?.deadJobs,
+            embeddingStatus: sweep.generations.length > 0 ? "configured" : "disabled",
+            embeddingGenerations: sweep.generations,
           }),
         );
         nextSweepAt = Date.now() + sweepIntervalMs;

@@ -62,3 +62,21 @@ export function embeddingConfigurationFromEnvironment(
     model: env.LORE_EMBEDDING_MODEL ?? DEFAULT_EMBEDDING_MODELS[provider],
   });
 }
+
+export function embeddingBuildEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> | undefined {
+  const provider = env.LORE_EMBEDDING_BUILD_PROVIDER?.trim();
+  const model = env.LORE_EMBEDDING_BUILD_MODEL?.trim();
+  if (!provider && !model) return undefined;
+  if (!provider || !model) {
+    throw new Error(
+      "LORE_EMBEDDING_BUILD_PROVIDER and LORE_EMBEDDING_BUILD_MODEL must be set together",
+    );
+  }
+  return {
+    ...env,
+    LORE_EMBEDDING_PROVIDER: provider,
+    LORE_EMBEDDING_MODEL: model,
+  };
+}

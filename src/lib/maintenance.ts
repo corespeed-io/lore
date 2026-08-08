@@ -356,3 +356,51 @@ export function createMemoryMaintenanceModule(
     },
   };
 }
+
+export type MemoryMaintenanceModule = ReturnType<typeof createMemoryMaintenanceModule>;
+
+export function createMemoryMaintenanceCoordinator(maintenances: MemoryMaintenanceModule[]) {
+  const lanes = [...maintenances];
+  let nextRunLane = 0;
+
+  return {
+    async generationReports(): Promise<EmbeddingGenerationReport[]> {
+      const reports: EmbeddingGenerationReport[] = [];
+      for (const maintenance of lanes) {
+        reports.push(await maintenance.generationReport());
+      }
+      return reports;
+    },
+
+    async seedStale(limitPerGeneration = 100): Promise<string[]> {
+      const seeded: string[] = [];
+      for (const maintenance of lanes) {
+        seeded.push(...(await maintenance.seedStale(limitPerGeneration)));
+      }
+      return seeded;
+    },
+
+    async pending(limitPerGeneration = 100): Promise<string[]> {
+      const pending: string[] = [];
+      for (const maintenance of lanes) {
+        pending.push(...(await maintenance.pending(limitPerGeneration)));
+      }
+      return pending;
+    },
+
+    async run(jobId?: string): Promise<MemoryMaintenanceResult> {
+      if (lanes.length === 0) return { status: "idle", jobId };
+      const startLane = jobId ? 0 : nextRunLane;
+      for (let offset = 0; offset < lanes.length; offset += 1) {
+        const laneIndex = (startLane + offset) % lanes.length;
+        const result = await lanes[laneIndex].run(jobId);
+        if (result.status !== "idle") {
+          nextRunLane = (laneIndex + 1) % lanes.length;
+          return result;
+        }
+      }
+      nextRunLane = (startLane + 1) % lanes.length;
+      return { status: "idle", jobId };
+    },
+  };
+}

@@ -5,8 +5,8 @@ import { chunkMemoryContent } from "./memory-chunking";
 import type { MemoryScope } from "./types";
 
 export const WORKSPACE_ARCHIVE_FORMAT = "lore-workspace-v1";
-const MAX_IMPORT_MEMORIES = 10_000;
-const MAX_IMPORT_LINKS = 50_000;
+export const MAX_WORKSPACE_ARCHIVE_MEMORIES = 10_000;
+export const MAX_WORKSPACE_ARCHIVE_LINKS = 50_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class PortabilityValidationError extends Error {
@@ -17,6 +17,12 @@ export class PortabilityValidationError extends Error {
 export class PortabilityAccessDeniedError extends Error {
   override name = "PortabilityAccessDeniedError";
   readonly status = 403;
+}
+
+export class WorkspaceExportLimitError extends Error {
+  override name = "WorkspaceExportLimitError";
+  readonly code = "workspace_export_limit_exceeded";
+  readonly status = 409;
 }
 
 export interface WorkspaceArchiveMemory {
@@ -185,14 +191,17 @@ function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
   if (archive.manifest.visibility !== "actor-visible") {
     throw new PortabilityValidationError("manifest.visibility must be actor-visible");
   }
-  if (!Array.isArray(archive.memories) || archive.memories.length > MAX_IMPORT_MEMORIES) {
+  if (
+    !Array.isArray(archive.memories) ||
+    archive.memories.length > MAX_WORKSPACE_ARCHIVE_MEMORIES
+  ) {
     throw new PortabilityValidationError(
-      `archive memories must contain at most ${MAX_IMPORT_MEMORIES} items`,
+      `archive memories must contain at most ${MAX_WORKSPACE_ARCHIVE_MEMORIES} items`,
     );
   }
-  if (!Array.isArray(archive.links) || archive.links.length > MAX_IMPORT_LINKS) {
+  if (!Array.isArray(archive.links) || archive.links.length > MAX_WORKSPACE_ARCHIVE_LINKS) {
     throw new PortabilityValidationError(
-      `archive links must contain at most ${MAX_IMPORT_LINKS} items`,
+      `archive links must contain at most ${MAX_WORKSPACE_ARCHIVE_LINKS} items`,
     );
   }
   if (
@@ -292,8 +301,10 @@ function normalizedOwnerMap(value: Record<string, string>): Record<string, strin
     throw new PortabilityValidationError("ownerMap must be an object");
   }
   const entries = Object.entries(value);
-  if (entries.length > MAX_IMPORT_MEMORIES) {
-    throw new PortabilityValidationError(`ownerMap exceeds ${MAX_IMPORT_MEMORIES} entries`);
+  if (entries.length > MAX_WORKSPACE_ARCHIVE_MEMORIES) {
+    throw new PortabilityValidationError(
+      `ownerMap exceeds ${MAX_WORKSPACE_ARCHIVE_MEMORIES} entries`,
+    );
   }
   const normalized: Record<string, string> = {};
   for (const [source, target] of entries) {
@@ -338,9 +349,15 @@ export function createPortabilityModule(database: PostgresDatabase) {
           `SELECT id, owner_user_id, scope, content, metadata, version, created_at, updated_at
            FROM memories
            WHERE workspace_id = $1
-           ORDER BY id`,
-          [actor.workspaceId],
+           ORDER BY id
+           LIMIT $2`,
+          [actor.workspaceId, MAX_WORKSPACE_ARCHIVE_MEMORIES + 1],
         );
+        if (memories.rows.length > MAX_WORKSPACE_ARCHIVE_MEMORIES) {
+          throw new WorkspaceExportLimitError(
+            `Workspace export exceeds ${MAX_WORKSPACE_ARCHIVE_MEMORIES} visible Memories`,
+          );
+        }
         const memoryIds = memories.rows.map((memory) => memory.id);
         const links = memoryIds.length
           ? await transaction.query<ExportLinkRow>(
@@ -350,10 +367,16 @@ export function createPortabilityModule(database: PostgresDatabase) {
                WHERE workspace_id = $1
                  AND source_memory_id = ANY($2::uuid[])
                  AND target_memory_id = ANY($2::uuid[])
-               ORDER BY id`,
-              [actor.workspaceId, memoryIds],
+               ORDER BY id
+               LIMIT $3`,
+              [actor.workspaceId, memoryIds, MAX_WORKSPACE_ARCHIVE_LINKS + 1],
             )
           : { rows: [] as ExportLinkRow[] };
+        if (links.rows.length > MAX_WORKSPACE_ARCHIVE_LINKS) {
+          throw new WorkspaceExportLimitError(
+            `Workspace export exceeds ${MAX_WORKSPACE_ARCHIVE_LINKS} visible Links`,
+          );
+        }
         return { deploymentId, memories: memories.rows, links: links.rows };
       });
 

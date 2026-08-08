@@ -3,6 +3,7 @@ import {
   DEFAULT_EMBEDDING_CONFIGURATION,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_PROTOCOL_REVISION,
+  embeddingBuildEnvironment,
   embeddingConfiguration,
   embeddingConfigurationFromEnvironment,
 } from "@/lib/embedding-config";
@@ -46,4 +47,22 @@ test("deployment configuration rejects dimension overrides", () => {
       LORE_EMBEDDING_DIMENSIONS: "1536",
     }),
   ).toThrow("LORE_EMBEDDING_DIMENSIONS is not configurable");
+});
+
+test("embedding rollout requires an explicit build provider and model pair", () => {
+  expect(embeddingBuildEnvironment({})).toBeUndefined();
+  expect(() => embeddingBuildEnvironment({ LORE_EMBEDDING_BUILD_PROVIDER: "google" })).toThrow(
+    "LORE_EMBEDDING_BUILD_PROVIDER and LORE_EMBEDDING_BUILD_MODEL must be set together",
+  );
+  expect(
+    embeddingBuildEnvironment({
+      LORE_EMBEDDING_PROVIDER: "ollama",
+      LORE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+      LORE_EMBEDDING_BUILD_PROVIDER: "google",
+      LORE_EMBEDDING_BUILD_MODEL: "gemini-embedding-2",
+    }),
+  ).toMatchObject({
+    LORE_EMBEDDING_PROVIDER: "google",
+    LORE_EMBEDDING_MODEL: "gemini-embedding-2",
+  });
 });

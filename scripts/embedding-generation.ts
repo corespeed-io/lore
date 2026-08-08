@@ -1,16 +1,14 @@
 import { createPostgresDatabase } from "../src/lib/db/postgres";
-import { embeddingConfigurationFromEnvironment } from "../src/lib/embedding-config";
+import {
+  embeddingBuildEnvironment,
+  embeddingConfigurationFromEnvironment,
+} from "../src/lib/embedding-config";
 import { createMemoryMaintenanceModule } from "../src/lib/maintenance";
 
 const connectionString = process.env.LORE_MAINTENANCE_DATABASE_URL;
 if (!connectionString) throw new Error("LORE_MAINTENANCE_DATABASE_URL is required");
 
-const buildEnvironment = {
-  ...process.env,
-  LORE_EMBEDDING_PROVIDER:
-    process.env.LORE_EMBEDDING_BUILD_PROVIDER ?? process.env.LORE_EMBEDDING_PROVIDER,
-  LORE_EMBEDDING_MODEL: process.env.LORE_EMBEDDING_BUILD_MODEL ?? process.env.LORE_EMBEDDING_MODEL,
-};
+const buildEnvironment = embeddingBuildEnvironment(process.env) ?? process.env;
 const configuration = embeddingConfigurationFromEnvironment(buildEnvironment);
 const provider = {
   ...configuration,

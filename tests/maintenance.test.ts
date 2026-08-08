@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
 import {
+  createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
   pruneRetiringEmbeddingGenerations,
 } from "@/lib/maintenance";
@@ -492,6 +493,68 @@ test("embedding revisions build beside the active generation and cut over atomic
     ),
   );
   expect(afterPrune.rows).toEqual([{ embedding_revision: "fixture-v1", status: "active" }]);
+});
+
+test("rollout maintenance drains serving queue hints and both generations through its backstop", async () => {
+  const testContext = await createMemoryTestContext();
+  const servingProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const notifications: string[] = [];
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: servingProvider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  await memories.remember(testContext.alice, { content: "Existing active-generation Memory." });
+
+  const servingMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: servingProvider,
+  });
+  await expect(servingMaintenance.run(notifications.shift())).resolves.toMatchObject({
+    status: "complete",
+  });
+
+  const buildingProvider = { ...servingProvider, revision: "fixture-v2" };
+  const buildingMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: buildingProvider,
+  });
+  await expect(buildingMaintenance.seedStale()).resolves.toHaveLength(1);
+
+  const rollout = createMemoryMaintenanceCoordinator([servingMaintenance, buildingMaintenance]);
+  const buildingJobHint = (await buildingMaintenance.pending())[0];
+  expect(buildingJobHint).toEqual(expect.any(String));
+  await expect(rollout.run(buildingJobHint)).resolves.toMatchObject({
+    status: "complete",
+    jobId: buildingJobHint,
+  });
+
+  await memories.remember(testContext.alice, { content: "Written while v2 is building." });
+  const servingJobHint = notifications.shift();
+  expect(servingJobHint).toEqual(expect.any(String));
+  await expect(rollout.run(servingJobHint)).resolves.toMatchObject({
+    status: "complete",
+    jobId: servingJobHint,
+  });
+
+  await memories.remember(testContext.alice, { content: "Lost Queue hint must be swept." });
+  const lostServingHint = notifications.shift();
+  expect(lostServingHint).toEqual(expect.any(String));
+  await rollout.seedStale(100);
+  await expect(rollout.pending(100)).resolves.toEqual(expect.arrayContaining([lostServingHint]));
+
+  for (;;) {
+    const result = await rollout.run();
+    if (result.status === "idle") break;
+  }
+
+  await expect(servingMaintenance.generationReport()).resolves.toMatchObject({
+    status: "active",
+    missingChunks: 0,
+    pendingJobs: 0,
+  });
+  await expect(buildingMaintenance.generationReport()).resolves.toMatchObject({
+    status: "building",
+    missingChunks: 0,
+    pendingJobs: 0,
+  });
 });
 
 test("an incomplete embedding generation cannot become active", async () => {

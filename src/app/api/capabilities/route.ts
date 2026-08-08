@@ -1,12 +1,9 @@
-import { createOperationsModule } from "@/lib/operations";
+import { createCapabilitiesHandlers } from "@/lib/http";
 import { getRuntimeDatabase } from "@/lib/runtime/database";
 import { getRuntimeEmbeddingProvider } from "@/lib/runtime/embedding";
 
-export async function GET() {
-  const operations = createOperationsModule(await getRuntimeDatabase(), {
+export async function GET(request: Request) {
+  return createCapabilitiesHandlers(await getRuntimeDatabase(), {
     embeddingConfigured: Boolean(getRuntimeEmbeddingProvider()),
-  });
-  return Response.json(await operations.capabilities(), {
-    headers: { "cache-control": "no-store" },
-  });
+  }).GET(request);
 }

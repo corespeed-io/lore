@@ -3,7 +3,21 @@ import { loreOpenApiDocument } from "@/lib/openapi";
 
 test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   const document = loreOpenApiDocument() as {
-    components: { schemas: { Error: { properties: { code: { enum: string[] } } } } };
+    components: {
+      schemas: {
+        Capabilities: {
+          properties: {
+            limits: {
+              properties: {
+                workspaceArchiveLinks: { const: number };
+                workspaceArchiveMemories: { const: number };
+              };
+            };
+          };
+        };
+        Error: { properties: { code: { enum: string[] } } };
+      };
+    };
     openapi: string;
     paths: Record<string, Record<string, Record<string, unknown>>>;
     security: Array<Record<string, unknown>>;
@@ -30,8 +44,18 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     ].sort(),
   );
   expect(document.components.schemas.Error.properties.code.enum).toEqual(
-    expect.arrayContaining(["idempotency_conflict", "precondition_required", "version_conflict"]),
+    expect.arrayContaining([
+      "idempotency_conflict",
+      "precondition_required",
+      "version_conflict",
+      "workspace_export_limit_exceeded",
+    ]),
   );
+  expect(document.paths["/api/v1/workspaces/export"].get.responses).toHaveProperty("409");
+  expect(document.components.schemas.Capabilities.properties.limits.properties).toEqual({
+    workspaceArchiveLinks: { const: 50_000 },
+    workspaceArchiveMemories: { const: 10_000 },
+  });
   expect(document.security).toEqual(
     expect.arrayContaining([
       { agentBearer: [] },
@@ -41,6 +65,12 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   );
   expect(document.paths["/livez"].get.security).toEqual([]);
   expect(document.paths["/readyz"].get.security).toEqual([]);
+  expect(document.paths["/api/v1/capabilities"].get).toMatchObject({
+    security: expect.arrayContaining([{ agentBearer: [] }, { basicAuth: [] }]),
+    parameters: [
+      expect.objectContaining({ name: "x-lore-workspace-id", in: "header", required: true }),
+    ],
+  });
   expect(document.paths["/api/v1/memories/{memoryId}"].patch.requestBody).toMatchObject({
     required: true,
   });
