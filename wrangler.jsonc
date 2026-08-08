@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "lore",
   "main": "worker.ts",
-  "compatibility_date": "2026-08-07",
+  "compatibility_date": "2026-08-05",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
     "directory": ".open-next/assets",
