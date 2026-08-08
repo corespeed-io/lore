@@ -1,5 +1,9 @@
-import { embeddingConfigurationFromEnvironment } from "../embedding-config";
+import {
+  embeddingBuildEnvironment,
+  embeddingConfigurationFromEnvironment,
+} from "../embedding-config";
 import type { EmbeddingProvider } from "../memory";
+import { markDependencyFailure, markDependencySuccess } from "../telemetry";
 import { createGoogleEmbeddingProvider } from "./google";
 import { createOllamaEmbeddingProvider } from "./ollama";
 import { createOpenAIEmbeddingProvider } from "./openai";
@@ -14,8 +18,11 @@ function warnOnEmbeddingFailure(
     ...provider,
     async embed(texts, task) {
       try {
-        return await provider.embed(texts, task);
+        const vectors = await provider.embed(texts, task);
+        markDependencySuccess("embedding");
+        return vectors;
       } catch (error) {
+        markDependencyFailure("embedding");
         warn(
           `Lore ${provider.provider}/${provider.model} ${task} embedding failed; continuing without a vector`,
         );
@@ -71,8 +78,40 @@ export function createEmbeddingProviderFromEnvironment(
         );
     }
   } catch (error) {
+    markDependencyFailure("embedding");
     const detail = error instanceof Error ? error.message : "unknown configuration error";
     warn(`Lore embeddings disabled: ${detail}`);
     return undefined;
   }
+}
+
+function embeddingProviderIdentity(provider: EmbeddingProvider): string {
+  return [provider.provider, provider.model, provider.dimensions, provider.revision].join("\u0000");
+}
+
+export function createMaintenanceEmbeddingProvidersFromEnvironment(
+  env: Record<string, string | undefined>,
+  warn: EmbeddingConfigurationWarning = () => undefined,
+): EmbeddingProvider[] {
+  const providers: EmbeddingProvider[] = [];
+  const serving = createEmbeddingProviderFromEnvironment(env, warn);
+  if (serving) providers.push(serving);
+
+  let buildEnvironment: Record<string, string | undefined> | undefined;
+  try {
+    buildEnvironment = embeddingBuildEnvironment(env);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown configuration error";
+    warn(`Lore embedding build disabled: ${detail}`);
+  }
+  if (buildEnvironment) {
+    const building = createEmbeddingProviderFromEnvironment(buildEnvironment, warn);
+    if (building) providers.push(building);
+  }
+
+  const uniqueProviders = new Map<string, EmbeddingProvider>();
+  for (const provider of providers) {
+    uniqueProviders.set(embeddingProviderIdentity(provider), provider);
+  }
+  return [...uniqueProviders.values()];
 }

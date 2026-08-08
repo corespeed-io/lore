@@ -180,6 +180,7 @@ interface SaveMemoryInput {
   id?: string;
   content: string;
   scope: MemoryScope;
+  version?: number;
 }
 
 export function useLoreMutations(workspaceId: string) {
@@ -192,12 +193,18 @@ export function useLoreMutations(workspaceId: string) {
     workspaceId ? loreKeys.saveMemory(workspaceId) : null,
     (_key, { arg }: { arg: SaveMemoryInput }) =>
       arg.id
-        ? updateMemory(workspaceId, arg.id, { content: arg.content, scope: arg.scope })
+        ? updateMemory(
+            workspaceId,
+            arg.id,
+            { content: arg.content, scope: arg.scope },
+            arg.version ?? 1,
+          )
         : rememberMemory(workspaceId, { content: arg.content, scope: arg.scope }),
   );
   const forgetMemoryMutation = useSWRMutation(
     workspaceId ? loreKeys.forgetMemory(workspaceId) : null,
-    (_key, { arg }: { arg: string }) => forgetMemory(workspaceId, arg),
+    (_key, { arg }: { arg: { id: string; version: number } }) =>
+      forgetMemory(workspaceId, arg.id, arg.version),
   );
 
   return {

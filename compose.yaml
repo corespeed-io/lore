@@ -50,11 +50,20 @@ services:
       OLLAMA_BASE_URL: ${LORE_DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-0}
       LORE_EMBEDDING_TIMEOUT_MS: ${LORE_EMBEDDING_TIMEOUT_MS:-120000}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
     restart: unless-stopped
 
   maintenance:
@@ -65,13 +74,19 @@ services:
       LORE_MAINTENANCE_POOL_SIZE: ${LORE_MAINTENANCE_POOL_SIZE:-2}
       LORE_MAINTENANCE_POLL_MS: ${LORE_MAINTENANCE_POLL_MS:-1000}
       LORE_MAINTENANCE_SWEEP_MS: ${LORE_MAINTENANCE_SWEEP_MS:-300000}
+      LORE_EMBEDDING_ROLLBACK_SECONDS: ${LORE_EMBEDDING_ROLLBACK_SECONDS:-604800}
       LORE_EMBEDDING_PROVIDER: ${LORE_EMBEDDING_PROVIDER:-ollama}
       LORE_EMBEDDING_MODEL: ${LORE_EMBEDDING_MODEL:-qwen3-embedding:0.6b}
+      LORE_EMBEDDING_BUILD_PROVIDER: ${LORE_EMBEDDING_BUILD_PROVIDER:-}
+      LORE_EMBEDDING_BUILD_MODEL: ${LORE_EMBEDDING_BUILD_MODEL:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OLLAMA_BASE_URL: ${LORE_DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-0}
       LORE_EMBEDDING_TIMEOUT_MS: ${LORE_EMBEDDING_TIMEOUT_MS:-120000}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

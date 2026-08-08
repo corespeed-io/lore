@@ -16,8 +16,8 @@ identity mapping, authorization, retrieval, and evaluation directly.
 
 ## What works
 
-- native Memory create, read, update, delete, list, provenance, and shared/private
-  scope;
+- native Memory create, read, update, delete, list, provenance, shared/private
+  scope, replay-safe writes, and optimistic concurrency;
 - durable directed Memory Links, clickable `[[reference]]` wikilinks, and derived
   affinity for otherwise isolated Memories;
 - lexical + optional vector retrieval with visibility filtered before top-k;
@@ -26,8 +26,12 @@ identity mapping, authorization, retrieval, and evaluation directly.
 - Postgres RLS over all tenant-owned source, chunk, credential, and Evaluation data;
 - versioned Evaluation Suites with Recall@K, MRR, nDCG, latency, cost, and hard
   isolation failures;
-- crash-safe background embedding, retry, and deployment-wide model re-indexing;
-- a working Memory console plus native HTTP APIs;
+- crash-safe background embedding, retry, and atomic embedding-generation rollout;
+- content-free transactional mutation events and expiring deletion tombstones;
+- checksummed RLS-visible Workspace export/import plus PostgreSQL backup/restore
+  tooling;
+- a working Memory console, versioned HTTP APIs, OpenAPI, health probes, and
+  privacy-safe optional OpenTelemetry;
 - OSS Docker/Postgres deployment and a Cloudflare Workers + Hyperdrive adapter.
 
 AutoDream, automatic consolidation, summarization, and proactive insight generation
@@ -95,11 +99,17 @@ Lore calls each provider directly and sends API keys only from the server. The
 Google adapter distinguishes document indexing from retrieval queries using the
 model's documented retrieval preprocessing; OpenAI and Ollama use the same text
 for both roles. Every adapter must return exactly 1024 values. Changing a running
-deployment's provider or model creates a different embedding space, so existing
-vectors are excluded from semantic retrieval until re-embedded. Lore materializes
-the active space before semantic top-k, favoring correct isolation over ANN
-acceleration while incompatible spaces coexist. The maintenance sweep detects the
-stale space and re-embeds those Memories in the background.
+deployment's provider or model creates a separate embedding generation. Set
+`LORE_EMBEDDING_BUILD_PROVIDER` and `LORE_EMBEDDING_BUILD_MODEL` on the maintenance
+process as a complete pair to build it beside the active generation. Keep the
+serving `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`, their credentials, and
+any provider endpoint available to that process too: during rollout, request writes
+still enqueue the serving generation while the maintenance worker drains both
+serving and building generations. The self-host worker keeps one sequential drain
+loop by default. Cloudflare Queue hints and the scheduled database sweep cover both
+generations. After exact coverage validation, `bun run db:embedding:activate`
+atomically switches generations and retains the prior space for bounded rollback.
+Lore never compares vectors across incompatible generations.
 
 Invalid deployment embedding configuration disables semantic embedding with a
 server-side warning instead of blocking Memory reads or writes. Provider request
@@ -179,10 +189,27 @@ accepted only while both the credential and Workspace grant remain active.
 - `/api/memories` and `/api/memories/:id`
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
 - `/api/evaluations/suites`, suite runs, and run results
+- stable aliases under `/api/v1`, with `/openapi.json` and
+  `/api/v1/capabilities` (verified Actor plus `x-lore-workspace-id`)
+- `/livez` for process liveness and `/readyz` for database, role, schema, vector,
+  and RLS readiness
+
+Memory reads return a strong ETag such as `"memory-v2"`. HTTP update and delete
+require that value in `If-Match`; stale writes fail with `412 version_conflict`.
+Mutation retries may send `Idempotency-Key`, scoped by Actor and operation. Memory
+list responses expose `x-lore-next-cursor` for stable cursor pagination.
 
 Agent tokens are returned only at creation time. Lore stores only their SHA-256
 hash and a short display prefix. Embedding selection is deployment-wide and is not
 exposed to Workspace members or Agents.
+
+## Operations and portability
+
+`bun run db:preflight` validates migration history and application/schema
+compatibility. `bun run db:backup`, `db:restore`, and `db:pitr:check` cover the
+operator PostgreSQL plane; Workspace export/import is a separate RLS-scoped logical
+plane. See [`docs/operations.md`](docs/operations.md) for backup ownership,
+restore drills, generation activation, degraded readiness, and telemetry privacy.
 
 ## CoreSpeed Cloud / Cloudflare
 

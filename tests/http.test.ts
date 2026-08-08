@@ -5,6 +5,7 @@ import {
   createAgentCredentialHandlers,
   createAgentGrantHandlers,
   createAgentHandlers,
+  createCapabilitiesHandlers,
   createEvaluationRunByIdHandlers,
   createEvaluationRunHandlers,
   createEvaluationSuiteHandlers,
@@ -76,6 +77,36 @@ test("Human can create a Workspace then write and list native Memories over HTTP
   await testContext.close();
 });
 
+test("Capabilities verifies Agent credentials and Workspace grants in the handler", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Capabilities Agent" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const capabilities = createCapabilitiesHandlers(testContext.database, {
+    embeddingConfigured: false,
+  });
+  const request = (token: string) =>
+    new Request("http://lore.local/api/v1/capabilities", {
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-lore-workspace-id": testContext.alice.workspaceId,
+      },
+    });
+
+  const accepted = await capabilities.GET(request(credential.token));
+  const shapeOnly = await capabilities.GET(request(`lore_agent_${"0".repeat(64)}`));
+  await access.revokeAgentCredential(testContext.alice, credential.id);
+  const revoked = await capabilities.GET(request(credential.token));
+
+  expect(accepted.status).toBe(200);
+  expect(accepted.headers.get("cache-control")).toBe("private, no-store");
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 3 });
+  expect(shapeOnly.status).toBe(403);
+  await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
+  expect(revoked.status).toBe(403);
+});
+
 test("Memory HTTP resource supports retrieve, update, and forget", async () => {
   process.env.AUTH_MODE = "none";
   process.env.ALLOW_INSECURE = "1";
@@ -106,7 +137,7 @@ test("Memory HTTP resource supports retrieve, update, and forget", async () => {
   const updateResponse = await memoryById.PATCH(
     new Request(`http://lore.local/api/memories/${created.id}`, {
       method: "PATCH",
-      headers,
+      headers: { ...headers, "if-match": '"memory-v1"' },
       body: JSON.stringify({ content: "Confirmed resource Memory.", scope: "private" }),
     }),
     created.id,
@@ -116,7 +147,10 @@ test("Memory HTTP resource supports retrieve, update, and forget", async () => {
     created.id,
   );
   const deleteResponse = await memoryById.DELETE(
-    new Request(`http://lore.local/api/memories/${created.id}`, { method: "DELETE", headers }),
+    new Request(`http://lore.local/api/memories/${created.id}`, {
+      method: "DELETE",
+      headers: { ...headers, "if-match": '"memory-v2"' },
+    }),
     created.id,
   );
   const missingResponse = await memoryById.GET(
@@ -131,6 +165,163 @@ test("Memory HTTP resource supports retrieve, update, and forget", async () => {
   await expect(getResponse.json()).resolves.toMatchObject({ id: created.id, version: 2 });
   expect(deleteResponse.status).toBe(204);
   expect(missingResponse.status).toBe(404);
+  await testContext.close();
+});
+
+test("Memory HTTP exposes ETags, idempotent replay, and stale-write errors", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-portable-core-user";
+  const testContext = await createMemoryTestContext();
+  const workspace = (await (
+    await createWorkspaceHandlers(testContext.database).POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Portable Core Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = {
+    "x-lore-workspace-id": workspace.id,
+    "idempotency-key": "memory-create-replay",
+  };
+  const memories = createMemoryHandlers(testContext.database);
+  const memoryById = createMemoryByIdHandlers(testContext.database);
+  const requestBody = JSON.stringify({ content: "Replay this HTTP Memory." });
+
+  const createResponse = await memories.POST(
+    new Request("http://lore.local/api/memories", { method: "POST", headers, body: requestBody }),
+  );
+  const created = (await createResponse.json()) as { id: string; version: number };
+  const replayResponse = await memories.POST(
+    new Request("http://lore.local/api/memories", { method: "POST", headers, body: requestBody }),
+  );
+  await expect(replayResponse.json()).resolves.toMatchObject({ id: created.id });
+  expect(createResponse.headers.get("etag")).toBe('"memory-v1"');
+  expect(replayResponse.status).toBe(201);
+
+  const changedReplay = await memories.POST(
+    new Request("http://lore.local/api/memories", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: "A different request." }),
+    }),
+  );
+  await expect(changedReplay.json()).resolves.toMatchObject({ code: "idempotency_conflict" });
+  expect(changedReplay.status).toBe(409);
+
+  const missingPrecondition = await memoryById.PATCH(
+    new Request(`http://lore.local/api/memories/${created.id}`, {
+      method: "PATCH",
+      headers: { "x-lore-workspace-id": workspace.id },
+      body: JSON.stringify({ scope: "private" }),
+    }),
+    created.id,
+  );
+  expect(missingPrecondition.status).toBe(428);
+
+  const staleWrite = await memoryById.PATCH(
+    new Request(`http://lore.local/api/memories/${created.id}`, {
+      method: "PATCH",
+      headers: { "x-lore-workspace-id": workspace.id, "if-match": '"memory-v2"' },
+      body: JSON.stringify({ scope: "private" }),
+    }),
+    created.id,
+  );
+  await expect(staleWrite.json()).resolves.toMatchObject({ code: "version_conflict" });
+  expect(staleWrite.status).toBe(412);
+
+  const updateResponse = await memoryById.PATCH(
+    new Request(`http://lore.local/api/memories/${created.id}`, {
+      method: "PATCH",
+      headers: { "x-lore-workspace-id": workspace.id, "if-match": '"memory-v1"' },
+      body: JSON.stringify({ scope: "private" }),
+    }),
+    created.id,
+  );
+  expect(updateResponse.headers.get("etag")).toBe('"memory-v2"');
+
+  const deleteHeaders = {
+    "x-lore-workspace-id": workspace.id,
+    "if-match": '"memory-v2"',
+    "idempotency-key": "memory-delete-replay",
+  };
+  const deleted = await memoryById.DELETE(
+    new Request(`http://lore.local/api/memories/${created.id}`, {
+      method: "DELETE",
+      headers: deleteHeaders,
+    }),
+    created.id,
+  );
+  const deleteReplay = await memoryById.DELETE(
+    new Request(`http://lore.local/api/memories/${created.id}`, {
+      method: "DELETE",
+      headers: deleteHeaders,
+    }),
+    created.id,
+  );
+  expect(deleted.status).toBe(204);
+  expect(deleteReplay.status).toBe(204);
+  await testContext.close();
+});
+
+test("Memory HTTP cursor advances within the authorized ordering", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-cursor-user";
+  const testContext = await createMemoryTestContext();
+  const workspace = (await (
+    await createWorkspaceHandlers(testContext.database).POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Cursor Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const memories = createMemoryHandlers(testContext.database);
+  const memoryIds: string[] = [];
+  for (const content of ["First cursor Memory.", "Second cursor Memory.", "Third cursor Memory."]) {
+    const response = await memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content }),
+      }),
+    );
+    memoryIds.push(((await response.json()) as { id: string }).id);
+  }
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    for (const [index, memoryId] of memoryIds.entries()) {
+      await transaction.query(
+        `UPDATE memories
+         SET updated_at = $2::timestamptz
+         WHERE id = $1`,
+        [memoryId, `2026-08-07T12:00:00.12345${6 - index}Z`],
+      );
+    }
+  });
+
+  const firstPage = await memories.GET(
+    new Request("http://lore.local/api/memories?limit=2", { headers }),
+  );
+  const cursor = firstPage.headers.get("x-lore-next-cursor");
+  expect(cursor).toBeTruthy();
+  const firstPageMemories = (await firstPage.json()) as Array<{ id: string }>;
+  expect(firstPageMemories).toHaveLength(2);
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE memories
+       SET updated_at = '2026-08-07T13:00:00Z'
+       WHERE id = $1`,
+      [firstPageMemories[1].id],
+    ),
+  );
+  const secondPage = await memories.GET(
+    new Request(`http://lore.local/api/memories?limit=2&cursor=${cursor}`, { headers }),
+  );
+  await expect(secondPage.json()).resolves.toEqual([expect.objectContaining({ id: memoryIds[2] })]);
+  expect(secondPage.headers.get("x-lore-next-cursor")).toBeNull();
   await testContext.close();
 });
 
@@ -193,6 +384,45 @@ test("Memory HTTP input rejects null characters in queries, content, and metadat
   ]);
 
   expect(responses.map((response) => response.status)).toEqual([400, 400, 400]);
+});
+
+test("Memory HTTP metadata rejects excessive depth and size", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-metadata-limits-user";
+  const testContext = await createMemoryTestContext();
+  const workspace = (await (
+    await createWorkspaceHandlers(testContext.database).POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Metadata Limits Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const memories = createMemoryHandlers(testContext.database);
+  let nested: Record<string, unknown> = { leaf: true };
+  for (let depth = 0; depth < 34; depth += 1) nested = { child: nested };
+
+  const responses = await Promise.all([
+    memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "deep", metadata: nested }),
+      }),
+    ),
+    memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "large", metadata: { value: "x".repeat(100_001) } }),
+      }),
+    ),
+  ]);
+
+  expect(responses.map((response) => response.status)).toEqual([400, 400]);
+  await testContext.close();
 });
 
 test("Agent HTTP resource provisions a grant and issues a revocable one-time token", async () => {

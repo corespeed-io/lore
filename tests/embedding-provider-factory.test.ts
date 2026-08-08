@@ -1,5 +1,13 @@
-import { expect, test, vi } from "vitest";
-import { createEmbeddingProviderFromEnvironment } from "@/lib/embedding/provider-factory";
+import { afterEach, expect, test, vi } from "vitest";
+import {
+  createEmbeddingProviderFromEnvironment,
+  createMaintenanceEmbeddingProvidersFromEnvironment,
+} from "@/lib/embedding/provider-factory";
+import { markDependencySuccess, runtimeDependencyStatus } from "@/lib/telemetry";
+
+afterEach(() => {
+  markDependencySuccess("embedding");
+});
 
 test("embedding provider factory builds the default local provider", () => {
   const warnings: string[] = [];
@@ -36,6 +44,7 @@ test.each([
   );
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toMatch(/^Lore embeddings disabled: /);
+  expect(runtimeDependencyStatus("embedding").status).toBe("degraded");
 });
 
 test("embedding provider factory reports runtime failures without swallowing them", async () => {
@@ -53,7 +62,56 @@ test("embedding provider factory reports runtime failures without swallowing the
     expect(warnings).toEqual([
       "Lore ollama/qwen3-embedding:0.6b document embedding failed; continuing without a vector",
     ]);
+    expect(runtimeDependencyStatus("embedding").status).toBe("degraded");
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+test("maintenance provider factory keeps serving and building generations explicit", () => {
+  const warnings: string[] = [];
+  const providers = createMaintenanceEmbeddingProvidersFromEnvironment(
+    {
+      LORE_EMBEDDING_PROVIDER: "ollama",
+      LORE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+      LORE_EMBEDDING_BUILD_PROVIDER: "google",
+      LORE_EMBEDDING_BUILD_MODEL: "gemini-embedding-2",
+      GEMINI_API_KEY: "test-key",
+    },
+    (message) => warnings.push(message),
+  );
+
+  expect(providers.map(({ provider, model }) => ({ provider, model }))).toEqual([
+    { provider: "ollama", model: "qwen3-embedding:0.6b" },
+    { provider: "google", model: "gemini-embedding-2" },
+  ]);
+  expect(warnings).toEqual([]);
+});
+
+test("maintenance provider factory disables an incomplete build lane without losing serving", () => {
+  const warnings: string[] = [];
+  const providers = createMaintenanceEmbeddingProvidersFromEnvironment(
+    { LORE_EMBEDDING_BUILD_PROVIDER: "google" },
+    (message) => warnings.push(message),
+  );
+
+  expect(providers).toHaveLength(1);
+  expect(providers[0]).toMatchObject({
+    provider: "ollama",
+    model: "qwen3-embedding:0.6b",
+  });
+  expect(warnings).toEqual([
+    "Lore embedding build disabled: LORE_EMBEDDING_BUILD_PROVIDER and LORE_EMBEDDING_BUILD_MODEL must be set together",
+  ]);
+});
+
+test("maintenance provider factory deduplicates a build lane matching serving", () => {
+  const providers = createMaintenanceEmbeddingProvidersFromEnvironment({
+    LORE_EMBEDDING_PROVIDER: "ollama",
+    LORE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+    LORE_EMBEDDING_BUILD_PROVIDER: "ollama",
+    LORE_EMBEDDING_BUILD_MODEL: "qwen3-embedding:0.6b",
+  });
+
+  expect(providers).toHaveLength(1);
 });

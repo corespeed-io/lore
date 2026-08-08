@@ -317,6 +317,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         id: editor.memory?.id,
         content,
         scope,
+        version: editor.memory?.version,
       });
       await mutations.mutateCache(loreKeys.memory(activeWorkspaceId, saved.id), saved, {
         revalidate: false,
@@ -339,7 +340,10 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     setMutationError(null);
     const memoryId = selectedMemory.id;
     try {
-      await mutations.forgetMemory.trigger(memoryId);
+      await mutations.forgetMemory.trigger({
+        id: memoryId,
+        version: selectedMemory.memory.version,
+      });
       await mutations.mutateCache(loreKeys.memory(activeWorkspaceId, memoryId), undefined, {
         revalidate: false,
       });

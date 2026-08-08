@@ -99,6 +99,24 @@ revision as protocol invariants; they are not operator, User, Workspace, or Agen
 settings.
 _Avoid_: Workspace Retrieval Profile, User embedding model, Agent retrieval setting
 
+**Embedding Generation**:
+One immutable provider/model/dimension/preprocessing-revision vector space. A new
+generation is built beside the active one, validated for exact coverage, activated
+atomically, and retained briefly for rollback before retirement.
+_Avoid_: Mixed embedding space, in-place model replacement
+
+**Memory Mutation Event**:
+A content-free, expiring outbox record committed in the same transaction as a
+Memory or Memory Link change. It may contain resource/version metadata and content
+hashes, but never Memory content, query text, credentials, or provider payloads.
+_Avoid_: Permanent audit copy, Memory revision body
+
+**Workspace Archive**:
+A checksummed logical export containing only Memories and Links visible to one
+human Actor under RLS. Import is bounded, dry-runnable, explicitly owner-remapped,
+and records source provenance; it is not an operational PostgreSQL backup.
+_Avoid_: Database backup, unrestricted tenant dump
+
 **Benchmark Graph Dataset**:
 A deterministic, synthetic node-and-link dataset used only to stress graph layout
 and rendering. It is not a Memory Graph and carries no product authorization semantics.

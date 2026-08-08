@@ -49,6 +49,9 @@
     "ACCESS_AUD": "replace-with-access-audience",
     "LORE_EMBEDDING_PROVIDER": "google",
     "LORE_EMBEDDING_MODEL": "gemini-embedding-2",
+    "LORE_EMBEDDING_BUILD_PROVIDER": "",
+    "LORE_EMBEDDING_BUILD_MODEL": "",
+    "LORE_EMBEDDING_ROLLBACK_SECONDS": "604800",
     "LORE_EMBEDDING_TIMEOUT_MS": "120000"
   }
 }

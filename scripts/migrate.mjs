@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { runMigrationPreflight } from "./lib/migration-preflight.mjs";
 import {
   BASELINE_MIGRATION_ID,
   hasCompleteLegacyBaseline,
@@ -17,6 +18,15 @@ const lockId = 1_280_263_749; // stable project-scoped advisory lock key
 
 await client.connect();
 try {
+  const preflight = await runMigrationPreflight(client);
+  if (!preflight.ok) {
+    throw new Error(
+      `Migration preflight failed: ${preflight.checks
+        .filter((check) => !check.ok && !check.advisory)
+        .map((check) => check.check)
+        .join(", ")}`,
+    );
+  }
   await client.query("SELECT pg_advisory_lock($1)", [lockId]);
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (

@@ -21,9 +21,10 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- the squashed `0001_initial.sql` migration plus `0002_memory_embedding_jobs.sql`
-  define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
-  state, versioned Evaluation tables, and leased embedding jobs with RLS;
+- migrations `0001_initial.sql` through `0003_portable_core.sql` define identity,
+  tenancy, user-private Agents, Memory/chunks/links, pgvector state, versioned
+  Evaluation tables, leased embedding jobs, replay-safe mutations, a content-free
+  event outbox, Workspace portability, and embedding generations with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
@@ -55,9 +56,20 @@ been removed. Lore now has a native implementation:
   headless settle, delta-painted focus state, capped edge hit layer, label
   collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
 - `src/lib/maintenance.ts` owns leased, idempotent document embedding and
-  deployment-wide re-index discovery. Postgres is the durable job source; the
-  self-host Node worker polls it, while Cloudflare Queues are wake-up hints with a
-  scheduled database sweep as the delivery backstop;
+  deployment-wide re-index discovery. A provider/model/revision change builds
+  generation-scoped vectors beside the active generation without rewriting
+  canonical chunks. Activation requires exact coverage and atomically moves the
+  prior active generation to bounded rollback. Postgres is the durable job source;
+  rollout maintenance drains both the serving and explicitly configured building
+  provider/model generations, because request writes continue to enqueue serving
+  jobs until cutover. The self-host Node worker polls both sequentially by default,
+  while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
+  database sweep as the delivery backstop;
+- `src/lib/idempotency.ts`, `portability.ts`, `operations.ts`, and `telemetry.ts`
+  own the Portable Core seams. Memory mutation events are database triggers in the
+  same transaction as source/link writes; deletion remains hard delete and leaves
+  only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
+  `/readyz`, and `/api/v1/capabilities` are the stable operational surface;
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers.
 
@@ -69,13 +81,13 @@ never blocks a Memory write. Local deployment defaults are Qwen3-Embedding 0.6B 
 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
 Invalid embedding configuration and provider request failures must warn server-side
 and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
-The pgvector column and HNSW index are fixed at 1024 dimensions. Self-host operators
+The generation-scoped pgvector column and HNSW index are fixed at 1024 dimensions. Self-host operators
 choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
 preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless
-provider, model, and revision all match the active deployment. Embedding model
-selection is not a Workspace/User product setting. Until embedding storage is
-partitioned by space, the semantic query must keep its `MATERIALIZED` active-space
-CTE so global HNSW traversal cannot mix incompatible spaces before top-k.
+provider, model, and revision all match one active or rolling-deploy-compatible
+generation. Embedding model selection is not a Workspace/User product setting. The
+semantic query must keep its `MATERIALIZED` exact-generation CTE so global HNSW
+traversal cannot mix incompatible spaces before top-k.
 
 Do not:
 
@@ -213,6 +225,14 @@ database invariant, not a UI convention.
   reveal the id, title, existence, or degree of a private neighbor.
 - Deleting a Memory or changing its scope must invalidate its chunks, embeddings,
   cached search results, and derived graph data.
+- HTTP update/delete requires a strong Memory ETag through `If-Match`; retries may
+  use actor/operation-scoped `Idempotency-Key`. Keep the lock, version check, source
+  write, chunk/job changes, replay record, and mutation event in one transaction.
+- Workspace export is always a human Actor/RLS-visible logical archive. Import must
+  validate its checksum and limits, dry-run cleanly, require explicit owner remap,
+  and record source provenance. It is not a PostgreSQL backup.
+- Mutation events and deletion tombstones never retain Memory content, query text,
+  credentials, or provider payloads and must expire.
 - Credentials and secrets stay server-only, are stored hashed or encrypted as
   appropriate, and never use `NEXT_PUBLIC_*` variables.
 - `AUTH_MODE=none` is only acceptable for explicit local development with
@@ -270,9 +290,14 @@ surfaces:
   affinities while guaranteeing that every relationship endpoint is present in the
   same authorized read model.
 - **Maintenance module:** claim versioned embedding jobs with a short lease, update
-  only the claimed Memory's chunks, retry provider failures deterministically, and
-  discover stale deployment-wide embedding spaces without exposing job state to
-  request actors.
+  only the claimed generation's vectors, retry provider failures deterministically,
+  discover stale deployment-wide embedding spaces, activate exact-coverage builds,
+  and prune expired retiring generations without exposing job state to request actors.
+- **Portability module:** produce checksummed Actor-visible Workspace archives and
+  perform validated, dry-runnable, explicitly owner-remapped imports.
+- **Operations module:** expose bounded capabilities/readiness state. Liveness is
+  process-only; readiness validates DB/role/schema/vector/RLS, while embedding
+  failure is degraded because lexical retrieval remains available.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
@@ -323,7 +348,10 @@ These commands remain the current verification loop:
 ```bash
 bun run dev        # localhost:3000
 bun run db:migrate # apply checksum-protected SQL migrations
+bun run db:preflight # validate server/schema/history before migration
 bun run db:bootstrap # migrate + provision separate request/maintenance logins
+bun run db:backup # create an operator-owned PostgreSQL custom-format backup
+bun run db:restore # restore into an explicitly named target database
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
 bun run typecheck  # generate Next types, then tsc --noEmit
