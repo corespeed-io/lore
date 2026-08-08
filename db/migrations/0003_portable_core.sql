@@ -963,18 +963,32 @@ BEGIN
     RAISE EXCEPTION 'Embedding rollback retention must be at least one hour';
   END IF;
 
+  -- A retired generation is no longer claimed by the active deployment. Cancel
+  -- work that never started, plus processing work whose lease has exceeded the
+  -- maximum one-hour lease accepted by claim_memory_embedding_job. A worker with
+  -- a still-valid lease keeps the generation alive until a later sweep.
+  UPDATE memory_embedding_jobs job
+  SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
+      last_error = COALESCE(job.last_error, 'Embedding generation retention expired'),
+      completed_at = now(), updated_at = now()
+  FROM embedding_generations generation
+  WHERE generation.id = job.generation_id
+    AND generation.status = 'retiring'
+    AND generation.retired_at <= now() - retention_seconds * interval '1 second'
+    AND (
+      job.status = 'pending'
+      OR (
+        job.status = 'processing'
+        AND job.leased_at <= now() - interval '1 hour'
+      )
+    );
+
   DELETE FROM memory_embedding_jobs job
   USING embedding_generations generation
   WHERE generation.id = job.generation_id
     AND generation.status = 'retiring'
     AND generation.retired_at <= now() - retention_seconds * interval '1 second'
-    AND job.status IN ('succeeded', 'dead', 'cancelled')
-    AND NOT EXISTS (
-      SELECT 1
-      FROM memory_embedding_jobs unfinished
-      WHERE unfinished.generation_id = generation.id
-        AND unfinished.status IN ('pending', 'processing')
-    );
+    AND job.status IN ('succeeded', 'dead', 'cancelled');
 
   DELETE FROM embedding_generations generation
   WHERE generation.status = 'retiring'

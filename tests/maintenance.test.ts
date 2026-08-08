@@ -384,6 +384,30 @@ test("embedding revisions build beside the active generation and cut over atomic
        WHERE status = 'retiring'`,
     ),
   );
+
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE memory_embedding_jobs job
+       SET status = 'processing', lease_token = gen_random_uuid(), leased_at = now(),
+           completed_at = NULL, updated_at = now()
+       FROM embedding_generations generation
+       WHERE generation.id = job.generation_id
+         AND generation.status = 'retiring'`,
+    ),
+  );
+  await expect(
+    pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
+  ).resolves.toBe(0);
+
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE memory_embedding_jobs job
+       SET leased_at = now() - interval '2 hours', updated_at = now()
+       FROM embedding_generations generation
+       WHERE generation.id = job.generation_id
+         AND generation.status = 'retiring'`,
+    ),
+  );
   await expect(
     pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
   ).resolves.toBe(1);
@@ -418,4 +442,55 @@ test("an incomplete embedding generation cannot become active", async () => {
     missingChunks: 1,
     pendingJobs: 1,
   });
+});
+
+test("expired retiring generations cancel abandoned pending jobs before pruning", async () => {
+  const testContext = await createMemoryTestContext();
+  const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
+  await memories.remember(testContext.alice, { content: "Retire the old embedding space." });
+
+  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: firstProvider,
+  });
+  await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
+
+  const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
+  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: replacementProvider,
+  });
+  await expect(replacementMaintenance.seedStale()).resolves.toHaveLength(1);
+  await expect(replacementMaintenance.run()).resolves.toMatchObject({ status: "complete" });
+  await expect(replacementMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
+
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `UPDATE embedding_generations generation
+       SET retired_at = now() - interval '2 hours'
+       WHERE generation.status = 'retiring'`,
+    );
+    await transaction.query(
+      `UPDATE memory_embedding_jobs job
+       SET status = 'pending', lease_token = NULL, leased_at = NULL,
+           completed_at = NULL, updated_at = now()
+       FROM embedding_generations generation
+       WHERE generation.id = job.generation_id
+         AND generation.status = 'retiring'`,
+    );
+  });
+
+  await expect(
+    pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
+  ).resolves.toBe(1);
+  const retiredState = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ generation_count: string; job_count: string }>(
+      `SELECT
+         count(DISTINCT generation.id)::text AS generation_count,
+         count(job.id)::text AS job_count
+       FROM embedding_generations generation
+       LEFT JOIN memory_embedding_jobs job ON job.generation_id = generation.id
+       WHERE generation.embedding_revision = 'fixture-v1'`,
+    ),
+  );
+  expect(retiredState.rows).toEqual([{ generation_count: "0", job_count: "0" }]);
 });
