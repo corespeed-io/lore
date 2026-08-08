@@ -747,6 +747,7 @@ DECLARE
   target_generation_id uuid;
   terminal_job_ids uuid[];
   stale_job_ids uuid[];
+  reconcile_job_ids uuid[];
   candidate_memory_ids uuid[];
   target_job_id uuid;
   target_memory_id uuid;
@@ -798,6 +799,10 @@ BEGIN
     LIMIT job_limit
   ) candidate;
 
+  SELECT COALESCE(array_agg(DISTINCT candidate.id ORDER BY candidate.id), ARRAY[]::uuid[])
+  INTO reconcile_job_ids
+  FROM unnest(terminal_job_ids || stale_job_ids) candidate(id);
+
   SELECT COALESCE(array_agg(candidate.id ORDER BY candidate.id), ARRAY[]::uuid[])
   INTO candidate_memory_ids
   FROM (
@@ -845,7 +850,7 @@ BEGIN
       FROM memory_embedding_jobs job
       WHERE job.workspace_id = memory.workspace_id
         AND job.memory_id = memory.id
-        AND job.id = ANY(terminal_job_ids || stale_job_ids)
+        AND job.id = ANY(reconcile_job_ids)
     )
   ORDER BY memory.id
   FOR KEY SHARE;
@@ -868,7 +873,7 @@ BEGIN
     RETURN;
   END IF;
 
-  FOREACH target_job_id IN ARRAY terminal_job_ids LOOP
+  FOREACH target_job_id IN ARRAY reconcile_job_ids LOOP
     DELETE FROM memory_embedding_jobs job
     WHERE job.id = target_job_id
       AND (
@@ -876,44 +881,43 @@ BEGIN
           AND job.completed_at < now() - interval '7 days')
         OR (job.status = 'dead' AND job.completed_at < now() - interval '30 days')
       );
-  END LOOP;
-
-  FOREACH target_job_id IN ARRAY stale_job_ids LOOP
-    UPDATE memory_embedding_jobs job
-    SET status = CASE
-          WHEN memory.version <> job.memory_version
-            OR memory.owner_user_id <> job.owner_user_id
-            OR memory.scope <> job.memory_scope
-            THEN 'cancelled'::memory_embedding_job_status
-          ELSE 'dead'::memory_embedding_job_status
-        END,
-        lease_token = NULL, leased_at = NULL,
-        last_error = CASE
-          WHEN memory.version <> job.memory_version
-            OR memory.owner_user_id <> job.owner_user_id
-            OR memory.scope <> job.memory_scope
-            THEN job.last_error
-          ELSE COALESCE(job.last_error, 'Embedding job lease expired')
-        END,
-        completed_at = now(), updated_at = now()
-    FROM memories memory
-    WHERE job.id = target_job_id
-      AND memory.workspace_id = job.workspace_id
-      AND memory.id = job.memory_id
-      AND (
-        (
-          job.status IN ('pending', 'processing', 'dead')
-          AND (
-            memory.version <> job.memory_version
-            OR memory.owner_user_id <> job.owner_user_id
-            OR memory.scope <> job.memory_scope
+    IF NOT FOUND THEN
+      UPDATE memory_embedding_jobs job
+      SET status = CASE
+            WHEN memory.version <> job.memory_version
+              OR memory.owner_user_id <> job.owner_user_id
+              OR memory.scope <> job.memory_scope
+              THEN 'cancelled'::memory_embedding_job_status
+            ELSE 'dead'::memory_embedding_job_status
+          END,
+          lease_token = NULL, leased_at = NULL,
+          last_error = CASE
+            WHEN memory.version <> job.memory_version
+              OR memory.owner_user_id <> job.owner_user_id
+              OR memory.scope <> job.memory_scope
+              THEN job.last_error
+            ELSE COALESCE(job.last_error, 'Embedding job lease expired')
+          END,
+          completed_at = now(), updated_at = now()
+      FROM memories memory
+      WHERE job.id = target_job_id
+        AND memory.workspace_id = job.workspace_id
+        AND memory.id = job.memory_id
+        AND (
+          (
+            job.status IN ('pending', 'processing', 'dead')
+            AND (
+              memory.version <> job.memory_version
+              OR memory.owner_user_id <> job.owner_user_id
+              OR memory.scope <> job.memory_scope
+            )
+          ) OR (
+            job.status = 'processing'
+            AND job.attempt_count >= job.max_attempts
+            AND job.leased_at <= now() - interval '1 hour'
           )
-        ) OR (
-          job.status = 'processing'
-          AND job.attempt_count >= job.max_attempts
-          AND job.leased_at <= now() - interval '1 hour'
-        )
-      );
+        );
+    END IF;
   END LOOP;
 
   FOREACH target_memory_id IN ARRAY candidate_memory_ids LOOP
