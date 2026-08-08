@@ -783,7 +783,7 @@ BEGIN
       ON memory.workspace_id = job.workspace_id
      AND memory.id = job.memory_id
     WHERE (
-      job.status IN ('pending', 'processing')
+      job.status IN ('pending', 'processing', 'dead')
       AND (
         memory.version <> job.memory_version
         OR memory.owner_user_id <> job.owner_user_id
@@ -902,7 +902,7 @@ BEGIN
       AND memory.id = job.memory_id
       AND (
         (
-          job.status IN ('pending', 'processing')
+          job.status IN ('pending', 'processing', 'dead')
           AND (
             memory.version <> job.memory_version
             OR memory.owner_user_id <> job.owner_user_id

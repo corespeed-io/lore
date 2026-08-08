@@ -144,7 +144,7 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
     throw new Error("still unavailable");
   });
   const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
-  await memories.remember(testContext.alice, { content: "Do not retry forever." });
+  const created = await memories.remember(testContext.alice, { content: "Do not retry forever." });
   await testContext.adminDatabase.transaction(async (transaction) => {
     await transaction.query("UPDATE memory_embedding_jobs SET max_attempts = 1");
   });
@@ -155,6 +155,20 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
   await expect(maintenance.run()).resolves.toMatchObject({ status: "dead" });
   await expect(maintenance.seedStale()).resolves.toEqual([]);
   await expect(maintenance.run()).resolves.toMatchObject({ status: "idle" });
+
+  await memories.update(testContext.alice, created.id, { content: "A new version may retry." });
+  await expect(maintenance.seedStale()).resolves.toEqual([]);
+  const statuses = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ memory_version: number; status: string }>(
+      `SELECT memory_version, status::text
+       FROM memory_embedding_jobs
+       ORDER BY memory_version`,
+    ),
+  );
+  expect(statuses.rows).toEqual([
+    { memory_version: 1, status: "cancelled" },
+    { memory_version: 2, status: "pending" },
+  ]);
 });
 
 test("deployment sweeps bound and retire exhausted processing leases", async () => {
