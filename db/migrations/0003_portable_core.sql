@@ -485,6 +485,11 @@ BEGIN
     AND generation.embedding_revision = target_revision;
   IF FOUND THEN RETURN; END IF;
 
+  -- Serialize first-generation creation. Otherwise two different identities can
+  -- both select `active`, and the loser of the one-active unique constraint has
+  -- no matching row to return to its caller.
+  LOCK TABLE embedding_generations IN SHARE ROW EXCLUSIVE MODE;
+
   initial_status := CASE
     WHEN NOT EXISTS (
       SELECT 1
