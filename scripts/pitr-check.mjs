@@ -1,4 +1,5 @@
 import pg from "pg";
+import { archiveCommandCheck, archivedWalCheck, restoreDrillCheck } from "./lib/pitr-check.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -21,6 +22,9 @@ try {
      FROM pg_stat_archiver`,
   );
   const row = settings.rows[0];
+  const archiveCommand = archiveCommandCheck(row.archive_command);
+  const archivedWal = archivedWalCheck(archiver.rows[0]);
+  const restoreDrill = restoreDrillCheck(process.env.LORE_PITR_RESTORE_DRILL_CONFIRMED_AT);
   const checks = [
     {
       check: "wal_level",
@@ -34,8 +38,7 @@ try {
     },
     {
       check: "archive_command",
-      ok: Boolean(row.archive_command && row.archive_command !== "(disabled)"),
-      detail: row.archive_command || "empty",
+      ...archiveCommand,
     },
     {
       check: "wal_senders",
@@ -49,16 +52,28 @@ try {
       advisory: true,
     },
     {
-      check: "archive_failures",
-      ok: Number(archiver.rows[0]?.failed_count ?? 0) === 0,
-      detail: String(archiver.rows[0]?.failed_count ?? 0),
+      check: "archive_progress",
+      ...archivedWal,
+    },
+    {
+      check: "restore_drill",
+      ...restoreDrill,
     },
   ];
   const report = {
     ok: checks.every((check) => check.ok || check.advisory),
     checks,
     archiveTimeout: row.archive_timeout,
-    archiver: archiver.rows[0] ?? null,
+    archiver: archiver.rows[0]
+      ? {
+          archivedCount: Number(archiver.rows[0].archived_count),
+          failedCount: Number(archiver.rows[0].failed_count),
+          lastArchivedWal: archiver.rows[0].last_archived_wal,
+          lastArchivedTime: archiver.rows[0].last_archived_time,
+          lastFailedWal: archiver.rows[0].last_failed_wal,
+          lastFailedTime: archiver.rows[0].last_failed_time,
+        }
+      : null,
   };
   console.log(JSON.stringify(report, null, 2));
   if (!report.ok) process.exitCode = 1;

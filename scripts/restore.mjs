@@ -44,12 +44,33 @@ try {
   }
   await client.query(
     `DO $$
+     DECLARE
+       existing_role record;
      BEGIN
+       FOR existing_role IN
+         SELECT oid, rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+                rolinherit, rolreplication, rolbypassrls
+         FROM pg_roles
+         WHERE rolname IN ('lore_app', 'lore_maintenance')
+       LOOP
+         IF existing_role.rolcanlogin OR existing_role.rolsuper OR
+            existing_role.rolcreatedb OR existing_role.rolcreaterole OR
+            existing_role.rolinherit OR existing_role.rolreplication OR
+            existing_role.rolbypassrls OR EXISTS (
+              SELECT 1 FROM pg_auth_members membership
+              WHERE membership.member = existing_role.oid
+            ) THEN
+           RAISE EXCEPTION 'Existing role % has unsafe attributes or memberships',
+             existing_role.rolname;
+         END IF;
+       END LOOP;
        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'lore_app') THEN
-         CREATE ROLE lore_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+         CREATE ROLE lore_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+           NOINHERIT NOREPLICATION NOBYPASSRLS;
        END IF;
        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'lore_maintenance') THEN
-         CREATE ROLE lore_maintenance NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+         CREATE ROLE lore_maintenance NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+           NOINHERIT NOREPLICATION NOBYPASSRLS;
        END IF;
      END
      $$`,
@@ -80,9 +101,36 @@ const verifier = new pg.Client({ connectionString: databaseUrl });
 await verifier.connect();
 try {
   const result = await verifier.query(
-    `SELECT
+    `WITH required_rls_tables(table_name) AS (
+       VALUES
+         ('users'), ('workspaces'), ('memberships'), ('agents'),
+         ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
+         ('memories'), ('memory_chunks'), ('memory_links'),
+         ('evaluation_suites'), ('evaluation_cases'), ('evaluation_runs'),
+         ('evaluation_results'), ('memory_embedding_jobs'),
+         ('request_idempotency_records'), ('memory_events'),
+         ('embedding_generations'), ('memory_chunk_embeddings'),
+         ('workspace_imports'), ('memory_import_provenance')
+     ), rls_state AS (
+       SELECT count(relation.oid) = count(*) AND bool_and(relation.relrowsecurity) AS enabled
+       FROM required_rls_tables required
+       LEFT JOIN pg_class relation
+         ON relation.oid = to_regclass('public.' || required.table_name)
+     ), role_state AS (
+       SELECT count(*) = 2 AND bool_and(
+         NOT role.rolcanlogin AND NOT role.rolsuper AND NOT role.rolcreatedb
+         AND NOT role.rolcreaterole AND NOT role.rolinherit AND NOT role.rolreplication
+         AND NOT role.rolbypassrls AND NOT EXISTS (
+           SELECT 1 FROM pg_auth_members membership WHERE membership.member = role.oid
+         )
+       ) AS safe
+       FROM pg_roles role
+       WHERE role.rolname IN ('lore_app', 'lore_maintenance')
+     )
+     SELECT
        (SELECT schema_revision FROM lore_system_state WHERE singleton) AS schema_revision,
-       (SELECT relrowsecurity FROM pg_class WHERE oid = 'memories'::regclass) AS memories_rls,
+       (SELECT enabled FROM rls_state) AS tenant_rls,
+       (SELECT safe FROM role_state) AS runtime_roles_safe,
        EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_vector,
        has_table_privilege('lore_app', 'memories', 'SELECT') AS app_can_select,
        has_table_privilege('lore_maintenance', 'memory_embedding_jobs', 'SELECT')
@@ -90,7 +138,8 @@ try {
   );
   const row = result.rows[0];
   if (
-    !row?.memories_rls ||
+    !row?.tenant_rls ||
+    !row.runtime_roles_safe ||
     !row.has_vector ||
     !row.app_can_select ||
     !row.maintenance_can_select ||

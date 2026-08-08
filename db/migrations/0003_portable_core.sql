@@ -875,6 +875,10 @@ DECLARE
   unfinished_count bigint;
   dead_count bigint;
 BEGIN
+  -- Serialize the coverage snapshot with canonical chunk mutations. Memory
+  -- writes acquire their memory_chunks lock before ensuring a generation, so
+  -- this order also avoids crossing the write-path lock order.
+  LOCK TABLE memory_chunks IN SHARE MODE;
   LOCK TABLE embedding_generations IN SHARE ROW EXCLUSIVE MODE;
 
   SELECT generation.id INTO target_generation_id

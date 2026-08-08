@@ -5,7 +5,8 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   const document = loreOpenApiDocument() as {
     components: { schemas: { Error: { properties: { code: { enum: string[] } } } } };
     openapi: string;
-    paths: Record<string, unknown>;
+    paths: Record<string, Record<string, Record<string, unknown>>>;
+    security: Array<Record<string, unknown>>;
   };
   expect(document.openapi).toBe("3.1.1");
   expect(Object.keys(document.paths).sort()).toEqual(
@@ -31,4 +32,24 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.components.schemas.Error.properties.code.enum).toEqual(
     expect.arrayContaining(["idempotency_conflict", "precondition_required", "version_conflict"]),
   );
+  expect(document.security).toEqual(
+    expect.arrayContaining([
+      { agentBearer: [] },
+      { basicAuth: [] },
+      { cloudflareAccessHeader: [] },
+    ]),
+  );
+  expect(document.paths["/livez"].get.security).toEqual([]);
+  expect(document.paths["/readyz"].get.security).toEqual([]);
+  expect(document.paths["/api/v1/memories/{memoryId}"].patch.requestBody).toMatchObject({
+    required: true,
+  });
+  expect(document.paths["/api/v1/workspaces/import"].post.requestBody).toMatchObject({
+    required: true,
+  });
+  expect(document.paths["/api/v1/workspaces"].post.requestBody).toMatchObject({ required: true });
+  expect(document.paths["/api/v1/agents"].post.requestBody).toMatchObject({ required: true });
+  expect(document.paths["/api/v1/evaluations/suites"].post.requestBody).toMatchObject({
+    required: true,
+  });
 });

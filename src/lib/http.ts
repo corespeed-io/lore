@@ -142,11 +142,10 @@ function decodeCursor(value: string | null): MemoryCursor | undefined {
     const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
     const parsed = JSON.parse(atob(normalized + padding)) as Record<string, unknown>;
     const id = uuidString(parsed.id, "cursor.id");
-    const updatedAt = optionalTimestamp(
-      typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
-      "cursor.updatedAt",
-    );
-    if (!updatedAt) throw new BadRequestError("cursor.updatedAt is required");
+    const updatedAt = typeof parsed.updatedAt === "string" ? parsed.updatedAt : "";
+    if (!updatedAt || updatedAt.length > 64 || !Number.isFinite(new Date(updatedAt).getTime())) {
+      throw new BadRequestError("cursor.updatedAt must be an ISO 8601 timestamp");
+    }
     return { id, updatedAt };
   } catch (error) {
     if (error instanceof BadRequestError) throw error;
@@ -185,15 +184,6 @@ function memoryScope(value: unknown): MemoryScope | undefined {
   if (value === undefined) return undefined;
   if (value === "shared" || value === "private") return value;
   throw new BadRequestError("scope must be shared or private");
-}
-
-function optionalTimestamp(value: string | null, name: string): string | undefined {
-  if (value === null || value.trim() === "") return undefined;
-  const timestamp = new Date(value);
-  if (!Number.isFinite(timestamp.getTime())) {
-    throw new BadRequestError(`${name} must be an ISO 8601 timestamp`);
-  }
-  return timestamp.toISOString();
 }
 
 function metadata(value: unknown): Record<string, unknown> | undefined {

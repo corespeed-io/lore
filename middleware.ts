@@ -10,7 +10,8 @@ export function isOperationalProbePath(path: string): boolean {
 }
 
 function json(error: string, status: number, extra: Record<string, string> = {}) {
-  return new NextResponse(JSON.stringify({ error }), {
+  const code = status === 401 ? "authentication_required" : "access_denied";
+  return new NextResponse(JSON.stringify({ code, error }), {
     status,
     headers: { "content-type": "application/json", ...extra },
   });

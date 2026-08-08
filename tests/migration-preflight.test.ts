@@ -8,6 +8,7 @@ const currentMigrations = [{ id: "0001_initial.sql", checksum: "current" }];
 test("migration preflight permits the exact legacy history that migrate can adopt", () => {
   const applied = [...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({ id, checksum }));
   expect(migrationHistoryStatus(applied, currentMigrations)).toEqual({
+    missing: [],
     modified: [],
     unknown: [],
   });
@@ -22,4 +23,15 @@ test("migration preflight still rejects extra history beside an adoptable legacy
     },
   ];
   expect(migrationHistoryStatus(applied, currentMigrations).unknown).toEqual([applied.at(-1)]);
+});
+
+test("migration preflight rejects gaps before the highest applied migration", () => {
+  const migrations = [
+    { id: "0001_initial.sql", checksum: "one" },
+    { id: "0002_jobs.sql", checksum: "two" },
+    { id: "0003_portable_core.sql", checksum: "three" },
+  ];
+  const applied = [migrations[0], migrations[2]];
+
+  expect(migrationHistoryStatus(applied, migrations).missing).toEqual([migrations[1]]);
 });

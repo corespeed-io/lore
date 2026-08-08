@@ -24,6 +24,14 @@ export function migrationHistoryStatus(applied, migrations) {
   const expected = new Map(migrations.map((migration) => [migration.id, migration.checksum]));
   const baselineApplied = applied.some(({ id }) => id === BASELINE_MIGRATION_ID);
   const adoptableLegacyBaseline = !baselineApplied && hasCompleteLegacyBaseline(applied);
+  const effectiveApplied = new Set(
+    applied.filter(({ id }) => expected.has(id)).map(({ id }) => id),
+  );
+  if (adoptableLegacyBaseline) effectiveApplied.add(BASELINE_MIGRATION_ID);
+  const highestAppliedIndex = migrations.reduce(
+    (highest, migration, index) => (effectiveApplied.has(migration.id) ? index : highest),
+    -1,
+  );
   return {
     modified: applied.filter(
       (migration) =>
@@ -34,6 +42,9 @@ export function migrationHistoryStatus(applied, migrations) {
         !expected.has(migration.id) &&
         !(adoptableLegacyBaseline && LEGACY_BASELINE_MIGRATIONS.has(migration.id)),
     ),
+    missing: migrations
+      .slice(0, highestAppliedIndex + 1)
+      .filter((migration) => !effectiveApplied.has(migration.id)),
   };
 }
 
@@ -67,14 +78,15 @@ export async function runMigrationPreflight(client) {
   );
   if (historyExists.rows[0]?.table) {
     const applied = await client.query("SELECT id, checksum FROM schema_migrations ORDER BY id");
-    const { modified, unknown } = migrationHistoryStatus(applied.rows, migrations);
+    const { missing, modified, unknown } = migrationHistoryStatus(applied.rows, migrations);
     checks.push({
       check: "migration_checksums",
-      ok: modified.length === 0 && unknown.length === 0,
+      ok: modified.length === 0 && unknown.length === 0 && missing.length === 0,
       detail:
         [
           ...modified.map((migration) => `modified:${migration.id}`),
           ...unknown.map((migration) => `unknown:${migration.id}`),
+          ...missing.map((migration) => `missing:${migration.id}`),
         ].join(",") || undefined,
     });
   } else {

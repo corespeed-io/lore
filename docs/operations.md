@@ -50,6 +50,10 @@ and `error` rejects visible collisions. Checksum, counts, field limits, link end
 owner mapping are validated before writes. A completed archive checksum is
 replay-safe for that importer and Workspace.
 
+Every imported Memory receives a fresh target id. `error` and `skip` apply only to
+source-id collisions the importing Actor can already see; Lore never probes or
+preserves a source id in a way that could reveal an RLS-hidden Memory.
+
 ## Logical backup and restore drill
 
 Use a trusted migration-owner/admin connection. The backup is a PostgreSQL custom
@@ -105,13 +109,19 @@ operators need periodic physical base backups and continuous WAL archiving to
 durable off-host storage. Validate the server first:
 
 ```bash
-DATABASE_URL=postgres://lore_admin:...@db.example/lore bun run db:pitr:check
+DATABASE_URL=postgres://lore_admin:...@db.example/lore \
+LORE_PITR_RESTORE_DRILL_CONFIRMED_AT=2026-08-01T12:00:00Z \
+  bun run db:pitr:check
 ```
 
-The check requires `wal_level=replica|logical`, `archive_mode=on|always`, a real
-`archive_command`, at least one WAL sender, and no recorded archive failures. Data
-checksums are reported as a strong advisory. A representative base-backup command
-is:
+The check requires `wal_level=replica|logical`, `archive_mode=on|always`, a
+non-no-op `archive_command` containing PostgreSQL's `%p` WAL-path placeholder, at
+least one observed successful archive newer than the latest failure, one WAL sender,
+and a restore drill recorded within the last 90 days. The command itself is always
+redacted because it may contain storage credentials. This is a bounded configuration
+check, not proof of recoverability; only a successful restore drill provides that
+evidence. Data checksums are reported as a strong advisory. A representative
+base-backup command is:
 
 ```bash
 pg_basebackup --dbname="$DATABASE_URL" --pgdata=/secure/lore-base-20260807 \

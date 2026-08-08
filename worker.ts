@@ -5,6 +5,7 @@ import { createEmbeddingProviderFromEnvironment } from "./src/lib/embedding/prov
 import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
+  purgeExpiredPortableCoreRecords,
 } from "./src/lib/maintenance";
 import type { MemoryEmbeddingJobMessage } from "./src/lib/memory";
 import { createOperationsModule, livenessReport } from "./src/lib/operations";
@@ -38,6 +39,13 @@ function maintenanceForEnvironment(env: CloudflareEnv) {
     leaseSeconds: embeddingMaintenanceLeaseSeconds(Number(env.LORE_EMBEDDING_TIMEOUT_MS)),
     logger: (entry) => console.log(JSON.stringify({ component: "memory-maintenance", ...entry })),
   });
+}
+
+function maintenanceDatabaseForEnvironment(env: CloudflareEnv) {
+  return createRequestPostgresDatabase(
+    { connectionString: env.MAINTENANCE_HYPERDRIVE.connectionString },
+    { role: "lore_maintenance" },
+  );
 }
 
 function probeResponse(body: unknown, status = 200): Response {
@@ -123,10 +131,21 @@ export default {
   },
 
   async scheduled(_controller, env) {
+    const purged = await purgeExpiredPortableCoreRecords(maintenanceDatabaseForEnvironment(env));
     const maintenance = maintenanceForEnvironment(env);
-    if (!maintenance) return;
+    if (!maintenance) {
+      console.log(
+        JSON.stringify({
+          component: "memory-maintenance",
+          event: "sweep_complete",
+          embeddingStatus: "disabled",
+          purgedIdempotencyRecords: purged.idempotencyRecords,
+          purgedMemoryEvents: purged.memoryEvents,
+        }),
+      );
+      return;
+    }
     const seeded = await maintenance.seedStale(1_000);
-    const purged = await maintenance.purgeExpired();
     const prunedEmbeddingGenerations = await maintenance.pruneRetiringGenerations(
       Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
     );

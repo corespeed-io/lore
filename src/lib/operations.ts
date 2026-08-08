@@ -55,15 +55,39 @@ export function createOperationsModule(
           database.transaction(async (transaction) => {
             await transaction.query("SELECT set_config('statement_timeout', '2000', true)");
             const result = await transaction.query<ReadinessRow>(
-              `SELECT
+              `WITH required_rls_tables(table_name) AS (
+                 VALUES
+                   ('users'), ('workspaces'), ('memberships'), ('agents'),
+                   ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
+                   ('memories'), ('memory_chunks'), ('memory_links'),
+                   ('evaluation_suites'), ('evaluation_cases'), ('evaluation_runs'),
+                   ('evaluation_results'), ('memory_embedding_jobs'),
+                   ('request_idempotency_records'), ('memory_events'),
+                   ('embedding_generations'), ('memory_chunk_embeddings'),
+                   ('workspace_imports'), ('memory_import_provenance')
+               ), rls_state AS (
+                 SELECT
+                   count(relation.oid) = count(*)
+                     AND bool_and(relation.relrowsecurity) AS enabled
+                 FROM required_rls_tables required
+                 LEFT JOIN pg_class relation
+                   ON relation.oid = to_regclass('public.' || required.table_name)
+               ), runtime_role AS (
+                 SELECT NOT role.rolsuper AND NOT role.rolbypassrls AS safe
+                 FROM pg_roles role
+                 WHERE role.rolname = current_user
+               )
+               SELECT
                  lore.portable_core_capabilities() AS capabilities,
                  EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_vector,
                  current_user AS role_name,
-                 lore.can_read_memory(
-                   '00000000-0000-4000-8000-000000000000'::uuid,
-                   '00000000-0000-4000-8000-000000000000'::uuid,
-                   'private'::memory_scope
-                 ) AS rls_probe`,
+                 (SELECT enabled FROM rls_state)
+                   AND (SELECT safe FROM runtime_role)
+                   AND current_setting('row_security') = 'on'
+                   AND NULLIF(current_setting('lore.workspace_id', true), '') IS NULL
+                   AND NULLIF(current_setting('lore.user_id', true), '') IS NULL
+                   AND NULLIF(current_setting('lore.agent_id', true), '') IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM memories LIMIT 1) AS rls_probe`,
             );
             const value = result.rows[0];
             if (!value) throw new Error("Readiness query returned no result");
@@ -73,7 +97,7 @@ export function createOperationsModule(
         components.database = "ok";
         components.vector = row.has_vector ? "ok" : "unavailable";
         components.rlsRole =
-          row.role_name === "lore_app" && row.rls_probe === false ? "ok" : "unavailable";
+          row.role_name === "lore_app" && row.rls_probe === true ? "ok" : "unavailable";
         components.schema =
           Number(row.capabilities.schemaRevision) === LORE_SCHEMA_REVISION ? "ok" : "incompatible";
       } catch {

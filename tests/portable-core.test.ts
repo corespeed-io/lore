@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
 import { createMemoryGraphModule } from "@/lib/graph";
 import { IdempotencyConflictError, mutationRequestHash } from "@/lib/idempotency";
+import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
 import { createMemoryModule, MemoryVersionConflictError } from "@/lib/memory";
 import { createOperationsModule } from "@/lib/operations";
 import { createPortabilityModule, PortabilityValidationError } from "@/lib/portability";
@@ -40,6 +41,36 @@ test("Memory create replays the same Idempotency-Key and rejects a changed paylo
     ),
   ).rejects.toBeInstanceOf(IdempotencyConflictError);
   await expect(memories.list(testContext.alice)).resolves.toHaveLength(1);
+});
+
+test("portable record retention runs without an embedding provider", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const operation = "memory.create";
+  const input = { content: "Expire the replay response and content-free event." };
+  await memories.remember(testContext.alice, input, {
+    idempotency: {
+      key: "portable-core-expiry",
+      operation,
+      requestHash: await mutationRequestHash({ operation, payload: input }),
+    },
+  });
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      "UPDATE request_idempotency_records SET expires_at = now() - interval '1 second'",
+    );
+    await transaction.query("UPDATE memory_events SET expires_at = now() - interval '1 second'");
+  });
+
+  await expect(purgeExpiredPortableCoreRecords(testContext.maintenanceDatabase)).resolves.toEqual({
+    idempotencyRecords: 1,
+    memoryEvents: 1,
+  });
+  const remaining = await testContext.adminDatabase.transaction(async (transaction) => ({
+    events: (await transaction.query("SELECT id FROM memory_events")).rows,
+    idempotency: (await transaction.query("SELECT id FROM request_idempotency_records")).rows,
+  }));
+  expect(remaining).toEqual({ events: [], idempotency: [] });
 });
 
 test("optimistic Memory updates allow one writer and reject a stale writer", async () => {
@@ -378,6 +409,68 @@ test("Workspace import cannot reveal an RLS-hidden Memory id collision", async (
   ).resolves.toMatchObject({ content: "Portable source Memory." });
 });
 
+test("Workspace import normalizes UUID case before owner and Link mapping", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const portability = createPortabilityModule(testContext.database);
+  const source = await memories.remember(testContext.carol, { content: "Uppercase source." });
+  const target = await memories.remember(testContext.carol, { content: "Uppercase target." });
+  await graph.connect(testContext.carol, {
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: "normalized",
+  });
+  const archive = await portability.exportWorkspace(testContext.carol);
+  archive.manifest.sourceDeploymentId = archive.manifest.sourceDeploymentId.toUpperCase();
+  archive.manifest.sourceWorkspaceId = archive.manifest.sourceWorkspaceId.toUpperCase();
+  for (const memory of archive.memories) {
+    memory.id = memory.id.toUpperCase();
+    memory.ownerUserId = memory.ownerUserId.toUpperCase();
+  }
+  for (const link of archive.links) {
+    link.id = link.id.toUpperCase();
+    link.sourceMemoryId = link.sourceMemoryId.toUpperCase();
+    link.targetMemoryId = link.targetMemoryId.toUpperCase();
+  }
+  const { checksum: _checksum, ...manifest } = archive.manifest;
+  archive.manifest.checksum = await mutationRequestHash({
+    manifest,
+    memories: archive.memories,
+    links: archive.links,
+  });
+  const ownerMap = {
+    [testContext.carol.userId.toUpperCase()]: testContext.alice.userId.toUpperCase(),
+  };
+
+  const imported = await portability.importWorkspace(testContext.alice, { archive, ownerMap });
+
+  expect(imported).toMatchObject({ importedMemories: 2, importedLinks: 1 });
+  expect(Object.keys(imported.memoryIdMap).sort()).toEqual([source.id, target.id].sort());
+});
+
+test("Workspace import rejects oversized metadata before queueing every child", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const portability = createPortabilityModule(testContext.database);
+  await memories.remember(testContext.carol, { content: "Bound imported metadata." });
+  const archive = await portability.exportWorkspace(testContext.carol);
+  archive.memories[0].metadata = { items: Array.from({ length: 10_001 }, () => null) };
+  const { checksum: _checksum, ...manifest } = archive.manifest;
+  archive.manifest.checksum = await mutationRequestHash({
+    manifest,
+    memories: archive.memories,
+    links: archive.links,
+  });
+
+  await expect(
+    portability.importWorkspace(testContext.alice, {
+      archive,
+      ownerMap: { [testContext.carol.userId]: testContext.alice.userId },
+    }),
+  ).rejects.toThrow(/exceeds 10000 values/);
+});
+
 test("Portable Core readiness checks schema, vector, and the RLS request role", async () => {
   const testContext = await createMemoryTestContext();
   const operations = createOperationsModule(testContext.database, { embeddingConfigured: true });
@@ -416,4 +509,12 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   } finally {
     markDependencySuccess("embedding");
   }
+
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("ALTER TABLE memories DISABLE ROW LEVEL SECURITY"),
+  );
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
 });

@@ -276,11 +276,20 @@ test("Memory HTTP cursor advances within the authorized ordering", async () => {
   );
   const cursor = firstPage.headers.get("x-lore-next-cursor");
   expect(cursor).toBeTruthy();
-  await expect(firstPage.json()).resolves.toHaveLength(2);
+  const firstPageMemories = (await firstPage.json()) as Array<{ id: string }>;
+  expect(firstPageMemories).toHaveLength(2);
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE memories
+       SET updated_at = '2026-08-07T13:00:00Z'
+       WHERE id = $1`,
+      [firstPageMemories[1].id],
+    ),
+  );
   const secondPage = await memories.GET(
     new Request(`http://lore.local/api/memories?limit=2&cursor=${cursor}`, { headers }),
   );
-  await expect(secondPage.json()).resolves.toHaveLength(1);
+  await expect(secondPage.json()).resolves.toEqual([expect.objectContaining({ id: memoryIds[2] })]);
   expect(secondPage.headers.get("x-lore-next-cursor")).toBeNull();
   await testContext.close();
 });

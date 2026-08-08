@@ -3,6 +3,7 @@ import { createEmbeddingProviderFromEnvironment } from "../lib/embedding/provide
 import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
+  purgeExpiredPortableCoreRecords,
 } from "../lib/maintenance";
 import { registerLoreTelemetry } from "../lib/register-telemetry";
 import { observeOperation } from "../lib/telemetry";
@@ -32,9 +33,6 @@ const embeddingEnvironment =
 const embeddingProvider = createEmbeddingProviderFromEnvironment(embeddingEnvironment, (message) =>
   console.warn(message),
 );
-if (!embeddingProvider) {
-  throw new Error("A valid deployment-wide embedding configuration is required by the worker");
-}
 
 const database = createPostgresDatabase(
   {
@@ -43,13 +41,15 @@ const database = createPostgresDatabase(
   },
   { role: "lore_maintenance" },
 );
-const maintenance = createMemoryMaintenanceModule(database, {
-  embeddingProvider,
-  leaseSeconds: embeddingMaintenanceLeaseSeconds(
-    positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
-  ),
-  logger: (entry) => console.log(JSON.stringify({ component: "memory-maintenance", ...entry })),
-});
+const maintenance = embeddingProvider
+  ? createMemoryMaintenanceModule(database, {
+      embeddingProvider,
+      leaseSeconds: embeddingMaintenanceLeaseSeconds(
+        positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
+      ),
+      logger: (entry) => console.log(JSON.stringify({ component: "memory-maintenance", ...entry })),
+    })
+  : null;
 const pollIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_POLL_MS, 1_000);
 const sweepIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_SWEEP_MS, 300_000);
 const embeddingRollbackSeconds = positiveInteger(
@@ -76,11 +76,12 @@ try {
     try {
       if (Date.now() >= nextSweepAt) {
         const sweep = await observeOperation("maintenance.sweep", async () => {
-          const seeded = await maintenance.seedStale(1_000);
-          const purged = await maintenance.purgeExpired();
-          const prunedEmbeddingGenerations =
-            await maintenance.pruneRetiringGenerations(embeddingRollbackSeconds);
-          const generation = await maintenance.generationReport();
+          const purged = await purgeExpiredPortableCoreRecords(database);
+          const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
+          const prunedEmbeddingGenerations = maintenance
+            ? await maintenance.pruneRetiringGenerations(embeddingRollbackSeconds)
+            : 0;
+          const generation = maintenance ? await maintenance.generationReport() : null;
           return { generation, prunedEmbeddingGenerations, purged, seeded };
         });
         console.log(
@@ -91,19 +92,24 @@ try {
             purgedIdempotencyRecords: sweep.purged.idempotencyRecords,
             purgedMemoryEvents: sweep.purged.memoryEvents,
             prunedEmbeddingGenerations: sweep.prunedEmbeddingGenerations,
-            generationStatus: sweep.generation.status,
-            generationEligibleChunks: sweep.generation.eligibleChunks,
-            generationEmbeddedChunks: sweep.generation.embeddedChunks,
-            generationMissingChunks: sweep.generation.missingChunks,
-            generationPendingJobs: sweep.generation.pendingJobs,
-            generationDeadJobs: sweep.generation.deadJobs,
+            embeddingStatus: sweep.generation ? "configured" : "disabled",
+            generationStatus: sweep.generation?.status,
+            generationEligibleChunks: sweep.generation?.eligibleChunks,
+            generationEmbeddedChunks: sweep.generation?.embeddedChunks,
+            generationMissingChunks: sweep.generation?.missingChunks,
+            generationPendingJobs: sweep.generation?.pendingJobs,
+            generationDeadJobs: sweep.generation?.deadJobs,
           }),
         );
         nextSweepAt = Date.now() + sweepIntervalMs;
       }
 
-      const result = await observeOperation("maintenance.job", () => maintenance.run());
       infrastructureBackoffMs = pollIntervalMs;
+      if (!maintenance) {
+        await wait(pollIntervalMs);
+        continue;
+      }
+      const result = await observeOperation("maintenance.job", () => maintenance.run());
       if (result.status === "idle" || result.status === "retry") {
         await wait(pollIntervalMs);
       }

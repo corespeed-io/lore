@@ -116,14 +116,10 @@ function metadata(value: unknown, name: string): Record<string, unknown> {
   const pending: Array<{ depth: number; path: string; value: unknown }> = [
     { depth: 0, path: name, value },
   ];
-  let visited = 0;
+  let scheduled = 1;
   while (pending.length) {
     const current = pending.pop();
     if (!current) break;
-    visited += 1;
-    if (visited > 10_000) {
-      throw new PortabilityValidationError(`${name} exceeds 10000 values`);
-    }
     if (current.depth > 32) {
       throw new PortabilityValidationError(`${name} exceeds 32 levels`);
     }
@@ -132,6 +128,10 @@ function metadata(value: unknown, name: string): Record<string, unknown> {
     }
     if (Array.isArray(current.value)) {
       for (const [index, item] of current.value.entries()) {
+        scheduled += 1;
+        if (scheduled > 10_000) {
+          throw new PortabilityValidationError(`${name} exceeds 10000 values`);
+        }
         pending.push({ depth: current.depth + 1, path: `${current.path}[${index}]`, value: item });
       }
     } else if (current.value && typeof current.value === "object") {
@@ -140,6 +140,10 @@ function metadata(value: unknown, name: string): Record<string, unknown> {
           throw new PortabilityValidationError(
             `${current.path} contains an invalid null character`,
           );
+        }
+        scheduled += 1;
+        if (scheduled > 10_000) {
+          throw new PortabilityValidationError(`${name} exceeds 10000 values`);
         }
         pending.push({ depth: current.depth + 1, path: `${current.path}.${key}`, value: item });
       }
@@ -162,16 +166,25 @@ async function archiveChecksum(archive: WorkspaceArchive): Promise<string> {
   return mutationRequestHash(archivePayload(archive));
 }
 
-function validateArchiveShape(archive: WorkspaceArchive): void {
+function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
   if (!archive || typeof archive !== "object") {
     throw new PortabilityValidationError("archive is required");
   }
   if (archive.manifest?.format !== WORKSPACE_ARCHIVE_FORMAT) {
     throw new PortabilityValidationError(`archive format must be ${WORKSPACE_ARCHIVE_FORMAT}`);
   }
-  uuid(archive.manifest.sourceDeploymentId, "manifest.sourceDeploymentId");
-  uuid(archive.manifest.sourceWorkspaceId, "manifest.sourceWorkspaceId");
-  timestamp(archive.manifest.exportedAt, "manifest.exportedAt");
+  const sourceDeploymentId = uuid(
+    archive.manifest.sourceDeploymentId,
+    "manifest.sourceDeploymentId",
+  );
+  const sourceWorkspaceId = uuid(archive.manifest.sourceWorkspaceId, "manifest.sourceWorkspaceId");
+  const exportedAt = timestamp(archive.manifest.exportedAt, "manifest.exportedAt");
+  if (!/^[0-9a-f]{64}$/.test(archive.manifest.checksum)) {
+    throw new PortabilityValidationError("manifest.checksum must be lowercase SHA-256");
+  }
+  if (archive.manifest.visibility !== "actor-visible") {
+    throw new PortabilityValidationError("manifest.visibility must be actor-visible");
+  }
   if (!Array.isArray(archive.memories) || archive.memories.length > MAX_IMPORT_MEMORIES) {
     throw new PortabilityValidationError(
       `archive memories must contain at most ${MAX_IMPORT_MEMORIES} items`,
@@ -189,11 +202,15 @@ function validateArchiveShape(archive: WorkspaceArchive): void {
     throw new PortabilityValidationError("archive manifest counts do not match its records");
   }
   const memoryIds = new Set<string>();
+  const normalizedMemories: WorkspaceArchiveMemory[] = [];
   for (const [index, memory] of archive.memories.entries()) {
+    if (!memory || typeof memory !== "object" || Array.isArray(memory)) {
+      throw new PortabilityValidationError(`memories[${index}] must be an object`);
+    }
     const id = uuid(memory.id, `memories[${index}].id`);
     if (memoryIds.has(id)) throw new PortabilityValidationError(`duplicate Memory id ${id}`);
     memoryIds.add(id);
-    uuid(memory.ownerUserId, `memories[${index}].ownerUserId`);
+    const ownerUserId = uuid(memory.ownerUserId, `memories[${index}].ownerUserId`);
     if (memory.scope !== "private" && memory.scope !== "shared") {
       throw new PortabilityValidationError(`memories[${index}].scope is invalid`);
     }
@@ -205,12 +222,27 @@ function validateArchiveShape(archive: WorkspaceArchive): void {
     ) {
       throw new PortabilityValidationError(`memories[${index}].content is invalid`);
     }
-    metadata(memory.metadata, `memories[${index}].metadata`);
-    timestamp(memory.createdAt, `memories[${index}].createdAt`);
-    timestamp(memory.updatedAt, `memories[${index}].updatedAt`);
+    const normalizedMetadata = metadata(memory.metadata, `memories[${index}].metadata`);
+    const createdAt = timestamp(memory.createdAt, `memories[${index}].createdAt`);
+    const updatedAt = timestamp(memory.updatedAt, `memories[${index}].updatedAt`);
+    if (!Number.isInteger(memory.version) || memory.version < 1) {
+      throw new PortabilityValidationError(`memories[${index}].version is invalid`);
+    }
+    normalizedMemories.push({
+      ...memory,
+      id,
+      ownerUserId,
+      metadata: normalizedMetadata,
+      createdAt,
+      updatedAt,
+    });
   }
   const linkIds = new Set<string>();
+  const normalizedLinks: WorkspaceArchiveLink[] = [];
   for (const [index, link] of archive.links.entries()) {
+    if (!link || typeof link !== "object" || Array.isArray(link)) {
+      throw new PortabilityValidationError(`links[${index}] must be an object`);
+    }
     const id = uuid(link.id, `links[${index}].id`);
     if (linkIds.has(id)) throw new PortabilityValidationError(`duplicate Link id ${id}`);
     linkIds.add(id);
@@ -230,8 +262,49 @@ function validateArchiveShape(archive: WorkspaceArchive): void {
     if (!Number.isFinite(link.weight) || link.weight < 0 || link.weight > 1) {
       throw new PortabilityValidationError(`links[${index}].weight is invalid`);
     }
-    metadata(link.metadata, `links[${index}].metadata`);
+    const normalizedMetadata = metadata(link.metadata, `links[${index}].metadata`);
+    const createdAt = timestamp(link.createdAt, `links[${index}].createdAt`);
+    const updatedAt = timestamp(link.updatedAt, `links[${index}].updatedAt`);
+    normalizedLinks.push({
+      ...link,
+      id,
+      sourceMemoryId: source,
+      targetMemoryId: target,
+      metadata: normalizedMetadata,
+      createdAt,
+      updatedAt,
+    });
   }
+  return {
+    manifest: {
+      ...archive.manifest,
+      exportedAt,
+      sourceDeploymentId,
+      sourceWorkspaceId,
+    },
+    memories: normalizedMemories,
+    links: normalizedLinks,
+  };
+}
+
+function normalizedOwnerMap(value: Record<string, string>): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new PortabilityValidationError("ownerMap must be an object");
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_IMPORT_MEMORIES) {
+    throw new PortabilityValidationError(`ownerMap exceeds ${MAX_IMPORT_MEMORIES} entries`);
+  }
+  const normalized: Record<string, string> = {};
+  for (const [source, target] of entries) {
+    const sourceId = uuid(source, "ownerMap source");
+    const targetId = uuid(target, `ownerMap[${source}]`);
+    if (normalized[sourceId] && normalized[sourceId] !== targetId) {
+      throw new PortabilityValidationError(`ownerMap contains conflicting source ${sourceId}`);
+    }
+    normalized[sourceId] = targetId;
+  }
+  return normalized;
 }
 
 async function insertChunks(
@@ -325,14 +398,15 @@ export function createPortabilityModule(database: PostgresDatabase) {
       input: ImportWorkspaceArchive,
     ): Promise<WorkspaceImportResult> {
       if (actor.agentId) throw new PortabilityAccessDeniedError("Workspace import requires a User");
-      validateArchiveShape(input.archive);
+      const archive = normalizedArchive(input.archive);
       const checksum = await archiveChecksum(input.archive);
       if (checksum !== input.archive.manifest.checksum) {
         throw new PortabilityValidationError("archive checksum does not match its records");
       }
-      const sourceOwners = new Set(input.archive.memories.map((memory) => memory.ownerUserId));
+      const ownerMap = normalizedOwnerMap(input.ownerMap);
+      const sourceOwners = new Set(archive.memories.map((memory) => memory.ownerUserId));
       for (const sourceOwner of sourceOwners) {
-        if (input.ownerMap[sourceOwner] !== actor.userId) {
+        if (ownerMap[sourceOwner] !== actor.userId.toLowerCase()) {
           throw new PortabilityValidationError(
             `ownerMap must explicitly map source owner ${sourceOwner} to the importing User`,
           );
@@ -352,7 +426,7 @@ export function createPortabilityModule(database: PostgresDatabase) {
           throw new PortabilityAccessDeniedError("User cannot import into this Workspace");
         }
 
-        const sourceIds = input.archive.memories.map((memory) => memory.id);
+        const sourceIds = archive.memories.map((memory) => memory.id);
         const conflicts = await transaction.query<{ id: string }>(
           "SELECT id FROM memories WHERE workspace_id = $1 AND id = ANY($2::uuid[])",
           [actor.workspaceId, sourceIds],
@@ -365,11 +439,11 @@ export function createPortabilityModule(database: PostgresDatabase) {
         }
         const skippedMemories = conflictPolicy === "skip" ? conflictingIds.size : 0;
         const includedMemoryIds = new Set(
-          input.archive.memories
+          archive.memories
             .filter((memory) => conflictPolicy !== "skip" || !conflictingIds.has(memory.id))
             .map((memory) => memory.id),
         );
-        const expectedLinkCount = input.archive.links.filter(
+        const expectedLinkCount = archive.links.filter(
           (link) =>
             includedMemoryIds.has(link.sourceMemoryId) &&
             includedMemoryIds.has(link.targetMemoryId),
@@ -399,8 +473,8 @@ export function createPortabilityModule(database: PostgresDatabase) {
             actor.workspaceId,
             actor.userId,
             checksum,
-            input.archive.manifest.sourceDeploymentId,
-            input.archive.manifest.sourceWorkspaceId,
+            archive.manifest.sourceDeploymentId,
+            archive.manifest.sourceWorkspaceId,
           ],
         );
         if (!claimed.rows[0]) {
@@ -419,7 +493,7 @@ export function createPortabilityModule(database: PostgresDatabase) {
         await transaction.query("SELECT set_config('lore.request_id', $1, true)", [importId]);
 
         const memoryIdMap: Record<string, string> = {};
-        for (const memory of input.archive.memories) {
+        for (const memory of archive.memories) {
           if (conflictPolicy === "skip" && conflictingIds.has(memory.id)) {
             continue;
           }
@@ -460,7 +534,7 @@ export function createPortabilityModule(database: PostgresDatabase) {
         }
 
         let importedLinks = 0;
-        for (const link of input.archive.links) {
+        for (const link of archive.links) {
           const source = memoryIdMap[link.sourceMemoryId];
           const target = memoryIdMap[link.targetMemoryId];
           if (!source || !target) continue;

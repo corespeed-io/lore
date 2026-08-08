@@ -478,25 +478,19 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
-          `WITH cursor_position AS MATERIALIZED (
-             SELECT COALESCE(
-               (
-                 SELECT cursor_memory.updated_at
-                 FROM memories cursor_memory
-                 WHERE cursor_memory.workspace_id = $1
-                   AND cursor_memory.id = $5::uuid
-               ),
-               $4::timestamptz
-             ) AS updated_at
-           )
-           SELECT *
+          `SELECT id, workspace_id, owner_user_id, created_by_agent_id, scope,
+                  content, metadata, version, created_at,
+                  to_char(
+                    updated_at AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                  ) AS updated_at
            FROM memories
            WHERE workspace_id = $1
              AND (
                $4::timestamptz IS NULL
-               OR updated_at < (SELECT cursor_position.updated_at FROM cursor_position)
+               OR updated_at < $4::timestamptz
                OR (
-                 updated_at = (SELECT cursor_position.updated_at FROM cursor_position)
+                 updated_at = $4::timestamptz
                  AND id > $5::uuid
                )
              )

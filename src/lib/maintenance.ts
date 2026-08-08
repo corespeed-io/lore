@@ -79,6 +79,21 @@ async function installMaintenanceContext(
   );
 }
 
+export async function purgeExpiredPortableCoreRecords(
+  database: PostgresDatabase,
+): Promise<{ idempotencyRecords: number; memoryEvents: number }> {
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{
+      idempotency_records: string | number;
+      memory_event_records: string | number;
+    }>("SELECT * FROM lore.purge_expired_portable_core_records()");
+    return {
+      idempotencyRecords: Number(result.rows[0]?.idempotency_records ?? 0),
+      memoryEvents: Number(result.rows[0]?.memory_event_records ?? 0),
+    };
+  });
+}
+
 export function createMemoryMaintenanceModule(
   database: PostgresDatabase,
   options: MemoryMaintenanceOptions,
@@ -186,16 +201,7 @@ export function createMemoryMaintenanceModule(
     },
 
     async purgeExpired(): Promise<{ idempotencyRecords: number; memoryEvents: number }> {
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<{
-          idempotency_records: string | number;
-          memory_event_records: string | number;
-        }>("SELECT * FROM lore.purge_expired_portable_core_records()");
-        return {
-          idempotencyRecords: Number(result.rows[0]?.idempotency_records ?? 0),
-          memoryEvents: Number(result.rows[0]?.memory_event_records ?? 0),
-        };
-      });
+      return purgeExpiredPortableCoreRecords(database);
     },
 
     async pruneRetiringGenerations(retentionSeconds = 604_800): Promise<number> {

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -23,21 +23,25 @@ const dumpUrl = new URL(databaseUrl);
 const dumpPassword = decodeURIComponent(dumpUrl.password);
 dumpUrl.password = "";
 
-await new Promise((resolveProcess, reject) => {
-  const child = spawn(
-    "pg_dump",
-    ["--format=custom", "--no-owner", "--file", backupPath, dumpUrl.toString()],
-    {
+const backupHandle = await open(backupPath, "wx", 0o600);
+try {
+  await backupHandle.chmod(0o600);
+  await new Promise((resolveProcess, reject) => {
+    const child = spawn("pg_dump", ["--format=custom", "--no-owner", dumpUrl.toString()], {
       env: { ...process.env, ...(dumpPassword ? { PGPASSWORD: dumpPassword } : {}) },
-      stdio: ["ignore", "inherit", "inherit"],
-    },
-  );
-  child.once("error", reject);
-  child.once("exit", (code) =>
-    code === 0 ? resolveProcess() : reject(new Error(`pg_dump exited with status ${code}`)),
-  );
-});
-await chmod(backupPath, 0o600);
+      stdio: ["ignore", backupHandle.fd, "inherit"],
+    });
+    child.once("error", reject);
+    child.once("exit", (code) =>
+      code === 0 ? resolveProcess() : reject(new Error(`pg_dump exited with status ${code}`)),
+    );
+  });
+} catch (error) {
+  await backupHandle.close();
+  await unlink(backupPath).catch(() => undefined);
+  throw error;
+}
+await backupHandle.close();
 
 const hash = createHash("sha256");
 for await (const chunk of createReadStream(backupPath)) hash.update(chunk);
@@ -50,6 +54,7 @@ const manifest = {
   restoreRequiresTrustedInput: true,
 };
 await writeFile(`${backupPath}.manifest.json`, `${JSON.stringify(manifest, null, 2)}\n`, {
+  flag: "wx",
   mode: 0o600,
 });
 console.log(
