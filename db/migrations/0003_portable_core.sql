@@ -634,6 +634,7 @@ BEGIN
       OR memory.owner_user_id <> job.owner_user_id
       OR memory.scope <> job.memory_scope
     )
+    AND (requested_job_id IS NULL OR job.id = requested_job_id)
     AND job.status IN ('pending', 'processing');
 
   UPDATE memory_embedding_jobs job
@@ -641,6 +642,7 @@ BEGIN
       last_error = COALESCE(job.last_error, 'Embedding job lease expired'),
       completed_at = now(), updated_at = now()
   WHERE job.status = 'processing'
+    AND (requested_job_id IS NULL OR job.id = requested_job_id)
     AND job.leased_at <= now() - lease_timeout_seconds * interval '1 second'
     AND job.attempt_count >= job.max_attempts;
 
@@ -1000,7 +1002,11 @@ BEGIN
 
   -- Completion obtains a generation FK lock before it updates its job. Take the
   -- same generation -> job order here so a late completion and retention sweep
-  -- serialize instead of deadlocking.
+  -- serialize instead of deadlocking. Activation already uses this table lock;
+  -- acquire it before any row lock so activation and prune cannot deadlock while
+  -- upgrading a delete's table lock.
+  LOCK TABLE embedding_generations IN SHARE ROW EXCLUSIVE MODE;
+
   PERFORM generation.id
   FROM embedding_generations generation
   WHERE generation.status = 'retiring'

@@ -214,6 +214,44 @@ test("stale jobs cannot write chunks after a Memory version changes", async () =
   ]);
 });
 
+test("a requested embedding hint cleans only its own stale job", async () => {
+  const testContext = await createMemoryTestContext();
+  const notifications: string[] = [];
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: provider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  const first = await memories.remember(testContext.alice, { content: "First old version." });
+  const second = await memories.remember(testContext.alice, { content: "Second old version." });
+  await memories.update(testContext.alice, first.id, { content: "First new version." });
+  await memories.update(testContext.alice, second.id, { content: "Second new version." });
+
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+  });
+  await expect(maintenance.run(notifications[0])).resolves.toEqual({
+    status: "idle",
+    jobId: notifications[0],
+  });
+
+  const oldStatuses = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ id: string; status: string }>(
+      `SELECT id, status::text
+       FROM memory_embedding_jobs
+       WHERE id = ANY($1::uuid[])
+       ORDER BY id`,
+      [[notifications[0], notifications[1]]],
+    ),
+  );
+  expect(oldStatuses.rows).toEqual(
+    [
+      { id: notifications[0], status: "cancelled" },
+      { id: notifications[1], status: "pending" },
+    ].sort((left, right) => left.id.localeCompare(right.id)),
+  );
+});
+
 test("maintenance role cannot mutate private chunks without the claimed lease context", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
