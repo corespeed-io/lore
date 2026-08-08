@@ -59,6 +59,7 @@ try {
             existing_role.rolbypassrls OR EXISTS (
               SELECT 1 FROM pg_auth_members membership
               WHERE membership.member = existing_role.oid
+                 OR membership.roleid = existing_role.oid
             ) THEN
            RAISE EXCEPTION 'Existing role % has unsafe attributes or memberships',
              existing_role.rolname;
@@ -121,7 +122,8 @@ try {
          NOT role.rolcanlogin AND NOT role.rolsuper AND NOT role.rolcreatedb
          AND NOT role.rolcreaterole AND NOT role.rolinherit AND NOT role.rolreplication
          AND NOT role.rolbypassrls AND NOT EXISTS (
-           SELECT 1 FROM pg_auth_members membership WHERE membership.member = role.oid
+           SELECT 1 FROM pg_auth_members membership
+           WHERE membership.member = role.oid OR membership.roleid = role.oid
          )
        ) AS safe
        FROM pg_roles role

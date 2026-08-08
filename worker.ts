@@ -5,6 +5,7 @@ import { createEmbeddingProviderFromEnvironment } from "./src/lib/embedding/prov
 import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
+  pruneRetiringEmbeddingGenerations,
   purgeExpiredPortableCoreRecords,
 } from "./src/lib/maintenance";
 import type { MemoryEmbeddingJobMessage } from "./src/lib/memory";
@@ -131,7 +132,12 @@ export default {
   },
 
   async scheduled(_controller, env) {
-    const purged = await purgeExpiredPortableCoreRecords(maintenanceDatabaseForEnvironment(env));
+    const maintenanceDatabase = maintenanceDatabaseForEnvironment(env);
+    const purged = await purgeExpiredPortableCoreRecords(maintenanceDatabase);
+    const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
+      maintenanceDatabase,
+      Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
+    );
     const maintenance = maintenanceForEnvironment(env);
     if (!maintenance) {
       console.log(
@@ -141,14 +147,12 @@ export default {
           embeddingStatus: "disabled",
           purgedIdempotencyRecords: purged.idempotencyRecords,
           purgedMemoryEvents: purged.memoryEvents,
+          prunedEmbeddingGenerations,
         }),
       );
       return;
     }
     const seeded = await maintenance.seedStale(1_000);
-    const prunedEmbeddingGenerations = await maintenance.pruneRetiringGenerations(
-      Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
-    );
     const generation = await maintenance.generationReport();
     console.log(
       JSON.stringify({

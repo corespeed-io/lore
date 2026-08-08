@@ -1,6 +1,9 @@
 import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
-import { createMemoryMaintenanceModule } from "@/lib/maintenance";
+import {
+  createMemoryMaintenanceModule,
+  pruneRetiringEmbeddingGenerations,
+} from "@/lib/maintenance";
 import { createMemoryModule, type EmbeddingTask } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
@@ -381,7 +384,9 @@ test("embedding revisions build beside the active generation and cut over atomic
        WHERE status = 'retiring'`,
     ),
   );
-  await expect(firstMaintenance.pruneRetiringGenerations(3_600)).resolves.toBe(1);
+  await expect(
+    pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
+  ).resolves.toBe(1);
   const afterPrune = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ embedding_revision: string; status: string }>(
       "SELECT embedding_revision, status FROM embedding_generations",

@@ -94,6 +94,24 @@ export async function purgeExpiredPortableCoreRecords(
   });
 }
 
+export async function pruneRetiringEmbeddingGenerations(
+  database: PostgresDatabase,
+  retentionSeconds = 604_800,
+): Promise<number> {
+  const requestedRetentionSeconds = Math.floor(retentionSeconds);
+  const safeRetentionSeconds =
+    Number.isFinite(requestedRetentionSeconds) && requestedRetentionSeconds >= 3_600
+      ? requestedRetentionSeconds
+      : 604_800;
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{ count: string | number }>(
+      "SELECT lore.prune_retiring_embedding_generations($1) AS count",
+      [safeRetentionSeconds],
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  });
+}
+
 export function createMemoryMaintenanceModule(
   database: PostgresDatabase,
   options: MemoryMaintenanceOptions,
@@ -205,18 +223,7 @@ export function createMemoryMaintenanceModule(
     },
 
     async pruneRetiringGenerations(retentionSeconds = 604_800): Promise<number> {
-      const requestedRetentionSeconds = Math.floor(retentionSeconds);
-      const safeRetentionSeconds =
-        Number.isFinite(requestedRetentionSeconds) && requestedRetentionSeconds >= 3_600
-          ? requestedRetentionSeconds
-          : 604_800;
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<{ count: string | number }>(
-          "SELECT lore.prune_retiring_embedding_generations($1) AS count",
-          [safeRetentionSeconds],
-        );
-        return Number(result.rows[0]?.count ?? 0);
-      });
+      return pruneRetiringEmbeddingGenerations(database, retentionSeconds);
     },
 
     async seedStale(limit = 100): Promise<string[]> {

@@ -1,5 +1,10 @@
 import pg from "pg";
-import { archiveCommandCheck, archivedWalCheck, restoreDrillCheck } from "./lib/pitr-check.mjs";
+import {
+  archiveCommandCheck,
+  archivedWalArtifactCheck,
+  archivedWalCheck,
+  restoreDrillCheck,
+} from "./lib/pitr-check.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -24,6 +29,10 @@ try {
   const row = settings.rows[0];
   const archiveCommand = archiveCommandCheck(row.archive_command);
   const archivedWal = archivedWalCheck(archiver.rows[0]);
+  const archivedWalArtifact = await archivedWalArtifactCheck(
+    process.env.LORE_PITR_ARCHIVE_DIRECTORY,
+    archiver.rows[0]?.last_archived_wal,
+  );
   const restoreDrill = restoreDrillCheck(process.env.LORE_PITR_RESTORE_DRILL_CONFIRMED_AT);
   const checks = [
     {
@@ -54,6 +63,10 @@ try {
     {
       check: "archive_progress",
       ...archivedWal,
+    },
+    {
+      check: "archive_artifact",
+      ...archivedWalArtifact,
     },
     {
       check: "restore_drill",

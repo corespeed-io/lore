@@ -82,8 +82,11 @@ LORE_RESTORE_CONFIRM=lore_restore_drill \
 ```
 
 The restore verifies the manifest, schema revision, pgvector, RLS, and request/
-maintenance role privileges. On a new cluster, the admin must have `CREATEROLE` so
-the restore can create Lore's two NOLOGIN group roles. Afterwards run
+maintenance role privileges. Use an isolated drill/recovery cluster. The restore
+rejects any pre-existing member of either Lore group role so a production runtime
+credential cannot silently inherit access to restored private data. On a new
+cluster, the admin must have `CREATEROLE` so the restore can create Lore's two
+NOLOGIN group roles. Afterwards run
 `scripts/create-runtime-role.mjs` against the restored database to provision fresh
 login credentials; never copy production runtime passwords into a drill.
 
@@ -110,18 +113,22 @@ durable off-host storage. Validate the server first:
 
 ```bash
 DATABASE_URL=postgres://lore_admin:...@db.example/lore \
+LORE_PITR_ARCHIVE_DIRECTORY=/secure/lore-wal-archive \
 LORE_PITR_RESTORE_DRILL_CONFIRMED_AT=2026-08-01T12:00:00Z \
   bun run db:pitr:check
 ```
 
 The check requires `wal_level=replica|logical`, `archive_mode=on|always`, a
 non-no-op `archive_command` containing PostgreSQL's `%p` WAL-path placeholder, at
-least one observed successful archive newer than the latest failure, one WAL sender,
-and a restore drill recorded within the last 90 days. The command itself is always
-redacted because it may contain storage credentials. This is a bounded configuration
-check, not proof of recoverability; only a successful restore drill provides that
-evidence. Data checksums are reported as a strong advisory. A representative
-base-backup command is:
+least one observed successful archive newer than the latest failure, the exact
+latest WAL name as a non-empty regular file under `LORE_PITR_ARCHIVE_DIRECTORY`,
+one WAL sender, and a restore drill recorded within the last 90 days. The command
+and archive path are always redacted because they may expose storage details. This
+bounded checker intentionally supports a locally visible, uncompressed archive
+directory. WAL-G, pgBackRest, object-storage, and managed-service archives require
+their provider's artifact verification plus a restore drill instead of this script.
+Only a successful restore drill proves recoverability. Data checksums are reported
+as a strong advisory. A representative base-backup command is:
 
 ```bash
 pg_basebackup --dbname="$DATABASE_URL" --pgdata=/secure/lore-base-20260807 \

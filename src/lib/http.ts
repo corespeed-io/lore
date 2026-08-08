@@ -256,6 +256,7 @@ function queryInteger(
 }
 
 function agentPermission(value: unknown): AgentGrantPermission {
+  if (value === undefined) return "read";
   if (value === "read" || value === "write") return value;
   throw new BadRequestError("permission must be read or write");
 }

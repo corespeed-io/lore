@@ -1,6 +1,10 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   archiveCommandCheck,
+  archivedWalArtifactCheck,
   archivedWalCheck,
   restoreDrillCheck,
 } from "../scripts/lib/pitr-check.mjs";
@@ -13,6 +17,19 @@ test("PITR checks reject no-op commands without exposing their value", () => {
   expect(archiveCommandCheck("secret-uploader --token super-secret %p")).toEqual({
     ok: true,
     detail: "configured (redacted)",
+  });
+  expect(archiveCommandCheck("/bin/true %p")).toMatchObject({ ok: false });
+  expect(archiveCommandCheck("sh -c 'true' %p")).toMatchObject({ ok: false });
+});
+
+test("PITR checks require the latest WAL to exist as a non-empty archive artifact", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lore-pitr-"));
+  const walName = "000000010000000000000002";
+  await expect(archivedWalArtifactCheck(directory, walName)).resolves.toMatchObject({ ok: false });
+  await writeFile(join(directory, walName), "verified WAL bytes", { mode: 0o600 });
+  await expect(archivedWalArtifactCheck(directory, walName)).resolves.toEqual({
+    ok: true,
+    detail: "latest WAL artifact exists (path redacted)",
   });
 });
 

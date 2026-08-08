@@ -3,6 +3,7 @@ import { createEmbeddingProviderFromEnvironment } from "../lib/embedding/provide
 import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
+  pruneRetiringEmbeddingGenerations,
   purgeExpiredPortableCoreRecords,
 } from "../lib/maintenance";
 import { registerLoreTelemetry } from "../lib/register-telemetry";
@@ -77,10 +78,11 @@ try {
       if (Date.now() >= nextSweepAt) {
         const sweep = await observeOperation("maintenance.sweep", async () => {
           const purged = await purgeExpiredPortableCoreRecords(database);
+          const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
+            database,
+            embeddingRollbackSeconds,
+          );
           const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
-          const prunedEmbeddingGenerations = maintenance
-            ? await maintenance.pruneRetiringGenerations(embeddingRollbackSeconds)
-            : 0;
           const generation = maintenance ? await maintenance.generationReport() : null;
           return { generation, prunedEmbeddingGenerations, purged, seeded };
         });
