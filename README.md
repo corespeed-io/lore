@@ -134,6 +134,10 @@ adding an unconditional recency score to otherwise unequal evidence.
 The relaxed English channel also gives bounded query-side weight to proper names,
 numbers, and long identifiers. This recovers specific entities without scanning
 the entire RLS-visible corpus to estimate document frequency on every request.
+`LORE_ENTITY_ALIAS_RECALL=1` adds a separate indexed, deterministic exact-alias
+channel for names and identifiers. It remains off by default, applies the same
+Workspace/scope/time/metadata/RLS filters before top-k, and never creates or infers
+a Memory.
 
 Invalid deployment embedding configuration disables semantic embedding with a
 server-side warning instead of blocking Memory reads or writes. Provider request

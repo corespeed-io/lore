@@ -45,6 +45,7 @@ test("reranking provider factory supports explicit managed adapters", () => {
       LORE_RERANK_PROVIDER: "cohere",
       LORE_RERANK_MODEL: "rerank-v4.0-pro",
       LORE_RERANK_BASE_URL: "",
+      LORE_RERANK_API_KEY: "",
       COHERE_API_KEY: "secret",
     }),
   ).toMatchObject({ provider: "cohere", model: "rerank-v4.0-pro" });

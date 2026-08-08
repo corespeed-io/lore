@@ -59,7 +59,10 @@ export function createQueryPlanningProviderFromEnvironment(
       return warnOnPlanningFailure(
         createGoogleQueryPlanningProvider({
           model: env.LORE_QUERY_PLANNER_MODEL ?? "",
-          apiKey: env.LORE_QUERY_PLANNER_API_KEY ?? env.GEMINI_API_KEY ?? "",
+          apiKey:
+            optionalString(env.LORE_QUERY_PLANNER_API_KEY) ??
+            optionalString(env.GEMINI_API_KEY) ??
+            "",
           baseUrl: optionalString(env.LORE_QUERY_PLANNER_BASE_URL),
           instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
           timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
@@ -85,7 +88,8 @@ export function createQueryPlanningProviderFromEnvironment(
         provider,
         model: env.LORE_QUERY_PLANNER_MODEL ?? "",
         baseUrl: optionalString(env.LORE_QUERY_PLANNER_BASE_URL),
-        apiKey: env.LORE_QUERY_PLANNER_API_KEY ?? env.OPENAI_API_KEY,
+        apiKey:
+          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ?? optionalString(env.OPENAI_API_KEY),
         instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
         timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
       }),

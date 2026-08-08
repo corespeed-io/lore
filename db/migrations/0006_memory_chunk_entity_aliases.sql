@@ -93,4 +93,16 @@ CREATE INDEX memory_chunks_entity_aliases_idx
 COMMENT ON FUNCTION lore.extract_entity_aliases(text) IS
   'Deterministic exact alias index terms; never an inferred Memory or authorization signal.';
 
-GRANT EXECUTE ON FUNCTION lore.extract_entity_aliases(text) TO lore_app, lore_maintenance;
+REVOKE ALL ON FUNCTION lore.extract_entity_aliases(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION lore.extract_entity_aliases(text) TO lore_app;
+
+DO $$
+BEGIN
+  UPDATE lore_system_state
+  SET schema_revision = 6, updated_at = now()
+  WHERE singleton AND schema_revision = 5;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Expected Lore schema revision 5 before migration 0006';
+  END IF;
+END
+$$;

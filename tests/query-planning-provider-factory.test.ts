@@ -37,6 +37,7 @@ test("query planning accepts Gemini's deployment API key", () => {
       LORE_QUERY_PLANNER_PROVIDER: "google",
       LORE_QUERY_PLANNER_MODEL: "gemini-test",
       LORE_QUERY_PLANNER_BASE_URL: "",
+      LORE_QUERY_PLANNER_API_KEY: "",
       GEMINI_API_KEY: "secret",
     }),
   ).toMatchObject({ provider: "google", model: "gemini-test" });
@@ -48,6 +49,7 @@ test("query planning accepts OpenAI's deployment API key", () => {
       LORE_QUERY_PLANNER_PROVIDER: "openai",
       LORE_QUERY_PLANNER_MODEL: "gpt-test",
       LORE_QUERY_PLANNER_BASE_URL: "",
+      LORE_QUERY_PLANNER_API_KEY: "   ",
       OPENAI_API_KEY: "secret",
     }),
   ).toMatchObject({ provider: "openai", model: "gpt-test" });

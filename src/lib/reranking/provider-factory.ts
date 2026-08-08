@@ -81,7 +81,7 @@ export function createRerankingProviderFromEnvironment(
                 : createLlamaCppRerankingProvider)({
               model: env.LORE_RERANK_MODEL ?? "",
               baseUrl: optionalString(env.LORE_RERANK_BASE_URL),
-              apiKey: env.LORE_RERANK_API_KEY,
+              apiKey: optionalString(env.LORE_RERANK_API_KEY),
               ...(provider === "vllm" || provider === "vllm-score"
                 ? { instruction: env.LORE_RERANK_INSTRUCTION }
                 : {}),
@@ -92,12 +92,12 @@ export function createRerankingProviderFromEnvironment(
               model: env.LORE_RERANK_MODEL ?? "",
               baseUrl: optionalString(env.LORE_RERANK_BASE_URL),
               apiKey:
-                env.LORE_RERANK_API_KEY ??
+                optionalString(env.LORE_RERANK_API_KEY) ??
                 (provider === "cohere"
-                  ? env.COHERE_API_KEY
+                  ? optionalString(env.COHERE_API_KEY)
                   : provider === "memos"
-                    ? env.MEMOS_API_KEY
-                    : env.VOYAGE_API_KEY) ??
+                    ? optionalString(env.MEMOS_API_KEY)
+                    : optionalString(env.VOYAGE_API_KEY)) ??
                 "",
               instruction: env.LORE_RERANK_INSTRUCTION,
               timeoutMs: positiveInteger(env.LORE_RERANK_TIMEOUT_MS, 30_000),

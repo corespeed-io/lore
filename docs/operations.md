@@ -21,10 +21,11 @@ should generate integrations from the v1 document.
 
 Migration `0003` adds and backfills nullable job generation ids so legacy writers
 can overlap with the generation-aware application. The bounded maintenance sweep
-adopts generation-less jobs for its configured embedding identity. A future
-contract migration may enforce `NOT NULL` only after generation-aware application
-instances have replaced every legacy writer; schema revision 3 remains current
-during this additive rollout.
+adopts generation-less jobs for its configured embedding identity. Migrations
+`0004` through `0006` add the English lexical, metadata, and entity-alias indexes;
+schema revision 6 is the current application contract. A future contract migration
+may enforce generation-id `NOT NULL` only after generation-aware application
+instances have replaced every legacy writer.
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
