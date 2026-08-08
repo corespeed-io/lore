@@ -58,9 +58,13 @@ test("Memory writes enqueue document embeddings without waiting for the provider
       embedding_model: string;
       embedding_revision: string;
     }>(
-      `SELECT embedding_provider, embedding_model, embedding_revision
-       FROM memory_chunks
-       WHERE memory_id = $1`,
+      `SELECT
+         generation.embedding_provider,
+         generation.embedding_model,
+         generation.embedding_revision
+       FROM memory_chunk_embeddings embedded
+       JOIN embedding_generations generation ON generation.id = embedded.generation_id
+       WHERE embedded.memory_id = $1`,
       [created.id],
     );
     expect(result.rows).toEqual([
@@ -207,7 +211,7 @@ test("stale jobs cannot write chunks after a Memory version changes", async () =
   ]);
 });
 
-test("maintenance role cannot update a private chunk without the claimed lease context", async () => {
+test("maintenance role cannot mutate private chunks without the claimed lease context", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const created = await memories.remember(testContext.alice, {
@@ -225,6 +229,24 @@ test("maintenance role cannot update a private chunk without the claimed lease c
     );
     expect(result.rows).toEqual([]);
   });
+
+  await testContext.maintenanceDatabase.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string }>(
+      "DELETE FROM memory_chunks WHERE memory_id = $1 RETURNING id",
+      [created.id],
+    );
+    expect(result.rows).toEqual([]);
+  });
+
+  await expect(
+    testContext.maintenanceDatabase.transaction((transaction) =>
+      transaction.query(
+        `INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
+         VALUES ($1, $2, $3, 1, 'Unauthorized maintenance content')`,
+        [crypto.randomUUID(), testContext.alice.workspaceId, created.id],
+      ),
+    ),
+  ).rejects.toMatchObject({ code: "42501" });
 });
 
 test("request actors cannot inspect jobs and deleting a Memory cascades its job", async () => {
@@ -270,5 +292,129 @@ test("provider identity changes deterministically seed a replacement job", async
   expect(seeded).toHaveLength(1);
   await expect(replacementMaintenance.run(seeded[0])).resolves.toMatchObject({
     status: "complete",
+  });
+});
+
+test("embedding revisions build beside the active generation and cut over atomically", async () => {
+  const testContext = await createMemoryTestContext();
+  const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
+  const content = "0. Ada founded Acme.\n1. Grace acquired Acme.\n2. Lin leads Acme.";
+  const created = await memories.remember(testContext.alice, { content, scope: "private" });
+  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: firstProvider,
+  });
+  await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
+
+  const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
+  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: replacementProvider,
+  });
+  const seeded = await replacementMaintenance.seedStale();
+  expect(seeded).toHaveLength(1);
+  await expect(replacementMaintenance.run(seeded[0])).resolves.toMatchObject({
+    status: "complete",
+  });
+  await expect(replacementMaintenance.generationReport()).resolves.toMatchObject({
+    status: "building",
+    eligibleChunks: 3,
+    embeddedChunks: 3,
+    missingChunks: 0,
+    pendingJobs: 0,
+    deadJobs: 0,
+  });
+
+  const beforeActivation = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ embedding_revision: string; status: string }>(
+      `SELECT embedding_revision, status
+       FROM embedding_generations
+       ORDER BY embedding_revision`,
+    ),
+  );
+  expect(beforeActivation.rows).toEqual([
+    { embedding_revision: "fixture-v1", status: "active" },
+    { embedding_revision: "fixture-v2", status: "building" },
+  ]);
+
+  await expect(replacementMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
+
+  const chunks = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ content: string; ordinal: number }>(
+      `SELECT ordinal, content
+       FROM memory_chunks
+       WHERE memory_id = $1
+       ORDER BY ordinal`,
+      [created.id],
+    ),
+  );
+  expect(chunks.rows).toEqual([
+    { ordinal: 0, content: "0. Ada founded Acme." },
+    { ordinal: 1, content: "1. Grace acquired Acme." },
+    { ordinal: 2, content: "2. Lin leads Acme." },
+  ]);
+
+  const afterActivation = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ embedding_revision: string; status: string }>(
+      `SELECT embedding_revision, status
+       FROM embedding_generations
+       ORDER BY embedding_revision`,
+    ),
+  );
+  expect(afterActivation.rows).toEqual([
+    { embedding_revision: "fixture-v1", status: "retiring" },
+    { embedding_revision: "fixture-v2", status: "active" },
+  ]);
+
+  await expect(firstMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
+  const afterRollback = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ embedding_revision: string; status: string }>(
+      `SELECT embedding_revision, status
+       FROM embedding_generations
+       ORDER BY embedding_revision`,
+    ),
+  );
+  expect(afterRollback.rows).toEqual([
+    { embedding_revision: "fixture-v1", status: "active" },
+    { embedding_revision: "fixture-v2", status: "retiring" },
+  ]);
+
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE embedding_generations
+       SET retired_at = now() - interval '2 hours'
+       WHERE status = 'retiring'`,
+    ),
+  );
+  await expect(firstMaintenance.pruneRetiringGenerations(3_600)).resolves.toBe(1);
+  const afterPrune = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ embedding_revision: string; status: string }>(
+      "SELECT embedding_revision, status FROM embedding_generations",
+    ),
+  );
+  expect(afterPrune.rows).toEqual([{ embedding_revision: "fixture-v1", status: "active" }]);
+});
+
+test("an incomplete embedding generation cannot become active", async () => {
+  const testContext = await createMemoryTestContext();
+  const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
+  await memories.remember(testContext.alice, { content: "Coverage must be complete." });
+  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: firstProvider,
+  });
+  await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
+
+  const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
+  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: replacementProvider,
+  });
+  await expect(replacementMaintenance.seedStale()).resolves.toHaveLength(1);
+  await expect(replacementMaintenance.activateGeneration()).rejects.toThrow(
+    /Embedding generation is not ready/,
+  );
+  await expect(replacementMaintenance.generationReport()).resolves.toMatchObject({
+    status: "building",
+    missingChunks: 1,
+    pendingJobs: 1,
   });
 });

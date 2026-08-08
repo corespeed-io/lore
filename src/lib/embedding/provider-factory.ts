@@ -1,5 +1,6 @@
 import { embeddingConfigurationFromEnvironment } from "../embedding-config";
 import type { EmbeddingProvider } from "../memory";
+import { markDependencyFailure, markDependencySuccess } from "../telemetry";
 import { createGoogleEmbeddingProvider } from "./google";
 import { createOllamaEmbeddingProvider } from "./ollama";
 import { createOpenAIEmbeddingProvider } from "./openai";
@@ -14,8 +15,11 @@ function warnOnEmbeddingFailure(
     ...provider,
     async embed(texts, task) {
       try {
-        return await provider.embed(texts, task);
+        const vectors = await provider.embed(texts, task);
+        markDependencySuccess("embedding");
+        return vectors;
       } catch (error) {
+        markDependencyFailure("embedding");
         warn(
           `Lore ${provider.provider}/${provider.model} ${task} embedding failed; continuing without a vector`,
         );
@@ -71,6 +75,7 @@ export function createEmbeddingProviderFromEnvironment(
         );
     }
   } catch (error) {
+    markDependencyFailure("embedding");
     const detail = error instanceof Error ? error.message : "unknown configuration error";
     warn(`Lore embeddings disabled: ${detail}`);
     return undefined;

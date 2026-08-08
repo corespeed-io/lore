@@ -23,12 +23,7 @@ export interface MemoryMaintenanceOptions {
   logger?: (entry: MemoryMaintenanceLog) => void;
 }
 
-interface ClaimedChunk {
-  id: string;
-  content: string;
-}
-
-interface ClaimedJobRow {
+interface ClaimedJobDatabaseRow {
   id: string;
   workspace_id: string;
   memory_id: string;
@@ -39,21 +34,24 @@ interface ClaimedJobRow {
   chunks: unknown;
 }
 
-function parseChunks(value: unknown): ClaimedChunk[] {
-  const parsed = typeof value === "string" ? (JSON.parse(value) as unknown) : value;
-  if (
-    !Array.isArray(parsed) ||
-    parsed.some(
-      (chunk) =>
-        !chunk ||
-        typeof chunk !== "object" ||
-        typeof (chunk as ClaimedChunk).id !== "string" ||
-        typeof (chunk as ClaimedChunk).content !== "string",
-    )
-  ) {
-    throw new Error("Maintenance job returned invalid chunks");
-  }
-  return parsed as ClaimedChunk[];
+interface ClaimedChunk {
+  content: string;
+  id: string;
+  ordinal: number;
+}
+
+interface ClaimedJobRow extends Omit<ClaimedJobDatabaseRow, "chunks"> {
+  chunks: ClaimedChunk[];
+}
+
+export interface EmbeddingGenerationReport {
+  id: string;
+  status: "active" | "building" | "failed" | "retiring";
+  eligibleChunks: number;
+  embeddedChunks: number;
+  missingChunks: number;
+  pendingJobs: number;
+  deadJobs: number;
 }
 
 function retryDelay(attempt: number): number {
@@ -92,10 +90,31 @@ export function createMemoryMaintenanceModule(
   );
   const logger = options.logger ?? (() => undefined);
 
+  function claimedChunks(value: unknown): ClaimedChunk[] {
+    if (!Array.isArray(value)) throw new Error("Embedding job returned invalid chunks");
+    return value.map((chunk) => {
+      if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) {
+        throw new Error("Embedding job returned an invalid chunk");
+      }
+      const item = chunk as Record<string, unknown>;
+      if (
+        typeof item.id !== "string" ||
+        typeof item.content !== "string" ||
+        typeof item.ordinal !== "number" ||
+        !Number.isInteger(item.ordinal) ||
+        item.ordinal < 0
+      ) {
+        throw new Error("Embedding job returned an invalid chunk");
+      }
+      return { id: item.id, content: item.content, ordinal: item.ordinal };
+    });
+  }
+
   async function finishFailure(
     job: ClaimedJobRow,
     leaseToken: string,
     failureDetail: "Embedding provider request failed" | "Embedding maintenance transaction failed",
+    chunkCount: number,
   ): Promise<MemoryMaintenanceResult> {
     const delay = retryDelay(job.attempt_count);
     const status = await database.transaction(async (transaction) => {
@@ -106,13 +125,12 @@ export function createMemoryMaintenanceModule(
       return result.rows[0]?.status ?? null;
     });
     if (!status) throw new Error("Maintenance job lease was lost before failure completion");
-    const chunks = parseChunks(job.chunks);
     if (status === "dead") {
       logger({
         event: "job_dead",
         jobId: job.id,
         attempt: job.attempt_count,
-        chunkCount: chunks.length,
+        chunkCount,
       });
       return { status: "dead", jobId: job.id };
     }
@@ -120,12 +138,81 @@ export function createMemoryMaintenanceModule(
       event: "job_retry",
       jobId: job.id,
       attempt: job.attempt_count,
-      chunkCount: chunks.length,
+      chunkCount,
     });
     return { status: "retry", jobId: job.id, retryAfterSeconds: delay };
   }
 
   return {
+    async generationReport(): Promise<EmbeddingGenerationReport> {
+      return database.transaction(async (transaction) => {
+        const result = await transaction.query<{
+          id: string;
+          status: EmbeddingGenerationReport["status"];
+          eligible_chunks: string | number;
+          embedded_chunks: string | number;
+          missing_chunks: string | number;
+          pending_jobs: string | number;
+          dead_jobs: string | number;
+        }>("SELECT * FROM lore.embedding_generation_report($1, $2, $3)", [
+          provider.provider,
+          provider.model,
+          provider.revision,
+        ]);
+        const row = result.rows[0];
+        if (!row) throw new Error("Embedding generation is not initialized");
+        return {
+          id: row.id,
+          status: row.status,
+          eligibleChunks: Number(row.eligible_chunks),
+          embeddedChunks: Number(row.embedded_chunks),
+          missingChunks: Number(row.missing_chunks),
+          pendingJobs: Number(row.pending_jobs),
+          deadJobs: Number(row.dead_jobs),
+        };
+      });
+    },
+
+    async activateGeneration(): Promise<string> {
+      return database.transaction(async (transaction) => {
+        const result = await transaction.query<{ id: string }>(
+          "SELECT lore.activate_embedding_generation($1, $2, $3) AS id",
+          [provider.provider, provider.model, provider.revision],
+        );
+        const id = result.rows[0]?.id;
+        if (!id) throw new Error("Embedding generation activation failed");
+        return id;
+      });
+    },
+
+    async purgeExpired(): Promise<{ idempotencyRecords: number; memoryEvents: number }> {
+      return database.transaction(async (transaction) => {
+        const result = await transaction.query<{
+          idempotency_records: string | number;
+          memory_event_records: string | number;
+        }>("SELECT * FROM lore.purge_expired_portable_core_records()");
+        return {
+          idempotencyRecords: Number(result.rows[0]?.idempotency_records ?? 0),
+          memoryEvents: Number(result.rows[0]?.memory_event_records ?? 0),
+        };
+      });
+    },
+
+    async pruneRetiringGenerations(retentionSeconds = 604_800): Promise<number> {
+      const requestedRetentionSeconds = Math.floor(retentionSeconds);
+      const safeRetentionSeconds =
+        Number.isFinite(requestedRetentionSeconds) && requestedRetentionSeconds >= 3_600
+          ? requestedRetentionSeconds
+          : 604_800;
+      return database.transaction(async (transaction) => {
+        const result = await transaction.query<{ count: string | number }>(
+          "SELECT lore.prune_retiring_embedding_generations($1) AS count",
+          [safeRetentionSeconds],
+        );
+        return Number(result.rows[0]?.count ?? 0);
+      });
+    },
+
     async seedStale(limit = 100): Promise<string[]> {
       const safeLimit = Math.max(1, Math.min(limit, 10_000));
       return database.transaction(async (transaction) => {
@@ -153,7 +240,7 @@ export function createMemoryMaintenanceModule(
     async run(jobId?: string): Promise<MemoryMaintenanceResult> {
       const leaseToken = crypto.randomUUID();
       const claimed = await database.transaction(async (transaction) => {
-        const result = await transaction.query<ClaimedJobRow>(
+        const result = await transaction.query<ClaimedJobDatabaseRow>(
           `SELECT *
            FROM lore.claim_memory_embedding_job($1, $2, $3, $4, $5, $6)`,
           [
@@ -165,11 +252,12 @@ export function createMemoryMaintenanceModule(
             leaseSeconds,
           ],
         );
-        return result.rows[0] ?? null;
+        const job = result.rows[0];
+        return job ? { ...job, chunks: claimedChunks(job.chunks) } : null;
       });
       if (!claimed) return { status: "idle", jobId };
 
-      const chunks = parseChunks(claimed.chunks);
+      const chunks = claimed.chunks;
       let vectors: string[];
       try {
         vectors = embeddingVectorLiterals(
@@ -180,35 +268,43 @@ export function createMemoryMaintenanceModule(
           chunks.length,
         );
       } catch {
-        return finishFailure(claimed, leaseToken, "Embedding provider request failed");
+        return finishFailure(
+          claimed,
+          leaseToken,
+          "Embedding provider request failed",
+          chunks.length,
+        );
       }
 
       try {
         await database.transaction(async (transaction) => {
           await installMaintenanceContext(transaction, claimed.id, leaseToken);
-          for (const [index, chunk] of chunks.entries()) {
-            const result = await transaction.query<{ id: string }>(
-              `UPDATE memory_chunks
-               SET embedding = $3::vector(1024),
-                   embedding_provider = $4,
-                   embedding_model = $5,
-                   embedding_revision = $6,
-                   embedded_at = now(),
-                   updated_at = now()
-               WHERE workspace_id = $1 AND id = $2
-               RETURNING id`,
-              [
-                claimed.workspace_id,
-                chunk.id,
-                vectors[index],
-                provider.provider,
-                provider.model,
-                provider.revision,
-              ],
-            );
-            if (result.rows.length !== 1) {
-              throw new Error("Maintenance job lost access to a claimed chunk");
-            }
+          const replacements = chunks.map((chunk, index) => ({
+            chunk_id: chunk.id,
+            embedding: vectors[index],
+          }));
+          const inserted = await transaction.query<{ id: string }>(
+            `INSERT INTO memory_chunk_embeddings (
+               generation_id, workspace_id, memory_id, chunk_id, embedding, embedded_at
+             )
+             SELECT
+               lore.current_maintenance_generation_id(),
+               $1,
+               $2,
+               replacement.chunk_id::uuid,
+               replacement.embedding::vector(1024),
+               now()
+             FROM jsonb_to_recordset($3::jsonb) AS replacement(
+               chunk_id text,
+               embedding text
+             )
+             ON CONFLICT (generation_id, chunk_id)
+             DO UPDATE SET embedding = EXCLUDED.embedding, embedded_at = now()
+             RETURNING chunk_id AS id`,
+            [claimed.workspace_id, claimed.memory_id, JSON.stringify(replacements)],
+          );
+          if (inserted.rows.length !== chunks.length) {
+            throw new Error("Maintenance job failed to replace every claimed chunk");
           }
           const finished = await transaction.query<{ status: "succeeded" | null }>(
             `SELECT lore.finish_memory_embedding_job($1, $2, NULL, $3) AS status`,
@@ -219,7 +315,12 @@ export function createMemoryMaintenanceModule(
           }
         });
       } catch {
-        return finishFailure(claimed, leaseToken, "Embedding maintenance transaction failed");
+        return finishFailure(
+          claimed,
+          leaseToken,
+          "Embedding maintenance transaction failed",
+          chunks.length,
+        );
       }
 
       logger({

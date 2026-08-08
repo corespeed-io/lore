@@ -3,6 +3,12 @@ import { checkAuth } from "./src/lib/auth";
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg).*)"] };
 
+const OPERATIONAL_PROBE_PATHS = new Set(["/api/health", "/livez", "/readyz"]);
+
+export function isOperationalProbePath(path: string): boolean {
+  return OPERATIONAL_PROBE_PATHS.has(path);
+}
+
 function json(error: string, status: number, extra: Record<string, string> = {}) {
   return new NextResponse(JSON.stringify({ error }), {
     status,
@@ -12,7 +18,11 @@ function json(error: string, status: number, extra: Record<string, string> = {})
 
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
-  if (path === "/api/health") return NextResponse.next();
+  // Orchestrators must be able to distinguish a live process from a ready
+  // instance before application authentication is available. These handlers
+  // return operational state only and never install an Actor or expose tenant
+  // data. An outer network policy may still restrict them in production.
+  if (isOperationalProbePath(path)) return NextResponse.next();
 
   const authorization = req.headers.get("authorization") ?? "";
   const agentRequest =
