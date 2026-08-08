@@ -731,6 +731,16 @@ BEGIN
     active_embedding_revision
   ) generation;
 
+  -- Retention locks generation before jobs. Hold the target generation before
+  -- global terminal/stale-job cleanup so seed and prune cannot invert that order.
+  PERFORM generation.id
+  FROM embedding_generations generation
+  WHERE generation.id = target_generation_id
+  FOR KEY SHARE;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
   DELETE FROM memory_embedding_jobs job
   WHERE (job.status IN ('succeeded', 'cancelled') AND job.completed_at < now() - interval '7 days')
      OR (job.status = 'dead' AND job.completed_at < now() - interval '30 days');
