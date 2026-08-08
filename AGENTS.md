@@ -21,7 +21,7 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0007_memory_chunk_entity_aliases.sql`
+- migrations `0001_initial.sql` through `0006_memory_chunk_entity_aliases.sql`
   define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, and embedding generations
