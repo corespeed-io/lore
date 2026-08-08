@@ -292,6 +292,16 @@ export function createMemoryMaintenanceModule(
       try {
         await database.transaction(async (transaction) => {
           await installMaintenanceContext(transaction, claimed.id, leaseToken);
+          // Memory mutations lock the parent Memory before replacing chunks.
+          // Take the same parent-first order before the embedding insert obtains
+          // foreign-key locks on generation/chunk rows, preventing a chunk ↔
+          // Memory lock inversion with concurrent update/delete.
+          const lockedMemory = await transaction.query<{ locked: boolean }>(
+            "SELECT lore.lock_current_maintenance_memory() AS locked",
+          );
+          if (lockedMemory.rows[0]?.locked !== true) {
+            throw new Error("Maintenance job Memory was deleted before completion");
+          }
           const replacements = chunks.map((chunk, index) => ({
             chunk_id: chunk.id,
             embedding: vectors[index],

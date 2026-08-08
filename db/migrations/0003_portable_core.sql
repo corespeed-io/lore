@@ -537,6 +537,32 @@ AS $$
     AND job.status = 'processing'
 $$;
 
+CREATE FUNCTION lore.lock_current_maintenance_memory()
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  locked_memory_id uuid;
+BEGIN
+  SELECT memory.id INTO locked_memory_id
+  FROM memory_embedding_jobs job
+  JOIN memories memory
+    ON memory.workspace_id = job.workspace_id
+   AND memory.id = job.memory_id
+   AND memory.owner_user_id = job.owner_user_id
+   AND memory.scope = job.memory_scope
+   AND memory.version = job.memory_version
+  WHERE job.id = lore.current_maintenance_job_id()
+    AND job.lease_token = lore.current_maintenance_lease_token()
+    AND job.status = 'processing'
+  FOR KEY SHARE OF memory;
+
+  RETURN locked_memory_id IS NOT NULL;
+END
+$$;
+
 CREATE FUNCTION lore.can_maintain_embedding(
   target_generation_id uuid,
   target_workspace_id uuid,
@@ -723,6 +749,14 @@ BEGIN
   IF job_limit NOT BETWEEN 1 AND 10000 THEN
     RAISE EXCEPTION 'Job limit must be between 1 and 10000';
   END IF;
+
+  -- Request writes take a ROW EXCLUSIVE memory-table lock before changing
+  -- chunks, generations, or jobs. Serialize deployment sweeps at that same
+  -- first boundary so global job cleanup cannot hold a child job while a
+  -- concurrent Memory delete holds its parent row. This sweep is bounded and
+  -- runs outside the request path.
+  LOCK TABLE memories IN SHARE ROW EXCLUSIVE MODE;
+
   SELECT generation.id INTO target_generation_id
   FROM lore.ensure_embedding_generation(
     active_embedding_provider,
@@ -1254,6 +1288,7 @@ REVOKE ALL ON FUNCTION lore.append_memory_event() FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.append_memory_link_event() FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.ensure_embedding_generation(text, text, integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.current_maintenance_generation_id() FROM PUBLIC;
+REVOKE ALL ON FUNCTION lore.lock_current_maintenance_memory() FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.can_maintain_embedding(uuid, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.embedding_generation_report(text, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.activate_embedding_generation(text, text, text) FROM PUBLIC;
@@ -1273,6 +1308,7 @@ GRANT EXECUTE ON FUNCTION lore.current_request_id() TO lore_app;
 GRANT EXECUTE ON FUNCTION lore.ensure_embedding_generation(text, text, integer, text)
   TO lore_app, lore_maintenance;
 GRANT EXECUTE ON FUNCTION lore.current_maintenance_generation_id() TO lore_maintenance;
+GRANT EXECUTE ON FUNCTION lore.lock_current_maintenance_memory() TO lore_maintenance;
 GRANT EXECUTE ON FUNCTION lore.can_maintain_embedding(uuid, uuid, uuid) TO lore_maintenance;
 GRANT EXECUTE ON FUNCTION lore.embedding_generation_report(text, text, text) TO lore_maintenance;
 GRANT EXECUTE ON FUNCTION lore.activate_embedding_generation(text, text, text) TO lore_maintenance;
