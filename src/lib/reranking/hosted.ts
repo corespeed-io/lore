@@ -1,3 +1,4 @@
+import { readBoundedResponseJson } from "../provider-response";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 type HostedRerankingProvider = "cohere" | "memos" | "voyage";
@@ -148,7 +149,7 @@ export function createHostedRerankingProvider(options: HostedRerankingOptions): 
       throw new Error(`${options.provider} reranking request failed with HTTP ${response.status}`);
     }
     return parseResults(
-      (await response.json()) as { data?: unknown; results?: unknown },
+      await readBoundedResponseJson<{ data?: unknown; results?: unknown }>(response),
       documents,
       top,
       options.provider,

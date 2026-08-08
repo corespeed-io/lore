@@ -1,6 +1,7 @@
 import type { EmbeddingConfiguration } from "../embedding-config";
 import { isQwen3EmbeddingModel } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
+import { readBoundedResponseJson, readBoundedResponseText } from "../provider-response";
 
 export interface OllamaEmbeddingOptions {
   baseUrl?: string;
@@ -74,13 +75,16 @@ export function createOllamaEmbeddingProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        const detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 300);
+        const detail = (await readBoundedResponseText(response).catch(() => ""))
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 300);
         throw new Error(
           `Ollama embedding request failed (${response.status})${detail ? `: ${detail}` : ""}`,
         );
       }
       const embeddings = embeddingsFrom(
-        (await response.json()) as OllamaEmbedResponse,
+        await readBoundedResponseJson<OllamaEmbedResponse>(response),
         configuration.dimensions,
       );
       if (embeddings.length !== texts.length) {

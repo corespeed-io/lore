@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readBoundedResponseJson } from "../provider-response";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
@@ -212,7 +213,7 @@ export function createOllamaListwiseRerankingProvider(
       if (!response.ok) {
         throw new Error(`ollama-listwise reranking request failed with HTTP ${response.status}`);
       }
-      const payload = (await response.json()) as OllamaListwiseResponse;
+      const payload = await readBoundedResponseJson<OllamaListwiseResponse>(response);
       const content = payload.message?.content;
       if (typeof content !== "string" || !content.trim()) {
         throw new Error("ollama-listwise returned no score content");

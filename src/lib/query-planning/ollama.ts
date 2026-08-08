@@ -1,3 +1,4 @@
+import { readBoundedResponseJson } from "../provider-response";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
@@ -109,7 +110,7 @@ export function createOllamaQueryPlanningProvider(
       if (!response.ok) {
         throw new Error(`Ollama query planner request failed with HTTP ${response.status}`);
       }
-      const payload = (await response.json()) as OllamaChatResponse;
+      const payload = await readBoundedResponseJson<OllamaChatResponse>(response);
       if (payload.done !== true) {
         throw new Error("Ollama query planner returned an incomplete response");
       }

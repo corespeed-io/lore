@@ -1,3 +1,4 @@
+import { readBoundedResponseJson } from "../provider-response";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
@@ -104,7 +105,7 @@ export function createOpenAICompatibleQueryPlanningProvider(
         throw new Error(`query planner request failed with HTTP ${response.status}`);
       }
       return parsePlannedQueries(
-        responseText((await response.json()) as ChatCompletionResponse),
+        responseText(await readBoundedResponseJson<ChatCompletionResponse>(response)),
         maxQueries,
       );
     },

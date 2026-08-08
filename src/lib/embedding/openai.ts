@@ -1,5 +1,6 @@
 import type { EmbeddingConfiguration } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
+import { readBoundedResponseJson } from "../provider-response";
 import { postEmbeddingJson, type RemoteEmbeddingRequestOptions } from "./http";
 
 const OPENAI_BASE_URL = "https://api.openai.com";
@@ -104,7 +105,7 @@ export function createOpenAIEmbeddingProvider(
         });
         embeddings.push(
           ...embeddingsFrom(
-            (await response.json()) as OpenAIEmbeddingResponse,
+            await readBoundedResponseJson<OpenAIEmbeddingResponse>(response),
             batch.length,
             configuration.dimensions,
           ),

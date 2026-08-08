@@ -1,3 +1,4 @@
+import { readBoundedResponseJson } from "../provider-response";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 const DEFAULT_VLLM_BASE_URL = "http://127.0.0.1:8000";
@@ -165,7 +166,12 @@ function createLocalRerankingProvider(
       if (!response.ok) {
         throw new Error(`${provider} reranking request failed with HTTP ${response.status}`);
       }
-      return parseResults((await response.json()) as VllmRerankResponse, documents, topN, provider);
+      return parseResults(
+        await readBoundedResponseJson<VllmRerankResponse>(response),
+        documents,
+        topN,
+        provider,
+      );
     },
   };
 }
@@ -222,7 +228,10 @@ export function createVllmScoreRerankingProvider(
       const originalIndexById = new Map(
         documents.map((document, index) => [document.id, index] as const),
       );
-      return parseScoreResults((await response.json()) as VllmScoreResponse, documents)
+      return parseScoreResults(
+        await readBoundedResponseJson<VllmScoreResponse>(response),
+        documents,
+      )
         .sort(
           (left, right) =>
             right.score - left.score ||
