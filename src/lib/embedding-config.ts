@@ -1,6 +1,6 @@
 export const EMBEDDING_DIMENSIONS = 1024 as const;
-export const EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v2";
-export const QWEN3_EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v3";
+export const EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v1";
+export const QWEN3_EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v2";
 
 export type EmbeddingDimensions = typeof EMBEDDING_DIMENSIONS;
 export type EmbeddingProviderName = "google" | "ollama" | "openai";

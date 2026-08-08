@@ -237,9 +237,11 @@ accepted-reference specificity, and answer/query proximity. The earlier
 cross-document runs are superseded and must not be used as quality evidence.
 
 The final run used Qwen3-Embedding 0.6B's official query instruction under the
-then-current provider-scoped `lore-embedding-v2` revision (the same query transform
-now ships in v3 after structured list chunking) plus query-specificity weighting in
-Lore's relaxed English lexical path. With cosine-distance threshold `0.6`, the
+experimental `lore-embedding-v3` profile, which also included structured list
+chunking, plus query-specificity weighting in Lore's relaxed English lexical path.
+The release protocol ships the query transform alone as `lore-embedding-v2` and
+defers structured chunking until canonical chunks have a safe migration path. With
+cosine-distance threshold `0.6`, the
 20-candidate pool reached Recall@20 `1.00`; the normal hybrid top ten also had
 Recall@10 `1.00`, Recall@1 `0.72`, MRR `0.8299`, and nDCG@10 `0.8724` at an
 average 113 ms. Qwen reranking with candidate limit 20 and first-stage/reranker
@@ -259,7 +261,7 @@ unconditionally.
 
 The Conflict workload produced the opposite reranker result. Lore now audits the
 exact answer fact inside returned evidence, not merely the containing Memory id.
-With v3 structured list chunking, bounded whole-small-Memory evidence, threshold
+With the experimental v3 structured list chunking, bounded whole-small-Memory evidence, threshold
 `0.6`, one feedback query, recency weight `0.6`, five top chunks, and two adjacent
 chunks, the two-source/200-question run reached evidence Recall@1 `0.285`,
 Recall@10 `0.800`, and MRR `0.4370` at 178 ms average latency. Adding the same

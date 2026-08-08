@@ -13,7 +13,7 @@ test("OpenAI adapter sends a float batch with the deployment dimensions", async 
       provider: "openai",
       model: "text-embedding-3-small",
       dimensions: 1024,
-      revision: "lore-embedding-v2",
+      revision: "lore-embedding-v1",
     },
     {
       apiKey: "test-openai-key",
@@ -49,7 +49,7 @@ test("OpenAI adapter restores API results to input order", async () => {
       provider: "openai",
       model: "text-embedding-3-large",
       dimensions: 1024,
-      revision: "lore-embedding-v2",
+      revision: "lore-embedding-v1",
     },
     {
       apiKey: "test-openai-key",
@@ -75,7 +75,7 @@ test("OpenAI adapter splits requests into conservative batches", async () => {
       provider: "openai",
       model: "text-embedding-3-small",
       dimensions: 1024,
-      revision: "lore-embedding-v2",
+      revision: "lore-embedding-v1",
     },
     {
       apiKey: "test-openai-key",
@@ -102,7 +102,7 @@ test("OpenAI adapter fails closed when its credential or response is invalid", a
         provider: "openai",
         model: "text-embedding-3-small",
         dimensions: 1024,
-        revision: "lore-embedding-v2",
+        revision: "lore-embedding-v1",
       },
       { apiKey: "" },
     ),
@@ -113,7 +113,7 @@ test("OpenAI adapter fails closed when its credential or response is invalid", a
       provider: "openai",
       model: "text-embedding-3-small",
       dimensions: 1024,
-      revision: "lore-embedding-v2",
+      revision: "lore-embedding-v1",
     },
     {
       apiKey: "test-openai-key",

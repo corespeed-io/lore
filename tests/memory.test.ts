@@ -2,8 +2,35 @@ import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
 import { createMemoryMaintenanceModule } from "@/lib/maintenance";
-import { createMemoryModule, type EmbeddingTask, MemoryAccessDeniedError } from "@/lib/memory";
-import { createMemoryTestContext } from "./support/memory-context";
+import {
+  type ActorContext,
+  createMemoryModule,
+  type EmbeddingTask,
+  MemoryAccessDeniedError,
+} from "@/lib/memory";
+import { createMemoryTestContext, type MemoryTestContext } from "./support/memory-context";
+
+async function replaceMemoryChunks(
+  testContext: MemoryTestContext,
+  actor: ActorContext,
+  memoryId: string,
+  chunks: string[],
+): Promise<void> {
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, actor);
+    await transaction.query(
+      "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
+      [actor.workspaceId, memoryId],
+    );
+    for (const [ordinal, content] of chunks.entries()) {
+      await transaction.query(
+        `INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [crypto.randomUUID(), actor.workspaceId, memoryId, ordinal, content],
+      );
+    }
+  });
+}
 
 test("Memory owner can remember and retrieve a private Memory", async () => {
   const testContext = await createMemoryTestContext();
@@ -389,12 +416,16 @@ test("Search breaks equal relevance scores by Memory recency", async () => {
   await testContext.close();
 });
 
-test("Search prefers the later structured fact when list-item relevance ties", async () => {
+test("Search prefers the later chunk when relevance ties", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const expected = await memories.remember(testContext.alice, {
     content: "0. The capital is Paris.\n1. The capital is Rome.",
   });
+  await replaceMemoryChunks(testContext, testContext.alice, expected.id, [
+    "0. The capital is Paris.",
+    "1. The capital is Rome.",
+  ]);
 
   const results = await memories.search(testContext.alice, {
     query: "What is the capital?",
@@ -410,9 +441,14 @@ test("Search prefers the later structured fact when list-item relevance ties", a
 test("Search can aggregate multiple top evidence chunks from one Memory", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
-  await memories.remember(testContext.alice, {
+  const memory = await memories.remember(testContext.alice, {
     content: "0. The capital is Paris.\n1. The capital is Rome.\n2. The weather is sunny.",
   });
+  await replaceMemoryChunks(testContext, testContext.alice, memory.id, [
+    "0. The capital is Paris.",
+    "1. The capital is Rome.",
+    "2. The weather is sunny.",
+  ]);
 
   const results = await createMemoryModule(testContext.database, {
     evidenceTopChunks: 2,
@@ -496,7 +532,8 @@ test("Evidence expansion returns a whole small Memory when its bounded budget co
     "4. Atlas deadline is Friday.",
     "5. Atlas reviewer is Lin.",
   ].join("\n");
-  await memories.remember(testContext.alice, { content });
+  const memory = await memories.remember(testContext.alice, { content });
+  await replaceMemoryChunks(testContext, testContext.alice, memory.id, content.split("\n"));
 
   const results = await createMemoryModule(testContext.database, {
     evidenceNeighborChunks: 1,
@@ -949,6 +986,7 @@ test("Reranking scores compact anchor evidence while returning bounded expanded 
   const memory = await createMemoryModule(testContext.database).remember(testContext.alice, {
     content,
   });
+  await replaceMemoryChunks(testContext, testContext.alice, memory.id, content.split("\n"));
   let rerankedEvidence: string | null = null;
   const memories = createMemoryModule(testContext.database, {
     evidenceNeighborChunks: 1,

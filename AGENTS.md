@@ -180,11 +180,10 @@ provider, model, and revision all match one active or rolling-deploy-compatible
 generation. Embedding model selection is not a Workspace/User product setting. The
 semantic query must keep its `MATERIALIZED` exact-generation CTE so global HNSW
 traversal cannot mix incompatible spaces before top-k.
-`lore-embedding-v2` applies structured list-item chunking for every provider.
-`lore-embedding-v3` is scoped to Qwen3/Ollama and additionally applies
-Qwen3-Embedding's fixed official retrieval instruction to query texts only; Qwen
-document texts remain unchanged. Google, OpenAI, and non-Qwen Ollama models retain
-the v2 revision until their own preprocessing changes. Treat any future
+`lore-embedding-v2` is scoped to Qwen3/Ollama and applies Qwen3-Embedding's fixed
+official retrieval instruction to query texts only; Qwen document texts and
+canonical chunking remain unchanged. Google, OpenAI, and non-Qwen Ollama models
+retain the v1 revision until their own preprocessing changes. Treat any future
 query/document preprocessing change as a new protocol revision and deployment-wide
 re-index, never as a benchmark-only or operator-tunable prompt.
 

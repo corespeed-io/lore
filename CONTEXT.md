@@ -97,11 +97,10 @@ The deployment-wide provider and model selected by a self-host operator for inde
 and searching Memories. Lore v1 fixes the vector dimension and preprocessing
 revision as protocol invariants; they are not operator, User, Workspace, or Agent
 settings. Candidate distance is a separately calibrated retrieval parameter and
-does not define the embedding space. `lore-embedding-v2` makes numbered and Markdown
-list items independent semantic chunks for every provider. The Qwen3/Ollama
-`lore-embedding-v3` protocol additionally applies Qwen3-Embedding's official
-retrieval instruction to query texts while leaving indexed document text unchanged;
-unrelated provider/model spaces remain on v2.
+does not define the embedding space. The Qwen3/Ollama `lore-embedding-v2` protocol
+applies Qwen3-Embedding's official retrieval instruction to query texts while leaving
+indexed document text and canonical chunking unchanged; unrelated provider/model
+spaces remain on v1.
 _Avoid_: Workspace Retrieval Profile, User embedding model, Agent retrieval setting
 
 **Embedding Generation**:

@@ -34,8 +34,10 @@ tasks.
 ## Fixed local profile
 
 - Hardware: Apple M4 Pro, 12 CPU cores, 24 GB unified memory.
-- Embedding: `qwen3-embedding:0.6b`, 1024 dimensions,
-  `lore-embedding-v3`.
+- Embedding: `qwen3-embedding:0.6b`, 1024 dimensions, experimental
+  `lore-embedding-v3` (official query transform plus structured list chunking).
+  The shipped protocol keeps only the query transform as `lore-embedding-v2` until
+  canonical chunks have a safe migration path.
 - Reader: local Ollama `qwen3.5:4b`, model digest
   `2a654d98e6fba55d452b7043684e9b57a947e393bbffa62485a7aac05ee4eefd`,
   Q4_K_M, server 0.32.6. Thinking is disabled; temperature is zero; seed is 42;

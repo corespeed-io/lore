@@ -102,12 +102,10 @@ Google adapter distinguishes document indexing from retrieval queries using the
 model's documented retrieval preprocessing. For Qwen3-Embedding, the Ollama adapter
 keeps documents unchanged and prefixes queries with Qwen's
 [fixed, official retrieval instruction](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B).
-That preprocessing is part of `lore-embedding-v3`, not an
-operator-tunable prompt. The v3 revision is scoped to matching Qwen3/Ollama models.
-All providers use Lore's v2 document protocol, which indexes numbered and Markdown
-list items as independent semantic chunks while keeping ordinary prose
-length-bounded. Google, OpenAI, and other Ollama models therefore remain in v2;
-OpenAI uses the same text for both roles. Every adapter
+That preprocessing is part of `lore-embedding-v2`, not an operator-tunable prompt.
+The v2 revision is scoped to matching Qwen3/Ollama models. Google, OpenAI, and
+other Ollama models remain on v1; OpenAI uses the same text for both roles. Canonical
+document chunking is unchanged across these revisions. Every adapter
 must return exactly 1024 values. Changing a running
 deployment's provider or model creates a different embedding generation. Lore
 materializes one exact compatible generation before semantic top-k, so vectors from
