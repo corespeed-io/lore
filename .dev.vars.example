@@ -2,5 +2,10 @@
 # with `wrangler secret put`; never commit the populated file.
 GEMINI_API_KEY=replace-with-a-server-side-key
 OPENAI_API_KEY=replace-with-a-server-side-key
+LORE_QUERY_PLANNER_API_KEY=replace-with-a-server-side-key
+LORE_RERANK_API_KEY=replace-with-a-server-side-key
+COHERE_API_KEY=replace-with-a-server-side-key
+MEMOS_API_KEY=replace-with-a-server-side-key
+VOYAGE_API_KEY=replace-with-a-server-side-key
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_KEEP_ALIVE=0

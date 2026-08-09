@@ -81,7 +81,7 @@ async function readinessResponse(env: CloudflareEnv): Promise<Response> {
     { connectionString: env.HYPERDRIVE.connectionString },
     { role: "lore_app" },
   );
-  createEmbeddingProviderFromEnvironment(
+  const embeddingProvider = createEmbeddingProviderFromEnvironment(
     {
       LORE_EMBEDDING_PROVIDER: env.LORE_EMBEDDING_PROVIDER,
       LORE_EMBEDDING_MODEL: env.LORE_EMBEDDING_MODEL,
@@ -93,7 +93,10 @@ async function readinessResponse(env: CloudflareEnv): Promise<Response> {
     },
     (message) => console.warn(message),
   );
-  const report = await createOperationsModule(database, { embeddingConfigured: true }).readiness();
+  const report = await createOperationsModule(database, {
+    embeddingConfigured: true,
+    embeddingIdentity: embeddingProvider,
+  }).readiness();
   return probeResponse(report, report.status === "unready" ? 503 : 200);
 }
 

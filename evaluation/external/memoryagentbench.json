@@ -1,0 +1,29 @@
+{
+  "name": "MemoryAgentBench",
+  "version": "2026-06-public",
+  "description": "Official MemoryAgentBench accurate-retrieval and conflict-resolution splits pinned for local evaluation.",
+  "source": "https://huggingface.co/datasets/ai-hyz/MemoryAgentBench",
+  "revision": "7ea066982b140a19337e17e60d45d4076e042faf",
+  "codeRevision": "455306dcabc3842526eb83cd4e225e5d486c5c5d",
+  "license": "MIT",
+  "files": {
+    "accurate": {
+      "path": "accurate-retrieval.jsonl",
+      "split": "Accurate_Retrieval",
+      "rows": 22,
+      "bytes": 38127731,
+      "sha256": "b54fbc14ea19605ee0fa409a3a4e08b876e202bfe061d029b82d57574cede60e",
+      "parquetBytes": 20024386,
+      "parquetSha256": "56c3cd80fb6731a3e53cd1a6be3148f54df60ff2d290ee50e28f8acebf9655c1"
+    },
+    "conflict": {
+      "path": "conflict-resolution.jsonl",
+      "split": "Conflict_Resolution",
+      "rows": 8,
+      "bytes": 3261248,
+      "sha256": "970395bf22da8051de13f4cd9e10b7e3ff84f23b799f14add119d22a68300a16",
+      "parquetBytes": 1491588,
+      "parquetSha256": "24d5c3f09ce0ce15625cb9f8a98f44f0d864ca6c94d7b4ad04eb697ca3a5ff45"
+    }
+  }
+}

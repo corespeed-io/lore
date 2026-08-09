@@ -101,7 +101,7 @@ test("Capabilities verifies Agent credentials and Workspace grants in the handle
 
   expect(accepted.status).toBe(200);
   expect(accepted.headers.get("cache-control")).toBe("private, no-store");
-  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 3 });
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 6 });
   expect(shapeOnly.status).toBe(403);
   await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
   expect(revoked.status).toBe(403);
@@ -384,6 +384,55 @@ test("Memory HTTP input rejects null characters in queries, content, and metadat
   ]);
 
   expect(responses.map((response) => response.status)).toEqual([400, 400, 400]);
+});
+
+test("Memory HTTP filters reject invalid or inverted time ranges", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-filter-user";
+  const testContext = await createMemoryTestContext();
+  const workspace = (await (
+    await createWorkspaceHandlers(testContext.database).POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Filter Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const memories = createMemoryHandlers(testContext.database);
+
+  const responses = await Promise.all([
+    memories.GET(
+      new Request("http://lore.local/api/memories?q=atlas&updated_after=not-a-date", {
+        headers,
+      }),
+    ),
+    memories.GET(
+      new Request(
+        "http://lore.local/api/memories?q=atlas&updated_after=2026-02-01T00%3A00%3A00Z&updated_before=2026-01-01T00%3A00%3A00Z",
+        { headers },
+      ),
+    ),
+    memories.GET(
+      new Request("http://lore.local/api/memories?q=atlas&scope=workspace", { headers }),
+    ),
+    memories.GET(
+      new Request("http://lore.local/api/memories?q=atlas&metadata=%7Bnot-json", { headers }),
+    ),
+    memories.GET(
+      new Request("http://lore.local/api/memories?q=atlas&metadata=%5B1%2C2%5D", { headers }),
+    ),
+    memories.GET(new Request("http://lore.local/api/memories?limit=1.5", { headers })),
+    memories.GET(new Request("http://lore.local/api/memories?limit=0", { headers })),
+    memories.GET(new Request("http://lore.local/api/memories?offset=-1", { headers })),
+    memories.GET(new Request("http://lore.local/api/memories?offset=1000001", { headers })),
+  ]);
+
+  expect(responses.map((response) => response.status)).toEqual([
+    400, 400, 400, 400, 400, 400, 400, 400, 400,
+  ]);
+  await testContext.close();
 });
 
 test("Memory HTTP metadata rejects excessive depth and size", async () => {

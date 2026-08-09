@@ -1,3 +1,5 @@
+import { readBoundedResponseText } from "../provider-response";
+
 export interface RemoteEmbeddingRequestOptions {
   fetch?: typeof fetch;
   maxRetries?: number;
@@ -56,12 +58,15 @@ export async function postEmbeddingJson(input: {
     }
     if (response?.ok) return response;
     if (response && (!retryable(response.status) || attempt === maxRetries)) {
-      const detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 300);
+      const detail = (await readBoundedResponseText(response).catch(() => ""))
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 300);
       throw new Error(
         `${input.service} embedding request failed (${response.status})${detail ? `: ${detail}` : ""}`,
       );
     }
-    if (response) await response.text();
+    if (response) await readBoundedResponseText(response).catch(() => undefined);
     const exponentialDelay = retryBaseDelayMs * 2 ** attempt;
     await sleep(Math.round(exponentialDelay * (0.5 + random())));
   }

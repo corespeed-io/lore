@@ -8,9 +8,10 @@ export async function GET() {
   // Initializing the provider records invalid configuration as degraded. Lore v1
   // always has a deployment-level embedding space (with local Ollama defaults),
   // so failure to construct it is not the same as an intentional disabled mode.
-  getRuntimeEmbeddingProvider();
+  const embeddingProvider = getRuntimeEmbeddingProvider();
   const operations = createOperationsModule(await getRuntimeDatabase(), {
     embeddingConfigured: true,
+    embeddingIdentity: embeddingProvider,
   });
   const report = await operations.readiness();
   return Response.json(report, {

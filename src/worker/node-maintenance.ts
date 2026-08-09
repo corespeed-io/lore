@@ -60,6 +60,10 @@ const embeddingRollbackSeconds = positiveInteger(
   process.env.LORE_EMBEDDING_ROLLBACK_SECONDS,
   604_800,
 );
+const workerConcurrency = Math.min(
+  positiveInteger(process.env.LORE_MAINTENANCE_CONCURRENCY, 1),
+  32,
+);
 let stopping = false;
 
 function requestStop(): void {
@@ -104,13 +108,18 @@ try {
         nextSweepAt = Date.now() + sweepIntervalMs;
       }
 
-      infrastructureBackoffMs = pollIntervalMs;
       if (!maintenance) {
+        infrastructureBackoffMs = pollIntervalMs;
         await wait(pollIntervalMs);
         continue;
       }
-      const result = await observeOperation("maintenance.job", () => maintenance.run());
-      if (result.status === "idle" || result.status === "retry") {
+      const results = await Promise.all(
+        Array.from({ length: workerConcurrency }, () =>
+          observeOperation("maintenance.job", () => maintenance.run()),
+        ),
+      );
+      infrastructureBackoffMs = pollIntervalMs;
+      if (results.every((result) => result.status === "idle" || result.status === "retry")) {
         await wait(pollIntervalMs);
       }
     } catch {

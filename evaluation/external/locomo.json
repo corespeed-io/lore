@@ -1,0 +1,21 @@
+{
+  "name": "LoCoMo",
+  "version": "ACL-2024-10-conversation",
+  "description": "Official final ACL 2024 LoCoMo ten-conversation release pinned for local Lore retrieval and answer-quality evaluation.",
+  "source": "https://github.com/snap-research/locomo",
+  "revision": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+  "paper": "https://aclanthology.org/2024.acl-long.747/",
+  "license": "CC-BY-NC-4.0",
+  "granularity": "dialog-turn",
+  "files": {
+    "dataset": {
+      "path": "data/locomo10.json",
+      "filename": "locomo10.json",
+      "samples": 10,
+      "dialogs": 5882,
+      "questions": 1986,
+      "bytes": 2805274,
+      "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
+    }
+  }
+}

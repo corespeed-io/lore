@@ -190,6 +190,15 @@ function memoryScope(value: unknown): MemoryScope | undefined {
   throw new BadRequestError("scope must be shared or private");
 }
 
+function optionalTimestamp(value: string | null, name: string): string | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new BadRequestError(`${name} must be an ISO 8601 timestamp`);
+  }
+  return timestamp.toISOString();
+}
+
 function metadata(value: unknown): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -200,6 +209,18 @@ function metadata(value: unknown): Record<string, unknown> | undefined {
     throw new BadRequestError("metadata exceeds 100000 characters");
   }
   return value as Record<string, unknown>;
+}
+
+function metadataFilter(value: string | null): Record<string, unknown> | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  if (value.length > 10_000) throw new BadRequestError("metadata exceeds 10000 characters");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new BadRequestError("metadata must be valid JSON");
+  }
+  return metadata(parsed);
 }
 
 function validateJsonStrings(value: unknown, path: string): void {
@@ -561,14 +582,48 @@ export function createMemoryHandlers(
         if (cursor && url.searchParams.has("offset")) {
           throw new BadRequestError("cursor and offset cannot be combined");
         }
+        const scope = memoryScope(url.searchParams.get("scope") ?? undefined);
+        const updatedAfter = optionalTimestamp(
+          url.searchParams.get("updated_after"),
+          "updated_after",
+        );
+        const updatedBefore = optionalTimestamp(
+          url.searchParams.get("updated_before"),
+          "updated_before",
+        );
+        const requestedMetadata = metadataFilter(url.searchParams.get("metadata"));
+        if (
+          updatedAfter &&
+          updatedBefore &&
+          new Date(updatedAfter).getTime() >= new Date(updatedBefore).getTime()
+        ) {
+          throw new BadRequestError("updated_after must be earlier than updated_before");
+        }
         if (query) {
           return Response.json(
-            await observeOperation("memory.search", () => memories.search(actor, { query, limit })),
+            await observeOperation("memory.search", () =>
+              memories.search(actor, {
+                query,
+                limit,
+                metadataFilter: requestedMetadata,
+                scope,
+                updatedAfter,
+                updatedBefore,
+              }),
+            ),
             { headers: { "cache-control": "private, no-store" } },
           );
         }
         const listed = await observeOperation("memory.list", () =>
-          memories.list(actor, { cursor, limit, offset }),
+          memories.list(actor, {
+            cursor,
+            limit,
+            offset,
+            metadataFilter: requestedMetadata,
+            scope,
+            updatedAfter,
+            updatedBefore,
+          }),
         );
         const last = listed.length === limit ? listed.at(-1) : undefined;
         const headers = new Headers({ "cache-control": "private, no-store" });

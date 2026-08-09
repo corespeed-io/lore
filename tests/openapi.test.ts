@@ -16,6 +16,9 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
           };
         };
         Error: { properties: { code: { enum: string[] } } };
+        MemorySearchResult: {
+          properties: { rerankScore: { type: string; minimum: number; maximum: number } };
+        };
       };
     };
     openapi: string;
@@ -56,6 +59,9 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     workspaceArchiveLinks: { const: 50_000 },
     workspaceArchiveMemories: { const: 10_000 },
   });
+  expect(document.components.schemas.MemorySearchResult.properties.rerankScore).toEqual(
+    expect.objectContaining({ type: "number", minimum: 0, maximum: 1 }),
+  );
   expect(document.security).toEqual(
     expect.arrayContaining([
       { agentBearer: [] },
@@ -74,6 +80,32 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.paths["/api/v1/memories/{memoryId}"].patch.requestBody).toMatchObject({
     required: true,
   });
+  expect(
+    document.paths["/api/v1/memories"].get.parameters as Array<Record<string, unknown>>,
+  ).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: "scope",
+        in: "query",
+        schema: { type: "string", enum: ["shared", "private"] },
+      }),
+      expect.objectContaining({
+        name: "updated_after",
+        in: "query",
+        schema: { type: "string", format: "date-time" },
+      }),
+      expect.objectContaining({
+        name: "updated_before",
+        in: "query",
+        schema: { type: "string", format: "date-time" },
+      }),
+      expect.objectContaining({
+        name: "metadata",
+        in: "query",
+        schema: { type: "string", maxLength: 10_000 },
+      }),
+    ]),
+  );
   expect(document.paths["/api/v1/workspaces/import"].post.requestBody).toMatchObject({
     required: true,
   });

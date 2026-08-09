@@ -1,5 +1,46 @@
 import { evaluateRanking } from "./evaluation";
 
+export type RetrievalBenchmarkActor = "alice" | "bob";
+
+export interface RetrievalBenchmarkMemoryFixture {
+  key: string;
+  owner: RetrievalBenchmarkActor;
+  scope: "shared" | "private";
+  content: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RetrievalBenchmarkCaseFixture {
+  key: string;
+  actor?: RetrievalBenchmarkActor;
+  category?: string;
+  query: string;
+  expectedKeys: string[];
+  forbiddenKeys?: string[];
+  limit: number;
+}
+
+/**
+ * A partition is the complete visible history for one or more benchmark cases.
+ * The runner installs every partition in its own Workspace so external suites
+ * cannot leak unrelated histories into one another's candidate set.
+ */
+export interface RetrievalBenchmarkPartition {
+  key: string;
+  name: string;
+  memories: RetrievalBenchmarkMemoryFixture[];
+  cases: RetrievalBenchmarkCaseFixture[];
+}
+
+export interface RetrievalBenchmarkSuiteSource {
+  name: string;
+  version: string | number;
+  description: string;
+  thresholds: number[];
+  provenance?: Record<string, unknown>;
+  partitions: AsyncIterable<RetrievalBenchmarkPartition>;
+}
+
 export interface RetrievalBenchmarkCaseMeasurement {
   retrievedMemoryIds: string[];
   expectedMemoryIds: string[];

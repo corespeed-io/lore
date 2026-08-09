@@ -1,5 +1,6 @@
 import type { EmbeddingConfiguration } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
+import { readBoundedResponseJson } from "../provider-response";
 import { postEmbeddingJson, type RemoteEmbeddingRequestOptions } from "./http";
 
 const GOOGLE_EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com";
@@ -125,7 +126,7 @@ export function createGoogleEmbeddingProvider(
         });
         embeddings.push(
           ...embeddingsFrom(
-            (await response.json()) as GoogleEmbeddingResponse,
+            await readBoundedResponseJson<GoogleEmbeddingResponse>(response),
             batch.length,
             configuration.dimensions,
           ),

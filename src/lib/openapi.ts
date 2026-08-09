@@ -166,6 +166,29 @@ export function loreOpenApiDocument(): Record<string, unknown> {
               description: "Opaque browse cursor; mutually exclusive with offset.",
               schema: { type: "string" },
             },
+            {
+              name: "scope",
+              in: "query",
+              schema: { type: "string", enum: ["shared", "private"] },
+            },
+            {
+              name: "updated_after",
+              in: "query",
+              description: "Inclusive lower bound for Memory updated_at.",
+              schema: { type: "string", format: "date-time" },
+            },
+            {
+              name: "updated_before",
+              in: "query",
+              description: "Exclusive upper bound for Memory updated_at.",
+              schema: { type: "string", format: "date-time" },
+            },
+            {
+              name: "metadata",
+              in: "query",
+              description: "JSON object applied as a bounded JSONB-containment filter.",
+              schema: { type: "string", maxLength: 10_000 },
+            },
           ],
           responses: {
             "200": jsonResponse(
@@ -496,6 +519,12 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           properties: {
             memory: { $ref: "#/components/schemas/Memory" },
             score: { type: "number" },
+            rerankScore: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+              description: "Present only after a successful calibrated reranker call.",
+            },
             evidence: { type: "string" },
           },
         },

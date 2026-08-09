@@ -11,6 +11,8 @@
       "!**/.claude",
       "!**/.gstack",
       "!**/.superpowers",
+      "!**/evaluation/datasets",
+      "!**/evaluation/results",
       "!**/node_modules",
       "!**/tmp",
       "!**/conductor.json",
