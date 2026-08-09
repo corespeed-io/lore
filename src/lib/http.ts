@@ -342,6 +342,23 @@ function requireHumanActor(actor: ActorContext): ActorContext {
   return actor;
 }
 
+export function createActorHandlers(database: PostgresDatabase) {
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        return Response.json(
+          { kind: "human", userId: actor.userId },
+          { headers: { "cache-control": "private, no-store" } },
+        );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
 export function createCapabilitiesHandlers(
   database: PostgresDatabase,
   options: { embeddingConfigured: boolean },

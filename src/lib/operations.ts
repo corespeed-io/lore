@@ -4,6 +4,30 @@ import { observeOperation, runtimeDependencyStatus } from "./telemetry";
 export const LORE_API_VERSION = "v1";
 export const LORE_SCHEMA_REVISION = 6;
 
+export interface DeploymentCapabilities {
+  apiVersion: "v1";
+  schemaRevision: number;
+  deploymentId: string;
+  features: {
+    idempotency: boolean;
+    optimisticConcurrency: boolean;
+    transactionalOutbox: boolean;
+    workspacePortability: boolean;
+    embeddingGenerations: boolean;
+    cursorPagination: boolean;
+  };
+  limits: {
+    workspaceArchiveMemories: number;
+    workspaceArchiveLinks: number;
+  };
+  activeEmbeddingGeneration: {
+    provider: string;
+    model: string;
+    dimensions: number;
+    revision: string;
+  } | null;
+}
+
 export interface ReadinessReport {
   status: "degraded" | "ready" | "unready";
   components: {
@@ -36,10 +60,10 @@ export function createOperationsModule(
   },
 ) {
   return {
-    async capabilities(): Promise<Record<string, unknown>> {
+    async capabilities(): Promise<DeploymentCapabilities> {
       return observeOperation("operations.capabilities", () =>
         database.transaction(async (transaction) => {
-          const result = await transaction.query<{ capabilities: Record<string, unknown> }>(
+          const result = await transaction.query<{ capabilities: DeploymentCapabilities }>(
             "SELECT lore.portable_core_capabilities() AS capabilities",
           );
           const capabilities = result.rows[0]?.capabilities;

@@ -486,9 +486,17 @@ accepted only while both the credential and Workspace grant remain active.
 - `/api/evaluations/suites`, suite runs, and run results
 - `/api/v1/workspaces/export` and `/api/v1/workspaces/import`
 - stable aliases under `/api/v1`, with `/openapi.json` and
-  `/api/v1/capabilities` (verified Actor plus `x-lore-workspace-id`)
+  `/api/v1/capabilities` (verified Actor plus `x-lore-workspace-id`); human clients
+  use `/api/v1/actor` for the verified target User in explicit import owner remaps
 - `/livez` for process liveness and `/readyz` for database, role, schema, vector,
   and RLS readiness
+
+The native `/operations` surface turns the stable portability contract into a
+human-only workflow: download an actor-visible archive, inspect its manifest and
+owner set, run checksum/limit/owner/collision validation as a dry check, then
+explicitly remap every source owner to the verified importing human and import. It
+also shows readiness, capability limits, and the active
+deployment-level embedding generation without exposing them as Workspace settings.
 
 Memory reads return a strong ETag such as `"memory-v2"`. HTTP update and delete
 require that value in `If-Match`; stale writes fail with `412 version_conflict`.

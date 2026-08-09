@@ -7,8 +7,13 @@ import useSWRMutation from "swr/mutation";
 import {
   createAgent,
   createWorkspace,
+  exportWorkspaceArchive,
   forgetMemory,
+  getCurrentHumanActor,
+  getDeploymentCapabilities,
   getMemory,
+  getReadiness,
+  importWorkspaceArchive,
   issueAgentCredential,
   listAgentCredentials,
   listAgents,
@@ -22,6 +27,7 @@ import {
   setAgentGrant,
   updateMemory,
 } from "./lore-api";
+import type { ImportWorkspaceArchive } from "./portability";
 import type { AgentGrantPermission, Memory, MemoryScope } from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
@@ -37,11 +43,20 @@ export const loreKeys = {
     ["lore", "search", workspaceId, query, limit] as const,
   graph: (workspaceId: string) => ["lore", "graph", workspaceId] as const,
   agents: (workspaceId: string) => ["lore", "agents", workspaceId] as const,
+  capabilities: (workspaceId: string) => ["lore", "capabilities", workspaceId] as const,
+  currentActor: (workspaceId: string) => ["lore", "current-actor", workspaceId] as const,
+  readiness: ["lore", "readiness"] as const,
   agentCredentials: (workspaceId: string, agentId: string) =>
     ["lore", "agent-credentials", workspaceId, agentId] as const,
   createWorkspace: ["lore", "mutation", "create-workspace"] as const,
   manageAgents: (workspaceId: string) =>
     ["lore", "mutation", "manage-agents", workspaceId] as const,
+  exportWorkspace: (workspaceId: string) =>
+    ["lore", "mutation", "export-workspace", workspaceId] as const,
+  validateWorkspaceImport: (workspaceId: string) =>
+    ["lore", "mutation", "validate-workspace-import", workspaceId] as const,
+  importWorkspace: (workspaceId: string) =>
+    ["lore", "mutation", "import-workspace", workspaceId] as const,
   saveMemory: (workspaceId: string) => ["lore", "mutation", "save-memory", workspaceId] as const,
   forgetMemory: (workspaceId: string) =>
     ["lore", "mutation", "forget-memory", workspaceId] as const,
@@ -194,6 +209,27 @@ export function useLoreAgents(workspaceId: string) {
   );
 }
 
+export function useLoreDeploymentCapabilities(workspaceId: string) {
+  return useSWR(
+    workspaceId ? loreKeys.capabilities(workspaceId) : null,
+    ([, , scopedWorkspaceId]) => getDeploymentCapabilities(scopedWorkspaceId),
+  );
+}
+
+export function useLoreCurrentHumanActor(workspaceId: string) {
+  return useSWR(
+    workspaceId ? loreKeys.currentActor(workspaceId) : null,
+    ([, , scopedWorkspaceId]) => getCurrentHumanActor(scopedWorkspaceId),
+  );
+}
+
+export function useLoreReadiness() {
+  return useSWR(loreKeys.readiness, () => getReadiness(), {
+    refreshInterval: 30_000,
+    revalidateOnFocus: true,
+  });
+}
+
 export function useLoreAgentCredentials(workspaceId: string, agentId: string, enabled = true) {
   return useSWR(
     workspaceId && agentId && enabled ? loreKeys.agentCredentials(workspaceId, agentId) : null,
@@ -283,5 +319,32 @@ export function useLoreAgentMutations(workspaceId: string) {
       setGrantMutation.isMutating ||
       revokeGrantMutation.isMutating ||
       revokeCredentialMutation.isMutating,
+  };
+}
+
+export function useLoreWorkspaceOperationMutations(workspaceId: string) {
+  const exportArchiveMutation = useSWRMutation(
+    workspaceId ? loreKeys.exportWorkspace(workspaceId) : null,
+    () => exportWorkspaceArchive(workspaceId),
+  );
+  const validateImportMutation = useSWRMutation(
+    workspaceId ? loreKeys.validateWorkspaceImport(workspaceId) : null,
+    (_key, { arg }: { arg: Omit<ImportWorkspaceArchive, "dryRun"> }) =>
+      importWorkspaceArchive(workspaceId, { ...arg, dryRun: true }),
+  );
+  const importArchiveMutation = useSWRMutation(
+    workspaceId ? loreKeys.importWorkspace(workspaceId) : null,
+    (_key, { arg }: { arg: Omit<ImportWorkspaceArchive, "dryRun"> }) =>
+      importWorkspaceArchive(workspaceId, { ...arg, dryRun: false }),
+  );
+
+  return {
+    exportArchive: exportArchiveMutation,
+    validateImport: validateImportMutation,
+    importArchive: importArchiveMutation,
+    isMutating:
+      exportArchiveMutation.isMutating ||
+      validateImportMutation.isMutating ||
+      importArchiveMutation.isMutating,
   };
 }
