@@ -575,7 +575,8 @@ Benchmark is part of the product quality system even without AutoDream.
 The existing application uses:
 
 - Next.js 16 (App Router), React 19, Bun 1.3.14+ for package management,
-  Node 24 LTS for self-hosted execution, and TypeScript 7;
+  Node 24 LTS for self-hosted execution, TypeScript 7, and Python 3.12+ for the
+  generated Python SDK and source verification;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
@@ -611,8 +612,13 @@ bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
 bun run design:check # enforce and self-test the Lore UI contract
-bun run test       # vitest run
-bun run build      # next build (production)
+bun run sdk:generate # regenerate TypeScript/Python contracts and package versions
+bun run sdk:check  # fail when generated developer contracts drift
+bun run test:python # run the Python 3.12+ SDK tests
+bun run test       # vitest plus the Python SDK tests
+bun run build:packages # build the TypeScript SDK, CLI, and external MCP packages
+bun run packages:smoke # pack/install/import the release artifacts
+bun run build      # Next production, maintenance, and developer-package builds
 bun run build:maintenance # bundle the self-host Node maintenance entrypoint
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
@@ -631,7 +637,9 @@ the `graph_benchmark` schema. The seeder refuses to rebuild its schema in a
 database without `bench` or `benchmark` in the name. It is renderer load data,
 not a persisted Memory Affinity model and not an Evaluation Suite.
 
-Before opening a PR, design:check, typecheck, lint, test, and build must all pass.
+Before opening a PR, design:check, typecheck, lint, test, build, packages:smoke,
+and the deployment dry runs must all pass. `bun run test` requires Python 3.12+
+because it includes the generated Python SDK suite.
 
 Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but

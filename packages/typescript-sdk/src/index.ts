@@ -37,6 +37,8 @@ export interface LoreClientOptions {
   headers?: HeadersInit;
   /** Required to send authentication over non-loopback plain HTTP. */
   allowInsecure?: boolean;
+  /** Per-request timeout in milliseconds. Defaults to 30 seconds. */
+  timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -95,6 +97,8 @@ export class LoreApiError extends Error {
 
 const MAX_SUCCESS_RESPONSE_BYTES = 128 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 64 * 1024;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_REQUEST_TIMEOUT_MS = 300_000;
 const AGENT_TOKEN_PATTERN = /^lore_agent_[0-9a-f]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LORE_ERROR_CODE_SET = new Set<string>(LORE_ERROR_CODES);
@@ -118,6 +122,14 @@ function normalizedLimit(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   if (!Number.isInteger(value) || value < 1 || value > 100) {
     throw new TypeError("limit must be an integer from 1 to 100");
+  }
+  return value;
+}
+
+function normalizedTimeoutMs(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_REQUEST_TIMEOUT_MS;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_REQUEST_TIMEOUT_MS) {
+    throw new TypeError("timeoutMs must be an integer from 1 to 300000 milliseconds");
   }
   return value;
 }
@@ -277,10 +289,38 @@ interface JsonResponse<Result> {
   response: Response;
 }
 
+function requestAbortSignal(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): {
+  dispose: () => void;
+  signal: AbortSignal;
+  timedOut: () => boolean;
+} {
+  const controller = new AbortController();
+  let didTimeOut = false;
+  const forwardCallerAbort = () => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) forwardCallerAbort();
+  else callerSignal?.addEventListener("abort", forwardCallerAbort, { once: true });
+  const timeout = setTimeout(() => {
+    didTimeOut = true;
+    controller.abort(new DOMException("Lore request timed out", "TimeoutError"));
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => didTimeOut,
+    dispose: () => {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", forwardCallerAbort);
+    },
+  };
+}
+
 class LoreTransport {
   readonly baseUrl: URL;
   readonly fetch: typeof globalThis.fetch;
   readonly headers: Headers;
+  readonly timeoutMs: number;
 
   constructor(options: LoreClientOptions) {
     this.baseUrl = normalizedBaseUrl(options.baseUrl);
@@ -298,6 +338,7 @@ class LoreTransport {
     this.fetch = options.fetch ?? globalThis.fetch;
     if (typeof this.fetch !== "function") throw new TypeError("A Fetch implementation is required");
     this.headers = customHeaders;
+    this.timeoutMs = normalizedTimeoutMs(options.timeoutMs);
     for (const [name, value] of actorHeaders(options.auth)) this.headers.set(name, value);
     for (const [name, value] of gatewayHeaders(options.gateway)) this.headers.set(name, value);
   }
@@ -309,48 +350,53 @@ class LoreTransport {
     }
     if (input.body !== undefined) headers.set("content-type", "application/json");
     for (const [name, value] of new Headers(input.headers)) headers.set(name, value);
-    let response: Response;
+    const requestAbort = requestAbortSignal(input.signal, this.timeoutMs);
     try {
-      response = await this.fetch(new URL(path, this.baseUrl), {
+      const response = await this.fetch(new URL(path, this.baseUrl), {
         method: input.method,
         headers,
         body: input.body === undefined ? undefined : JSON.stringify(input.body),
         redirect: "error",
-        signal: input.signal,
+        signal: requestAbort.signal,
       });
-    } catch (error) {
-      if (input.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-        throw error;
+      if (response.status === 204) return { data: undefined as Result, response };
+      const accepted = response.ok || input.acceptedStatuses?.includes(response.status) === true;
+      const text = await readBoundedText(
+        response,
+        accepted ? MAX_SUCCESS_RESPONSE_BYTES : MAX_ERROR_RESPONSE_BYTES,
+      );
+      if (!accepted) {
+        const payload = (() => {
+          try {
+            return JSON.parse(text) as { code?: unknown; error?: unknown };
+          } catch {
+            return {};
+          }
+        })();
+        throw new LoreApiError(
+          typeof payload.error === "string"
+            ? payload.error
+            : `Lore request failed (${response.status})`,
+          response.status,
+          typeof payload.code === "string" && LORE_ERROR_CODE_SET.has(payload.code)
+            ? (payload.code as LoreErrorCode)
+            : "http_error",
+        );
       }
+      return { data: parsedJson(text, response) as Result, response };
+    } catch (error) {
+      if (error instanceof LoreApiError) throw error;
+      if (input.signal?.aborted) throw error;
+      if (requestAbort.timedOut()) {
+        throw new LoreApiError("Lore request timed out", 0, "transport_error", { cause: error });
+      }
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
       throw new LoreApiError("Lore request could not be completed", 0, "transport_error", {
         cause: error,
       });
+    } finally {
+      requestAbort.dispose();
     }
-    if (response.status === 204) return { data: undefined as Result, response };
-    const accepted = response.ok || input.acceptedStatuses?.includes(response.status) === true;
-    const text = await readBoundedText(
-      response,
-      accepted ? MAX_SUCCESS_RESPONSE_BYTES : MAX_ERROR_RESPONSE_BYTES,
-    );
-    if (!accepted) {
-      const payload = (() => {
-        try {
-          return JSON.parse(text) as { code?: unknown; error?: unknown };
-        } catch {
-          return {};
-        }
-      })();
-      throw new LoreApiError(
-        typeof payload.error === "string"
-          ? payload.error
-          : `Lore request failed (${response.status})`,
-        response.status,
-        typeof payload.code === "string" && LORE_ERROR_CODE_SET.has(payload.code)
-          ? (payload.code as LoreErrorCode)
-          : "http_error",
-      );
-    }
-    return { data: parsedJson(text, response) as Result, response };
   }
 }
 

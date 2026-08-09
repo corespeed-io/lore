@@ -47,8 +47,9 @@ Qwen3-Embedding 0.6B at 1024 dimensions.
 
 ## Run with Docker
 
-Bun 1.3.14+, Node 24 LTS, and a Postgres distribution with pgvector are required. The fastest
-self-hosted setup is:
+Bun 1.3.14+, Node 24 LTS, and a Postgres distribution with pgvector are required.
+The source verification loop additionally requires Python 3.12+ for the Python SDK.
+The fastest self-hosted setup is:
 
 ```bash
 cp .env.example .env
@@ -519,6 +520,8 @@ error handling to the TypeScript SDK.
 Generate/check both language contracts and build the JavaScript packages:
 
 ```bash
+bun run sdk:generate
+bun run sdk:check
 bun run build:packages
 ```
 
@@ -604,10 +607,13 @@ Workerd template.
 ## Verify changes
 
 ```bash
+bun run sdk:check
 bun run typecheck
 bun run lint
 bun run test
+bun run test:python
 bun run build
+bun run build:packages
 bun run packages:smoke
 bun audit --audit-level=high
 bunx opennextjs-cloudflare build

@@ -21,7 +21,9 @@ bun run build:packages
 `sdk:check` fails when the OpenAPI document and any generated artifact differ. The
 handwritten SDK runtimes wrap those types with the behavior OpenAPI alone cannot provide:
 authentication, `x-lore-workspace-id`, opaque cursors, strong Memory ETags,
-idempotency keys, bounded response reads, and safe error parsing.
+idempotency keys, bounded response reads, a default 30-second request timeout, and
+safe error parsing. TypeScript callers may set `timeoutMs` from 1 through 300,000
+milliseconds; Python callers may set `timeout` greater than 0 and at most 300 seconds.
 
 ## Shared connection environment
 

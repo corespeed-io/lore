@@ -28,10 +28,21 @@ function packedTarball(packageDirectory, destination) {
     "--json",
   ]);
   const result = JSON.parse(output);
-  if (!Array.isArray(result) || typeof result[0]?.filename !== "string") {
+  const candidates = Array.isArray(result)
+    ? result
+    : result && typeof result === "object" && typeof result.filename === "string"
+      ? [result]
+      : result && typeof result === "object"
+        ? Object.values(result)
+        : [];
+  const packed = candidates.find(
+    (candidate) =>
+      candidate && typeof candidate === "object" && typeof candidate.filename === "string",
+  );
+  if (!packed) {
     throw new Error(`npm pack returned an invalid result for ${packageDirectory}`);
   }
-  return join(destination, result[0].filename);
+  return join(destination, packed.filename);
 }
 
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "lore-package-smoke-"));

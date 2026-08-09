@@ -179,6 +179,63 @@ describe("Lore TypeScript SDK", () => {
     expect(String(failure)).not.toContain(AGENT_TOKEN);
   });
 
+  test("times out stalled requests without requiring an MCP caller signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockImplementation(
+        async (_url: URL, init?: RequestInit) =>
+          await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      );
+      const client = new LoreClient({
+        baseUrl: "http://127.0.0.1:3000",
+        fetch: fetchMock,
+      });
+      const pending = client.listWorkspaces();
+      const failure = expect(pending).rejects.toMatchObject({
+        status: 0,
+        code: "transport_error",
+        message: "Lore request timed out",
+      });
+      const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(request?.signal).toBeInstanceOf(AbortSignal);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(request?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await failure;
+      expect(request?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("preserves explicit caller cancellation", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async (_url: URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const client = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    });
+    const controller = new AbortController();
+    const reason = new DOMException("caller cancelled", "AbortError");
+    const pending = client.listWorkspaces(controller.signal);
+
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+  });
+
   test("cancels a declared oversize error body before reading it", async () => {
     const cancel = vi.fn();
     const response = new Response(new ReadableStream({ cancel }), {
