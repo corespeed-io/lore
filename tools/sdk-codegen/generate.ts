@@ -102,12 +102,7 @@ function generatedPythonContract(document: OpenApiDocument, errorCodes: readonly
   return `# Generated from Lore's canonical OpenAPI document. Do not edit by hand.
 from __future__ import annotations
 
-from typing import Any, Final, Literal, TypedDict, Union
-
-try:
-    from typing import NotRequired, TypeAlias
-except ImportError:  # Python 3.9
-    from typing_extensions import NotRequired, TypeAlias
+from typing import Any, Final, Literal, NotRequired, TypeAlias, TypedDict, Union
 
 LORE_API_VERSION: Final[str] = ${JSON.stringify(document.info.version)}
 LORE_ERROR_CODES: Final[frozenset[str]] = frozenset(${JSON.stringify(errorCodes)})

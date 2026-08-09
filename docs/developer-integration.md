@@ -113,7 +113,8 @@ memories.update_memory(
 
 The dependency-light synchronous client provides the same core Workspace/Memory,
 readiness, graph, pagination, strong-version, and replay-safe mutation behavior as
-the TypeScript client. It requires Python 3.9+.
+the TypeScript client. It requires Python 3.12+; CI covers the minimum and current
+stable Python 3.14 release.
 
 ## CLI
 

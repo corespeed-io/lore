@@ -1,12 +1,7 @@
 # Generated from Lore's canonical OpenAPI document. Do not edit by hand.
 from __future__ import annotations
 
-from typing import Any, Final, Literal, TypedDict, Union
-
-try:
-    from typing import NotRequired, TypeAlias
-except ImportError:  # Python 3.9
-    from typing_extensions import NotRequired, TypeAlias
+from typing import Any, Final, Literal, NotRequired, TypeAlias, TypedDict, Union
 
 LORE_API_VERSION: Final[str] = "v1"
 LORE_ERROR_CODES: Final[frozenset[str]] = frozenset(["access_denied","authentication_required","idempotency_conflict","internal_error","invalid_archive","invalid_request","not_found","precondition_required","version_conflict","workspace_export_limit_exceeded"])
