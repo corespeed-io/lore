@@ -511,12 +511,29 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
     agent.id,
   );
   const credential = (await credentialResponse.json()) as { id: string; token: string };
+  const credentialListResponse = await credentials.GET(
+    new Request(`http://lore.local/api/agents/${agent.id}/credentials`, { headers }),
+    agent.id,
+  );
 
   expect(createResponse.status).toBe(201);
   expect(agent.permission).toBe("write");
   await expect(listResponse.json()).resolves.toMatchObject([{ id: agent.id }]);
   expect(credentialResponse.status).toBe(201);
+  expect(credentialResponse.headers.get("cache-control")).toBe("private, no-store");
   expect(credential.token).toMatch(/^lore_agent_[a-f0-9]{64}$/);
+  expect(credentialListResponse.headers.get("cache-control")).toBe("private, no-store");
+  const credentialList = (await credentialListResponse.json()) as Array<Record<string, unknown>>;
+  expect(credentialList).toMatchObject([
+    {
+      id: credential.id,
+      agentId: agent.id,
+      prefix: expect.any(String),
+      revokedAt: null,
+    },
+  ]);
+  expect(credentialList[0]).not.toHaveProperty("token");
+  expect(credentialList[0]).not.toHaveProperty("secretHash");
 
   const revokeCredentialResponse = await credentialById.DELETE(
     new Request(`http://lore.local/api/agent-credentials/${credential.id}`, {
@@ -542,6 +559,58 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
       workspace.id,
     ),
   ).not.toBeNull();
+  const agentHeaders = {
+    authorization: `Bearer ${secondCredential.token}`,
+    "x-lore-workspace-id": workspace.id,
+  };
+  const forbiddenAdministrationResponses = await Promise.all([
+    agents.GET(new Request("http://lore.local/api/agents", { headers: agentHeaders })),
+    agents.POST(
+      new Request("http://lore.local/api/agents", {
+        method: "POST",
+        headers: agentHeaders,
+        body: JSON.stringify({ name: "Forbidden assistant", permission: "read" }),
+      }),
+    ),
+    credentials.GET(
+      new Request(`http://lore.local/api/agents/${agent.id}/credentials`, {
+        headers: agentHeaders,
+      }),
+      agent.id,
+    ),
+    credentials.POST(
+      new Request(`http://lore.local/api/agents/${agent.id}/credentials`, {
+        method: "POST",
+        headers: agentHeaders,
+      }),
+      agent.id,
+    ),
+    credentialById.DELETE(
+      new Request(`http://lore.local/api/agent-credentials/${credential.id}`, {
+        method: "DELETE",
+        headers: agentHeaders,
+      }),
+      credential.id,
+    ),
+    grants.PUT(
+      new Request(`http://lore.local/api/agents/${agent.id}/grant`, {
+        method: "PUT",
+        headers: agentHeaders,
+        body: JSON.stringify({ permission: "read" }),
+      }),
+      agent.id,
+    ),
+    grants.DELETE(
+      new Request(`http://lore.local/api/agents/${agent.id}/grant`, {
+        method: "DELETE",
+        headers: agentHeaders,
+      }),
+      agent.id,
+    ),
+  ]);
+  expect(forbiddenAdministrationResponses.map((response) => response.status)).toEqual(
+    Array(7).fill(403),
+  );
 
   const revokeGrantResponse = await grants.DELETE(
     new Request(`http://lore.local/api/agents/${agent.id}/grant`, {
@@ -557,6 +626,27 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
       workspace.id,
     ),
   ).resolves.toBeNull();
+
+  const restoreGrantResponse = await grants.PUT(
+    new Request(`http://lore.local/api/agents/${agent.id}/grant`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ permission: "read" }),
+    }),
+    agent.id,
+  );
+  expect(restoreGrantResponse.status).toBe(200);
+  await expect(restoreGrantResponse.json()).resolves.toMatchObject({
+    agentId: agent.id,
+    permission: "read",
+    status: "active",
+  });
+  await expect(
+    createAccessModule(testContext.database).authenticateAgent(
+      secondCredential.token,
+      workspace.id,
+    ),
+  ).resolves.toMatchObject({ agentId: agent.id });
 
   await testContext.close();
 });

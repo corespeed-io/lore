@@ -46,6 +46,37 @@ test("User can atomically provision and list Agents for the active Workspace", a
   await testContext.close();
 });
 
+test("Agent management stays scoped when one User belongs to two Workspaces", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  await access.addMember(testContext.carol, testContext.alice.userId, { role: "member" });
+  const researchAlice = {
+    userId: testContext.alice.userId,
+    workspaceId: testContext.carol.workspaceId,
+  };
+  const operationsAgent = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Operations assistant",
+    permission: "write",
+  });
+  const researchAgent = await access.createAgentForWorkspace(researchAlice, {
+    name: "Research assistant",
+    permission: "read",
+  });
+  const credential = await access.issueAgentCredential(testContext.alice, operationsAgent.id);
+
+  await expect(access.listAgents(testContext.alice)).resolves.toMatchObject([
+    { id: operationsAgent.id },
+  ]);
+  await expect(access.listAgents(researchAlice)).resolves.toMatchObject([{ id: researchAgent.id }]);
+  await expect(access.listAgentCredentials(researchAlice, operationsAgent.id)).resolves.toEqual([]);
+  await expect(
+    access.issueAgentCredential(researchAlice, operationsAgent.id),
+  ).rejects.toBeInstanceOf(AccessDeniedError);
+  await expect(access.revokeAgentCredential(researchAlice, credential.id)).resolves.toBe(false);
+
+  await testContext.close();
+});
+
 test("RLS keeps a User's Agents and Workspace Grants private from other members", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);
@@ -77,6 +108,15 @@ test("Agent credential resolves to the owning User and granted Workspace", async
   const credential = await access.issueAgentCredential(testContext.alice, agent.id);
 
   expect(credential.token).toMatch(/^lore_agent_[A-Za-z0-9_-]+$/);
+  await expect(access.listAgentCredentials(testContext.alice, agent.id)).resolves.toMatchObject([
+    {
+      id: credential.id,
+      agentId: agent.id,
+      prefix: credential.prefix,
+      revokedAt: null,
+    },
+  ]);
+  await expect(access.listAgentCredentials(testContext.bob, agent.id)).resolves.toEqual([]);
   await expect(
     access.authenticateAgent(credential.token, testContext.alice.workspaceId),
   ).resolves.toEqual({
@@ -121,6 +161,22 @@ test("Revoked Agent credential can no longer authenticate", async () => {
   await testContext.close();
 });
 
+test("Disabled Agent cannot receive a new credential", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Disabled assistant" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query("UPDATE agents SET status = 'disabled' WHERE id = $1", [agent.id]);
+  });
+
+  await expect(access.issueAgentCredential(testContext.alice, agent.id)).rejects.toBeInstanceOf(
+    AccessDeniedError,
+  );
+
+  await testContext.close();
+});
+
 test("Revoked Agent Workspace Grant invalidates every credential", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);
@@ -136,6 +192,7 @@ test("Revoked Agent Workspace Grant invalidates every credential", async () => {
   await expect(
     access.authenticateAgent(second.token, testContext.alice.workspaceId),
   ).resolves.toBeNull();
+  await expect(access.listAgentCredentials(testContext.alice, agent.id)).resolves.toHaveLength(2);
 
   await testContext.close();
 });
@@ -184,10 +241,17 @@ test("User cannot grant another User's Agent", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);
   const aliceAgent = await access.createAgent(testContext.alice, { name: "Alice assistant" });
+  await access.grantAgent(testContext.alice, aliceAgent.id, { permission: "write" });
+  const credential = await access.issueAgentCredential(testContext.alice, aliceAgent.id);
 
   await expect(
     access.grantAgent(testContext.bob, aliceAgent.id, { permission: "write" }),
   ).rejects.toBeInstanceOf(AccessDeniedError);
+  await expect(access.revokeAgentGrant(testContext.bob, aliceAgent.id)).resolves.toBe(false);
+  await expect(access.revokeAgentCredential(testContext.bob, credential.id)).resolves.toBe(false);
+  await expect(
+    access.authenticateAgent(credential.token, testContext.alice.workspaceId),
+  ).resolves.toMatchObject({ agentId: aliceAgent.id });
 
   await testContext.close();
 });

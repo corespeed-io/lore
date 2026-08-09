@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { listMemories, listWorkspaces } from "@/lib/lore-api";
+import { listAgentCredentials, listMemories, listWorkspaces, setAgentGrant } from "@/lib/lore-api";
 import { clearRequestLog, getRequestLog } from "@/lib/request-log";
 import type { Memory } from "@/lib/types";
 
@@ -49,4 +49,25 @@ test("intentional request cancellation is not reported as an API failure", async
 
   await expect(listWorkspaces()).rejects.toBe(aborted);
   expect(getRequestLog()).toEqual([]);
+});
+
+test("Agent browser client scopes credential reads and grant updates to one Workspace", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(Response.json({ status: "active", permission: "write" }));
+  vi.stubGlobal("fetch", fetchMock);
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const agentId = "30000000-0000-4000-8000-000000000001";
+
+  await listAgentCredentials(workspaceId, agentId);
+  await setAgentGrant(workspaceId, agentId, "write");
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(String(fetchMock.mock.calls[0][0])).toContain(`/agents/${agentId}/credentials`);
+  const credentialRequest = fetchMock.mock.calls[0][1];
+  if (!credentialRequest) throw new Error("Expected credential request options");
+  expect((credentialRequest.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
+  expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "PUT" });
+  expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ permission: "write" }));
 });

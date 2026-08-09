@@ -16,6 +16,9 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
           };
         };
         Error: { properties: { code: { enum: string[] } } };
+        IssuedAgentCredential: {
+          properties: { token: { type: string; readOnly: boolean } };
+        };
         MemorySearchResult: {
           properties: { rerankScore: { type: string; minimum: number; maximum: number } };
         };
@@ -79,6 +82,18 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   });
   expect(document.paths["/api/v1/memories/{memoryId}"].patch.requestBody).toMatchObject({
     required: true,
+  });
+  expect(document.paths["/api/v1/agents/{agentId}/credentials"]).toMatchObject({
+    get: { operationId: "listAgentCredentials" },
+    post: { operationId: "issueAgentCredential" },
+  });
+  expect(document.paths["/api/v1/agents/{agentId}/grant"].put).toMatchObject({
+    operationId: "setAgentGrant",
+    requestBody: { required: true },
+  });
+  expect(document.components.schemas.IssuedAgentCredential.properties.token).toEqual({
+    type: "string",
+    readOnly: true,
   });
   expect(
     document.paths["/api/v1/memories"].get.parameters as Array<Record<string, unknown>>,

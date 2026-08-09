@@ -24,7 +24,7 @@ identity mapping, authorization, retrieval, and evaluation directly.
   bounded multi-query planning, second-stage reranking, abstention, rank fusion, and
   evidence diversity;
 - Users, Identities, Workspaces, Memberships, Agents, Workspace grants, and hashed
-  one-time Agent credentials;
+  one-time Agent credentials, with a native Agent/grant/credential management UI;
 - Postgres RLS over all tenant-owned source, chunk, credential, and Evaluation data;
 - versioned Evaluation Suites with Recall@K, MRR, nDCG, latency, cost, and hard
   isolation failures;

@@ -420,12 +420,25 @@ export function createAgentCredentialHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
+    async GET(request: Request, agentId: string): Promise<Response> {
+      try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        return Response.json(await access.listAgentCredentials(actor, normalizedAgentId), {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
     async POST(request: Request, agentId: string): Promise<Response> {
       try {
         const normalizedAgentId = uuidString(agentId, "agentId");
         const actor = requireHumanActor(await resolver.resolveActor(request));
         return Response.json(await access.issueAgentCredential(actor, normalizedAgentId), {
           status: 201,
+          headers: { "cache-control": "private, no-store" },
         });
       } catch (error) {
         return errorResponse(error);
@@ -460,6 +473,21 @@ export function createAgentGrantHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
+    async PUT(request: Request, agentId: string): Promise<Response> {
+      try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const body = await jsonObject(request);
+        return Response.json(
+          await access.grantAgent(actor, normalizedAgentId, {
+            permission: agentPermission(body.permission),
+          }),
+        );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
     async DELETE(request: Request, agentId: string): Promise<Response> {
       try {
         const normalizedAgentId = uuidString(agentId, "agentId");
