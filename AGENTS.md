@@ -72,6 +72,13 @@ been removed. Lore now has a native implementation:
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
   `/readyz`, `/api/v1/actor`, and `/api/v1/capabilities` are the stable operational
   surface;
+- `packages/typescript-sdk` generates its public types from the canonical OpenAPI
+  document and owns the deep integration client. `packages/cli` and the external
+  stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
+  scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
+  MCP outside Portable Core and never accept a model-supplied Workspace override.
+  `packages/python-sdk` provides the equivalent dependency-light Python seam from
+  the same generated OpenAPI contract; keep both SDKs behaviorally aligned;
 - Node/self-host exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so

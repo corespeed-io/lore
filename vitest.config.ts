@@ -4,6 +4,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": new URL("./src", import.meta.url).pathname,
+      "@corespeed/lore-sdk": new URL("./packages/typescript-sdk/src/index.ts", import.meta.url)
+        .pathname,
+      "@corespeed/lore-cli": new URL("./packages/cli/src/index.ts", import.meta.url).pathname,
+      "@corespeed/lore-mcp": new URL("./packages/mcp/src/index.ts", import.meta.url).pathname,
     },
   },
   test: {

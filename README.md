@@ -33,8 +33,9 @@ identity mapping, authorization, retrieval, and evaluation directly.
 - content-free transactional mutation events and expiring deletion tombstones;
 - checksummed RLS-visible Workspace export/import plus PostgreSQL backup/restore
   tooling;
-- a working Memory console, versioned HTTP APIs, OpenAPI, health probes, and
-  privacy-safe optional OpenTelemetry;
+- a working Memory console, versioned HTTP APIs, generated TypeScript/Python
+  contracts, TypeScript and Python SDKs, CLI, external MCP adapter, health probes,
+  and privacy-safe optional OpenTelemetry;
 - OSS Docker/Postgres deployment and a Cloudflare Workers + Hyperdrive adapter.
 
 AutoDream, automatic consolidation, summarization, and proactive insight generation
@@ -507,6 +508,59 @@ Agent tokens are returned only at creation time. Lore stores only their SHA-256
 hash and a short display prefix. Embedding selection is deployment-wide and is not
 exposed to Workspace members or Agents.
 
+## SDK, CLI, and MCP
+
+Lore's developer tools share the stable `/api/v1` Memory contract plus the stable
+`/readyz` probe. TypeScript and Python types come from the same OpenAPI document
+served at `/openapi.json`; the CLI and external MCP server delegate authentication,
+Workspace selection, pagination, ETags, idempotency, bounded response reads, and API
+error handling to the TypeScript SDK.
+
+Generate/check both language contracts and build the JavaScript packages:
+
+```bash
+bun run build:packages
+```
+
+Use an Agent credential from the one-time `/agents` flow through environment
+variables. Secrets are not accepted as CLI flags:
+
+```bash
+export LORE_URL=http://127.0.0.1:3000
+export LORE_WORKSPACE_ID=10000000-0000-4000-8000-000000000001
+export LORE_AGENT_TOKEN=lore_agent_...
+
+printf %s "deployment notes" | node packages/cli/dist/bin.js memory search --stdin --limit 10
+printf %s "Release approved" | node packages/cli/dist/bin.js memory remember --stdin \
+  --scope private --idempotency-key release-approved-1
+```
+
+The stdio MCP adapter exposes bounded list/search/get and version-safe
+remember/update/forget tools for exactly that configured Actor and Workspace. Supply
+the same `idempotencyKey` when retrying a mutation whose response was lost:
+
+```json
+{
+  "mcpServers": {
+    "lore": {
+      "command": "node",
+      "args": ["/absolute/path/to/lore/packages/mcp/dist/bin.js"],
+      "env": {
+        "LORE_URL": "http://127.0.0.1:3000",
+        "LORE_WORKSPACE_ID": "10000000-0000-4000-8000-000000000001",
+        "LORE_AGENT_TOKEN": "lore_agent_..."
+      }
+    }
+  }
+}
+```
+
+Do not commit the populated MCP configuration. The adapter is an integration
+process outside Portable Core: it stores no Memory or authorization state and it
+cannot widen the Agent grant enforced by Lore and Postgres RLS. See
+[`docs/developer-integration.md`](docs/developer-integration.md) for the complete
+configuration and command surface.
+
 ## Operations and portability
 
 `bun run db:preflight` validates migration history and application/schema
@@ -554,6 +608,7 @@ bun run typecheck
 bun run lint
 bun run test
 bun run build
+bun run packages:smoke
 bun audit --audit-level=high
 bunx opennextjs-cloudflare build
 bunx wrangler deploy --dry-run
