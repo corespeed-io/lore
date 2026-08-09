@@ -313,6 +313,7 @@ describe("Lore TypeScript SDK", () => {
       LORE_AGENT_TOKEN: AGENT_TOKEN,
       LORE_ACCESS_CLIENT_ID: "client-id.access",
       LORE_ACCESS_CLIENT_SECRET: "client-secret",
+      LORE_REQUEST_TIMEOUT_MS: "120000",
     });
 
     expect(configuration.client).toMatchObject({
@@ -322,6 +323,15 @@ describe("Lore TypeScript SDK", () => {
         clientId: "client-id.access",
         clientSecret: "client-secret",
       },
+      timeoutMs: 120_000,
     });
+  });
+
+  test("rejects an invalid environment request timeout", () => {
+    for (const timeout of ["0", "300001", "1.5", "never"]) {
+      expect(() => loreConfigurationFromEnvironment({ LORE_REQUEST_TIMEOUT_MS: timeout })).toThrow(
+        /LORE_REQUEST_TIMEOUT_MS|timeoutMs/,
+      );
+    }
   });
 });

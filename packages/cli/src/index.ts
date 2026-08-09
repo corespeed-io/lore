@@ -52,6 +52,7 @@ Connection environment:
   LORE_ACCESS_TOKEN        Cloudflare Access gateway client token
   LORE_ACCESS_CLIENT_ID    Cloudflare Access gateway service-token client id
   LORE_ACCESS_CLIENT_SECRET  Cloudflare Access gateway service-token client secret
+  LORE_REQUEST_TIMEOUT_MS  Total request deadline; default: 30000, max: 300000
   LORE_ALLOW_INSECURE      Explicitly allow authenticated non-loopback HTTP
 
 Secrets are intentionally accepted only through environment variables. Prefer

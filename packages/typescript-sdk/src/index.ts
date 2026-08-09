@@ -630,12 +630,18 @@ export function loreConfigurationFromEnvironment(
   if (allowInsecureValue && !["0", "1", "false", "true"].includes(allowInsecureValue)) {
     throw new TypeError("LORE_ALLOW_INSECURE must be 0, 1, false, or true");
   }
+  const timeoutValue = environment.LORE_REQUEST_TIMEOUT_MS?.trim();
+  if (timeoutValue && !/^\d+$/.test(timeoutValue)) {
+    throw new TypeError("LORE_REQUEST_TIMEOUT_MS must be an integer from 1 to 300000");
+  }
+  const timeoutMs = timeoutValue ? normalizedTimeoutMs(Number(timeoutValue)) : undefined;
   return {
     client: {
       baseUrl: environment.LORE_URL?.trim() || "http://127.0.0.1:3000",
       auth,
       gateway,
       allowInsecure: allowInsecureValue === "1" || allowInsecureValue === "true",
+      timeoutMs,
     },
     workspaceId: environment.LORE_WORKSPACE_ID?.trim() || undefined,
   };

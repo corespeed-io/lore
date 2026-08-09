@@ -551,7 +551,8 @@ the same `idempotencyKey` when retrying a mutation whose response was lost:
       "env": {
         "LORE_URL": "http://127.0.0.1:3000",
         "LORE_WORKSPACE_ID": "10000000-0000-4000-8000-000000000001",
-        "LORE_AGENT_TOKEN": "lore_agent_..."
+        "LORE_AGENT_TOKEN": "lore_agent_...",
+        "LORE_REQUEST_TIMEOUT_MS": "120000"
       }
     }
   }

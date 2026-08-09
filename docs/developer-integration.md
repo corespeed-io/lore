@@ -21,9 +21,12 @@ bun run build:packages
 `sdk:check` fails when the OpenAPI document and any generated artifact differ. The
 handwritten SDK runtimes wrap those types with the behavior OpenAPI alone cannot provide:
 authentication, `x-lore-workspace-id`, opaque cursors, strong Memory ETags,
-idempotency keys, bounded response reads, a default 30-second request timeout, and
-safe error parsing. TypeScript callers may set `timeoutMs` from 1 through 300,000
-milliseconds; Python callers may set `timeout` greater than 0 and at most 300 seconds.
+idempotency keys, bounded response reads, a default 30-second request deadline, and
+safe error parsing. TypeScript `timeoutMs` is a total deadline spanning connection
+and bounded response reading; CLI/MCP operators may set the same value with
+`LORE_REQUEST_TIMEOUT_MS` from 1 through 300,000 milliseconds. Python `timeout` is
+passed to `urllib` as a socket-operation timeout and must be greater than 0 and at
+most 300 seconds; it is not a total request deadline.
 
 ## Shared connection environment
 
@@ -39,6 +42,7 @@ The CLI and MCP process use the same variables:
 | `LORE_ACCESS_TOKEN` | Cloudflare Access gateway client token sent as `cf-access-token` |
 | `LORE_ACCESS_CLIENT_ID` | Cloudflare Access gateway service-token client id |
 | `LORE_ACCESS_CLIENT_SECRET` | Cloudflare Access gateway service-token client secret |
+| `LORE_REQUEST_TIMEOUT_MS` | CLI/MCP total request deadline; defaults to `30000`, maximum `300000` |
 | `LORE_ALLOW_INSECURE` | `1` or `true` to opt into authenticated non-loopback HTTP |
 
 Configure at most one Lore Actor mechanism (`LORE_AGENT_TOKEN` or Basic) and at
