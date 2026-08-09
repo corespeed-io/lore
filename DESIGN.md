@@ -2,7 +2,7 @@
 
 > Status: Active
 > Canonical source: `DESIGN.md`
-> Last decision review: 2026-08-05
+> Last decision review: 2026-08-08
 
 This document is Lore's binding UI contract. Lore is a native Memory System;
 the product model in `CONTEXT.md` defines every frontend data contract.
@@ -46,8 +46,8 @@ retrieval remains a full-width browse/search surface.
 ### Responsive completeness
 
 Workspace selection, search, Memory browse, Graph exploration, create, inspect,
-edit, scope change, and forget must all remain complete on mobile. The sidebar
-becomes a drawer; the product model does not change.
+edit, scope change, forget, and Agent management must all remain complete on
+mobile. The sidebar becomes a drawer; the product model does not change.
 
 ## 3. Information architecture
 
@@ -56,6 +56,7 @@ becomes a drawer; the product model does not change.
 | Dashboard | Understand the active Workspace | Activity, types, hubs, sources, API health | Unknown graph state is never rendered as zero |
 | Memories | Capture and retrieve Memory | Searchable chronological rows | Errors render inline near the workflow |
 | Graph | Explore authorized Memory relationships | Interactive affinity map + selection inspector | Errors remain inside the Graph workspace |
+| Agents | Connect user-owned Agents to the active Workspace | Agent creation, grants, and credential lifecycle | Secrets are one-time; restore/revoke consequences stay explicit |
 
 Search is global to the active Workspace and always returns to Memories. Selecting
 a Memory replaces the list with a detail workspace; Back returns to the same query.
@@ -131,6 +132,8 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `globals.css` owns tokens, reset, base rules, and documented component classes.
 - `App.tsx` owns Workspace selection, native data, routing, mutations, and workflow composition.
 - `GraphView.tsx` owns Graph filtering, selection, and inspection.
+- `AgentsView.tsx` owns Workspace-scoped Agent creation, grant lifecycle, credential
+  metadata, one-time credential reveal, and credential revocation.
 - `src/lib/viz/graph.ts` owns the optimized D3 force layout, zoom/pan, node drag,
   label collision, and neighborhood paint state.
 - `Sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
@@ -143,6 +146,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Composer | feature panel | empty, ready, saving, error |
 | Detail | feature workspace | view/edit, saving, destructive, mobile stack |
 | Graph | `GraphView` | loading, empty, mapped, filtered, selected, error |
+| Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, error |
 
 ## 10. Workflow specifications
 
@@ -179,6 +183,19 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Scope uses the graph palette plus explicit text in the inspector and legend, never
   color alone.
 
+### Manage Agents
+
+- Entry: Agents navigation in the active Workspace; management requires a human Actor.
+- Creating an Agent also creates its initial read or write grant in that Workspace.
+- Grant permission changes, revocation, and restoration remain separate from the
+  Agent's global status. Restoring a grant explicitly warns that an active Agent's
+  unrevoked credentials can authenticate in that Workspace again; credentials for
+  a disabled Agent remain blocked until that Agent is re-enabled.
+- Credential metadata may be revisited, but a new secret is shown exactly once and
+  Lore retains only its prefix and hash. Revocation is explicit and irreversible.
+- Disabled Agents remain visible for diagnosis but cannot authenticate or receive a
+  new credential. Rename, disable, and delete controls are outside this workflow today.
+
 ## 11. Loading, empty, error, and attention states
 
 - Initial loading uses the plain `Opening Lore…` status.
@@ -191,6 +208,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Use `aside`, `nav`, `main`, headings, labels, fieldsets, and live regions correctly.
 - All controls are keyboard reachable with a visible focus ring.
 - Escape closes the mobile drawer and composer/detail overlays when applicable.
+- The one-time credential reveal is the exception: Escape and backdrop dismissal are
+  blocked because closing would destroy the only secret display. It closes only after
+  the human explicitly confirms that the token was saved.
 - Touch targets are at least 34px; primary actions are at least 38px.
 - No behavior depends only on hover or color.
 
@@ -220,6 +240,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
+| 2026-08-08 | Add Agents as a standard Lore destination on the canonical 1100px content track | Make human-only Agent creation, Workspace grants, and credential lifecycle a first-class native workflow without creating a second visual system | Agent administration without a binding UI contract |
 | 2026-08-05 | Restore Lore's complete Dashboard/Graph/Memories shell and optimized graph interaction around native Memory types | Preserve the product's mature interface without importing an external domain model | The temporary simplified Memory console |
 | 2026-08-06 | Fix Lore v1 at 1024 dimensions while allowing one provider/model per deployment | Self-host operators retain model choice without turning the database vector protocol into runtime configuration | Workspace/User model selection |
 | 2026-08-05 | Build Graph as an Actor-specific Memory-affinity read model | Preserve exploration without weakening RLS or reviving the deleted proxy | Deferred Graph placeholder |

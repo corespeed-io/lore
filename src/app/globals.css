@@ -1972,11 +1972,6 @@ a.ext {
 }
 
 /* ── Agent management ─────────────────────────────────────────────────────── */
-.agents-page {
-  width: min(1120px, 100%);
-  margin: 0 auto;
-  padding: 42px 40px 72px;
-}
 .agents-hero {
   display: flex;
   align-items: flex-start;
@@ -2215,7 +2210,7 @@ a.ext {
   border: 1px solid #f5c2c7;
   border-radius: 8px;
   background: #fff5f5;
-  color: #b42318;
+  color: var(--danger);
   cursor: pointer;
   font: inherit;
   font-size: 13px;
@@ -2264,6 +2259,12 @@ a.ext {
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+.agent-credentials-head .agent-credential-warning {
+  max-width: 620px;
+  margin-top: 8px;
+  color: var(--body);
+  font-weight: 600;
 }
 .agent-credential-list {
   overflow: hidden;
@@ -2366,9 +2367,6 @@ a.ext {
   }
 }
 @media (max-width: 620px) {
-  .agents-page {
-    padding: 28px 18px 56px;
-  }
   .agents-hero,
   .agent-credentials-head {
     flex-direction: column;

@@ -280,8 +280,11 @@ function queryInteger(
   return value;
 }
 
-function agentPermission(value: unknown): AgentGrantPermission {
-  if (value === undefined) return "read";
+function agentPermission(
+  value: unknown,
+  defaultPermission?: AgentGrantPermission,
+): AgentGrantPermission {
+  if (value === undefined && defaultPermission) return defaultPermission;
   if (value === "read" || value === "write") return value;
   throw new BadRequestError("permission must be read or write");
 }
@@ -394,7 +397,9 @@ export function createAgentHandlers(database: PostgresDatabase) {
     async GET(request: Request): Promise<Response> {
       try {
         const actor = requireHumanActor(await resolver.resolveActor(request));
-        return Response.json(await access.listAgents(actor));
+        return Response.json(await access.listAgents(actor), {
+          headers: { "cache-control": "private, no-store" },
+        });
       } catch (error) {
         return errorResponse(error);
       }
@@ -406,9 +411,12 @@ export function createAgentHandlers(database: PostgresDatabase) {
         const body = await jsonObject(request);
         const agent = await access.createAgentForWorkspace(actor, {
           name: requiredString(body.name, "name", 120),
-          permission: agentPermission(body.permission),
+          permission: agentPermission(body.permission, "read"),
         });
-        return Response.json(agent, { status: 201 });
+        return Response.json(agent, {
+          status: 201,
+          headers: { "cache-control": "private, no-store" },
+        });
       } catch (error) {
         return errorResponse(error);
       }
@@ -482,6 +490,7 @@ export function createAgentGrantHandlers(database: PostgresDatabase) {
           await access.grantAgent(actor, normalizedAgentId, {
             permission: agentPermission(body.permission),
           }),
+          { headers: { "cache-control": "private, no-store" } },
         );
       } catch (error) {
         return errorResponse(error);

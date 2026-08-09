@@ -503,6 +503,16 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
   );
   const agent = (await createResponse.json()) as { id: string; permission: string };
   const listResponse = await agents.GET(new Request("http://lore.local/api/agents", { headers }));
+  const defaultPermissionResponse = await agents.POST(
+    new Request("http://lore.local/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Default reader" }),
+    }),
+  );
+  const defaultPermissionAgent = (await defaultPermissionResponse.json()) as {
+    permission: string;
+  };
   const credentialResponse = await credentials.POST(
     new Request(`http://lore.local/api/agents/${agent.id}/credentials`, {
       method: "POST",
@@ -517,7 +527,11 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
   );
 
   expect(createResponse.status).toBe(201);
+  expect(createResponse.headers.get("cache-control")).toBe("private, no-store");
   expect(agent.permission).toBe("write");
+  expect(defaultPermissionResponse.status).toBe(201);
+  expect(defaultPermissionAgent.permission).toBe("read");
+  expect(listResponse.headers.get("cache-control")).toBe("private, no-store");
   await expect(listResponse.json()).resolves.toMatchObject([{ id: agent.id }]);
   expect(credentialResponse.status).toBe(201);
   expect(credentialResponse.headers.get("cache-control")).toBe("private, no-store");
@@ -627,6 +641,39 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
     ),
   ).resolves.toBeNull();
 
+  const invalidRestoreResponse = await grants.PUT(
+    new Request(`http://lore.local/api/agents/${agent.id}/grant`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({}),
+    }),
+    agent.id,
+  );
+  expect(invalidRestoreResponse.status).toBe(400);
+  await expect(invalidRestoreResponse.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "permission must be read or write",
+  });
+  const afterInvalidRestoreResponse = await agents.GET(
+    new Request("http://lore.local/api/agents", { headers }),
+  );
+  expect(afterInvalidRestoreResponse.status).toBe(200);
+  await expect(afterInvalidRestoreResponse.json()).resolves.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: agent.id,
+        permission: "write",
+        grantStatus: "revoked",
+      }),
+    ]),
+  );
+  await expect(
+    createAccessModule(testContext.database).authenticateAgent(
+      secondCredential.token,
+      workspace.id,
+    ),
+  ).resolves.toBeNull();
+
   const restoreGrantResponse = await grants.PUT(
     new Request(`http://lore.local/api/agents/${agent.id}/grant`, {
       method: "PUT",
@@ -636,6 +683,7 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
     agent.id,
   );
   expect(restoreGrantResponse.status).toBe(200);
+  expect(restoreGrantResponse.headers.get("cache-control")).toBe("private, no-store");
   await expect(restoreGrantResponse.json()).resolves.toMatchObject({
     agentId: agent.id,
     permission: "read",

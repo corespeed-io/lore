@@ -96,8 +96,9 @@ been removed. Lore now has a native implementation:
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers.
 
-Still incomplete: full Evaluation management UI. Agent, Workspace grant, and
-credential lifecycle management is available in the native `/agents` surface.
+Still incomplete: full Evaluation management UI and Agent rename/disable/delete
+controls. Workspace-scoped Agent creation plus grant and credential lifecycle
+management is available in the native `/agents` surface.
 Chunking and lexical indexing
 are synchronous; document embedding, retry, and deployment-wide re-indexing are
 background maintenance. The Ollama, Google Gemini, and OpenAI adapters are

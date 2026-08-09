@@ -19,10 +19,13 @@ function errorMessage(cause: unknown): string {
 
 function displayDate(value: string | null): string {
   if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return "Unknown";
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+    timeZone: "UTC",
+  }).format(date);
 }
 
 export function AgentsView({
@@ -59,7 +62,7 @@ export function AgentsView({
   }
 
   return (
-    <section className="agents-page">
+    <section className="page-wrap agents-page">
       <header className="agents-hero">
         <div>
           <p className="agents-kicker">{workspaceName}</p>
@@ -169,7 +172,7 @@ function AgentCard({
   const [mutationError, setMutationError] = useState<string | null>(null);
   const credentials = useLoreAgentCredentials(workspaceId, agent.id, expanded);
   const mutations = useLoreAgentMutations(workspaceId);
-  const activeCredentials = (credentials.data ?? []).filter(
+  const unrevokedCredentialCount = (credentials.data ?? []).filter(
     (credential) => !credential.revokedAt,
   ).length;
   const agentDisabled = agent.status === "disabled";
@@ -204,6 +207,16 @@ function AgentCard({
     } catch (cause) {
       setMutationError(errorMessage(cause));
     }
+  }
+
+  async function restoreGrant() {
+    const credentialEffect = agentDisabled
+      ? "This Agent remains disabled, so its credentials cannot authenticate until the Agent is re-enabled."
+      : "Every unrevoked credential for this Agent will be able to authenticate here again.";
+    if (!window.confirm(`Restore ${agent.name}'s access to this Workspace? ${credentialEffect}`)) {
+      return;
+    }
+    await setGrant(agent.permission);
   }
 
   async function issueCredential() {
@@ -278,7 +291,7 @@ function AgentCard({
               type="button"
               className="agent-primary"
               disabled={busy}
-              onClick={() => void setGrant(agent.permission)}
+              onClick={() => void restoreGrant()}
             >
               Restore access
             </button>
@@ -299,7 +312,9 @@ function AgentCard({
         >
           <span aria-hidden="true">{expanded ? "−" : "+"}</span>
           Credentials
-          {expanded && !credentials.isLoading && <small>{activeCredentials} active</small>}
+          {expanded && !credentials.isLoading && (
+            <small>{unrevokedCredentialCount} unrevoked</small>
+          )}
         </button>
       </div>
 
@@ -313,6 +328,13 @@ function AgentCard({
             <div>
               <strong>Credentials</strong>
               <p>Secrets are shown once. Stored records contain only a prefix and hash.</p>
+              {agent.grantStatus === "revoked" && unrevokedCredentialCount > 0 && (
+                <p className="agent-credential-warning">
+                  {agentDisabled
+                    ? "Restoring this grant preserves Workspace access, but credentials stay blocked while the Agent is disabled."
+                    : "Restoring access will let every unrevoked credential authenticate in this Workspace again."}
+                </p>
+              )}
             </div>
             <button
               type="button"
