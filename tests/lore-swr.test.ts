@@ -34,6 +34,12 @@ test("Lore cache keys isolate Workspace, query, and result shape", () => {
   expect(loreKeys.graph(workspaceId)).not.toEqual(
     loreKeys.graph("10000000-0000-4000-8000-000000000002"),
   );
+  expect(loreKeys.agents(workspaceId)).not.toEqual(
+    loreKeys.agents("10000000-0000-4000-8000-000000000002"),
+  );
+  expect(loreKeys.agentCredentials(workspaceId, "agent-a")).not.toEqual(
+    loreKeys.agentCredentials(workspaceId, "agent-b"),
+  );
 });
 
 test("upserting a Memory preserves page boundaries without duplicates", () => {

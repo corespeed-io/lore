@@ -46,6 +46,15 @@ export interface IssuedAgentCredential {
   token: string;
 }
 
+export interface AgentCredential {
+  id: string;
+  agentId: string;
+  prefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -92,6 +101,15 @@ interface WorkspaceAgentRow extends AgentRow {
 interface AuthenticatedAgentRow {
   user_id: string;
   agent_id: string;
+}
+
+interface AgentCredentialRow {
+  id: string;
+  agent_id: string;
+  secret_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
 }
 
 interface WorkspaceRow {
@@ -160,6 +178,17 @@ function toWorkspaceAgent(row: WorkspaceAgentRow): WorkspaceAgent {
     ...toAgent(row),
     permission: row.permission,
     grantStatus: row.grant_status,
+  };
+}
+
+function toAgentCredential(row: AgentCredentialRow): AgentCredential {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    prefix: row.secret_prefix,
+    createdAt: row.created_at,
+    lastUsedAt: row.last_used_at,
+    revokedAt: row.revoked_at,
   };
 }
 
@@ -347,11 +376,48 @@ export function createAccessModule(database: PostgresDatabase) {
           const id = crypto.randomUUID();
           const result = await transaction.query<{ id: string; secret_prefix: string }>(
             `INSERT INTO agent_credentials (id, agent_id, secret_prefix, secret_hash)
-             VALUES ($1, $2, $3, $4)
+             SELECT $1, agent.id, $3, $4
+             FROM agent_workspace_grants workspace_grant
+             JOIN agents agent ON agent.id = workspace_grant.agent_id
+             WHERE workspace_grant.workspace_id = $2
+               AND workspace_grant.agent_id = $5
+               AND workspace_grant.status = 'active'
+               AND agent.status = 'active'
              RETURNING id, secret_prefix`,
-            [id, agentId, prefix, secretHash],
+            [id, actor.workspaceId, prefix, secretHash, agentId],
           );
+          if (!result.rows[0]) {
+            throw new AccessDeniedError("Agent is not active in the selected Workspace");
+          }
           return { id: result.rows[0].id, prefix: result.rows[0].secret_prefix, token };
+        }),
+      );
+    },
+
+    async listAgentCredentials(actor: ActorContext, agentId: string): Promise<AgentCredential[]> {
+      return translateAccessError(() =>
+        database.transaction(async (transaction) => {
+          await installActorContext(transaction, actor);
+          const result = await transaction.query<AgentCredentialRow>(
+            `SELECT
+               credential.id,
+               credential.agent_id,
+               credential.secret_prefix,
+               credential.created_at,
+               credential.last_used_at,
+               credential.revoked_at
+             FROM agent_credentials credential
+             WHERE credential.agent_id = $1
+               AND EXISTS (
+                 SELECT 1
+                 FROM agent_workspace_grants workspace_grant
+                 WHERE workspace_grant.workspace_id = $2
+                   AND workspace_grant.agent_id = credential.agent_id
+               )
+             ORDER BY credential.created_at DESC, credential.id`,
+            [agentId, actor.workspaceId],
+          );
+          return result.rows.map(toAgentCredential);
         }),
       );
     },
@@ -378,11 +444,18 @@ export function createAccessModule(database: PostgresDatabase) {
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<{ id: string }>(
-          `UPDATE agent_credentials
+          `UPDATE agent_credentials credential
            SET revoked_at = now()
-           WHERE id = $1 AND revoked_at IS NULL
-           RETURNING id`,
-          [credentialId],
+           WHERE credential.id = $1
+             AND credential.revoked_at IS NULL
+             AND EXISTS (
+               SELECT 1
+               FROM agent_workspace_grants workspace_grant
+               WHERE workspace_grant.workspace_id = $2
+                 AND workspace_grant.agent_id = credential.agent_id
+             )
+           RETURNING credential.id`,
+          [credentialId, actor.workspaceId],
         );
         return result.rows.length === 1;
       });

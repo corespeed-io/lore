@@ -1,1 +1,1 @@
-export { DELETE } from "@/app/api/agents/[id]/grant/route";
+export { DELETE, PUT } from "@/app/api/agents/[id]/grant/route";

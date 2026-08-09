@@ -5,17 +5,24 @@ import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import useSWRMutation from "swr/mutation";
 import {
+  createAgent,
   createWorkspace,
   forgetMemory,
   getMemory,
+  issueAgentCredential,
+  listAgentCredentials,
+  listAgents,
   listMemories,
   listWorkspaces,
   readGraph,
   rememberMemory,
+  revokeAgentCredential,
+  revokeAgentGrant,
   searchMemories,
+  setAgentGrant,
   updateMemory,
 } from "./lore-api";
-import type { Memory, MemoryScope } from "./types";
+import type { AgentGrantPermission, Memory, MemoryScope } from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
 export const MAX_MEMORY_PAGES = 50;
@@ -29,7 +36,12 @@ export const loreKeys = {
   search: (workspaceId: string, query: string, limit: number) =>
     ["lore", "search", workspaceId, query, limit] as const,
   graph: (workspaceId: string) => ["lore", "graph", workspaceId] as const,
+  agents: (workspaceId: string) => ["lore", "agents", workspaceId] as const,
+  agentCredentials: (workspaceId: string, agentId: string) =>
+    ["lore", "agent-credentials", workspaceId, agentId] as const,
   createWorkspace: ["lore", "mutation", "create-workspace"] as const,
+  manageAgents: (workspaceId: string) =>
+    ["lore", "mutation", "manage-agents", workspaceId] as const,
   saveMemory: (workspaceId: string) => ["lore", "mutation", "save-memory", workspaceId] as const,
   forgetMemory: (workspaceId: string) =>
     ["lore", "mutation", "forget-memory", workspaceId] as const,
@@ -176,6 +188,20 @@ export function useLoreGraph(workspaceId: string) {
   );
 }
 
+export function useLoreAgents(workspaceId: string) {
+  return useSWR(workspaceId ? loreKeys.agents(workspaceId) : null, ([, , scopedWorkspaceId]) =>
+    listAgents(scopedWorkspaceId),
+  );
+}
+
+export function useLoreAgentCredentials(workspaceId: string, agentId: string, enabled = true) {
+  return useSWR(
+    workspaceId && agentId && enabled ? loreKeys.agentCredentials(workspaceId, agentId) : null,
+    ([, , scopedWorkspaceId, scopedAgentId]) =>
+      listAgentCredentials(scopedWorkspaceId, scopedAgentId),
+  );
+}
+
 interface SaveMemoryInput {
   id?: string;
   content: string;
@@ -216,5 +242,46 @@ export function useLoreMutations(workspaceId: string) {
       createWorkspaceMutation.isMutating ||
       saveMemoryMutation.isMutating ||
       forgetMemoryMutation.isMutating,
+  };
+}
+
+export function useLoreAgentMutations(workspaceId: string) {
+  const mutationKey = workspaceId ? loreKeys.manageAgents(workspaceId) : null;
+  const createAgentMutation = useSWRMutation(
+    mutationKey,
+    (_key, { arg }: { arg: { name: string; permission: AgentGrantPermission } }) =>
+      createAgent(workspaceId, arg),
+  );
+  const issueCredentialMutation = useSWRMutation(
+    mutationKey,
+    (_key, { arg }: { arg: { agentId: string } }) => issueAgentCredential(workspaceId, arg.agentId),
+  );
+  const setGrantMutation = useSWRMutation(
+    mutationKey,
+    (_key, { arg }: { arg: { agentId: string; permission: AgentGrantPermission } }) =>
+      setAgentGrant(workspaceId, arg.agentId, arg.permission),
+  );
+  const revokeGrantMutation = useSWRMutation(
+    mutationKey,
+    (_key, { arg }: { arg: { agentId: string } }) => revokeAgentGrant(workspaceId, arg.agentId),
+  );
+  const revokeCredentialMutation = useSWRMutation(
+    mutationKey,
+    (_key, { arg }: { arg: { credentialId: string } }) =>
+      revokeAgentCredential(workspaceId, arg.credentialId),
+  );
+
+  return {
+    createAgent: createAgentMutation,
+    issueCredential: issueCredentialMutation,
+    setGrant: setGrantMutation,
+    revokeGrant: revokeGrantMutation,
+    revokeCredential: revokeCredentialMutation,
+    isMutating:
+      createAgentMutation.isMutating ||
+      issueCredentialMutation.isMutating ||
+      setGrantMutation.isMutating ||
+      revokeGrantMutation.isMutating ||
+      revokeCredentialMutation.isMutating,
   };
 }

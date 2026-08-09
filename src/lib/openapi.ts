@@ -306,6 +306,25 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         },
       },
       "/api/v1/agents/{agentId}/credentials": {
+        get: {
+          operationId: "listAgentCredentials",
+          security: humanSecurity,
+          parameters: [
+            workspaceHeader,
+            {
+              name: "agentId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Agent credential metadata without secret hashes", {
+              type: "array",
+              items: { $ref: "#/components/schemas/AgentCredential" },
+            }),
+          },
+        },
         post: {
           operationId: "issueAgentCredential",
           security: humanSecurity,
@@ -326,6 +345,30 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         },
       },
       "/api/v1/agents/{agentId}/grant": {
+        put: {
+          operationId: "setAgentGrant",
+          security: humanSecurity,
+          parameters: [
+            workspaceHeader,
+            {
+              name: "agentId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          requestBody: requestBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["permission"],
+            properties: { permission: { type: "string", enum: ["read", "write"] } },
+          }),
+          responses: {
+            "200": jsonResponse("Active Agent Workspace grant", {
+              $ref: "#/components/schemas/AgentWorkspaceGrant",
+            }),
+          },
+        },
         delete: {
           operationId: "revokeAgentGrant",
           security: humanSecurity,
@@ -572,6 +615,31 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             ...timestampProperties,
           },
         },
+        AgentWorkspaceGrant: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "agentId", "permission", "status", "createdAt", "updatedAt"],
+          properties: {
+            workspaceId: { type: "string", format: "uuid" },
+            agentId: { type: "string", format: "uuid" },
+            permission: { type: "string", enum: ["read", "write"] },
+            status: { type: "string", enum: ["active", "revoked"] },
+            ...timestampProperties,
+          },
+        },
+        AgentCredential: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "agentId", "prefix", "createdAt", "lastUsedAt", "revokedAt"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            agentId: { type: "string", format: "uuid" },
+            prefix: { type: "string" },
+            createdAt: { type: "string", format: "date-time" },
+            lastUsedAt: { oneOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
+            revokedAt: { oneOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
+          },
+        },
         IssuedAgentCredential: {
           type: "object",
           additionalProperties: false,
@@ -579,7 +647,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           properties: {
             id: { type: "string", format: "uuid" },
             prefix: { type: "string" },
-            token: { type: "string", writeOnly: true },
+            token: { type: "string", readOnly: true },
           },
         },
         MemoryGraph: {

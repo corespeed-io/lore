@@ -1971,6 +1971,427 @@ a.ext {
   overflow-wrap: anywhere;
 }
 
+/* ── Agent management ─────────────────────────────────────────────────────── */
+.agents-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+.agents-kicker {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.agents-hero h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+.agents-hero p:not(.agents-kicker) {
+  max-width: 650px;
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.agents-count {
+  flex: 0 0 auto;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 7px 10px;
+}
+.agents-create {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(200px, 1.3fr) 150px auto;
+  align-items: end;
+  gap: 14px;
+  margin-bottom: 24px;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: var(--canvas-elevated);
+  padding: 18px;
+}
+.agents-create-copy {
+  display: grid;
+  align-self: center;
+  gap: 4px;
+}
+.agents-create-copy strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+.agents-create-copy span,
+.agents-create label > span,
+.agent-controls label > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.agents-create label,
+.agent-controls label {
+  display: grid;
+  gap: 6px;
+}
+.agents-create input,
+.agents-create select,
+.agent-controls select {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 10px;
+}
+.agents-create button,
+.agent-primary,
+.credential-reveal-actions button {
+  min-height: 38px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 7px 13px;
+}
+.agents-create button:disabled,
+.agent-primary:disabled,
+.agent-danger:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.agents-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+  color: #b42318;
+  font-size: 13px;
+}
+.agents-error button {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.agents-empty {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  border: 1px dashed var(--hairline);
+  border-radius: 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.agents-empty strong {
+  align-self: end;
+  color: var(--ink);
+}
+.agents-empty p {
+  align-self: start;
+  max-width: 430px;
+  margin: 8px 18px;
+  font-size: 14px;
+}
+.agents-list {
+  display: grid;
+  gap: 12px;
+}
+.agent-card {
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: #fff;
+}
+.agent-card.agent-revoked {
+  background: var(--canvas-elevated);
+}
+.agent-card-main {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+}
+.agent-avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--hairline);
+  border-radius: 13px;
+  background: var(--hairline-soft);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 16px;
+}
+.agent-identity {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.agent-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-name-row h2 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-identity code,
+.agent-identity > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-status {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 7px;
+  text-transform: uppercase;
+}
+.agent-status-active {
+  border-color: #b7ebc6;
+  background: #f0fff4;
+  color: #14843c;
+}
+.agent-status-revoked {
+  border-color: #f5c2c7;
+  background: #fff5f5;
+  color: #b42318;
+}
+.agent-status-disabled {
+  border-color: #d5d5d5;
+  background: #f5f5f5;
+  color: #666;
+}
+.agent-controls {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+.agent-controls select {
+  width: 140px;
+}
+.agent-danger {
+  min-height: 38px;
+  border: 1px solid #f5c2c7;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 11px;
+}
+.agent-credentials-toggle {
+  border-top: 1px solid var(--hairline-soft);
+}
+.agent-credentials-toggle > button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 10px 18px;
+  text-align: left;
+}
+.agent-credentials-toggle small {
+  margin-left: auto;
+  color: var(--muted-soft);
+  font-family: var(--font-mono);
+}
+.agent-credentials {
+  border-top: 1px solid var(--hairline-soft);
+  background: var(--canvas-elevated);
+  padding: 16px 18px 18px;
+}
+.agent-credentials-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.agent-credentials-head strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+.agent-credentials-head p,
+.agent-credential-empty {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-credentials-head .agent-credential-warning {
+  max-width: 620px;
+  margin-top: 8px;
+  color: var(--body);
+  font-weight: 600;
+}
+.agent-credential-list {
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: #fff;
+}
+.agent-credential-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+}
+.agent-credential-row + .agent-credential-row {
+  border-top: 1px solid var(--hairline-soft);
+}
+.agent-credential-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.agent-credential-row code {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.agent-credential-row span:not(.agent-status) {
+  color: var(--muted);
+  font-size: 11px;
+}
+.credential-reveal {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
+  padding: 24px;
+}
+.credential-reveal::backdrop {
+  background: rgba(0, 0, 0, 0.42);
+}
+.credential-reveal h2 {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 22px;
+}
+.credential-reveal > p:not(.memory-editor-kicker) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.credential-reveal > code {
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 18px 0;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--hairline-soft);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 13px;
+  user-select: all;
+}
+.credential-copy-status {
+  min-height: 18px;
+  margin: -8px 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.credential-reveal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.credential-reveal-actions button:first-child {
+  border-color: var(--hairline);
+  background: #fff;
+  color: var(--ink);
+}
+@media (max-width: 920px) {
+  .agents-create {
+    grid-template-columns: 1fr 1fr;
+  }
+  .agents-create-copy {
+    grid-column: 1 / -1;
+  }
+  .agent-card-main {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+  .agent-controls {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
+@media (max-width: 620px) {
+  .agents-hero,
+  .agent-credentials-head {
+    flex-direction: column;
+  }
+  .agents-count {
+    display: none;
+  }
+  .agents-create {
+    grid-template-columns: 1fr;
+  }
+  .agents-create-copy {
+    grid-column: auto;
+  }
+  .agent-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .agent-controls select {
+    width: 100%;
+  }
+  .agent-credential-row {
+    align-items: flex-start;
+  }
+}
+
 /* ── Admin console (optional area; same Geist light palette as the viewer) ── */
 .admin-nav-link {
   text-decoration: none;

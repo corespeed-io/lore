@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentsView } from "@/components/AgentsView";
 import { GraphView } from "@/components/GraphView";
 import { LocalGraphModal } from "@/components/LocalGraphModal";
 import { MemoryView } from "@/components/MemoryView";
@@ -26,6 +27,7 @@ const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
   graph: "Graph",
   search: "Memories",
+  agents: "Agents",
 };
 
 const EMPTY_GRAPH: GraphData = { nodes: [], links: [] };
@@ -535,6 +537,14 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                     typeFilter={memoryTypeFilter}
                     onTypeFilter={setMemoryTypeFilter}
                     onOpen={openMemory}
+                  />
+                )}
+
+                {tab === "agents" && (
+                  <AgentsView
+                    key={activeWorkspaceId}
+                    workspaceId={activeWorkspaceId}
+                    workspaceName={activeWorkspace?.name ?? "Workspace"}
                   />
                 )}
               </>
