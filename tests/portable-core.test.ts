@@ -602,6 +602,25 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
     },
   });
 
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "SELECT lore.ensure_embedding_generation('ollama', 'qwen3-embedding:0.6b', 1024, 'lore-embedding-v1')",
+    ),
+  );
+  const mismatchedEmbedding = createOperationsModule(testContext.database, {
+    embeddingConfigured: true,
+    embeddingIdentity: {
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      revision: "lore-embedding-v2",
+    },
+  });
+  await expect(mismatchedEmbedding.readiness()).resolves.toMatchObject({
+    status: "degraded",
+    components: { embedding: "degraded" },
+  });
+
   markDependencyFailure("embedding");
   try {
     await expect(operations.readiness()).resolves.toMatchObject({

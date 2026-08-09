@@ -626,28 +626,37 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     const staleEmbeddingResult = await admin.query<{ count: string }>(
       `SELECT count(*)::text AS count
        FROM memories memory
-       WHERE memory.metadata->>'benchmarkPartition' = ANY($5::text[])
-         AND NOT (memory.owner_user_id = $4 AND memory.scope = 'private')
+       WHERE memory.metadata->>'benchmarkPartition' = ANY($6::text[])
+         AND NOT (memory.owner_user_id = $5 AND memory.scope = 'private')
          AND (
            NOT EXISTS (
              SELECT 1 FROM memory_chunks chunk
              WHERE chunk.workspace_id = memory.workspace_id AND chunk.memory_id = memory.id
            )
            OR EXISTS (
-             SELECT 1 FROM memory_chunks chunk
-             WHERE chunk.workspace_id = memory.workspace_id
-               AND chunk.memory_id = memory.id
-               AND (
-                 chunk.embedding IS NULL
-                 OR chunk.embedding_provider <> $1
-                 OR chunk.embedding_model <> $2
-                 OR chunk.embedding_revision <> $3
+           SELECT 1 FROM memory_chunks chunk
+           WHERE chunk.workspace_id = memory.workspace_id
+             AND chunk.memory_id = memory.id
+             AND NOT EXISTS (
+               SELECT 1
+               FROM embedding_generations generation
+               JOIN memory_chunk_embeddings embedded
+                 ON embedded.generation_id = generation.id
+                AND embedded.workspace_id = chunk.workspace_id
+                AND embedded.memory_id = chunk.memory_id
+                AND embedded.chunk_id = chunk.id
+               WHERE generation.embedding_provider = $1
+                 AND generation.embedding_model = $2
+                 AND generation.embedding_dimensions = $3
+                 AND generation.embedding_revision = $4
+                 AND generation.status = 'active'
                )
            )
          )`,
       [
         input.embeddingProvider.provider,
         input.embeddingProvider.model,
+        input.embeddingProvider.dimensions,
         input.embeddingProvider.revision,
         bobUserId,
         selectedPartitionKeys,

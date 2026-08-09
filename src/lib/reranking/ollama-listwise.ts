@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readBoundedResponseJson } from "../provider-response";
+import { providerHttpError, readBoundedResponseJson } from "../provider-response";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
@@ -26,6 +26,8 @@ export interface OllamaListwiseRerankingOptions {
 
 interface OllamaListwiseResponse {
   message?: { content?: unknown };
+  remote_host?: unknown;
+  remote_model?: unknown;
 }
 
 function boundedInteger(
@@ -43,6 +45,15 @@ function endpoint(baseUrl: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("ollama-listwise reranking base URL must use http or https");
+  }
+  if (
+    url.protocol !== "https:" &&
+    url.hostname !== "127.0.0.1" &&
+    url.hostname !== "localhost" &&
+    url.hostname !== "[::1]" &&
+    url.hostname !== "host.docker.internal"
+  ) {
+    throw new Error("ollama-listwise reranking base URL must use https outside localhost");
   }
   return new URL("api/chat", `${url.toString().replace(/\/$/, "")}/`).toString();
 }
@@ -211,9 +222,18 @@ export function createOllamaListwiseRerankingProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`ollama-listwise reranking request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `ollama-listwise reranking request failed with HTTP ${response.status}`,
+        );
       }
       const payload = await readBoundedResponseJson<OllamaListwiseResponse>(response);
+      if (
+        (typeof payload.remote_model === "string" && payload.remote_model.trim()) ||
+        (typeof payload.remote_host === "string" && payload.remote_host.trim())
+      ) {
+        throw new Error("ollama-listwise reranking refuses a remote/cloud response");
+      }
       const content = payload.message?.content;
       if (typeof content !== "string" || !content.trim()) {
         throw new Error("ollama-listwise returned no score content");

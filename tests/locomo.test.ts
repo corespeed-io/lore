@@ -115,6 +115,7 @@ test("LoCoMo preserves unresolved official evidence instead of inventing a dialo
 
 test("LoCoMo official normalization removes articles, conjunctions, punctuation, and stems", () => {
   expect(normalizeLocomoAnswer("The cats, and a DOG!")).toBe("cats dog");
+  expect(normalizeLocomoAnswer("the-house")).toBe("thehouse");
   expect(evaluateLocomoAnswer({ prediction: "running", reference: "runs", category: 4 })).toBe(1);
 });
 

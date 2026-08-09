@@ -1,11 +1,11 @@
-import { readBoundedResponseJson } from "../provider-response";
+import { providerHttpError, readBoundedResponseJson } from "../provider-response";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
 const DEFAULT_INSTRUCTION = `Rewrite a memory recall question into distinct evidence-retrieval queries.
 For counts, comparisons, temporal reasoning, or multi-hop questions, create separate queries for each fact needed.
-Preserve exact names, dates, products, and places. Do not answer the question.
-Return only a JSON object with a queries array.`;
+Preserve exact names, dates, products, and places. Do not answer the question.`;
+const JSON_OUTPUT_INSTRUCTION = "Return only a JSON object with a queries array.";
 
 export interface OpenAICompatibleQueryPlanningOptions {
   provider: "openai" | "vllm";
@@ -60,7 +60,8 @@ export function createOpenAICompatibleQueryPlanningProvider(
 ): QueryPlanningProvider {
   const model = options.model.trim();
   if (!model) throw new Error("LORE_QUERY_PLANNER_MODEL is required");
-  const instruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
+  const configuredInstruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
+  const instruction = `${configuredInstruction}\n${JSON_OUTPUT_INSTRUCTION}`;
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
   const defaultBaseUrl =
@@ -74,7 +75,7 @@ export function createOpenAICompatibleQueryPlanningProvider(
   return {
     provider: options.provider,
     model,
-    revision: "lore-query-planning-v1",
+    revision: "lore-query-planning-v2",
     transport: "openai-chat-completions-v1",
     instruction,
     decoding: { temperature: 0, maximumOutputTokens: 256 },
@@ -102,7 +103,10 @@ export function createOpenAICompatibleQueryPlanningProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`query planner request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `query planner request failed with HTTP ${response.status}`,
+        );
       }
       return parsePlannedQueries(
         responseText(await readBoundedResponseJson<ChatCompletionResponse>(response)),

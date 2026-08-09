@@ -17,6 +17,7 @@ export interface ReadinessReport {
 
 interface ReadinessRow {
   capabilities: Record<string, unknown>;
+  embedding_matches: boolean;
   has_vector: boolean;
   role_name: string;
   rls_probe: boolean;
@@ -24,7 +25,15 @@ interface ReadinessRow {
 
 export function createOperationsModule(
   database: PostgresDatabase,
-  options: { embeddingConfigured: boolean },
+  options: {
+    embeddingConfigured: boolean;
+    embeddingIdentity?: {
+      dimensions: number;
+      model: string;
+      provider: string;
+      revision: string;
+    };
+  },
 ) {
   return {
     async capabilities(): Promise<Record<string, unknown>> {
@@ -79,6 +88,15 @@ export function createOperationsModule(
                )
                SELECT
                  lore.portable_core_capabilities() AS capabilities,
+                 CASE WHEN $1::text IS NULL THEN true ELSE EXISTS (
+                   SELECT 1
+                   FROM embedding_generations generation
+                   WHERE generation.embedding_provider = $1
+                     AND generation.embedding_model = $2
+                     AND generation.embedding_dimensions = $3
+                     AND generation.embedding_revision = $4
+                     AND generation.status IN ('active', 'retiring')
+                 ) END AS embedding_matches,
                  EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_vector,
                  current_user AS role_name,
                  (SELECT enabled FROM rls_state)
@@ -88,6 +106,14 @@ export function createOperationsModule(
                    AND NULLIF(current_setting('lore.user_id', true), '') IS NULL
                    AND NULLIF(current_setting('lore.agent_id', true), '') IS NULL
                    AND NOT EXISTS (SELECT 1 FROM memories LIMIT 1) AS rls_probe`,
+              options.embeddingIdentity
+                ? [
+                    options.embeddingIdentity.provider,
+                    options.embeddingIdentity.model,
+                    options.embeddingIdentity.dimensions,
+                    options.embeddingIdentity.revision,
+                  ]
+                : [null, null, null, null],
             );
             const value = result.rows[0];
             if (!value) throw new Error("Readiness query returned no result");
@@ -100,6 +126,9 @@ export function createOperationsModule(
           row.role_name === "lore_app" && row.rls_probe === true ? "ok" : "unavailable";
         components.schema =
           Number(row.capabilities.schemaRevision) === LORE_SCHEMA_REVISION ? "ok" : "incompatible";
+        if (options.embeddingConfigured && !row.embedding_matches) {
+          components.embedding = "degraded";
+        }
       } catch {
         // The response intentionally reports only bounded component states.
       }

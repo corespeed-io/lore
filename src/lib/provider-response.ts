@@ -57,3 +57,8 @@ export async function readBoundedResponseJson<Result>(
     throw new Error("Provider returned invalid JSON");
   }
 }
+
+export async function providerHttpError(response: Response, message: string): Promise<Error> {
+  await readBoundedResponseText(response).catch(() => undefined);
+  return new Error(message);
+}

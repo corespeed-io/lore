@@ -9,11 +9,11 @@ test("vLLM adapter sends the official rerank request and restores document ids",
   let requestBody: Record<string, unknown> | undefined;
   const provider = createVllmRerankingProvider({
     model: "Qwen/Qwen3-Reranker-0.6B",
-    baseUrl: "http://reranker.test/",
+    baseUrl: "https://reranker.test/",
     apiKey: "test-key",
     instruction: "Retrieve relevant personal memories",
     fetch: async (input, init) => {
-      expect(String(input)).toBe("http://reranker.test/v1/rerank");
+      expect(String(input)).toBe("https://reranker.test/v1/rerank");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-key");
       requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return Response.json({
@@ -46,6 +46,21 @@ test("vLLM adapter sends the official rerank request and restores document ids",
     { documentId: "second", score: 0.9 },
     { documentId: "first", score: 0.4 },
   ]);
+});
+
+test("vLLM adapters require HTTPS outside localhost", () => {
+  expect(() =>
+    createVllmRerankingProvider({
+      model: "Qwen/Qwen3-Reranker-0.6B",
+      baseUrl: "http://reranker.example.com",
+    }),
+  ).toThrow("must use https outside localhost");
+  expect(() =>
+    createVllmScoreRerankingProvider({
+      model: "Qwen/Qwen3-Reranker-0.6B",
+      baseUrl: "http://reranker.example.com",
+    }),
+  ).toThrow("must use https outside localhost");
 });
 
 test("vLLM adapter rejects malformed or duplicate result indexes", async () => {

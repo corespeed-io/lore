@@ -1,4 +1,4 @@
-import { readBoundedResponseJson } from "../provider-response";
+import { providerHttpError, readBoundedResponseJson } from "../provider-response";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 const DEFAULT_VLLM_BASE_URL = "http://127.0.0.1:8000";
@@ -37,6 +37,15 @@ function endpoint(baseUrl: string, provider: LocalRerankingProvider): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`${provider} reranking base URL must use http or https`);
+  }
+  if (
+    url.protocol !== "https:" &&
+    url.hostname !== "127.0.0.1" &&
+    url.hostname !== "localhost" &&
+    url.hostname !== "[::1]" &&
+    url.hostname !== "host.docker.internal"
+  ) {
+    throw new Error(`${provider} reranking base URL must use https outside localhost`);
   }
   const base = `${url.toString().replace(/\/$/, "")}/`;
   return new URL("v1/rerank", base).toString();
@@ -164,7 +173,10 @@ function createLocalRerankingProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`${provider} reranking request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `${provider} reranking request failed with HTTP ${response.status}`,
+        );
       }
       return parseResults(
         await readBoundedResponseJson<VllmRerankResponse>(response),
@@ -199,6 +211,15 @@ export function createVllmScoreRerankingProvider(
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("vllm-score reranking base URL must use http or https");
   }
+  if (
+    url.protocol !== "https:" &&
+    url.hostname !== "127.0.0.1" &&
+    url.hostname !== "localhost" &&
+    url.hostname !== "[::1]" &&
+    url.hostname !== "host.docker.internal"
+  ) {
+    throw new Error("vllm-score reranking base URL must use https outside localhost");
+  }
   const apiKey = options.apiKey?.trim();
 
   return {
@@ -223,7 +244,10 @@ export function createVllmScoreRerankingProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`vllm-score reranking request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `vllm-score reranking request failed with HTTP ${response.status}`,
+        );
       }
       const originalIndexById = new Map(
         documents.map((document, index) => [document.id, index] as const),

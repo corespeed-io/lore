@@ -156,6 +156,23 @@ test("conflict assembly requires the answer span to be grounded in the selected 
   });
 });
 
+test("conflict assembly rejects a whole-fact answer span that has no comparison frame", async () => {
+  const fact = "rugby union was created in the country of India";
+  const result = await assembleVersionedSingleHopAnswer({
+    reader: readerReturning(
+      JSON.stringify({ candidates: [{ evidence_id: "e1", answer_span: fact }] }),
+    ),
+    question: "Which country was rugby union created in?",
+    evidence: [{ id: "memory", text: `186. ${fact}.` }],
+  });
+
+  expect(result.answer.text).toBe("Answer: UNKNOWN");
+  expect(result.extractionValidation).toMatchObject({
+    status: "invalid-candidates",
+    rejections: { answerSpan: 1 },
+  });
+});
+
 test("conflict assembly compacts authorized evidence to a fact-level top ten pool", async () => {
   const filler = Array.from(
     { length: 20 },
@@ -314,4 +331,30 @@ test("CAR retries a structurally invalid one-hop shortcut once", async () => {
     "valid",
   ]);
   expect(result.answer).toMatchObject({ inputTokens: 40, outputTokens: 20, totalTokens: 60 });
+});
+
+test("CAR rejects overlong decompositions instead of truncating them into a valid chain", async () => {
+  const overlong = JSON.stringify({
+    hops: Array.from({ length: 7 }, (_, index) => ({
+      id: index + 1,
+      query:
+        index === 0 ? "What is related to Alice?" : `What is related to {hop_${index}_answer}?`,
+    })),
+  });
+  const reader = readerReturning(overlong);
+
+  const result = await assembleVersionedMultiHopAnswer({
+    reader,
+    question: "Follow the complete seven-hop chain from Alice.",
+    async retrieve() {
+      throw new Error("An invalid decomposition must not retrieve evidence");
+    },
+  });
+
+  expect(result.answer.text).toBe("Answer: UNKNOWN");
+  expect(result.decomposition).toEqual([]);
+  expect(result.decompositionAttempts.map(({ status }) => status)).toEqual([
+    "invalid-hop-chain",
+    "invalid-hop-chain",
+  ]);
 });

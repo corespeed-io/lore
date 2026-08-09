@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { providerHttpError, readBoundedResponseJson } from "../../src/lib/provider-response";
 
 export interface BenchmarkReaderEvidence {
   id: string;
@@ -308,12 +309,15 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`benchmark reader request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `benchmark reader request failed with HTTP ${response.status}`,
+        );
       }
-      const payload = (await response.json()) as {
+      const payload = await readBoundedResponseJson<{
         choices?: unknown;
         usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
-      };
+      }>(response);
       const first = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
       const message =
         typeof first === "object" && first !== null && "message" in first
@@ -386,9 +390,12 @@ function createGoogleReader(options: ReaderOptions): BenchmarkReaderProvider {
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`Google benchmark reader request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `Google benchmark reader request failed with HTTP ${response.status}`,
+        );
       }
-      const payload = (await response.json()) as {
+      const payload = await readBoundedResponseJson<{
         status?: unknown;
         steps?: unknown;
         usage?: {
@@ -396,7 +403,7 @@ function createGoogleReader(options: ReaderOptions): BenchmarkReaderProvider {
           total_output_tokens?: unknown;
           total_tokens?: unknown;
         };
-      };
+      }>(response);
       if (payload.status !== "completed" || !Array.isArray(payload.steps)) {
         throw new Error("Google benchmark reader returned an incomplete interaction");
       }
@@ -504,20 +511,29 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
         }),
       ]);
       if (!versionResponse.ok || !tagsResponse.ok || !showResponse.ok) {
+        await Promise.all(
+          [versionResponse, tagsResponse, showResponse].map(async (response) => {
+            if (response.ok) {
+              await response.body?.cancel().catch(() => undefined);
+              return;
+            }
+            await providerHttpError(response, "Ollama benchmark reader inspection failed");
+          }),
+        );
         throw new Error(
           `Ollama benchmark reader inspection failed with HTTP ${versionResponse.status}/${tagsResponse.status}/${showResponse.status}`,
         );
       }
-      const versionPayload = (await versionResponse.json()) as { version?: unknown };
-      const tagsPayload = (await tagsResponse.json()) as { models?: unknown };
-      const showPayload = (await showResponse.json()) as {
+      const versionPayload = await readBoundedResponseJson<{ version?: unknown }>(versionResponse);
+      const tagsPayload = await readBoundedResponseJson<{ models?: unknown }>(tagsResponse);
+      const showPayload = await readBoundedResponseJson<{
         template?: unknown;
         parameters?: unknown;
         model_info?: unknown;
         capabilities?: unknown;
         remote_model?: unknown;
         remote_host?: unknown;
-      };
+      }>(showResponse);
       const serverVersion = optionalString(versionPayload.version);
       if (!serverVersion) throw new Error("Ollama benchmark reader returned no server version");
       if (!Array.isArray(tagsPayload.models)) {
@@ -590,8 +606,12 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
         signal: signal(),
       });
       if (!response.ok) {
-        throw new Error(`Ollama benchmark reader unload failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `Ollama benchmark reader unload failed with HTTP ${response.status}`,
+        );
       }
+      await response.body?.cancel().catch(() => undefined);
     },
     async answer(input) {
       const renderedInput = readerInput(input, maximumContextCharacters);
@@ -624,9 +644,12 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`Ollama benchmark reader request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `Ollama benchmark reader request failed with HTTP ${response.status}`,
+        );
       }
-      const payload = (await response.json()) as {
+      const payload = await readBoundedResponseJson<{
         message?: unknown;
         done?: unknown;
         done_reason?: unknown;
@@ -638,7 +661,7 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
         load_duration?: unknown;
         prompt_eval_duration?: unknown;
         eval_duration?: unknown;
-      };
+      }>(response);
       if (payload.done !== true) {
         throw new Error("Ollama benchmark reader returned an incomplete response");
       }

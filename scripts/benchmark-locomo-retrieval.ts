@@ -90,6 +90,11 @@ function parseArgs(args: string[]): CliOptions {
       throw new Error(`Unknown LoCoMo retrieval option ${flag}`);
     }
   }
+  if (options.categories?.has(5)) {
+    throw new Error(
+      "LoCoMo category 5 is excluded from the retrieval diagnostic because its released QA metric is single-label and non-comparable",
+    );
+  }
   return options;
 }
 

@@ -109,6 +109,7 @@ try {
       }
 
       if (!maintenance) {
+        infrastructureBackoffMs = pollIntervalMs;
         await wait(pollIntervalMs);
         continue;
       }

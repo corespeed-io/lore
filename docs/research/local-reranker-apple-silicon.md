@@ -1,5 +1,9 @@
 # Local reranking on Apple Silicon
 
+> The local numeric ablations below predate Lore's generation-scoped benchmark
+> validator. They remain historical research observations, not current release
+> claims; rerun the pinned profiles before using their thresholds operationally.
+
 **Decision (2026-08-07):** use a local, quantized
 [`Qwen/Qwen3-Reranker-0.6B`](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)
 with **llama.cpp** for Lore's first real local reranker benchmark. It is the

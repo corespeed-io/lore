@@ -11,6 +11,7 @@ import {
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
 } from "../src/lib/memory";
+import { chunkMemoryContent } from "../src/lib/memory-chunking";
 import { createQueryPlanningProviderFromEnvironment } from "../src/lib/query-planning/provider-factory";
 import { createRerankingProviderFromEnvironment } from "../src/lib/reranking/provider-factory";
 import {
@@ -201,7 +202,15 @@ function tripwireContent(row: MemoryAgentBenchRow, index: number): string {
   return `Private answer tripwire\nQuestion: ${row.questions[index]}\nAnswer: ${row.answers[index].join(" | ")}`;
 }
 
-const options = parseArgs(process.argv.slice(2));
+const cliArgs = process.argv.slice(2);
+const options = parseArgs(cliArgs);
+const conflictAssemblyEnabled = booleanSetting("LORE_MEMORYAGENTBENCH_CONFLICT_ASSEMBLY");
+if (conflictAssemblyEnabled) {
+  if (cliArgs.includes("--facts-per-memory") && options.factsPerMemory !== 1) {
+    throw new Error("Conflict assembly requires --facts-per-memory 1");
+  }
+  options.factsPerMemory = 1;
+}
 const dataDirectory = resolve(
   process.env.LORE_MEMORYAGENTBENCH_DATA_DIR ?? "evaluation/datasets/memoryagentbench",
 );
@@ -210,6 +219,14 @@ await verifyFile(dataPath, memoryAgentBenchManifest.files.conflict);
 const selectedRows = selectRows(await readMemoryAgentBenchRows(dataPath), options);
 const selected = selectedRows.map((row) => {
   const facts = parseConflictResolutionFacts(row.context);
+  if (conflictAssemblyEnabled) {
+    const splitFact = facts.find((fact) => chunkMemoryContent(fact).length !== 1);
+    if (splitFact) {
+      throw new Error(
+        `Conflict assembly requires one canonical chunk per fact in ${row.metadata.source}`,
+      );
+    }
+  }
   const questionCount = Math.min(options.maxQuestions, row.questions.length);
   return {
     row,
@@ -223,7 +240,7 @@ const corpusKey = createHash("sha256")
     JSON.stringify({
       revision: memoryAgentBenchManifest.revision,
       codeRevision: memoryAgentBenchManifest.codeRevision,
-      renderRevision: "lore-memoryagentbench-conflict-v1",
+      renderRevision: "lore-memoryagentbench-conflict-v2",
       factsPerMemory: options.factsPerMemory,
       rows: selected.map(({ row, facts, questionCount }) => ({
         source: row.metadata.source,
@@ -355,7 +372,6 @@ const rerankDiversityLambda = numericSetting("LORE_RERANK_DIVERSITY_LAMBDA", 1, 
 const rerankMinimumScore = numericSetting("LORE_RERANK_MIN_SCORE", 0, 0, 1);
 const rerankWeight = numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1);
 const semanticDistanceThreshold = numericSetting("LORE_SEMANTIC_DISTANCE_THRESHOLD", 0.5, 0, 2);
-const conflictAssemblyEnabled = booleanSetting("LORE_MEMORYAGENTBENCH_CONFLICT_ASSEMBLY");
 const entityAliasRecall = booleanSetting("LORE_ENTITY_ALIAS_RECALL");
 
 const admin = new pg.Client({ connectionString: databaseUrl });
@@ -590,18 +606,27 @@ try {
            SELECT 1 FROM memory_chunks chunk
            WHERE chunk.workspace_id = memory.workspace_id
              AND chunk.memory_id = memory.id
-             AND (
-               chunk.embedding IS NULL
-               OR chunk.embedding_provider <> $2
-               OR chunk.embedding_model <> $3
-               OR chunk.embedding_revision <> $4
+             AND NOT EXISTS (
+               SELECT 1
+               FROM embedding_generations generation
+               JOIN memory_chunk_embeddings embedded
+                 ON embedded.generation_id = generation.id
+                AND embedded.workspace_id = chunk.workspace_id
+                AND embedded.memory_id = chunk.memory_id
+                AND embedded.chunk_id = chunk.id
+               WHERE generation.embedding_provider = $2
+                 AND generation.embedding_model = $3
+                 AND generation.embedding_dimensions = $4
+                 AND generation.embedding_revision = $5
+                 AND generation.status = 'active'
              )
-         )
+           )
        )`,
     [
       JSON.stringify({ benchmark: memoryAgentBenchManifest.name, corpusKey }),
       embeddingProvider.provider,
       embeddingProvider.model,
+      embeddingProvider.dimensions,
       embeddingProvider.revision,
     ],
   );

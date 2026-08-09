@@ -126,7 +126,7 @@ test("reranking provider factory reports runtime failures without blocking fallb
       {
         LORE_RERANK_PROVIDER: "vllm",
         LORE_RERANK_MODEL: "Qwen/Qwen3-Reranker-0.6B",
-        LORE_RERANK_BASE_URL: "http://reranker.test",
+        LORE_RERANK_BASE_URL: "https://reranker.test",
       },
       (message) => warnings.push(message),
     );

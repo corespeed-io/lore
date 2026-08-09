@@ -396,7 +396,9 @@ surfaces:
   perform validated, dry-runnable, explicitly owner-remapped imports.
 - **Operations module:** expose bounded capabilities/readiness state. Liveness is
   process-only; readiness validates DB/role/schema/vector/RLS, while embedding
-  failure is degraded because lexical retrieval remains available.
+  failure or the absence of an active/retiring generation matching the configured
+  provider/model/dimensions/revision is degraded because lexical retrieval remains
+  available.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
@@ -507,11 +509,11 @@ Benchmark is part of the product quality system even without AutoDream.
   canonical `benchmark:locomo` profile scores only categories 1-4 (1,540 cases)
   with the original normalized token-F1 semantics and an NLTK 3.8.1-compatible
   Porter stemmer; it is not the complete three-task LoCoMo benchmark. Category 5
-  must run alone as the explicitly named repaired-adversarial protocol because
-  444 of 446 upstream rows omit the `answer` field and the released option order
-  is unseeded. Preserve raw and unresolved evidence annotations, report retrieval
-  recall separately from answer F1, and never fold the repaired profile into an
-  unlabeled “official” overall score. `--skip-retrieval-diagnostic` may avoid a
+  is excluded: 444 of 446 upstream rows omit the `answer` field, the released
+  option order is unseeded, and every repaired item has the same unanswerable gold
+  label, so an always-abstain reader scores 100%. Preserve raw and unresolved
+  evidence annotations and report retrieval recall separately from answer F1.
+  `--skip-retrieval-diagnostic` may avoid a
   duplicate setup sweep only when an exact retrieval report is retained
   separately; the QA run must still execute real search for every question and
   must record `setupDiagnosticSkipped: true` rather than importing unverified
@@ -544,8 +546,9 @@ Benchmark is part of the product quality system even without AutoDream.
   model, use bounded residency during warm runs, explicitly unload on exit, and never
   download a model as an implicit benchmark side effect.
 - MemoryAgentBench may enable benchmark-only structured post-retrieval assembly for
-  explicitly versioned current-value questions. Compact only RLS-authorized
-  returned Memory evidence to a fact-level BM25 top-10 pool, validate copied fact text
+  explicitly versioned current-value questions. Store exactly one numbered fact per
+  Memory for that profile, then compact only RLS-authorized returned Memory evidence
+  to a fact-level BM25 top-10 pool; validate copied fact text
   against that pool, derive freshness serials from source evidence rather than trusting
   model-generated numbers, and then apply max(serial) deterministically. Multi-hop CAR
   must run a fresh RLS-authorized Lore search for every resolved hop and cap the

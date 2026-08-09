@@ -1,4 +1,4 @@
-import { readBoundedResponseJson } from "../provider-response";
+import { providerHttpError, readBoundedResponseJson } from "../provider-response";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
@@ -108,7 +108,10 @@ export function createOllamaQueryPlanningProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`Ollama query planner request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `Ollama query planner request failed with HTTP ${response.status}`,
+        );
       }
       const payload = await readBoundedResponseJson<OllamaChatResponse>(response);
       if (payload.done !== true) {

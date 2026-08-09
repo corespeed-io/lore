@@ -611,18 +611,27 @@ try {
            SELECT 1 FROM memory_chunks chunk
            WHERE chunk.workspace_id = memory.workspace_id
              AND chunk.memory_id = memory.id
-             AND (
-               chunk.embedding IS NULL
-               OR chunk.embedding_provider <> $2
-               OR chunk.embedding_model <> $3
-               OR chunk.embedding_revision <> $4
+             AND NOT EXISTS (
+               SELECT 1
+               FROM embedding_generations generation
+               JOIN memory_chunk_embeddings embedded
+                 ON embedded.generation_id = generation.id
+                AND embedded.workspace_id = chunk.workspace_id
+                AND embedded.memory_id = chunk.memory_id
+                AND embedded.chunk_id = chunk.id
+               WHERE generation.embedding_provider = $2
+                 AND generation.embedding_model = $3
+                 AND generation.embedding_dimensions = $4
+                 AND generation.embedding_revision = $5
+                 AND generation.status = 'active'
              )
-         )
+           )
        )`,
     [
       JSON.stringify({ benchmark: longMemEvalV2Manifest.name, corpusKey: selectedCorpusKey }),
       embeddingProvider.provider,
       embeddingProvider.model,
+      embeddingProvider.dimensions,
       embeddingProvider.revision,
     ],
   );
@@ -1060,7 +1069,17 @@ try {
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, serialized, "utf8");
     console.error(`Wrote LongMemEval-V2 report to ${outputPath}`);
-    console.log(JSON.stringify({ metrics: report.metrics, valid: report.valid }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          metrics: report.metrics,
+          valid: report.valid,
+          scoreComplete: report.scoreComplete,
+        },
+        null,
+        2,
+      ),
+    );
   } else {
     console.log(serialized.trimEnd());
   }

@@ -1,4 +1,4 @@
-import { readBoundedResponseJson } from "../provider-response";
+import { providerHttpError, readBoundedResponseJson } from "../provider-response";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
@@ -111,7 +111,10 @@ export function createGoogleQueryPlanningProvider(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`Google query planner request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `Google query planner request failed with HTTP ${response.status}`,
+        );
       }
       return parsePlannedQueries(
         responseText(await readBoundedResponseJson<GoogleInteractionResponse>(response)),

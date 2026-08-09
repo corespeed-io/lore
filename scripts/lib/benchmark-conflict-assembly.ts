@@ -5,7 +5,7 @@ import type {
 } from "./benchmark-reader";
 
 export const BENCHMARK_CONFLICT_ASSEMBLY_PROTOCOL = {
-  revision: "mab-conflict-candidate-assembly-v6",
+  revision: "mab-conflict-candidate-assembly-v7",
   paper: {
     title: "Reliable Post-Retrieval Assembly for Agent Memory",
     arxiv: "https://arxiv.org/abs/2606.01435",
@@ -26,13 +26,14 @@ export const BENCHMARK_CONFLICT_ASSEMBLY_PROTOCOL = {
 } as const;
 
 export const BENCHMARK_CONFLICT_CAR_PROTOCOL = {
-  revision: "mab-conflict-car-v6",
+  revision: "mab-conflict-car-v7",
   paper: BENCHMARK_CONFLICT_ASSEMBLY_PROTOCOL.paper,
   sourceRevision: BENCHMARK_CONFLICT_ASSEMBLY_PROTOCOL.sourceRevision,
   sourceUrl: BENCHMARK_CONFLICT_ASSEMBLY_PROTOCOL.sourceUrl,
   policy: "decompose-retrieve-extract-max-serial-per-hop",
   retrievalBoundary: "fresh-rls-authorized-lore-search-per-hop",
-  structuredOutput: "native-json-schema-evidence-id-answer-span-plus-source-validation",
+  structuredOutput:
+    "native-json-schema-on-ollama-prompt-only-otherwise-plus-evidence-id-answer-span-source-validation",
   decompositionValidation: "known-multi-hop-linear-chain-with-at-least-two-atomic-hops",
   retryPolicy: "one-structural-decomposition-repair-no-semantic-empty-retry",
   decompositionPrompt: "official-source-verbatim-first-attempt",
@@ -59,7 +60,7 @@ const candidateResponseSchema = {
         required: ["evidence_id", "answer_span"],
         properties: {
           evidence_id: { type: "string" },
-          answer_span: { type: "string" },
+          answer_span: { type: "string", minLength: 1, maxLength: 256 },
         },
       },
     },
@@ -180,10 +181,12 @@ function exactAnswerFrame(factText: string, answerSpan: string): ExactAnswerFram
   const surface = factSurface(factText);
   const normalizedSurface = surface.toLocaleLowerCase("en-US");
   const normalizedAnswer = factSurface(answerSpan).toLocaleLowerCase("en-US");
+  if (!normalizedAnswer || normalizedAnswer.length > 256) return null;
   const answerIndex = normalizedSurface.lastIndexOf(normalizedAnswer);
   if (answerIndex < 0) return null;
   const prefix = surface.slice(0, answerIndex);
   const suffix = surface.slice(answerIndex + normalizedAnswer.length);
+  if (!prefix.trim() && !suffix.trim()) return null;
   return {
     prefix,
     suffix,
@@ -344,8 +347,11 @@ function validatedDecomposition(raw: string): {
 } {
   const parsed = jsonObject(raw);
   if (!parsed || !Array.isArray(parsed.hops)) return { hops: [], status: "malformed" };
+  if (parsed.hops.length > BENCHMARK_CONFLICT_CAR_PROTOCOL.maximumHops) {
+    return { hops: [], status: "invalid-hop-chain" };
+  }
   const hops: BenchmarkConflictHop[] = [];
-  for (const value of parsed.hops.slice(0, BENCHMARK_CONFLICT_CAR_PROTOCOL.maximumHops)) {
+  for (const value of parsed.hops) {
     if (typeof value !== "object" || value === null)
       return { hops: [], status: "invalid-hop-chain" };
     const hop = value as Record<string, unknown>;

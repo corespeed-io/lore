@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { readBoundedResponseJson, readBoundedResponseText } from "@/lib/provider-response";
+import {
+  providerHttpError,
+  readBoundedResponseJson,
+  readBoundedResponseText,
+} from "@/lib/provider-response";
 
 test("provider responses reject a declared body above the byte limit", async () => {
   const response = new Response("small", { headers: { "content-length": "100" } });
@@ -30,4 +34,12 @@ test("provider JSON parsing stays bounded and rejects malformed payloads", async
   await expect(readBoundedResponseJson(new Response("not-json"), 64)).rejects.toThrow(
     "Provider returned invalid JSON",
   );
+});
+
+test("provider HTTP errors consume their bounded response body before returning", async () => {
+  const response = new Response("private provider detail", { status: 503 });
+  await expect(providerHttpError(response, "provider failed")).resolves.toMatchObject({
+    message: "provider failed",
+  });
+  expect(response.bodyUsed).toBe(true);
 });

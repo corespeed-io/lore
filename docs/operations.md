@@ -23,7 +23,11 @@ Migration `0003` adds and backfills nullable job generation ids so legacy writer
 can overlap with the generation-aware application. The bounded maintenance sweep
 adopts generation-less jobs for its configured embedding identity. Migrations
 `0004` through `0006` add the English lexical, metadata, and entity-alias indexes;
-schema revision 6 is the current application contract. A future contract migration
+`0004` and `0006` also add stored generated columns to `memory_chunks`, so PostgreSQL
+rewrites that table while holding an `ACCESS EXCLUSIVE` lock. Schedule those two
+migrations as write-downtime maintenance on an existing large corpus rather than
+treating them as online index-only changes. Schema revision 6 is the current
+application contract. A future contract migration
 may enforce generation-id `NOT NULL` only after generation-aware application
 instances have replaced every legacy writer.
 
@@ -161,6 +165,17 @@ is signed off. The canonical procedure is PostgreSQL's
 [continuous archiving and PITR](https://www.postgresql.org/docs/18/continuous-archiving.html).
 
 ## Embedding generation rollout
+
+Changing preprocessing revision is a generation rollout even when provider and
+model strings stay the same. In particular, the release that introduces
+`lore-embedding-v2` for Ollama/Qwen3 adds the official query-side instruction;
+existing `lore-embedding-v1` document vectors are not relabeled or mixed into that
+space. Start the new maintenance worker, allow it to build the v2 generation,
+inspect coverage with `bun run db:embedding:report`, activate it, and only then
+finish rolling the request application to the new release. Until an active or
+retiring generation exactly matches the configured provider, model, dimensions,
+and revision, `/readyz` reports embedding as degraded while lexical retrieval
+remains available.
 
 Vectors are stored by immutable `(provider, model, dimensions, preprocessing
 revision)` generation. A new generation starts as `building`; the active generation

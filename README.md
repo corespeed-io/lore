@@ -262,7 +262,7 @@ URL passthrough. `LORE_RERANK_API_KEY` overrides the provider-specific key and
 `LORE_RERANK_BASE_URL` supports a private deployment endpoint. A managed adapter
 sends the already-authorized candidate evidence outside the Lore deployment; the
 operator is responsible for that provider's retention/compliance terms. Managed
-endpoints must use HTTPS outside localhost.
+endpoints must use HTTPS outside loopback or the explicit Docker-host bridge.
 
 The Memos adapter uses its required `Token` authorization scheme and conservatively
 batches authorized evidence by 6,000 Unicode characters before globally sorting
@@ -307,7 +307,9 @@ for larger Memories. On the audited two-source/200-question MemoryAgentBench
 Conflict slice, the explicit `topChunks=5`, `neighborChunks=2` profile raised exact
 answer-evidence Recall@10 from `0.635` to `0.800` and MRR from `0.3697` to `0.4370`
 without changing the parent-Memory result or causing an isolation failure. This is
-an aggressive evaluation profile, not the default context budget.
+a historical local ablation measured before the generation-scoped benchmark
+validator; rerun it with the current runner before using it as a deployment
+threshold. It is an aggressive evaluation profile, not the default context budget.
 
 `LORE_RETRIEVAL_FEEDBACK_QUERIES=1..3` enables bounded pseudo-relevance feedback for
 multi-hop recall without another chat model. Lore extracts the sentence with the
@@ -324,9 +326,10 @@ only an explicitly configured reranker may reorder the expanded pool. Feedback c
 also drift, so the default is `0`. Set
 `LORE_BENCHMARK_RETRIEVAL_FEEDBACK_QUERIES=1` to add isolated feedback and
 planner+feedback variants to a retrieval report before deployment.
-On the evidence-aware two-source Conflict run, depth two improved exact evidence
+On the same historical evidence-aware two-source Conflict run, depth two improved exact evidence
 Recall@10 only from `0.635` to `0.640` while average latency rose from 179 ms to
-269 ms and MRR fell; depth one remains the measured local Pareto point.
+269 ms and MRR fell; treat depth one as a provisional local Pareto point until the
+current runner reproduces it.
 
 `LORE_RETRIEVAL_RECENCY_WEIGHT=0..1` optionally performs a local temporal second
 stage by reciprocal-rank fusing the hybrid relevance order with visible Memory
@@ -421,6 +424,10 @@ worker to build beside the active model, inspect coverage with
 `bun run db:embedding:report`, and cut over with
 `bun run db:embedding:activate`. Retiring vectors remain rollback-capable for
 `LORE_EMBEDDING_ROLLBACK_SECONDS` (seven days by default).
+Preprocessing revisions use the same rollout even when provider/model strings do
+not change. An upgraded request process reports embedding as degraded and keeps
+lexical retrieval available until its exact generation has been built and activated;
+see [the operations runbook](docs/operations.md#embedding-generation-rollout).
 
 The self-host worker claims one leased job at a time by default. Remote embedding
 services can often improve indexing throughput with `LORE_MAINTENANCE_CONCURRENCY`
@@ -816,12 +823,13 @@ embedded setup variants. Keep the separate retrieval JSON alongside that report.
 The runner preserves the upstream raw evidence while applying only mechanical
 dialog-ID repairs and exposing unresolved annotations. It ports the pinned NLTK
 3.8.1 default Porter behavior instead of using a merely similar JavaScript
-stemmer. LoCoMo's 446 adversarial questions are not mixed into this score: 444
-released rows omit the field that the official reader/scorer dereference, and the
-official multiple-choice order is unseeded. Run `--categories 5` only as the
-separately labeled repaired-adversarial profile. Event summarization and multimodal
-dialog generation lack fixed official evaluators and are not claimed by this QA
-runner. See the [original ACL paper](https://aclanthology.org/2024.acl-long.747/)
+stemmer. LoCoMo's 446 adversarial questions are not scored: 444 released rows omit
+the field that the official reader/scorer dereference, the official multiple-choice
+order is unseeded, and every repaired case has the same unanswerable gold label. An
+always-abstain reader would therefore score 100%, so `--categories 5` fails closed
+instead of publishing a meaningless quality number. Event summarization and
+multimodal dialog generation lack fixed official evaluators and are not claimed by
+this QA runner. See the [original ACL paper](https://aclanthology.org/2024.acl-long.747/)
 and the pinned [runner audit](docs/research/locomo-runner-audit.md).
 
 The first local 4B planner/reranker ablation, including fixed model digests,
@@ -894,7 +902,8 @@ the literal anchor was absent. This separates retrieval headroom from reader hea
 
 For the benchmark's explicitly versioned current-value questions, set
 `LORE_MEMORYAGENTBENCH_CONFLICT_ASSEMBLY=1` to evaluate post-retrieval assembly. The
-runner first compacts only the RLS-authorized returned evidence into a fact-level BM25
+runner stores exactly one numbered fact per Memory for this profile, then compacts
+only the RLS-authorized returned evidence into a fact-level BM25
 top-10 pool, matching the original paper's retrieval granularity without performing a
 global unauthorized fact search. The reader extracts every exact subject/predicate
 candidate into a validated intermediate representation; Lore rejects candidates that
@@ -930,7 +939,8 @@ BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_retrieval_benchmark \
 
 Use `--max-sources 8 --max-questions 100` for all 800 Conflict Resolution
 questions (3,214 fact Memories at the default 16 facts per Memory), or `--source`
-for one exact source. `--facts-per-memory` exposes the chunk-granularity ablation;
+for one exact source. `--facts-per-memory` exposes the chunk-granularity ablation
+when conflict assembly is off; assembly requires one fact per Memory.
 `LORE_MEMORYAGENTBENCH_RETRIEVAL_LIMIT` controls evidence depth. The runner uses the
 official normalized `substring_exact_match`, records per-source accuracy/latency/
 tokens, validates the exact corpus before `--reuse-indexed`, and treats any access

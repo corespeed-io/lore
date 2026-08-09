@@ -1,4 +1,5 @@
 import { extractBoxedAnswer } from "../../src/lib/answer-evaluation";
+import { providerHttpError, readBoundedResponseJson } from "../../src/lib/provider-response";
 
 export type BenchmarkJudgeKind = "abstention" | "gotchas";
 
@@ -217,12 +218,16 @@ function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvi
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
-      if (!response.ok)
-        throw new Error(`benchmark judge request failed with HTTP ${response.status}`);
-      const payload = (await response.json()) as {
+      if (!response.ok) {
+        throw await providerHttpError(
+          response,
+          `benchmark judge request failed with HTTP ${response.status}`,
+        );
+      }
+      const payload = await readBoundedResponseJson<{
         choices?: unknown;
         usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
-      };
+      }>(response);
       const first = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
       const message =
         typeof first === "object" && first !== null && "message" in first
@@ -284,9 +289,12 @@ function createGoogleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
-        throw new Error(`Google benchmark judge request failed with HTTP ${response.status}`);
+        throw await providerHttpError(
+          response,
+          `Google benchmark judge request failed with HTTP ${response.status}`,
+        );
       }
-      const payload = (await response.json()) as {
+      const payload = await readBoundedResponseJson<{
         status?: unknown;
         steps?: unknown;
         usage?: {
@@ -294,7 +302,7 @@ function createGoogleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
           total_output_tokens?: unknown;
           total_tokens?: unknown;
         };
-      };
+      }>(response);
       if (payload.status !== "completed" || !Array.isArray(payload.steps)) {
         throw new Error("Google benchmark judge returned an incomplete interaction");
       }

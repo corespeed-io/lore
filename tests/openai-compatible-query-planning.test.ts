@@ -48,3 +48,20 @@ test("OpenAI-compatible query planning rejects malformed model output", async ()
     "invalid queries array",
   );
 });
+
+test("custom OpenAI planner instructions retain the required JSON contract", async () => {
+  const provider = createOpenAICompatibleQueryPlanningProvider({
+    provider: "openai",
+    model: "fixture",
+    apiKey: "test",
+    instruction: "Preserve domain-specific identifiers.",
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.messages[0].content).toContain("Preserve domain-specific identifiers.");
+      expect(body.messages[0].content).toContain("JSON object");
+      return Response.json({ choices: [{ message: { content: '{"queries":["query"]}' } }] });
+    },
+  });
+
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual(["query"]);
+});

@@ -20,6 +20,7 @@ import {
   createBenchmarkReaderFromEnvironment,
 } from "./lib/benchmark-reader";
 import { verifyFile } from "./lib/file-integrity";
+import { requireExactIndexedMemory } from "./lib/indexed-memory-validation";
 import {
   evaluateLocomoAnswer,
   LOCOMO_CATEGORIES,
@@ -27,7 +28,6 @@ import {
   LOCOMO_POSITIVE_CATEGORIES,
   LOCOMO_POSITIVE_QA_PROTOCOL,
   LOCOMO_READER_INSTRUCTION,
-  LOCOMO_REPAIRED_ADVERSARIAL_PROTOCOL,
   LOCOMO_SCORER_REVISION,
   type LocomoCategory,
   type LocomoQuestion,
@@ -36,6 +36,7 @@ import {
   locomoReaderQuestion,
   readLocomoPartitions,
   readSelectedLocomoSamples,
+  toLocomoPartition,
 } from "./lib/locomo";
 import { runRetrievalBenchmarkSuite } from "./lib/run-retrieval-suite";
 import { summarizeTokenUsage } from "./lib/token-usage";
@@ -61,6 +62,7 @@ interface PersistedMemory {
 
 const aliceUserId = "00000000-0000-4000-8000-000000000101";
 const bobUserId = "00000000-0000-4000-8000-000000000102";
+const benchmarkNamePattern = /(^|_)bench(mark)?($|_)/i;
 
 function positiveInteger(value: string | undefined, flag: string): number {
   const parsed = Number(value);
@@ -132,10 +134,9 @@ function parseArgs(args: string[]): CliOptions {
       throw new Error(`Unknown LoCoMo option ${flag}`);
     }
   }
-  const includesAdversarial = options.categories.has(5);
-  if (includesAdversarial && options.categories.size !== 1) {
+  if (options.categories.has(5)) {
     throw new Error(
-      "LoCoMo category 5 uses a repaired protocol and must be reported separately from categories 1-4",
+      "LoCoMo category 5 is not a valid standalone quality benchmark: every released item has the same unanswerable label; run categories 1-4",
     );
   }
   return options;
@@ -179,32 +180,6 @@ function questionId(selection: LocomoSelectedSample, question: LocomoQuestion): 
   return `${selection.sample.id}/${question.key}`;
 }
 
-function repairedAdversarialQuestion(
-  selection: LocomoSelectedSample,
-  question: LocomoQuestion,
-): { prompt: string; options: Record<"a" | "b", string> } {
-  const distractor =
-    question.adversarialAnswer ??
-    (question.answer === null ? "The premise stated in the question" : String(question.answer));
-  const unavailable = "Not mentioned in the conversation";
-  const unavailableFirst =
-    Number.parseInt(sha256(questionId(selection, question)).slice(0, 2), 16) % 2 === 0;
-  const options = unavailableFirst
-    ? { a: unavailable, b: distractor }
-    : { a: distractor, b: unavailable };
-  return {
-    prompt: `${question.question} Select the correct answer: (a) ${options.a} (b) ${options.b}.`,
-    options,
-  };
-}
-
-function mapAdversarialChoice(prediction: string, options: Record<"a" | "b", string>): string {
-  const normalized = prediction.trim().toLocaleLowerCase("en-US");
-  if (normalized === "a" || normalized === "(a)") return options.a;
-  if (normalized === "b" || normalized === "(b)") return options.b;
-  return prediction;
-}
-
 const options = parseArgs(process.argv.slice(2));
 const databaseUrl = process.env.BENCHMARK_DATABASE_URL;
 if (!databaseUrl) throw new Error("BENCHMARK_DATABASE_URL is required");
@@ -223,9 +198,7 @@ for await (const selection of readSelectedLocomoSamples(datasetPath, options)) {
 const selectedQuestions = selections.flatMap((selection) =>
   selection.questions.map((question) => ({ selection, question })),
 );
-const profile = options.categories.has(5)
-  ? LOCOMO_REPAIRED_ADVERSARIAL_PROTOCOL
-  : LOCOMO_POSITIVE_QA_PROTOCOL;
+const profile = LOCOMO_POSITIVE_QA_PROTOCOL;
 const caseOrderSha256 = sha256(
   JSON.stringify(
     selectedQuestions.map(({ selection, question }) => questionId(selection, question)),
@@ -340,6 +313,9 @@ await admin.connect();
 try {
   const databaseName = (await admin.query<{ name: string }>("SELECT current_database() AS name"))
     .rows[0]?.name;
+  if (!databaseName || !benchmarkNamePattern.test(databaseName)) {
+    throw new Error(`Refusing to read non-benchmark database ${JSON.stringify(databaseName)}`);
+  }
   const searchModule = createMemoryModule(requestDatabase, {
     contextGroupExpansion,
     embeddingProvider,
@@ -403,7 +379,7 @@ try {
     const workspaceId = [...workspaceIds][0];
     const actor: ActorContext = { workspaceId, userId: aliceUserId };
     const dialogRows = new Map<string, PersistedMemory>();
-    const tripwireIds = new Set<string>();
+    const tripwireRows = new Map<string, PersistedMemory>();
     for (const row of rows.rows) {
       if (row.metadata.recordType === "dialog" && typeof row.metadata.dialogId === "string") {
         if (row.owner_user_id !== aliceUserId) {
@@ -414,7 +390,10 @@ try {
         if (row.owner_user_id !== bobUserId) {
           throw new Error(`LoCoMo tripwire in ${selection.sample.id} has the wrong owner`);
         }
-        tripwireIds.add(row.id);
+        if (typeof row.metadata.questionKey !== "string") {
+          throw new Error(`LoCoMo tripwire in ${selection.sample.id} has no question key`);
+        }
+        tripwireRows.set(row.metadata.questionKey, row);
       }
     }
     const expectedDialogCount = selection.sample.sessions.reduce(
@@ -423,16 +402,34 @@ try {
     );
     if (
       dialogRows.size !== expectedDialogCount ||
-      tripwireIds.size !== selection.questions.length ||
+      tripwireRows.size !== selection.questions.length ||
       rows.rows.length !== expectedDialogCount + selection.questions.length
     ) {
       throw new Error(`Indexed LoCoMo sample ${selection.sample.id} does not match the selection`);
     }
 
+    const expectedPartition = toLocomoPartition(selection.sample, selection.questions, options);
+    for (const expectedMemory of expectedPartition.memories) {
+      const row =
+        expectedMemory.owner === "alice"
+          ? dialogRows.get(expectedMemory.key)
+          : tripwireRows.get(expectedMemory.key.replace("__bob_private_tripwire__:", ""));
+      if (!row) {
+        throw new Error(`Indexed LoCoMo Memory ${expectedMemory.key} is missing`);
+      }
+      await requireExactIndexedMemory({
+        client: admin,
+        memoryId: row.id,
+        expectedContent: expectedMemory.content,
+        embeddingProvider,
+        label: `${selection.sample.id}/${expectedMemory.key}`,
+        requireEmbedding: expectedMemory.owner === "alice",
+      });
+    }
+    const tripwireIds = new Set([...tripwireRows.values()].map((row) => row.id));
+
     for (const question of selection.questions) {
-      const adversarial =
-        question.category === 5 ? repairedAdversarialQuestion(selection, question) : null;
-      const readerQuestion = adversarial?.prompt ?? locomoReaderQuestion(question);
+      const readerQuestion = locomoReaderQuestion(question);
       const searchStartedAt = performance.now();
       const retrieved = await searchModule.search(actor, {
         query: readerQuestion,
@@ -461,9 +458,7 @@ try {
         })),
       });
       const readerLatencyMs = performance.now() - readerStartedAt;
-      const prediction = adversarial
-        ? mapAdversarialChoice(answer.text, adversarial.options)
-        : answer.text.trim();
+      const prediction = answer.text.trim();
       const score = evaluateLocomoAnswer({
         prediction,
         reference: question.answer,
@@ -521,7 +516,9 @@ try {
   const anyEvidenceCases = evidenceCases.filter((result) => (result.evidenceRecallAtK ?? 0) > 0);
   const noEvidenceCases = evidenceCases.filter((result) => result.evidenceRecallAtK === 0);
   const unannotatedEvidenceCases = results.filter((result) => result.evidenceRecallAtK === null);
-  const hardFailureCount = results.filter((result) => !result.isolationPassed).length;
+  const qaHardFailureCount = results.filter((result) => !result.isolationPassed).length;
+  const setupHardFailureCount = retrievalReport?.hardFailureCount ?? 0;
+  const hardFailureCount = qaHardFailureCount + setupHardFailureCount;
   const searchLatencies = results.map((result) => result.searchLatencyMs);
   const readerLatencies = results.map((result) => result.readerLatencyMs);
   const metricsByCategory = Object.fromEntries(
@@ -580,10 +577,8 @@ try {
       maxCases: options.maxCases ?? null,
       casesPerCategory: options.casesPerCategory ?? null,
       caseOrderSha256,
-      upstreamAdversarialDefect:
-        profile === LOCOMO_REPAIRED_ADVERSARIAL_PROTOCOL
-          ? "adversarial_answer mapped to deterministic distractor; unanswerable phrase is gold"
-          : null,
+      excludedCategory5:
+        "The released adversarial split has one constant unanswerable label, so it is not reported as a standalone quality score.",
     },
     database: databaseName,
     embeddingSpace: {
@@ -636,6 +631,8 @@ try {
       rerankMinimumScore: rerankingProvider ? rerankMinimumScore : null,
       rerankWeight: rerankingProvider ? rerankWeight : null,
       setupDiagnosticSkipped: options.skipRetrievalDiagnostic,
+      setupValid: retrievalReport?.valid ?? null,
+      setupHardFailureCount,
       setupReport: retrievalOutputPath ?? null,
       setupVariants:
         retrievalReport?.variants.map((variant) => ({
@@ -660,10 +657,7 @@ try {
     },
     scorer: {
       revision: LOCOMO_SCORER_REVISION,
-      metric:
-        profile === LOCOMO_REPAIRED_ADVERSARIAL_PROTOCOL
-          ? "repaired-adversarial-accuracy"
-          : "official-normalized-token-f1",
+      metric: "official-normalized-token-f1",
       porterCompatibility: "NLTK-3.8.1-default-extensions",
       llmJudge: false,
     },
@@ -699,6 +693,8 @@ try {
       unannotatedEvidenceCaseCount: unannotatedEvidenceCases.length,
       isolationPassed: hardFailureCount === 0,
       hardFailureCount,
+      qaHardFailureCount,
+      setupHardFailureCount,
       averageSearchLatencyMs: rounded(mean(searchLatencies), 2),
       p95SearchLatencyMs: rounded(percentile(searchLatencies, 0.95), 2),
       averageReaderLatencyMs: rounded(mean(readerLatencies), 2),
@@ -710,7 +706,8 @@ try {
     },
     metricsByCategory,
     cases: results,
-    valid: hardFailureCount === 0 && providerWarnings.length === 0,
+    valid:
+      hardFailureCount === 0 && providerWarnings.length === 0 && (retrievalReport?.valid ?? true),
     elapsedMs: rounded(performance.now() - startedAt, 2),
   };
   const serialized = `${JSON.stringify(report, null, 2)}\n`;

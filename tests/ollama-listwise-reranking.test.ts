@@ -103,3 +103,28 @@ test("Ollama listwise adapter rejects missing, duplicate, foreign, and unbounded
     ).rejects.toThrow(/wrong number|invalid score/);
   }
 });
+
+test("Ollama listwise adapter rejects insecure remote endpoints and cloud responses", async () => {
+  expect(() =>
+    createOllamaListwiseRerankingProvider({
+      model: "qwen3.5:4b",
+      baseUrl: "http://reranker.example.com",
+    }),
+  ).toThrow("must use https outside localhost");
+
+  const provider = createOllamaListwiseRerankingProvider({
+    model: "qwen3.5:4b",
+    fetch: async () =>
+      Response.json({
+        remote_model: "cloud-model",
+        message: { content: JSON.stringify({ scores: [{ id: "c0", score: 0.8 }] }) },
+      }),
+  });
+  await expect(
+    provider.rerank({
+      query: "query",
+      documents: [{ id: "memory", text: "private evidence" }],
+      limit: 1,
+    }),
+  ).rejects.toThrow("refuses a remote/cloud response");
+});
