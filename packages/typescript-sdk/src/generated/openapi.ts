@@ -48,6 +48,22 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/agents/{agentId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete: operations["deleteAgent"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch: operations["updateAgent"];
+        readonly trace?: never;
+    };
     readonly "/api/v1/agents/{agentId}/credentials": {
         readonly parameters: {
             readonly query?: never;
@@ -524,6 +540,11 @@ export interface components {
             /** @enum {string} */
             readonly status: "ready" | "degraded" | "unready";
         };
+        readonly UpdateAgentInput: {
+            readonly name?: string;
+            /** @enum {string} */
+            readonly status?: "active" | "disabled";
+        };
         readonly UpdateMemoryInput: {
             readonly content?: string;
             readonly metadata?: {
@@ -750,6 +771,59 @@ export interface operations {
                     readonly "application/json": components["schemas"]["WorkspaceAgent"];
                 };
             };
+        };
+    };
+    readonly deleteAgent: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly agentId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Disabled Agent, grants, and credentials deleted */
+            readonly 204: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
+            };
+            readonly 404: components["responses"]["Error"];
+            readonly 409: components["responses"]["Error"];
+        };
+    };
+    readonly updateAgent: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly agentId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["UpdateAgentInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Updated global Agent identity and status */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["WorkspaceAgent"];
+                };
+            };
+            readonly 404: components["responses"]["Error"];
         };
     };
     readonly listAgentCredentials: {

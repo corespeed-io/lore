@@ -86,6 +86,13 @@ const memoryIdParameter = {
   schema: { type: "string", format: "uuid" },
 } as const;
 
+const agentIdParameter = {
+  name: "agentId",
+  in: "path",
+  required: true,
+  schema: { type: "string", format: "uuid" },
+} as const;
+
 const humanSecurity = [
   { basicAuth: [] },
   { cloudflareAccessHeader: [] },
@@ -317,19 +324,35 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           },
         },
       },
+      "/api/v1/agents/{agentId}": {
+        patch: {
+          operationId: "updateAgent",
+          security: humanSecurity,
+          parameters: [workspaceHeader, agentIdParameter],
+          requestBody: requestBody({ $ref: "#/components/schemas/UpdateAgentInput" }),
+          responses: {
+            "200": jsonResponse("Updated global Agent identity and status", {
+              $ref: "#/components/schemas/WorkspaceAgent",
+            }),
+            "404": { $ref: "#/components/responses/Error" },
+          },
+        },
+        delete: {
+          operationId: "deleteAgent",
+          security: humanSecurity,
+          parameters: [workspaceHeader, agentIdParameter],
+          responses: {
+            "204": { description: "Disabled Agent, grants, and credentials deleted" },
+            "404": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/api/v1/agents/{agentId}/credentials": {
         get: {
           operationId: "listAgentCredentials",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           responses: {
             "200": jsonResponse("Agent credential metadata without secret hashes", {
               type: "array",
@@ -340,15 +363,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         post: {
           operationId: "issueAgentCredential",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           responses: {
             "201": jsonResponse("One-time Agent credential", {
               $ref: "#/components/schemas/IssuedAgentCredential",
@@ -360,15 +375,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         put: {
           operationId: "setAgentGrant",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           requestBody: requestBody({
             type: "object",
             additionalProperties: false,
@@ -384,15 +391,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         delete: {
           operationId: "revokeAgentGrant",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           responses: { "204": { description: "Grant revoked" } },
         },
       },
@@ -634,6 +633,15 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             permission: { type: "string", enum: ["read", "write"] },
             grantStatus: { type: "string", enum: ["active", "revoked"] },
             ...timestampProperties,
+          },
+        },
+        UpdateAgentInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 120 },
+            status: { type: "string", enum: ["active", "disabled"] },
           },
         },
         AgentWorkspaceGrant: {

@@ -2,7 +2,7 @@ import type { PostgresDatabase } from "./db";
 import { observeOperation, runtimeDependencyStatus } from "./telemetry";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 6;
+export const LORE_SCHEMA_REVISION = 7;
 
 export interface DeploymentCapabilities {
   apiVersion: "v1";

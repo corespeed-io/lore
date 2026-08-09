@@ -10,6 +10,7 @@ import type { PostgresDatabase } from "./db";
 export type AgentStatus = "active" | "disabled";
 export type AgentGrantPermission = "read" | "write";
 export type AgentGrantStatus = "active" | "revoked";
+export type AgentDeletionResult = "deleted" | "must_disable" | "not_found";
 export type MembershipRole = "owner" | "admin" | "member";
 export type MembershipStatus = "active" | "suspended";
 
@@ -336,6 +337,75 @@ export function createAccessModule(database: PostgresDatabase) {
             [actor.workspaceId, actor.userId],
           );
           return result.rows.map(toWorkspaceAgent);
+        }),
+      );
+    },
+
+    async updateAgent(
+      actor: ActorContext,
+      agentId: string,
+      input: { name?: string; status?: AgentStatus },
+    ): Promise<WorkspaceAgent | null> {
+      return translateAccessError(() =>
+        database.transaction(async (transaction) => {
+          await installActorContext(transaction, actor);
+          const result = await transaction.query<WorkspaceAgentRow>(
+            `UPDATE agents agent
+             SET
+               name = COALESCE($4, agent.name),
+               status = COALESCE($5::agent_status, agent.status),
+               updated_at = now()
+             FROM agent_workspace_grants workspace_grant
+             WHERE agent.id = $1
+               AND agent.owner_user_id = $2
+               AND workspace_grant.workspace_id = $3
+               AND workspace_grant.agent_id = agent.id
+             RETURNING
+               agent.*,
+               workspace_grant.permission,
+               workspace_grant.status AS grant_status`,
+            [agentId, actor.userId, actor.workspaceId, input.name ?? null, input.status ?? null],
+          );
+          return result.rows[0] ? toWorkspaceAgent(result.rows[0]) : null;
+        }),
+      );
+    },
+
+    async deleteAgent(actor: ActorContext, agentId: string): Promise<AgentDeletionResult> {
+      return translateAccessError(() =>
+        database.transaction(async (transaction) => {
+          await installActorContext(transaction, actor);
+          const target = await transaction.query<{ status: AgentStatus }>(
+            `SELECT agent.status
+             FROM agents agent
+             WHERE agent.id = $1
+               AND agent.owner_user_id = $2
+               AND EXISTS (
+                 SELECT 1
+                 FROM agent_workspace_grants workspace_grant
+                 WHERE workspace_grant.workspace_id = $3
+                   AND workspace_grant.agent_id = agent.id
+               )
+             FOR UPDATE`,
+            [agentId, actor.userId, actor.workspaceId],
+          );
+          if (!target.rows[0]) return "not_found";
+          if (target.rows[0].status !== "disabled") return "must_disable";
+          const deleted = await transaction.query<{ id: string }>(
+            `DELETE FROM agents agent
+             WHERE agent.id = $1
+               AND agent.owner_user_id = $2
+               AND agent.status = 'disabled'
+               AND EXISTS (
+                 SELECT 1
+                 FROM agent_workspace_grants workspace_grant
+                 WHERE workspace_grant.workspace_id = $3
+                   AND workspace_grant.agent_id = agent.id
+               )
+             RETURNING agent.id`,
+            [agentId, actor.userId, actor.workspaceId],
+          );
+          return deleted.rows[0] ? "deleted" : "not_found";
         }),
       );
     },

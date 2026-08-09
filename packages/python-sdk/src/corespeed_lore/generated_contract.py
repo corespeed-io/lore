@@ -162,6 +162,10 @@ class ReadinessReport(TypedDict):
     status: Literal["ready", "degraded", "unready"]
     components: dict[str, Any]
 
+class UpdateAgentInput(TypedDict):
+    name: NotRequired[str]
+    status: NotRequired[Literal["active", "disabled"]]
+
 class UpdateMemoryInput(TypedDict):
     content: NotRequired[str]
     scope: NotRequired[Literal["shared", "private"]]

@@ -157,6 +157,27 @@ export function createAgent(
   });
 }
 
+export function updateAgent(
+  workspaceId: string,
+  agentId: string,
+  input: { name?: string; status?: WorkspaceAgent["status"] },
+): Promise<WorkspaceAgent> {
+  return requestJson(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    workspaceId,
+    operation: "PATCH /api/v1/agents/:id",
+  });
+}
+
+export function deleteAgent(workspaceId: string, agentId: string): Promise<void> {
+  return requestJson(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
+    method: "DELETE",
+    workspaceId,
+    operation: "DELETE /api/v1/agents/:id",
+  });
+}
+
 export function listAgentCredentials(
   workspaceId: string,
   agentId: string,

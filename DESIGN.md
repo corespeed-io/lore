@@ -138,7 +138,8 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `App.tsx` owns Workspace selection, native data, routing, mutations, and workflow composition.
 - `GraphView.tsx` owns Graph filtering, selection, and inspection.
 - `AgentsView.tsx` owns Workspace-scoped Agent creation, grant lifecycle, credential
-  metadata, one-time credential reveal, and credential revocation.
+  metadata, one-time credential reveal, credential revocation, and global Agent
+  rename/status/deletion controls.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, and read-only deployment readiness/capabilities.
 - `src/lib/viz/graph.ts` owns the optimized D3 force layout, zoom/pan, node drag,
@@ -153,7 +154,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Composer | feature panel | empty, ready, saving, error |
 | Detail | feature workspace | view/edit, saving, destructive, mobile stack |
 | Graph | `GraphView` | loading, empty, mapped, filtered, selected, error |
-| Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, error |
+| Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, lifecycle dialog, destructive confirmation, error |
 | Workspace operations | `WorkspaceOperationsView` | loading, ready/degraded/unready, export, file selected, dry-run, importing, receipt, error |
 
 ## 10. Workflow specifications
@@ -202,7 +203,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Credential metadata may be revisited, but a new secret is shown exactly once and
   Lore retains only its prefix and hash. Revocation is explicit and irreversible.
 - Disabled Agents remain visible for diagnosis but cannot authenticate or receive a
-  new credential. Rename, disable, and delete controls are outside this workflow today.
+  new credential. Rename and status changes are global across the User-owned Agent's
+  Workspace grants. Re-enabling may restore unrevoked credentials only where grants
+  are active. Permanent deletion requires the Agent to be disabled plus an exact-name
+  confirmation; it removes grants and credentials while retaining Memories and
+  clearing their creating-Agent reference.
 
 ### Operate a Workspace
 
