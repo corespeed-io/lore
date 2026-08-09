@@ -435,6 +435,18 @@ test("Workspace export is actor-visible, checksummed, dry-runnable, and replay-s
   });
   const replayed = await portability.importWorkspace(testContext.carol, { archive, ownerMap });
   expect(replayed).toMatchObject({ ...imported, replayed: true });
+  const replayedDryRun = await portability.importWorkspace(testContext.carol, {
+    archive,
+    ownerMap,
+    dryRun: true,
+  });
+  expect(replayedDryRun).toMatchObject({
+    dryRun: true,
+    importedLinks: imported.importedLinks,
+    importedMemories: imported.importedMemories,
+    memoryIdMap: {},
+    replayed: true,
+  });
   await expect(memories.list(testContext.carol)).resolves.toHaveLength(3);
 
   const tampered = structuredClone(archive);

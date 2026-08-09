@@ -31,8 +31,8 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.openapi).toBe("3.1.1");
   expect(Object.keys(document.paths).sort()).toEqual(
     [
-      "/api/v1/agent-credentials/{credentialId}",
       "/api/v1/actor",
+      "/api/v1/agent-credentials/{credentialId}",
       "/api/v1/agents",
       "/api/v1/agents/{agentId}/credentials",
       "/api/v1/agents/{agentId}/grant",

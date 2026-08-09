@@ -101,6 +101,22 @@ interface ExportLinkRow {
   updated_at: string;
 }
 
+async function workspaceImportReceipt(
+  transaction: PostgresTransaction,
+  actor: ActorContext,
+  checksum: string,
+): Promise<WorkspaceImportResult | null> {
+  const replay = await transaction.query<{ summary: WorkspaceImportResult }>(
+    `SELECT summary
+     FROM workspace_imports
+     WHERE workspace_id = $1
+       AND imported_by_user_id = $2
+       AND archive_sha256 = $3`,
+    [actor.workspaceId, actor.userId, checksum],
+  );
+  return replay.rows[0]?.summary ?? null;
+}
+
 function timestamp(value: unknown, name: string): string {
   const parsed = new Date(String(value));
   if (!Number.isFinite(parsed.getTime()))
@@ -449,6 +465,16 @@ export function createPortabilityModule(database: PostgresDatabase) {
           throw new PortabilityAccessDeniedError("User cannot import into this Workspace");
         }
 
+        const previousReceipt = await workspaceImportReceipt(transaction, actor, checksum);
+        if (previousReceipt) {
+          return {
+            ...previousReceipt,
+            dryRun: input.dryRun === true,
+            memoryIdMap: input.dryRun ? {} : previousReceipt.memoryIdMap,
+            replayed: true,
+          };
+        }
+
         const sourceIds = archive.memories.map((memory) => memory.id);
         const conflicts = await transaction.query<{ id: string }>(
           "SELECT id FROM memories WHERE workspace_id = $1 AND id = ANY($2::uuid[])",
@@ -501,15 +527,7 @@ export function createPortabilityModule(database: PostgresDatabase) {
           ],
         );
         if (!claimed.rows[0]) {
-          const replay = await transaction.query<{ summary: WorkspaceImportResult }>(
-            `SELECT summary
-             FROM workspace_imports
-             WHERE workspace_id = $1
-               AND imported_by_user_id = $2
-               AND archive_sha256 = $3`,
-            [actor.workspaceId, actor.userId, checksum],
-          );
-          const result = replay.rows[0]?.summary;
+          const result = await workspaceImportReceipt(transaction, actor, checksum);
           if (!result) throw new Error("Import receipt became unavailable");
           return { ...result, replayed: true };
         }

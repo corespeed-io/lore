@@ -100,6 +100,9 @@ scrolling and the sidebar remains viewport-height.
 | `--hairline-soft` | `#f2f2f2` | Hover and selected navigation |
 | `--link` | `#0070f3` | Focus, links, active semantic accents |
 | `--danger` | `#c9352b` | Destructive actions only |
+| `--status-degraded-border` | `#ead7a4` | Degraded-status border |
+| `--status-degraded-surface` | `#fffaf0` | Degraded-status surface |
+| `--status-degraded-ink` | `#8a5a00` | Degraded-status text |
 
 Hover uses `--hairline-soft`; selected states combine it with `--ink`; focus uses
 a two-pixel `--link` ring. Color is scarce and never substitutes for labels.

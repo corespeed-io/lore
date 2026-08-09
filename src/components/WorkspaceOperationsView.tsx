@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useLoreCurrentHumanActor,
   useLoreDeploymentCapabilities,
@@ -77,11 +77,13 @@ function readinessSummary(status: ReadinessReport["status"]): string {
 
 function StatusBadge({ value }: { value: string }) {
   const normalized = value === "ok" ? "ready" : value;
-  const tone = ["ready", "disabled", "loaded"].includes(normalized)
+  const tone = ["ready", "loaded"].includes(normalized)
     ? "ok"
-    : ["degraded", "unknown", "incompatible"].includes(normalized)
-      ? "degraded"
-      : "unready";
+    : normalized === "disabled"
+      ? "neutral"
+      : ["degraded", "unknown"].includes(normalized)
+        ? "degraded"
+        : "unready";
   return <span className={`operations-status operations-status-${tone}`}>{value}</span>;
 }
 
@@ -109,6 +111,7 @@ export function WorkspaceOperationsView({
   const currentActor = useLoreCurrentHumanActor(workspaceId);
   const readiness = useLoreReadiness();
   const mutations = useLoreWorkspaceOperationMutations(workspaceId);
+  const archiveSelection = useRef(0);
   const [selectedArchive, setSelectedArchive] = useState<SelectedArchive | null>(null);
   const [conflictPolicy, setConflictPolicy] = useState<WorkspaceImportConflictPolicy>("remap");
   const [validatedFingerprint, setValidatedFingerprint] = useState<string | null>(null);
@@ -117,9 +120,19 @@ export function WorkspaceOperationsView({
   const [exportReceipt, setExportReceipt] = useState<WorkspaceArchive["manifest"] | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const [dismissedReadinessError, setDismissedReadinessError] = useState<unknown>(null);
-  const [dismissedCapabilitiesError, setDismissedCapabilitiesError] = useState<unknown>(null);
-  const [dismissedActorError, setDismissedActorError] = useState<unknown>(null);
+  const [dismissedReadinessError, setDismissedReadinessError] = useState<string | null>(null);
+  const [dismissedCapabilitiesError, setDismissedCapabilitiesError] = useState<string | null>(null);
+  const [dismissedActorError, setDismissedActorError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!readiness.error) setDismissedReadinessError(null);
+  }, [readiness.error]);
+  useEffect(() => {
+    if (!capabilities.error) setDismissedCapabilitiesError(null);
+  }, [capabilities.error]);
+  useEffect(() => {
+    if (!currentActor.error) setDismissedActorError(null);
+  }, [currentActor.error]);
 
   const sourceOwners = useMemo(
     () => (selectedArchive ? workspaceArchiveSourceOwners(selectedArchive.archive) : []),
@@ -136,18 +149,14 @@ export function WorkspaceOperationsView({
   const busy = mutations.isMutating;
   const readinessReport = readiness.data;
   const deploymentCapabilities = capabilities.data;
+  const readinessErrorMessage = readiness.error ? errorMessage(readiness.error) : null;
   const readinessError =
-    readiness.error && readiness.error !== dismissedReadinessError
-      ? errorMessage(readiness.error)
-      : null;
+    readinessErrorMessage !== dismissedReadinessError ? readinessErrorMessage : null;
+  const capabilitiesErrorMessage = capabilities.error ? errorMessage(capabilities.error) : null;
   const capabilitiesError =
-    capabilities.error && capabilities.error !== dismissedCapabilitiesError
-      ? errorMessage(capabilities.error)
-      : null;
-  const actorError =
-    currentActor.error && currentActor.error !== dismissedActorError
-      ? errorMessage(currentActor.error)
-      : null;
+    capabilitiesErrorMessage !== dismissedCapabilitiesError ? capabilitiesErrorMessage : null;
+  const actorErrorMessage = currentActor.error ? errorMessage(currentActor.error) : null;
+  const actorError = actorErrorMessage !== dismissedActorError ? actorErrorMessage : null;
 
   function resetValidation() {
     setValidatedFingerprint(null);
@@ -158,6 +167,7 @@ export function WorkspaceOperationsView({
 
   async function selectArchive(file: File | undefined) {
     if (!file) return;
+    const selection = ++archiveSelection.current;
     setImportError(null);
     setImportResult(null);
     setValidatedFingerprint(null);
@@ -168,10 +178,13 @@ export function WorkspaceOperationsView({
       return;
     }
     try {
-      const archive = parseWorkspaceArchiveText(await file.text());
+      const text = await file.text();
+      if (selection !== archiveSelection.current) return;
+      const archive = parseWorkspaceArchiveText(text);
       setSelectedArchive({ archive, fileName: file.name, fileSize: file.size });
       setConflictPolicy("remap");
     } catch (cause) {
+      if (selection !== archiveSelection.current) return;
       setSelectedArchive(null);
       setImportError(errorMessage(cause));
     }
@@ -216,7 +229,7 @@ export function WorkspaceOperationsView({
 
   async function validateImport() {
     const input = importInput();
-    if (!input || !inputFingerprint) return;
+    if (busy || importResult || !input || !inputFingerprint) return;
     setImportError(null);
     setImportResult(null);
     try {
@@ -232,7 +245,8 @@ export function WorkspaceOperationsView({
 
   async function commitImport() {
     const input = importInput();
-    if (!input || !dryRunResult || !dryRunIsCurrent) return;
+    if (busy || importResult || !input || !dryRunResult || !dryRunIsCurrent) return;
+    if (dryRunResult.replayed) return;
     if (
       !window.confirm(
         `Import ${dryRunResult.importedMemories} Memories and ${dryRunResult.importedLinks} Links into ${workspaceName}? Lore will create fresh Memory ids.`,
@@ -287,13 +301,15 @@ export function WorkspaceOperationsView({
             </div>
             {readinessReport && <StatusBadge value={readinessReport.status} />}
           </div>
-          {readinessError ? (
-            <InlineError
-              message={readinessError}
-              onDismiss={() => setDismissedReadinessError(readiness.error)}
-            />
-          ) : !readinessReport ? (
-            <p className="operations-loading">Checking the request path…</p>
+          {!readinessReport ? (
+            readinessError ? (
+              <InlineError
+                message={readinessError}
+                onDismiss={() => setDismissedReadinessError(readinessError)}
+              />
+            ) : (
+              <p className="operations-loading">Checking the request path…</p>
+            )
           ) : (
             <>
               <p className="operations-summary">{readinessSummary(readinessReport.status)}</p>
@@ -309,6 +325,12 @@ export function WorkspaceOperationsView({
                   ),
                 )}
               </dl>
+              {readinessError && (
+                <InlineError
+                  message={readinessError}
+                  onDismiss={() => setDismissedReadinessError(readinessError)}
+                />
+              )}
             </>
           )}
         </section>
@@ -321,13 +343,15 @@ export function WorkspaceOperationsView({
             </div>
             <span className="operations-level">Deployment-level</span>
           </div>
-          {capabilitiesError ? (
-            <InlineError
-              message={capabilitiesError}
-              onDismiss={() => setDismissedCapabilitiesError(capabilities.error)}
-            />
-          ) : !deploymentCapabilities ? (
-            <p className="operations-loading">Loading capabilities…</p>
+          {!deploymentCapabilities ? (
+            capabilitiesError ? (
+              <InlineError
+                message={capabilitiesError}
+                onDismiss={() => setDismissedCapabilitiesError(capabilitiesError)}
+              />
+            ) : (
+              <p className="operations-loading">Loading capabilities…</p>
+            )
           ) : (
             <>
               <div className="operations-deployment-meta">
@@ -344,7 +368,16 @@ export function WorkspaceOperationsView({
                         key={feature}
                         aria-label={`${FEATURE_LABELS[feature]}: ${available ? "available" : "unavailable"}`}
                       >
-                        <span aria-hidden="true">{available ? "✓" : "—"}</span>
+                        <span
+                          className={
+                            available
+                              ? "operations-feature-available"
+                              : "operations-feature-unavailable"
+                          }
+                          aria-hidden="true"
+                        >
+                          {available ? "✓" : "—"}
+                        </span>
                         {FEATURE_LABELS[feature]}
                       </li>
                     );
@@ -369,6 +402,12 @@ export function WorkspaceOperationsView({
                 )}
                 <small>Configured once per deployment, never per Workspace or Agent.</small>
               </div>
+              {capabilitiesError && (
+                <InlineError
+                  message={capabilitiesError}
+                  onDismiss={() => setDismissedCapabilitiesError(capabilitiesError)}
+                />
+              )}
             </>
           )}
         </section>
@@ -459,18 +498,24 @@ export function WorkspaceOperationsView({
 
                 <div className="operations-field">
                   <span>Target owner User ID</span>
-                  {actorError ? (
-                    <InlineError
-                      message={actorError}
-                      onDismiss={() => setDismissedActorError(currentActor.error)}
-                    />
-                  ) : currentActor.data ? (
+                  {currentActor.data ? (
                     <div className="operations-owner-target">
                       <strong>You</strong>
                       <code>{currentActor.data.userId}</code>
                     </div>
+                  ) : actorError ? (
+                    <InlineError
+                      message={actorError}
+                      onDismiss={() => setDismissedActorError(actorError)}
+                    />
                   ) : (
                     <span className="operations-loading">Resolving the importing human…</span>
+                  )}
+                  {currentActor.data && actorError && (
+                    <InlineError
+                      message={actorError}
+                      onDismiss={() => setDismissedActorError(actorError)}
+                    />
                   )}
                   <small>
                     Every source owner is explicitly remapped to the verified importing human.
@@ -487,6 +532,7 @@ export function WorkspaceOperationsView({
                         name="workspace-import-policy"
                         value={policy}
                         checked={conflictPolicy === policy}
+                        disabled={busy || Boolean(importResult)}
                         onChange={() => {
                           setConflictPolicy(policy);
                           resetValidation();
@@ -496,10 +542,10 @@ export function WorkspaceOperationsView({
                         <strong>{policy}</strong>
                         <small>
                           {policy === "remap"
-                            ? "Create fresh IDs for every imported Memory."
+                            ? "Import every Memory with a fresh ID, including visible source-ID collisions."
                             : policy === "skip"
-                              ? "Skip source IDs that visibly collide."
-                              : "Reject the archive if a visible source ID collides."}
+                              ? "Skip visible source-ID collisions; imported Memories still receive fresh IDs."
+                              : "Reject visible source-ID collisions; imported Memories still receive fresh IDs."}
                         </small>
                       </span>
                     </label>
@@ -527,7 +573,7 @@ export function WorkspaceOperationsView({
                 <div className="operations-import-actions">
                   <button
                     type="button"
-                    disabled={!ownerIdValid || busy}
+                    disabled={!ownerIdValid || busy || Boolean(importResult)}
                     onClick={() => void validateImport()}
                   >
                     {mutations.validateImport.isMutating ? "Validating…" : "Run dry check"}
@@ -535,7 +581,12 @@ export function WorkspaceOperationsView({
                   <button
                     type="button"
                     className="operations-primary"
-                    disabled={!dryRunIsCurrent || busy || Boolean(importResult)}
+                    disabled={
+                      !dryRunIsCurrent ||
+                      busy ||
+                      Boolean(importResult) ||
+                      Boolean(dryRunResult?.replayed)
+                    }
                     onClick={() => void commitImport()}
                   >
                     {mutations.importArchive.isMutating ? "Importing…" : "Import archive"}
@@ -546,12 +597,25 @@ export function WorkspaceOperationsView({
                   <div className="operations-dry-run" role="status">
                     <span aria-hidden="true">✓</span>
                     <div>
-                      <strong>Dry check passed</strong>
-                      <p>
-                        Ready to import {dryRunResult.importedMemories} Memories and{" "}
-                        {dryRunResult.importedLinks} Links. {dryRunResult.skippedMemories} visible
-                        collisions will be skipped.
-                      </p>
+                      <strong>
+                        {dryRunResult.replayed ? "Archive already imported" : "Dry check passed"}
+                      </strong>
+                      {dryRunResult.replayed ? (
+                        <p>
+                          Lore already has a completed receipt for this checksum. Importing it again
+                          would write no Memories or Links.
+                        </p>
+                      ) : (
+                        <p>
+                          Ready to import {dryRunResult.importedMemories} Memories and{" "}
+                          {dryRunResult.importedLinks} Links.{" "}
+                          {conflictPolicy === "skip"
+                            ? `${dryRunResult.skippedMemories} visible collisions will be skipped.`
+                            : conflictPolicy === "remap"
+                              ? "Every imported Memory will receive a fresh ID."
+                              : "No visible source-ID collisions were found."}
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}

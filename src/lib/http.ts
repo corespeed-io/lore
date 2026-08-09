@@ -338,7 +338,7 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
 }
 
 function requireHumanActor(actor: ActorContext): ActorContext {
-  if (actor.agentId) throw new AccessDeniedError("Agent administration requires a User");
+  if (actor.agentId) throw new AccessDeniedError("This operation requires a User");
   return actor;
 }
 
