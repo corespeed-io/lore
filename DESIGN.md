@@ -2,7 +2,7 @@
 
 > Status: Active
 > Canonical source: `DESIGN.md`
-> Last decision review: 2026-08-08
+> Last decision review: 2026-08-09
 
 This document is Lore's binding UI contract. Lore is a native Memory System;
 the product model in `CONTEXT.md` defines every frontend data contract.
@@ -46,8 +46,9 @@ retrieval remains a full-width browse/search surface.
 ### Responsive completeness
 
 Workspace selection, search, Memory browse, Graph exploration, create, inspect,
-edit, scope change, forget, and Agent management must all remain complete on
-mobile. The sidebar becomes a drawer; the product model does not change.
+edit, scope change, forget, Agent management, and Workspace portability must all
+remain complete on mobile. The sidebar becomes a drawer; the product model does
+not change.
 
 ## 3. Information architecture
 
@@ -57,6 +58,7 @@ mobile. The sidebar becomes a drawer; the product model does not change.
 | Memories | Capture and retrieve Memory | Searchable chronological rows | Errors render inline near the workflow |
 | Graph | Explore authorized Memory relationships | Interactive affinity map + selection inspector | Errors remain inside the Graph workspace |
 | Agents | Connect user-owned Agents to the active Workspace | Agent creation, grants, and credential lifecycle | Secrets are one-time; restore/revoke consequences stay explicit |
+| Operations | Move visible Memory and inspect deployment health | Export/import workflow, readiness, and capabilities | Dry-run gates imports; degraded is distinct from unready |
 
 Search is global to the active Workspace and always returns to Memories. Selecting
 a Memory replaces the list with a detail workspace; Back returns to the same query.
@@ -98,6 +100,9 @@ scrolling and the sidebar remains viewport-height.
 | `--hairline-soft` | `#f2f2f2` | Hover and selected navigation |
 | `--link` | `#0070f3` | Focus, links, active semantic accents |
 | `--danger` | `#c9352b` | Destructive actions only |
+| `--status-degraded-border` | `#ead7a4` | Degraded-status border |
+| `--status-degraded-surface` | `#fffaf0` | Degraded-status surface |
+| `--status-degraded-ink` | `#8a5a00` | Degraded-status text |
 
 Hover uses `--hairline-soft`; selected states combine it with `--ink`; focus uses
 a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
@@ -134,6 +139,8 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `GraphView.tsx` owns Graph filtering, selection, and inspection.
 - `AgentsView.tsx` owns Workspace-scoped Agent creation, grant lifecycle, credential
   metadata, one-time credential reveal, and credential revocation.
+- `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
+  dry-run/import, owner remap, and read-only deployment readiness/capabilities.
 - `src/lib/viz/graph.ts` owns the optimized D3 force layout, zoom/pan, node drag,
   label collision, and neighborhood paint state.
 - `Sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
@@ -147,6 +154,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Detail | feature workspace | view/edit, saving, destructive, mobile stack |
 | Graph | `GraphView` | loading, empty, mapped, filtered, selected, error |
 | Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, error |
+| Workspace operations | `WorkspaceOperationsView` | loading, ready/degraded/unready, export, file selected, dry-run, importing, receipt, error |
 
 ## 10. Workflow specifications
 
@@ -196,6 +204,23 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Disabled Agents remain visible for diagnosis but cannot authenticate or receive a
   new credential. Rename, disable, and delete controls are outside this workflow today.
 
+### Operate a Workspace
+
+- Entry: Operations navigation in the active Workspace; export and import require a
+  human Actor and remain scoped by the ordinary Workspace request context and RLS.
+- Export downloads a checksummed, actor-visible logical archive. The interface names
+  excluded data explicitly and never presents the archive as a PostgreSQL backup.
+- Import begins with a bounded local file check, requires an explicit target-owner
+  remap to the human returned by `/api/v1/actor` and a collision policy, then requires
+  a successful server dry-run before the write action becomes available. An archive
+  identity is never trusted as the target. Any changed input invalidates the dry-run
+  receipt.
+- The completed receipt reports imported/skipped counts and replay status without
+  echoing Memory content. Successful import revalidates Memory, search, and Graph data.
+- Readiness distinguishes `ready`, lexical-safe `degraded`, and request-blocking
+  `unready`. Capabilities and the active embedding generation are read-only
+  deployment facts, never Workspace/User/Agent settings.
+
 ## 11. Loading, empty, error, and attention states
 
 - Initial loading uses the plain `Opening Lore…` status.
@@ -240,6 +265,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
+| 2026-08-09 | Add Operations as the human-only Workspace portability and deployment-health destination | Keep high-consequence export/import behind checksum validation, owner remap, and dry-run while making lexical-safe degradation visible | CLI/API-only Workspace portability |
 | 2026-08-08 | Add Agents as a standard Lore destination on the canonical 1100px content track | Make human-only Agent creation, Workspace grants, and credential lifecycle a first-class native workflow without creating a second visual system | Agent administration without a binding UI contract |
 | 2026-08-05 | Restore Lore's complete Dashboard/Graph/Memories shell and optimized graph interaction around native Memory types | Preserve the product's mature interface without importing an external domain model | The temporary simplified Memory console |
 | 2026-08-06 | Fix Lore v1 at 1024 dimensions while allowing one provider/model per deployment | Self-host operators retain model choice without turning the database vector protocol into runtime configuration | Workspace/User model selection |

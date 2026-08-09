@@ -70,7 +70,8 @@ been removed. Lore now has a native implementation:
   own the Portable Core seams. Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
-  `/readyz`, and `/api/v1/capabilities` are the stable operational surface;
+  `/readyz`, `/api/v1/actor`, and `/api/v1/capabilities` are the stable operational
+  surface;
 - Node/self-host exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
@@ -98,7 +99,9 @@ been removed. Lore now has a native implementation:
 
 Still incomplete: full Evaluation management UI and Agent rename/disable/delete
 controls. Workspace-scoped Agent creation plus grant and credential lifecycle
-management is available in the native `/agents` surface.
+management is available in the native `/agents` surface. Human-only Workspace
+export/download, checksum-backed import dry-run, explicit owner remap, import
+receipts, and deployment readiness/capabilities are available in `/operations`.
 Chunking and lexical indexing
 are synchronous; document embedding, retry, and deployment-wide re-indexing are
 background maintenance. The Ollama, Google Gemini, and OpenAI adapters are

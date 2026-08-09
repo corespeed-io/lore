@@ -121,6 +121,18 @@ export function loreOpenApiDocument(): Record<string, unknown> {
     servers: [{ url: "/" }],
     security: actorSecurity,
     paths: {
+      "/api/v1/actor": {
+        get: {
+          operationId: "getCurrentHumanActor",
+          security: humanSecurity,
+          parameters: [workspaceHeader],
+          responses: {
+            "200": jsonResponse("Verified human Actor for the active Workspace", {
+              $ref: "#/components/schemas/HumanActor",
+            }),
+          },
+        },
+      },
       "/api/v1/workspaces": {
         get: {
           operationId: "listWorkspaces",
@@ -579,6 +591,15 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             id: { type: "string", format: "uuid" },
             name: { type: "string" },
             ...timestampProperties,
+          },
+        },
+        HumanActor: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "userId"],
+          properties: {
+            kind: { const: "human" },
+            userId: { type: "string", format: "uuid" },
           },
         },
         WorkspaceSummary: {

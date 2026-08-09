@@ -1,5 +1,16 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { listAgentCredentials, listMemories, listWorkspaces, setAgentGrant } from "@/lib/lore-api";
+import {
+  exportWorkspaceArchive,
+  getCurrentHumanActor,
+  getDeploymentCapabilities,
+  getReadiness,
+  importWorkspaceArchive,
+  listAgentCredentials,
+  listMemories,
+  listWorkspaces,
+  setAgentGrant,
+} from "@/lib/lore-api";
+import type { WorkspaceArchive } from "@/lib/portability";
 import { clearRequestLog, getRequestLog } from "@/lib/request-log";
 import type { Memory } from "@/lib/types";
 
@@ -70,4 +81,91 @@ test("Agent browser client scopes credential reads and grant updates to one Work
   expect((credentialRequest.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
   expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "PUT" });
   expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ permission: "write" }));
+});
+
+test("Operations browser client treats bounded 503 readiness as a typed unready report", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      Response.json(
+        {
+          status: "unready",
+          components: {
+            database: "unavailable",
+            embedding: "unknown",
+            rlsRole: "unavailable",
+            schema: "unavailable",
+            vector: "unavailable",
+          },
+        },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  await expect(getReadiness()).resolves.toMatchObject({ status: "unready" });
+  expect(getRequestLog()).toMatchObject([{ operation: "GET /readyz", ok: true }]);
+});
+
+test("Operations browser client scopes Actor, capabilities, export, and dry-run import to one Workspace", async () => {
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const archive: WorkspaceArchive = {
+    manifest: {
+      checksum: "a".repeat(64),
+      exportedAt: "2026-08-09T00:00:00.000Z",
+      format: "lore-workspace-v1",
+      memoryCount: 0,
+      linkCount: 0,
+      sourceDeploymentId: "20000000-0000-4000-8000-000000000001",
+      sourceWorkspaceId: workspaceId,
+      visibility: "actor-visible",
+    },
+    memories: [],
+    links: [],
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json({ kind: "human", userId: "30000000-0000-4000-8000-000000000001" }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({
+        apiVersion: "v1",
+        schemaRevision: 6,
+        deploymentId: "20000000-0000-4000-8000-000000000001",
+        features: {},
+        limits: { workspaceArchiveMemories: 10_000, workspaceArchiveLinks: 50_000 },
+        activeEmbeddingGeneration: null,
+      }),
+    )
+    .mockResolvedValueOnce(Response.json(archive))
+    .mockResolvedValueOnce(
+      Response.json({
+        archiveChecksum: archive.manifest.checksum,
+        dryRun: true,
+        importedLinks: 0,
+        importedMemories: 0,
+        memoryIdMap: {},
+        replayed: false,
+        skippedMemories: 0,
+      }),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(getCurrentHumanActor(workspaceId)).resolves.toMatchObject({ kind: "human" });
+  await getDeploymentCapabilities(workspaceId);
+  await expect(exportWorkspaceArchive(workspaceId)).resolves.toEqual(archive);
+  await importWorkspaceArchive(workspaceId, { archive, ownerMap: {}, dryRun: true });
+
+  for (const call of fetchMock.mock.calls) {
+    const options = call[1];
+    if (!options) throw new Error("Expected request options");
+    expect((options.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
+  }
+  expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "POST" });
+  expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
+    archive,
+    ownerMap: {},
+    dryRun: true,
+  });
 });

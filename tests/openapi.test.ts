@@ -31,6 +31,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.openapi).toBe("3.1.1");
   expect(Object.keys(document.paths).sort()).toEqual(
     [
+      "/api/v1/actor",
       "/api/v1/agent-credentials/{credentialId}",
       "/api/v1/agents",
       "/api/v1/agents/{agentId}/credentials",
@@ -79,6 +80,13 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     parameters: [
       expect.objectContaining({ name: "x-lore-workspace-id", in: "header", required: true }),
     ],
+  });
+  expect(document.paths["/api/v1/actor"].get).toMatchObject({
+    security: expect.arrayContaining([{ basicAuth: [] }]),
+    parameters: [
+      expect.objectContaining({ name: "x-lore-workspace-id", in: "header", required: true }),
+    ],
+    responses: { "200": expect.any(Object) },
   });
   expect(document.paths["/api/v1/memories/{memoryId}"].patch.requestBody).toMatchObject({
     required: true,

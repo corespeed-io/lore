@@ -1,9 +1,16 @@
+import type { DeploymentCapabilities, ReadinessReport } from "./operations";
+import type {
+  ImportWorkspaceArchive,
+  WorkspaceArchive,
+  WorkspaceImportResult,
+} from "./portability";
 import { recordRequest } from "./request-log";
 import type {
   AgentCredential,
   AgentGrantPermission,
   AgentWorkspaceGrant,
   GraphData,
+  HumanActorSummary,
   IssuedAgentCredential,
   Memory,
   MemoryScope,
@@ -13,12 +20,13 @@ import type {
 } from "./types";
 
 interface RequestOptions extends RequestInit {
+  acceptedStatuses?: readonly number[];
   workspaceId?: string;
   operation: string;
 }
 
 async function requestJson<Result>(path: string, options: RequestOptions): Promise<Result> {
-  const { workspaceId, operation, ...init } = options;
+  const { acceptedStatuses = [], workspaceId, operation, ...init } = options;
   const startedAt = Date.now();
   const headers = new Headers(init.headers);
   if (init.body) headers.set("content-type", "application/json");
@@ -26,7 +34,7 @@ async function requestJson<Result>(path: string, options: RequestOptions): Promi
 
   try {
     const response = await fetch(path, { ...init, headers });
-    if (!response.ok) {
+    if (!response.ok && !acceptedStatuses.includes(response.status)) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(payload.error ?? `Request failed (${response.status})`);
     }
@@ -81,6 +89,59 @@ export function listAgents(workspaceId: string, signal?: AbortSignal): Promise<W
     workspaceId,
     operation: "GET /api/v1/agents",
     signal,
+  });
+}
+
+export function getCurrentHumanActor(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<HumanActorSummary> {
+  return requestJson("/api/v1/actor", {
+    workspaceId,
+    operation: "GET /api/v1/actor",
+    signal,
+  });
+}
+
+export function getDeploymentCapabilities(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<DeploymentCapabilities> {
+  return requestJson("/api/v1/capabilities", {
+    workspaceId,
+    operation: "GET /api/v1/capabilities",
+    signal,
+  });
+}
+
+export function getReadiness(signal?: AbortSignal): Promise<ReadinessReport> {
+  return requestJson("/readyz", {
+    acceptedStatuses: [503],
+    operation: "GET /readyz",
+    signal,
+  });
+}
+
+export function exportWorkspaceArchive(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceArchive> {
+  return requestJson("/api/v1/workspaces/export", {
+    workspaceId,
+    operation: "GET /api/v1/workspaces/export",
+    signal,
+  });
+}
+
+export function importWorkspaceArchive(
+  workspaceId: string,
+  input: ImportWorkspaceArchive,
+): Promise<WorkspaceImportResult> {
+  return requestJson("/api/v1/workspaces/import", {
+    method: "POST",
+    body: JSON.stringify(input),
+    workspaceId,
+    operation: "POST /api/v1/workspaces/import",
   });
 }
 

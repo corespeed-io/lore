@@ -16,7 +16,9 @@ a Workspace export.
 document, while `GET /api/v1/capabilities` reports the live schema revision and
 active embedding generation without tenant data. Capabilities still requires a
 verified Actor and `x-lore-workspace-id`; a bearer token's shape alone never grants
-access. Existing unversioned routes remain available to the bundled UI, but clients
+access. `GET /api/v1/actor` is human-only and returns the verified importing User id
+for explicit owner remap; an archive-provided identity is never trusted as that
+target. Existing unversioned routes remain available to the bundled UI, but clients
 should generate integrations from the v1 document.
 
 Migration `0003` adds and backfills nullable job generation ids so legacy writers

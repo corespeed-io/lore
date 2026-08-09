@@ -8,6 +8,7 @@ import { MemoryView } from "@/components/MemoryView";
 import { Overview } from "@/components/Overview";
 import { SearchResults } from "@/components/SearchResults";
 import { Sidebar } from "@/components/Sidebar";
+import { WorkspaceOperationsView } from "@/components/WorkspaceOperationsView";
 import { memoryTitle, memoryType } from "@/lib/lore-api";
 import {
   loreKeys,
@@ -28,6 +29,7 @@ const TAB_LABELS: Record<Tab, string> = {
   graph: "Graph",
   search: "Memories",
   agents: "Agents",
+  operations: "Operations",
 };
 
 const EMPTY_GRAPH: GraphData = { nodes: [], links: [] };
@@ -545,6 +547,21 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                     key={activeWorkspaceId}
                     workspaceId={activeWorkspaceId}
                     workspaceName={activeWorkspace?.name ?? "Workspace"}
+                  />
+                )}
+
+                {tab === "operations" && (
+                  <WorkspaceOperationsView
+                    key={activeWorkspaceId}
+                    workspaceId={activeWorkspaceId}
+                    workspaceName={activeWorkspace?.name ?? "Workspace"}
+                    onImportComplete={() =>
+                      Promise.all([
+                        mutateMemories(),
+                        mutateGraph(),
+                        searchQuery ? mutateSearch() : Promise.resolve(undefined),
+                      ])
+                    }
                   />
                 )}
               </>

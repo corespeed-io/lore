@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import {
+  createActorHandlers,
   createAgentCredentialByIdHandlers,
   createAgentCredentialHandlers,
   createAgentGrantHandlers,
@@ -12,6 +13,7 @@ import {
   createGraphHandlers,
   createMemoryByIdHandlers,
   createMemoryHandlers,
+  createPortabilityHandlers,
   createWorkspaceHandlers,
 } from "@/lib/http";
 import { createMemoryTestContext } from "./support/memory-context";
@@ -74,6 +76,160 @@ test("Human can create a Workspace then write and list native Memories over HTTP
     nodes: [expect.objectContaining({ id: created.id, scope: "private" })],
     links: [],
   });
+  await testContext.close();
+});
+
+test("Workspace portability HTTP is RLS-scoped, dry-runnable, and human-only", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-portability-user";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const memories = createMemoryHandlers(testContext.database);
+  const agents = createAgentHandlers(testContext.database);
+  const actorHandlers = createActorHandlers(testContext.database);
+  const credentials = createAgentCredentialHandlers(testContext.database);
+  const portability = createPortabilityHandlers(testContext.database);
+  const createWorkspace = async (name: string) =>
+    (await (
+      await workspaces.POST(
+        new Request("http://lore.local/api/workspaces", {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        }),
+      )
+    ).json()) as { id: string };
+  const sourceWorkspace = await createWorkspace("Portability source");
+  const targetWorkspace = await createWorkspace("Portability target");
+  const sourceHeaders = { "x-lore-workspace-id": sourceWorkspace.id };
+  const targetHeaders = { "x-lore-workspace-id": targetWorkspace.id };
+
+  const sourceMemory = (await (
+    await memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers: sourceHeaders,
+        body: JSON.stringify({ content: "Source-only private Memory.", scope: "private" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const targetMemory = (await (
+    await memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers: targetHeaders,
+        body: JSON.stringify({ content: "Target-only shared Memory." }),
+      }),
+    )
+  ).json()) as { id: string };
+
+  const sourceExportResponse = await portability.EXPORT(
+    new Request("http://lore.local/api/v1/workspaces/export", { headers: sourceHeaders }),
+  );
+  const sourceArchive = (await sourceExportResponse.json()) as {
+    manifest: { checksum: string };
+    memories: Array<{ id: string; ownerUserId: string }>;
+  };
+  const targetArchive = (await (
+    await portability.EXPORT(
+      new Request("http://lore.local/api/v1/workspaces/export", { headers: targetHeaders }),
+    )
+  ).json()) as { memories: Array<{ id: string }> };
+
+  expect(sourceExportResponse.status).toBe(200);
+  expect(sourceExportResponse.headers.get("cache-control")).toBe("private, no-store");
+  expect(sourceExportResponse.headers.get("content-disposition")).toContain(sourceWorkspace.id);
+  expect(sourceArchive.memories.map((memory) => memory.id)).toEqual([sourceMemory.id]);
+  expect(targetArchive.memories.map((memory) => memory.id)).toEqual([targetMemory.id]);
+
+  const sourceOwnerId = sourceArchive.memories[0]?.ownerUserId;
+  if (!sourceOwnerId) throw new Error("Expected the source archive owner");
+  const humanActorResponse = await actorHandlers.GET(
+    new Request("http://lore.local/api/v1/actor", { headers: targetHeaders }),
+  );
+  expect(humanActorResponse.status).toBe(200);
+  expect(humanActorResponse.headers.get("cache-control")).toBe("private, no-store");
+  await expect(humanActorResponse.json()).resolves.toEqual({
+    kind: "human",
+    userId: sourceOwnerId,
+  });
+  const importBody = {
+    archive: sourceArchive,
+    ownerMap: { [sourceOwnerId]: sourceOwnerId },
+    conflictPolicy: "remap",
+  };
+  const dryRunResponse = await portability.IMPORT(
+    new Request("http://lore.local/api/v1/workspaces/import", {
+      method: "POST",
+      headers: targetHeaders,
+      body: JSON.stringify({ ...importBody, dryRun: true }),
+    }),
+  );
+  expect(dryRunResponse.status).toBe(200);
+  await expect(dryRunResponse.json()).resolves.toMatchObject({
+    dryRun: true,
+    importedMemories: 1,
+  });
+  const beforeImport = await memories.GET(
+    new Request("http://lore.local/api/memories", { headers: targetHeaders }),
+  );
+  await expect(beforeImport.json()).resolves.toHaveLength(1);
+
+  const agent = (await (
+    await agents.POST(
+      new Request("http://lore.local/api/v1/agents", {
+        method: "POST",
+        headers: sourceHeaders,
+        body: JSON.stringify({ name: "Portability probe" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const credential = (await (
+    await credentials.POST(
+      new Request(`http://lore.local/api/v1/agents/${agent.id}/credentials`, {
+        method: "POST",
+        headers: sourceHeaders,
+      }),
+      agent.id,
+    )
+  ).json()) as { token: string };
+  const agentHeaders = {
+    authorization: `Bearer ${credential.token}`,
+    "x-lore-workspace-id": sourceWorkspace.id,
+  };
+  const [agentActor, agentExport, agentImport] = await Promise.all([
+    actorHandlers.GET(new Request("http://lore.local/api/v1/actor", { headers: agentHeaders })),
+    portability.EXPORT(
+      new Request("http://lore.local/api/v1/workspaces/export", { headers: agentHeaders }),
+    ),
+    portability.IMPORT(
+      new Request("http://lore.local/api/v1/workspaces/import", {
+        method: "POST",
+        headers: agentHeaders,
+        body: JSON.stringify({ ...importBody, dryRun: true }),
+      }),
+    ),
+  ]);
+  expect([agentActor.status, agentExport.status, agentImport.status]).toEqual([403, 403, 403]);
+
+  const importResponse = await portability.IMPORT(
+    new Request("http://lore.local/api/v1/workspaces/import", {
+      method: "POST",
+      headers: targetHeaders,
+      body: JSON.stringify({ ...importBody, dryRun: false }),
+    }),
+  );
+  expect(importResponse.status).toBe(200);
+  await expect(importResponse.json()).resolves.toMatchObject({
+    dryRun: false,
+    importedMemories: 1,
+    replayed: false,
+  });
+  const afterImport = await memories.GET(
+    new Request("http://lore.local/api/memories", { headers: targetHeaders }),
+  );
+  await expect(afterImport.json()).resolves.toHaveLength(2);
+
   await testContext.close();
 });
 

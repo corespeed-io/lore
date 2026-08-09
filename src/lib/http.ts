@@ -338,8 +338,25 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
 }
 
 function requireHumanActor(actor: ActorContext): ActorContext {
-  if (actor.agentId) throw new AccessDeniedError("Agent administration requires a User");
+  if (actor.agentId) throw new AccessDeniedError("This operation requires a User");
   return actor;
+}
+
+export function createActorHandlers(database: PostgresDatabase) {
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        return Response.json(
+          { kind: "human", userId: actor.userId },
+          { headers: { "cache-control": "private, no-store" } },
+        );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
 }
 
 export function createCapabilitiesHandlers(

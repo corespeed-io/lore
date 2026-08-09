@@ -8,6 +8,11 @@ export interface WorkspaceSummary {
   updatedAt: string;
 }
 
+export interface HumanActorSummary {
+  kind: "human";
+  userId: string;
+}
+
 export type AgentGrantPermission = "read" | "write";
 
 export interface WorkspaceAgent {
