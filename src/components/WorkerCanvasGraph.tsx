@@ -53,6 +53,7 @@ const MIN_COLLISION_RADIUS = 4 + COLLISION_GAP;
 const MAX_COLLISION_RADIUS = 16 + COLLISION_GAP;
 const MAX_RENDERED_LINKS = 40_000;
 const LAYOUT_REVEAL_TRANSITION_MS = 220;
+const WORKER_READY_TIMEOUT_MS = 30_000;
 const INITIAL_REVEAL_FIT_RATIO = 0.02;
 const INITIAL_REVEAL_FIT_MIN_NODES = 64;
 const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
@@ -389,7 +390,7 @@ function CanvasRenderer({
     registerPositionSink?.(({ nodeIndices, positions, lockedId }) => {
       for (let deltaIndex = 0; deltaIndex < nodeIndices.length; deltaIndex += 1) {
         const node = mutableNodes[nodeIndices[deltaIndex] ?? -1];
-        if (!node || node.id === lockedId) continue;
+        if (!node || node === dragged || node.id === lockedId) continue;
         node.x = positions[deltaIndex * 2] ?? node.x;
         node.y = positions[deltaIndex * 2 + 1] ?? node.y;
       }
@@ -632,6 +633,7 @@ function CanvasRenderer({
       registerLayoutCompleteSink?.(null);
       if (frame) cancelAnimationFrame(frame);
       if (fitFrame) cancelAnimationFrame(fitFrame);
+      canvas.classList.remove("graph-canvas-node-hover");
       selection
         .on(".drag", null)
         .on(".zoom", null)
@@ -726,6 +728,12 @@ export function WorkerCanvasGraph({
     milliseconds: number;
   } | null>(null);
   const layoutMs = completedLayout?.graph === workerGraph ? completedLayout.milliseconds : null;
+  const [layoutFailure, setLayoutFailure] = useState<{
+    graph: typeof workerGraph;
+    message: string;
+  } | null>(null);
+  const layoutError = layoutFailure?.graph === workerGraph ? layoutFailure.message : null;
+  const [workerAttempt, setWorkerAttempt] = useState(0);
   const [layoutTicks, setLayoutTicks] = useState<number | null>(null);
   const [physicsState, setPhysicsState] = useState<"dragging" | "settling" | "settled">("settled");
   const [physicsFrames, setPhysicsFrames] = useState(0);
@@ -759,16 +767,44 @@ export function WorkerCanvasGraph({
   const dragNode = useCallback((event: NodeDragEvent) => {
     workerRef.current?.postMessage({ type: `drag-${event.phase}`, ...event });
   }, []);
+  const retryLayout = useCallback(() => {
+    setLayoutFailure(null);
+    setWorkerAttempt((attempt) => attempt + 1);
+  }, []);
 
   useEffect(() => {
     setLayoutTicks(null);
     setLayoutProgress({ tick: 0, totalTicks: 0, revealedNodes: 0 });
-    const worker = new Worker(new URL("./graph-canvas.worker.ts", import.meta.url));
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./graph-canvas.worker.ts", import.meta.url), {
+        name: `lore-graph-layout-${workerAttempt}`,
+      });
+    } catch {
+      setLayoutFailure({ graph: workerGraph, message: "The graph renderer could not start." });
+      return;
+    }
+    let failed = false;
     let completionTimer: ReturnType<typeof setTimeout> | null = null;
+    let readyTimer: ReturnType<typeof setTimeout> | null = null;
     const revealTransitionMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0
       : LAYOUT_REVEAL_TRANSITION_MS;
+    const failLayout = (message: string) => {
+      if (failed) return;
+      failed = true;
+      if (readyTimer) clearTimeout(readyTimer);
+      if (completionTimer) clearTimeout(completionTimer);
+      if (workerRef.current === worker) workerRef.current = null;
+      worker.terminate();
+      setLayoutFailure({ graph: workerGraph, message });
+    };
     workerRef.current = worker;
+    worker.onerror = (event) => {
+      event.preventDefault();
+      failLayout("The graph renderer stopped unexpectedly.");
+    };
+    worker.onmessageerror = () => failLayout("The graph renderer returned unreadable data.");
     worker.onmessage = (
       event: MessageEvent<
         | {
@@ -796,6 +832,7 @@ export function WorkerCanvasGraph({
         | { type: "status"; state: "dragging" | "settling" | "settled" }
       >,
     ) => {
+      if (failed) return;
       if (event.data.type === "progress") {
         layoutPreviewSinkRef.current?.({
           nodeIndices: event.data.nodeIndices,
@@ -839,6 +876,10 @@ export function WorkerCanvasGraph({
         return;
       }
       const result = event.data;
+      if (readyTimer) {
+        clearTimeout(readyTimer);
+        readyTimer = null;
+      }
       if (showMetrics) setLayoutTicks(result.layoutTicks);
       const completeLayout = () => {
         layoutCompleteSinkRef.current?.();
@@ -847,20 +888,30 @@ export function WorkerCanvasGraph({
       if (revealTransitionMs === 0) completeLayout();
       else completionTimer = setTimeout(completeLayout, revealTransitionMs);
     };
-    worker.postMessage({
-      type: "init",
-      nodes: workerGraph.nodes,
-      links: workerGraph.links,
-      width: LAYOUT_WIDTH,
-      height: LAYOUT_HEIGHT,
-      collisionGap: workerGraph.collisionGap,
-    });
+    readyTimer = setTimeout(
+      () => failLayout("The graph layout took too long to finish."),
+      WORKER_READY_TIMEOUT_MS,
+    );
+    try {
+      worker.postMessage({
+        type: "init",
+        nodes: workerGraph.nodes,
+        links: workerGraph.links,
+        width: LAYOUT_WIDTH,
+        height: LAYOUT_HEIGHT,
+        collisionGap: workerGraph.collisionGap,
+      });
+    } catch {
+      failLayout("The graph renderer could not receive the layout data.");
+    }
     return () => {
+      failed = true;
+      if (readyTimer) clearTimeout(readyTimer);
       if (completionTimer) clearTimeout(completionTimer);
-      workerRef.current = null;
+      if (workerRef.current === worker) workerRef.current = null;
       worker.terminate();
     };
-  }, [showMetrics, workerGraph]);
+  }, [showMetrics, workerAttempt, workerGraph]);
 
   return (
     <div className={production ? "graph-canvas-stage" : "graph-scale-stage"}>
@@ -879,27 +930,40 @@ export function WorkerCanvasGraph({
       />
       <div
         className={`graph-scale-layout-curtain${layoutMs === null ? "" : " graph-scale-layout-curtain-ready"}`}
-        role="status"
+        role={layoutError ? "alert" : "status"}
         aria-live="polite"
         aria-hidden={layoutMs !== null}
-        aria-label={`Settling memory field, ${layoutProgress.revealedNodes} of ${data.nodes.length} Memories`}
       >
-        <div className="graph-scale-layout-loader">
-          <span className="graph-scale-layout-spinner" aria-hidden="true" />
-          <div>
-            <strong>Settling memory field</strong>
-          </div>
-          <span className="graph-scale-layout-progress" aria-hidden="true">
-            <span
-              style={{
-                width: `${
-                  data.nodes.length > 0
-                    ? (layoutProgress.revealedNodes / data.nodes.length) * 100
-                    : 0
-                }%`,
-              }}
-            />
+        <div
+          className={`graph-scale-layout-loader${layoutError ? " graph-scale-layout-loader-error" : ""}`}
+        >
+          <span
+            className={`graph-scale-layout-spinner${layoutError ? " graph-scale-layout-spinner-error" : ""}`}
+            aria-hidden="true"
+          >
+            {layoutError ? "!" : null}
           </span>
+          <div>
+            <strong>{layoutError ? "Graph layout unavailable" : "Settling memory field"}</strong>
+            {layoutError ? <small>{layoutError}</small> : null}
+          </div>
+          {layoutError ? (
+            <button type="button" className="graph-scale-layout-retry" onClick={retryLayout}>
+              Retry
+            </button>
+          ) : (
+            <span className="graph-scale-layout-progress" aria-hidden="true">
+              <span
+                style={{
+                  width: `${
+                    data.nodes.length > 0
+                      ? (layoutProgress.revealedNodes / data.nodes.length) * 100
+                      : 0
+                  }%`,
+                }}
+              />
+            </span>
+          )}
         </div>
       </div>
       {showMetrics ? (

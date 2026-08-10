@@ -23,7 +23,9 @@ export function graphNodeCentrality(
 ): Map<string, GraphNodeCentrality> {
   const neighbors = new Map(nodes.map((node) => [node.id, new Set<string>()]));
   for (const link of links) {
-    if (!neighbors.has(link.source) || !neighbors.has(link.target)) continue;
+    if (link.source === link.target || !neighbors.has(link.source) || !neighbors.has(link.target)) {
+      continue;
+    }
     neighbors.get(link.source)?.add(link.target);
     neighbors.get(link.target)?.add(link.source);
   }

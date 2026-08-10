@@ -53,7 +53,7 @@ describe("graph node centrality", () => {
       ],
     );
 
-    expect(metrics.get("a")?.degree).toBe(2);
+    expect(metrics.get("a")?.degree).toBe(1);
     expect(metrics.get("b")?.degree).toBe(1);
   });
 });

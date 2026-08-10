@@ -1017,6 +1017,7 @@ body {
 .graph-canvas-stage {
   position: absolute;
   inset: 0;
+  z-index: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1042,27 +1043,6 @@ body {
   display: block;
   cursor: grab;
   touch-action: none;
-}
-
-.graph-edge-tooltip {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  left: 0;
-  max-width: min(360px, calc(100vw - 48px));
-  pointer-events: none;
-  opacity: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.08);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 14px;
-  white-space: nowrap;
-  transition: opacity 0.08s;
 }
 
 /* ── Graph legend / controls ────────────────────────────────────────────────── */
@@ -4301,12 +4281,29 @@ a.ext {
   animation: graph-scale-spin 720ms linear infinite;
 }
 
+.graph-scale-layout-spinner-error {
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.graph-scale-layout-spinner-error::after {
+  display: none;
+}
+
 .graph-scale-layout-loader > div {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+}
+
+.graph-scale-layout-loader-error > div {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
 }
 
 .graph-scale-layout-loader strong {
@@ -4316,6 +4313,27 @@ a.ext {
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.graph-scale-layout-loader small {
+  display: block;
+  margin-top: 3px;
+  color: var(--mute);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.graph-scale-layout-retry {
+  grid-column: 1 / -1;
+  justify-self: start;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
 }
 
 .graph-scale-layout-progress {
