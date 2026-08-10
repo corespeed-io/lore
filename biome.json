@@ -13,6 +13,8 @@
       "!**/.superpowers",
       "!**/evaluation/datasets",
       "!**/evaluation/results",
+      "!**/packages/*/dist",
+      "!**/packages/*/src/generated",
       "!**/node_modules",
       "!**/tmp",
       "!**/conductor.json",
