@@ -8,6 +8,7 @@ import {
   useLoreMemory,
   useLoreMemoryProposalMutations,
   useLoreMemoryProposals,
+  useLoreObservations,
 } from "@/lib/lore-swr";
 import type { MemoryProposal, MemoryProposalReviewResult, MemoryProposalStatus } from "@/lib/types";
 
@@ -23,6 +24,7 @@ const FILTERS: Array<{ label: string; status: MemoryProposalStatus }> = [
   { label: "Accepted", status: "accepted" },
   { label: "Rejected", status: "rejected" },
 ];
+const EMPTY_OBSERVATION_IDS: readonly string[] = [];
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -52,6 +54,7 @@ export function MemoryProposalsView({
   const [receipt, setReceipt] = useState<MemoryProposalReviewResult | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dismissedRequestError, setDismissedRequestError] = useState<string | null>(null);
+  const [dismissedObservationError, setDismissedObservationError] = useState<string | null>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
   const {
     data: proposalData,
@@ -67,6 +70,17 @@ export function MemoryProposalsView({
       ? receipt.proposal
       : (proposals.find((proposal) => proposal.id === selectedId) ?? null);
   const receiptMemoryId = receipt?.memory?.id ?? null;
+  const observationIds = selected?.evidenceObservationIds ?? EMPTY_OBSERVATION_IDS;
+  const {
+    data: evidenceObservations = [],
+    error: observationError,
+    isLoading: observationsLoading,
+    mutate: mutateObservations,
+  } = useLoreObservations(workspaceId, observationIds);
+  const observationsById = useMemo(
+    () => new Map(evidenceObservations.map((observation) => [observation.id, observation])),
+    [evidenceObservations],
+  );
   const targetId = selected?.kind === "update" ? selected.targetMemoryId : null;
   const {
     data: targetMemory,
@@ -80,10 +94,18 @@ export function MemoryProposalsView({
   const requestErrorMessage = requestError ? errorMessage(requestError) : null;
   const visibleRequestError =
     requestErrorMessage === dismissedRequestError ? null : requestErrorMessage;
+  const observationErrorMessage = observationError ? errorMessage(observationError) : null;
+  const visibleObservationError =
+    observationErrorMessage === dismissedObservationError ? null : observationErrorMessage;
   const targetChanged = Boolean(
     selected?.status === "pending" &&
       selected.kind === "update" &&
       (!targetMemory || targetMemory.version !== selected.baseMemoryVersion),
+  );
+  const observationEvidenceUnavailable = Boolean(
+    observationIds.length > 0 &&
+      !observationsLoading &&
+      (observationError || evidenceObservations.length !== observationIds.length),
   );
 
   useEffect(() => {
@@ -103,6 +125,7 @@ export function MemoryProposalsView({
     setSelectedId(id);
     setReceipt(null);
     setActionError(null);
+    setDismissedObservationError(null);
     window.requestAnimationFrame(() => reviewHeadingRef.current?.focus());
   }
 
@@ -112,6 +135,7 @@ export function MemoryProposalsView({
     setReceipt(null);
     setActionError(null);
     setDismissedRequestError(null);
+    setDismissedObservationError(null);
   }
 
   async function review(decision: "accept" | "reject") {
@@ -133,14 +157,16 @@ export function MemoryProposalsView({
       });
     } catch (cause) {
       setActionError(errorMessage(cause));
+      const refreshes: Array<Promise<unknown>> = [mutateProposals()];
       if (selected.kind === "update" && selected.targetMemoryId) {
-        await Promise.allSettled([
-          mutateProposals(),
+        refreshes.push(
           mutations.mutateCache(loreKeys.memory(workspaceId, selected.targetMemoryId), undefined, {
             revalidate: true,
           }),
-        ]);
+        );
       }
+      if (observationIds.length > 0) refreshes.push(mutateObservations());
+      await Promise.allSettled(refreshes);
       return;
     }
 
@@ -348,21 +374,93 @@ export function MemoryProposalsView({
               </details>
 
               <section className="proposal-evidence" aria-labelledby="proposal-evidence-title">
-                <h3 id="proposal-evidence-title">Evidence Memories</h3>
-                {selected.evidenceMemoryIds.length ? (
-                  <ul>
-                    {selected.evidenceMemoryIds.map((memoryId, index) => (
-                      <li key={memoryId}>
-                        <button type="button" onClick={() => onOpenMemory(memoryId)}>
-                          Evidence {index + 1}
-                          <span>{memoryId}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p>No evidence Memories were attached to this proposal.</p>
+                <h3 id="proposal-evidence-title">Evidence</h3>
+                {selected.evidenceMemoryIds.length > 0 && (
+                  <div>
+                    <p>Canonical Memories</p>
+                    <ul>
+                      {selected.evidenceMemoryIds.map((memoryId, index) => (
+                        <li key={memoryId}>
+                          <button type="button" onClick={() => onOpenMemory(memoryId)}>
+                            Memory {index + 1}
+                            <span>{memoryId}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
+                {selected.evidenceObservationIds.length > 0 && (
+                  <div>
+                    <p>Raw Observations</p>
+                    {visibleObservationError && (
+                      <div className="native-error proposal-error" role="alert">
+                        <span>Observation evidence request failed: {visibleObservationError}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDismissedObservationError(null);
+                            void mutateObservations();
+                          }}
+                        >
+                          Retry
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDismissedObservationError(visibleObservationError)}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    )}
+                    <ul>
+                      {selected.evidenceObservationIds.map((observationId, index) => {
+                        const observation = observationsById.get(observationId);
+                        const observationState = observation
+                          ? observation.kind
+                          : observationsLoading
+                            ? "loading"
+                            : observationError
+                              ? "request failed"
+                              : "unavailable";
+                        return (
+                          <li key={observationId}>
+                            <article>
+                              <header>
+                                <strong>Observation {index + 1}</strong>
+                                <span>{observationState}</span>
+                              </header>
+                              {observation ? (
+                                <>
+                                  <div>{observation.content}</div>
+                                  <small>
+                                    SHA-256 {observation.payloadSha256} · {observationId}
+                                  </small>
+                                </>
+                              ) : (
+                                <p>
+                                  {observationsLoading
+                                    ? "Loading Observation…"
+                                    : observationError
+                                      ? "Observation evidence could not be loaded."
+                                      : "Observation is no longer visible or has been forgotten."}
+                                </p>
+                              )}
+                            </article>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <p>
+                      Observations remain durable evidence until their Episode is explicitly
+                      forgotten.
+                    </p>
+                  </div>
+                )}
+                {selected.evidenceMemoryIds.length === 0 &&
+                  selected.evidenceObservationIds.length === 0 && (
+                    <p>No evidence was attached to this proposal.</p>
+                  )}
               </section>
 
               {selected.kind === "update" && targetChanged && !targetLoading && (
@@ -372,6 +470,21 @@ export function MemoryProposalsView({
                     {targetError || !targetMemory
                       ? "The target Memory is unavailable, so this proposal cannot be accepted."
                       : `The target is now v${targetMemory.version}; this proposal was based on v${selected.baseMemoryVersion}. Lore will not silently rebase it.`}
+                  </span>
+                </div>
+              )}
+
+              {selected.status === "pending" && observationEvidenceUnavailable && (
+                <div className="proposal-conflict" role="alert">
+                  <strong>
+                    {observationError
+                      ? "Observation evidence could not be verified"
+                      : "Observation evidence unavailable"}
+                  </strong>
+                  <span>
+                    {observationError
+                      ? "Lore will not accept this proposal until the evidence request succeeds. Retry the request before reviewing."
+                      : "Lore will not accept this proposal without all cited raw evidence. The Observation may have been explicitly forgotten or may no longer be visible."}
                   </span>
                 </div>
               )}
@@ -420,7 +533,13 @@ export function MemoryProposalsView({
                   <button
                     type="button"
                     className="proposal-accept"
-                    disabled={mutations.isMutating || targetChanged || targetLoading}
+                    disabled={
+                      mutations.isMutating ||
+                      targetChanged ||
+                      targetLoading ||
+                      observationsLoading ||
+                      observationEvidenceUnavailable
+                    }
                     onClick={() => void review("accept")}
                   >
                     {mutations.isMutating ? "Reviewing…" : "Accept into Memory"}

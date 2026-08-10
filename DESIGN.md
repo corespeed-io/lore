@@ -249,7 +249,12 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   is refused until review frees an inbox slot, so no pending proposal becomes
   unreachable behind the native list bound.
 - Selecting a proposal exposes its complete proposed content and metadata before
-  actions. Evidence opens through the standard authorized Memory detail workflow.
+  actions. Canonical Memory evidence opens through the standard authorized Memory
+  detail workflow. Raw Observation evidence is shown inline with kind, full
+  currently visible content, and SHA-256; loading, request-failed, and
+  unavailable-or-forgotten states remain distinguishable. Observation evidence is durable until
+  its Episode is explicitly forgotten and does not become searchable Memory merely
+  by appearing in review.
 - Accept creates or updates canonical Memory exactly once. An update whose target
   version changed remains pending, disables acceptance, and explains the conflict;
   it is never silently rebased. Reject is explicit and irreversible but does not

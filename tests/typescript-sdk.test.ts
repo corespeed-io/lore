@@ -1,4 +1,5 @@
 import {
+  type Episode,
   LoreApiError,
   LoreClient,
   loreConfigurationFromEnvironment,
@@ -10,6 +11,36 @@ import { describe, expect, test, vi } from "vitest";
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000001";
 const MEMORY_ID = "20000000-0000-4000-8000-000000000001";
 const AGENT_TOKEN = `lore_agent_${"a".repeat(64)}`;
+
+function episode(): Episode {
+  return {
+    id: "60000000-0000-4000-8000-000000000001",
+    workspaceId: WORKSPACE_ID,
+    ownerUserId: "30000000-0000-4000-8000-000000000001",
+    recordedByActorKind: "agent",
+    recordedByAgentId: "40000000-0000-4000-8000-000000000001",
+    kind: "conversation",
+    scope: "private",
+    startedAt: "2026-08-10T00:00:00.000Z",
+    endedAt: "2026-08-10T00:00:00.000Z",
+    observationCount: 1,
+    createdAt: "2026-08-10T00:00:01.000Z",
+    observations: [
+      {
+        id: "70000000-0000-4000-8000-000000000001",
+        workspaceId: WORKSPACE_ID,
+        episodeId: "60000000-0000-4000-8000-000000000001",
+        ordinal: 0,
+        kind: "message",
+        observedAt: "2026-08-10T00:00:00.000Z",
+        payloadSha256: "a".repeat(64),
+        content: "Raw evidence",
+        metadata: {},
+        createdAt: "2026-08-10T00:00:01.000Z",
+      },
+    ],
+  };
+}
 
 function memory(overrides: Partial<Memory> = {}): Memory {
   return {
@@ -41,6 +72,7 @@ function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
     proposedScope: "private",
     proposedMetadata: {},
     evidenceMemoryIds: [],
+    evidenceObservationIds: [],
     status: "pending",
     reviewedByUserId: null,
     acceptedMemoryId: null,
@@ -137,6 +169,41 @@ describe("Lore TypeScript SDK", () => {
     const [reviewUrl, reviewInit] = fetchMock.mock.calls[2] as [URL, RequestInit];
     expect(reviewUrl.pathname).toBe(`/api/v1/memory-proposals/${pending.id}/review`);
     expect(reviewInit.body).toBe(JSON.stringify({ decision: "accept" }));
+  });
+
+  test("records and pages immutable Episode evidence over stable v1 routes", async () => {
+    const recorded = episode();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(recorded, { status: 201 }))
+      .mockResolvedValueOnce(
+        Response.json([recorded], { headers: { "x-lore-next-cursor": "episode-next" } }),
+      )
+      .mockResolvedValueOnce(Response.json(recorded.observations));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    const input = {
+      kind: "conversation" as const,
+      observations: [{ kind: "message" as const, content: "Raw evidence" }],
+    };
+
+    await workspace.recordEpisode(input, { idempotencyKey: "episode-1" });
+    const page = await workspace.listEpisodes({ kind: "conversation", limit: 25 });
+    await workspace.getObservations([recorded.observations[0].id]);
+
+    const [recordUrl, recordInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(recordUrl.pathname).toBe("/api/v1/episodes");
+    expect(new Headers(recordInit.headers).get("idempotency-key")).toBe("episode-1");
+    expect(recordInit.body).toBe(JSON.stringify(input));
+    const [listUrl] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(listUrl.pathname + listUrl.search).toBe("/api/v1/episodes?limit=25&kind=conversation");
+    expect(page).toEqual({ episodes: [recorded], nextCursor: "episode-next" });
+    const [observationsUrl] = fetchMock.mock.calls[2] as [URL, RequestInit];
+    expect(observationsUrl.pathname + observationsUrl.search).toBe(
+      `/api/v1/observations?id=${recorded.observations[0].id}`,
+    );
   });
 
   test("refuses authenticated plain HTTP outside loopback unless explicitly allowed", () => {

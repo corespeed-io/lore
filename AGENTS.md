@@ -21,12 +21,14 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0008_memory_proposals.sql`
+- migrations `0001_initial.sql` through `0009_observation_evidence.sql`
   define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, embedding generations, Agent
-  lifecycle, and owner-private Memory Proposals with RLS;
-- `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
+  lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
+  evidence with RLS;
+- `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
+  `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
@@ -80,12 +82,20 @@ been removed. Lore now has a native implementation:
   surface;
 - Memory Proposals are the safe boundary for suggested create/update operations:
   an Actor with write authority may submit complete proposed content and up to 50
-  visible evidence Memory ids, but only the owner human may accept or reject it.
+  visible Memory/Observation evidence ids, but only the owner human may accept or
+  reject it.
   Pending proposals never enter Memory browse/search/Graph/export/outbox. Update
   acceptance is exact-version and never silently rebases; future opt-in AutoDream
   work must use this boundary instead of silently persisting generated content.
   Proposal content expires after 30 days, and hard-deleting a target or accepted
   Memory removes its associated proposals and replay bodies immediately;
+- Episodes are bounded, ordered evidence envelopes; their immutable Observations
+  preserve message, tool, document-fragment, or event content until the owner User
+  or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
+  Memory retrieval or Graph, and may be read as Proposal evidence only through
+  current Actor/RLS visibility. An Agent records provenance; it is not a generic
+  Source. Any future automatic retention must be an explicit opt-in deployment
+  policy;
 - `packages/typescript-sdk` generates its public types from the canonical OpenAPI
   document and owns the deep integration client. `packages/cli` and the external
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
@@ -272,6 +282,7 @@ invariants.
 The v1 system must provide:
 
 - Memory create, read, update, delete, and provenance;
+- immutable, durable Observation evidence grouped into bounded Episodes;
 - hybrid retrieval over only the Memories the caller may see;
 - Users, Identities, Workspaces, Memberships, Agents, and agent Workspace grants;
 - user-private and Workspace-shared Memory enforced with Postgres RLS;
@@ -299,6 +310,9 @@ Workspace ──< Memory >── owner User
 Agent ──< Memory.created_by_agent_id (provenance only)
 Workspace ──< Memory Proposal >── owner User
 Agent ──< Memory Proposal.proposed_by_agent_id (provenance only)
+Workspace ──< Episode >── owner User
+Episode ──< Observation
+Agent ──< Episode.recorded_by_agent_id (provenance only)
 ```
 
 Memory isolation rules:
@@ -318,6 +332,9 @@ Memory isolation rules:
 - A Memory Proposal is owner-private review state, not a draft Memory. Write-authorized
   Actors may submit it, but only its owner human may accept or reject it. Until
   acceptance it is absent from canonical retrieval, Graph, export, and outbox.
+- An Observation is immutable evidence, not Memory. It inherits owner/scope
+  visibility from its Episode, remains until explicit Episode forget, and never
+  enters ordinary Memory retrieval or Graph.
 - Visibility and write authority are separate: sharing a Memory does not transfer
   ownership or grant other members permission to mutate it. Only the owner User or
   an authorized Agent acting for that User may mutate it.
@@ -330,6 +347,7 @@ The relational model centers on:
 - `agents`, `agent_workspace_grants`, `agent_credentials`;
 - `memories`, `memory_chunks`, `memory_links`, Memory Proposals/evidence, and
   embedding/index state;
+- `episodes` and `observations` for durable non-canonical evidence;
 - `evaluation_suites`, `evaluation_cases`, `evaluation_runs`, and
   `evaluation_results`.
 
@@ -422,6 +440,9 @@ surfaces:
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
   chunking, indexing, provenance, and permission invalidation.
+- **Observation module:** atomically record, list, retrieve, and explicitly forget
+  bounded immutable Episodes while keeping their Observations outside canonical
+  Memory retrieval and enforcing the same owner/scope/RLS rules.
 - **Graph module:** return visible Memory nodes, durable Memory Links, and derived
   affinities while guaranteeing that every relationship endpoint is present in the
   same authorized read model.

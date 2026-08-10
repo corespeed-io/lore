@@ -4,6 +4,7 @@ import {
   exportWorkspaceArchive,
   getCurrentHumanActor,
   getDeploymentCapabilities,
+  getObservations,
   getReadiness,
   importWorkspaceArchive,
   listAgentCredentials,
@@ -47,6 +48,7 @@ function proposal(): MemoryProposal {
     proposedScope: "private",
     proposedMetadata: {},
     evidenceMemoryIds: [],
+    evidenceObservationIds: [],
     status: "pending",
     reviewedByUserId: null,
     acceptedMemoryId: null,
@@ -182,6 +184,21 @@ test("Proposal browser client scopes review history and decisions to one Workspa
   });
 });
 
+test("Observation browser client preserves evidence order inside one Workspace", async () => {
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const first = "60000000-0000-4000-8000-000000000001";
+  const second = "60000000-0000-4000-8000-000000000002";
+  const fetchMock = vi.fn().mockResolvedValueOnce(Response.json([]));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(getObservations(workspaceId, [second, first])).resolves.toEqual([]);
+
+  const [requestUrl, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+  const url = new URL(requestUrl, "http://lore.local");
+  expect(url.pathname + url.search).toBe(`/api/v1/observations?id=${second}&id=${first}`);
+  expect(new Headers(options.headers).get("x-lore-workspace-id")).toBe(workspaceId);
+});
+
 test("Operations browser client treats bounded 503 readiness as a typed unready report", async () => {
   vi.stubGlobal(
     "fetch",
@@ -230,7 +247,7 @@ test("Operations browser client scopes Actor, capabilities, export, and dry-run 
     .mockResolvedValueOnce(
       Response.json({
         apiVersion: "v1",
-        schemaRevision: 8,
+        schemaRevision: 9,
         deploymentId: "20000000-0000-4000-8000-000000000001",
         features: {},
         limits: {
@@ -238,6 +255,10 @@ test("Operations browser client scopes Actor, capabilities, export, and dry-run 
           workspaceArchiveLinks: 50_000,
           memoryProposalEvidence: 50,
           memoryProposalList: 100,
+          episodeObservations: 100,
+          episodeContentCharacters: 1_000_000,
+          observationContentCharacters: 100_000,
+          observationBatchRead: 50,
         },
         activeEmbeddingGeneration: null,
       }),

@@ -68,6 +68,14 @@ const lore = new LoreClient({
 });
 const memories = lore.workspace(process.env.LORE_WORKSPACE_ID ?? "");
 
+const episode = await memories.recordEpisode(
+  {
+    kind: "conversation",
+    observations: [{ kind: "message", content: "The rollout starts Monday." }],
+  },
+  { idempotencyKey: "rollout-episode-1" },
+);
+
 const created = await memories.remember({
   content: "The rollout starts Monday.",
   scope: "shared",
@@ -79,16 +87,19 @@ await memories.proposeMemory(
     targetMemoryId: created.id,
     expectedVersion: created.version,
     content: "The rollout starts after human approval.",
+    evidenceObservationIds: [episode.observations[0].id],
   },
   { idempotencyKey: "rollout-proposal-1" },
 );
 ```
 
-The Workspace client also provides `listMemoryProposals`, `proposeMemory`, and
-`reviewMemoryProposal` alongside `capabilities`, `graph`, `listMemories`,
-`searchMemories`, `remember`, `getMemory`, `updateMemory`, and `forgetMemory`.
-Proposal submission and direct Memory mutation methods create a replay-safe
-idempotency key unless the caller supplies one. Direct update/forget and update
+The Workspace client also provides `listEpisodes`, `recordEpisode`, `getEpisode`,
+bounded `getObservations`, and `forgetEpisode`, plus `listMemoryProposals`,
+`proposeMemory`, and `reviewMemoryProposal` alongside the canonical Memory methods.
+An Observation is durable raw evidence, not searchable Memory. Proposal evidence is
+resolved again under the reviewing human's current RLS visibility.
+Episode recording, Proposal submission, and direct Memory mutation methods create
+a replay-safe idempotency key unless the caller supplies one. Direct update/forget and update
 proposals require the current positive Memory version. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
@@ -113,6 +124,14 @@ lore = LoreClient(
 )
 memories = lore.workspace(os.environ["LORE_WORKSPACE_ID"])
 
+episode = memories.record_episode(
+    {
+        "kind": "conversation",
+        "observations": [{"kind": "message", "content": "The rollout starts Monday."}],
+    },
+    idempotency_key="rollout-episode-1",
+)
+
 created = memories.remember(
     "The rollout starts Monday.",
     scope="shared",
@@ -129,6 +148,7 @@ memories.propose_memory(
         "kind": "create",
         "content": "Suggested note awaiting human review.",
         "scope": "private",
+        "evidenceObservationIds": [episode["observations"][0]["id"]],
     },
     idempotency_key="suggested-note-1",
 )
@@ -152,8 +172,11 @@ printf %s "fact" | node packages/cli/dist/bin.js memory remember --stdin \
   --scope private --idempotency-key fact-1
 printf %s "suggested fact" | node packages/cli/dist/bin.js memory propose create \
   --stdin --scope private --idempotency-key proposal-1
+printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":"raw evidence"}]}' \
+  | node packages/cli/dist/bin.js episode record --stdin --idempotency-key episode-1
+node packages/cli/dist/bin.js episode list --scope private
 node packages/cli/dist/bin.js memory propose update MEMORY_UUID --version 2 \
-  --content "suggested replacement" --evidence EVIDENCE_MEMORY_UUID \
+  --content "suggested replacement" --observation-evidence OBSERVATION_UUID \
   --idempotency-key proposal-update-1
 printf %s "new fact" | node packages/cli/dist/bin.js memory update MEMORY_UUID \
   --version 2 --stdin --idempotency-key fact-update-1
@@ -182,6 +205,7 @@ node packages/mcp/dist/bin.js
 It exposes:
 
 - `lore_list`, `lore_search`, and `lore_get` as read-only tools;
+- `lore_observe` to durably record a bounded, non-canonical Episode;
 - `lore_remember` as a non-destructive mutation tool;
 - `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, metadata, or visibility;
@@ -199,12 +223,12 @@ full Memory content, and detail/mutation responses mark `contentTruncated` or
 `metadataTruncated` when a value cannot safely fit. Metadata inputs retain the
 Portable Core's 100,000-character, 32-level, and 10,000-value limits.
 
-All four mutation tools accept an optional `idempotencyKey`. A caller retrying an
+All five mutation tools accept an optional `idempotencyKey`. A caller retrying an
 operation after losing the response must reuse the same key; omitting it creates a
 fresh operation.
 
 AutoDream is not part of this adapter. A future AutoDream process must remain an
-explicit opt-in extension outside Portable Core; it may submit a Memory Proposal,
-but must not silently persist summaries, merges, or insights into Memory core.
-Pending and reviewed proposal content expires after 30 days. Forgetting a proposal's
-target or accepted Memory removes that proposal content immediately.
+explicit opt-in extension outside Portable Core; it may record Observations and
+submit a Memory Proposal, but must not silently persist summaries, merges, or
+insights into Memory core. Observation content remains until an explicit Episode
+forget. Pending and reviewed Proposal content expires after 30 days.

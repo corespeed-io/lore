@@ -118,6 +118,7 @@ export interface MemoryProposal {
   proposedScope: MemoryScope;
   proposedMetadata: Record<string, unknown>;
   evidenceMemoryIds: string[];
+  evidenceObservationIds: string[];
   status: MemoryProposalStatus;
   reviewedByUserId: string | null;
   acceptedMemoryId: string | null;
@@ -127,6 +128,7 @@ export interface MemoryProposal {
 
 interface ProposedMemoryBase {
   evidenceMemoryIds?: readonly string[];
+  evidenceObservationIds?: readonly string[];
 }
 
 export interface ProposeMemoryCreate extends ProposedMemoryBase {
@@ -274,6 +276,11 @@ interface MemoryProposalRow {
 
 interface MemoryProposalEvidenceRow {
   memory_id: string;
+  proposal_id: string;
+}
+
+interface MemoryProposalObservationEvidenceRow {
+  observation_id: string;
   proposal_id: string;
 }
 
@@ -1252,6 +1259,7 @@ function toMemory(row: MemoryRow): Memory {
 function toMemoryProposal(
   row: MemoryProposalRow,
   evidenceMemoryIds: readonly string[] = [],
+  evidenceObservationIds: readonly string[] = [],
 ): MemoryProposal {
   return {
     id: row.id,
@@ -1266,6 +1274,7 @@ function toMemoryProposal(
     proposedScope: row.proposed_scope,
     proposedMetadata: row.proposed_metadata,
     evidenceMemoryIds: [...evidenceMemoryIds],
+    evidenceObservationIds: [...evidenceObservationIds],
     status: row.status,
     reviewedByUserId: row.reviewed_by_user_id,
     acceptedMemoryId: row.accepted_memory_id,
@@ -1406,22 +1415,33 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
   async function proposalEvidenceIds(
     transaction: PostgresTransaction,
     proposalId: string,
-  ): Promise<string[]> {
-    const evidence = await transaction.query<MemoryProposalEvidenceRow>(
+  ): Promise<{ memoryIds: string[]; observationIds: string[] }> {
+    const memoryEvidence = await transaction.query<MemoryProposalEvidenceRow>(
       `SELECT proposal_id, memory_id
        FROM memory_proposal_evidence
        WHERE proposal_id = $1
        ORDER BY ordinal`,
       [proposalId],
     );
-    return evidence.rows.map((row) => row.memory_id);
+    const observationEvidence = await transaction.query<MemoryProposalObservationEvidenceRow>(
+      `SELECT proposal_id, observation_reference_id AS observation_id
+       FROM memory_proposal_observation_evidence
+       WHERE proposal_id = $1
+       ORDER BY ordinal`,
+      [proposalId],
+    );
+    return {
+      memoryIds: memoryEvidence.rows.map((row) => row.memory_id),
+      observationIds: observationEvidence.rows.map((row) => row.observation_id),
+    };
   }
 
   async function proposalFromRow(
     transaction: PostgresTransaction,
     row: MemoryProposalRow,
   ): Promise<MemoryProposal> {
-    return toMemoryProposal(row, await proposalEvidenceIds(transaction, row.id));
+    const evidence = await proposalEvidenceIds(transaction, row.id);
+    return toMemoryProposal(row, evidence.memoryIds, evidence.observationIds);
   }
 
   async function proposalsFromRows(
@@ -1429,20 +1449,39 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     rows: readonly MemoryProposalRow[],
   ): Promise<MemoryProposal[]> {
     if (!rows.length) return [];
-    const evidence = await transaction.query<MemoryProposalEvidenceRow>(
+    const memoryEvidence = await transaction.query<MemoryProposalEvidenceRow>(
       `SELECT proposal_id, memory_id
        FROM memory_proposal_evidence
        WHERE proposal_id = ANY($1::uuid[])
        ORDER BY proposal_id, ordinal`,
       [rows.map((row) => row.id)],
     );
-    const byProposal = new Map<string, string[]>();
-    for (const row of evidence.rows) {
-      const ids = byProposal.get(row.proposal_id) ?? [];
+    const observationEvidence = await transaction.query<MemoryProposalObservationEvidenceRow>(
+      `SELECT proposal_id, observation_reference_id AS observation_id
+       FROM memory_proposal_observation_evidence
+       WHERE proposal_id = ANY($1::uuid[])
+       ORDER BY proposal_id, ordinal`,
+      [rows.map((row) => row.id)],
+    );
+    const memoriesByProposal = new Map<string, string[]>();
+    for (const row of memoryEvidence.rows) {
+      const ids = memoriesByProposal.get(row.proposal_id) ?? [];
       ids.push(row.memory_id);
-      byProposal.set(row.proposal_id, ids);
+      memoriesByProposal.set(row.proposal_id, ids);
     }
-    return rows.map((row) => toMemoryProposal(row, byProposal.get(row.id) ?? []));
+    const observationsByProposal = new Map<string, string[]>();
+    for (const row of observationEvidence.rows) {
+      const ids = observationsByProposal.get(row.proposal_id) ?? [];
+      ids.push(row.observation_id);
+      observationsByProposal.set(row.proposal_id, ids);
+    }
+    return rows.map((row) =>
+      toMemoryProposal(
+        row,
+        memoriesByProposal.get(row.id) ?? [],
+        observationsByProposal.get(row.id) ?? [],
+      ),
+    );
   }
 
   return {
@@ -1508,8 +1547,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       options: MemoryProposalMutationOptions = {},
     ): Promise<MemoryProposal> {
       const evidenceMemoryIds = [...new Set(input.evidenceMemoryIds ?? [])];
-      if (evidenceMemoryIds.length > 50) {
-        throw new TypeError("A Memory Proposal may cite at most 50 evidence Memories");
+      const evidenceObservationIds = [...new Set(input.evidenceObservationIds ?? [])];
+      if (evidenceMemoryIds.length + evidenceObservationIds.length > 50) {
+        throw new TypeError("A Memory Proposal may cite at most 50 evidence records");
       }
       if (
         input.kind === "update" &&
@@ -1604,6 +1644,22 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             }
           }
 
+          if (evidenceObservationIds.length) {
+            const visibleEvidence = await transaction.query<{ id: string }>(
+              `SELECT id
+               FROM observations
+               WHERE workspace_id = $1
+                 AND id = ANY($2::uuid[])`,
+              [actor.workspaceId, evidenceObservationIds],
+            );
+            const visibleIds = new Set(visibleEvidence.rows.map((row) => row.id));
+            if (evidenceObservationIds.some((id) => !visibleIds.has(id))) {
+              throw new MemoryProposalAccessDeniedError(
+                "Proposal evidence must be visible in the current Workspace",
+              );
+            }
+          }
+
           const inserted = await transaction.query<MemoryProposalRow>(
             `SELECT *
              FROM lore.submit_memory_proposal(
@@ -1635,10 +1691,19 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               [actor.workspaceId, id, memoryId, ordinal],
             );
           }
-          const proposal = {
-            ...toMemoryProposal(inserted.rows[0], evidenceMemoryIds),
+          for (const [ordinal, observationId] of evidenceObservationIds.entries()) {
+            await transaction.query(
+              `INSERT INTO memory_proposal_observation_evidence (
+                 workspace_id, proposal_id, observation_id, observation_reference_id, ordinal
+               ) VALUES ($1, $2, $3, $3, $4)`,
+              [actor.workspaceId, id, observationId, ordinal],
+            );
+          }
+          const proposal = toMemoryProposal(
+            inserted.rows[0],
             evidenceMemoryIds,
-          };
+            evidenceObservationIds,
+          );
           await completeMutation(
             transaction,
             claim.requestId,
@@ -1754,6 +1819,19 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               jobId: null,
               chunksChanged: false,
             };
+          }
+
+          const evidence = await proposalEvidenceIds(transaction, current.id);
+          if (evidence.observationIds.length) {
+            const visibleObservations = await transaction.query<{ id: string }>(
+              `SELECT lore.lock_reviewable_proposal_observations($1, $2) AS id`,
+              [actor.workspaceId, current.id],
+            );
+            if (visibleObservations.rows.length !== evidence.observationIds.length) {
+              throw new MemoryProposalReviewConflictError(
+                "Observation evidence is no longer available for review",
+              );
+            }
           }
 
           let applied: {

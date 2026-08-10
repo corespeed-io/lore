@@ -107,6 +107,7 @@ class LorePythonSdkTests(unittest.TestCase):
             "proposedScope": "private",
             "proposedMetadata": {},
             "evidenceMemoryIds": [],
+            "evidenceObservationIds": [],
             "status": "pending",
             "reviewedByUserId": None,
             "acceptedMemoryId": None,
@@ -159,6 +160,66 @@ class LorePythonSdkTests(unittest.TestCase):
                 "https://lore.example.test",
                 headers={"Authorization": "Bearer bypass"},
             )
+
+    def test_episode_methods_use_stable_v1_routes_and_cursor(self):
+        episode_id = "60000000-0000-4000-8000-000000000001"
+        episode = {
+            "id": episode_id,
+            "workspaceId": WORKSPACE_ID,
+            "ownerUserId": "30000000-0000-4000-8000-000000000001",
+            "recordedByActorKind": "agent",
+            "recordedByAgentId": "40000000-0000-4000-8000-000000000001",
+            "kind": "conversation",
+            "scope": "private",
+            "startedAt": "2026-08-10T00:00:00.000Z",
+            "endedAt": "2026-08-10T00:00:00.000Z",
+            "observationCount": 1,
+            "createdAt": "2026-08-10T00:00:01.000Z",
+            "observations": [],
+        }
+        transport = QueueTransport(
+            FakeResponse(episode, status=201),
+            FakeResponse([episode], headers={"x-lore-next-cursor": "episode-next"}),
+            FakeResponse(episode),
+            FakeResponse([]),
+            FakeResponse(b"", status=204),
+        )
+        workspace = LoreClient(
+            "http://127.0.0.1:3000", transport=transport
+        ).workspace(WORKSPACE_ID)
+        input_episode = {
+            "kind": "conversation",
+            "observations": [{"kind": "message", "content": "Raw evidence"}],
+        }
+
+        workspace.record_episode(input_episode, idempotency_key="episode-1")
+        page = workspace.list_episodes(kind="conversation", limit=25)
+        workspace.get_episode(episode_id)
+        workspace.get_observations(["70000000-0000-4000-8000-000000000001"])
+        workspace.forget_episode(episode_id, idempotency_key="episode-forget-1")
+
+        record_request = transport.requests[0][0]
+        self.assertEqual(record_request.full_url, "http://127.0.0.1:3000/api/v1/episodes")
+        self.assertEqual(record_request.get_header("Idempotency-key"), "episode-1")
+        self.assertEqual(json.loads(record_request.data), input_episode)
+        self.assertEqual(page.next_cursor, "episode-next")
+        self.assertEqual(
+            transport.requests[1][0].full_url,
+            "http://127.0.0.1:3000/api/v1/episodes?limit=25&kind=conversation",
+        )
+        self.assertEqual(
+            transport.requests[2][0].full_url,
+            f"http://127.0.0.1:3000/api/v1/episodes/{episode_id}",
+        )
+        self.assertEqual(
+            transport.requests[3][0].full_url,
+            "http://127.0.0.1:3000/api/v1/observations?id=70000000-0000-4000-8000-000000000001",
+        )
+        self.assertEqual(transport.requests[4][0].method, "DELETE")
+        self.assertEqual(
+            transport.requests[4][0].get_header("Idempotency-key"),
+            "episode-forget-1",
+        )
 
     def test_cloudflare_service_token_uses_client_headers(self):
         transport = QueueTransport(FakeResponse([]))

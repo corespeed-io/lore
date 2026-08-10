@@ -3514,7 +3514,7 @@ a.ext {
 }
 
 .proposal-target button,
-.proposal-evidence button,
+.proposal-evidence li > button,
 .proposal-receipt button {
   min-height: 34px;
   border: 1px solid var(--hairline);
@@ -3589,6 +3589,17 @@ a.ext {
   font-size: 12px;
 }
 
+.proposal-evidence > div {
+  margin-top: 12px;
+}
+
+.proposal-evidence > div > p {
+  margin: 0;
+  color: var(--body);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .proposal-evidence ul {
   display: grid;
   gap: 6px;
@@ -3597,18 +3608,65 @@ a.ext {
   padding: 0;
 }
 
-.proposal-evidence button {
+.proposal-evidence li > button {
   display: grid;
   width: 100%;
   text-align: left;
 }
 
-.proposal-evidence button span {
+.proposal-evidence li > button span {
   overflow-wrap: anywhere;
   margin-top: 3px;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 10px;
+}
+
+.proposal-evidence article {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--canvas);
+  padding: 12px;
+}
+
+.proposal-evidence article header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.proposal-evidence article header strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.proposal-evidence article header span,
+.proposal-evidence article small {
+  color: var(--muted);
+  font: 10px / 1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.proposal-evidence article > div {
+  max-height: 240px;
+  overflow: auto;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.proposal-evidence article > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .proposal-conflict,
@@ -4770,6 +4828,7 @@ a.ext {
   margin: 16px 24px 0;
   padding: 10px 12px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -4781,10 +4840,13 @@ a.ext {
 }
 
 .native-error button {
+  min-height: 34px;
   border: 0;
+  border-radius: 6px;
   background: none;
   color: inherit;
   font: 500 12px var(--font-sans);
+  padding: 7px 8px;
   cursor: pointer;
 }
 

@@ -10,6 +10,12 @@ type Schema<Name extends keyof components["schemas"]> = components["schemas"][Na
 export type Memory = Schema<"Memory">;
 export type MemoryScope = Memory["scope"];
 export type MemorySearchResult = Schema<"MemorySearchResult">;
+export type Episode = Schema<"Episode">;
+export type EpisodeSummary = Schema<"EpisodeSummary">;
+export type EpisodeKind = EpisodeSummary["kind"];
+export type Observation = Schema<"Observation">;
+export type ObservationKind = Observation["kind"];
+export type RecordEpisodeInput = Schema<"RecordEpisodeInput">;
 export type CreateMemoryInput = Schema<"CreateMemoryInput">;
 export type UpdateMemoryInput = Schema<"UpdateMemoryInput">;
 export type CreateMemoryProposalInput = Schema<"CreateMemoryProposalInput">;
@@ -81,6 +87,19 @@ export interface MemoryProposalListInput {
   limit?: number;
   signal?: AbortSignal;
   status?: MemoryProposalStatus;
+}
+
+export interface EpisodeListInput {
+  cursor?: string;
+  kind?: EpisodeKind;
+  limit?: number;
+  scope?: MemoryScope;
+  signal?: AbortSignal;
+}
+
+export interface EpisodePage {
+  episodes: readonly EpisodeSummary[];
+  nextCursor: string | null;
 }
 
 export interface MutationOptions {
@@ -526,6 +545,66 @@ export class LoreWorkspaceClient {
         signal: options.signal,
       })
     ).data;
+  }
+
+  async listEpisodes(input: EpisodeListInput = {}): Promise<EpisodePage> {
+    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    if (input.cursor) params.set("cursor", input.cursor);
+    if (input.kind) params.set("kind", input.kind);
+    if (input.scope) params.set("scope", input.scope);
+    const { data, response } = await this.transport.json<readonly EpisodeSummary[]>(
+      `api/v1/episodes?${params}`,
+      { workspaceId: this.workspaceId, signal: input.signal },
+    );
+    return { episodes: data, nextCursor: response.headers.get("x-lore-next-cursor") };
+  }
+
+  async recordEpisode(input: RecordEpisodeInput, options: MutationOptions = {}): Promise<Episode> {
+    return (
+      await this.transport.json<Episode>("api/v1/episodes", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        body: input,
+        headers: { "idempotency-key": normalizedIdempotencyKey(options.idempotencyKey) },
+        signal: options.signal,
+      })
+    ).data;
+  }
+
+  async getEpisode(episodeId: string, signal?: AbortSignal): Promise<Episode> {
+    return (
+      await this.transport.json<Episode>(
+        `api/v1/episodes/${normalizedUuid(episodeId, "episodeId")}`,
+        { workspaceId: this.workspaceId, signal },
+      )
+    ).data;
+  }
+
+  async getObservations(
+    observationIds: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<readonly Observation[]> {
+    const ids = [...new Set(observationIds.map((id) => normalizedUuid(id, "observationId")))];
+    if (ids.length < 1 || ids.length > 50) {
+      throw new TypeError("observationIds must contain 1 to 50 UUIDs");
+    }
+    const params = new URLSearchParams();
+    for (const id of ids) params.append("id", id);
+    return (
+      await this.transport.json<readonly Observation[]>(`api/v1/observations?${params}`, {
+        workspaceId: this.workspaceId,
+        signal,
+      })
+    ).data;
+  }
+
+  async forgetEpisode(episodeId: string, options: MutationOptions = {}): Promise<void> {
+    await this.transport.json<void>(`api/v1/episodes/${normalizedUuid(episodeId, "episodeId")}`, {
+      method: "DELETE",
+      workspaceId: this.workspaceId,
+      headers: { "idempotency-key": normalizedIdempotencyKey(options.idempotencyKey) },
+      signal: options.signal,
+    });
   }
 
   async listMemoryProposals(

@@ -112,6 +112,38 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/episodes": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["listEpisodes"];
+        readonly put?: never;
+        readonly post: operations["recordEpisode"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/episodes/{episodeId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["getEpisode"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete: operations["deleteEpisode"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/evaluations/runs/{runId}": {
         readonly parameters: {
             readonly query?: never;
@@ -234,6 +266,22 @@ export interface paths {
         readonly get?: never;
         readonly put?: never;
         readonly post: operations["reviewMemoryProposal"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/observations": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["getObservations"];
+        readonly put?: never;
+        readonly post?: never;
         readonly delete?: never;
         readonly options?: never;
         readonly head?: never;
@@ -371,6 +419,8 @@ export interface components {
                 /** @constant */
                 readonly memoryProposals: true;
                 /** @constant */
+                readonly observationEvidence: true;
+                /** @constant */
                 readonly optimisticConcurrency: true;
                 /** @constant */
                 readonly transactionalOutbox: true;
@@ -379,6 +429,10 @@ export interface components {
             };
             readonly limits: {
                 /** @constant */
+                readonly episodeContentCharacters: 1000000;
+                /** @constant */
+                readonly episodeObservations: 100;
+                /** @constant */
                 readonly memoryProposalEvidence: 50;
                 /** @constant */
                 readonly memoryProposalList: 100;
@@ -386,6 +440,10 @@ export interface components {
                 readonly memoryProposalPending: 100;
                 /** @constant */
                 readonly memoryProposalRetentionSeconds: 2592000;
+                /** @constant */
+                readonly observationBatchRead: 50;
+                /** @constant */
+                readonly observationContentCharacters: 100000;
                 /** @constant */
                 readonly workspaceArchiveLinks: 50000;
                 /** @constant */
@@ -413,7 +471,10 @@ export interface components {
         };
         readonly CreateMemoryProposalCreateInput: {
             readonly content: string;
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
             /** @constant */
             readonly kind: "create";
             readonly metadata?: {
@@ -427,6 +488,51 @@ export interface components {
         };
         readonly CreateMemoryProposalInput: components["schemas"]["CreateMemoryProposalCreateInput"] | components["schemas"]["CreateMemoryProposalUpdateInput"];
         readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
+        readonly Episode: {
+            /** Format: date-time */
+            readonly createdAt: string;
+            /** Format: date-time */
+            readonly endedAt: string;
+            /** Format: uuid */
+            readonly id: string;
+            /** @enum {string} */
+            readonly kind: "conversation" | "workflow" | "document" | "event";
+            readonly observationCount: number;
+            readonly observations: readonly components["schemas"]["Observation"][];
+            /** Format: uuid */
+            readonly ownerUserId: string;
+            /** @enum {string} */
+            readonly recordedByActorKind: "human" | "agent";
+            readonly recordedByAgentId: string | null;
+            /** @enum {string} */
+            readonly scope: "shared" | "private";
+            /** Format: date-time */
+            readonly startedAt: string;
+            /** Format: uuid */
+            readonly workspaceId: string;
+        };
+        readonly EpisodeSummary: {
+            /** Format: date-time */
+            readonly createdAt: string;
+            /** Format: date-time */
+            readonly endedAt: string;
+            /** Format: uuid */
+            readonly id: string;
+            /** @enum {string} */
+            readonly kind: "conversation" | "workflow" | "document" | "event";
+            readonly observationCount: number;
+            /** Format: uuid */
+            readonly ownerUserId: string;
+            /** @enum {string} */
+            readonly recordedByActorKind: "human" | "agent";
+            readonly recordedByAgentId: string | null;
+            /** @enum {string} */
+            readonly scope: "shared" | "private";
+            /** Format: date-time */
+            readonly startedAt: string;
+            /** Format: uuid */
+            readonly workspaceId: string;
+        };
         readonly Error: {
             /** @enum {string} */
             readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "not_found" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
@@ -574,6 +680,7 @@ export interface components {
             /** Format: date-time */
             readonly createdAt: string;
             readonly evidenceMemoryIds: readonly string[];
+            readonly evidenceObservationIds: readonly string[];
             /** Format: uuid */
             readonly id: string;
             /** @enum {string} */
@@ -603,7 +710,10 @@ export interface components {
         };
         readonly MemoryProposalUpdateContentInput: {
             readonly content: string;
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
             /** @constant */
             readonly kind: "update";
@@ -617,7 +727,10 @@ export interface components {
         };
         readonly MemoryProposalUpdateMetadataInput: {
             readonly content?: string;
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
             /** @constant */
             readonly kind: "update";
@@ -631,7 +744,10 @@ export interface components {
         };
         readonly MemoryProposalUpdateScopeInput: {
             readonly content?: string;
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
             /** @constant */
             readonly kind: "update";
@@ -649,6 +765,26 @@ export interface components {
             /** @description Present only after a successful calibrated reranker call. */
             readonly rerankScore?: number;
             readonly score: number;
+        };
+        readonly Observation: {
+            readonly content: string;
+            /** Format: date-time */
+            readonly createdAt: string;
+            /** Format: uuid */
+            readonly episodeId: string;
+            /** Format: uuid */
+            readonly id: string;
+            /** @enum {string} */
+            readonly kind: "message" | "tool_call" | "tool_result" | "document_fragment" | "event";
+            readonly metadata: {
+                readonly [key: string]: unknown;
+            };
+            /** Format: date-time */
+            readonly observedAt: string;
+            readonly ordinal: number;
+            readonly payloadSha256: string;
+            /** Format: uuid */
+            readonly workspaceId: string;
         };
         readonly RankingMetrics: {
             readonly forbiddenRetrievedIds: readonly string[];
@@ -672,6 +808,26 @@ export interface components {
             };
             /** @enum {string} */
             readonly status: "ready" | "degraded" | "unready";
+        };
+        readonly RecordEpisodeInput: {
+            /** @enum {string} */
+            readonly kind: "conversation" | "workflow" | "document" | "event";
+            readonly observations: readonly components["schemas"]["RecordObservationInput"][];
+            /**
+             * @default private
+             * @enum {string}
+             */
+            readonly scope?: "shared" | "private";
+        };
+        readonly RecordObservationInput: {
+            readonly content: string;
+            /** @enum {string} */
+            readonly kind: "message" | "tool_call" | "tool_result" | "document_fragment" | "event";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /** Format: date-time */
+            readonly observedAt?: string;
         };
         readonly UpdateAgentInput: {
             readonly name?: string;
@@ -1082,6 +1238,114 @@ export interface operations {
             };
         };
     };
+    readonly listEpisodes: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description Opaque Episode browse cursor. */
+                readonly cursor?: string;
+                readonly kind?: "conversation" | "workflow" | "document" | "event";
+                readonly limit?: number;
+                readonly scope?: "shared" | "private";
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Actor-visible immutable Episode envelopes */
+            readonly 200: {
+                headers: {
+                    /** @description Present on a full page; opaque to clients. */
+                    readonly "x-lore-next-cursor"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["EpisodeSummary"][];
+                };
+            };
+        };
+    };
+    readonly recordEpisode: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "Idempotency-Key"?: string;
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["RecordEpisodeInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Recorded immutable Episode evidence */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["Episode"];
+                };
+            };
+            readonly 403: components["responses"]["Error"];
+            readonly 409: components["responses"]["Error"];
+        };
+    };
+    readonly getEpisode: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly episodeId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Episode with available Observation payloads */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["Episode"];
+                };
+            };
+            readonly 404: components["responses"]["Error"];
+        };
+    };
+    readonly deleteEpisode: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "Idempotency-Key"?: string;
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly episodeId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Deleted Episode and Observation evidence */
+            readonly 204: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
+            };
+            readonly 404: components["responses"]["Error"];
+        };
+    };
     readonly getEvaluationRun: {
         readonly parameters: {
             readonly query?: never;
@@ -1443,6 +1707,31 @@ export interface operations {
             readonly 404: components["responses"]["Error"];
             readonly 409: components["responses"]["Error"];
             readonly 412: components["responses"]["Error"];
+        };
+    };
+    readonly getObservations: {
+        readonly parameters: {
+            readonly query: {
+                /** @description Repeat for 1 to 50 RLS-visible Observation ids. */
+                readonly id: readonly string[];
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Visible immutable Observation evidence in request order */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["Observation"][];
+                };
+            };
         };
     };
     readonly listWorkspaces: {

@@ -1,13 +1,17 @@
-from .client import LoreApiError, LoreClient, LoreWorkspaceClient, MemoryPage
+from .client import EpisodePage, LoreApiError, LoreClient, LoreWorkspaceClient, MemoryPage
 from .generated_contract import (
     Capabilities,
     CreateMemoryProposalInput,
+    Episode,
+    EpisodeSummary,
     Memory,
     MemoryGraph,
     MemoryProposal,
     MemoryProposalReviewResult,
     MemorySearchResult,
+    Observation,
     ReadinessReport,
+    RecordEpisodeInput,
     Workspace,
     WorkspaceSummary,
 )
@@ -15,6 +19,9 @@ from .generated_contract import (
 __all__ = [
     "Capabilities",
     "CreateMemoryProposalInput",
+    "Episode",
+    "EpisodePage",
+    "EpisodeSummary",
     "LoreApiError",
     "LoreClient",
     "LoreWorkspaceClient",
@@ -24,7 +31,9 @@ __all__ = [
     "MemoryProposalReviewResult",
     "MemoryPage",
     "MemorySearchResult",
+    "Observation",
     "ReadinessReport",
+    "RecordEpisodeInput",
     "Workspace",
     "WorkspaceSummary",
 ]

@@ -68,7 +68,7 @@
     "sdk:generate": "bun tools/sdk-codegen/generate.ts",
     "format": "biome check --write .",
     "test": "vitest run && bun run test:python",
-    "test:python": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/python-sdk/src python3 -m unittest discover -s packages/python-sdk/tests",
+    "test:python": "node scripts/test-python.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {

@@ -18,8 +18,11 @@ identity mapping, authorization, retrieval, and evaluation directly.
 
 - native Memory create, read, update, delete, list, provenance, shared/private
   scope, replay-safe writes, and optimistic concurrency;
+- immutable, durable Observations grouped into bounded Episodes, private by
+  default and kept outside canonical Memory retrieval; Proposals may cite them as evidence;
 - owner-private Memory Proposals for Agent- or human-submitted create/update
-  suggestions, with evidence, exact-version review, and explicit human acceptance;
+  suggestions, with visible Memory/Observation evidence, exact-version review,
+  and explicit human acceptance;
 - durable directed Memory Links, clickable `[[reference]]` wikilinks, and derived
   affinity for otherwise isolated Memories;
 - dual lexical + optional vector retrieval with visibility filtered before top-k,
@@ -28,7 +31,8 @@ identity mapping, authorization, retrieval, and evaluation directly.
 - Users, Identities, Workspaces, Memberships, Agents, Workspace grants, and hashed
   one-time Agent credentials, with native Agent creation, Workspace
   grant/credential lifecycle, and global rename/disable/delete UI;
-- Postgres RLS over all tenant-owned source, chunk, credential, and Evaluation data;
+- Postgres RLS over tenant-owned Memory, Episode/Observation, chunk, credential,
+  and Evaluation data;
 - versioned Evaluation Suites with Recall@K, MRR, nDCG, latency, cost, and hard
   isolation failures;
 - crash-safe background embedding, retry, and atomic embedding-generation rollout;
@@ -43,8 +47,9 @@ identity mapping, authorization, retrieval, and evaluation directly.
 AutoDream, automatic consolidation, summarization, and proactive insight generation
 are intentionally outside v1. Memory Proposals provide the guarded acceptance
 boundary a future opt-in extension can use without silently writing canonical
-Memory. Proposal content has a bounded 30-day lifetime, and forgetting a target or
-accepted Memory removes its associated proposal content immediately. Lore includes
+Memory. Raw Observation content is durable until its Episode is explicitly
+forgotten; only Proposal review content has a bounded 30-day lifetime. Forgetting a
+target or accepted Memory removes its associated proposal content immediately. Lore includes
 Ollama, Google Gemini, and OpenAI
 embedding adapters. Chunking and lexical indexing complete inside the Memory write;
 document embedding runs asynchronously and never blocks that write. Embedding
@@ -490,6 +495,7 @@ accepted only while both the credential and Workspace grant remain active.
 
 - `/api/workspaces`
 - `/api/memories` and `/api/memories/:id`
+- `/api/v1/episodes`, `/api/v1/episodes/:id`, and bounded Observation evidence reads
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
 - `/api/evaluations/suites`, suite runs, and run results
 - `/api/v1/workspaces/export` and `/api/v1/workspaces/import`
@@ -544,12 +550,15 @@ printf %s "Release approved" | node packages/cli/dist/bin.js memory remember --s
   --scope private --idempotency-key release-approved-1
 printf %s "Suggested release note" | node packages/cli/dist/bin.js memory propose create \
   --stdin --scope private --idempotency-key release-proposal-1
+printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":"Release approved"}]}' \
+  | node packages/cli/dist/bin.js episode record --stdin --idempotency-key release-episode-1
 ```
 
 The stdio MCP adapter exposes bounded list/search/get, direct version-safe
-remember/update/forget, and `lore_propose` for owner-reviewed suggestions in exactly
-the configured Actor and Workspace. Supply the same `idempotencyKey` when retrying
-a mutation whose response was lost:
+remember/update/forget, `lore_observe` for non-canonical Episode evidence, and
+`lore_propose` for owner-reviewed suggestions in exactly the configured Actor and
+Workspace. Supply the same `idempotencyKey` when retrying a mutation whose response
+was lost:
 
 ```json
 {
@@ -629,6 +638,10 @@ bun audit --audit-level=high
 bunx opennextjs-cloudflare build
 bunx wrangler deploy --dry-run
 ```
+
+`test:python` selects Python 3.12 or newer, preferring 3.14, 3.13, then 3.12. Set
+`LORE_PYTHON=/absolute/path/to/python` when a supported interpreter is not on the
+usual command path.
 
 The deterministic Evaluation fixture is
 [`evaluation/suites/synthetic-v1.json`](evaluation/suites/synthetic-v1.json). The
