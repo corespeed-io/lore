@@ -1,15 +1,22 @@
 /// <reference lib="webworker" />
 
 import * as d3 from "d3";
+import { PARTICLE_FIELD_RADIUS_MULTIPLIER } from "@/lib/viz/graph-physics";
 
 interface WorkerNode extends d3.SimulationNodeDatum {
   id: string;
+  gravity: number;
+  hub: boolean;
   sourceIndex: number;
   anchorX: number;
   anchorY: number;
+  wellX: number;
+  wellY: number;
   collisionRadius: number;
   layoutStableTicks: number;
   layoutRevealed: boolean;
+  lastFrameX: number;
+  lastFrameY: number;
 }
 
 interface WorkerLink extends d3.SimulationLinkDatum<WorkerNode> {
@@ -24,7 +31,7 @@ interface LinkPair {
 
 interface InitRequest {
   type: "init";
-  nodes: { id: string }[];
+  nodes: { id: string; gravity: number; hub: boolean; radius: number }[];
   links: { source: string; target: string }[];
   width: number;
   height: number;
@@ -52,6 +59,8 @@ let nodeById = new Map<string, WorkerNode>();
 let layoutSimulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
 let particleSimulation: d3.Simulation<WorkerNode, WorkerLink> | null = null;
 let particleLinkForce: d3.ForceLink<WorkerNode, WorkerLink> | null = null;
+let particleXForce: d3.ForceX<WorkerNode> | null = null;
+let particleYForce: d3.ForceY<WorkerNode> | null = null;
 let graphLinks: LinkPair[] = [];
 let adjacentIds = new Map<string, Set<string>>();
 let incidentLinkIndices = new Map<string, number[]>();
@@ -62,6 +71,8 @@ let activeLinkCount = 0;
 let simulatedNodeCount = 0;
 let simulatedLinkCount = 0;
 let draggedNode: WorkerNode | null = null;
+let lastDragInputAt = 0;
+let settleStableFrames = 0;
 let physicsFrame = 0;
 let physicsStartedAt = 0;
 let physicsTimer: ReturnType<typeof setInterval> | null = null;
@@ -73,9 +84,17 @@ let gridCellSize = 1;
 // consistent and never reheats unrelated particles across the full graph.
 const MAX_ACTIVE_NODES = 900;
 const MAX_BOUNDARY_NODES = 4_000;
-const COMPACT_LINK_DISTANCE = 62;
-const COMPACT_CHARGE_STRENGTH = -100;
-const COMPACT_RADIAL_STRENGTH = 0.055;
+const COLD_LINK_DISTANCE = 72;
+const PARTICLE_LINK_DISTANCE = 62;
+// Every Memory gets enough charge to open visible gaps between local clusters,
+// while high-degree nodes make more room for their denser neighbourhoods.
+const COMPACT_CHARGE_BASE = -20;
+const COMPACT_CHARGE_RANGE = -45;
+const PARTICLE_CHARGE_STRENGTH = -12;
+const GRAVITY_WELL_WIDTH_RATIO = 0.75;
+const GRAVITY_WELL_HEIGHT_RATIO = 0.6;
+const GRAVITY_WELL_STRENGTH = 0.09;
+const HUB_GRAVITY_WELL_STRENGTH = 0.26;
 // A coarse Barnes–Hut approximation keeps the local field inside a 60Hz budget.
 const MANY_BODY_THETA = 1.4;
 const LAYOUT_MAX_TICKS = 48;
@@ -88,12 +107,27 @@ const LAYOUT_REVEAL_SPEED_SQUARED = 4;
 const LAYOUT_REVEAL_STABLE_TICKS = 2;
 // A fixed interval avoids adding timer delay after every expensive force tick.
 const TARGET_TICK_MS = 1_000 / 60;
-// The old D3 timer sustained about 25 ticks/s at alpha 0.3. At 60Hz, 0.12
-// preserves roughly the same post-release energy per wall-clock second.
+// Release reheats the field just enough to make the anchor spring visibly pull
+// back before alpha decay freezes the new, partially displaced shape.
 const RELEASE_ALPHA = 0.12;
-// Local interaction omits distant charge bodies. A weak spring to each particle's
-// settled coordinate supplies the missing low-frequency field.
-const PARTICLE_ANCHOR_STRENGTH = 0.012;
+// During a drag, a light anchor lets the relation spring move neighbours. On
+// release, the dragged Memory keeps a gentle pull while its neighbours return
+// firmly to their own anchors instead of collapsing around the new drop point.
+const PARTICLE_DRAG_ANCHOR_STRENGTH = 0.025;
+const PARTICLE_SETTLE_DRAGGED_ANCHOR_STRENGTH = 0.45;
+const PARTICLE_SETTLE_NEIGHBOR_ANCHOR_STRENGTH = 4.5;
+const PARTICLE_RELEASE_DRAGGED_LINK_STRENGTH = 0.025;
+const PARTICLE_RELEASE_LINK_STRENGTH = 0.16;
+const PARTICLE_DRAG_VELOCITY_DECAY = 0.8;
+const PARTICLE_DRAG_ALPHA = 0.24;
+const PARTICLE_ALPHA_DECAY = 0.08;
+const PARTICLE_DRAG_IDLE_MS = 90;
+const PARTICLE_SETTLE_DELTA_SQUARED = 0.0001;
+const PARTICLE_SETTLE_STABLE_FRAMES = 4;
+
+function linkEndpointId(endpoint: string | WorkerNode) {
+  return typeof endpoint === "string" ? endpoint : endpoint.id;
+}
 
 function postReady(layoutMs: number, layoutTicks: number) {
   self.postMessage({ type: "ready", layoutMs, layoutTicks });
@@ -189,25 +223,72 @@ function seedLayoutPositions(width: number, height: number) {
   }
 }
 
+function assignGravityWells(width: number, height: number) {
+  const hubs = nodes
+    .filter((node) => node.hub)
+    .sort((left, right) => right.gravity - left.gravity || left.id.localeCompare(right.id));
+  if (hubs.length === 0) {
+    for (const node of nodes) {
+      node.wellX = width / 2;
+      node.wellY = height / 2;
+    }
+    return;
+  }
+
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const ownerById = new Map<string, WorkerNode>();
+  const queue: WorkerNode[] = [];
+  for (const [index, hub] of hubs.entries()) {
+    const radius = index === 0 ? 0 : Math.sqrt(index / Math.max(1, hubs.length - 1));
+    const angle = index * goldenAngle - Math.PI / 2;
+    hub.wellX = width / 2 + Math.cos(angle) * width * GRAVITY_WELL_WIDTH_RATIO * radius;
+    hub.wellY = height / 2 + Math.sin(angle) * height * GRAVITY_WELL_HEIGHT_RATIO * radius;
+    ownerById.set(hub.id, hub);
+    queue.push(hub);
+  }
+
+  // A deterministic multi-source walk assigns each connected Memory to its
+  // nearest visible hub. The result is several topology-shaped gravity wells,
+  // not one radial force that packs the complete graph into a ball.
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor];
+    if (!current) continue;
+    const owner = ownerById.get(current.id);
+    if (!owner) continue;
+    for (const neighborId of adjacentIds.get(current.id) ?? []) {
+      if (ownerById.has(neighborId)) continue;
+      const neighbor = nodeById.get(neighborId);
+      if (!neighbor) continue;
+      ownerById.set(neighborId, owner);
+      queue.push(neighbor);
+    }
+  }
+
+  for (const node of nodes) {
+    const owner = ownerById.get(node.id);
+    node.wellX = owner?.wellX ?? node.x ?? width / 2;
+    node.wellY = owner?.wellY ?? node.y ?? height / 2;
+  }
+}
+
 function initialize(request: InitRequest) {
   stopPhysicsLoop();
   particleSimulation?.stop();
   layoutSimulation?.stop();
   const startedAt = performance.now();
   graphLinks = request.links.map((link) => ({ ...link }));
-  const degrees = new Map<string, number>();
-  for (const link of graphLinks) {
-    degrees.set(link.source, (degrees.get(link.source) ?? 0) + 1);
-    degrees.set(link.target, (degrees.get(link.target) ?? 0) + 1);
-  }
   nodes = request.nodes.map((node, sourceIndex) => ({
     ...node,
     sourceIndex,
     anchorX: 0,
     anchorY: 0,
-    collisionRadius: 4 + Math.min(12, (degrees.get(node.id) ?? 0) * 1.1) + request.collisionGap,
+    wellX: 0,
+    wellY: 0,
+    collisionRadius: node.radius + request.collisionGap,
     layoutStableTicks: 0,
     layoutRevealed: false,
+    lastFrameX: 0,
+    lastFrameY: 0,
   }));
   maxCollisionRadius = Math.max(...nodes.map((node) => node.collisionRadius));
   nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -229,6 +310,7 @@ function initialize(request: InitRequest) {
     incidentLinkIndices.get(link.target)?.push(linkIndex);
   }
   seedLayoutPositions(request.width, request.height);
+  assignGravityWells(request.width, request.height);
   const links: WorkerLink[] = graphLinks.map((link) => ({ ...link }));
   layoutSimulation = d3
     .forceSimulation(nodes)
@@ -237,21 +319,28 @@ function initialize(request: InitRequest) {
       d3
         .forceLink<WorkerNode, WorkerLink>(links)
         .id((node) => node.id)
-        .distance(COMPACT_LINK_DISTANCE)
-        .strength(0.25),
+        .distance(COLD_LINK_DISTANCE)
+        .strength(0.08),
     )
     .force(
       "charge",
-      d3.forceManyBody<WorkerNode>().strength(COMPACT_CHARGE_STRENGTH).theta(MANY_BODY_THETA),
+      d3
+        .forceManyBody<WorkerNode>()
+        .strength((node) => COMPACT_CHARGE_BASE + node.gravity * COMPACT_CHARGE_RANGE)
+        .theta(MANY_BODY_THETA),
     )
     .force("center", d3.forceCenter(request.width / 2, request.height / 2))
-    .force("x", d3.forceX(request.width / 2).strength(0.015))
-    .force("y", d3.forceY(request.height / 2).strength(0.015))
     .force(
-      "radial",
+      "x",
       d3
-        .forceRadial<WorkerNode>(0, request.width / 2, request.height / 2)
-        .strength(COMPACT_RADIAL_STRENGTH),
+        .forceX<WorkerNode>((node) => node.wellX)
+        .strength((node) => (node.hub ? HUB_GRAVITY_WELL_STRENGTH : GRAVITY_WELL_STRENGTH)),
+    )
+    .force(
+      "y",
+      d3
+        .forceY<WorkerNode>((node) => node.wellY)
+        .strength((node) => (node.hub ? HUB_GRAVITY_WELL_STRENGTH : GRAVITY_WELL_STRENGTH)),
     )
     .force(
       "collide",
@@ -309,6 +398,8 @@ function activateNode(node: WorkerNode) {
   activeNodes.push(node);
   node.vx = 0;
   node.vy = 0;
+  node.lastFrameX = node.x ?? node.anchorX;
+  node.lastFrameY = node.y ?? node.anchorY;
   node.fx = null;
   node.fy = null;
   for (const linkIndex of incidentLinkIndices.get(node.id) ?? []) {
@@ -319,7 +410,7 @@ function activateNode(node: WorkerNode) {
 }
 
 function addNearbyNodes(x: number, y: number) {
-  const fieldRadius = maxCollisionRadius * 12;
+  const fieldRadius = maxCollisionRadius * PARTICLE_FIELD_RADIUS_MULTIPLIER;
   const fieldRadiusSquared = fieldRadius * fieldRadius;
   const added: WorkerNode[] = [];
   const minimumColumn = Math.floor((x - fieldRadius) / gridCellSize);
@@ -375,6 +466,41 @@ function freezeActiveNodes() {
   }
 }
 
+function addCollisionBoundaryNodes(boundaryIds: Set<string>) {
+  const boundaryPadding = 6;
+  for (const activeNode of activeNodes) {
+    const searchRadius = activeNode.collisionRadius + maxCollisionRadius + boundaryPadding;
+    const searchRadiusSquared = searchRadius * searchRadius;
+    const positions = [
+      [activeNode.anchorX, activeNode.anchorY],
+      [activeNode.x ?? activeNode.anchorX, activeNode.y ?? activeNode.anchorY],
+    ];
+    for (const [x, y] of positions) {
+      if (x === undefined || y === undefined) continue;
+      const minimumColumn = Math.floor((x - searchRadius) / gridCellSize);
+      const maximumColumn = Math.floor((x + searchRadius) / gridCellSize);
+      const minimumRow = Math.floor((y - searchRadius) / gridCellSize);
+      const maximumRow = Math.floor((y + searchRadius) / gridCellSize);
+      for (let column = minimumColumn; column <= maximumColumn; column += 1) {
+        for (let row = minimumRow; row <= maximumRow; row += 1) {
+          for (const candidate of settledGrid.get(gridKey(column, row)) ?? []) {
+            if (
+              activeIds.has(candidate.id) ||
+              boundaryIds.has(candidate.id) ||
+              boundaryIds.size >= MAX_BOUNDARY_NODES
+            ) {
+              continue;
+            }
+            const dx = candidate.anchorX - x;
+            const dy = candidate.anchorY - y;
+            if (dx * dx + dy * dy <= searchRadiusSquared) boundaryIds.add(candidate.id);
+          }
+        }
+      }
+    }
+  }
+}
+
 function particleTopology(): { nodes: WorkerNode[]; links: WorkerLink[] } {
   const boundaryIds = new Set<string>();
   const links: WorkerLink[] = [];
@@ -388,6 +514,10 @@ function particleTopology(): { nodes: WorkerNode[]; links: WorkerLink[] } {
     for (const id of missingBoundaryIds) boundaryIds.add(id);
     links.push({ ...link });
   }
+  // Linked particles can return through parts of the settled field that were
+  // never activated by the pointer path. Include nearby static Memories as
+  // fixed collision bodies so release cannot pack active nodes on top of them.
+  addCollisionBoundaryNodes(boundaryIds);
   const boundaryNodes = [...boundaryIds].flatMap((id) => {
     const node = nodeById.get(id);
     if (!node) return [];
@@ -414,10 +544,17 @@ function syncParticleTopology(simulation: d3.Simulation<WorkerNode, WorkerLink>)
 function postParticleFrame() {
   physicsFrame += 1;
   let movingNodes = 0;
+  let maximumDeltaSquared = 0;
   for (const node of activeNodes) {
-    const vx = node.vx ?? 0;
-    const vy = node.vy ?? 0;
-    if (vx * vx + vy * vy > 0.0025) movingNodes += 1;
+    const x = node.x ?? node.anchorX;
+    const y = node.y ?? node.anchorY;
+    const dx = x - node.lastFrameX;
+    const dy = y - node.lastFrameY;
+    const deltaSquared = dx * dx + dy * dy;
+    node.lastFrameX = x;
+    node.lastFrameY = y;
+    maximumDeltaSquared = Math.max(maximumDeltaSquared, deltaSquared);
+    if (deltaSquared > 0.0025) movingNodes += 1;
   }
   postFrame({
     frame: physicsFrame,
@@ -427,6 +564,7 @@ function postParticleFrame() {
     physicsFps:
       physicsFrame > 1 ? ((physicsFrame - 1) * 1_000) / (performance.now() - physicsStartedAt) : 0,
   });
+  return maximumDeltaSquared;
 }
 
 function stopPhysicsLoop() {
@@ -454,10 +592,21 @@ function finishParticleField(simulation: d3.Simulation<WorkerNode, WorkerLink>) 
 
 function runPhysicsTick(simulation: d3.Simulation<WorkerNode, WorkerLink>) {
   if (particleSimulation !== simulation) return;
+  if (draggedNode && performance.now() - lastDragInputAt >= PARTICLE_DRAG_IDLE_MS) {
+    simulation.alphaTarget(0);
+  }
   simulation.tick();
-  postParticleFrame();
-  if (simulation.alphaTarget() === 0 && simulation.alpha() < simulation.alphaMin()) {
-    finishParticleField(simulation);
+  const maximumDeltaSquared = postParticleFrame();
+  if (
+    !draggedNode &&
+    simulation.alphaTarget() === 0 &&
+    simulation.alpha() < simulation.alphaMin()
+  ) {
+    settleStableFrames =
+      maximumDeltaSquared <= PARTICLE_SETTLE_DELTA_SQUARED ? settleStableFrames + 1 : 0;
+    if (settleStableFrames >= PARTICLE_SETTLE_STABLE_FRAMES) finishParticleField(simulation);
+  } else {
+    settleStableFrames = 0;
   }
 }
 
@@ -474,8 +623,10 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
   simulatedNodeCount = 0;
   simulatedLinkCount = 0;
   physicsFrame = 0;
+  settleStableFrames = 0;
   physicsStartedAt = performance.now();
   draggedNode = node;
+  lastDragInputAt = performance.now();
   activateNode(node);
   const nearby = addNearbyNodes(x, y);
   addLinkedNeighborhood([node.id], 3);
@@ -492,16 +643,23 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
   particleLinkForce = d3
     .forceLink<WorkerNode, WorkerLink>(topology.links)
     .id((particle) => particle.id)
-    .distance(COMPACT_LINK_DISTANCE)
+    .distance(PARTICLE_LINK_DISTANCE)
     .strength(0.25);
+  particleXForce = d3
+    .forceX<WorkerNode>((particle) => particle.anchorX)
+    .strength(PARTICLE_DRAG_ANCHOR_STRENGTH);
+  particleYForce = d3
+    .forceY<WorkerNode>((particle) => particle.anchorY)
+    .strength(PARTICLE_DRAG_ANCHOR_STRENGTH);
 
   const simulation = d3
     .forceSimulation<WorkerNode, WorkerLink>(topology.nodes)
-    .velocityDecay(0.4)
+    .velocityDecay(PARTICLE_DRAG_VELOCITY_DECAY)
+    .alphaDecay(PARTICLE_ALPHA_DECAY)
     .force("link", particleLinkForce)
     .force(
       "charge",
-      d3.forceManyBody<WorkerNode>().strength(COMPACT_CHARGE_STRENGTH).theta(MANY_BODY_THETA),
+      d3.forceManyBody<WorkerNode>().strength(PARTICLE_CHARGE_STRENGTH).theta(MANY_BODY_THETA),
     )
     .force(
       "collide",
@@ -510,16 +668,10 @@ function startParticleField(node: WorkerNode, x: number, y: number) {
         .strength(1)
         .iterations(1),
     )
-    .force(
-      "x",
-      d3.forceX<WorkerNode>((particle) => particle.anchorX).strength(PARTICLE_ANCHOR_STRENGTH),
-    )
-    .force(
-      "y",
-      d3.forceY<WorkerNode>((particle) => particle.anchorY).strength(PARTICLE_ANCHOR_STRENGTH),
-    )
-    .alpha(0.3)
-    .alphaTarget(0.3)
+    .force("x", particleXForce)
+    .force("y", particleYForce)
+    .alpha(PARTICLE_DRAG_ALPHA)
+    .alphaTarget(PARTICLE_DRAG_ALPHA)
     .stop();
   particleSimulation = simulation;
   physicsTimer = setInterval(() => runPhysicsTick(simulation), TARGET_TICK_MS);
@@ -533,6 +685,7 @@ function dragPoint(request: DragPointRequest) {
     startParticleField(node, request.x, request.y);
     return;
   }
+  lastDragInputAt = performance.now();
   const nearby = addNearbyNodes(request.x, request.y);
   const changed = addLinkedNeighborhood(
     nearby.map((particle) => particle.id),
@@ -543,18 +696,35 @@ function dragPoint(request: DragPointRequest) {
   node.y = request.y;
   node.fx = request.x;
   node.fy = request.y;
-  particleSimulation.alpha(Math.max(particleSimulation.alpha(), 0.3)).alphaTarget(0.3);
+  particleSimulation
+    .alpha(Math.max(particleSimulation.alpha(), PARTICLE_DRAG_ALPHA))
+    .alphaTarget(PARTICLE_DRAG_ALPHA);
 }
 
 function dragEnd(request: DragEndRequest) {
   const node = draggedNode ?? nodeById.get(request.id);
   if (!node || !particleSimulation) return;
-  node.x = request.x;
-  node.y = request.y;
   node.fx = null;
   node.fy = null;
   draggedNode = null;
-  particleSimulation.alpha(Math.min(particleSimulation.alpha(), RELEASE_ALPHA)).alphaTarget(0);
+  settleStableFrames = 0;
+  particleXForce?.strength((particle) =>
+    particle === node
+      ? PARTICLE_SETTLE_DRAGGED_ANCHOR_STRENGTH
+      : PARTICLE_SETTLE_NEIGHBOR_ANCHOR_STRENGTH,
+  );
+  particleYForce?.strength((particle) =>
+    particle === node
+      ? PARTICLE_SETTLE_DRAGGED_ANCHOR_STRENGTH
+      : PARTICLE_SETTLE_NEIGHBOR_ANCHOR_STRENGTH,
+  );
+  particleLinkForce?.strength((link) =>
+    linkEndpointId(link.source) === node.id || linkEndpointId(link.target) === node.id
+      ? PARTICLE_RELEASE_DRAGGED_LINK_STRENGTH
+      : PARTICLE_RELEASE_LINK_STRENGTH,
+  );
+  syncParticleTopology(particleSimulation);
+  particleSimulation.alpha(Math.max(particleSimulation.alpha(), RELEASE_ALPHA)).alphaTarget(0);
   self.postMessage({ type: "status", state: "settling" });
 }
 

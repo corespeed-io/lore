@@ -1,11 +1,12 @@
 "use client";
 
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { WorkerCanvasGraph } from "@/app/prototype/graph-scale/GraphScalePrototype";
 import { typeColor } from "@/lib/colors";
 import { useLoreSearch } from "@/lib/lore-swr";
 import { typeSort } from "@/lib/type-display";
 import type { GraphData, GraphNode } from "@/lib/types";
-import { type GraphInstance, mountGraph } from "@/lib/viz/graph";
+import type { GraphInstance } from "@/lib/viz/graph";
 
 interface GraphViewProps {
   workspaceId: string;
@@ -142,6 +143,10 @@ export function GraphView({
   const hasActiveFilter =
     hasQuery || hasResettableFocus || Boolean(selectedNode) || Boolean(typeFilter);
   const handleSelect = useCallback((memoryId: string | null) => setSelectedId(memoryId), []);
+  const registerGraphInstance = useCallback((instance: GraphInstance | null) => {
+    instanceRef.current = instance;
+    instance?.select(selectedIdRef.current);
+  }, []);
 
   // Clear the selection on an empty-canvas click or Escape. Native listeners (not
   // a JSX onClick) so the canvas stays a non-interactive element for a11y; node
@@ -164,18 +169,6 @@ export function GraphView({
       window.removeEventListener("keydown", onKey);
     };
   }, []);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !data.nodes.length) return;
-    const instance = mountGraph(el, data, { onSelect: handleSelect });
-    instanceRef.current = instance;
-    instance.select(selectedIdRef.current);
-    return () => {
-      instance.destroy();
-      instanceRef.current = null;
-    };
-  }, [data, handleSelect]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -227,6 +220,13 @@ export function GraphView({
 
   return (
     <div ref={containerRef} className={`graph-fullscreen${className ? ` ${className}` : ""}`}>
+      <WorkerCanvasGraph
+        data={data}
+        onSelect={handleSelect}
+        registerGraphInstance={registerGraphInstance}
+        production
+        showMetrics={false}
+      />
       <div className={`glegend${typeFilter ? " glegend-filtering" : ""}`}>
         {legendTypes.map(({ type, color }) => (
           <button
