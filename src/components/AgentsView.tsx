@@ -319,7 +319,14 @@ function AgentCard({
               Restore access
             </button>
           )}
-          <button type="button" className="agent-manage" disabled={busy} onClick={onManage}>
+          <button
+            type="button"
+            className="agent-manage"
+            aria-label={`Manage ${agent.name}`}
+            aria-haspopup="dialog"
+            disabled={busy}
+            onClick={onManage}
+          >
             Manage
           </button>
         </div>
@@ -431,6 +438,9 @@ function AgentLifecycleDialog({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [renameValue, setRenameValue] = useState(agent.name);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [statusConfirmation, setStatusConfirmation] = useState<WorkspaceAgent["status"] | null>(
+    null,
+  );
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"delete" | "rename" | "status" | null>(null);
   const mutations = useLoreAgentMutations(workspaceId);
@@ -477,6 +487,7 @@ function AgentLifecycleDialog({
     try {
       const updated = await mutations.updateAgent.trigger({ agentId: agent.id, status });
       await onAgentChange(updated);
+      setStatusConfirmation(null);
     } catch (cause) {
       setMutationError(errorMessage(cause));
     } finally {
@@ -507,12 +518,22 @@ function AgentLifecycleDialog({
       aria-describedby="agent-lifecycle-summary"
       onCancel={(event) => {
         event.preventDefault();
-        if (!busy) onClose();
+        onClose();
       }}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
-        if (!busy) onClose();
+        onClose();
+      }}
+      onMouseDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const outsideDialog =
+          event.clientX < bounds.left ||
+          event.clientX > bounds.right ||
+          event.clientY < bounds.top ||
+          event.clientY > bounds.bottom;
+        if (outsideDialog) onClose();
       }}
     >
       <header className="agent-lifecycle-head">
@@ -525,7 +546,6 @@ function AgentLifecycleDialog({
           ref={closeButtonRef}
           type="button"
           className="agent-lifecycle-close"
-          disabled={busy}
           onClick={onClose}
         >
           Close
@@ -559,6 +579,9 @@ function AgentLifecycleDialog({
               value={renameValue}
               maxLength={120}
               autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               disabled={busy}
               onChange={(event) => setRenameValue(event.target.value)}
             />
@@ -592,18 +615,51 @@ function AgentLifecycleDialog({
             </p>
           )}
         </div>
-        <button
-          type="button"
-          className={agentDisabled ? "agent-lifecycle-primary" : "agent-lifecycle-secondary"}
-          disabled={busy}
-          onClick={() => void changeStatus(agentDisabled ? "active" : "disabled")}
-        >
-          {pendingAction === "status"
-            ? "Updating…"
-            : agentDisabled
-              ? "Re-enable Agent"
-              : "Disable Agent"}
-        </button>
+        {statusConfirmation ? (
+          <fieldset className="agent-status-confirmation">
+            <legend>Confirm status change</legend>
+            <p>
+              {statusConfirmation === "active"
+                ? "Confirm global re-enable. Unrevoked credentials may authenticate again in other Workspaces not shown here."
+                : "Confirm global disable. Every credential will stop authenticating, including in other Workspaces not shown here."}
+            </p>
+            <div>
+              <button
+                type="button"
+                className="agent-lifecycle-secondary"
+                disabled={busy}
+                onClick={() => setStatusConfirmation(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={
+                  statusConfirmation === "active"
+                    ? "agent-lifecycle-primary"
+                    : "agent-lifecycle-secondary"
+                }
+                disabled={busy}
+                onClick={() => void changeStatus(statusConfirmation)}
+              >
+                {pendingAction === "status"
+                  ? "Updating…"
+                  : statusConfirmation === "active"
+                    ? "Confirm re-enable"
+                    : "Confirm disable"}
+              </button>
+            </div>
+          </fieldset>
+        ) : (
+          <button
+            type="button"
+            className={agentDisabled ? "agent-lifecycle-primary" : "agent-lifecycle-secondary"}
+            disabled={busy}
+            onClick={() => setStatusConfirmation(agentDisabled ? "active" : "disabled")}
+          >
+            {agentDisabled ? "Re-enable Agent" : "Disable Agent"}
+          </button>
+        )}
       </section>
 
       <section
@@ -613,8 +669,9 @@ function AgentLifecycleDialog({
         <div>
           <h3 id="agent-delete-title">Delete Agent</h3>
           <p>
-            Permanently removes all Workspace grants and credentials. Memories remain, but their
-            creating-Agent reference is cleared. The Agent must be disabled first.
+            This view only shows the selected Workspace. Permanent deletion also removes grants and
+            credentials in every other Workspace, without listing them here. Memories remain, but
+            their creating-Agent reference is cleared. The Agent must be disabled first.
           </p>
         </div>
         {agentDisabled ? (
@@ -626,6 +683,9 @@ function AgentLifecycleDialog({
               <input
                 value={deleteConfirmation}
                 autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 disabled={busy}
                 onChange={(event) => setDeleteConfirmation(event.target.value)}
               />

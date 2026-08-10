@@ -302,13 +302,13 @@ export function useLoreAgentMutations(workspaceId: string) {
       {
         arg,
       }: {
-        arg: { agentId: string; name?: string; status?: "active" | "disabled" };
+        arg: { agentId: string; name?: string; status?: WorkspaceAgent["status"] };
       },
     ) =>
       updateAgent(workspaceId, arg.agentId, { name: arg.name, status: arg.status }).then(
         async (updated) => {
           await mutateCache(
-            (key) => Array.isArray(key) && key[0] === "lore" && key[1] === "agents",
+            isLoreAgentsCacheKey,
             (current: WorkspaceAgent[] | undefined) =>
               current?.map((candidate) =>
                 candidate.id === updated.id
@@ -332,20 +332,14 @@ export function useLoreAgentMutations(workspaceId: string) {
       await deleteAgent(workspaceId, arg.agentId);
       await Promise.all([
         mutateCache(
-          (key) => Array.isArray(key) && key[0] === "lore" && key[1] === "agents",
+          isLoreAgentsCacheKey,
           (current: WorkspaceAgent[] | undefined) =>
             current?.filter((candidate) => candidate.id !== arg.agentId),
           { revalidate: false },
         ),
-        mutateCache(
-          (key) =>
-            Array.isArray(key) &&
-            key[0] === "lore" &&
-            key[1] === "agent-credentials" &&
-            key[3] === arg.agentId,
-          undefined,
-          { revalidate: false },
-        ),
+        mutateCache((key) => isLoreAgentCredentialsCacheKey(key, arg.agentId), undefined, {
+          revalidate: false,
+        }),
       ]);
     },
   );
@@ -381,6 +375,16 @@ export function useLoreAgentMutations(workspaceId: string) {
       revokeGrantMutation.isMutating ||
       revokeCredentialMutation.isMutating,
   };
+}
+
+export function isLoreAgentsCacheKey(key: unknown): boolean {
+  return Array.isArray(key) && key[0] === "lore" && key[1] === "agents";
+}
+
+export function isLoreAgentCredentialsCacheKey(key: unknown, agentId: string): boolean {
+  return (
+    Array.isArray(key) && key[0] === "lore" && key[1] === "agent-credentials" && key[3] === agentId
+  );
 }
 
 export function useLoreWorkspaceOperationMutations(workspaceId: string) {

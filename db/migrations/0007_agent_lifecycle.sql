@@ -1,3 +1,7 @@
+CREATE INDEX memories_created_by_agent_idx
+  ON memories (created_by_agent_id)
+  WHERE created_by_agent_id IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION lore.protect_memory_identity()
 RETURNS trigger
 LANGUAGE plpgsql

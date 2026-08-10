@@ -2063,7 +2063,6 @@ a.ext {
 }
 .agents-create button,
 .agent-primary,
-.agent-lifecycle-primary,
 .credential-reveal-actions button {
   min-height: 38px;
   border: 1px solid var(--ink);
@@ -2402,6 +2401,32 @@ a.ext {
   justify-content: flex-start;
   gap: 10px;
 }
+.agent-status-confirmation {
+  display: grid;
+  min-width: 0;
+  max-width: 320px;
+  margin: 0;
+  gap: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--hairline-soft);
+  padding: 12px;
+}
+.agent-status-confirmation legend {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+.agent-lifecycle-section .agent-status-confirmation > p {
+  margin: 0;
+  color: var(--body);
+}
+.agent-status-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .agent-rename-form,
 .agent-delete-confirmation {
   display: grid;
@@ -2573,10 +2598,6 @@ a.ext {
   .agent-controls select {
     width: 100%;
   }
-  .agent-manage,
-  .agent-controls > button {
-    width: 100%;
-  }
   .agent-credential-row {
     align-items: flex-start;
   }
@@ -2599,6 +2620,13 @@ a.ext {
   .agent-lifecycle-secondary,
   .agent-lifecycle-delete {
     width: 100%;
+  }
+  .agent-status-confirmation {
+    max-width: none;
+  }
+  .agent-status-confirmation > div {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }
 
