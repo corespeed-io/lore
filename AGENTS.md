@@ -53,9 +53,15 @@ been removed. Lore now has a native implementation:
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
   references remain inert, and raw HTML stays escaped;
-- `src/lib/viz/graph.ts` is the restored, performance-tuned D3 renderer. Keep its
-  headless settle, delta-painted focus state, capped edge hit layer, label
-  collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
+- `src/components/WorkerCanvasGraph.tsx` and its colocated Worker own the production
+  Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
+  one Canvas, cold layout reveals progressively, and interaction frames transfer
+  coordinate deltas. Preserve viewport culling, the 40,000-link paint cap, label
+  collision, elastic drag, user zoom/pan across hide/show and resize, and fit behavior.
+  Labels are intentionally interaction-driven (hover, selection, or filtering),
+  while centrality is expressed through node size and physics rather than persistent
+  degree annotations. `src/lib/viz/graph.ts` retains the shared Graph instance contract,
+  label helpers, and the legacy SVG benchmark control;
 - `src/lib/maintenance.ts` owns leased, idempotent document embedding and
   deployment-wide re-index discovery. A provider/model/revision change builds
   generation-scoped vectors beside the active generation without rewriting
@@ -226,11 +232,12 @@ generic upstream adapter to support the historical component structure.
 The native Graph endpoint caps reads at 5,000 visible Memories. It returns all
 RLS-visible Memory Links whose endpoints are in that node set, then derives at most
 three affinities per Memory among the first 500 otherwise isolated nodes. The
-optimized SVG renderer is measured against the migrated ~1,000-node / ~2,200-link
-graph. At benchmark scale, preserve D3 as the layout engine but move static
-simulation to a Web Worker and links to Canvas before increasing the SVG DOM budget.
-The throwaway `/prototype/graph-scale` benchmark uses one compact radial layout and
-one adaptive interaction model at every scale: at most 900 active nodes plus
+Worker + Canvas renderer is measured against the migrated ~1,000-node / ~2,200-link
+graph. Preserve D3 as the layout engine without moving the simulation or links back
+onto the main-thread SVG DOM. The `/prototype/graph-scale` benchmark shell reuses
+the production renderer and compares it with static Canvas and legacy SVG controls.
+It uses one compact radial layout and one adaptive interaction model at every scale:
+at most 900 active nodes plus
 pinned real boundary endpoints. Its Worker frames contain active coordinate deltas,
 while Canvas culls the viewport and caps rendered links at 40,000. Do not describe
 the interactive field as exact far-field physics; the initial Worker layout still
