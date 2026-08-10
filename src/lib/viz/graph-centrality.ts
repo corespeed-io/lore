@@ -21,14 +21,15 @@ export function graphNodeCentrality(
   nodes: readonly CentralityNode[],
   links: readonly CentralityLink[],
 ): Map<string, GraphNodeCentrality> {
-  const degrees = new Map(nodes.map((node) => [node.id, 0]));
+  const neighbors = new Map(nodes.map((node) => [node.id, new Set<string>()]));
   for (const link of links) {
-    if (degrees.has(link.source)) degrees.set(link.source, (degrees.get(link.source) ?? 0) + 1);
-    if (degrees.has(link.target)) degrees.set(link.target, (degrees.get(link.target) ?? 0) + 1);
+    if (!neighbors.has(link.source) || !neighbors.has(link.target)) continue;
+    neighbors.get(link.source)?.add(link.target);
+    neighbors.get(link.target)?.add(link.source);
   }
 
   const ranked = nodes
-    .map((node) => ({ id: node.id, degree: degrees.get(node.id) ?? 0 }))
+    .map((node) => ({ id: node.id, degree: neighbors.get(node.id)?.size ?? 0 }))
     .sort((left, right) => right.degree - left.degree || left.id.localeCompare(right.id));
   const orderedDegrees = ranked.map((node) => node.degree).sort((left, right) => left - right);
   const medianDegree = orderedDegrees[Math.floor(orderedDegrees.length / 2)] ?? 0;

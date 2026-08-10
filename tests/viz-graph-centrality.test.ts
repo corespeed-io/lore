@@ -42,4 +42,18 @@ describe("graph node centrality", () => {
 
     expect([...metrics.values()].some((metric) => metric.hub)).toBe(false);
   });
+
+  test("counts connected nodes rather than duplicate or self links", () => {
+    const metrics = graphNodeCentrality(
+      [{ id: "a" }, { id: "b" }],
+      [
+        { source: "a", target: "b" },
+        { source: "a", target: "b" },
+        { source: "a", target: "a" },
+      ],
+    );
+
+    expect(metrics.get("a")?.degree).toBe(2);
+    expect(metrics.get("b")?.degree).toBe(1);
+  });
 });

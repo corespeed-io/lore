@@ -3,7 +3,7 @@
 import * as d3 from "d3";
 import { PARTICLE_FIELD_RADIUS_MULTIPLIER } from "@/lib/viz/graph-physics";
 
-interface WorkerNode extends d3.SimulationNodeDatum {
+type WorkerNode = d3.SimulationNodeDatum & {
   id: string;
   gravity: number;
   hub: boolean;
@@ -17,12 +17,12 @@ interface WorkerNode extends d3.SimulationNodeDatum {
   layoutRevealed: boolean;
   lastFrameX: number;
   lastFrameY: number;
-}
+};
 
-interface WorkerLink extends d3.SimulationLinkDatum<WorkerNode> {
+type WorkerLink = d3.SimulationLinkDatum<WorkerNode> & {
   source: string | WorkerNode;
   target: string | WorkerNode;
-}
+};
 
 interface LinkPair {
   source: string;

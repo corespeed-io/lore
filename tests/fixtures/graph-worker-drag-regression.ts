@@ -4,10 +4,9 @@ type WorkerMessage =
   | { type: "status"; state: "dragging" | "settling" | "settled" }
   | { type: "frame"; nodeIndices: Uint32Array; positions: Float32Array };
 
-const worker = new Worker(
-  new URL("../../src/app/prototype/graph-scale/graph-scale.worker.ts", import.meta.url),
-  { type: "module" },
-);
+const worker = new Worker(new URL("../../src/components/graph-canvas.worker.ts", import.meta.url), {
+  type: "module",
+});
 const messages: WorkerMessage[] = [];
 let latestLayout: Extract<WorkerMessage, { type: "progress" }> | null = null;
 let resolveMessage: (() => void) | null = null;

@@ -141,8 +141,10 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   metadata, one-time credential reveal, and credential revocation.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, and read-only deployment readiness/capabilities.
-- `src/lib/viz/graph.ts` owns the optimized D3 force layout, zoom/pan, node drag,
-  label collision, and neighborhood paint state.
+- `WorkerCanvasGraph.tsx` and `graph-canvas.worker.ts` own the production Graph's
+  Worker-based D3 layout, Canvas paint, progressive reveal, elastic node drag,
+  label collision, and zoom/pan state. `src/lib/viz/graph.ts` retains the shared
+  instance contract and the legacy SVG benchmark control.
 - `Sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
 - Route files only load runtime configuration and render the feature boundary.
 
@@ -187,6 +189,12 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Search dims non-matches; selection keeps the chosen Memory and its neighbors prominent.
 - The graph supports free node drag, background pan, wheel/buttons zoom, fit-to-view,
   hover focus, and empty-canvas/Escape deselection.
+- Default nodes stay unlabeled so the field remains readable at ~1,000 nodes. Labels
+  appear for hover, selection, and active search/type/focus filters; node size and
+  motion express centrality without persistent degree or hub annotations.
+- Workspace navigation and responsive resizing preserve the actor's current zoom/pan.
+  A graph-data refresh returns to the centered settling state until the new layout
+  is ready.
 - `Open Memory` enters the standard detail workspace; Back returns to Graph.
 - Scope uses the graph palette plus explicit text in the inspector and legend, never
   color alone.
@@ -265,6 +273,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
+| 2026-08-10 | Promote the measured Worker + Canvas renderer to the native Graph and keep labels interaction-driven | Keep ~1,000-node layout and drag responsive while making centrality visible without persistent annotation clutter | Main-thread SVG production renderer and always-on labels |
 | 2026-08-09 | Add Operations as the human-only Workspace portability and deployment-health destination | Keep high-consequence export/import behind checksum validation, owner remap, and dry-run while making lexical-safe degradation visible | CLI/API-only Workspace portability |
 | 2026-08-08 | Add Agents as a standard Lore destination on the canonical 1100px content track | Make human-only Agent creation, Workspace grants, and credential lifecycle a first-class native workflow without creating a second visual system | Agent administration without a binding UI contract |
 | 2026-08-05 | Restore Lore's complete Dashboard/Graph/Memories shell and optimized graph interaction around native Memory types | Preserve the product's mature interface without importing an external domain model | The temporary simplified Memory console |

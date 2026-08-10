@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { WorkerCanvasGraph } from "@/app/prototype/graph-scale/GraphScalePrototype";
+import { WorkerCanvasGraph } from "@/components/WorkerCanvasGraph";
 import { typeColor } from "@/lib/colors";
 import { useLoreSearch } from "@/lib/lore-swr";
 import { typeSort } from "@/lib/type-display";

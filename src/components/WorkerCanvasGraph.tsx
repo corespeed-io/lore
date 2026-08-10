@@ -158,6 +158,8 @@ function CanvasRenderer({
     let activeIds: Set<string> | null = null;
     let selectedId: string | null = null;
     let hoveredId: string | null = null;
+    let layoutReady = !layoutPending;
+    let measured = false;
 
     const currentLayoutBounds = (visibleOnly = false) =>
       mutableNodes.reduce(
@@ -496,11 +498,11 @@ function CanvasRenderer({
       const layoutBounds = currentLayoutBounds(visibleOnly);
       const layoutWidth = Math.max(1, layoutBounds.maxX - layoutBounds.minX);
       const layoutHeight = Math.max(1, layoutBounds.maxY - layoutBounds.minY);
-      const scale = Math.min(
-        (width - padding * 2) / layoutWidth,
-        (height - padding * 2) / layoutHeight,
+      const scale = Math.max(
+        0.0001,
+        Math.min((width - padding * 2) / layoutWidth, (height - padding * 2) / layoutHeight),
       );
-      zoomBehavior.scaleExtent([layoutPending ? 0.0001 : Math.max(0.0001, Math.min(scale, 1)), 8]);
+      zoomBehavior.scaleExtent([layoutReady ? Math.min(scale, 1) : 0.0001, 8]);
       const nextTransform = d3.zoomIdentity
         .translate(
           (width - layoutWidth * scale) / 2 - layoutBounds.minX * scale,
@@ -535,12 +537,24 @@ function CanvasRenderer({
 
     const resize = () => {
       const box = canvas.getBoundingClientRect();
-      width = Math.max(1, box.width);
-      height = Math.max(1, box.height);
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (box.width <= 0 || box.height <= 0) return;
+      const nextWidth = box.width;
+      const nextHeight = box.height;
+      const nextDpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (measured && nextWidth === width && nextHeight === height && nextDpr === dpr) {
+        return;
+      }
+      width = nextWidth;
+      height = nextHeight;
+      dpr = nextDpr;
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
-      fitCanvas();
+      if (!measured) {
+        measured = true;
+        fitCanvas();
+      } else {
+        scheduleDraw();
+      }
     };
 
     const observer = new ResizeObserver(resize);
@@ -581,7 +595,10 @@ function CanvasRenderer({
     }
     observer.observe(canvas);
     resize();
-    registerLayoutCompleteSink?.(() => fitCanvas(true));
+    registerLayoutCompleteSink?.(() => {
+      layoutReady = true;
+      fitCanvas(true);
+    });
     registerGraphInstance?.({
       destroy() {},
       fit() {
@@ -704,7 +721,11 @@ export function WorkerCanvasGraph({
     totalTicks: 0,
     revealedNodes: 0,
   });
-  const [layoutMs, setLayoutMs] = useState<number | null>(null);
+  const [completedLayout, setCompletedLayout] = useState<{
+    graph: typeof workerGraph;
+    milliseconds: number;
+  } | null>(null);
+  const layoutMs = completedLayout?.graph === workerGraph ? completedLayout.milliseconds : null;
   const [layoutTicks, setLayoutTicks] = useState<number | null>(null);
   const [physicsState, setPhysicsState] = useState<"dragging" | "settling" | "settled">("settled");
   const [physicsFrames, setPhysicsFrames] = useState(0);
@@ -740,7 +761,9 @@ export function WorkerCanvasGraph({
   }, []);
 
   useEffect(() => {
-    const worker = new Worker(new URL("./graph-scale.worker.ts", import.meta.url));
+    setLayoutTicks(null);
+    setLayoutProgress({ tick: 0, totalTicks: 0, revealedNodes: 0 });
+    const worker = new Worker(new URL("./graph-canvas.worker.ts", import.meta.url));
     let completionTimer: ReturnType<typeof setTimeout> | null = null;
     const revealTransitionMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0
@@ -819,7 +842,7 @@ export function WorkerCanvasGraph({
       if (showMetrics) setLayoutTicks(result.layoutTicks);
       const completeLayout = () => {
         layoutCompleteSinkRef.current?.();
-        setLayoutMs(result.layoutMs);
+        setCompletedLayout({ graph: workerGraph, milliseconds: result.layoutMs });
       };
       if (revealTransitionMs === 0) completeLayout();
       else completionTimer = setTimeout(completeLayout, revealTransitionMs);
