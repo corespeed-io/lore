@@ -2081,7 +2081,12 @@ a.ext {
 }
 .agents-create button:disabled,
 .agent-primary:disabled,
-.agent-danger:disabled {
+.agent-danger:disabled,
+.agent-lifecycle-primary:disabled,
+.agent-lifecycle-secondary:disabled,
+.agent-lifecycle-delete:disabled,
+.agent-manage:disabled,
+.agent-lifecycle-close:disabled {
   cursor: default;
   opacity: 0.45;
 }
@@ -2223,6 +2228,20 @@ a.ext {
 .agent-controls select {
   width: 140px;
 }
+.agent-manage,
+.agent-lifecycle-secondary,
+.agent-lifecycle-close {
+  min-height: 38px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 7px 11px;
+}
 .agent-danger {
   min-height: 38px;
   border: 1px solid #f5c2c7;
@@ -2314,6 +2333,177 @@ a.ext {
   color: var(--muted);
   font-size: 11px;
 }
+.agent-lifecycle-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
+  padding: 24px;
+}
+.agent-lifecycle-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.42);
+}
+.agent-lifecycle-head,
+.agent-lifecycle-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.agent-lifecycle-head h2 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+}
+.agent-lifecycle-head > div {
+  min-width: 0;
+}
+.agent-lifecycle-head code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.agent-lifecycle-close {
+  flex: 0 0 auto;
+  min-height: 34px;
+}
+.agent-lifecycle-summary {
+  margin: 18px 0 20px;
+  color: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.agent-lifecycle-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 20px;
+  border-top: 1px solid var(--hairline-soft);
+  padding: 20px 0;
+}
+.agent-lifecycle-section h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+.agent-lifecycle-section p {
+  max-width: 470px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.agent-lifecycle-title-row {
+  justify-content: flex-start;
+  gap: 10px;
+}
+.agent-status-confirmation {
+  display: grid;
+  min-width: 0;
+  max-width: 320px;
+  margin: 0;
+  gap: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--hairline-soft);
+  padding: 12px;
+}
+.agent-status-confirmation legend {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+.agent-lifecycle-section .agent-status-confirmation > p {
+  margin: 0;
+  color: var(--body);
+}
+.agent-status-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.agent-rename-form,
+.agent-delete-confirmation {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.agent-rename-form label,
+.agent-delete-confirmation label {
+  display: grid;
+  gap: 6px;
+}
+.agent-rename-form label > span,
+.agent-delete-confirmation label > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.agent-rename-form input,
+.agent-delete-confirmation input {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 10px;
+}
+.agent-lifecycle-primary,
+.agent-lifecycle-delete {
+  min-height: 38px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 7px 13px;
+  white-space: nowrap;
+}
+.agent-lifecycle-primary {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+.agent-lifecycle-danger-zone {
+  align-items: start;
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--hairline));
+  border-radius: 12px;
+  padding: 16px;
+}
+.agent-lifecycle-danger-zone h3 {
+  color: var(--danger);
+}
+.agent-lifecycle-delete {
+  border: 1px solid var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+.agent-delete-confirmation {
+  grid-template-columns: minmax(210px, 1fr);
+}
+.agent-delete-confirmation strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.agent-lifecycle-section .agent-delete-gate {
+  align-self: center;
+  max-width: 240px;
+  margin: 0;
+  color: var(--body);
+  font-weight: 600;
+}
 .credential-reveal {
   width: min(620px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
@@ -2383,6 +2573,13 @@ a.ext {
     grid-column: 1 / -1;
     justify-content: flex-end;
   }
+  .agent-lifecycle-section {
+    grid-template-columns: 1fr;
+  }
+  .agent-rename-form,
+  .agent-delete-confirmation {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
 }
 @media (max-width: 620px) {
   .agents-hero,
@@ -2407,6 +2604,33 @@ a.ext {
   }
   .agent-credential-row {
     align-items: flex-start;
+  }
+  .agent-lifecycle-dialog {
+    width: min(100% - 16px, 680px);
+    max-height: calc(100vh - 16px);
+    padding: 18px;
+  }
+  .agent-lifecycle-head {
+    gap: 12px;
+  }
+  .agent-lifecycle-head h2 {
+    font-size: 20px;
+  }
+  .agent-rename-form,
+  .agent-delete-confirmation {
+    grid-template-columns: 1fr;
+  }
+  .agent-lifecycle-primary,
+  .agent-lifecycle-secondary,
+  .agent-lifecycle-delete {
+    width: 100%;
+  }
+  .agent-status-confirmation {
+    max-width: none;
+  }
+  .agent-status-confirmation > div {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }
 

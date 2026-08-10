@@ -21,7 +21,7 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0006_memory_chunk_entity_aliases.sql`
+- migrations `0001_initial.sql` through `0007_agent_lifecycle.sql`
   define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, and embedding generations
@@ -110,9 +110,11 @@ been removed. Lore now has a native implementation:
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers.
 
-Still incomplete: full Evaluation management UI and Agent rename/disable/delete
-controls. Workspace-scoped Agent creation plus grant and credential lifecycle
-management is available in the native `/agents` surface. Human-only Workspace
+Still incomplete: full Evaluation management UI. Workspace-scoped Agent creation,
+grant and credential lifecycle management, plus global rename/disable/delete
+controls are available in the native `/agents` surface. Agent deletion requires a
+disabled Agent, removes every grant and credential, and preserves Memories while
+clearing their creating-Agent reference. Human-only Workspace
 export/download, checksum-backed import dry-run, explicit owner remap, import
 receipts, and deployment readiness/capabilities are available in `/operations`.
 Chunking and lexical indexing

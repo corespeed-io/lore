@@ -7,6 +7,7 @@ import useSWRMutation from "swr/mutation";
 import {
   createAgent,
   createWorkspace,
+  deleteAgent,
   exportWorkspaceArchive,
   forgetMemory,
   getCurrentHumanActor,
@@ -25,10 +26,11 @@ import {
   revokeAgentGrant,
   searchMemories,
   setAgentGrant,
+  updateAgent,
   updateMemory,
 } from "./lore-api";
 import type { ImportWorkspaceArchive } from "./portability";
-import type { AgentGrantPermission, Memory, MemoryScope } from "./types";
+import type { AgentGrantPermission, Memory, MemoryScope, WorkspaceAgent } from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
 export const MAX_MEMORY_PAGES = 50;
@@ -282,6 +284,7 @@ export function useLoreMutations(workspaceId: string) {
 }
 
 export function useLoreAgentMutations(workspaceId: string) {
+  const { mutate: mutateCache } = useSWRConfig();
   const mutationKey = workspaceId ? loreKeys.manageAgents(workspaceId) : null;
   const createAgentMutation = useSWRMutation(
     mutationKey,
@@ -291,6 +294,54 @@ export function useLoreAgentMutations(workspaceId: string) {
   const issueCredentialMutation = useSWRMutation(
     mutationKey,
     (_key, { arg }: { arg: { agentId: string } }) => issueAgentCredential(workspaceId, arg.agentId),
+  );
+  const updateAgentMutation = useSWRMutation(
+    mutationKey,
+    (
+      _key,
+      {
+        arg,
+      }: {
+        arg: { agentId: string; name?: string; status?: WorkspaceAgent["status"] };
+      },
+    ) =>
+      updateAgent(workspaceId, arg.agentId, { name: arg.name, status: arg.status }).then(
+        async (updated) => {
+          await mutateCache(
+            isLoreAgentsCacheKey,
+            (current: WorkspaceAgent[] | undefined) =>
+              current?.map((candidate) =>
+                candidate.id === updated.id
+                  ? {
+                      ...candidate,
+                      name: updated.name,
+                      status: updated.status,
+                      updatedAt: updated.updatedAt,
+                    }
+                  : candidate,
+              ),
+            { revalidate: false },
+          );
+          return updated;
+        },
+      ),
+  );
+  const deleteAgentMutation = useSWRMutation(
+    mutationKey,
+    async (_key, { arg }: { arg: { agentId: string } }) => {
+      await deleteAgent(workspaceId, arg.agentId);
+      await Promise.all([
+        mutateCache(
+          isLoreAgentsCacheKey,
+          (current: WorkspaceAgent[] | undefined) =>
+            current?.filter((candidate) => candidate.id !== arg.agentId),
+          { revalidate: false },
+        ),
+        mutateCache((key) => isLoreAgentCredentialsCacheKey(key, arg.agentId), undefined, {
+          revalidate: false,
+        }),
+      ]);
+    },
   );
   const setGrantMutation = useSWRMutation(
     mutationKey,
@@ -309,17 +360,31 @@ export function useLoreAgentMutations(workspaceId: string) {
 
   return {
     createAgent: createAgentMutation,
+    updateAgent: updateAgentMutation,
+    deleteAgent: deleteAgentMutation,
     issueCredential: issueCredentialMutation,
     setGrant: setGrantMutation,
     revokeGrant: revokeGrantMutation,
     revokeCredential: revokeCredentialMutation,
     isMutating:
       createAgentMutation.isMutating ||
+      updateAgentMutation.isMutating ||
+      deleteAgentMutation.isMutating ||
       issueCredentialMutation.isMutating ||
       setGrantMutation.isMutating ||
       revokeGrantMutation.isMutating ||
       revokeCredentialMutation.isMutating,
   };
+}
+
+export function isLoreAgentsCacheKey(key: unknown): boolean {
+  return Array.isArray(key) && key[0] === "lore" && key[1] === "agents";
+}
+
+export function isLoreAgentCredentialsCacheKey(key: unknown, agentId: string): boolean {
+  return (
+    Array.isArray(key) && key[0] === "lore" && key[1] === "agent-credentials" && key[3] === agentId
+  );
 }
 
 export function useLoreWorkspaceOperationMutations(workspaceId: string) {

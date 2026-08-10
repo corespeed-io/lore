@@ -1,4 +1,9 @@
-import { AccessDeniedError, type AgentGrantPermission, createAccessModule } from "./access";
+import {
+  AccessDeniedError,
+  type AgentGrantPermission,
+  type AgentStatus,
+  createAccessModule,
+} from "./access";
 import type { ActorContext } from "./actor-context";
 import type { PostgresDatabase } from "./db";
 import {
@@ -85,13 +90,22 @@ function errorResponse(error: unknown): Response {
     );
   }
   if (error instanceof AccessDeniedError || error instanceof MemoryAccessDeniedError) {
-    return Response.json({ code: errorCode(error), error: error.message }, { status: 403 });
+    return Response.json(
+      { code: errorCode(error), error: error.message },
+      { status: 403, headers: { "cache-control": "private, no-store" } },
+    );
   }
   if (error instanceof EvaluationSuiteNotFoundError) {
-    return Response.json({ code: errorCode(error), error: error.message }, { status: 404 });
+    return Response.json(
+      { code: errorCode(error), error: error.message },
+      { status: 404, headers: { "cache-control": "private, no-store" } },
+    );
   }
   console.error("Unhandled Lore request error", error);
-  return Response.json({ code: "internal_error", error: "Internal server error" }, { status: 500 });
+  return Response.json(
+    { code: "internal_error", error: "Internal server error" },
+    { status: 500, headers: { "cache-control": "private, no-store" } },
+  );
 }
 
 function memoryEtag(version: number): string {
@@ -289,6 +303,11 @@ function agentPermission(
   throw new BadRequestError("permission must be read or write");
 }
 
+function agentStatus(value: unknown): AgentStatus {
+  if (value === "active" || value === "disabled") return value;
+  throw new BadRequestError("status must be active or disabled");
+}
+
 function uuidString(value: unknown, name: string): string {
   const result = requiredString(value, name, 36);
   const normalized = normalizeUuid(result);
@@ -434,6 +453,78 @@ export function createAgentHandlers(database: PostgresDatabase) {
           status: 201,
           headers: { "cache-control": "private, no-store" },
         });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createAgentByIdHandlers(database: PostgresDatabase) {
+  const access = createAccessModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async PATCH(request: Request, agentId: string): Promise<Response> {
+      try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const body = await jsonObject(request);
+        const unsupportedField = Object.keys(body).find(
+          (field) => field !== "name" && field !== "status",
+        );
+        if (unsupportedField) {
+          throw new BadRequestError(`${unsupportedField} is not a supported Agent field`);
+        }
+        if (body.name === undefined && body.status === undefined) {
+          throw new BadRequestError("name or status is required");
+        }
+        const agent = await access.updateAgent(actor, normalizedAgentId, {
+          name: body.name === undefined ? undefined : requiredString(body.name, "name", 120),
+          status: body.status === undefined ? undefined : agentStatus(body.status),
+        });
+        return agent
+          ? Response.json(agent, {
+              headers: { "cache-control": "private, no-store" },
+            })
+          : Response.json(
+              { code: "not_found", error: "Agent not found" },
+              {
+                status: 404,
+                headers: { "cache-control": "private, no-store" },
+              },
+            );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async DELETE(request: Request, agentId: string): Promise<Response> {
+      try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const result = await access.deleteAgent(actor, normalizedAgentId);
+        if (result === "deleted") {
+          return new Response(null, {
+            status: 204,
+            headers: { "cache-control": "private, no-store" },
+          });
+        }
+        if (result === "must_disable") {
+          return Response.json(
+            { code: "invalid_request", error: "Disable Agent before deleting it" },
+            {
+              status: 409,
+              headers: { "cache-control": "private, no-store" },
+            },
+          );
+        }
+        return Response.json(
+          { code: "not_found", error: "Agent not found" },
+          {
+            status: 404,
+            headers: { "cache-control": "private, no-store" },
+          },
+        );
       } catch (error) {
         return errorResponse(error);
       }

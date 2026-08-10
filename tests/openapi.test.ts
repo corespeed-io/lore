@@ -34,6 +34,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/api/v1/actor",
       "/api/v1/agent-credentials/{credentialId}",
       "/api/v1/agents",
+      "/api/v1/agents/{agentId}",
       "/api/v1/agents/{agentId}/credentials",
       "/api/v1/agents/{agentId}/grant",
       "/api/v1/capabilities",
@@ -94,6 +95,19 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.paths["/api/v1/agents/{agentId}/credentials"]).toMatchObject({
     get: { operationId: "listAgentCredentials" },
     post: { operationId: "issueAgentCredential" },
+  });
+  expect(document.paths["/api/v1/agents/{agentId}"]).toMatchObject({
+    patch: {
+      operationId: "updateAgent",
+      security: expect.arrayContaining([{ basicAuth: [] }]),
+      requestBody: { required: true },
+      responses: { "200": expect.any(Object), "404": expect.any(Object) },
+    },
+    delete: {
+      operationId: "deleteAgent",
+      security: expect.arrayContaining([{ basicAuth: [] }]),
+      responses: { "204": expect.any(Object), "409": expect.any(Object) },
+    },
   });
   expect(document.paths["/api/v1/agents/{agentId}/grant"].put).toMatchObject({
     operationId: "setAgentGrant",
