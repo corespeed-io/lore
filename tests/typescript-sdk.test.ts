@@ -3,6 +3,7 @@ import {
   LoreClient,
   loreConfigurationFromEnvironment,
   type Memory,
+  type MemoryProposal,
 } from "@corespeed/lore-sdk";
 import { describe, expect, test, vi } from "vitest";
 
@@ -22,6 +23,29 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     version: 3,
     createdAt: "2026-08-09T00:00:00.000Z",
     updatedAt: "2026-08-09T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
+  return {
+    id: "50000000-0000-4000-8000-000000000001",
+    workspaceId: WORKSPACE_ID,
+    ownerUserId: "30000000-0000-4000-8000-000000000001",
+    proposedByActorKind: "agent",
+    proposedByAgentId: "40000000-0000-4000-8000-000000000001",
+    kind: "create",
+    targetMemoryId: null,
+    baseMemoryVersion: null,
+    proposedContent: "Proposed fact",
+    proposedScope: "private",
+    proposedMetadata: {},
+    evidenceMemoryIds: [],
+    status: "pending",
+    reviewedByUserId: null,
+    acceptedMemoryId: null,
+    createdAt: "2026-08-10T00:00:00.000Z",
+    reviewedAt: null,
     ...overrides,
   };
 }
@@ -72,6 +96,47 @@ describe("Lore TypeScript SDK", () => {
     expect(headers.get("if-match")).toBe('"memory-v3"');
     expect(headers.get("idempotency-key")).toBe("update-1");
     expect(init.body).toBe(JSON.stringify({ content: "Updated" }));
+  });
+
+  test("submits and reviews owner-private Memory Proposals over stable v1 routes", async () => {
+    const pending = proposal();
+    const accepted = proposal({
+      status: "accepted",
+      reviewedByUserId: pending.ownerUserId,
+      acceptedMemoryId: MEMORY_ID,
+      reviewedAt: "2026-08-10T00:01:00.000Z",
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(pending, { status: 201 }))
+      .mockResolvedValueOnce(Response.json([pending]))
+      .mockResolvedValueOnce(Response.json({ proposal: accepted, memory: memory() }));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await workspace.proposeMemory(
+      { kind: "create", content: "Proposed fact", scope: "private" },
+      { idempotencyKey: "proposal-1" },
+    );
+    await workspace.listMemoryProposals({ status: "pending", limit: 25 });
+    await workspace.reviewMemoryProposal(pending.id, "accept");
+
+    const [proposalUrl, proposalInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(proposalUrl.pathname).toBe("/api/v1/memory-proposals");
+    expect(proposalInit.method).toBe("POST");
+    expect(new Headers(proposalInit.headers).get("idempotency-key")).toBe("proposal-1");
+    expect(proposalInit.body).toBe(
+      JSON.stringify({ kind: "create", content: "Proposed fact", scope: "private" }),
+    );
+    const [listUrl] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(listUrl.pathname + listUrl.search).toBe(
+      "/api/v1/memory-proposals?limit=25&status=pending",
+    );
+    const [reviewUrl, reviewInit] = fetchMock.mock.calls[2] as [URL, RequestInit];
+    expect(reviewUrl.pathname).toBe(`/api/v1/memory-proposals/${pending.id}/review`);
+    expect(reviewInit.body).toBe(JSON.stringify({ decision: "accept" }));
   });
 
   test("refuses authenticated plain HTTP outside loopback unless explicitly allowed", () => {

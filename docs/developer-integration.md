@@ -73,17 +73,26 @@ const created = await memories.remember({
   scope: "shared",
 });
 
-await memories.updateMemory(
-  created.id,
-  { content: "The rollout starts Tuesday." },
-  { expectedVersion: created.version },
+await memories.proposeMemory(
+  {
+    kind: "update",
+    targetMemoryId: created.id,
+    expectedVersion: created.version,
+    content: "The rollout starts after human approval.",
+  },
+  { idempotencyKey: "rollout-proposal-1" },
 );
 ```
 
-The Workspace client provides `capabilities`, `graph`, `listMemories`,
+The Workspace client also provides `listMemoryProposals`, `proposeMemory`, and
+`reviewMemoryProposal` alongside `capabilities`, `graph`, `listMemories`,
 `searchMemories`, `remember`, `getMemory`, `updateMemory`, and `forgetMemory`.
-Mutation methods create a replay-safe idempotency key unless the caller supplies
-one. Update and forget require the current positive Memory version.
+Proposal submission and direct Memory mutation methods create a replay-safe
+idempotency key unless the caller supplies one. Direct update/forget and update
+proposals require the current positive Memory version. Proposal listing and review
+require a human Actor; a write-granted Agent may submit a proposal but cannot accept
+it. Review is status-idempotent: repeating the same decision has no additional
+effect, while the opposite decision returns a conflict.
 
 ## Python SDK
 
@@ -115,6 +124,14 @@ memories.update_memory(
     content="The rollout starts Tuesday.",
     idempotency_key="rollout-note-update-1",
 )
+memories.propose_memory(
+    {
+        "kind": "create",
+        "content": "Suggested note awaiting human review.",
+        "scope": "private",
+    },
+    idempotency_key="suggested-note-1",
+)
 ```
 
 The dependency-light synchronous client provides the same core Workspace/Memory,
@@ -133,6 +150,11 @@ printf %s "release date" | node packages/cli/dist/bin.js memory search --stdin
 node packages/cli/dist/bin.js memory get MEMORY_UUID
 printf %s "fact" | node packages/cli/dist/bin.js memory remember --stdin \
   --scope private --idempotency-key fact-1
+printf %s "suggested fact" | node packages/cli/dist/bin.js memory propose create \
+  --stdin --scope private --idempotency-key proposal-1
+node packages/cli/dist/bin.js memory propose update MEMORY_UUID --version 2 \
+  --content "suggested replacement" --evidence EVIDENCE_MEMORY_UUID \
+  --idempotency-key proposal-update-1
 printf %s "new fact" | node packages/cli/dist/bin.js memory update MEMORY_UUID \
   --version 2 --stdin --idempotency-key fact-update-1
 node packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3 \
@@ -161,6 +183,7 @@ It exposes:
 
 - `lore_list`, `lore_search`, and `lore_get` as read-only tools;
 - `lore_remember` as a non-destructive mutation tool;
+- `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, metadata, or visibility;
 - `lore_forget` as an explicitly destructive tool.
 
@@ -176,10 +199,12 @@ full Memory content, and detail/mutation responses mark `contentTruncated` or
 `metadataTruncated` when a value cannot safely fit. Metadata inputs retain the
 Portable Core's 100,000-character, 32-level, and 10,000-value limits.
 
-All three mutation tools accept an optional `idempotencyKey`. A caller retrying an
+All four mutation tools accept an optional `idempotencyKey`. A caller retrying an
 operation after losing the response must reuse the same key; omitting it creates a
 fresh operation.
 
 AutoDream is not part of this adapter. A future AutoDream process must remain an
-explicit opt-in extension outside Portable Core and must not silently persist
-summaries, merges, or insights into Memory core.
+explicit opt-in extension outside Portable Core; it may submit a Memory Proposal,
+but must not silently persist summaries, merges, or insights into Memory core.
+Pending and reviewed proposal content expires after 30 days. Forgetting a proposal's
+target or accepted Memory removes that proposal content immediately.

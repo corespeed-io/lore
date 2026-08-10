@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "@/components/AgentsView";
 import { GraphView } from "@/components/GraphView";
 import { LocalGraphModal } from "@/components/LocalGraphModal";
+import { MemoryProposalsView } from "@/components/MemoryProposalsView";
 import { MemoryView } from "@/components/MemoryView";
 import { Overview } from "@/components/Overview";
 import { SearchResults } from "@/components/SearchResults";
@@ -22,13 +23,14 @@ import {
   useLoreWorkspaces,
 } from "@/lib/lore-swr";
 import { parseRoute, type RouteState, routeUrl, type Tab } from "@/lib/route";
-import type { GraphData, Memory, MemoryScope } from "@/lib/types";
+import type { GraphData, Memory, MemoryProposalReviewResult, MemoryScope } from "@/lib/types";
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
   graph: "Graph",
   search: "Memories",
   agents: "Agents",
+  proposals: "Proposals",
   operations: "Operations",
 };
 
@@ -338,6 +340,16 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     }
   }
 
+  async function refreshReviewedProposal(result: MemoryProposalReviewResult) {
+    const reviewedMemory = result.memory;
+    if (!reviewedMemory) return;
+    await mutateMemories((pages) => upsertMemoryPages(pages, reviewedMemory), {
+      revalidate: true,
+    });
+    void mutateGraph();
+    if (searchQuery) void mutateSearch();
+  }
+
   async function removeOpenMemory() {
     if (!activeWorkspaceId || !selectedMemory) return;
     if (!window.confirm("Forget this Memory? This cannot be undone.")) return;
@@ -547,6 +559,16 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                     key={activeWorkspaceId}
                     workspaceId={activeWorkspaceId}
                     workspaceName={activeWorkspace?.name ?? "Workspace"}
+                  />
+                )}
+
+                {tab === "proposals" && (
+                  <MemoryProposalsView
+                    key={activeWorkspaceId}
+                    workspaceId={activeWorkspaceId}
+                    workspaceName={activeWorkspace?.name ?? "Workspace"}
+                    onOpenMemory={openMemory}
+                    onReviewed={refreshReviewedProposal}
                   />
                 )}
 

@@ -18,6 +18,8 @@ identity mapping, authorization, retrieval, and evaluation directly.
 
 - native Memory create, read, update, delete, list, provenance, shared/private
   scope, replay-safe writes, and optimistic concurrency;
+- owner-private Memory Proposals for Agent- or human-submitted create/update
+  suggestions, with evidence, exact-version review, and explicit human acceptance;
 - durable directed Memory Links, clickable `[[reference]]` wikilinks, and derived
   affinity for otherwise isolated Memories;
 - dual lexical + optional vector retrieval with visibility filtered before top-k,
@@ -39,7 +41,11 @@ identity mapping, authorization, retrieval, and evaluation directly.
 - OSS Docker/Postgres deployment and a Cloudflare Workers + Hyperdrive adapter.
 
 AutoDream, automatic consolidation, summarization, and proactive insight generation
-are intentionally outside v1. Lore includes Ollama, Google Gemini, and OpenAI
+are intentionally outside v1. Memory Proposals provide the guarded acceptance
+boundary a future opt-in extension can use without silently writing canonical
+Memory. Proposal content has a bounded 30-day lifetime, and forgetting a target or
+accepted Memory removes its associated proposal content immediately. Lore includes
+Ollama, Google Gemini, and OpenAI
 embedding adapters. Chunking and lexical indexing complete inside the Memory write;
 document embedding runs asynchronously and never blocks that write. Embedding
 configuration is set once per deployment. Local deployments default to
@@ -536,11 +542,14 @@ export LORE_AGENT_TOKEN=lore_agent_...
 printf %s "deployment notes" | node packages/cli/dist/bin.js memory search --stdin --limit 10
 printf %s "Release approved" | node packages/cli/dist/bin.js memory remember --stdin \
   --scope private --idempotency-key release-approved-1
+printf %s "Suggested release note" | node packages/cli/dist/bin.js memory propose create \
+  --stdin --scope private --idempotency-key release-proposal-1
 ```
 
-The stdio MCP adapter exposes bounded list/search/get and version-safe
-remember/update/forget tools for exactly that configured Actor and Workspace. Supply
-the same `idempotencyKey` when retrying a mutation whose response was lost:
+The stdio MCP adapter exposes bounded list/search/get, direct version-safe
+remember/update/forget, and `lore_propose` for owner-reviewed suggestions in exactly
+the configured Actor and Workspace. Supply the same `idempotencyKey` when retrying
+a mutation whose response was lost:
 
 ```json
 {

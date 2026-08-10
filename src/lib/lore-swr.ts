@@ -19,9 +19,11 @@ import {
   listAgentCredentials,
   listAgents,
   listMemories,
+  listMemoryProposals,
   listWorkspaces,
   readGraph,
   rememberMemory,
+  reviewMemoryProposal,
   revokeAgentCredential,
   revokeAgentGrant,
   searchMemories,
@@ -30,7 +32,13 @@ import {
   updateMemory,
 } from "./lore-api";
 import type { ImportWorkspaceArchive } from "./portability";
-import type { AgentGrantPermission, Memory, MemoryScope, WorkspaceAgent } from "./types";
+import type {
+  AgentGrantPermission,
+  Memory,
+  MemoryProposalStatus,
+  MemoryScope,
+  WorkspaceAgent,
+} from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
 export const MAX_MEMORY_PAGES = 50;
@@ -45,6 +53,8 @@ export const loreKeys = {
     ["lore", "search", workspaceId, query, limit] as const,
   graph: (workspaceId: string) => ["lore", "graph", workspaceId] as const,
   agents: (workspaceId: string) => ["lore", "agents", workspaceId] as const,
+  memoryProposals: (workspaceId: string, status: MemoryProposalStatus) =>
+    ["lore", "memory-proposals", workspaceId, status] as const,
   capabilities: (workspaceId: string) => ["lore", "capabilities", workspaceId] as const,
   currentActor: (workspaceId: string) => ["lore", "current-actor", workspaceId] as const,
   readiness: ["lore", "readiness"] as const,
@@ -53,6 +63,8 @@ export const loreKeys = {
   createWorkspace: ["lore", "mutation", "create-workspace"] as const,
   manageAgents: (workspaceId: string) =>
     ["lore", "mutation", "manage-agents", workspaceId] as const,
+  reviewMemoryProposal: (workspaceId: string) =>
+    ["lore", "mutation", "review-memory-proposal", workspaceId] as const,
   exportWorkspace: (workspaceId: string) =>
     ["lore", "mutation", "export-workspace", workspaceId] as const,
   validateWorkspaceImport: (workspaceId: string) =>
@@ -208,6 +220,13 @@ export function useLoreGraph(workspaceId: string) {
 export function useLoreAgents(workspaceId: string) {
   return useSWR(workspaceId ? loreKeys.agents(workspaceId) : null, ([, , scopedWorkspaceId]) =>
     listAgents(scopedWorkspaceId),
+  );
+}
+
+export function useLoreMemoryProposals(workspaceId: string, status: MemoryProposalStatus) {
+  return useSWR(
+    workspaceId ? loreKeys.memoryProposals(workspaceId, status) : null,
+    ([, , scopedWorkspaceId, scopedStatus]) => listMemoryProposals(scopedWorkspaceId, scopedStatus),
   );
 }
 
@@ -385,6 +404,27 @@ export function isLoreAgentCredentialsCacheKey(key: unknown, agentId: string): b
   return (
     Array.isArray(key) && key[0] === "lore" && key[1] === "agent-credentials" && key[3] === agentId
   );
+}
+
+export function useLoreMemoryProposalMutations(workspaceId: string) {
+  const { mutate: mutateCache } = useSWRConfig();
+  const reviewProposalMutation = useSWRMutation(
+    workspaceId ? loreKeys.reviewMemoryProposal(workspaceId) : null,
+    (
+      _key,
+      {
+        arg,
+      }: {
+        arg: { decision: "accept" | "reject"; proposalId: string };
+      },
+    ) => reviewMemoryProposal(workspaceId, arg.proposalId, arg.decision),
+  );
+
+  return {
+    mutateCache,
+    reviewProposal: reviewProposalMutation,
+    isMutating: reviewProposalMutation.isMutating,
+  };
 }
 
 export function useLoreWorkspaceOperationMutations(workspaceId: string) {

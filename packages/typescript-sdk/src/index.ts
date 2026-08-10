@@ -12,6 +12,10 @@ export type MemoryScope = Memory["scope"];
 export type MemorySearchResult = Schema<"MemorySearchResult">;
 export type CreateMemoryInput = Schema<"CreateMemoryInput">;
 export type UpdateMemoryInput = Schema<"UpdateMemoryInput">;
+export type CreateMemoryProposalInput = Schema<"CreateMemoryProposalInput">;
+export type MemoryProposal = Schema<"MemoryProposal">;
+export type MemoryProposalStatus = MemoryProposal["status"];
+export type MemoryProposalReviewResult = Schema<"MemoryProposalReviewResult">;
 export type Workspace = Schema<"Workspace">;
 export type WorkspaceSummary = Schema<"WorkspaceSummary">;
 export type MemoryGraph = Schema<"MemoryGraph">;
@@ -71,6 +75,12 @@ export interface MemorySearchInput {
 export interface MemoryPage {
   memories: readonly Memory[];
   nextCursor: string | null;
+}
+
+export interface MemoryProposalListInput {
+  limit?: number;
+  signal?: AbortSignal;
+  status?: MemoryProposalStatus;
 }
 
 export interface MutationOptions {
@@ -515,6 +525,52 @@ export class LoreWorkspaceClient {
         headers: { "idempotency-key": normalizedIdempotencyKey(options.idempotencyKey) },
         signal: options.signal,
       })
+    ).data;
+  }
+
+  async listMemoryProposals(
+    input: MemoryProposalListInput = {},
+  ): Promise<readonly MemoryProposal[]> {
+    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    if (input.status) params.set("status", input.status);
+    return (
+      await this.transport.json<readonly MemoryProposal[]>(`api/v1/memory-proposals?${params}`, {
+        workspaceId: this.workspaceId,
+        signal: input.signal,
+      })
+    ).data;
+  }
+
+  async proposeMemory(
+    input: CreateMemoryProposalInput,
+    options: MutationOptions = {},
+  ): Promise<MemoryProposal> {
+    return (
+      await this.transport.json<MemoryProposal>("api/v1/memory-proposals", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        body: input,
+        headers: { "idempotency-key": normalizedIdempotencyKey(options.idempotencyKey) },
+        signal: options.signal,
+      })
+    ).data;
+  }
+
+  async reviewMemoryProposal(
+    proposalId: string,
+    decision: "accept" | "reject",
+    signal?: AbortSignal,
+  ): Promise<MemoryProposalReviewResult> {
+    return (
+      await this.transport.json<MemoryProposalReviewResult>(
+        `api/v1/memory-proposals/${normalizedUuid(proposalId, "proposalId")}/review`,
+        {
+          method: "POST",
+          workspaceId: this.workspaceId,
+          body: { decision },
+          signal,
+        },
+      )
     ).data;
   }
 

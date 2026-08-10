@@ -70,6 +70,33 @@ export interface MemorySearchResult {
   evidence: string;
 }
 
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+
+export interface MemoryProposal {
+  id: string;
+  workspaceId: string;
+  ownerUserId: string;
+  proposedByActorKind: "human" | "agent";
+  proposedByAgentId: string | null;
+  kind: "create" | "update";
+  targetMemoryId: string | null;
+  baseMemoryVersion: number | null;
+  proposedContent: string;
+  proposedScope: MemoryScope;
+  proposedMetadata: Record<string, unknown>;
+  evidenceMemoryIds: string[];
+  status: MemoryProposalStatus;
+  reviewedByUserId: string | null;
+  acceptedMemoryId: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+export interface MemoryProposalReviewResult {
+  proposal: MemoryProposal;
+  memory: Memory | null;
+}
+
 export interface GraphNode {
   id: string;
   reference: string;

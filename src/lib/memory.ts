@@ -62,6 +62,21 @@ export class MemoryVersionConflictError extends Error {
   }
 }
 
+export class MemoryProposalAccessDeniedError extends Error {
+  override name = "MemoryProposalAccessDeniedError";
+  readonly status = 403;
+}
+
+export class MemoryProposalReviewConflictError extends Error {
+  override name = "MemoryProposalReviewConflictError";
+  readonly status = 409;
+}
+
+export class MemoryProposalCapacityError extends Error {
+  override name = "MemoryProposalCapacityError";
+  readonly status = 409;
+}
+
 export interface Memory {
   id: string;
   workspaceId: string;
@@ -87,8 +102,64 @@ export interface UpdateMemory {
   metadata?: Record<string, unknown>;
 }
 
+export type MemoryProposalKind = "create" | "update";
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+
+export interface MemoryProposal {
+  id: string;
+  workspaceId: string;
+  ownerUserId: string;
+  proposedByActorKind: "agent" | "human";
+  proposedByAgentId: string | null;
+  kind: MemoryProposalKind;
+  targetMemoryId: string | null;
+  baseMemoryVersion: number | null;
+  proposedContent: string;
+  proposedScope: MemoryScope;
+  proposedMetadata: Record<string, unknown>;
+  evidenceMemoryIds: string[];
+  status: MemoryProposalStatus;
+  reviewedByUserId: string | null;
+  acceptedMemoryId: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+interface ProposedMemoryBase {
+  evidenceMemoryIds?: readonly string[];
+}
+
+export interface ProposeMemoryCreate extends ProposedMemoryBase {
+  kind: "create";
+  content: string;
+  scope?: MemoryScope;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ProposeMemoryUpdate extends ProposedMemoryBase, UpdateMemory {
+  kind: "update";
+  targetMemoryId: string;
+  expectedVersion: number;
+}
+
+export type ProposeMemory = ProposeMemoryCreate | ProposeMemoryUpdate;
+
+export interface ListMemoryProposals {
+  limit?: number;
+  status?: MemoryProposalStatus;
+}
+
+export interface MemoryProposalReviewResult {
+  memory: Memory | null;
+  proposal: MemoryProposal;
+}
+
 export interface MemoryMutationOptions {
   expectedVersion?: number;
+  idempotency?: IdempotencyRequest;
+}
+
+export interface MemoryProposalMutationOptions {
   idempotency?: IdempotencyRequest;
 }
 
@@ -177,6 +248,33 @@ interface MemoryRow {
   version: number;
   created_at: string;
   updated_at: string;
+}
+
+interface MemoryProposalRow {
+  id: string;
+  workspace_id: string;
+  owner_user_id: string;
+  proposed_by_actor_kind: "agent" | "human";
+  proposed_by_agent_id: string | null;
+  kind: MemoryProposalKind;
+  target_memory_id: string | null;
+  base_memory_version: number | null;
+  proposed_content: string;
+  proposed_scope: MemoryScope;
+  proposed_metadata: Record<string, unknown>;
+  changes_content: boolean;
+  changes_scope: boolean;
+  changes_metadata: boolean;
+  status: MemoryProposalStatus;
+  reviewed_by_user_id: string | null;
+  accepted_memory_id: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+interface MemoryProposalEvidenceRow {
+  memory_id: string;
+  proposal_id: string;
 }
 
 interface SearchRow extends MemoryRow {
@@ -1151,6 +1249,31 @@ function toMemory(row: MemoryRow): Memory {
   };
 }
 
+function toMemoryProposal(
+  row: MemoryProposalRow,
+  evidenceMemoryIds: readonly string[] = [],
+): MemoryProposal {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    ownerUserId: row.owner_user_id,
+    proposedByActorKind: row.proposed_by_actor_kind,
+    proposedByAgentId: row.proposed_by_agent_id,
+    kind: row.kind,
+    targetMemoryId: row.target_memory_id,
+    baseMemoryVersion: row.base_memory_version,
+    proposedContent: row.proposed_content,
+    proposedScope: row.proposed_scope,
+    proposedMetadata: row.proposed_metadata,
+    evidenceMemoryIds: [...evidenceMemoryIds],
+    status: row.status,
+    reviewedByUserId: row.reviewed_by_user_id,
+    acceptedMemoryId: row.accepted_memory_id,
+    createdAt: serializedTimestamp(row.created_at),
+    reviewedAt: row.reviewed_at === null ? null : serializedTimestamp(row.reviewed_at),
+  };
+}
+
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
   const contextGroupExpansion = normalizeContextGroupExpansion(options.contextGroupExpansion);
   const embeddingProvider = options.embeddingProvider;
@@ -1188,6 +1311,140 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     }
   }
 
+  async function insertMemoryInTransaction(
+    transaction: PostgresTransaction,
+    actor: ActorContext,
+    input: RememberMemory,
+    createdByAgentId: string | null = actor.agentId ?? null,
+  ): Promise<{ jobId: string | null; memory: Memory }> {
+    const chunks = prepareChunks(input.content);
+    const id = crypto.randomUUID();
+    const result = await transaction.query<MemoryRow>(
+      `INSERT INTO memories (
+         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       RETURNING *`,
+      [
+        id,
+        actor.workspaceId,
+        actor.userId,
+        createdByAgentId,
+        input.scope ?? "shared",
+        input.content,
+        JSON.stringify(input.metadata ?? {}),
+      ],
+    );
+    const memory = result.rows[0];
+    await insertChunks(transaction, actor.workspaceId, id, chunks);
+    const jobId = embeddingProvider
+      ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)
+      : null;
+    return { memory: toMemory(memory), jobId };
+  }
+
+  async function updateMemoryInTransaction(
+    transaction: PostgresTransaction,
+    actor: ActorContext,
+    id: string,
+    input: UpdateMemory,
+    expectedVersion?: number,
+  ): Promise<{ chunksChanged: boolean; jobId: string | null; memory: Memory } | null> {
+    const current = await transaction.query<MemoryRow>(
+      `SELECT *
+       FROM memories
+       WHERE id = $1
+         AND workspace_id = $2
+         AND lore.can_write_memory(workspace_id, owner_user_id)
+       FOR UPDATE`,
+      [id, actor.workspaceId],
+    );
+    const currentMemory = current.rows[0];
+    if (!currentMemory) return null;
+    if (expectedVersion !== undefined && currentMemory.version !== expectedVersion) {
+      throw new MemoryVersionConflictError(expectedVersion, currentMemory.version);
+    }
+    const contentToEmbed =
+      input.content ?? (input.scope === undefined ? null : currentMemory.content);
+    const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
+    const result = await transaction.query<MemoryRow>(
+      `UPDATE memories
+       SET content = COALESCE($3::text, content),
+           scope = COALESCE($4::memory_scope, scope),
+           metadata = COALESCE($5::jsonb, metadata),
+           version = version + 1,
+           updated_at = now()
+       WHERE id = $1
+         AND workspace_id = $2
+         AND version = $6
+       RETURNING *`,
+      [
+        id,
+        actor.workspaceId,
+        input.content ?? null,
+        input.scope ?? null,
+        input.metadata === undefined ? null : JSON.stringify(input.metadata),
+        currentMemory.version,
+      ],
+    );
+    const updated = result.rows[0];
+    if (!updated) {
+      throw new MemoryVersionConflictError(currentMemory.version, currentMemory.version + 1);
+    }
+    if (chunks) {
+      await transaction.query(
+        "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
+        [actor.workspaceId, id],
+      );
+      await insertChunks(transaction, actor.workspaceId, id, chunks);
+    }
+    const jobId = embeddingProvider
+      ? await enqueueEmbeddingJob(transaction, updated, embeddingProvider, chunks === null)
+      : null;
+    return { memory: toMemory(updated), jobId, chunksChanged: chunks !== null };
+  }
+
+  async function proposalEvidenceIds(
+    transaction: PostgresTransaction,
+    proposalId: string,
+  ): Promise<string[]> {
+    const evidence = await transaction.query<MemoryProposalEvidenceRow>(
+      `SELECT proposal_id, memory_id
+       FROM memory_proposal_evidence
+       WHERE proposal_id = $1
+       ORDER BY ordinal`,
+      [proposalId],
+    );
+    return evidence.rows.map((row) => row.memory_id);
+  }
+
+  async function proposalFromRow(
+    transaction: PostgresTransaction,
+    row: MemoryProposalRow,
+  ): Promise<MemoryProposal> {
+    return toMemoryProposal(row, await proposalEvidenceIds(transaction, row.id));
+  }
+
+  async function proposalsFromRows(
+    transaction: PostgresTransaction,
+    rows: readonly MemoryProposalRow[],
+  ): Promise<MemoryProposal[]> {
+    if (!rows.length) return [];
+    const evidence = await transaction.query<MemoryProposalEvidenceRow>(
+      `SELECT proposal_id, memory_id
+       FROM memory_proposal_evidence
+       WHERE proposal_id = ANY($1::uuid[])
+       ORDER BY proposal_id, ordinal`,
+      [rows.map((row) => row.id)],
+    );
+    const byProposal = new Map<string, string[]>();
+    for (const row of evidence.rows) {
+      const ids = byProposal.get(row.proposal_id) ?? [];
+      ids.push(row.memory_id);
+      byProposal.set(row.proposal_id, ids);
+    }
+    return rows.map((row) => toMemoryProposal(row, byProposal.get(row.id) ?? []));
+  }
+
   return {
     async remember(
       actor: ActorContext,
@@ -1195,7 +1452,6 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       options: MemoryMutationOptions = {},
     ): Promise<Memory> {
       try {
-        const chunks = prepareChunks(input.content);
         const created = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const claim = await beginMutation<{ memory: Memory }>(
@@ -1213,36 +1469,15 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           if (access.rows[0]?.allowed !== true) {
             throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
           }
-          const id = crypto.randomUUID();
-          const result = await transaction.query<MemoryRow>(
-            `INSERT INTO memories (
-               id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-             RETURNING *`,
-            [
-              id,
-              actor.workspaceId,
-              actor.userId,
-              actor.agentId ?? null,
-              input.scope ?? "shared",
-              input.content,
-              JSON.stringify(input.metadata ?? {}),
-            ],
-          );
-          const memory = result.rows[0];
-          await insertChunks(transaction, actor.workspaceId, id, chunks);
-          const jobId = embeddingProvider
-            ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)
-            : null;
-          const createdMemory = toMemory(memory);
+          const inserted = await insertMemoryInTransaction(transaction, actor, input);
           await completeMutation(
             transaction,
             claim.requestId,
             201,
-            { memory: createdMemory },
+            { memory: inserted.memory },
             Boolean(options.idempotency),
           );
-          return { memory: createdMemory, jobId, replayed: false };
+          return { ...inserted, replayed: false };
         });
         if (!created.replayed) notifyMaintenance(created.jobId);
         return created.memory;
@@ -1265,6 +1500,328 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         );
         return result.rows[0] ? toMemory(result.rows[0]) : null;
       });
+    },
+
+    async propose(
+      actor: ActorContext,
+      input: ProposeMemory,
+      options: MemoryProposalMutationOptions = {},
+    ): Promise<MemoryProposal> {
+      const evidenceMemoryIds = [...new Set(input.evidenceMemoryIds ?? [])];
+      if (evidenceMemoryIds.length > 50) {
+        throw new TypeError("A Memory Proposal may cite at most 50 evidence Memories");
+      }
+      if (
+        input.kind === "update" &&
+        input.content === undefined &&
+        input.scope === undefined &&
+        input.metadata === undefined
+      ) {
+        throw new TypeError("An update proposal must change content, scope, or metadata");
+      }
+
+      try {
+        return await database.transaction(async (transaction) => {
+          await installActorContext(transaction, actor);
+          const claim = await beginMutation<{ proposal: MemoryProposal }>(
+            transaction,
+            actor,
+            options.idempotency,
+          );
+          if (claim.replay) return claim.replay.body.proposal;
+          const access = await transaction.query<{ allowed: boolean }>(
+            "SELECT lore.can_write_memory($1, $2) AS allowed",
+            [actor.workspaceId, actor.userId],
+          );
+          if (access.rows[0]?.allowed !== true) {
+            throw new MemoryProposalAccessDeniedError(
+              "Actor cannot propose Memory changes in this Workspace",
+            );
+          }
+
+          let kind: MemoryProposalKind;
+          let targetMemoryId: string | null;
+          let baseMemoryVersion: number | null;
+          let proposedContent: string;
+          let proposedScope: MemoryScope;
+          let proposedMetadata: Record<string, unknown>;
+          let changesContent: boolean;
+          let changesScope: boolean;
+          let changesMetadata: boolean;
+
+          if (input.kind === "create") {
+            kind = "create";
+            targetMemoryId = null;
+            baseMemoryVersion = null;
+            proposedContent = input.content;
+            proposedScope = input.scope ?? "shared";
+            proposedMetadata = input.metadata ?? {};
+            changesContent = true;
+            changesScope = true;
+            changesMetadata = true;
+          } else {
+            const target = await transaction.query<MemoryRow>(
+              `SELECT *
+               FROM memories
+               WHERE id = $1
+                 AND workspace_id = $2
+                 AND lore.can_write_memory(workspace_id, owner_user_id)`,
+              [input.targetMemoryId, actor.workspaceId],
+            );
+            const current = target.rows[0];
+            if (!current) {
+              throw new MemoryProposalAccessDeniedError(
+                "Actor cannot propose a change to this Memory",
+              );
+            }
+            if (current.version !== input.expectedVersion) {
+              throw new MemoryVersionConflictError(input.expectedVersion, current.version);
+            }
+            kind = "update";
+            targetMemoryId = current.id;
+            baseMemoryVersion = current.version;
+            proposedContent = input.content ?? current.content;
+            proposedScope = input.scope ?? current.scope;
+            proposedMetadata = input.metadata ?? current.metadata;
+            changesContent = input.content !== undefined;
+            changesScope = input.scope !== undefined;
+            changesMetadata = input.metadata !== undefined;
+          }
+
+          if (evidenceMemoryIds.length) {
+            const visibleEvidence = await transaction.query<{ id: string }>(
+              `SELECT id
+               FROM memories
+               WHERE workspace_id = $1
+                 AND id = ANY($2::uuid[])`,
+              [actor.workspaceId, evidenceMemoryIds],
+            );
+            const visibleIds = new Set(visibleEvidence.rows.map((row) => row.id));
+            if (evidenceMemoryIds.some((id) => !visibleIds.has(id))) {
+              throw new MemoryProposalAccessDeniedError(
+                "Proposal evidence must be visible in the current Workspace",
+              );
+            }
+          }
+
+          const inserted = await transaction.query<MemoryProposalRow>(
+            `SELECT *
+             FROM lore.submit_memory_proposal(
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+               $11, $12, $13
+             )`,
+            [
+              actor.workspaceId,
+              actor.userId,
+              actor.agentId ? "agent" : "human",
+              actor.agentId ?? null,
+              kind,
+              targetMemoryId,
+              baseMemoryVersion,
+              proposedContent,
+              proposedScope,
+              JSON.stringify(proposedMetadata),
+              changesContent,
+              changesScope,
+              changesMetadata,
+            ],
+          );
+          const id = inserted.rows[0].id;
+          for (const [ordinal, memoryId] of evidenceMemoryIds.entries()) {
+            await transaction.query(
+              `INSERT INTO memory_proposal_evidence (
+                 workspace_id, proposal_id, memory_id, ordinal
+               ) VALUES ($1, $2, $3, $4)`,
+              [actor.workspaceId, id, memoryId, ordinal],
+            );
+          }
+          const proposal = {
+            ...toMemoryProposal(inserted.rows[0], evidenceMemoryIds),
+            evidenceMemoryIds,
+          };
+          await completeMutation(
+            transaction,
+            claim.requestId,
+            201,
+            { proposal },
+            Boolean(options.idempotency),
+          );
+          return proposal;
+        });
+      } catch (error) {
+        if (error && typeof error === "object" && (error as { code?: unknown }).code === "54000") {
+          throw new MemoryProposalCapacityError(
+            "Review a pending Memory Proposal before submitting another",
+            { cause: error },
+          );
+        }
+        if (isPostgresAccessDenied(error)) {
+          throw new MemoryProposalAccessDeniedError(
+            "Actor cannot propose Memory changes in this Workspace",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+    },
+
+    async listProposals(
+      actor: ActorContext,
+      input: ListMemoryProposals = {},
+    ): Promise<MemoryProposal[]> {
+      if (actor.agentId) {
+        throw new MemoryProposalAccessDeniedError("Only a human User can review Memory Proposals");
+      }
+      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      return database.transaction(async (transaction) => {
+        await installActorContext(transaction, actor);
+        const result = await transaction.query<MemoryProposalRow>(
+          `SELECT *
+           FROM memory_proposals
+           WHERE workspace_id = $1
+             AND owner_user_id = $2
+             AND expires_at > now()
+             AND ($3::memory_proposal_status IS NULL OR status = $3::memory_proposal_status)
+           ORDER BY created_at DESC, id
+           LIMIT $4`,
+          [actor.workspaceId, actor.userId, input.status ?? null, limit],
+        );
+        return proposalsFromRows(transaction, result.rows);
+      });
+    },
+
+    async reviewProposal(
+      actor: ActorContext,
+      id: string,
+      decision: "accept" | "reject",
+    ): Promise<MemoryProposalReviewResult | null> {
+      if (actor.agentId) {
+        throw new MemoryProposalAccessDeniedError("Only a human User can review Memory Proposals");
+      }
+      try {
+        const reviewed = await database.transaction(async (transaction) => {
+          await installActorContext(transaction, actor);
+          const selected = await transaction.query<MemoryProposalRow>(
+            `SELECT *
+             FROM memory_proposals
+             WHERE id = $1
+               AND workspace_id = $2
+               AND owner_user_id = $3
+               AND expires_at > now()
+             FOR UPDATE`,
+            [id, actor.workspaceId, actor.userId],
+          );
+          const current = selected.rows[0];
+          if (!current) return null;
+
+          if (current.status !== "pending") {
+            const repeated =
+              (decision === "accept" && current.status === "accepted") ||
+              (decision === "reject" && current.status === "rejected");
+            if (!repeated) {
+              throw new MemoryProposalReviewConflictError(
+                `Memory Proposal is already ${current.status}`,
+              );
+            }
+            const accepted = current.accepted_memory_id
+              ? await transaction.query<MemoryRow>(
+                  "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
+                  [current.accepted_memory_id, actor.workspaceId],
+                )
+              : null;
+            return {
+              proposal: await proposalFromRow(transaction, current),
+              memory: accepted?.rows[0] ? toMemory(accepted.rows[0]) : null,
+              jobId: null,
+              chunksChanged: false,
+            };
+          }
+
+          if (decision === "reject") {
+            const rejected = await transaction.query<MemoryProposalRow>(
+              `UPDATE memory_proposals
+               SET status = 'rejected',
+                   reviewed_by_user_id = $3,
+                   reviewed_at = now(),
+                   expires_at = now() + interval '30 days'
+               WHERE id = $1 AND workspace_id = $2
+               RETURNING *`,
+              [id, actor.workspaceId, actor.userId],
+            );
+            return {
+              proposal: await proposalFromRow(transaction, rejected.rows[0]),
+              memory: null,
+              jobId: null,
+              chunksChanged: false,
+            };
+          }
+
+          let applied: {
+            chunksChanged: boolean;
+            jobId: string | null;
+            memory: Memory;
+          } | null;
+          if (current.kind === "create") {
+            applied = {
+              ...(await insertMemoryInTransaction(
+                transaction,
+                actor,
+                {
+                  content: current.proposed_content,
+                  scope: current.proposed_scope,
+                  metadata: current.proposed_metadata,
+                },
+                null,
+              )),
+              chunksChanged: true,
+            };
+          } else {
+            if (current.target_memory_id === null || current.base_memory_version === null) {
+              throw new Error("Stored update proposal is missing its target version");
+            }
+            applied = await updateMemoryInTransaction(
+              transaction,
+              actor,
+              current.target_memory_id,
+              {
+                ...(current.changes_content ? { content: current.proposed_content } : {}),
+                ...(current.changes_scope ? { scope: current.proposed_scope } : {}),
+                ...(current.changes_metadata ? { metadata: current.proposed_metadata } : {}),
+              },
+              current.base_memory_version,
+            );
+          }
+          if (!applied) {
+            throw new MemoryProposalAccessDeniedError("The target Memory is no longer writable");
+          }
+          const accepted = await transaction.query<MemoryProposalRow>(
+            `UPDATE memory_proposals
+             SET status = 'accepted',
+                 reviewed_by_user_id = $3,
+                 accepted_memory_id = $4,
+                 reviewed_at = now(),
+                 expires_at = now() + interval '30 days'
+             WHERE id = $1 AND workspace_id = $2
+             RETURNING *`,
+            [id, actor.workspaceId, actor.userId, applied.memory.id],
+          );
+          return {
+            proposal: await proposalFromRow(transaction, accepted.rows[0]),
+            memory: applied.memory,
+            jobId: applied.jobId,
+            chunksChanged: applied.chunksChanged,
+          };
+        });
+        if (reviewed?.chunksChanged) notifyMaintenance(reviewed.jobId);
+        return reviewed ? { proposal: reviewed.proposal, memory: reviewed.memory } : null;
+      } catch (error) {
+        if (isPostgresAccessDenied(error)) {
+          throw new MemoryProposalAccessDeniedError("Actor cannot review this Memory Proposal", {
+            cause: error,
+          });
+        }
+        throw error;
+      }
     },
 
     async update(
@@ -1290,17 +1847,14 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         if (claim.replay) {
           return { memory: claim.replay.body.memory, jobId: null, chunksChanged: false };
         }
-        const current = await transaction.query<MemoryRow>(
-          `SELECT *
-           FROM memories
-           WHERE id = $1
-             AND workspace_id = $2
-             AND lore.can_write_memory(workspace_id, owner_user_id)
-           FOR UPDATE`,
-          [id, actor.workspaceId],
+        const updated = await updateMemoryInTransaction(
+          transaction,
+          actor,
+          id,
+          input,
+          options.expectedVersion,
         );
-        const currentMemory = current.rows[0];
-        if (!currentMemory) {
+        if (!updated) {
           await completeMutation(
             transaction,
             claim.requestId,
@@ -1310,59 +1864,14 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           );
           return { memory: null, jobId: null, chunksChanged: false };
         }
-        if (
-          options.expectedVersion !== undefined &&
-          currentMemory.version !== options.expectedVersion
-        ) {
-          throw new MemoryVersionConflictError(options.expectedVersion, currentMemory.version);
-        }
-        const contentToEmbed =
-          input.content ?? (input.scope === undefined ? null : currentMemory.content);
-        const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
-        const result = await transaction.query<MemoryRow>(
-          `UPDATE memories
-           SET content = COALESCE($3::text, content),
-               scope = COALESCE($4::memory_scope, scope),
-               metadata = COALESCE($5::jsonb, metadata),
-               version = version + 1,
-               updated_at = now()
-           WHERE id = $1
-             AND workspace_id = $2
-             AND version = $6
-           RETURNING *`,
-          [
-            id,
-            actor.workspaceId,
-            input.content ?? null,
-            input.scope ?? null,
-            input.metadata === undefined ? null : JSON.stringify(input.metadata),
-            currentMemory.version,
-          ],
-        );
-        const updated = result.rows[0];
-        if (!updated) {
-          throw new MemoryVersionConflictError(currentMemory.version, currentMemory.version + 1);
-        }
-        if (updated && chunks) {
-          await transaction.query(
-            "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
-            [actor.workspaceId, id],
-          );
-          await insertChunks(transaction, actor.workspaceId, id, chunks);
-        }
-        const jobId =
-          updated && embeddingProvider
-            ? await enqueueEmbeddingJob(transaction, updated, embeddingProvider, chunks === null)
-            : null;
-        const updatedMemory = toMemory(updated);
         await completeMutation(
           transaction,
           claim.requestId,
           200,
-          { memory: updatedMemory },
+          { memory: updated.memory },
           Boolean(options.idempotency),
         );
-        return { memory: updatedMemory, jobId, chunksChanged: chunks !== null };
+        return updated;
       });
       // Metadata-only updates can leave an existing stale job for the scheduled
       // sweep without billing a Queue message for an already-embedded Memory.

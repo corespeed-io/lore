@@ -17,6 +17,8 @@ const errorSchema = {
         "invalid_request",
         "not_found",
         "precondition_required",
+        "proposal_capacity_exceeded",
+        "proposal_review_conflict",
         "version_conflict",
         "workspace_export_limit_exceeded",
       ],
@@ -57,6 +59,29 @@ const memorySchema = {
     ...timestampProperties,
   },
 } as const;
+
+const memoryProposalUpdateProperties = {
+  kind: { const: "update" },
+  targetMemoryId: { type: "string", format: "uuid" },
+  expectedVersion: { type: "integer", minimum: 1 },
+  content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+  scope: { type: "string", enum: ["shared", "private"] },
+  metadata: { type: "object", additionalProperties: true },
+  evidenceMemoryIds: {
+    type: "array",
+    maxItems: 50,
+    items: { type: "string", format: "uuid" },
+  },
+} as const;
+
+function memoryProposalUpdateVariant(change: "content" | "metadata" | "scope") {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["kind", "targetMemoryId", "expectedVersion", change],
+    properties: memoryProposalUpdateProperties,
+  } as const;
+}
 
 const workspaceHeader = {
   name: "x-lore-workspace-id",
@@ -275,6 +300,73 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             "204": { description: "Deleted" },
             "412": { $ref: "#/components/responses/Error" },
             "428": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/memory-proposals": {
+        get: {
+          operationId: "listMemoryProposals",
+          security: humanSecurity,
+          parameters: [
+            workspaceHeader,
+            {
+              name: "status",
+              in: "query",
+              schema: { type: "string", enum: ["pending", "accepted", "rejected"] },
+            },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+          ],
+          responses: {
+            "200": jsonResponse("Owner-private Memory Proposals", {
+              type: "array",
+              items: { $ref: "#/components/schemas/MemoryProposal" },
+            }),
+            "403": { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          operationId: "createMemoryProposal",
+          parameters: [workspaceHeader, idempotencyHeader],
+          requestBody: requestBody({ $ref: "#/components/schemas/CreateMemoryProposalInput" }),
+          responses: {
+            "201": jsonResponse("Submitted owner-private Memory Proposal", {
+              $ref: "#/components/schemas/MemoryProposal",
+            }),
+            "403": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+            "412": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/memory-proposals/{proposalId}/review": {
+        post: {
+          operationId: "reviewMemoryProposal",
+          security: humanSecurity,
+          parameters: [
+            workspaceHeader,
+            {
+              name: "proposalId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          requestBody: requestBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["decision"],
+            properties: { decision: { type: "string", enum: ["accept", "reject"] } },
+          }),
+          responses: {
+            "200": jsonResponse(
+              "Reviewed Memory Proposal",
+              { $ref: "#/components/schemas/MemoryProposalReviewResult" },
+              { ETag: { schema: { type: "string" } } },
+            ),
+            "403": { $ref: "#/components/responses/Error" },
+            "404": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+            "412": { $ref: "#/components/responses/Error" },
           },
         },
       },
@@ -564,6 +656,105 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             content: { type: "string", minLength: 1, maxLength: 1_000_000 },
             scope: { type: "string", enum: ["shared", "private"] },
             metadata: { type: "object", additionalProperties: true },
+          },
+        },
+        CreateMemoryProposalInput: {
+          oneOf: [
+            { $ref: "#/components/schemas/CreateMemoryProposalCreateInput" },
+            { $ref: "#/components/schemas/CreateMemoryProposalUpdateInput" },
+          ],
+        },
+        CreateMemoryProposalCreateInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "content"],
+          properties: {
+            kind: { const: "create" },
+            content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            scope: { type: "string", enum: ["shared", "private"], default: "shared" },
+            metadata: { type: "object", additionalProperties: true },
+            evidenceMemoryIds: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", format: "uuid" },
+            },
+          },
+        },
+        CreateMemoryProposalUpdateInput: {
+          anyOf: [
+            { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
+            { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
+            { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
+          ],
+        },
+        MemoryProposalUpdateContentInput: memoryProposalUpdateVariant("content"),
+        MemoryProposalUpdateScopeInput: memoryProposalUpdateVariant("scope"),
+        MemoryProposalUpdateMetadataInput: memoryProposalUpdateVariant("metadata"),
+        MemoryProposal: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "workspaceId",
+            "ownerUserId",
+            "proposedByActorKind",
+            "proposedByAgentId",
+            "kind",
+            "targetMemoryId",
+            "baseMemoryVersion",
+            "proposedContent",
+            "proposedScope",
+            "proposedMetadata",
+            "evidenceMemoryIds",
+            "status",
+            "reviewedByUserId",
+            "acceptedMemoryId",
+            "createdAt",
+            "reviewedAt",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            workspaceId: { type: "string", format: "uuid" },
+            ownerUserId: { type: "string", format: "uuid" },
+            proposedByActorKind: { type: "string", enum: ["human", "agent"] },
+            proposedByAgentId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            kind: { type: "string", enum: ["create", "update"] },
+            targetMemoryId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            baseMemoryVersion: {
+              oneOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+            },
+            proposedContent: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            proposedScope: { type: "string", enum: ["shared", "private"] },
+            proposedMetadata: { type: "object", additionalProperties: true },
+            evidenceMemoryIds: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", format: "uuid" },
+            },
+            status: { type: "string", enum: ["pending", "accepted", "rejected"] },
+            reviewedByUserId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            acceptedMemoryId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            createdAt: { type: "string", format: "date-time" },
+            reviewedAt: {
+              oneOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+            },
+          },
+        },
+        MemoryProposalReviewResult: {
+          type: "object",
+          additionalProperties: false,
+          required: ["proposal", "memory"],
+          properties: {
+            proposal: { $ref: "#/components/schemas/MemoryProposal" },
+            memory: { oneOf: [{ $ref: "#/components/schemas/Memory" }, { type: "null" }] },
           },
         },
         MemorySearchResult: {
@@ -1047,6 +1238,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 "workspacePortability",
                 "embeddingGenerations",
                 "cursorPagination",
+                "memoryProposals",
               ],
               properties: {
                 idempotency: { const: true },
@@ -1055,15 +1247,27 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 workspacePortability: { const: true },
                 embeddingGenerations: { const: true },
                 cursorPagination: { const: true },
+                memoryProposals: { const: true },
               },
             },
             limits: {
               type: "object",
               additionalProperties: false,
-              required: ["workspaceArchiveMemories", "workspaceArchiveLinks"],
+              required: [
+                "workspaceArchiveMemories",
+                "workspaceArchiveLinks",
+                "memoryProposalEvidence",
+                "memoryProposalList",
+                "memoryProposalPending",
+                "memoryProposalRetentionSeconds",
+              ],
               properties: {
                 workspaceArchiveMemories: { const: MAX_WORKSPACE_ARCHIVE_MEMORIES },
                 workspaceArchiveLinks: { const: MAX_WORKSPACE_ARCHIVE_LINKS },
+                memoryProposalEvidence: { const: 50 },
+                memoryProposalList: { const: 100 },
+                memoryProposalPending: { const: 100 },
+                memoryProposalRetentionSeconds: { const: 2_592_000 },
               },
             },
             activeEmbeddingGeneration: {

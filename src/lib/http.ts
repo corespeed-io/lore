@@ -22,6 +22,10 @@ import {
   createMemoryModule,
   MemoryAccessDeniedError,
   type MemoryModuleOptions,
+  MemoryProposalAccessDeniedError,
+  MemoryProposalCapacityError,
+  MemoryProposalReviewConflictError,
+  type MemoryProposalStatus,
   type MemoryScope,
   MemoryVersionConflictError,
 } from "./memory";
@@ -53,6 +57,8 @@ class PreconditionRequiredError extends Error {
 function errorCode(error: unknown): string {
   if (error instanceof PreconditionRequiredError) return "precondition_required";
   if (error instanceof MemoryVersionConflictError) return "version_conflict";
+  if (error instanceof MemoryProposalCapacityError) return "proposal_capacity_exceeded";
+  if (error instanceof MemoryProposalReviewConflictError) return "proposal_review_conflict";
   if (error instanceof IdempotencyConflictError) return "idempotency_conflict";
   if (error instanceof WorkspaceExportLimitError) return error.code;
   if (error instanceof BadRequestError || error instanceof RequestInputError)
@@ -61,7 +67,8 @@ function errorCode(error: unknown): string {
   if (
     error instanceof WorkspaceAccessError ||
     error instanceof AccessDeniedError ||
-    error instanceof MemoryAccessDeniedError
+    error instanceof MemoryAccessDeniedError ||
+    error instanceof MemoryProposalAccessDeniedError
   ) {
     return "access_denied";
   }
@@ -79,6 +86,8 @@ function errorResponse(error: unknown): Response {
     error instanceof WorkspaceAccessError ||
     error instanceof PreconditionRequiredError ||
     error instanceof MemoryVersionConflictError ||
+    error instanceof MemoryProposalCapacityError ||
+    error instanceof MemoryProposalReviewConflictError ||
     error instanceof IdempotencyConflictError ||
     error instanceof PortabilityValidationError ||
     error instanceof PortabilityAccessDeniedError ||
@@ -89,7 +98,11 @@ function errorResponse(error: unknown): Response {
       { status: error.status, headers: { "cache-control": "private, no-store" } },
     );
   }
-  if (error instanceof AccessDeniedError || error instanceof MemoryAccessDeniedError) {
+  if (
+    error instanceof AccessDeniedError ||
+    error instanceof MemoryAccessDeniedError ||
+    error instanceof MemoryProposalAccessDeniedError
+  ) {
     return Response.json(
       { code: errorCode(error), error: error.message },
       { status: 403, headers: { "cache-control": "private, no-store" } },
@@ -202,6 +215,20 @@ function memoryScope(value: unknown): MemoryScope | undefined {
   if (value === undefined) return undefined;
   if (value === "shared" || value === "private") return value;
   throw new BadRequestError("scope must be shared or private");
+}
+
+function memoryProposalStatus(value: string | null): MemoryProposalStatus | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  if (value === "pending" || value === "accepted" || value === "rejected") return value;
+  throw new BadRequestError("status must be pending, accepted, or rejected");
+}
+
+function positiveInteger(value: unknown, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new BadRequestError(`${name} must be a positive integer`);
+  }
+  return parsed;
 }
 
 function optionalTimestamp(value: string | null, name: string): string | undefined {
@@ -802,6 +829,128 @@ export function createMemoryHandlers(
           status: 201,
           headers: { etag: memoryEtag(memory.version), "cache-control": "private, no-store" },
         });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createMemoryProposalHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
+  const memories = createMemoryModule(database, options);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const url = new URL(request.url);
+        const proposals = await observeOperation("memory-proposal.list", () =>
+          memories.listProposals(actor, {
+            limit: queryInteger(url, "limit", 50, 1, 100),
+            status: memoryProposalStatus(url.searchParams.get("status")),
+          }),
+        );
+        return Response.json(proposals, {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async POST(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const body = await jsonObject(request);
+        const evidenceMemoryIds =
+          body.evidenceMemoryIds === undefined
+            ? []
+            : uuidArray(body.evidenceMemoryIds, "evidenceMemoryIds", true);
+        if (evidenceMemoryIds.length > 50) {
+          throw new BadRequestError("evidenceMemoryIds exceeds 50 items");
+        }
+
+        const input =
+          body.kind === "create"
+            ? {
+                kind: "create" as const,
+                content: requiredString(body.content, "content", 1_000_000),
+                scope: memoryScope(body.scope),
+                metadata: metadata(body.metadata),
+                evidenceMemoryIds,
+              }
+            : body.kind === "update"
+              ? {
+                  kind: "update" as const,
+                  targetMemoryId: uuidString(body.targetMemoryId, "targetMemoryId"),
+                  expectedVersion: positiveInteger(body.expectedVersion, "expectedVersion"),
+                  content:
+                    body.content === undefined
+                      ? undefined
+                      : requiredString(body.content, "content", 1_000_000),
+                  scope: memoryScope(body.scope),
+                  metadata: metadata(body.metadata),
+                  evidenceMemoryIds,
+                }
+              : null;
+        if (!input) throw new BadRequestError("kind must be create or update");
+        if (
+          input.kind === "update" &&
+          input.content === undefined &&
+          input.scope === undefined &&
+          input.metadata === undefined
+        ) {
+          throw new BadRequestError("An update proposal must change content, scope, or metadata");
+        }
+        const proposal = await observeOperation("memory-proposal.create", async () =>
+          memories.propose(actor, input, {
+            idempotency: await idempotencyRequest(request, "memory-proposal.create", input),
+          }),
+        );
+        return Response.json(proposal, {
+          status: 201,
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createMemoryProposalReviewHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
+  const memories = createMemoryModule(database, options);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async POST(request: Request, id: string): Promise<Response> {
+      try {
+        const proposalId = uuidString(id, "proposalId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const body = await jsonObject(request);
+        if (body.decision !== "accept" && body.decision !== "reject") {
+          throw new BadRequestError("decision must be accept or reject");
+        }
+        const decision = body.decision;
+        const reviewed = await observeOperation("memory-proposal.review", () =>
+          memories.reviewProposal(actor, proposalId, decision),
+        );
+        return reviewed
+          ? Response.json(reviewed, {
+              headers: {
+                ...(reviewed.memory ? { etag: memoryEtag(reviewed.memory.version) } : {}),
+                "cache-control": "private, no-store",
+              },
+            })
+          : Response.json(
+              { code: "not_found", error: "Memory Proposal not found" },
+              { status: 404, headers: { "cache-control": "private, no-store" } },
+            );
       } catch (error) {
         return errorResponse(error);
       }

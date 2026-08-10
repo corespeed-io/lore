@@ -1,10 +1,12 @@
 import {
   type CreateMemoryInput,
+  type CreateMemoryProposalInput,
   LoreApiError,
   LoreClient,
   loreConfigurationFromEnvironment,
   type Memory,
   type MemoryPage,
+  type MemoryProposal,
   type MemorySearchInput,
   type MemorySearchResult,
   type MutationOptions,
@@ -26,6 +28,10 @@ export interface LoreMcpMemoryClient {
     cursor?: string;
     scope?: "shared" | "private";
   }): Promise<MemoryPage>;
+  proposeMemory(
+    input: CreateMemoryProposalInput,
+    options?: MutationOptions,
+  ): Promise<MemoryProposal>;
   remember(input: CreateMemoryInput, options?: MutationOptions): Promise<Memory>;
   searchMemories(input: MemorySearchInput): Promise<readonly MemorySearchResult[]>;
   updateMemory(
@@ -113,6 +119,16 @@ const searchResultSchema = z.object({
   rerankScore: z.number().min(0).max(1).optional(),
   evidence: z.string().max(SEARCH_EVIDENCE_BUDGET),
   evidenceTruncated: z.boolean(),
+});
+const proposalSubmissionSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(["create", "update"]),
+  targetMemoryId: z.string().uuid().nullable(),
+  baseMemoryVersion: z.number().int().positive().nullable(),
+  proposedScope: scopeSchema,
+  evidenceMemoryIds: z.array(z.string().uuid()).max(50),
+  status: z.enum(["pending", "accepted", "rejected"]),
+  createdAt: z.string(),
 });
 
 type McpMemory = z.infer<typeof memorySchema>;
@@ -202,6 +218,19 @@ function versionedMutationOptions(
   idempotencyKey: string | undefined,
 ): VersionedMutationOptions {
   return { expectedVersion, ...mutationOptions(idempotencyKey) };
+}
+
+function proposalSubmission(proposal: MemoryProposal): z.infer<typeof proposalSubmissionSchema> {
+  return {
+    id: proposal.id,
+    kind: proposal.kind,
+    targetMemoryId: proposal.targetMemoryId,
+    baseMemoryVersion: proposal.baseMemoryVersion,
+    proposedScope: proposal.proposedScope,
+    evidenceMemoryIds: [...proposal.evidenceMemoryIds],
+    status: proposal.status,
+    createdAt: proposal.createdAt,
+  };
 }
 
 function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
@@ -321,6 +350,69 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             await memories.remember(memoryInput, mutationOptions(idempotencyKey)),
             DETAIL_CONTENT_BUDGET,
             DETAIL_METADATA_BUDGET,
+          ),
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_propose",
+    {
+      title: "Propose a Lore Memory",
+      description:
+        "Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. Reuse idempotencyKey when retrying an unknown outcome.",
+      inputSchema: z.discriminatedUnion("kind", [
+        z.object({
+          kind: z.literal("create"),
+          content: z.string().trim().min(1).max(1_000_000),
+          scope: scopeSchema.default("shared"),
+          metadata: metadataSchema.optional(),
+          evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
+          idempotencyKey: idempotencyKeySchema,
+        }),
+        z
+          .object({
+            kind: z.literal("update"),
+            targetMemoryId: z.string().uuid(),
+            expectedVersion: z.number().int().positive(),
+            content: z.string().trim().min(1).max(1_000_000).optional(),
+            scope: scopeSchema.optional(),
+            metadata: metadataSchema.optional(),
+            evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
+            idempotencyKey: idempotencyKeySchema,
+          })
+          .refine(
+            (input) =>
+              input.content !== undefined ||
+              input.scope !== undefined ||
+              input.metadata !== undefined,
+            { message: "content, scope, or metadata is required" },
+          ),
+      ]),
+      outputSchema: z.object({ proposal: proposalSubmissionSchema }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const { idempotencyKey, ...proposalInput } = input;
+        let normalizedProposal: CreateMemoryProposalInput;
+        if (proposalInput.kind === "create") {
+          normalizedProposal = proposalInput;
+        } else if (proposalInput.content !== undefined) {
+          normalizedProposal = { ...proposalInput, content: proposalInput.content };
+        } else if (proposalInput.scope !== undefined) {
+          normalizedProposal = { ...proposalInput, scope: proposalInput.scope };
+        } else if (proposalInput.metadata !== undefined) {
+          normalizedProposal = { ...proposalInput, metadata: proposalInput.metadata };
+        } else {
+          throw new TypeError("content, scope, or metadata is required");
+        }
+        return success({
+          proposal: proposalSubmission(
+            await memories.proposeMemory(normalizedProposal, mutationOptions(idempotencyKey)),
           ),
         });
       } catch (error) {

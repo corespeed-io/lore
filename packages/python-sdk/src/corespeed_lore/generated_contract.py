@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Final, Literal, NotRequired, TypeAlias, TypedDict, Union
 
 LORE_API_VERSION: Final[str] = "v1"
-LORE_ERROR_CODES: Final[frozenset[str]] = frozenset(["access_denied","authentication_required","idempotency_conflict","internal_error","invalid_archive","invalid_request","not_found","precondition_required","version_conflict","workspace_export_limit_exceeded"])
+LORE_ERROR_CODES: Final[frozenset[str]] = frozenset(["access_denied","authentication_required","idempotency_conflict","internal_error","invalid_archive","invalid_request","not_found","precondition_required","proposal_capacity_exceeded","proposal_review_conflict","version_conflict","workspace_export_limit_exceeded"])
 
 class AgentCredential(TypedDict):
     id: str
@@ -41,8 +41,19 @@ class CreateMemoryInput(TypedDict):
     scope: NotRequired[Literal["shared", "private"]]
     metadata: NotRequired[dict[str, Any]]
 
+class CreateMemoryProposalCreateInput(TypedDict):
+    kind: Literal["create"]
+    content: str
+    scope: NotRequired[Literal["shared", "private"]]
+    metadata: NotRequired[dict[str, Any]]
+    evidenceMemoryIds: NotRequired[list[str]]
+
+CreateMemoryProposalInput: TypeAlias = Union["CreateMemoryProposalCreateInput", "CreateMemoryProposalUpdateInput"]
+
+CreateMemoryProposalUpdateInput: TypeAlias = Union["MemoryProposalUpdateContentInput", "MemoryProposalUpdateScopeInput", "MemoryProposalUpdateMetadataInput"]
+
 class Error(TypedDict):
-    code: Literal["access_denied", "authentication_required", "idempotency_conflict", "internal_error", "invalid_archive", "invalid_request", "not_found", "precondition_required", "version_conflict", "workspace_export_limit_exceeded"]
+    code: Literal["access_denied", "authentication_required", "idempotency_conflict", "internal_error", "invalid_archive", "invalid_request", "not_found", "precondition_required", "proposal_capacity_exceeded", "proposal_review_conflict", "version_conflict", "workspace_export_limit_exceeded"]
     error: str
 
 class EvaluationCase(TypedDict):
@@ -144,6 +155,56 @@ class MemoryGraphNode(TypedDict):
     scope: Literal["shared", "private"]
     type: str
     updatedAt: str
+
+class MemoryProposal(TypedDict):
+    id: str
+    workspaceId: str
+    ownerUserId: str
+    proposedByActorKind: Literal["human", "agent"]
+    proposedByAgentId: Union[str, None]
+    kind: Literal["create", "update"]
+    targetMemoryId: Union[str, None]
+    baseMemoryVersion: Union[int, None]
+    proposedContent: str
+    proposedScope: Literal["shared", "private"]
+    proposedMetadata: dict[str, Any]
+    evidenceMemoryIds: list[str]
+    status: Literal["pending", "accepted", "rejected"]
+    reviewedByUserId: Union[str, None]
+    acceptedMemoryId: Union[str, None]
+    createdAt: str
+    reviewedAt: Union[str, None]
+
+class MemoryProposalReviewResult(TypedDict):
+    proposal: MemoryProposal
+    memory: Union[Memory, None]
+
+class MemoryProposalUpdateContentInput(TypedDict):
+    kind: Literal["update"]
+    targetMemoryId: str
+    expectedVersion: int
+    content: str
+    scope: NotRequired[Literal["shared", "private"]]
+    metadata: NotRequired[dict[str, Any]]
+    evidenceMemoryIds: NotRequired[list[str]]
+
+class MemoryProposalUpdateMetadataInput(TypedDict):
+    kind: Literal["update"]
+    targetMemoryId: str
+    expectedVersion: int
+    content: NotRequired[str]
+    scope: NotRequired[Literal["shared", "private"]]
+    metadata: dict[str, Any]
+    evidenceMemoryIds: NotRequired[list[str]]
+
+class MemoryProposalUpdateScopeInput(TypedDict):
+    kind: Literal["update"]
+    targetMemoryId: str
+    expectedVersion: int
+    content: NotRequired[str]
+    scope: Literal["shared", "private"]
+    metadata: NotRequired[dict[str, Any]]
+    evidenceMemoryIds: NotRequired[list[str]]
 
 class MemorySearchResult(TypedDict):
     memory: Memory

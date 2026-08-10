@@ -7,14 +7,23 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       schemas: {
         Capabilities: {
           properties: {
+            features: {
+              properties: {
+                memoryProposals: { const: true };
+              };
+            };
             limits: {
               properties: {
                 workspaceArchiveLinks: { const: number };
                 workspaceArchiveMemories: { const: number };
+                memoryProposalEvidence: { const: number };
+                memoryProposalList: { const: number };
+                memoryProposalPending: { const: number };
               };
             };
           };
         };
+        CreateMemoryProposalUpdateInput: { anyOf: Array<{ $ref: string }> };
         Error: { properties: { code: { enum: string[] } } };
         IssuedAgentCredential: {
           properties: { token: { type: string; readOnly: boolean } };
@@ -22,6 +31,9 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
         MemorySearchResult: {
           properties: { rerankScore: { type: string; minimum: number; maximum: number } };
         };
+        MemoryProposalUpdateContentInput: { required: readonly string[] };
+        MemoryProposalUpdateMetadataInput: { required: readonly string[] };
+        MemoryProposalUpdateScopeInput: { required: readonly string[] };
       };
     };
     openapi: string;
@@ -44,6 +56,8 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/api/v1/graph",
       "/api/v1/memories",
       "/api/v1/memories/{memoryId}",
+      "/api/v1/memory-proposals",
+      "/api/v1/memory-proposals/{proposalId}/review",
       "/api/v1/workspaces",
       "/api/v1/workspaces/export",
       "/api/v1/workspaces/import",
@@ -55,14 +69,39 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     expect.arrayContaining([
       "idempotency_conflict",
       "precondition_required",
+      "proposal_capacity_exceeded",
+      "proposal_review_conflict",
       "version_conflict",
       "workspace_export_limit_exceeded",
     ]),
   );
   expect(document.paths["/api/v1/workspaces/export"].get.responses).toHaveProperty("409");
   expect(document.components.schemas.Capabilities.properties.limits.properties).toEqual({
+    memoryProposalEvidence: { const: 50 },
+    memoryProposalList: { const: 100 },
+    memoryProposalPending: { const: 100 },
+    memoryProposalRetentionSeconds: { const: 2_592_000 },
     workspaceArchiveLinks: { const: 50_000 },
     workspaceArchiveMemories: { const: 10_000 },
+  });
+  expect(document.components.schemas.Capabilities.properties.features.properties).toHaveProperty(
+    "memoryProposals",
+    { const: true },
+  );
+  expect(document.components.schemas.CreateMemoryProposalUpdateInput.anyOf).toEqual([
+    { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
+    { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
+    { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
+  ]);
+  expect(document.components.schemas.MemoryProposalUpdateContentInput.required).toContain(
+    "content",
+  );
+  expect(document.components.schemas.MemoryProposalUpdateScopeInput.required).toContain("scope");
+  expect(document.components.schemas.MemoryProposalUpdateMetadataInput.required).toContain(
+    "metadata",
+  );
+  expect(document.paths["/api/v1/memory-proposals/{proposalId}/review"]).toMatchObject({
+    post: { responses: { "200": { headers: { ETag: { schema: { type: "string" } } } } } },
   });
   expect(document.components.schemas.MemorySearchResult.properties.rerankScore).toEqual(
     expect.objectContaining({ type: "number", minimum: 0, maximum: 1 }),
