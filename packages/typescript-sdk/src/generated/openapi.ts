@@ -385,6 +385,8 @@ export interface components {
                 /** @constant */
                 readonly memoryProposalPending: 100;
                 /** @constant */
+                readonly memoryProposalRetentionSeconds: 2592000;
+                /** @constant */
                 readonly workspaceArchiveLinks: 50000;
                 /** @constant */
                 readonly workspaceArchiveMemories: 10000;
@@ -1430,6 +1432,7 @@ export interface operations {
             /** @description Reviewed Memory Proposal */
             readonly 200: {
                 headers: {
+                    readonly ETag?: string;
                     readonly [name: string]: unknown;
                 };
                 content: {

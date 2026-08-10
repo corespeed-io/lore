@@ -15,6 +15,7 @@ interface MemoryProposalsViewProps {
   workspaceId: string;
   workspaceName: string;
   onOpenMemory: (memoryId: string) => void;
+  onReviewed: (result: MemoryProposalReviewResult) => Promise<void>;
 }
 
 const FILTERS: Array<{ label: string; status: MemoryProposalStatus }> = [
@@ -40,20 +41,11 @@ function utcDate(value: string): string {
   }).format(new Date(value));
 }
 
-function cacheKeyMatches(key: unknown, workspaceId: string, names: readonly string[]): boolean {
-  return (
-    Array.isArray(key) &&
-    key[0] === "lore" &&
-    typeof key[1] === "string" &&
-    names.includes(key[1]) &&
-    key[2] === workspaceId
-  );
-}
-
 export function MemoryProposalsView({
   workspaceId,
   workspaceName,
   onOpenMemory,
+  onReviewed,
 }: MemoryProposalsViewProps) {
   const [status, setStatus] = useState<MemoryProposalStatus>("pending");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -127,7 +119,7 @@ export function MemoryProposalsView({
     if (
       decision === "reject" &&
       !window.confirm(
-        "Reject this proposal? It will remain in review history and cannot be reopened.",
+        "Reject this proposal? It will remain in recent history for up to 30 days and cannot be reopened.",
       )
     ) {
       return;
@@ -160,18 +152,8 @@ export function MemoryProposalsView({
           })
         : Promise.resolve(undefined),
       mutateProposals(),
-      mutations.mutateCache(
-        (key) => cacheKeyMatches(key, workspaceId, ["memory-proposals"]),
-        undefined,
-        { revalidate: true },
-      ),
-      result.memory
-        ? mutations.mutateCache(
-            (key) => cacheKeyMatches(key, workspaceId, ["memories", "search", "graph"]),
-            undefined,
-            { revalidate: true },
-          )
-        : Promise.resolve(undefined),
+      mutations.mutateCache(loreKeys.memoryProposals(workspaceId, result.proposal.status)),
+      onReviewed(result),
     ]);
   }
 

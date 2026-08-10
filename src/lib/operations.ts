@@ -23,6 +23,7 @@ export interface DeploymentCapabilities {
     memoryProposalEvidence: number;
     memoryProposalList: number;
     memoryProposalPending: number;
+    memoryProposalRetentionSeconds: number;
   };
   activeEmbeddingGeneration: {
     provider: string;

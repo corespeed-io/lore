@@ -22,6 +22,7 @@ CREATE TABLE memory_proposals (
   accepted_memory_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   reviewed_at timestamptz,
+  expires_at timestamptz NOT NULL DEFAULT (now() + interval '30 days'),
   UNIQUE (workspace_id, id),
   CHECK (
     proposed_by_actor_kind = 'agent'
@@ -44,17 +45,20 @@ CREATE TABLE memory_proposals (
     (status = 'pending'
       AND reviewed_by_user_id IS NULL
       AND accepted_memory_id IS NULL
-      AND reviewed_at IS NULL)
+      AND reviewed_at IS NULL
+      AND expires_at = created_at + interval '30 days')
     OR
     (status = 'accepted'
       AND reviewed_by_user_id IS NOT NULL
       AND accepted_memory_id IS NOT NULL
-      AND reviewed_at IS NOT NULL)
+      AND reviewed_at IS NOT NULL
+      AND expires_at = reviewed_at + interval '30 days')
     OR
     (status = 'rejected'
       AND reviewed_by_user_id IS NOT NULL
       AND accepted_memory_id IS NULL
-      AND reviewed_at IS NOT NULL)
+      AND reviewed_at IS NOT NULL
+      AND expires_at = reviewed_at + interval '30 days')
   )
 );
 
@@ -77,11 +81,11 @@ CREATE INDEX memory_proposals_owner_status_idx
   ON memory_proposals (workspace_id, owner_user_id, status, created_at DESC, id);
 CREATE INDEX memory_proposal_evidence_memory_idx
   ON memory_proposal_evidence (workspace_id, memory_id, proposal_id);
+CREATE INDEX memory_proposals_expiry_idx ON memory_proposals (expires_at);
 
 CREATE FUNCTION lore.can_read_memory_proposal(
   target_workspace_id uuid,
-  target_owner_user_id uuid,
-  target_proposed_by_agent_id uuid
+  target_owner_user_id uuid
 )
 RETURNS boolean
 LANGUAGE sql
@@ -90,11 +94,36 @@ PARALLEL SAFE
 AS $$
   SELECT target_workspace_id = lore.current_workspace_id()
     AND target_owner_user_id = lore.current_user_id()
-    AND CASE
-      WHEN lore.current_agent_id() IS NULL THEN lore.is_active_member(target_workspace_id)
-      ELSE target_proposed_by_agent_id = lore.current_agent_id()
-        AND lore.agent_has_access(target_workspace_id, 'read')
-    END
+    AND lore.current_agent_id() IS NULL
+    AND lore.is_active_member(target_workspace_id)
+$$;
+
+CREATE FUNCTION lore.can_append_memory_proposal_evidence(
+  target_workspace_id uuid,
+  target_proposal_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT target_workspace_id = lore.current_workspace_id()
+    AND EXISTS (
+      SELECT 1
+      FROM public.memory_proposals proposal
+      WHERE proposal.id = target_proposal_id
+        AND proposal.workspace_id = target_workspace_id
+        AND proposal.owner_user_id = lore.current_user_id()
+        AND proposal.status = 'pending'
+        AND proposal.expires_at > now()
+        AND proposal.proposed_by_agent_id IS NOT DISTINCT FROM lore.current_agent_id()
+        AND proposal.proposed_by_actor_kind = CASE
+          WHEN lore.current_agent_id() IS NULL THEN 'human'
+          ELSE 'agent'
+        END
+        AND lore.can_write_memory(proposal.workspace_id, proposal.owner_user_id)
+    )
 $$;
 
 CREATE FUNCTION lore.can_review_memory_proposal(
@@ -143,6 +172,7 @@ BEGIN
       AND NEW.accepted_memory_id IS NOT DISTINCT FROM OLD.accepted_memory_id
       AND NEW.created_at IS NOT DISTINCT FROM OLD.created_at
       AND NEW.reviewed_at IS NOT DISTINCT FROM OLD.reviewed_at
+      AND NEW.expires_at IS NOT DISTINCT FROM OLD.expires_at
     THEN
       RETURN NEW;
     END IF;
@@ -174,6 +204,7 @@ BEGIN
     OR NEW.status NOT IN ('accepted', 'rejected')
     OR NEW.reviewed_by_user_id IS DISTINCT FROM lore.current_user_id()
     OR NEW.reviewed_at IS NULL
+    OR NEW.expires_at IS DISTINCT FROM NEW.reviewed_at + interval '30 days'
   THEN
     RAISE EXCEPTION 'Invalid Memory Proposal review transition'
       USING ERRCODE = '42501';
@@ -239,6 +270,7 @@ BEGIN
     WHERE proposal.workspace_id = NEW.workspace_id
       AND proposal.owner_user_id = NEW.owner_user_id
       AND proposal.status = 'pending'
+      AND proposal.expires_at > now()
   ) >= 100
   THEN
     RAISE EXCEPTION 'Memory Proposal pending limit reached'
@@ -272,13 +304,110 @@ BEFORE UPDATE ON memory_proposals
 FOR EACH ROW
 EXECUTE FUNCTION lore.protect_memory_proposal_review();
 
+CREATE FUNCTION lore.submit_memory_proposal(
+  target_workspace_id uuid,
+  target_owner_user_id uuid,
+  target_actor_kind text,
+  target_agent_id uuid,
+  target_kind memory_proposal_kind,
+  target_memory_id uuid,
+  target_base_memory_version integer,
+  target_content text,
+  target_scope memory_scope,
+  target_metadata jsonb,
+  target_changes_content boolean,
+  target_changes_scope boolean,
+  target_changes_metadata boolean
+)
+RETURNS SETOF memory_proposals
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NOT lore.can_write_memory(target_workspace_id, target_owner_user_id)
+    OR target_actor_kind IS DISTINCT FROM (CASE
+      WHEN lore.current_agent_id() IS NULL THEN 'human'
+      ELSE 'agent'
+    END)
+    OR target_agent_id IS DISTINCT FROM lore.current_agent_id()
+  THEN
+    RAISE EXCEPTION 'Actor cannot submit this Memory Proposal'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN QUERY
+  INSERT INTO public.memory_proposals (
+    id, workspace_id, owner_user_id, proposed_by_actor_kind,
+    proposed_by_agent_id, kind, target_memory_id, base_memory_version,
+    proposed_content, proposed_scope, proposed_metadata,
+    changes_content, changes_scope, changes_metadata
+  ) VALUES (
+    gen_random_uuid(), target_workspace_id, target_owner_user_id, target_actor_kind,
+    target_agent_id, target_kind, target_memory_id, target_base_memory_version,
+    target_content, target_scope, target_metadata,
+    target_changes_content, target_changes_scope, target_changes_metadata
+  )
+  RETURNING public.memory_proposals.*;
+END
+$$;
+
+CREATE FUNCTION lore.scrub_deleted_memory_proposal()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  DELETE FROM public.request_idempotency_records replay
+  WHERE replay.workspace_id = OLD.workspace_id
+    AND replay.response_body #>> '{proposal,id}' = OLD.id::text;
+  RETURN OLD;
+END
+$$;
+
+CREATE TRIGGER memory_proposals_scrub_idempotency
+AFTER DELETE ON memory_proposals
+FOR EACH ROW
+EXECUTE FUNCTION lore.scrub_deleted_memory_proposal();
+
+CREATE FUNCTION lore.remove_proposals_for_deleted_memory()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  DELETE FROM public.memory_proposals proposal
+  WHERE proposal.workspace_id = OLD.workspace_id
+    AND (
+      proposal.target_memory_id = OLD.id
+      OR proposal.accepted_memory_id = OLD.id
+    );
+
+  DELETE FROM public.request_idempotency_records replay
+  WHERE replay.workspace_id = OLD.workspace_id
+    AND (
+      replay.response_body #>> '{proposal,targetMemoryId}' = OLD.id::text
+      OR replay.response_body #>> '{proposal,acceptedMemoryId}' = OLD.id::text
+    );
+  RETURN OLD;
+END
+$$;
+
+CREATE TRIGGER memories_remove_proposals_before_delete
+BEFORE DELETE ON memories
+FOR EACH ROW
+EXECUTE FUNCTION lore.remove_proposals_for_deleted_memory();
+
 ALTER TABLE memory_proposals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memory_proposal_evidence ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY memory_proposals_select ON memory_proposals
   FOR SELECT
   USING (
-    lore.can_read_memory_proposal(workspace_id, owner_user_id, proposed_by_agent_id)
+    lore.can_read_memory_proposal(workspace_id, owner_user_id)
+    AND expires_at > now()
   );
 
 CREATE POLICY memory_proposals_insert ON memory_proposals
@@ -319,12 +448,9 @@ CREATE POLICY memory_proposal_evidence_select ON memory_proposal_evidence
 CREATE POLICY memory_proposal_evidence_insert ON memory_proposal_evidence
   FOR INSERT
   WITH CHECK (
-    EXISTS (
-      SELECT 1
-      FROM memory_proposals proposal
-      WHERE proposal.id = memory_proposal_evidence.proposal_id
-        AND proposal.workspace_id = memory_proposal_evidence.workspace_id
-        AND proposal.status = 'pending'
+    lore.can_append_memory_proposal_evidence(
+      memory_proposal_evidence.workspace_id,
+      memory_proposal_evidence.proposal_id
     )
     AND EXISTS (
       SELECT 1
@@ -335,13 +461,25 @@ CREATE POLICY memory_proposal_evidence_insert ON memory_proposal_evidence
     )
   );
 
-REVOKE ALL ON FUNCTION lore.can_read_memory_proposal(uuid, uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION lore.can_read_memory_proposal(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION lore.can_append_memory_proposal_evidence(uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.can_review_memory_proposal(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION lore.submit_memory_proposal(
+  uuid, uuid, text, uuid, memory_proposal_kind, uuid, integer,
+  text, memory_scope, jsonb, boolean, boolean, boolean
+) FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.protect_memory_proposal_review() FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.validate_memory_proposal_target() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION lore.can_read_memory_proposal(uuid, uuid, uuid) TO lore_app;
+REVOKE ALL ON FUNCTION lore.scrub_deleted_memory_proposal() FROM PUBLIC;
+REVOKE ALL ON FUNCTION lore.remove_proposals_for_deleted_memory() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION lore.can_read_memory_proposal(uuid, uuid) TO lore_app;
+GRANT EXECUTE ON FUNCTION lore.can_append_memory_proposal_evidence(uuid, uuid) TO lore_app;
 GRANT EXECUTE ON FUNCTION lore.can_review_memory_proposal(uuid, uuid) TO lore_app;
-GRANT SELECT, INSERT, UPDATE ON memory_proposals TO lore_app;
+GRANT EXECUTE ON FUNCTION lore.submit_memory_proposal(
+  uuid, uuid, text, uuid, memory_proposal_kind, uuid, integer,
+  text, memory_scope, jsonb, boolean, boolean, boolean
+) TO lore_app;
+GRANT SELECT, UPDATE ON memory_proposals TO lore_app;
 GRANT SELECT, INSERT ON memory_proposal_evidence TO lore_app;
 
 CREATE OR REPLACE FUNCTION lore.portable_core_capabilities()
@@ -369,7 +507,8 @@ AS $$
       'workspaceArchiveLinks', 50000,
       'memoryProposalEvidence', 50,
       'memoryProposalList', 100,
-      'memoryProposalPending', 100
+      'memoryProposalPending', 100,
+      'memoryProposalRetentionSeconds', 2592000
     ),
     'activeEmbeddingGeneration', (
       SELECT jsonb_build_object(
@@ -385,6 +524,30 @@ AS $$
   FROM lore_system_state state
   WHERE state.singleton
 $$;
+
+CREATE OR REPLACE FUNCTION lore.purge_expired_portable_core_records()
+RETURNS TABLE (idempotency_records bigint, memory_event_records bigint)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  idempotency_count bigint;
+  event_count bigint;
+BEGIN
+  DELETE FROM public.memory_proposals WHERE expires_at <= now();
+  DELETE FROM public.request_idempotency_records WHERE expires_at <= now();
+  GET DIAGNOSTICS idempotency_count = ROW_COUNT;
+  DELETE FROM public.memory_events WHERE expires_at <= now();
+  GET DIAGNOSTICS event_count = ROW_COUNT;
+  RETURN QUERY SELECT idempotency_count, event_count;
+END
+$$;
+
+COMMENT ON TABLE memory_proposals IS
+  'Owner-private, non-canonical review state. Content expires after 30 days and is removed with its target or accepted Memory.';
+COMMENT ON COLUMN memory_proposals.expires_at IS
+  'Hard content-retention boundary: 30 days after submission or the latest review.';
 
 DO $$
 BEGIN

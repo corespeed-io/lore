@@ -23,7 +23,7 @@ import {
   useLoreWorkspaces,
 } from "@/lib/lore-swr";
 import { parseRoute, type RouteState, routeUrl, type Tab } from "@/lib/route";
-import type { GraphData, Memory, MemoryScope } from "@/lib/types";
+import type { GraphData, Memory, MemoryProposalReviewResult, MemoryScope } from "@/lib/types";
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
@@ -340,6 +340,16 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     }
   }
 
+  async function refreshReviewedProposal(result: MemoryProposalReviewResult) {
+    const reviewedMemory = result.memory;
+    if (!reviewedMemory) return;
+    await mutateMemories((pages) => upsertMemoryPages(pages, reviewedMemory), {
+      revalidate: true,
+    });
+    void mutateGraph();
+    if (searchQuery) void mutateSearch();
+  }
+
   async function removeOpenMemory() {
     if (!activeWorkspaceId || !selectedMemory) return;
     if (!window.confirm("Forget this Memory? This cannot be undone.")) return;
@@ -558,6 +568,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                     workspaceId={activeWorkspaceId}
                     workspaceName={activeWorkspace?.name ?? "Workspace"}
                     onOpenMemory={openMemory}
+                    onReviewed={refreshReviewedProposal}
                   />
                 )}
 

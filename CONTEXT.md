@@ -79,7 +79,9 @@ an Actor for review by its owner User. It is owner-private, may cite only Memori
 visible to its submitting Actor, and binds an update to one exact Memory version.
 A proposal is not searchable Memory and cannot change canonical Memory until that
 User explicitly accepts it. Each owner has at most 100 pending proposals in one
-Workspace; reviewing one frees capacity for another submission.
+Workspace; reviewing one frees capacity for another submission. Pending and reviewed
+proposal content expires after 30 days. Forgetting a target or accepted Memory removes
+its associated proposal content immediately.
 _Avoid_: Draft Memory, automatic Memory, AutoDream result
 
 ## Graph

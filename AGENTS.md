@@ -83,7 +83,9 @@ been removed. Lore now has a native implementation:
   visible evidence Memory ids, but only the owner human may accept or reject it.
   Pending proposals never enter Memory browse/search/Graph/export/outbox. Update
   acceptance is exact-version and never silently rebases; future opt-in AutoDream
-  work must use this boundary instead of silently persisting generated content;
+  work must use this boundary instead of silently persisting generated content.
+  Proposal content expires after 30 days, and hard-deleting a target or accepted
+  Memory removes its associated proposals and replay bodies immediately;
 - `packages/typescript-sdk` generates its public types from the canonical OpenAPI
   document and owns the deep integration client. `packages/cli` and the external
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace

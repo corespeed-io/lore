@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
+import { createMemoryGraphModule } from "@/lib/graph";
+import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
 import {
   createMemoryModule,
   MemoryProposalAccessDeniedError,
@@ -8,6 +10,7 @@ import {
   MemoryProposalReviewConflictError,
   MemoryVersionConflictError,
 } from "@/lib/memory";
+import { createPortabilityModule } from "@/lib/portability";
 import { createMemoryTestContext } from "./support/memory-context";
 
 async function createWritingAgent() {
@@ -26,12 +29,19 @@ async function createWritingAgent() {
 test("Agent proposal remains private and non-canonical until its owner accepts it", async () => {
   const { agent, agentActor, testContext } = await createWritingAgent();
   const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const portability = createPortabilityModule(testContext.database);
+  const evidence = await memories.remember(testContext.alice, {
+    content: "The planning meeting moved the launch.",
+    scope: "private",
+  });
 
   const proposal = await memories.propose(agentActor, {
     kind: "create",
     content: "The launch moved to Tuesday.",
     scope: "shared",
     metadata: { type: "decision" },
+    evidenceMemoryIds: [evidence.id],
   });
 
   expect(proposal).toMatchObject({
@@ -40,11 +50,25 @@ test("Agent proposal remains private and non-canonical until its owner accepts i
     proposedByAgentId: agent.id,
     status: "pending",
     acceptedMemoryId: null,
+    evidenceMemoryIds: [evidence.id],
   });
-  await expect(memories.list(testContext.alice)).resolves.toEqual([]);
+  await expect(memories.list(testContext.alice)).resolves.toMatchObject([{ id: evidence.id }]);
   await expect(memories.list(testContext.bob)).resolves.toEqual([]);
   await expect(memories.search(testContext.alice, { query: "Tuesday" })).resolves.toEqual([]);
   await expect(memories.listProposals(testContext.alice)).resolves.toEqual([proposal]);
+  await expect(graph.read(testContext.alice)).resolves.toMatchObject({
+    nodes: [{ id: evidence.id }],
+  });
+  await expect(portability.exportWorkspace(testContext.alice)).resolves.toMatchObject({
+    memories: [{ id: evidence.id }],
+  });
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    const events = await transaction.query<{ resource_id: string }>(
+      "SELECT resource_id FROM memory_events ORDER BY sequence",
+    );
+    expect(events.rows).toEqual([{ resource_id: evidence.id }]);
+  });
 
   const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
 
@@ -105,18 +129,12 @@ test("Proposal acceptance and rejection are replay-safe without duplicate Memori
       expectedVersion: first.memory.version,
     }),
   ).resolves.toBe(true);
-  await expect(
-    memories.listProposals(testContext.alice, { status: "accepted" }),
-  ).resolves.toMatchObject([
-    {
-      id: acceptedProposal.id,
-      acceptedMemoryId: first.memory.id,
-      status: "accepted",
-    },
-  ]);
+  await expect(memories.listProposals(testContext.alice, { status: "accepted" })).resolves.toEqual(
+    [],
+  );
   await expect(
     memories.reviewProposal(testContext.alice, acceptedProposal.id, "accept"),
-  ).resolves.toMatchObject({ memory: null, proposal: { status: "accepted" } });
+  ).resolves.toBeNull();
 
   await testContext.close();
 });
@@ -137,7 +155,8 @@ test("Database review transition rejects a forged accepted receipt", async () =>
          SET status = 'accepted',
              reviewed_by_user_id = $2,
              accepted_memory_id = $3,
-             reviewed_at = now()
+             reviewed_at = now(),
+             expires_at = now() + interval '30 days'
          WHERE id = $1`,
         [proposal.id, testContext.alice.userId, crypto.randomUUID()],
       ),
@@ -164,7 +183,8 @@ test("Database review transition rejects a forged accepted receipt", async () =>
          SET status = 'accepted',
              reviewed_by_user_id = $2,
              accepted_memory_id = $3,
-             reviewed_at = now()
+             reviewed_at = now(),
+             expires_at = now() + interval '30 days'
          WHERE id = $1`,
         [updateProposal.id, testContext.alice.userId, crypto.randomUUID()],
       ),
@@ -177,8 +197,7 @@ test("Database review transition rejects a forged accepted receipt", async () =>
 test("Pending proposal capacity keeps every proposal manageable in the native inbox", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
-  await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+  await testContext.adminDatabase.transaction(async (transaction) => {
     await transaction.query(
       `INSERT INTO memory_proposals (
          id, workspace_id, owner_user_id, proposed_by_actor_kind,
@@ -226,6 +245,13 @@ test("Only the owner human can list or review an Agent proposal", async () => {
   await expect(memories.listProposals(testContext.bob)).resolves.toEqual([]);
   await expect(memories.reviewProposal(testContext.bob, proposal.id, "accept")).resolves.toBeNull();
   await expect(memories.list(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, agentActor);
+    await expect(
+      transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposal.id]),
+    ).resolves.toMatchObject({ rows: [] });
+  });
 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
@@ -307,7 +333,7 @@ test("Update proposal applies only to the exact reviewed Memory version", async 
   await testContext.close();
 });
 
-test("Deleting a target preserves proposal history and prevents later acceptance", async () => {
+test("Deleting a target removes proposal content and prevents later acceptance", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const target = await memories.remember(testContext.alice, {
@@ -326,14 +352,40 @@ test("Deleting a target preserves proposal history and prevents later acceptance
   ).resolves.toBe(true);
   await expect(
     memories.reviewProposal(testContext.alice, proposal.id, "accept"),
-  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
-  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
-    {
-      id: proposal.id,
-      status: "pending",
-      targetMemoryId: target.id,
-    },
-  ]);
+  ).resolves.toBeNull();
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.close();
+});
+
+test("Expired proposal content is purged with Portable Core retention", async () => {
+  const testContext = await createMemoryTestContext();
+  const proposalId = crypto.randomUUID();
+
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO memory_proposals (
+         id, workspace_id, owner_user_id, proposed_by_actor_kind,
+         kind, proposed_content, proposed_scope, proposed_metadata,
+         changes_content, changes_scope, changes_metadata, status,
+         reviewed_by_user_id, created_at, reviewed_at, expires_at
+       ) VALUES (
+         $1, $2, $3, 'human', 'create', 'Expired private proposal',
+         'private', '{}'::jsonb, true, true, true, 'rejected', $3,
+         now() - interval '61 days', now() - interval '31 days',
+         now() - interval '1 day'
+       )`,
+      [proposalId, testContext.alice.workspaceId, testContext.alice.userId],
+    );
+  });
+  const memories = createMemoryModule(testContext.database);
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+  await purgeExpiredPortableCoreRecords(testContext.maintenanceDatabase);
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await expect(
+      transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposalId]),
+    ).resolves.toMatchObject({ rows: [] });
+  });
 
   await testContext.close();
 });
@@ -346,8 +398,7 @@ test("Database target validation rejects a cross-owner update proposal", async (
     scope: "private",
   });
 
-  await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+  await testContext.adminDatabase.transaction(async (transaction) => {
     await expect(
       transaction.query(
         `INSERT INTO memory_proposals (

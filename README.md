@@ -43,7 +43,9 @@ identity mapping, authorization, retrieval, and evaluation directly.
 AutoDream, automatic consolidation, summarization, and proactive insight generation
 are intentionally outside v1. Memory Proposals provide the guarded acceptance
 boundary a future opt-in extension can use without silently writing canonical
-Memory. Lore includes Ollama, Google Gemini, and OpenAI
+Memory. Proposal content has a bounded 30-day lifetime, and forgetting a target or
+accepted Memory removes its associated proposal content immediately. Lore includes
+Ollama, Google Gemini, and OpenAI
 embedding adapters. Chunking and lexical indexing complete inside the Memory write;
 document embedding runs asynchronously and never blocks that write. Embedding
 configuration is set once per deployment. Local deployments default to

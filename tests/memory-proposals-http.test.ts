@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "vitest";
 import {
   createAgentCredentialHandlers,
   createAgentHandlers,
+  createMemoryByIdHandlers,
   createMemoryHandlers,
   createMemoryProposalHandlers,
   createMemoryProposalReviewHandlers,
@@ -143,6 +144,7 @@ test("Agent submits a Proposal over v1 and only the human owner can accept it", 
   };
   expect(acceptedResponse.status).toBe(200);
   expect(acceptedResponse.headers.get("cache-control")).toBe("private, no-store");
+  expect(acceptedResponse.headers.get("etag")).toBe('"memory-v1"');
   expect(accepted.proposal).toMatchObject({
     acceptedMemoryId: accepted.memory.id,
     status: "accepted",
@@ -180,6 +182,105 @@ test("Agent submits a Proposal over v1 and only the human owner can accept it", 
     new Request("http://lore.local/api/v1/memories", { headers: humanHeaders }),
   );
   await expect(listedMemories.json()).resolves.toMatchObject([{ id: accepted.memory.id }]);
+
+  const forgotten = await createMemoryByIdHandlers(testContext.database).DELETE(
+    new Request(`http://lore.local/api/v1/memories/${accepted.memory.id}`, {
+      method: "DELETE",
+      headers: { ...humanHeaders, "if-match": '"memory-v1"' },
+    }),
+    accepted.memory.id,
+  );
+  expect(forgotten.status).toBe(204);
+  await expect(
+    proposals
+      .GET(
+        new Request("http://lore.local/api/v1/memory-proposals?status=accepted", {
+          headers: humanHeaders,
+        }),
+      )
+      .then((response) => response.json()),
+  ).resolves.toEqual([]);
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await expect(
+      transaction.query(
+        "SELECT id FROM request_idempotency_records WHERE response_body #>> '{proposal,id}' = $1",
+        [submitted.id],
+      ),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+
+  await testContext.close();
+});
+
+test("HTTP refuses a stale update Proposal with 412 and keeps it pending", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "proposal-http-stale";
+  const testContext = await createMemoryTestContext();
+  const workspace = (await (
+    await createWorkspaceHandlers(testContext.database).POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Stale Proposal Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const memories = createMemoryHandlers(testContext.database);
+  const memoryById = createMemoryByIdHandlers(testContext.database);
+  const proposals = createMemoryProposalHandlers(testContext.database);
+  const reviews = createMemoryProposalReviewHandlers(testContext.database);
+
+  const created = (await (
+    await memories.POST(
+      new Request("http://lore.local/api/v1/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "Launch Monday", scope: "private" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const proposed = (await (
+    await proposals.POST(
+      new Request("http://lore.local/api/v1/memory-proposals", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          kind: "update",
+          targetMemoryId: created.id,
+          expectedVersion: 1,
+          content: "Launch Tuesday",
+        }),
+      }),
+    )
+  ).json()) as { id: string };
+
+  const changed = await memoryById.PATCH(
+    new Request(`http://lore.local/api/v1/memories/${created.id}`, {
+      method: "PATCH",
+      headers: { ...headers, "if-match": '"memory-v1"' },
+      body: JSON.stringify({ content: "Launch Wednesday" }),
+    }),
+    created.id,
+  );
+  expect(changed.status).toBe(200);
+
+  const stale = await reviews.POST(
+    new Request(`http://lore.local/api/v1/memory-proposals/${proposed.id}/review`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "accept" }),
+    }),
+    proposed.id,
+  );
+  expect(stale.status).toBe(412);
+  expect(stale.headers.get("cache-control")).toBe("private, no-store");
+  await expect(stale.json()).resolves.toMatchObject({ code: "version_conflict" });
+  await expect(
+    proposals
+      .GET(new Request("http://lore.local/api/v1/memory-proposals?status=pending", { headers }))
+      .then((response) => response.json()),
+  ).resolves.toMatchObject([{ id: proposed.id, status: "pending" }]);
 
   await testContext.close();
 });

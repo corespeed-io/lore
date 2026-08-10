@@ -358,9 +358,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             properties: { decision: { type: "string", enum: ["accept", "reject"] } },
           }),
           responses: {
-            "200": jsonResponse("Reviewed Memory Proposal", {
-              $ref: "#/components/schemas/MemoryProposalReviewResult",
-            }),
+            "200": jsonResponse(
+              "Reviewed Memory Proposal",
+              { $ref: "#/components/schemas/MemoryProposalReviewResult" },
+              { ETag: { schema: { type: "string" } } },
+            ),
             "403": { $ref: "#/components/responses/Error" },
             "404": { $ref: "#/components/responses/Error" },
             "409": { $ref: "#/components/responses/Error" },
@@ -1257,6 +1259,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 "memoryProposalEvidence",
                 "memoryProposalList",
                 "memoryProposalPending",
+                "memoryProposalRetentionSeconds",
               ],
               properties: {
                 workspaceArchiveMemories: { const: MAX_WORKSPACE_ARCHIVE_MEMORIES },
@@ -1264,6 +1267,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 memoryProposalEvidence: { const: 50 },
                 memoryProposalList: { const: 100 },
                 memoryProposalPending: { const: 100 },
+                memoryProposalRetentionSeconds: { const: 2_592_000 },
               },
             },
             activeEmbeddingGeneration: {

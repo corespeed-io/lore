@@ -206,3 +206,5 @@ fresh operation.
 AutoDream is not part of this adapter. A future AutoDream process must remain an
 explicit opt-in extension outside Portable Core; it may submit a Memory Proposal,
 but must not silently persist summaries, merges, or insights into Memory core.
+Pending and reviewed proposal content expires after 30 days. Forgetting a proposal's
+target or accepted Memory removes that proposal content immediately.

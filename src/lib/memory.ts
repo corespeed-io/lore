@@ -1604,21 +1604,13 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             }
           }
 
-          const id = crypto.randomUUID();
           const inserted = await transaction.query<MemoryProposalRow>(
-            `INSERT INTO memory_proposals (
-               id, workspace_id, owner_user_id, proposed_by_actor_kind,
-               proposed_by_agent_id, kind,
-               target_memory_id, base_memory_version, proposed_content,
-               proposed_scope, proposed_metadata, changes_content,
-               changes_scope, changes_metadata
-             ) VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb,
-               $12, $13, $14
-             )
-             RETURNING *`,
+            `SELECT *
+             FROM lore.submit_memory_proposal(
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+               $11, $12, $13
+             )`,
             [
-              id,
               actor.workspaceId,
               actor.userId,
               actor.agentId ? "agent" : "human",
@@ -1634,6 +1626,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               changesMetadata,
             ],
           );
+          const id = inserted.rows[0].id;
           for (const [ordinal, memoryId] of evidenceMemoryIds.entries()) {
             await transaction.query(
               `INSERT INTO memory_proposal_evidence (
@@ -1642,7 +1635,10 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               [actor.workspaceId, id, memoryId, ordinal],
             );
           }
-          const proposal = await proposalFromRow(transaction, inserted.rows[0]);
+          const proposal = {
+            ...toMemoryProposal(inserted.rows[0], evidenceMemoryIds),
+            evidenceMemoryIds,
+          };
           await completeMutation(
             transaction,
             claim.requestId,
@@ -1684,6 +1680,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
            FROM memory_proposals
            WHERE workspace_id = $1
              AND owner_user_id = $2
+             AND expires_at > now()
              AND ($3::memory_proposal_status IS NULL OR status = $3::memory_proposal_status)
            ORDER BY created_at DESC, id
            LIMIT $4`,
@@ -1710,6 +1707,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              WHERE id = $1
                AND workspace_id = $2
                AND owner_user_id = $3
+               AND expires_at > now()
              FOR UPDATE`,
             [id, actor.workspaceId, actor.userId],
           );
@@ -1744,7 +1742,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               `UPDATE memory_proposals
                SET status = 'rejected',
                    reviewed_by_user_id = $3,
-                   reviewed_at = now()
+                   reviewed_at = now(),
+                   expires_at = now() + interval '30 days'
                WHERE id = $1 AND workspace_id = $2
                RETURNING *`,
               [id, actor.workspaceId, actor.userId],
@@ -1800,7 +1799,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              SET status = 'accepted',
                  reviewed_by_user_id = $3,
                  accepted_memory_id = $4,
-                 reviewed_at = now()
+                 reviewed_at = now(),
+                 expires_at = now() + interval '30 days'
              WHERE id = $1 AND workspace_id = $2
              RETURNING *`,
             [id, actor.workspaceId, actor.userId, applied.memory.id],

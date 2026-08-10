@@ -254,9 +254,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   version changed remains pending, disables acceptance, and explains the conflict;
   it is never silently rebased. Reject is explicit and irreversible but does not
   alter canonical Memory.
-- The latest 100 accepted and rejected proposals remain available in each recent
-  history view. Successful acceptance revalidates Memory browse, search, and Graph
-  state without turning Proposal into a searchable Memory type.
+- Up to the latest 100 accepted and rejected proposals remain available in each
+  recent-history view for 30 days. Pending proposals also expire after 30 days;
+  forgetting a target or accepted Memory removes associated proposal content
+  immediately. Successful acceptance updates Memory browse and revalidates search
+  and Graph state without turning Proposal into a searchable Memory type.
 
 ## 11. Loading, empty, error, and attention states
 

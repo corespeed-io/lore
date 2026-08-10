@@ -942,7 +942,10 @@ export function createMemoryProposalReviewHandlers(
         );
         return reviewed
           ? Response.json(reviewed, {
-              headers: { "cache-control": "private, no-store" },
+              headers: {
+                ...(reviewed.memory ? { etag: memoryEtag(reviewed.memory.version) } : {}),
+                "cache-control": "private, no-store",
+              },
             })
           : Response.json(
               { code: "not_found", error: "Memory Proposal not found" },

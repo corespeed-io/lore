@@ -80,6 +80,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     memoryProposalEvidence: { const: 50 },
     memoryProposalList: { const: 100 },
     memoryProposalPending: { const: 100 },
+    memoryProposalRetentionSeconds: { const: 2_592_000 },
     workspaceArchiveLinks: { const: 50_000 },
     workspaceArchiveMemories: { const: 10_000 },
   });
@@ -99,6 +100,9 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.components.schemas.MemoryProposalUpdateMetadataInput.required).toContain(
     "metadata",
   );
+  expect(document.paths["/api/v1/memory-proposals/{proposalId}/review"]).toMatchObject({
+    post: { responses: { "200": { headers: { ETag: { schema: { type: "string" } } } } } },
+  });
   expect(document.components.schemas.MemorySearchResult.properties.rerankScore).toEqual(
     expect.objectContaining({ type: "number", minimum: 0, maximum: 1 }),
   );

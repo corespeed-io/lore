@@ -606,6 +606,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
       memoryProposalEvidence: 50,
       memoryProposalList: 100,
       memoryProposalPending: 100,
+      memoryProposalRetentionSeconds: 2_592_000,
     },
   });
   await expect(operations.readiness()).resolves.toMatchObject({
