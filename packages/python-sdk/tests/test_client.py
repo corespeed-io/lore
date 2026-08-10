@@ -92,6 +92,65 @@ class LorePythonSdkTests(unittest.TestCase):
         self.assertEqual(request.get_header("Idempotency-key"), "update-1")
         self.assertEqual(json.loads(request.data), {"content": "Updated"})
 
+    def test_proposal_methods_use_v1_routes_and_reusable_idempotency(self):
+        proposal_id = "50000000-0000-4000-8000-000000000001"
+        pending = {
+            "id": proposal_id,
+            "workspaceId": WORKSPACE_ID,
+            "ownerUserId": "30000000-0000-4000-8000-000000000001",
+            "proposedByActorKind": "human",
+            "proposedByAgentId": None,
+            "kind": "create",
+            "targetMemoryId": None,
+            "baseMemoryVersion": None,
+            "proposedContent": "Proposed fact",
+            "proposedScope": "private",
+            "proposedMetadata": {},
+            "evidenceMemoryIds": [],
+            "status": "pending",
+            "reviewedByUserId": None,
+            "acceptedMemoryId": None,
+            "createdAt": "2026-08-10T00:00:00.000Z",
+            "reviewedAt": None,
+        }
+        transport = QueueTransport(
+            FakeResponse(pending, status=201),
+            FakeResponse([pending]),
+            FakeResponse([pending]),
+            FakeResponse({"proposal": {**pending, "status": "rejected"}, "memory": None}),
+        )
+        workspace = LoreClient(
+            "http://127.0.0.1:3000", transport=transport
+        ).workspace(WORKSPACE_ID)
+
+        workspace.propose_memory(
+            {"kind": "create", "content": "Proposed fact", "scope": "private"},
+            idempotency_key="proposal-1",
+        )
+        workspace.list_memory_proposals()
+        workspace.list_memory_proposals(status="pending", limit=25)
+        workspace.review_memory_proposal(proposal_id, "reject")
+
+        create_request = transport.requests[0][0]
+        self.assertEqual(create_request.full_url, "http://127.0.0.1:3000/api/v1/memory-proposals")
+        self.assertEqual(create_request.get_header("Idempotency-key"), "proposal-1")
+        all_request = transport.requests[1][0]
+        self.assertEqual(
+            all_request.full_url,
+            "http://127.0.0.1:3000/api/v1/memory-proposals?limit=50",
+        )
+        list_request = transport.requests[2][0]
+        self.assertEqual(
+            list_request.full_url,
+            "http://127.0.0.1:3000/api/v1/memory-proposals?limit=25&status=pending",
+        )
+        review_request = transport.requests[3][0]
+        self.assertEqual(
+            review_request.full_url,
+            f"http://127.0.0.1:3000/api/v1/memory-proposals/{proposal_id}/review",
+        )
+        self.assertEqual(json.loads(review_request.data), {"decision": "reject"})
+
     def test_authenticated_http_and_reserved_custom_headers_are_rejected(self):
         with self.assertRaisesRegex(TypeError, "require HTTPS"):
             LoreClient("http://lore.example.test", agent_token=AGENT_TOKEN)

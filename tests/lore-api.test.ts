@@ -8,13 +8,15 @@ import {
   importWorkspaceArchive,
   listAgentCredentials,
   listMemories,
+  listMemoryProposals,
   listWorkspaces,
+  reviewMemoryProposal,
   setAgentGrant,
   updateAgent,
 } from "@/lib/lore-api";
 import type { WorkspaceArchive } from "@/lib/portability";
 import { clearRequestLog, getRequestLog } from "@/lib/request-log";
-import type { Memory } from "@/lib/types";
+import type { Memory, MemoryProposal } from "@/lib/types";
 
 function memory(index: number): Memory {
   return {
@@ -28,6 +30,28 @@ function memory(index: number): Memory {
     version: 1,
     createdAt: "2026-08-05T00:00:00.000Z",
     updatedAt: "2026-08-05T00:00:00.000Z",
+  };
+}
+
+function proposal(): MemoryProposal {
+  return {
+    id: "50000000-0000-4000-8000-000000000001",
+    workspaceId: "10000000-0000-4000-8000-000000000001",
+    ownerUserId: "20000000-0000-4000-8000-000000000001",
+    proposedByActorKind: "agent",
+    proposedByAgentId: "30000000-0000-4000-8000-000000000001",
+    kind: "create",
+    targetMemoryId: null,
+    baseMemoryVersion: null,
+    proposedContent: "Proposed fact",
+    proposedScope: "private",
+    proposedMetadata: {},
+    evidenceMemoryIds: [],
+    status: "pending",
+    reviewedByUserId: null,
+    acceptedMemoryId: null,
+    createdAt: "2026-08-10T00:00:00.000Z",
+    reviewedAt: null,
   };
 }
 
@@ -125,6 +149,39 @@ test("Agent browser client scopes global lifecycle mutations through the selecte
   expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
 });
 
+test("Proposal browser client scopes review history and decisions to one Workspace", async () => {
+  const pending = proposal();
+  const reviewed = {
+    proposal: {
+      ...pending,
+      status: "rejected" as const,
+      reviewedByUserId: pending.ownerUserId,
+      reviewedAt: "2026-08-10T00:05:00.000Z",
+    },
+    memory: null,
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json([pending]))
+    .mockResolvedValueOnce(Response.json(reviewed));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(listMemoryProposals(pending.workspaceId, "pending")).resolves.toEqual([pending]);
+  await expect(reviewMemoryProposal(pending.workspaceId, pending.id, "reject")).resolves.toEqual(
+    reviewed,
+  );
+
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain("status=pending&limit=100");
+  expect(String(fetchMock.mock.calls[1]?.[0])).toContain(`/${pending.id}/review`);
+  for (const call of fetchMock.mock.calls) {
+    expect(new Headers(call[1]?.headers).get("x-lore-workspace-id")).toBe(pending.workspaceId);
+  }
+  expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+    method: "POST",
+    body: JSON.stringify({ decision: "reject" }),
+  });
+});
+
 test("Operations browser client treats bounded 503 readiness as a typed unready report", async () => {
   vi.stubGlobal(
     "fetch",
@@ -173,10 +230,15 @@ test("Operations browser client scopes Actor, capabilities, export, and dry-run 
     .mockResolvedValueOnce(
       Response.json({
         apiVersion: "v1",
-        schemaRevision: 7,
+        schemaRevision: 8,
         deploymentId: "20000000-0000-4000-8000-000000000001",
         features: {},
-        limits: { workspaceArchiveMemories: 10_000, workspaceArchiveLinks: 50_000 },
+        limits: {
+          workspaceArchiveMemories: 10_000,
+          workspaceArchiveLinks: 50_000,
+          memoryProposalEvidence: 50,
+          memoryProposalList: 100,
+        },
         activeEmbeddingGeneration: null,
       }),
     )

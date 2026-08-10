@@ -1,5 +1,5 @@
 import { createLoreMcpServer, type LoreMcpMemoryClient } from "@corespeed/lore-mcp";
-import type { Memory } from "@corespeed/lore-sdk";
+import type { Memory, MemoryProposal } from "@corespeed/lore-sdk";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -22,11 +22,35 @@ function memory(overrides: Partial<Memory> = {}): Memory {
   };
 }
 
+function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
+  return {
+    id: "50000000-0000-4000-8000-000000000001",
+    workspaceId: WORKSPACE_ID,
+    ownerUserId: "30000000-0000-4000-8000-000000000001",
+    proposedByActorKind: "agent",
+    proposedByAgentId: "40000000-0000-4000-8000-000000000001",
+    kind: "create",
+    targetMemoryId: null,
+    baseMemoryVersion: null,
+    proposedContent: "Proposed fact",
+    proposedScope: "private",
+    proposedMetadata: {},
+    evidenceMemoryIds: [],
+    status: "pending",
+    reviewedByUserId: null,
+    acceptedMemoryId: null,
+    createdAt: "2026-08-10T00:00:00.000Z",
+    reviewedAt: null,
+    ...overrides,
+  };
+}
+
 function fakeMemories(): LoreMcpMemoryClient {
   return {
     forgetMemory: vi.fn().mockResolvedValue(undefined),
     getMemory: vi.fn().mockResolvedValue(memory()),
     listMemories: vi.fn().mockResolvedValue({ memories: [memory()], nextCursor: null }),
+    proposeMemory: vi.fn().mockResolvedValue(proposal()),
     remember: vi.fn().mockResolvedValue(memory({ version: 1 })),
     searchMemories: vi
       .fn()
@@ -64,6 +88,7 @@ describe("Lore external MCP adapter", () => {
       "lore_search",
       "lore_get",
       "lore_remember",
+      "lore_propose",
       "lore_update",
       "lore_forget",
     ]);
@@ -80,6 +105,39 @@ describe("Lore external MCP adapter", () => {
     for (const tool of tools) {
       expect(JSON.stringify(tool.inputSchema)).not.toContain("workspaceId");
     }
+  });
+
+  test("submits a bounded non-canonical proposal with replay protection", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+
+    const result = await client.callTool({
+      name: "lore_propose",
+      arguments: {
+        kind: "create",
+        content: "Proposed fact",
+        scope: "private",
+        idempotencyKey: "proposal-1",
+      },
+    });
+
+    expect(memories.proposeMemory).toHaveBeenCalledWith(
+      { kind: "create", content: "Proposed fact", scope: "private" },
+      { idempotencyKey: "proposal-1" },
+    );
+    expect(result.structuredContent).toEqual({
+      proposal: {
+        id: proposal().id,
+        kind: "create",
+        targetMemoryId: null,
+        baseMemoryVersion: null,
+        proposedScope: "private",
+        evidenceMemoryIds: [],
+        status: "pending",
+        createdAt: proposal().createdAt,
+      },
+    });
+    expect(JSON.stringify(result.structuredContent)).not.toContain("Proposed fact");
   });
 
   test("calls Lore through the injected deep client and removes tenant identity fields", async () => {

@@ -12,8 +12,11 @@ from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_o
 
 from .generated_contract import (
     Capabilities,
+    CreateMemoryProposalInput,
     Memory,
     MemoryGraph,
+    MemoryProposal,
+    MemoryProposalReviewResult,
     MemorySearchResult,
     ReadinessReport,
     Workspace,
@@ -403,6 +406,60 @@ class LoreWorkspaceClient:
                 workspace_id=self.workspace_id,
                 body={"content": content, "scope": _scope(scope), "metadata": dict(metadata or {})},
                 headers={"idempotency-key": _idempotency_key(idempotency_key)},
+            ),
+        )
+
+    def list_memory_proposals(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> Sequence[MemoryProposal]:
+        if status is not None and status not in {"pending", "accepted", "rejected"}:
+            raise TypeError("status must be pending, accepted, or rejected")
+        params: MutableMapping[str, Union[str, int]] = {"limit": _limit(limit, 50)}
+        if status is not None:
+            params["status"] = status
+        return cast(
+            Sequence[MemoryProposal],
+            self.client._request(
+                f"api/v1/memory-proposals?{urlencode(params)}",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
+    def propose_memory(
+        self,
+        proposal: CreateMemoryProposalInput,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> MemoryProposal:
+        return cast(
+            MemoryProposal,
+            self.client._request(
+                "api/v1/memory-proposals",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body=proposal,
+                headers={"idempotency-key": _idempotency_key(idempotency_key)},
+            ),
+        )
+
+    def review_memory_proposal(
+        self,
+        proposal_id: str,
+        decision: str,
+    ) -> MemoryProposalReviewResult:
+        if decision not in {"accept", "reject"}:
+            raise TypeError("decision must be accept or reject")
+        identifier = _normalized_uuid(proposal_id, "proposal_id")
+        return cast(
+            MemoryProposalReviewResult,
+            self.client._request(
+                f"api/v1/memory-proposals/{identifier}/review",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body={"decision": decision},
             ),
         )
 

@@ -57,22 +57,29 @@ function openApiErrorCodes(document: OpenApiDocument): readonly string[] {
   return codes.map((code) => String(code));
 }
 
-function pythonType(schema: JsonSchema): string {
-  if (schema.$ref) return schema.$ref.split("/").at(-1) ?? "Any";
+function pythonType(schema: JsonSchema, forwardReferences = false): string {
+  if (schema.$ref) {
+    const name = schema.$ref.split("/").at(-1) ?? "Any";
+    return forwardReferences ? JSON.stringify(name) : name;
+  }
   if (schema.const !== undefined) return `Literal[${JSON.stringify(schema.const)}]`;
   if (schema.enum?.length) {
     return `Literal[${schema.enum.map((value) => JSON.stringify(value)).join(", ")}]`;
   }
   const alternatives = schema.oneOf ?? schema.anyOf;
   if (alternatives?.length) {
-    const rendered = [...new Set(alternatives.map(pythonType))];
+    const rendered = [
+      ...new Set(alternatives.map((alternative) => pythonType(alternative, forwardReferences))),
+    ];
     return rendered.length === 1 ? rendered[0] : `Union[${rendered.join(", ")}]`;
   }
-  if (schema.type === "array") return `list[${pythonType(schema.items ?? {})}]`;
+  if (schema.type === "array") {
+    return `list[${pythonType(schema.items ?? {}, forwardReferences)}]`;
+  }
   if (schema.type === "object") {
     const valueType =
       typeof schema.additionalProperties === "object"
-        ? pythonType(schema.additionalProperties)
+        ? pythonType(schema.additionalProperties, forwardReferences)
         : "Any";
     return `dict[str, ${valueType}]`;
   }
@@ -90,7 +97,7 @@ function generatedPythonContract(document: OpenApiDocument, errorCodes: readonly
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, schema]) => {
       if (schema.type !== "object" || !schema.properties) {
-        return `${name}: TypeAlias = ${pythonType(schema)}`;
+        return `${name}: TypeAlias = ${pythonType(schema, true)}`;
       }
       const required = new Set(schema.required ?? []);
       const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {

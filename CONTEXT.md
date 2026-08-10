@@ -73,6 +73,15 @@ reference in provenance metadata; otherwise its UUID is the reference. Ambiguous
 or unreadable references never resolve.
 _Avoid_: Global slug, authorization key, gbrain page slug
 
+**Memory Proposal**:
+A content-bearing suggestion to create or change a canonical Memory, submitted by
+an Actor for review by its owner User. It is owner-private, may cite only Memories
+visible to its submitting Actor, and binds an update to one exact Memory version.
+A proposal is not searchable Memory and cannot change canonical Memory until that
+User explicitly accepts it. Each owner has at most 100 pending proposals in one
+Workspace; reviewing one frees capacity for another submission.
+_Avoid_: Draft Memory, automatic Memory, AutoDream result
+
 ## Graph
 
 **Memory Graph**:

@@ -208,6 +208,38 @@ export interface paths {
         readonly patch: operations["updateMemory"];
         readonly trace?: never;
     };
+    readonly "/api/v1/memory-proposals": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["listMemoryProposals"];
+        readonly put?: never;
+        readonly post: operations["createMemoryProposal"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/memory-proposals/{proposalId}/review": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: operations["reviewMemoryProposal"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/workspaces": {
         readonly parameters: {
             readonly query?: never;
@@ -337,6 +369,8 @@ export interface components {
                 /** @constant */
                 readonly idempotency: true;
                 /** @constant */
+                readonly memoryProposals: true;
+                /** @constant */
                 readonly optimisticConcurrency: true;
                 /** @constant */
                 readonly transactionalOutbox: true;
@@ -344,6 +378,12 @@ export interface components {
                 readonly workspacePortability: true;
             };
             readonly limits: {
+                /** @constant */
+                readonly memoryProposalEvidence: 50;
+                /** @constant */
+                readonly memoryProposalList: 100;
+                /** @constant */
+                readonly memoryProposalPending: 100;
                 /** @constant */
                 readonly workspaceArchiveLinks: 50000;
                 /** @constant */
@@ -369,9 +409,25 @@ export interface components {
              */
             readonly scope?: "shared" | "private";
         };
+        readonly CreateMemoryProposalCreateInput: {
+            readonly content: string;
+            readonly evidenceMemoryIds?: readonly string[];
+            /** @constant */
+            readonly kind: "create";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /**
+             * @default shared
+             * @enum {string}
+             */
+            readonly scope?: "shared" | "private";
+        };
+        readonly CreateMemoryProposalInput: components["schemas"]["CreateMemoryProposalCreateInput"] | components["schemas"]["CreateMemoryProposalUpdateInput"];
+        readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
         readonly Error: {
             /** @enum {string} */
-            readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "not_found" | "precondition_required" | "version_conflict" | "workspace_export_limit_exceeded";
+            readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "not_found" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
             readonly error: string;
         };
         readonly EvaluationCase: {
@@ -509,6 +565,81 @@ export interface components {
             readonly type: string;
             /** Format: date-time */
             readonly updatedAt: string;
+        };
+        readonly MemoryProposal: {
+            readonly acceptedMemoryId: string | null;
+            readonly baseMemoryVersion: number | null;
+            /** Format: date-time */
+            readonly createdAt: string;
+            readonly evidenceMemoryIds: readonly string[];
+            /** Format: uuid */
+            readonly id: string;
+            /** @enum {string} */
+            readonly kind: "create" | "update";
+            /** Format: uuid */
+            readonly ownerUserId: string;
+            /** @enum {string} */
+            readonly proposedByActorKind: "human" | "agent";
+            readonly proposedByAgentId: string | null;
+            readonly proposedContent: string;
+            readonly proposedMetadata: {
+                readonly [key: string]: unknown;
+            };
+            /** @enum {string} */
+            readonly proposedScope: "shared" | "private";
+            readonly reviewedAt: string | null;
+            readonly reviewedByUserId: string | null;
+            /** @enum {string} */
+            readonly status: "pending" | "accepted" | "rejected";
+            readonly targetMemoryId: string | null;
+            /** Format: uuid */
+            readonly workspaceId: string;
+        };
+        readonly MemoryProposalReviewResult: {
+            readonly memory: components["schemas"]["Memory"] | null;
+            readonly proposal: components["schemas"]["MemoryProposal"];
+        };
+        readonly MemoryProposalUpdateContentInput: {
+            readonly content: string;
+            readonly evidenceMemoryIds?: readonly string[];
+            readonly expectedVersion: number;
+            /** @constant */
+            readonly kind: "update";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
+            /** Format: uuid */
+            readonly targetMemoryId: string;
+        };
+        readonly MemoryProposalUpdateMetadataInput: {
+            readonly content?: string;
+            readonly evidenceMemoryIds?: readonly string[];
+            readonly expectedVersion: number;
+            /** @constant */
+            readonly kind: "update";
+            readonly metadata: {
+                readonly [key: string]: unknown;
+            };
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
+            /** Format: uuid */
+            readonly targetMemoryId: string;
+        };
+        readonly MemoryProposalUpdateScopeInput: {
+            readonly content?: string;
+            readonly evidenceMemoryIds?: readonly string[];
+            readonly expectedVersion: number;
+            /** @constant */
+            readonly kind: "update";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /** @enum {string} */
+            readonly scope: "shared" | "private";
+            /** Format: uuid */
+            readonly targetMemoryId: string;
         };
         readonly MemorySearchResult: {
             readonly evidence: string;
@@ -1218,6 +1349,97 @@ export interface operations {
             };
             readonly 412: components["responses"]["Error"];
             readonly 428: components["responses"]["Error"];
+        };
+    };
+    readonly listMemoryProposals: {
+        readonly parameters: {
+            readonly query?: {
+                readonly limit?: number;
+                readonly status?: "pending" | "accepted" | "rejected";
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Owner-private Memory Proposals */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["MemoryProposal"][];
+                };
+            };
+            readonly 403: components["responses"]["Error"];
+        };
+    };
+    readonly createMemoryProposal: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "Idempotency-Key"?: string;
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["CreateMemoryProposalInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Submitted owner-private Memory Proposal */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryProposal"];
+                };
+            };
+            readonly 403: components["responses"]["Error"];
+            readonly 409: components["responses"]["Error"];
+            readonly 412: components["responses"]["Error"];
+        };
+    };
+    readonly reviewMemoryProposal: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly proposalId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": {
+                    /** @enum {string} */
+                    readonly decision: "accept" | "reject";
+                };
+            };
+        };
+        readonly responses: {
+            /** @description Reviewed Memory Proposal */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryProposalReviewResult"];
+                };
+            };
+            readonly 403: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
+            readonly 409: components["responses"]["Error"];
+            readonly 412: components["responses"]["Error"];
         };
     };
     readonly listWorkspaces: {

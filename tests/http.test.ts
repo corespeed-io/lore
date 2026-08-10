@@ -258,7 +258,7 @@ test("Capabilities verifies Agent credentials and Workspace grants in the handle
 
   expect(accepted.status).toBe(200);
   expect(accepted.headers.get("cache-control")).toBe("private, no-store");
-  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 7 });
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 8 });
   expect(shapeOnly.status).toBe(403);
   await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
   expect(revoked.status).toBe(403);

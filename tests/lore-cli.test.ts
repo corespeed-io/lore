@@ -73,6 +73,150 @@ test("CLI remembers through the SDK without accepting secret flags", async () =>
   });
 });
 
+test("CLI submits a non-canonical proposal with evidence and a stable retry key", async () => {
+  const captured = captureIo("A safer suggested fact\n");
+  const evidenceId = "20000000-0000-4000-8000-000000000002";
+  const fetchMock = vi.fn().mockResolvedValue(
+    Response.json({
+      id: "50000000-0000-4000-8000-000000000001",
+      workspaceId: WORKSPACE_ID,
+      ownerUserId: "30000000-0000-4000-8000-000000000001",
+      proposedByActorKind: "agent",
+      proposedByAgentId: "40000000-0000-4000-8000-000000000001",
+      kind: "create",
+      targetMemoryId: null,
+      baseMemoryVersion: null,
+      proposedContent: "A safer suggested fact",
+      proposedScope: "private",
+      proposedMetadata: {},
+      evidenceMemoryIds: [evidenceId],
+      status: "pending",
+      reviewedByUserId: null,
+      acceptedMemoryId: null,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      reviewedAt: null,
+    }),
+  );
+
+  const exitCode = await runLoreCli(
+    [
+      "memory",
+      "propose",
+      "create",
+      "--stdin",
+      "--scope",
+      "private",
+      "--evidence",
+      evidenceId,
+      "--idempotency-key",
+      "proposal-1",
+    ],
+    {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    },
+  );
+
+  expect(exitCode).toBe(0);
+  const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(url.pathname).toBe("/api/v1/memory-proposals");
+  expect(new Headers(init.headers).get("idempotency-key")).toBe("proposal-1");
+  expect(JSON.parse(String(init.body))).toEqual({
+    kind: "create",
+    content: "A safer suggested fact",
+    scope: "private",
+    evidenceMemoryIds: [evidenceId],
+  });
+  expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ status: "pending" });
+});
+
+test("CLI submits versioned update proposals and rejects an empty patch", async () => {
+  const targetMemoryId = "20000000-0000-4000-8000-000000000003";
+  const evidenceId = "20000000-0000-4000-8000-000000000004";
+  const captured = captureIo();
+  const fetchMock = vi.fn().mockResolvedValue(
+    Response.json({
+      id: "50000000-0000-4000-8000-000000000002",
+      workspaceId: WORKSPACE_ID,
+      ownerUserId: "30000000-0000-4000-8000-000000000001",
+      proposedByActorKind: "agent",
+      proposedByAgentId: "40000000-0000-4000-8000-000000000001",
+      kind: "update",
+      targetMemoryId,
+      baseMemoryVersion: 7,
+      proposedContent: "Existing content",
+      proposedScope: "shared",
+      proposedMetadata: { state: "approved" },
+      evidenceMemoryIds: [evidenceId],
+      status: "pending",
+      reviewedByUserId: null,
+      acceptedMemoryId: null,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      reviewedAt: null,
+    }),
+  );
+
+  const exitCode = await runLoreCli(
+    [
+      "memory",
+      "propose",
+      "update",
+      targetMemoryId,
+      "--version",
+      "7",
+      "--metadata",
+      '{"state":"approved"}',
+      "--evidence",
+      evidenceId,
+      "--idempotency-key",
+      "proposal-update-1",
+    ],
+    {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    },
+  );
+
+  expect(exitCode).toBe(0);
+  const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(new Headers(init.headers).get("idempotency-key")).toBe("proposal-update-1");
+  expect(JSON.parse(String(init.body))).toEqual({
+    kind: "update",
+    targetMemoryId,
+    expectedVersion: 7,
+    metadata: { state: "approved" },
+    evidenceMemoryIds: [evidenceId],
+  });
+
+  const invalid = captureIo();
+  const invalidExitCode = await runLoreCli(
+    ["memory", "propose", "update", targetMemoryId, "--version", "7"],
+    {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: vi.fn(),
+      io: invalid.io,
+    },
+  );
+  expect(invalidExitCode).toBe(2);
+  expect(invalid.stderr.join("")).toContain(
+    "memory propose update requires --content, --scope, or --metadata",
+  );
+});
+
 test("CLI reports missing Workspace as a usage error", async () => {
   const captured = captureIo();
   const exitCode = await runLoreCli(["memory", "list"], {

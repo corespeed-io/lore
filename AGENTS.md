@@ -21,11 +21,11 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0007_agent_lifecycle.sql`
+- migrations `0001_initial.sql` through `0008_memory_proposals.sql`
   define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
-  a content-free event outbox, Workspace portability, and embedding generations
-  with RLS;
+  a content-free event outbox, Workspace portability, embedding generations, Agent
+  lifecycle, and owner-private Memory Proposals with RLS;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
@@ -78,6 +78,12 @@ been removed. Lore now has a native implementation:
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
   `/readyz`, `/api/v1/actor`, and `/api/v1/capabilities` are the stable operational
   surface;
+- Memory Proposals are the safe boundary for suggested create/update operations:
+  an Actor with write authority may submit complete proposed content and up to 50
+  visible evidence Memory ids, but only the owner human may accept or reject it.
+  Pending proposals never enter Memory browse/search/Graph/export/outbox. Update
+  acceptance is exact-version and never silently rebases; future opt-in AutoDream
+  work must use this boundary instead of silently persisting generated content;
 - `packages/typescript-sdk` generates its public types from the canonical OpenAPI
   document and owns the deep integration client. `packages/cli` and the external
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
@@ -267,6 +273,7 @@ The v1 system must provide:
 - hybrid retrieval over only the Memories the caller may see;
 - Users, Identities, Workspaces, Memberships, Agents, and agent Workspace grants;
 - user-private and Workspace-shared Memory enforced with Postgres RLS;
+- owner-private Memory Proposals with human-only acceptance into canonical Memory;
 - deterministic background maintenance: chunking, embedding, indexing, retries,
   re-indexing, and deletion/permission-change invalidation;
 - a Benchmark/Evaluation suite covering retrieval quality, isolation, latency, and
@@ -288,6 +295,8 @@ User ──< Membership >── Workspace
 User ──< Agent ──< Agent Workspace Grant >── Workspace
 Workspace ──< Memory >── owner User
 Agent ──< Memory.created_by_agent_id (provenance only)
+Workspace ──< Memory Proposal >── owner User
+Agent ──< Memory Proposal.proposed_by_agent_id (provenance only)
 ```
 
 Memory isolation rules:
@@ -304,6 +313,9 @@ Memory isolation rules:
   grant.
 - `created_by_agent_id` records provenance. It does not own the Memory and does not
   define visibility.
+- A Memory Proposal is owner-private review state, not a draft Memory. Write-authorized
+  Actors may submit it, but only its owner human may accept or reject it. Until
+  acceptance it is absent from canonical retrieval, Graph, export, and outbox.
 - Visibility and write authority are separate: sharing a Memory does not transfer
   ownership or grant other members permission to mutate it. Only the owner User or
   an authorized Agent acting for that User may mutate it.
@@ -314,7 +326,8 @@ The relational model centers on:
 
 - `users`, `identities`, `workspaces`, `memberships`;
 - `agents`, `agent_workspace_grants`, `agent_credentials`;
-- `memories`, `memory_chunks`, `memory_links`, and embedding/index state;
+- `memories`, `memory_chunks`, `memory_links`, Memory Proposals/evidence, and
+  embedding/index state;
 - `evaluation_suites`, `evaluation_cases`, `evaluation_runs`, and
   `evaluation_results`.
 

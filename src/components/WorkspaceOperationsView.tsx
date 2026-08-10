@@ -27,6 +27,7 @@ const FEATURE_LABELS = {
   workspacePortability: "Workspace portability",
   embeddingGenerations: "Embedding generations",
   cursorPagination: "Cursor pagination",
+  memoryProposals: "Memory Proposals",
 } as const;
 
 const COMPONENT_LABELS: Record<keyof ReadinessReport["components"], string> = {

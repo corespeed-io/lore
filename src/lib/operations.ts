@@ -2,7 +2,7 @@ import type { PostgresDatabase } from "./db";
 import { observeOperation, runtimeDependencyStatus } from "./telemetry";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 7;
+export const LORE_SCHEMA_REVISION = 8;
 
 export interface DeploymentCapabilities {
   apiVersion: "v1";
@@ -15,10 +15,14 @@ export interface DeploymentCapabilities {
     workspacePortability: boolean;
     embeddingGenerations: boolean;
     cursorPagination: boolean;
+    memoryProposals: boolean;
   };
   limits: {
     workspaceArchiveMemories: number;
     workspaceArchiveLinks: number;
+    memoryProposalEvidence: number;
+    memoryProposalList: number;
+    memoryProposalPending: number;
   };
   activeEmbeddingGeneration: {
     provider: string;
@@ -97,7 +101,8 @@ export function createOperationsModule(
                    ('evaluation_results'), ('memory_embedding_jobs'),
                    ('request_idempotency_records'), ('memory_events'),
                    ('embedding_generations'), ('memory_chunk_embeddings'),
-                   ('workspace_imports'), ('memory_import_provenance')
+                   ('workspace_imports'), ('memory_import_provenance'),
+                   ('memory_proposals'), ('memory_proposal_evidence')
                ), rls_state AS (
                  SELECT
                    count(relation.oid) = count(*)

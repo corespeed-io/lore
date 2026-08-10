@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import {
+  type CreateMemoryProposalInput,
   LoreApiError,
   LoreClient,
   type LoreClientOptions,
@@ -37,6 +38,8 @@ Commands:
   memory search --stdin [--limit N] [--scope shared|private]
   memory remember <content> [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory remember --stdin [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
+  memory propose create <content>|--stdin [--scope shared|private] [--metadata JSON] [--evidence UUID] [--idempotency-key KEY]
+  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--evidence UUID] [--idempotency-key KEY]
   memory get <memory-id>
   memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory forget <memory-id> --version N [--idempotency-key KEY]
@@ -106,7 +109,7 @@ function exactPositionals(positionals: string[], count: number, usage: string): 
 }
 
 function allowedOptions(
-  values: Readonly<Record<string, boolean | string | undefined>>,
+  values: Readonly<Record<string, boolean | string | readonly string[] | undefined>>,
   commandOptions: readonly string[],
 ): void {
   const permitted = new Set([
@@ -121,6 +124,17 @@ function allowedOptions(
     ([name, value]) => value !== undefined && !permitted.has(name),
   );
   if (unexpected) throw new CliUsageError(`--${unexpected[0]} is not valid for this command`);
+}
+
+function optionEvidence(values: readonly string[] | undefined): string[] | undefined {
+  if (values === undefined) return undefined;
+  if (values.length > 50) throw new CliUsageError("--evidence may be repeated at most 50 times");
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const normalized = values.map((value) => value.trim().toLowerCase());
+  if (normalized.some((value) => !uuidPattern.test(value))) {
+    throw new CliUsageError("--evidence must be a UUID");
+  }
+  return [...new Set(normalized)];
 }
 
 function optionInteger(value: string | undefined, name: string): number | undefined {
@@ -178,6 +192,7 @@ export async function runLoreCli(
         "allow-insecure": { type: "boolean" },
         content: { type: "string" },
         cursor: { type: "string" },
+        evidence: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
         "idempotency-key": { type: "string" },
         limit: { type: "string" },
@@ -293,6 +308,86 @@ export async function runLoreCli(
           },
           { idempotencyKey: parsed.values["idempotency-key"] },
         ),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "memory" && action === "propose") {
+      const mode = parsed.positionals[2];
+      const fromStdin = parsed.values.stdin === true;
+      if (parsed.values.stdin && parsed.values.content !== undefined) {
+        throw new CliUsageError("--stdin and --content cannot be combined");
+      }
+      let proposal: CreateMemoryProposalInput;
+      if (mode === "create") {
+        exactPositionals(
+          parsed.positionals,
+          fromStdin ? 3 : 4,
+          "memory propose create <content>|--stdin",
+        );
+        allowedOptions(parsed.values, [
+          "evidence",
+          "idempotency-key",
+          "metadata",
+          "scope",
+          "stdin",
+        ]);
+        proposal = {
+          kind: "create",
+          content: fromStdin
+            ? await stdinValue(io, 1_000_000, "content")
+            : requiredPosition(parsed.positionals, 3, "content"),
+          scope: optionScope(parsed.values.scope),
+          metadata: optionMetadata(parsed.values.metadata),
+          evidenceMemoryIds: optionEvidence(parsed.values.evidence),
+        };
+      } else if (mode === "update") {
+        exactPositionals(parsed.positionals, 4, "memory propose update <memory-id> --version N");
+        allowedOptions(parsed.values, [
+          "content",
+          "evidence",
+          "idempotency-key",
+          "metadata",
+          "scope",
+          "stdin",
+          "version",
+        ]);
+        const expectedVersion = optionInteger(parsed.values.version, "--version");
+        if (expectedVersion === undefined) {
+          throw new CliUsageError("memory propose update requires --version");
+        }
+        const updateBase = {
+          kind: "update" as const,
+          targetMemoryId: requiredPosition(parsed.positionals, 3, "memory id"),
+          expectedVersion,
+          evidenceMemoryIds: optionEvidence(parsed.values.evidence),
+        };
+        const content = fromStdin
+          ? await stdinValue(io, 1_000_000, "content")
+          : parsed.values.content;
+        const scope = optionScope(parsed.values.scope);
+        const proposalMetadata = optionMetadata(parsed.values.metadata);
+        if (content !== undefined) {
+          proposal = { ...updateBase, content, scope, metadata: proposalMetadata };
+        } else if (scope !== undefined) {
+          proposal = { ...updateBase, scope, metadata: proposalMetadata };
+        } else if (proposalMetadata !== undefined) {
+          proposal = { ...updateBase, metadata: proposalMetadata };
+        } else {
+          throw new CliUsageError(
+            "memory propose update requires --content, --scope, or --metadata",
+          );
+        }
+      } else {
+        throw new CliUsageError(
+          "Usage: lore memory propose create <content>|--stdin, or memory propose update <memory-id> --version N",
+        );
+      }
+      output(
+        io,
+        await workspace.proposeMemory(proposal, {
+          idempotencyKey: parsed.values["idempotency-key"],
+        }),
         pretty,
       );
       return 0;

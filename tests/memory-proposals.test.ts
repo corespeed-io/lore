@@ -1,0 +1,576 @@
+import { expect, test } from "vitest";
+import { createAccessModule } from "@/lib/access";
+import { installActorContext } from "@/lib/actor-context";
+import {
+  createMemoryModule,
+  MemoryProposalAccessDeniedError,
+  MemoryProposalCapacityError,
+  MemoryProposalReviewConflictError,
+  MemoryVersionConflictError,
+} from "@/lib/memory";
+import { createMemoryTestContext } from "./support/memory-context";
+
+async function createWritingAgent() {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Dream assistant" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "write" });
+  return {
+    access,
+    agent,
+    agentActor: { ...testContext.alice, agentId: agent.id },
+    testContext,
+  };
+}
+
+test("Agent proposal remains private and non-canonical until its owner accepts it", async () => {
+  const { agent, agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The launch moved to Tuesday.",
+    scope: "shared",
+    metadata: { type: "decision" },
+  });
+
+  expect(proposal).toMatchObject({
+    kind: "create",
+    ownerUserId: testContext.alice.userId,
+    proposedByAgentId: agent.id,
+    status: "pending",
+    acceptedMemoryId: null,
+  });
+  await expect(memories.list(testContext.alice)).resolves.toEqual([]);
+  await expect(memories.list(testContext.bob)).resolves.toEqual([]);
+  await expect(memories.search(testContext.alice, { query: "Tuesday" })).resolves.toEqual([]);
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([proposal]);
+
+  const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
+
+  expect(accepted?.proposal).toMatchObject({
+    id: proposal.id,
+    status: "accepted",
+    reviewedByUserId: testContext.alice.userId,
+    acceptedMemoryId: accepted?.memory?.id,
+  });
+  expect(accepted?.memory).toMatchObject({
+    ownerUserId: testContext.alice.userId,
+    createdByAgentId: null,
+    content: "The launch moved to Tuesday.",
+    scope: "shared",
+  });
+  await expect(memories.list(testContext.bob)).resolves.toMatchObject([
+    { id: accepted?.memory?.id },
+  ]);
+
+  await testContext.close();
+});
+
+test("Proposal acceptance and rejection are replay-safe without duplicate Memories", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const acceptedProposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "Accepted once",
+  });
+
+  const first = await memories.reviewProposal(testContext.alice, acceptedProposal.id, "accept");
+  const replay = await memories.reviewProposal(testContext.alice, acceptedProposal.id, "accept");
+
+  expect(replay).toEqual(first);
+  await expect(memories.list(testContext.alice)).resolves.toHaveLength(1);
+  await expect(
+    memories.reviewProposal(testContext.alice, acceptedProposal.id, "reject"),
+  ).rejects.toBeInstanceOf(MemoryProposalReviewConflictError);
+
+  const rejectedProposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "Never canonical",
+  });
+  const rejected = await memories.reviewProposal(testContext.alice, rejectedProposal.id, "reject");
+  const rejectedReplay = await memories.reviewProposal(
+    testContext.alice,
+    rejectedProposal.id,
+    "reject",
+  );
+
+  expect(rejectedReplay).toEqual(rejected);
+  expect(rejected?.memory).toBeNull();
+  await expect(memories.list(testContext.alice)).resolves.toHaveLength(1);
+
+  if (!first?.memory) throw new Error("Expected accepted proposal to create a Memory");
+  await expect(
+    memories.forget(testContext.alice, first.memory.id, {
+      expectedVersion: first.memory.version,
+    }),
+  ).resolves.toBe(true);
+  await expect(
+    memories.listProposals(testContext.alice, { status: "accepted" }),
+  ).resolves.toMatchObject([
+    {
+      id: acceptedProposal.id,
+      acceptedMemoryId: first.memory.id,
+      status: "accepted",
+    },
+  ]);
+  await expect(
+    memories.reviewProposal(testContext.alice, acceptedProposal.id, "accept"),
+  ).resolves.toMatchObject({ memory: null, proposal: { status: "accepted" } });
+
+  await testContext.close();
+});
+
+test("Database review transition rejects a forged accepted receipt", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "Receipt must match the canonical Memory",
+  });
+
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await expect(
+      transaction.query(
+        `UPDATE memory_proposals
+         SET status = 'accepted',
+             reviewed_by_user_id = $2,
+             accepted_memory_id = $3,
+             reviewed_at = now()
+         WHERE id = $1`,
+        [proposal.id, testContext.alice.userId, crypto.randomUUID()],
+      ),
+    ).rejects.toThrow("Accepted create receipt must match the canonical Memory");
+  });
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    { id: proposal.id, status: "pending" },
+  ]);
+
+  const target = await memories.remember(testContext.alice, {
+    content: "Original canonical content",
+  });
+  const updateProposal = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: target.id,
+    expectedVersion: target.version,
+    content: "Proposed canonical content",
+  });
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await expect(
+      transaction.query(
+        `UPDATE memory_proposals
+         SET status = 'accepted',
+             reviewed_by_user_id = $2,
+             accepted_memory_id = $3,
+             reviewed_at = now()
+         WHERE id = $1`,
+        [updateProposal.id, testContext.alice.userId, crypto.randomUUID()],
+      ),
+    ).rejects.toThrow("Accepted update receipt must match the canonical Memory");
+  });
+
+  await testContext.close();
+});
+
+test("Pending proposal capacity keeps every proposal manageable in the native inbox", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await transaction.query(
+      `INSERT INTO memory_proposals (
+         id, workspace_id, owner_user_id, proposed_by_actor_kind,
+         proposed_by_agent_id, kind, target_memory_id, base_memory_version,
+         proposed_content, proposed_scope, proposed_metadata,
+         changes_content, changes_scope, changes_metadata
+       )
+       SELECT gen_random_uuid(), $1, $2, 'human', NULL, 'create', NULL, NULL,
+              'Pending proposal ' || ordinal, 'shared', '{}'::jsonb,
+              true, true, true
+       FROM generate_series(1, 100) ordinal`,
+      [testContext.alice.workspaceId, testContext.alice.userId],
+    );
+  });
+
+  await expect(
+    memories.propose(testContext.alice, { kind: "create", content: "One proposal too many" }),
+  ).rejects.toBeInstanceOf(MemoryProposalCapacityError);
+  const [pending] = await memories.listProposals(testContext.alice, {
+    status: "pending",
+    limit: 100,
+  });
+  await memories.reviewProposal(testContext.alice, pending.id, "reject");
+  await expect(
+    memories.propose(testContext.alice, { kind: "create", content: "Capacity restored" }),
+  ).resolves.toMatchObject({ status: "pending" });
+
+  await testContext.close();
+});
+
+test("Only the owner human can list or review an Agent proposal", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "Owner-private proposal",
+  });
+
+  await expect(memories.listProposals(agentActor)).rejects.toBeInstanceOf(
+    MemoryProposalAccessDeniedError,
+  );
+  await expect(memories.reviewProposal(agentActor, proposal.id, "accept")).rejects.toBeInstanceOf(
+    MemoryProposalAccessDeniedError,
+  );
+  await expect(memories.listProposals(testContext.bob)).resolves.toEqual([]);
+  await expect(memories.reviewProposal(testContext.bob, proposal.id, "accept")).resolves.toBeNull();
+  await expect(memories.list(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.bob);
+    await expect(transaction.query("SELECT id FROM memory_proposals")).resolves.toMatchObject({
+      rows: [],
+    });
+  });
+
+  await testContext.close();
+});
+
+test("Deleting the submitting Agent preserves proposal content and actor kind", async () => {
+  const { agent, agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "Keep this suggestion after its Agent is removed",
+  });
+
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await expect(
+      transaction.query("UPDATE memory_proposals SET proposed_by_agent_id = NULL WHERE id = $1", [
+        proposal.id,
+      ]),
+    ).rejects.toThrow("Memory Proposal provenance is immutable");
+  });
+
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query("DELETE FROM agents WHERE id = $1", [agent.id]);
+  });
+
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    {
+      id: proposal.id,
+      proposedByActorKind: "agent",
+      proposedByAgentId: null,
+      proposedContent: "Keep this suggestion after its Agent is removed",
+      status: "pending",
+    },
+  ]);
+
+  await testContext.close();
+});
+
+test("Update proposal applies only to the exact reviewed Memory version", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const original = await memories.remember(testContext.alice, {
+    content: "Launch Monday",
+    scope: "private",
+    metadata: { type: "plan" },
+  });
+  const proposal = await memories.propose(agentActor, {
+    kind: "update",
+    targetMemoryId: original.id,
+    expectedVersion: original.version,
+    content: "Launch Tuesday",
+  });
+
+  await memories.update(
+    testContext.alice,
+    original.id,
+    { content: "Launch Wednesday" },
+    { expectedVersion: original.version },
+  );
+
+  await expect(
+    memories.reviewProposal(testContext.alice, proposal.id, "accept"),
+  ).rejects.toBeInstanceOf(MemoryVersionConflictError);
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    { id: proposal.id, status: "pending", baseMemoryVersion: original.version },
+  ]);
+  await expect(memories.retrieve(testContext.alice, original.id)).resolves.toMatchObject({
+    content: "Launch Wednesday",
+    version: original.version + 1,
+  });
+
+  await testContext.close();
+});
+
+test("Deleting a target preserves proposal history and prevents later acceptance", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const target = await memories.remember(testContext.alice, {
+    content: "A canonical fact that may be deleted",
+    scope: "private",
+  });
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: target.id,
+    expectedVersion: target.version,
+    content: "A proposed replacement",
+  });
+
+  await expect(
+    memories.forget(testContext.alice, target.id, { expectedVersion: target.version }),
+  ).resolves.toBe(true);
+  await expect(
+    memories.reviewProposal(testContext.alice, proposal.id, "accept"),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    {
+      id: proposal.id,
+      status: "pending",
+      targetMemoryId: target.id,
+    },
+  ]);
+
+  await testContext.close();
+});
+
+test("Database target validation rejects a cross-owner update proposal", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const bobPrivate = await memories.remember(testContext.bob, {
+    content: "Bob-owned target",
+    scope: "private",
+  });
+
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await expect(
+      transaction.query(
+        `INSERT INTO memory_proposals (
+           id, workspace_id, owner_user_id, proposed_by_actor_kind, kind,
+           target_memory_id, base_memory_version, proposed_content,
+           proposed_scope, proposed_metadata, changes_content, changes_scope,
+           changes_metadata
+         ) VALUES (
+           $1, $2, $3, 'human', 'update', $4, 1, $5, 'private', '{}'::jsonb,
+           true, false, false
+         )`,
+        [
+          crypto.randomUUID(),
+          testContext.alice.workspaceId,
+          testContext.alice.userId,
+          bobPrivate.id,
+          "Cross-owner proposal",
+        ],
+      ),
+    ).rejects.toThrow("Memory Proposal target must be an owned Memory in this Workspace");
+  });
+
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+  await testContext.close();
+});
+
+test("Accepted update changes canonical content, chunks, and outbox in one transaction", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const original = await memories.remember(testContext.alice, {
+    content: "Old operational fact",
+    scope: "private",
+  });
+  const evidence = await memories.remember(testContext.alice, {
+    content: "Meeting evidence",
+    scope: "private",
+  });
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: original.id,
+    expectedVersion: original.version,
+    content: "New operational fact",
+    evidenceMemoryIds: [evidence.id],
+  });
+
+  const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
+
+  expect(accepted?.proposal).toMatchObject({
+    evidenceMemoryIds: [evidence.id],
+    acceptedMemoryId: original.id,
+    status: "accepted",
+  });
+  expect(accepted?.memory).toMatchObject({
+    id: original.id,
+    content: "New operational fact",
+    version: original.version + 1,
+  });
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    const chunks = await transaction.query<{ content: string }>(
+      "SELECT content FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+      [original.id],
+    );
+    const events = await transaction.query<{ event_type: string }>(
+      `SELECT event_type
+       FROM memory_events
+       WHERE resource_id = $1
+       ORDER BY sequence`,
+      [original.id],
+    );
+    expect(chunks.rows).toEqual([{ content: "New operational fact" }]);
+    expect(events.rows.map((row) => row.event_type)).toEqual(["memory.created", "memory.updated"]);
+  });
+
+  await testContext.close();
+});
+
+test("Accepting a metadata-only proposal preserves canonical chunks", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const original = await memories.remember(testContext.alice, {
+    content: "Content whose chunks should remain stable",
+    scope: "private",
+    metadata: { state: "draft" },
+  });
+  const before = await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    return transaction.query<{ id: string }>(
+      "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+      [original.id],
+    );
+  });
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: original.id,
+    expectedVersion: original.version,
+    metadata: { state: "approved" },
+  });
+
+  const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
+  const after = await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    return transaction.query<{ id: string }>(
+      "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+      [original.id],
+    );
+  });
+
+  expect(accepted?.memory).toMatchObject({
+    content: original.content,
+    scope: original.scope,
+    metadata: { state: "approved" },
+    version: original.version + 1,
+  });
+  expect(after.rows).toEqual(before.rows);
+
+  await testContext.close();
+});
+
+test("Proposal evidence cannot include a private Memory hidden from the Actor", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const bobPrivate = await memories.remember(testContext.bob, {
+    content: "Bob private evidence",
+    scope: "private",
+  });
+
+  await expect(
+    memories.propose(agentActor, {
+      kind: "create",
+      content: "Attempted synthesis",
+      evidenceMemoryIds: [bobPrivate.id],
+    }),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.close();
+});
+
+test("Revoked write grant immediately blocks Agent proposals", async () => {
+  const { access, agent, agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  await access.revokeAgentGrant(testContext.alice, agent.id);
+
+  await expect(
+    memories.propose(agentActor, { kind: "create", content: "Should not be proposed" }),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+
+  await testContext.close();
+});
+
+test("A read-only sibling Agent cannot submit or inspect another Agent proposal", async () => {
+  const { access, agent, agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const readAgent = await access.createAgent(testContext.alice, { name: "Read assistant" });
+  await access.grantAgent(testContext.alice, readAgent.id, { permission: "read" });
+  const readActor = { ...testContext.alice, agentId: readAgent.id };
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "Only the writing Agent submitted this",
+  });
+
+  await expect(
+    memories.propose(readActor, { kind: "create", content: "Read-only suggestion" }),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, readActor);
+    await expect(
+      transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposal.id]),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+
+  await access.revokeAgentGrant(testContext.alice, agent.id);
+  await testContext.close();
+});
+
+test("Suspending the owner Membership blocks Agent submission and human review", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "Pending before Membership suspension",
+  });
+  await testContext.suspendMembership(testContext.alice);
+
+  await expect(
+    memories.propose(agentActor, { kind: "create", content: "Blocked after suspension" }),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+  await expect(
+    memories.reviewProposal(testContext.alice, proposal.id, "accept"),
+  ).resolves.toBeNull();
+
+  await testContext.close();
+});
+
+test("Proposal lists stay scoped when one owner belongs to two Workspaces", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  await access.addMember(testContext.carol, testContext.alice.userId, { role: "member" });
+  const researchAlice = {
+    userId: testContext.alice.userId,
+    workspaceId: testContext.carol.workspaceId,
+  };
+  const operationsProposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "Operations only",
+  });
+  const researchProposal = await memories.propose(researchAlice, {
+    kind: "create",
+    content: "Research only",
+  });
+
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    { id: operationsProposal.id },
+  ]);
+  await expect(memories.listProposals(researchAlice)).resolves.toMatchObject([
+    { id: researchProposal.id },
+  ]);
+  await expect(
+    memories.reviewProposal(testContext.alice, researchProposal.id, "accept"),
+  ).resolves.toBeNull();
+
+  await testContext.close();
+});
