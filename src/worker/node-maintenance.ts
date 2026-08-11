@@ -1,4 +1,4 @@
-import { createDrizzleDatabase } from "../lib/db/drizzle";
+import { createPostgresDatabase } from "../lib/db/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../lib/embedding/provider-factory";
 import {
   createMemoryMaintenanceCoordinator,
@@ -27,7 +27,7 @@ const embeddingProviders = createMaintenanceEmbeddingProvidersFromEnvironment(
   (message) => console.warn(message),
 );
 
-const database = createDrizzleDatabase(
+const database = createPostgresDatabase(
   {
     connectionString,
     max: positiveInteger(process.env.LORE_MAINTENANCE_POOL_SIZE, 2),

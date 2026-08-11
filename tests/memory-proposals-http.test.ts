@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { afterEach, expect, test } from "vitest";
 import {
   createAgentCredentialHandlers,
@@ -203,8 +202,9 @@ test("Agent submits a Proposal over v1 and only the human owner can accept it", 
   ).resolves.toEqual([]);
   await testContext.adminDatabase.transaction(async (transaction) => {
     await expect(
-      transaction.execute(
-        sql`SELECT id FROM request_idempotency_records WHERE response_body #>> '{proposal,id}' = ${submitted.id}`,
+      transaction.query(
+        "SELECT id FROM request_idempotency_records WHERE response_body #>> '{proposal,id}' = $1",
+        [submitted.id],
       ),
     ).resolves.toMatchObject({ rows: [] });
   });
@@ -342,21 +342,25 @@ test("Proposal HTTP validation is bounded and stable", async () => {
   }
 
   const owner = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ user_id: string }>(
-      sql`SELECT user_id FROM memberships WHERE workspace_id = ${workspace.id} AND role = 'owner'`,
+    transaction.query<{ user_id: string }>(
+      "SELECT user_id FROM memberships WHERE workspace_id = $1 AND role = 'owner'",
+      [workspace.id],
     ),
   );
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(sql`INSERT INTO memory_proposals (
+    transaction.query(
+      `INSERT INTO memory_proposals (
          id, workspace_id, owner_user_id, proposed_by_actor_kind,
          proposed_by_agent_id, kind, target_memory_id, base_memory_version,
          proposed_content, proposed_scope, proposed_metadata,
          changes_content, changes_scope, changes_metadata
        )
-       SELECT gen_random_uuid(), ${workspace.id}, ${owner.rows[0].user_id}, 'human', NULL, 'create', NULL, NULL,
+       SELECT gen_random_uuid(), $1, $2, 'human', NULL, 'create', NULL, NULL,
               'Pending HTTP proposal ' || ordinal, 'shared', '{}'::jsonb,
               true, true, true
-       FROM generate_series(1, 100) ordinal`),
+       FROM generate_series(1, 100) ordinal`,
+      [workspace.id, owner.rows[0].user_id],
+    ),
   );
   const capacity = await proposals.POST(
     new Request("http://lore.local/api/v1/memory-proposals", {

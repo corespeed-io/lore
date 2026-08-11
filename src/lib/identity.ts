@@ -1,5 +1,4 @@
-import { sql } from "drizzle-orm";
-import type { LoreDatabase } from "./db";
+import type { PostgresDatabase } from "./db";
 
 export interface User {
   id: string;
@@ -31,19 +30,20 @@ function toUser(row: UserRow): User {
   };
 }
 
-export function createIdentityModule(database: LoreDatabase) {
+export function createIdentityModule(database: PostgresDatabase) {
   return {
     async register(identity: RegisterIdentity): Promise<User> {
       return database.transaction(async (transaction) => {
-        const result = await transaction.execute<UserRow>(
-          sql`SELECT * FROM lore.register_identity(
-            ${crypto.randomUUID()},
-            ${crypto.randomUUID()},
-            ${identity.provider},
-            ${identity.subject},
-            ${identity.displayName},
-            ${identity.email ?? ""}
-          )`,
+        const result = await transaction.query<UserRow>(
+          "SELECT * FROM lore.register_identity($1, $2, $3, $4, $5, $6)",
+          [
+            crypto.randomUUID(),
+            crypto.randomUUID(),
+            identity.provider,
+            identity.subject,
+            identity.displayName,
+            identity.email ?? "",
+          ],
         );
         return toUser(result.rows[0]);
       });
@@ -51,8 +51,9 @@ export function createIdentityModule(database: LoreDatabase) {
 
     async resolve(provider: string, subject: string): Promise<User | null> {
       return database.transaction(async (transaction) => {
-        const result = await transaction.execute<UserRow>(
-          sql`SELECT * FROM lore.resolve_identity(${provider}, ${subject})`,
+        const result = await transaction.query<UserRow>(
+          "SELECT * FROM lore.resolve_identity($1, $2)",
+          [provider, subject],
         );
         return result.rows[0] ? toUser(result.rows[0]) : null;
       });

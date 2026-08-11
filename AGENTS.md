@@ -21,22 +21,23 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- `src/lib/db/schema.ts` is the canonical Drizzle schema, and
-  `db/drizzle/0000_baseline.sql` is the canonical fresh-install migration. Together
-  they define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
+- migrations `0001_initial.sql` through `0009_observation_evidence.sql`
+  define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, embedding generations, Agent
   lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
-  evidence with RLS. Drizzle's `drizzle.__drizzle_migrations` is the only active
-  migration ledger. The migration command may adopt an exact, complete legacy
-  `0001`-through-`0009` checksum history once, then deletes the legacy ledger; never
-  add a second migration path or a new file to the removed legacy chain;
+  evidence with RLS;
+- dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
+  not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
+  transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
+  dbmate with a PostgreSQL advisory lock, stores SHA-256 values beside dbmate's
+  versions in `lore_schema_migrations`, and can adopt the exact earlier SQL ledger
+  without replaying DDL or changing tenant data. Keep migration `down` sections
+  empty: production recovery is forward-only;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
-  context for every request transaction. Runtime and test database access goes
-  through Drizzle transactions. PostgreSQL-specific SQL remains valid when carried
-  by Drizzle's typed `sql` objects, especially for RLS-sensitive hybrid retrieval;
+  context for every request transaction;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   native routes built through the pure handler seam in `src/lib/http.ts`;
 - `src/components/App.tsx` owns the native Memory workflow and client routing,
@@ -638,23 +639,23 @@ The existing application uses:
 - Next.js 16 (App Router), React 19, Bun 1.3.14+ for package management,
   Node 24 LTS for self-hosted execution, TypeScript 7, and Python 3.12+ for the
   generated Python SDK and source verification;
+- dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
+  PostgreSQL transactions; Lore has no runtime ORM;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
 
-`bun.lock` is the only dependency lockfile. Bun installs dependencies, dispatches
-scripts, and runs the TypeScript migration CLI; Next.js self-hosting executes on
-Node 24, and the Cloudflare bundle executes on Workerd. Do not add an npm/pnpm/Yarn
-lockfile or claim that Cloudflare runs Bun/Node as a process.
+`bun.lock` is the only dependency lockfile. Bun installs dependencies and dispatches
+scripts; Next.js self-hosting and migration scripts execute on Node 24, and the
+Cloudflare bundle executes on Workerd. Do not add an npm/pnpm/Yarn lockfile or claim
+that Cloudflare runs Bun/Node as a process.
 
 These commands remain the current verification loop:
 
 ```bash
 bun run dev        # localhost:3000
-bun run db:migrate # apply checksum-protected Drizzle migrations
+bun run db:migrate # preflight/adopt, then apply checksum-protected dbmate migrations
 bun run db:preflight # validate server/schema/history before migration
-bun run db:generate # generate the next migration from the canonical Drizzle schema
-bun run db:schema:check # validate the Drizzle migration journal/snapshots
 bun run db:bootstrap # migrate + provision separate request/maintenance logins
 bun run db:backup # create an operator-owned PostgreSQL custom-format backup
 bun run db:restore # restore into an explicitly named target database
@@ -683,7 +684,6 @@ bun run build:packages # build the TypeScript SDK, CLI, and external MCP package
 bun run packages:smoke # pack/install/import the release artifacts
 bun run build      # Next production, maintenance, and developer-package builds
 bun run build:maintenance # bundle the self-host Node maintenance entrypoint
-bun run build:migrate # bundle the self-host Node migration entrypoint
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```

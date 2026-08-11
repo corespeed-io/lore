@@ -15,10 +15,10 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The Compose stack runs the
-checksum-protected Drizzle migrations, provisions separate non-owner request and maintenance logins, and
-starts both Lore and its embedding worker under narrow RLS roles. The example binds
-to `127.0.0.1` and opts into
+Open [http://localhost:3000](http://localhost:3000). The Compose stack runs every
+plain-SQL migration through dbmate, provisions separate non-owner request and
+maintenance logins, and starts both Lore and its embedding worker under narrow RLS
+roles. The example binds to `127.0.0.1` and opts into
 unauthenticated local access; never expose `AUTH_MODE=none` or `ALLOW_INSECURE=1`
 to the internet.
 
@@ -400,9 +400,9 @@ Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic usern
 cannot be used to select or impersonate another internal User. Multi-user deployments
 should use a verified identity proxy such as Cloudflare Access.
 
-Lore keeps a single text lockfile, `bun.lock`. Bun owns dependency installation,
-script dispatch, and the TypeScript migration CLI; the self-hosted application runs
-on Node 24, while the Cloudflare artifact executes on Workerd.
+Lore keeps a single text lockfile, `bun.lock`. Bun owns dependency installation and
+script dispatch; self-hosted application and migration code still execute on Node 24,
+while the Cloudflare artifact executes on Workerd.
 
 ## Local development
 
@@ -585,14 +585,12 @@ configuration and command surface.
 
 ## Operations and portability
 
-`src/lib/db/schema.ts` and Drizzle's migration journal are the only active schema
-and history sources. `bun run db:generate` creates the next migration and
-`bun run db:schema:check` validates the journal snapshots. `bun run db:preflight`
-validates migration history and application/schema compatibility. `bun run
-db:backup`, `db:restore`, and `db:pitr:check` cover the
-operator PostgreSQL plane; Workspace export/import is a separate RLS-scoped logical
-plane. See [`docs/operations.md`](operations.md) for backup ownership,
-restore drills, generation activation, degraded readiness, and telemetry privacy.
+`bun run db:preflight` validates dbmate history, Lore's stored migration checksums,
+and application/schema compatibility. `bun run db:backup`, `db:restore`, and
+`db:pitr:check` cover the operator PostgreSQL plane; Workspace export/import is a
+separate RLS-scoped logical plane. See [`docs/operations.md`](operations.md) for
+backup ownership, restore drills, generation activation, degraded readiness, and
+telemetry privacy.
 
 ## CoreSpeed Cloud / Cloudflare
 

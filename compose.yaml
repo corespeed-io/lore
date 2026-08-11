@@ -15,9 +15,9 @@ services:
 
   migrate:
     build: .
-    command: ["sh", "-c", "node .worker/migrate.js && node scripts/create-runtime-role.mjs"]
+    command: ["sh", "-c", "node scripts/migrate.mjs && node scripts/create-runtime-role.mjs"]
     environment:
-      DATABASE_URL: postgres://lore_admin:${LORE_DB_ADMIN_PASSWORD:?Set LORE_DB_ADMIN_PASSWORD in .env}@postgres:5432/lore
+      DATABASE_URL: postgres://lore_admin:${LORE_DB_ADMIN_PASSWORD:?Set LORE_DB_ADMIN_PASSWORD in .env}@postgres:5432/lore?sslmode=disable
       LORE_RUNTIME_ROLE: lore_runtime
       LORE_RUNTIME_PASSWORD: ${LORE_DB_RUNTIME_PASSWORD:?Set LORE_DB_RUNTIME_PASSWORD in .env}
       LORE_MAINTENANCE_ROLE: lore_maintenance_runtime

@@ -1,20 +1,20 @@
 import "server-only";
-import type { RuntimeLoreDatabase } from "../db/drizzle";
-import { createDrizzleDatabase, createRequestDrizzleDatabase } from "../db/drizzle";
+import type { RuntimePostgresDatabase } from "../db/postgres";
+import { createPostgresDatabase, createRequestPostgresDatabase } from "../db/postgres";
 
 interface HyperdriveBinding {
   connectionString: string;
 }
 
-let nodeDatabase: RuntimeLoreDatabase | null = null;
+let nodeDatabase: RuntimePostgresDatabase | null = null;
 
-async function resolveCloudflareDatabase(): Promise<RuntimeLoreDatabase | null> {
+async function resolveCloudflareDatabase(): Promise<RuntimePostgresDatabase | null> {
   try {
     const { getCloudflareContext } = await import("@opennextjs/cloudflare");
     const context = await getCloudflareContext({ async: true });
     const hyperdrive = (context.env as unknown as { HYPERDRIVE?: HyperdriveBinding }).HYPERDRIVE;
     return hyperdrive?.connectionString
-      ? createRequestDrizzleDatabase({ connectionString: hyperdrive.connectionString })
+      ? createRequestPostgresDatabase({ connectionString: hyperdrive.connectionString })
       : null;
   } catch {
     // Standard Node/Docker execution has no OpenNext request context.
@@ -22,12 +22,12 @@ async function resolveCloudflareDatabase(): Promise<RuntimeLoreDatabase | null> 
   }
 }
 
-export async function getRuntimeDatabase(): Promise<RuntimeLoreDatabase> {
+export async function getRuntimeDatabase(): Promise<RuntimePostgresDatabase> {
   if (nodeDatabase) return nodeDatabase;
   const cloudflareDatabase = await resolveCloudflareDatabase();
   if (cloudflareDatabase) return cloudflareDatabase;
   if (process.env.DATABASE_URL) {
-    nodeDatabase = createDrizzleDatabase({
+    nodeDatabase = createPostgresDatabase({
       connectionString: process.env.DATABASE_URL,
       max: Number(process.env.DATABASE_POOL_SIZE ?? "10"),
     });

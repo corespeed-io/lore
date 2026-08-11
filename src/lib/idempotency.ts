@@ -1,6 +1,5 @@
-import { sql } from "drizzle-orm";
 import type { ActorContext } from "./actor-context";
-import type { LoreTransaction } from "./db";
+import type { PostgresTransaction } from "./db";
 
 export interface IdempotencyRequest {
   key: string;
@@ -34,12 +33,15 @@ function actorIdentity(actor: ActorContext): { id: string; kind: "agent" | "user
   return actor.agentId ? { id: actor.agentId, kind: "agent" } : { id: actor.userId, kind: "user" };
 }
 
-async function installRequestId(transaction: LoreTransaction, requestId: string): Promise<void> {
-  await transaction.execute(sql`SELECT set_config('lore.request_id', ${requestId}, true)`);
+async function installRequestId(
+  transaction: PostgresTransaction,
+  requestId: string,
+): Promise<void> {
+  await transaction.query("SELECT set_config('lore.request_id', $1, true)", [requestId]);
 }
 
 export async function beginMutation<Result>(
-  transaction: LoreTransaction,
+  transaction: PostgresTransaction,
   actor: ActorContext,
   request?: IdempotencyRequest,
 ): Promise<MutationClaim<Result>> {
@@ -51,47 +53,56 @@ export async function beginMutation<Result>(
 
   const identity = actorIdentity(actor);
   const requestId = crypto.randomUUID();
-  const inserted = await transaction.execute<{ id: string }>(
-    sql`INSERT INTO request_idempotency_records (
+  const inserted = await transaction.query<{ id: string }>(
+    `INSERT INTO request_idempotency_records (
        id, workspace_id, actor_user_id, actor_kind, actor_id,
        operation, idempotency_key, request_sha256
-     ) VALUES (
-       ${requestId}, ${actor.workspaceId}, ${actor.userId}, ${identity.kind},
-       ${identity.id}, ${request.operation}, ${request.key}, ${request.requestHash}
-     )
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (workspace_id, actor_kind, actor_id, operation, idempotency_key)
        DO NOTHING
      RETURNING id`,
+    [
+      requestId,
+      actor.workspaceId,
+      actor.userId,
+      identity.kind,
+      identity.id,
+      request.operation,
+      request.key,
+      request.requestHash,
+    ],
   );
   if (inserted.rows[0]) {
     await installRequestId(transaction, requestId);
     return { requestId };
   }
 
-  const existing = await transaction.execute<IdempotencyRow>(
-    sql`SELECT id, request_sha256, status, response_status, response_body, expires_at
+  const existing = await transaction.query<IdempotencyRow>(
+    `SELECT id, request_sha256, status, response_status, response_body, expires_at
      FROM request_idempotency_records
-     WHERE workspace_id = ${actor.workspaceId}
-       AND actor_kind = ${identity.kind}
-       AND actor_id = ${identity.id}
-       AND operation = ${request.operation}
-       AND idempotency_key = ${request.key}
+     WHERE workspace_id = $1
+       AND actor_kind = $2
+       AND actor_id = $3
+       AND operation = $4
+       AND idempotency_key = $5
      FOR UPDATE`,
+    [actor.workspaceId, identity.kind, identity.id, request.operation, request.key],
   );
   const row = existing.rows[0];
   if (!row) throw new Error("Idempotency record became unavailable");
 
   if (new Date(row.expires_at).getTime() <= Date.now()) {
-    await transaction.execute(
-      sql`UPDATE request_idempotency_records
-       SET request_sha256 = ${request.requestHash},
+    await transaction.query(
+      `UPDATE request_idempotency_records
+       SET request_sha256 = $2,
            status = 'in_progress',
            response_status = NULL,
            response_body = NULL,
            completed_at = NULL,
            created_at = now(),
            expires_at = now() + interval '24 hours'
-       WHERE id = ${row.id}`,
+       WHERE id = $1`,
+      [row.id, request.requestHash],
     );
     await installRequestId(transaction, row.id);
     return { requestId: row.id };
@@ -113,22 +124,23 @@ export async function beginMutation<Result>(
 }
 
 export async function completeMutation(
-  transaction: LoreTransaction,
+  transaction: PostgresTransaction,
   requestId: string,
   status: number,
   body: unknown,
   idempotent: boolean,
 ): Promise<void> {
   if (!idempotent) return;
-  const completed = await transaction.execute<{ id: string }>(
-    sql`UPDATE request_idempotency_records
+  const completed = await transaction.query<{ id: string }>(
+    `UPDATE request_idempotency_records
      SET status = 'completed',
-         response_status = ${status},
-         response_body = ${JSON.stringify(body)}::jsonb,
+         response_status = $2,
+         response_body = $3::jsonb,
          completed_at = now()
-     WHERE id = ${requestId}
+     WHERE id = $1
        AND status = 'in_progress'
      RETURNING id`,
+    [requestId, status, JSON.stringify(body)],
   );
   if (!completed.rows[0]) throw new Error("Idempotency record completion failed");
 }

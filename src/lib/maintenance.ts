@@ -1,5 +1,4 @@
-import { sql } from "drizzle-orm";
-import type { LoreDatabase, LoreTransaction } from "./db";
+import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiterals } from "./embedding/vector";
 import type { EmbeddingProvider } from "./memory";
 
@@ -68,25 +67,26 @@ export function embeddingMaintenanceLeaseSeconds(providerTimeoutMs = 120_000): n
 }
 
 async function installMaintenanceContext(
-  transaction: LoreTransaction,
+  transaction: PostgresTransaction,
   jobId: string,
   leaseToken: string,
 ): Promise<void> {
-  await transaction.execute(
-    sql`SELECT
-       set_config('lore.maintenance_job_id', ${jobId}, true),
-       set_config('lore.maintenance_lease_token', ${leaseToken}, true)`,
+  await transaction.query(
+    `SELECT
+       set_config('lore.maintenance_job_id', $1, true),
+       set_config('lore.maintenance_lease_token', $2, true)`,
+    [jobId, leaseToken],
   );
 }
 
 export async function purgeExpiredPortableCoreRecords(
-  database: LoreDatabase,
+  database: PostgresDatabase,
 ): Promise<{ idempotencyRecords: number; memoryEvents: number }> {
   return database.transaction(async (transaction) => {
-    const result = await transaction.execute<{
+    const result = await transaction.query<{
       idempotency_records: string | number;
       memory_event_records: string | number;
-    }>(sql`SELECT * FROM lore.purge_expired_portable_core_records()`);
+    }>("SELECT * FROM lore.purge_expired_portable_core_records()");
     return {
       idempotencyRecords: Number(result.rows[0]?.idempotency_records ?? 0),
       memoryEvents: Number(result.rows[0]?.memory_event_records ?? 0),
@@ -95,7 +95,7 @@ export async function purgeExpiredPortableCoreRecords(
 }
 
 export async function pruneRetiringEmbeddingGenerations(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   retentionSeconds = 604_800,
 ): Promise<number> {
   const requestedRetentionSeconds = Math.floor(retentionSeconds);
@@ -104,15 +104,16 @@ export async function pruneRetiringEmbeddingGenerations(
       ? requestedRetentionSeconds
       : 604_800;
   return database.transaction(async (transaction) => {
-    const result = await transaction.execute<{ count: string | number }>(
-      sql`SELECT lore.prune_retiring_embedding_generations(${safeRetentionSeconds}) AS count`,
+    const result = await transaction.query<{ count: string | number }>(
+      "SELECT lore.prune_retiring_embedding_generations($1) AS count",
+      [safeRetentionSeconds],
     );
     return Number(result.rows[0]?.count ?? 0);
   });
 }
 
 export function createMemoryMaintenanceModule(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: MemoryMaintenanceOptions,
 ) {
   const provider = options.embeddingProvider;
@@ -150,10 +151,9 @@ export function createMemoryMaintenanceModule(
   ): Promise<MemoryMaintenanceResult> {
     const delay = retryDelay(job.attempt_count);
     const status = await database.transaction(async (transaction) => {
-      const result = await transaction.execute<{ status: "pending" | "dead" | null }>(
-        sql`SELECT lore.finish_memory_embedding_job(
-          ${job.id}, ${leaseToken}, ${failureDetail}, ${delay}
-        ) AS status`,
+      const result = await transaction.query<{ status: "pending" | "dead" | null }>(
+        `SELECT lore.finish_memory_embedding_job($1, $2, $3, $4) AS status`,
+        [job.id, leaseToken, failureDetail, delay],
       );
       return result.rows[0]?.status ?? null;
     });
@@ -179,7 +179,7 @@ export function createMemoryMaintenanceModule(
   return {
     async generationReport(): Promise<EmbeddingGenerationReport> {
       return database.transaction(async (transaction) => {
-        const result = await transaction.execute<{
+        const result = await transaction.query<{
           id: string;
           status: EmbeddingGenerationReport["status"];
           eligible_chunks: string | number;
@@ -187,9 +187,11 @@ export function createMemoryMaintenanceModule(
           missing_chunks: string | number;
           pending_jobs: string | number;
           dead_jobs: string | number;
-        }>(sql`SELECT * FROM lore.embedding_generation_report(
-          ${provider.provider}, ${provider.model}, ${provider.revision}
-        )`);
+        }>("SELECT * FROM lore.embedding_generation_report($1, $2, $3)", [
+          provider.provider,
+          provider.model,
+          provider.revision,
+        ]);
         const row = result.rows[0];
         if (!row) throw new Error("Embedding generation is not initialized");
         return {
@@ -206,10 +208,9 @@ export function createMemoryMaintenanceModule(
 
     async activateGeneration(): Promise<string> {
       return database.transaction(async (transaction) => {
-        const result = await transaction.execute<{ id: string }>(
-          sql`SELECT lore.activate_embedding_generation(
-            ${provider.provider}, ${provider.model}, ${provider.revision}
-          ) AS id`,
+        const result = await transaction.query<{ id: string }>(
+          "SELECT lore.activate_embedding_generation($1, $2, $3) AS id",
+          [provider.provider, provider.model, provider.revision],
         );
         const id = result.rows[0]?.id;
         if (!id) throw new Error("Embedding generation activation failed");
@@ -228,11 +229,10 @@ export function createMemoryMaintenanceModule(
     async seedStale(limit = 100): Promise<string[]> {
       const safeLimit = Math.max(1, Math.min(limit, 10_000));
       return database.transaction(async (transaction) => {
-        const result = await transaction.execute<{ id: string }>(
-          sql`SELECT id
-           FROM lore.enqueue_stale_memory_embedding_jobs(
-             ${provider.provider}, ${provider.model}, ${provider.revision}, ${safeLimit}
-           )`,
+        const result = await transaction.query<{ id: string }>(
+          `SELECT id
+           FROM lore.enqueue_stale_memory_embedding_jobs($1, $2, $3, $4)`,
+          [provider.provider, provider.model, provider.revision, safeLimit],
         );
         return result.rows.map((row) => row.id);
       });
@@ -241,12 +241,10 @@ export function createMemoryMaintenanceModule(
     async pending(limit = 100): Promise<string[]> {
       const safeLimit = Math.max(1, Math.min(limit, 10_000));
       return database.transaction(async (transaction) => {
-        const result = await transaction.execute<{ id: string }>(
-          sql`SELECT id
-           FROM lore.list_pending_memory_embedding_jobs(
-             ${provider.provider}, ${provider.model}, ${provider.revision},
-             ${leaseSeconds}, ${safeLimit}
-           )`,
+        const result = await transaction.query<{ id: string }>(
+          `SELECT id
+           FROM lore.list_pending_memory_embedding_jobs($1, $2, $3, $4, $5)`,
+          [provider.provider, provider.model, provider.revision, leaseSeconds, safeLimit],
         );
         return result.rows.map((row) => row.id);
       });
@@ -255,12 +253,17 @@ export function createMemoryMaintenanceModule(
     async run(jobId?: string): Promise<MemoryMaintenanceResult> {
       const leaseToken = crypto.randomUUID();
       const claimed = await database.transaction(async (transaction) => {
-        const result = await transaction.execute<ClaimedJobDatabaseRow>(
-          sql`SELECT *
-           FROM lore.claim_memory_embedding_job(
-             ${jobId ?? null}, ${provider.provider}, ${provider.model}, ${provider.revision},
-             ${leaseToken}, ${leaseSeconds}
-           )`,
+        const result = await transaction.query<ClaimedJobDatabaseRow>(
+          `SELECT *
+           FROM lore.claim_memory_embedding_job($1, $2, $3, $4, $5, $6)`,
+          [
+            jobId ?? null,
+            provider.provider,
+            provider.model,
+            provider.revision,
+            leaseToken,
+            leaseSeconds,
+          ],
         );
         const job = result.rows[0];
         return job ? { ...job, chunks: claimedChunks(job.chunks) } : null;
@@ -293,8 +296,8 @@ export function createMemoryMaintenanceModule(
           // Take the same parent-first order before the embedding insert obtains
           // foreign-key locks on generation/chunk rows, preventing a chunk ↔
           // Memory lock inversion with concurrent update/delete.
-          const lockedMemory = await transaction.execute<{ locked: boolean }>(
-            sql`SELECT lore.lock_current_maintenance_memory() AS locked`,
+          const lockedMemory = await transaction.query<{ locked: boolean }>(
+            "SELECT lore.lock_current_maintenance_memory() AS locked",
           );
           if (lockedMemory.rows[0]?.locked !== true) {
             throw new Error("Maintenance job Memory was deleted before completion");
@@ -303,32 +306,32 @@ export function createMemoryMaintenanceModule(
             chunk_id: chunk.id,
             embedding: vectors[index],
           }));
-          const inserted = await transaction.execute<{ id: string }>(
-            sql`INSERT INTO memory_chunk_embeddings (
+          const inserted = await transaction.query<{ id: string }>(
+            `INSERT INTO memory_chunk_embeddings (
                generation_id, workspace_id, memory_id, chunk_id, embedding, embedded_at
              )
              SELECT
                lore.current_maintenance_generation_id(),
-               ${claimed.workspace_id},
-               ${claimed.memory_id},
+               $1,
+               $2,
                replacement.chunk_id::uuid,
                replacement.embedding::vector(1024),
                now()
-             FROM jsonb_to_recordset(${JSON.stringify(replacements)}::jsonb) AS replacement(
+             FROM jsonb_to_recordset($3::jsonb) AS replacement(
                chunk_id text,
                embedding text
              )
              ON CONFLICT (generation_id, chunk_id)
              DO UPDATE SET embedding = EXCLUDED.embedding, embedded_at = now()
              RETURNING chunk_id AS id`,
+            [claimed.workspace_id, claimed.memory_id, JSON.stringify(replacements)],
           );
           if (inserted.rows.length !== chunks.length) {
             throw new Error("Maintenance job failed to replace every claimed chunk");
           }
-          const finished = await transaction.execute<{ status: "succeeded" | null }>(
-            sql`SELECT lore.finish_memory_embedding_job(
-              ${claimed.id}, ${leaseToken}, NULL, ${1}
-            ) AS status`,
+          const finished = await transaction.query<{ status: "succeeded" | null }>(
+            `SELECT lore.finish_memory_embedding_job($1, $2, NULL, $3) AS status`,
+            [claimed.id, leaseToken, 1],
           );
           if (finished.rows[0]?.status !== "succeeded") {
             throw new Error("Maintenance job lease was lost before success completion");

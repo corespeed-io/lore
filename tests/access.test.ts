@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { AccessDeniedError, createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
@@ -89,11 +88,9 @@ test("RLS keeps a User's Agents and Workspace Grants private from other members"
 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
-    await expect(transaction.execute(sql.raw("SELECT id FROM agents"))).resolves.toMatchObject({
-      rows: [],
-    });
+    await expect(transaction.query("SELECT id FROM agents")).resolves.toMatchObject({ rows: [] });
     await expect(
-      transaction.execute(sql.raw("SELECT agent_id FROM agent_workspace_grants")),
+      transaction.query("SELECT agent_id FROM agent_workspace_grants"),
     ).resolves.toMatchObject({ rows: [] });
   });
 
@@ -134,16 +131,16 @@ test("Agent credential resolves to the owning User and granted Workspace", async
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
     await expect(
-      transaction.execute(sql.raw("SELECT id, agent_id, secret_prefix FROM agent_credentials")),
+      transaction.query("SELECT id, agent_id, secret_prefix FROM agent_credentials"),
     ).resolves.toMatchObject({ rows: [{ id: credential.id, agent_id: agent.id }] });
-    await expect(
-      transaction.execute(sql.raw("SELECT secret_hash FROM agent_credentials")),
-    ).rejects.toThrow(/permission denied/i);
+    await expect(transaction.query("SELECT secret_hash FROM agent_credentials")).rejects.toThrow(
+      /permission denied/i,
+    );
   });
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
     await expect(
-      transaction.execute(sql.raw("SELECT id, agent_id, secret_prefix FROM agent_credentials")),
+      transaction.query("SELECT id, agent_id, secret_prefix FROM agent_credentials"),
     ).resolves.toMatchObject({ rows: [] });
   });
 
@@ -171,7 +168,7 @@ test("Disabled Agent cannot receive a new credential", async () => {
   const agent = await access.createAgent(testContext.alice, { name: "Disabled assistant" });
   await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(sql`UPDATE agents SET status = 'disabled' WHERE id = ${agent.id}`);
+    await transaction.query("UPDATE agents SET status = 'disabled' WHERE id = $1", [agent.id]);
   });
 
   await expect(access.issueAgentCredential(testContext.alice, agent.id)).rejects.toBeInstanceOf(
@@ -332,17 +329,17 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
   await expect(
     testContext.database.transaction(async (transaction) => {
       await installActorContext(transaction, agentActor);
-      await transaction.execute(
-        sql`UPDATE memories SET created_by_agent_id = NULL WHERE id = ${memory.id}`,
-      );
+      await transaction.query("UPDATE memories SET created_by_agent_id = NULL WHERE id = $1", [
+        memory.id,
+      ]);
     }),
   ).rejects.toThrow(/Memory identity and provenance are immutable/);
   await expect(
     testContext.database.transaction(async (transaction) => {
       await installActorContext(transaction, testContext.alice);
-      await transaction.execute(
-        sql`UPDATE memories SET created_by_agent_id = NULL WHERE id = ${memory.id}`,
-      );
+      await transaction.query("UPDATE memories SET created_by_agent_id = NULL WHERE id = $1", [
+        memory.id,
+      ]);
     }),
   ).rejects.toThrow(/Memory identity and provenance are immutable/);
   await expect(memories.retrieve(testContext.alice, memory.id)).resolves.toMatchObject({

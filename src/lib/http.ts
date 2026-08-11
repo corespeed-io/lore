@@ -5,7 +5,7 @@ import {
   createAccessModule,
 } from "./access";
 import type { ActorContext } from "./actor-context";
-import type { LoreDatabase } from "./db";
+import type { PostgresDatabase } from "./db";
 import {
   createEvaluationModule,
   type EvaluationCaseInput,
@@ -517,7 +517,7 @@ function requireHumanActor(actor: ActorContext): ActorContext {
   return actor;
 }
 
-export function createActorHandlers(database: LoreDatabase) {
+export function createActorHandlers(database: PostgresDatabase) {
   const resolver = createRequestContextResolver(database);
   return {
     async GET(request: Request): Promise<Response> {
@@ -535,7 +535,7 @@ export function createActorHandlers(database: LoreDatabase) {
 }
 
 export function createCapabilitiesHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: { embeddingConfigured: boolean },
 ) {
   const operations = createOperationsModule(database, options);
@@ -554,7 +554,7 @@ export function createCapabilitiesHandlers(
   };
 }
 
-export function createReadinessHandlers(database: LoreDatabase, options: OperationsOptions) {
+export function createReadinessHandlers(database: PostgresDatabase, options: OperationsOptions) {
   const operations = createOperationsModule(database, options);
   return {
     async GET(): Promise<Response> {
@@ -567,7 +567,7 @@ export function createReadinessHandlers(database: LoreDatabase, options: Operati
   };
 }
 
-export function createWorkspaceHandlers(database: LoreDatabase) {
+export function createWorkspaceHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -595,7 +595,7 @@ export function createWorkspaceHandlers(database: LoreDatabase) {
   };
 }
 
-export function createAgentHandlers(database: LoreDatabase) {
+export function createAgentHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -629,7 +629,7 @@ export function createAgentHandlers(database: LoreDatabase) {
   };
 }
 
-export function createAgentByIdHandlers(database: LoreDatabase) {
+export function createAgentByIdHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -701,7 +701,7 @@ export function createAgentByIdHandlers(database: LoreDatabase) {
   };
 }
 
-export function createAgentCredentialHandlers(database: LoreDatabase) {
+export function createAgentCredentialHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -732,7 +732,7 @@ export function createAgentCredentialHandlers(database: LoreDatabase) {
   };
 }
 
-export function createAgentCredentialByIdHandlers(database: LoreDatabase) {
+export function createAgentCredentialByIdHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -754,7 +754,7 @@ export function createAgentCredentialByIdHandlers(database: LoreDatabase) {
   };
 }
 
-export function createAgentGrantHandlers(database: LoreDatabase) {
+export function createAgentGrantHandlers(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -793,7 +793,7 @@ export function createAgentGrantHandlers(database: LoreDatabase) {
 }
 
 export function createEvaluationSuiteHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: EvaluationModuleOptions = {},
 ) {
   const evaluations = createEvaluationModule(database, options);
@@ -834,7 +834,7 @@ export function createEvaluationSuiteHandlers(
 }
 
 export function createEvaluationRunHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: EvaluationModuleOptions = {},
 ) {
   const evaluations = createEvaluationModule(database, options);
@@ -853,7 +853,7 @@ export function createEvaluationRunHandlers(
 }
 
 export function createEvaluationRunByIdHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: EvaluationModuleOptions = {},
 ) {
   const evaluations = createEvaluationModule(database, options);
@@ -877,7 +877,10 @@ export function createEvaluationRunByIdHandlers(
   };
 }
 
-export function createMemoryHandlers(database: LoreDatabase, options: MemoryModuleOptions = {}) {
+export function createMemoryHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
   const memories = createMemoryModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
@@ -976,7 +979,7 @@ export function createMemoryHandlers(database: LoreDatabase, options: MemoryModu
 }
 
 export function createMemoryProposalHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: MemoryModuleOptions = {},
 ) {
   const memories = createMemoryModule(database, options);
@@ -1066,7 +1069,7 @@ export function createMemoryProposalHandlers(
   };
 }
 
-export function createEpisodeHandlers(database: LoreDatabase) {
+export function createEpisodeHandlers(database: PostgresDatabase) {
   const observations = createObservationModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -1123,7 +1126,7 @@ export function createEpisodeHandlers(database: LoreDatabase) {
   };
 }
 
-export function createObservationHandlers(database: LoreDatabase) {
+export function createObservationHandlers(database: PostgresDatabase) {
   const observations = createObservationModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -1148,7 +1151,7 @@ export function createObservationHandlers(database: LoreDatabase) {
   };
 }
 
-export function createEpisodeByIdHandlers(database: LoreDatabase) {
+export function createEpisodeByIdHandlers(database: PostgresDatabase) {
   const observations = createObservationModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -1193,7 +1196,7 @@ export function createEpisodeByIdHandlers(database: LoreDatabase) {
 }
 
 export function createMemoryProposalReviewHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: MemoryModuleOptions = {},
 ) {
   const memories = createMemoryModule(database, options);
@@ -1229,7 +1232,7 @@ export function createMemoryProposalReviewHandlers(
   };
 }
 
-export function createGraphHandlers(database: LoreDatabase) {
+export function createGraphHandlers(database: PostgresDatabase) {
   const graph = createMemoryGraphModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -1252,7 +1255,7 @@ export function createGraphHandlers(database: LoreDatabase) {
   };
 }
 
-export function createPortabilityHandlers(database: LoreDatabase) {
+export function createPortabilityHandlers(database: PostgresDatabase) {
   const portability = createPortabilityModule(database);
   const resolver = createRequestContextResolver(database);
   return {
@@ -1307,7 +1310,7 @@ export function createPortabilityHandlers(database: LoreDatabase) {
 }
 
 export function createMemoryByIdHandlers(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: MemoryModuleOptions = {},
 ) {
   const memories = createMemoryModule(database, options);

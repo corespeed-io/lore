@@ -26,6 +26,8 @@ bun run format     # Auto-format code with Biome
 bun run typecheck  # Type-check with TypeScript
 bun run test       # Run tests with Vitest
 bun run build      # Build for production
+bun run db:preflight # Validate PostgreSQL, dbmate history, and schema compatibility
+bun run db:migrate # Apply plain-SQL migrations through the guarded dbmate wrapper
 bun run preview:cloudflare # Preview the Workers build through workerd
 ```
 

@@ -1,39 +1,55 @@
 import { describe, expect, test } from "vitest";
-import { LEGACY_CUTOVER_MIGRATIONS, legacyCutoverIssues } from "../scripts/lib/drizzle-migrations";
+import {
+  hasCompleteLegacyBaseline,
+  LEGACY_BASELINE_MIGRATIONS,
+  PRE_DBMATE_MIGRATIONS,
+  preDbmateAdoption,
+} from "../scripts/migration-baseline.mjs";
 
-const completeLegacyHistory = [...LEGACY_CUTOVER_MIGRATIONS].map(([id, checksum]) => ({
+const completeLegacyHistory = [...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({
   id,
   checksum,
 }));
 
-describe("Drizzle cutover baseline", () => {
-  test("recognizes only the exact complete pre-cutover history", () => {
-    expect(legacyCutoverIssues(completeLegacyHistory)).toEqual([]);
+describe("squashed migration baseline", () => {
+  test("leaves fresh databases alone", () => {
+    expect(hasCompleteLegacyBaseline([])).toBe(false);
+  });
+
+  test("recognizes the exact complete legacy history", () => {
+    expect(hasCompleteLegacyBaseline(completeLegacyHistory)).toBe(true);
   });
 
   test("rejects a partial legacy history", () => {
-    expect(legacyCutoverIssues(completeLegacyHistory.slice(0, -1))).toContainEqual({
-      id: "0009_observation_evidence.sql",
-      reason: "missing",
-    });
+    expect(() => hasCompleteLegacyBaseline(completeLegacyHistory.slice(0, -1))).toThrow(
+      "found 12 of 13 migrations",
+    );
   });
 
   test("rejects modified legacy SQL", () => {
-    const modified = completeLegacyHistory.map((migration, index) =>
+    const modifiedHistory = completeLegacyHistory.map((migration, index) =>
       index === 0 ? { ...migration, checksum: "modified" } : migration,
     );
-    expect(legacyCutoverIssues(modified)).toContainEqual({
-      id: "0001_initial.sql",
-      reason: "modified",
+
+    expect(() => hasCompleteLegacyBaseline(modifiedHistory)).toThrow(
+      "migration 0001_memory.sql was modified",
+    );
+  });
+});
+
+describe("data-preserving dbmate adoption", () => {
+  test("adopts an exact pre-dbmate prefix as dbmate versions", () => {
+    const rows = [...PRE_DBMATE_MIGRATIONS].slice(0, 4).map(([id, checksum]) => ({ id, checksum }));
+    expect(preDbmateAdoption(rows)).toEqual({
+      kind: "pre-dbmate",
+      versions: ["0001", "0002", "0003", "0004"],
     });
   });
 
-  test("rejects unknown history instead of guessing schema state", () => {
-    expect(
-      legacyCutoverIssues([
-        ...completeLegacyHistory,
-        { id: "0099_unknown.sql", checksum: "unknown" },
-      ]),
-    ).toContainEqual({ id: "0099_unknown.sql", reason: "unknown" });
+  test("rejects a pre-dbmate history gap", () => {
+    const rows = [...PRE_DBMATE_MIGRATIONS]
+      .filter(([id]) => !id.startsWith("0002"))
+      .map(([id, checksum]) => ({ id, checksum }));
+    expect(() => preDbmateAdoption(rows)).toThrow("missing migration 0002");
   });
 });

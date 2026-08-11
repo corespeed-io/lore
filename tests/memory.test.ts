@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
@@ -19,12 +18,16 @@ async function replaceMemoryChunks(
 ): Promise<void> {
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, actor);
-    await transaction.execute(
-      sql`DELETE FROM memory_chunks WHERE workspace_id = ${actor.workspaceId} AND memory_id = ${memoryId}`,
+    await transaction.query(
+      "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
+      [actor.workspaceId, memoryId],
     );
     for (const [ordinal, content] of chunks.entries()) {
-      await transaction.execute(sql`INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
-         VALUES (${crypto.randomUUID()}, ${actor.workspaceId}, ${memoryId}, ${ordinal}, ${content})`);
+      await transaction.query(
+        `INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [crypto.randomUUID(), actor.workspaceId, memoryId, ordinal, content],
+      );
     }
   });
 }
@@ -129,7 +132,7 @@ test("Only the Memory owner can forget a Memory", async () => {
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
     await expect(
-      transaction.execute(sql`SELECT id FROM memory_chunks WHERE memory_id = ${created.id}`),
+      transaction.query("SELECT id FROM memory_chunks WHERE memory_id = $1", [created.id]),
     ).resolves.toMatchObject({ rows: [] });
   });
   await expect(
@@ -286,8 +289,9 @@ test("Changing Memory scope invalidates and rebuilds derived chunks", async () =
   const chunkIds = async () =>
     testContext.database.transaction(async (transaction) => {
       await installActorContext(transaction, testContext.alice);
-      const result = await transaction.execute<{ id: string }>(
-        sql`SELECT id FROM memory_chunks WHERE memory_id = ${created.id} ORDER BY ordinal`,
+      const result = await transaction.query<{ id: string }>(
+        "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+        [created.id],
       );
       return result.rows.map((row) => row.id);
     });
@@ -313,9 +317,7 @@ test("RLS denies direct access to another User's private Memory chunks", async (
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
     await expect(
-      transaction.execute(
-        sql`SELECT id, content FROM memory_chunks WHERE memory_id = ${created.id}`,
-      ),
+      transaction.query("SELECT id, content FROM memory_chunks WHERE memory_id = $1", [created.id]),
     ).resolves.toMatchObject({ rows: [] });
   });
 });
@@ -395,12 +397,14 @@ test("Search breaks equal relevance scores by Memory recency", async () => {
     content: "Atlas status codename amber.",
   });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2025-01-01T00:00:00.000Z"} WHERE id = ${older.id}`,
-    );
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2026-01-01T00:00:00.000Z"} WHERE id = ${newer.id}`,
-    );
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      older.id,
+      "2025-01-01T00:00:00.000Z",
+    ]);
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      newer.id,
+      "2026-01-01T00:00:00.000Z",
+    ]);
   });
 
   const results = await memories.search(testContext.alice, {
@@ -460,9 +464,9 @@ test("Search can aggregate multiple top evidence chunks from one Memory", async 
 test("Entity aliases retain specific names while dropping question-openers", async () => {
   const testContext = await createMemoryTestContext();
   const result = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ aliases: string[] }>(
-      sql`SELECT lore.extract_entity_aliases(${"From which source was the Duchy of Normandy's Qwen3-Reranker record quoted?"}) AS aliases`,
-    ),
+    transaction.query<{ aliases: string[] }>("SELECT lore.extract_entity_aliases($1) AS aliases", [
+      "From which source was the Duchy of Normandy's Qwen3-Reranker record quoted?",
+    ]),
   );
 
   expect(result.rows[0]?.aliases).toEqual([
@@ -554,12 +558,14 @@ test("Optional temporal rank fusion can prefer newer relevant Memory", async () 
     content: "Atlas status is now green.",
   });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2025-01-01T00:00:00.000Z"} WHERE id = ${older.id}`,
-    );
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2026-01-01T00:00:00.000Z"} WHERE id = ${newer.id}`,
-    );
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      older.id,
+      "2025-01-01T00:00:00.000Z",
+    ]);
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      newer.id,
+      "2026-01-01T00:00:00.000Z",
+    ]);
   });
 
   const baseline = await memories.search(testContext.alice, {
@@ -609,15 +615,18 @@ test("Scope and time filters constrain candidates before ranking", async () => {
     scope: "private",
   });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2025-01-01T00:00:00.000Z"} WHERE id = ${oldShared.id}`,
-    );
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2026-01-01T00:00:00.000Z"} WHERE id = ${currentShared.id}`,
-    );
-    await transaction.execute(
-      sql`UPDATE memories SET updated_at = ${"2026-01-02T00:00:00.000Z"} WHERE id = ${currentPrivate.id}`,
-    );
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      oldShared.id,
+      "2025-01-01T00:00:00.000Z",
+    ]);
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      currentShared.id,
+      "2026-01-01T00:00:00.000Z",
+    ]);
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      currentPrivate.id,
+      "2026-01-02T00:00:00.000Z",
+    ]);
   });
 
   const sharedResults = await memories.search(testContext.alice, {

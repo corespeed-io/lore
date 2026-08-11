@@ -1,48 +1,37 @@
 import { expect, test } from "vitest";
-import { drizzleHistoryIssues } from "../scripts/lib/drizzle-migrations";
+import { dbmateHistoryStatus } from "../scripts/lib/migration-preflight.mjs";
 
-const expected = [
-  { folderMillis: 1, hash: "one", sql: ["one"], bps: true },
-  { folderMillis: 2, hash: "two", sql: ["two"], bps: true },
-  { folderMillis: 3, hash: "three", sql: ["three"], bps: true },
+const migrations = [
+  { version: "0001", checksum: "one" },
+  { version: "0002", checksum: "two" },
+  { version: "0003", checksum: "three" },
 ];
 
-test("Drizzle preflight accepts a fresh database and exact journal", () => {
-  expect(drizzleHistoryIssues([], expected)).toEqual([]);
+test("dbmate preflight accepts an exact checksum-protected prefix", () => {
   expect(
-    drizzleHistoryIssues(
-      expected.map((migration) => ({
-        created_at: migration.folderMillis,
-        hash: migration.hash,
-      })),
-      expected,
+    dbmateHistoryStatus(
+      [
+        { version: "0001", checksum: "one" },
+        { version: "0002", checksum: "two" },
+      ],
+      migrations,
     ),
-  ).toEqual([]);
+  ).toEqual({ missing: [], modified: [], unknown: [] });
 });
 
-test("Drizzle preflight rejects modified and unknown journal records", () => {
-  expect(
-    drizzleHistoryIssues(
-      [
-        { created_at: 1, hash: "modified" },
-        { created_at: 99, hash: "unknown" },
-      ],
-      expected,
-    ),
-  ).toEqual([
-    { id: "1", reason: "modified" },
-    { id: "99", reason: "unknown" },
-  ]);
+test("dbmate preflight rejects missing or modified checksums", () => {
+  const applied = [
+    { version: "0001", checksum: null },
+    { version: "0003", checksum: "modified" },
+  ];
+  expect(dbmateHistoryStatus(applied, migrations)).toEqual({
+    missing: ["0002"],
+    modified: applied,
+    unknown: [],
+  });
 });
 
-test("Drizzle preflight rejects gaps before the highest applied migration", () => {
-  expect(
-    drizzleHistoryIssues(
-      [
-        { created_at: 1, hash: "one" },
-        { created_at: 3, hash: "three" },
-      ],
-      expected,
-    ),
-  ).toEqual([{ id: "2", reason: "missing" }]);
+test("dbmate preflight rejects unknown versions", () => {
+  const unknown = { version: "0099", checksum: "unknown" };
+  expect(dbmateHistoryStatus([unknown], migrations).unknown).toEqual([unknown]);
 });

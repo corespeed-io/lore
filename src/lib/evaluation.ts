@@ -1,6 +1,5 @@
-import { sql } from "drizzle-orm";
 import { type ActorContext, installActorContext } from "./actor-context";
-import type { LoreDatabase } from "./db";
+import type { PostgresDatabase } from "./db";
 import { createMemoryModule, type MemoryModuleOptions } from "./memory";
 
 export type EvaluationRunStatus = "running" | "completed" | "failed";
@@ -222,7 +221,7 @@ function toRun(row: RunRow, results: EvaluationResult[]): EvaluationRun {
 }
 
 export function createEvaluationModule(
-  database: LoreDatabase,
+  database: PostgresDatabase,
   options: EvaluationModuleOptions = {},
 ) {
   const searchProvider =
@@ -233,21 +232,19 @@ export function createEvaluationModule(
   async function getSuite(actor: ActorContext, suiteId: string): Promise<EvaluationSuite | null> {
     return database.transaction(async (transaction) => {
       await installActorContext(transaction, actor);
-      const suiteResult = await transaction.execute<SuiteRow>(
-        sql`SELECT * FROM evaluation_suites
-         WHERE workspace_id = ${actor.workspaceId}
-           AND id = ${suiteId}
-           AND created_by_user_id = ${actor.userId}`,
+      const suiteResult = await transaction.query<SuiteRow>(
+        `SELECT * FROM evaluation_suites
+         WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $3`,
+        [actor.workspaceId, suiteId, actor.userId],
       );
       const suite = suiteResult.rows[0];
       if (!suite) return null;
-      const caseResult = await transaction.execute<CaseRow>(
-        sql`SELECT id, ordinal, query, expected_memory_ids, forbidden_memory_ids, result_limit
+      const caseResult = await transaction.query<CaseRow>(
+        `SELECT id, ordinal, query, expected_memory_ids, forbidden_memory_ids, result_limit
          FROM evaluation_cases
-         WHERE workspace_id = ${actor.workspaceId}
-           AND suite_id = ${suiteId}
-           AND created_by_user_id = ${actor.userId}
+         WHERE workspace_id = $1 AND suite_id = $2 AND created_by_user_id = $3
          ORDER BY ordinal, id`,
+        [actor.workspaceId, suiteId, actor.userId],
       );
       return toSuite(suite, caseResult.rows.map(toCase));
     });
@@ -256,24 +253,24 @@ export function createEvaluationModule(
   async function getRun(actor: ActorContext, runId: string): Promise<EvaluationRun | null> {
     return database.transaction(async (transaction) => {
       await installActorContext(transaction, actor);
-      const runResult = await transaction.execute<RunRow>(
-        sql`SELECT * FROM evaluation_runs
-         WHERE workspace_id = ${actor.workspaceId}
-           AND id = ${runId}
-           AND created_by_user_id = ${actor.userId}`,
+      const runResult = await transaction.query<RunRow>(
+        `SELECT * FROM evaluation_runs
+         WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $3`,
+        [actor.workspaceId, runId, actor.userId],
       );
       const run = runResult.rows[0];
       if (!run) return null;
-      const resultRows = await transaction.execute<ResultRow>(
-        sql`SELECT result.*
+      const resultRows = await transaction.query<ResultRow>(
+        `SELECT result.*
          FROM evaluation_results result
          JOIN evaluation_cases evaluation_case
            ON evaluation_case.id = result.case_id
           AND evaluation_case.created_by_user_id = result.created_by_user_id
-         WHERE result.workspace_id = ${actor.workspaceId}
-           AND result.run_id = ${runId}
-           AND result.created_by_user_id = ${actor.userId}
+         WHERE result.workspace_id = $1
+           AND result.run_id = $2
+           AND result.created_by_user_id = $3
          ORDER BY evaluation_case.ordinal, result.id`,
+        [actor.workspaceId, runId, actor.userId],
       );
       return toRun(run, resultRows.rows.map(toResult));
     });
@@ -289,33 +286,43 @@ export function createEvaluationModule(
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const suiteId = crypto.randomUUID();
-        const suiteResult = await transaction.execute<SuiteRow>(
-          sql`INSERT INTO evaluation_suites (
+        const suiteResult = await transaction.query<SuiteRow>(
+          `INSERT INTO evaluation_suites (
              id, workspace_id, created_by_user_id, name, version, description
-           ) VALUES (
-             ${suiteId}, ${actor.workspaceId}, ${actor.userId}, ${input.name},
-             ${Math.max(1, Math.floor(input.version ?? 1))}, ${input.description ?? ""}
-           )
+           ) VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING *`,
+          [
+            suiteId,
+            actor.workspaceId,
+            actor.userId,
+            input.name,
+            Math.max(1, Math.floor(input.version ?? 1)),
+            input.description ?? "",
+          ],
         );
         const cases: EvaluationCase[] = [];
         for (const [ordinal, evaluationCase] of input.cases.entries()) {
           if (!evaluationCase.query.trim() || !evaluationCase.expectedMemoryIds.length) {
             throw new Error("Each Evaluation case requires a query and expected Memory");
           }
-          const result = await transaction.execute<CaseRow>(
-            sql`INSERT INTO evaluation_cases (
+          const result = await transaction.query<CaseRow>(
+            `INSERT INTO evaluation_cases (
                id, workspace_id, suite_id, created_by_user_id, ordinal, query,
                expected_memory_ids, forbidden_memory_ids, result_limit
-             ) VALUES (
-               ${crypto.randomUUID()}, ${actor.workspaceId}, ${suiteId}, ${actor.userId},
-               ${ordinal}, ${evaluationCase.query},
-               ${sql.param(unique(evaluationCase.expectedMemoryIds))},
-               ${sql.param(unique(evaluationCase.forbiddenMemoryIds ?? []))},
-               ${Math.max(1, Math.min(evaluationCase.limit ?? 10, 100))}
-             )
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING
                id, ordinal, query, expected_memory_ids, forbidden_memory_ids, result_limit`,
+            [
+              crypto.randomUUID(),
+              actor.workspaceId,
+              suiteId,
+              actor.userId,
+              ordinal,
+              evaluationCase.query,
+              unique(evaluationCase.expectedMemoryIds),
+              unique(evaluationCase.forbiddenMemoryIds ?? []),
+              Math.max(1, Math.min(evaluationCase.limit ?? 10, 100)),
+            ],
           );
           cases.push(toCase(result.rows[0]));
         }
@@ -328,12 +335,12 @@ export function createEvaluationModule(
     async listSuites(actor: ActorContext): Promise<EvaluationSuite[]> {
       const suiteIds = await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.execute<{ id: string }>(
-          sql`SELECT id
+        const result = await transaction.query<{ id: string }>(
+          `SELECT id
            FROM evaluation_suites
-           WHERE workspace_id = ${actor.workspaceId}
-             AND created_by_user_id = ${actor.userId}
+           WHERE workspace_id = $1 AND created_by_user_id = $2
            ORDER BY updated_at DESC, id`,
+          [actor.workspaceId, actor.userId],
         );
         return result.rows.map((row) => row.id);
       });
@@ -349,9 +356,10 @@ export function createEvaluationModule(
       const runId = crypto.randomUUID();
       await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        await transaction.execute(
-          sql`INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id)
-           VALUES (${runId}, ${actor.workspaceId}, ${suiteId}, ${actor.userId})`,
+        await transaction.query(
+          `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id)
+           VALUES ($1, $2, $3, $4)`,
+          [runId, actor.workspaceId, suiteId, actor.userId],
         );
       });
 
@@ -381,16 +389,22 @@ export function createEvaluationModule(
           const resultId = crypto.randomUUID();
           await database.transaction(async (transaction) => {
             await installActorContext(transaction, actor);
-            await transaction.execute(
-              sql`INSERT INTO evaluation_results (
+            await transaction.query(
+              `INSERT INTO evaluation_results (
                  id, workspace_id, run_id, case_id, created_by_user_id, retrieved_memory_ids,
                  metrics, latency_ms, estimated_cost_usd
-               ) VALUES (
-                 ${resultId}, ${actor.workspaceId}, ${runId}, ${evaluationCase.id},
-                 ${actor.userId}, ${sql.param(retrievedMemoryIds)},
-                 ${JSON.stringify(metrics)}::jsonb,
-                 ${latencyMs}, ${estimatedCost}
-               )`,
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
+              [
+                resultId,
+                actor.workspaceId,
+                runId,
+                evaluationCase.id,
+                actor.userId,
+                retrievedMemoryIds,
+                JSON.stringify(metrics),
+                latencyMs,
+                estimatedCost,
+              ],
             );
           });
           completedResults.push({
@@ -425,15 +439,11 @@ export function createEvaluationModule(
           : "Isolation failure: forbidden Memory retrieved";
         await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          await transaction.execute(
-            sql`UPDATE evaluation_runs
-             SET status = ${status},
-                 metrics = ${JSON.stringify(metrics)}::jsonb,
-                 error = ${error},
-                 completed_at = now()
-             WHERE workspace_id = ${actor.workspaceId}
-               AND id = ${runId}
-               AND created_by_user_id = ${actor.userId}`,
+          await transaction.query(
+            `UPDATE evaluation_runs
+             SET status = $3, metrics = $4::jsonb, error = $5, completed_at = now()
+             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $6`,
+            [actor.workspaceId, runId, status, JSON.stringify(metrics), error, actor.userId],
           );
         });
       } catch (error) {
@@ -452,15 +462,17 @@ export function createEvaluationModule(
         };
         await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          await transaction.execute(
-            sql`UPDATE evaluation_runs
-             SET status = 'failed',
-                 metrics = ${JSON.stringify(failedMetrics)}::jsonb,
-                 error = ${error instanceof Error ? error.message : String(error)},
-                 completed_at = now()
-             WHERE workspace_id = ${actor.workspaceId}
-               AND id = ${runId}
-               AND created_by_user_id = ${actor.userId}`,
+          await transaction.query(
+            `UPDATE evaluation_runs
+             SET status = 'failed', metrics = $3::jsonb, error = $4, completed_at = now()
+             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $5`,
+            [
+              actor.workspaceId,
+              runId,
+              JSON.stringify(failedMetrics),
+              error instanceof Error ? error.message : String(error),
+              actor.userId,
+            ],
           );
         });
         throw error;

@@ -1,11 +1,8 @@
+import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
-import { and, eq, type SQLWrapper, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import { onTestFinished } from "vitest";
-import { type LoreDatabase, throwDatabaseCause } from "@/lib/db";
-import * as schema from "@/lib/db/schema";
+import type { PostgresDatabase } from "@/lib/db";
 import type { ActorContext } from "@/lib/memory";
 
 const ALICE_USER_ID = "10000000-0000-4000-8000-000000000001";
@@ -14,12 +11,22 @@ const CAROL_USER_ID = "10000000-0000-4000-8000-000000000003";
 const OPERATIONS_WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
 const RESEARCH_WORKSPACE_ID = "20000000-0000-4000-8000-000000000002";
 
-const migrationsFolder = new URL("../../db/drizzle", import.meta.url).pathname;
+const migrationsUrl = new URL("../../db/migrations/", import.meta.url);
+
+async function migrate(postgres: PGlite): Promise<void> {
+  const migrationIds = (await readdir(migrationsUrl))
+    .filter((name) => /^\d+.*\.sql$/.test(name))
+    .sort();
+  for (const migrationId of migrationIds) {
+    const migrationUrl = new URL(migrationId, migrationsUrl);
+    await postgres.exec(await readFile(migrationUrl, "utf8"));
+  }
+}
 
 export interface MemoryTestContext {
-  database: LoreDatabase;
-  maintenanceDatabase: LoreDatabase;
-  adminDatabase: LoreDatabase;
+  database: PostgresDatabase;
+  maintenanceDatabase: PostgresDatabase;
+  adminDatabase: PostgresDatabase;
   alice: ActorContext;
   bob: ActorContext;
   carol: ActorContext;
@@ -30,38 +37,40 @@ export interface MemoryTestContext {
 export async function createMemoryTestContext(): Promise<MemoryTestContext> {
   const postgres = new PGlite({ extensions: { vector } });
   await postgres.waitReady;
-  const drizzleDatabase = drizzle({ client: postgres, schema });
-  await migrate(drizzleDatabase, { migrationsFolder });
-  await drizzleDatabase.insert(schema.users).values([
-    { id: ALICE_USER_ID, displayName: "Alice" },
-    { id: BOB_USER_ID, displayName: "Bob" },
-    { id: CAROL_USER_ID, displayName: "Carol" },
+  await migrate(postgres);
+  await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)", [
+    ALICE_USER_ID,
+    "Alice",
+    BOB_USER_ID,
+    "Bob",
+    CAROL_USER_ID,
+    "Carol",
   ]);
-  await drizzleDatabase.insert(schema.workspaces).values([
-    { id: OPERATIONS_WORKSPACE_ID, name: "Operations" },
-    { id: RESEARCH_WORKSPACE_ID, name: "Research" },
+  await postgres.query("INSERT INTO workspaces (id, name) VALUES ($1, $2), ($3, $4)", [
+    OPERATIONS_WORKSPACE_ID,
+    "Operations",
+    RESEARCH_WORKSPACE_ID,
+    "Research",
   ]);
-  await drizzleDatabase.insert(schema.memberships).values([
-    { workspaceId: OPERATIONS_WORKSPACE_ID, userId: ALICE_USER_ID, role: "owner" },
-    { workspaceId: OPERATIONS_WORKSPACE_ID, userId: BOB_USER_ID, role: "member" },
-    { workspaceId: RESEARCH_WORKSPACE_ID, userId: CAROL_USER_ID, role: "owner" },
-  ]);
+  await postgres.query(
+    `INSERT INTO memberships (workspace_id, user_id, role)
+     VALUES ($1, $2, 'owner'), ($1, $3, 'member')`,
+    [OPERATIONS_WORKSPACE_ID, ALICE_USER_ID, BOB_USER_ID],
+  );
+  await postgres.query(
+    `INSERT INTO memberships (workspace_id, user_id, role)
+     VALUES ($1, $2, 'owner')`,
+    [RESEARCH_WORKSPACE_ID, CAROL_USER_ID],
+  );
   await postgres.exec("SET ROLE lore_app");
 
-  function databaseForRole(role: "lore_app" | "lore_maintenance" | "NONE"): LoreDatabase {
+  function databaseForRole(role: "lore_app" | "lore_maintenance" | "NONE"): PostgresDatabase {
     return {
       transaction: (use) =>
-        drizzleDatabase.transaction(async (transaction) => {
-          await transaction.execute(sql.raw(`SET LOCAL ROLE ${role}`));
+        postgres.transaction(async (transaction) => {
+          await transaction.query(`SET LOCAL ROLE ${role}`);
           return use({
-            async execute<Row>(statement: SQLWrapper) {
-              try {
-                const result = await transaction.execute<Record<string, unknown>>(statement);
-                return { rows: result.rows as Row[] };
-              } catch (error) {
-                throwDatabaseCause(error);
-              }
-            },
+            query: (sql, params) => transaction.query(sql, params),
           });
         }),
     };
@@ -87,15 +96,12 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
     suspendMembership: async (actor) => {
       await postgres.exec("RESET ROLE");
       try {
-        await drizzleDatabase
-          .update(schema.memberships)
-          .set({ status: "suspended", updatedAt: sql`now()` })
-          .where(
-            and(
-              eq(schema.memberships.workspaceId, actor.workspaceId),
-              eq(schema.memberships.userId, actor.userId),
-            ),
-          );
+        await postgres.query(
+          `UPDATE memberships
+           SET status = 'suspended', updated_at = now()
+           WHERE workspace_id = $1 AND user_id = $2`,
+          [actor.workspaceId, actor.userId],
+        );
       } finally {
         await postgres.exec("SET ROLE lore_app");
       }

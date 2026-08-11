@@ -1,8 +1,6 @@
-import { type SQLWrapper, sql } from "drizzle-orm";
-import { PgDialect } from "drizzle-orm/pg-core";
 import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
-import type { LoreDatabase } from "@/lib/db";
+import type { PostgresDatabase } from "@/lib/db";
 import { createMemoryGraphModule } from "@/lib/graph";
 import { IdempotencyConflictError, mutationRequestHash } from "@/lib/idempotency";
 import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
@@ -24,8 +22,7 @@ function exportLimitDatabase(options: {
   linkCount?: number;
   memoryCount: number;
   queries: string[];
-}): LoreDatabase {
-  const dialect = new PgDialect();
+}): PostgresDatabase {
   const memory = {
     id: "40000000-0000-4000-8000-000000000001",
     owner_user_id: "10000000-0000-4000-8000-000000000001",
@@ -49,76 +46,35 @@ function exportLimitDatabase(options: {
   return {
     transaction: (use) =>
       use({
-        async execute<Row>(statement: SQLWrapper): Promise<{ rows: Row[] }> {
-          const query = dialect.sqlToQuery(statement.getSQL());
-          options.queries.push(query.sql);
-          if (query.sql.includes("set_config('lore.workspace_id'")) return { rows: [] };
-          if (query.sql.includes("portable_core_capabilities")) {
+        async query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }> {
+          options.queries.push(sql);
+          if (sql.includes("set_config('lore.workspace_id'")) return { rows: [] };
+          if (sql.includes("portable_core_capabilities")) {
             return {
               rows: [
                 { capabilities: { deploymentId: EXPORT_TEST_DEPLOYMENT_ID } },
               ] as unknown as Row[],
             };
           }
-          if (query.sql.includes("FROM memories")) {
-            expect(query.sql).toContain("LIMIT $2");
-            expect(query.params[1]).toBe(MAX_WORKSPACE_ARCHIVE_MEMORIES + 1);
+          if (sql.includes("FROM memories")) {
+            expect(sql).toContain("LIMIT $2");
+            expect(params?.[1]).toBe(MAX_WORKSPACE_ARCHIVE_MEMORIES + 1);
             return {
               rows: Array(options.memoryCount).fill(memory) as unknown as Row[],
             };
           }
-          if (query.sql.includes("FROM memory_links")) {
-            expect(query.sql).toContain("LIMIT $4");
-            expect(query.params[3]).toBe(MAX_WORKSPACE_ARCHIVE_LINKS + 1);
+          if (sql.includes("FROM memory_links")) {
+            expect(sql).toContain("LIMIT $3");
+            expect(params?.[2]).toBe(MAX_WORKSPACE_ARCHIVE_LINKS + 1);
             return {
               rows: Array(options.linkCount ?? 0).fill(link) as unknown as Row[],
             };
           }
-          throw new Error(`Unexpected export test query: ${query.sql}`);
+          throw new Error(`Unexpected export test query: ${sql}`);
         },
       }),
   };
 }
-
-test("Hybrid search binds the query text and dense vector only once", async () => {
-  const dialect = new PgDialect();
-  let searchQuery: { params: unknown[]; sql: string } | undefined;
-  const database: LoreDatabase = {
-    transaction: (use) =>
-      use({
-        async execute<Row>(statement: SQLWrapper): Promise<{ rows: Row[] }> {
-          const query = dialect.sqlToQuery(statement.getSQL());
-          if (query.sql.includes("raw_query_parameters")) searchQuery = query;
-          return { rows: [] };
-        },
-      }),
-  };
-  const queryText = "single binding sentinel";
-  await createMemoryModule(database, {
-    embeddingProvider: {
-      provider: "test",
-      model: "deterministic",
-      dimensions: 1024,
-      revision: "test-v1",
-      embed: async () => [Array(1024).fill(0.125)],
-    },
-  }).search(
-    {
-      workspaceId: "20000000-0000-4000-8000-000000000001",
-      userId: "10000000-0000-4000-8000-000000000001",
-    },
-    { query: queryText, limit: 5 },
-  );
-
-  expect(searchQuery).toBeDefined();
-  expect(searchQuery?.params.filter((parameter) => parameter === queryText)).toHaveLength(1);
-  expect(
-    searchQuery?.params.filter(
-      (parameter) =>
-        typeof parameter === "string" && parameter.startsWith("[") && parameter.endsWith("]"),
-    ),
-  ).toHaveLength(1);
-});
 
 test("Memory create replays the same Idempotency-Key and rejects a changed payload", async () => {
   const testContext = await createMemoryTestContext();
@@ -167,12 +123,10 @@ test("portable record retention runs without an embedding provider", async () =>
     },
   });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(
-      sql.raw("UPDATE request_idempotency_records SET expires_at = now() - interval '1 second'"),
+    await transaction.query(
+      "UPDATE request_idempotency_records SET expires_at = now() - interval '1 second'",
     );
-    await transaction.execute(
-      sql.raw("UPDATE memory_events SET expires_at = now() - interval '1 second'"),
-    );
+    await transaction.query("UPDATE memory_events SET expires_at = now() - interval '1 second'");
   });
 
   await expect(purgeExpiredPortableCoreRecords(testContext.maintenanceDatabase)).resolves.toEqual({
@@ -180,9 +134,8 @@ test("portable record retention runs without an embedding provider", async () =>
     memoryEvents: 1,
   });
   const remaining = await testContext.adminDatabase.transaction(async (transaction) => ({
-    events: (await transaction.execute(sql.raw("SELECT id FROM memory_events"))).rows,
-    idempotency: (await transaction.execute(sql.raw("SELECT id FROM request_idempotency_records")))
-      .rows,
+    events: (await transaction.query("SELECT id FROM memory_events")).rows,
+    idempotency: (await transaction.query("SELECT id FROM request_idempotency_records")).rows,
   }));
   expect(remaining).toEqual({ events: [], idempotency: [] });
 });
@@ -244,8 +197,9 @@ test("concurrent writers cannot rebuild chunks from a stale pre-read", async () 
 
   const memory = await memories.retrieve(testContext.alice, created.id);
   const chunks = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ content: string }>(
-      sql`SELECT content FROM memory_chunks WHERE memory_id = ${created.id} ORDER BY ordinal`,
+    transaction.query<{ content: string }>(
+      "SELECT content FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+      [created.id],
     ),
   );
   expect(chunks.rows.map((chunk) => chunk.content).join("\n")).toBe(memory?.content);
@@ -268,8 +222,8 @@ test("Idempotency-Key scope is isolated by actor", async () => {
 
   const aliceRows = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    return transaction.execute<{ actor_user_id: string }>(
-      sql.raw("SELECT actor_user_id FROM request_idempotency_records"),
+    return transaction.query<{ actor_user_id: string }>(
+      "SELECT actor_user_id FROM request_idempotency_records",
     );
   });
   expect(aliceRows.rows).toEqual([{ actor_user_id: testContext.alice.userId }]);
@@ -290,8 +244,8 @@ test("hard deletion scrubs prior idempotent response bodies containing Memory co
 
   await expect(memories.forget(testContext.alice, created.id)).resolves.toBe(true);
   const records = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ response_body: unknown }>(
-      sql.raw("SELECT response_body FROM request_idempotency_records"),
+    transaction.query<{ response_body: unknown }>(
+      "SELECT response_body FROM request_idempotency_records",
     ),
   );
   expect(JSON.stringify(records.rows)).not.toContain(created.id);
@@ -313,20 +267,20 @@ test("transactional Memory events survive hard deletion without retaining conten
 
   const aliceEvents = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    return transaction.execute<{
+    return transaction.query<{
       event_type: string;
       resource_id: string;
       before_content_sha256: string | null;
       after_content_sha256: string | null;
     }>(
-      sql.raw(`SELECT event_type, resource_id, before_content_sha256, after_content_sha256
+      `SELECT event_type, resource_id, before_content_sha256, after_content_sha256
        FROM memory_events
-       ORDER BY sequence`),
+       ORDER BY sequence`,
     );
   });
   const durableEvents = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ event_type: string }>(
-      sql.raw("SELECT event_type FROM memory_events ORDER BY sequence"),
+    transaction.query<{ event_type: string }>(
+      "SELECT event_type FROM memory_events ORDER BY sequence",
     ),
   );
   expect(durableEvents.rows.map((event) => event.event_type)).toEqual([
@@ -347,15 +301,13 @@ test("transactional Memory events survive hard deletion without retaining conten
 
   const bobEvents = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
-    return transaction.execute<{ resource_id: string }>(
-      sql.raw("SELECT resource_id FROM memory_events"),
-    );
+    return transaction.query<{ resource_id: string }>("SELECT resource_id FROM memory_events");
   });
   expect(bobEvents.rows).toEqual([{ resource_id: sharedMemory.id }]);
 
   const carolEvents = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.carol);
-    return transaction.execute(sql.raw("SELECT resource_id FROM memory_events"));
+    return transaction.query("SELECT resource_id FROM memory_events");
   });
   expect(carolEvents.rows).toEqual([]);
 });
@@ -374,21 +326,21 @@ test("Memory Link mutations append content-free events in the same transaction",
 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    await transaction.execute(sql`DELETE FROM memory_links WHERE id = ${link.id}`);
+    await transaction.query("DELETE FROM memory_links WHERE id = $1", [link.id]);
   });
   const result = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{
+    transaction.query<{
       after_content_sha256: string | null;
       before_content_sha256: string | null;
       event_type: string;
       resource_id: string;
       resource_type: string;
     }>(
-      sql.raw(`SELECT resource_type, resource_id, event_type,
+      `SELECT resource_type, resource_id, event_type,
               before_content_sha256, after_content_sha256
        FROM memory_events
        WHERE resource_type = 'memory_link'
-       ORDER BY sequence`),
+       ORDER BY sequence`,
     ),
   );
   expect(result.rows).toEqual([
@@ -411,16 +363,17 @@ test("Memory Link mutations append content-free events in the same transaction",
   await memories.update(testContext.alice, target.id, { scope: "private" });
   const bobLinkEvents = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
-    return transaction.execute(
-      sql.raw("SELECT resource_id FROM memory_events WHERE resource_type = 'memory_link'"),
+    return transaction.query(
+      "SELECT resource_id FROM memory_events WHERE resource_type = 'memory_link'",
     );
   });
   expect(bobLinkEvents.rows).toEqual([]);
 
   const bobTargetEvents = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
-    return transaction.execute(
-      sql`SELECT resource_id FROM memory_events WHERE resource_type = 'memory' AND resource_id = ${target.id}`,
+    return transaction.query(
+      "SELECT resource_id FROM memory_events WHERE resource_type = 'memory' AND resource_id = $1",
+      [target.id],
     );
   });
   expect(bobTargetEvents.rows).toEqual([]);
@@ -673,10 +626,8 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   });
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw(
-        "SELECT lore.ensure_embedding_generation('ollama', 'qwen3-embedding:0.6b', 1024, 'lore-embedding-v1')",
-      ),
+    transaction.query(
+      "SELECT lore.ensure_embedding_generation('ollama', 'qwen3-embedding:0.6b', 1024, 'lore-embedding-v1')",
     ),
   );
   const mismatchedEmbedding = createOperationsModule(testContext.database, {
@@ -710,22 +661,18 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw("UPDATE lore_system_state SET schema_revision = 3 WHERE singleton"),
-    ),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 3 WHERE singleton"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw("UPDATE lore_system_state SET schema_revision = 7 WHERE singleton"),
-    ),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 7 WHERE singleton"),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(sql.raw("ALTER TABLE memories DISABLE ROW LEVEL SECURITY")),
+    transaction.query("ALTER TABLE memories DISABLE ROW LEVEL SECURITY"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",

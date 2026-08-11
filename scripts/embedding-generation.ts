@@ -1,4 +1,4 @@
-import { createDrizzleDatabase } from "../src/lib/db/drizzle";
+import { createPostgresDatabase } from "../src/lib/db/postgres";
 import {
   embeddingBuildEnvironment,
   embeddingConfigurationFromEnvironment,
@@ -16,7 +16,7 @@ const provider = {
     throw new Error("Generation administration does not call the embedding provider");
   },
 };
-const database = createDrizzleDatabase({ connectionString }, { role: "lore_maintenance" });
+const database = createPostgresDatabase({ connectionString }, { role: "lore_maintenance" });
 try {
   const maintenance = createMemoryMaintenanceModule(database, { embeddingProvider: provider });
   const command = process.argv[2] ?? "report";
