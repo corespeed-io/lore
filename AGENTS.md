@@ -31,9 +31,9 @@ been removed. Lore now has a native implementation:
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
   transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock, stores SHA-256 values beside dbmate's
-  versions in `lore_schema_migrations`, and can adopt the exact earlier SQL or
-  Drizzle ledger without replaying DDL or changing tenant data. Keep migration
-  `down` sections empty: production recovery is forward-only;
+  versions in `lore_schema_migrations`, and can adopt the exact earlier SQL ledger
+  without replaying DDL or changing tenant data. Keep migration `down` sections
+  empty: production recovery is forward-only;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent

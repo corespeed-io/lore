@@ -269,10 +269,9 @@ worker. CoreSpeed Cloud uses Cloudflare Workers native observability from
 `bun run db:migrate` runs the same preflight as `bun run db:preflight` before taking
 the migration lock. dbmate owns SQL parsing and application; Lore owns the advisory
 lock, schema compatibility checks, and SHA-256 values stored beside dbmate versions
-in `lore_schema_migrations`. An exact earlier `schema_migrations` history or the
-short-lived Drizzle cutover journal is adopted transactionally by seeding the new
-ledger and removing only the obsolete ledger. Tenant tables and their data are never
-rebuilt or replayed during adoption.
+in `lore_schema_migrations`. An exact earlier `schema_migrations` history is adopted
+transactionally by seeding the new ledger and removing only the obsolete ledger.
+Tenant tables and their data are never rebuilt or replayed during adoption.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

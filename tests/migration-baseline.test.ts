@@ -1,11 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
-  DRIZZLE_CUTOVER,
   hasCompleteLegacyBaseline,
   LEGACY_BASELINE_MIGRATIONS,
   PRE_DBMATE_MIGRATIONS,
   preDbmateAdoption,
-  verifyDrizzleCutover,
 } from "../scripts/migration-baseline.mjs";
 
 const completeLegacyHistory = [...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({
@@ -53,14 +51,5 @@ describe("data-preserving dbmate adoption", () => {
       .filter(([id]) => !id.startsWith("0002"))
       .map(([id, checksum]) => ({ id, checksum }));
     expect(() => preDbmateAdoption(rows)).toThrow("missing migration 0002");
-  });
-
-  test("accepts only the exact merged Drizzle baseline", () => {
-    expect(() =>
-      verifyDrizzleCutover([{ hash: DRIZZLE_CUTOVER.hash, created_at: DRIZZLE_CUTOVER.createdAt }]),
-    ).not.toThrow();
-    expect(() =>
-      verifyDrizzleCutover([{ hash: "modified", created_at: DRIZZLE_CUTOVER.createdAt }]),
-    ).toThrow("exact Lore cutover baseline");
   });
 });

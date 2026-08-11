@@ -3,7 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
 import { adoptMigrationHistory, migrationFiles } from "../scripts/lib/migration-preflight.mjs";
-import { DRIZZLE_CUTOVER, PRE_DBMATE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
+import { PRE_DBMATE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
 
 const migrationsUrl = new URL("../db/migrations/", import.meta.url);
 
@@ -78,31 +78,4 @@ test("dbmate adopts the exact SQL ledger without changing Memory data", async ()
   await expect(
     postgres.query("SELECT to_regclass('public.schema_migrations') AS relation"),
   ).resolves.toMatchObject({ rows: [{ relation: null }] });
-});
-
-test("dbmate adopts the exact Drizzle ledger without replaying schema DDL", async () => {
-  const postgres = await migratedDatabase();
-  await postgres.exec(`
-    CREATE SCHEMA drizzle;
-    CREATE TABLE drizzle.__drizzle_migrations (
-      id serial PRIMARY KEY,
-      hash text NOT NULL,
-      created_at bigint NOT NULL
-    );
-  `);
-  await postgres.query(
-    "INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)",
-    [DRIZZLE_CUTOVER.hash, DRIZZLE_CUTOVER.createdAt],
-  );
-
-  await expect(adoptMigrationHistory(postgres, await migrationFiles())).resolves.toEqual({
-    adopted: true,
-    source: "drizzle",
-  });
-  await expect(
-    postgres.query("SELECT to_regnamespace('drizzle') AS namespace"),
-  ).resolves.toMatchObject({ rows: [{ namespace: null }] });
-  await expect(
-    postgres.query("SELECT count(*)::integer AS count FROM lore_schema_migrations"),
-  ).resolves.toMatchObject({ rows: [{ count: 9 }] });
 });

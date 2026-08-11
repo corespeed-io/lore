@@ -64,12 +64,6 @@ export const LEGACY_BASELINE_MIGRATIONS = new Map([
   ],
 ]);
 
-export const DRIZZLE_CUTOVER = {
-  hash: "5ed7330b7da0b598120e1fabbda090c997ef362d91829cb63bc68e7eae027f1d",
-  createdAt: 1_786_471_877_999,
-  schemaRevision: 9,
-};
-
 function exactHistory(rows, expected, label) {
   if (rows.length !== expected.size) {
     throw new Error(`Cannot adopt ${label}: found ${rows.length} of ${expected.size} migrations`);
@@ -122,14 +116,4 @@ export function preDbmateAdoption(rows) {
     kind: "pre-dbmate",
     versions: expectedEntries.slice(0, highestApplied + 1).map(([id]) => /^([0-9]+)/.exec(id)?.[1]),
   };
-}
-
-export function verifyDrizzleCutover(rows) {
-  if (
-    rows.length !== 1 ||
-    rows[0]?.hash !== DRIZZLE_CUTOVER.hash ||
-    Number(rows[0]?.created_at) !== DRIZZLE_CUTOVER.createdAt
-  ) {
-    throw new Error("Cannot adopt Drizzle history: expected the exact Lore cutover baseline");
-  }
 }

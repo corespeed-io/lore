@@ -1,12 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import {
-  DBMATE_MIGRATIONS_TABLE,
-  DRIZZLE_CUTOVER,
-  preDbmateAdoption,
-  verifyDrizzleCutover,
-} from "../migration-baseline.mjs";
+import { DBMATE_MIGRATIONS_TABLE, preDbmateAdoption } from "../migration-baseline.mjs";
 
 export const MINIMUM_POSTGRES_VERSION = 150000;
 export const LATEST_SCHEMA_REVISION = 9;
@@ -109,11 +104,10 @@ export async function inspectMigrationHistory(client, migrations) {
   // pg@9 does not reject concurrent client.query calls.
   const dbmateExists = await relationExists(client, `public.${DBMATE_MIGRATIONS_TABLE}`);
   const legacyExists = await relationExists(client, "public.schema_migrations");
-  const drizzleExists = await relationExists(client, "drizzle.__drizzle_migrations");
   const domainExists = await relationExists(client, "public.memories");
   const revision = await readSchemaRevision(client);
 
-  const histories = [dbmateExists, legacyExists, drizzleExists].filter(Boolean).length;
+  const histories = [dbmateExists, legacyExists].filter(Boolean).length;
   if (histories > 1) {
     return {
       kind: "invalid",
@@ -184,33 +178,6 @@ export async function inspectMigrationHistory(client, migrations) {
     }
   }
 
-  if (drizzleExists) {
-    const result = await client.query(
-      "SELECT hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at",
-    );
-    try {
-      verifyDrizzleCutover(result.rows);
-      if (revision !== DRIZZLE_CUTOVER.schemaRevision) {
-        throw new Error(
-          `Cannot adopt Drizzle history: schema revision ${revision ?? "missing"}; expected ${DRIZZLE_CUTOVER.schemaRevision}`,
-        );
-      }
-      return {
-        kind: "drizzle",
-        ok: true,
-        detail: "exact Drizzle cutover verified; ready for data-preserving adoption",
-        revision,
-      };
-    } catch (error) {
-      return {
-        kind: "invalid",
-        ok: false,
-        detail: error instanceof Error ? error.message : "invalid Drizzle history",
-        revision,
-      };
-    }
-  }
-
   if (domainExists || revision !== null) {
     return {
       kind: "invalid",
@@ -260,13 +227,6 @@ export async function adoptMigrationHistory(client, migrations) {
       }
       await seedDbmateHistory(client, history.adoption.versions, migrations);
       await client.query("DROP TABLE public.schema_migrations");
-    } else if (history.kind === "drizzle") {
-      await seedDbmateHistory(
-        client,
-        migrations.map((migration) => migration.version),
-        migrations,
-      );
-      await client.query("DROP SCHEMA drizzle CASCADE");
     }
     await client.query("COMMIT");
     return { adopted: history.kind !== "fresh", source: history.kind };
