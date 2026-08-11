@@ -30,7 +30,8 @@ bun run preview:cloudflare # Preview the Workers build through workerd
 ```
 
 All core commands must pass before opening a pull request; changes to deployment or
-server runtime code must also pass the OpenNext/Wrangler dry run from `README.md`.
+server runtime code must also pass the
+[OpenNext/Wrangler dry run](../docs/reference.md#verify-changes).
 
 ```bash
 bun run typecheck && bun run lint && bun run test && bun run build

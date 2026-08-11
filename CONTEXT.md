@@ -53,7 +53,8 @@ applicable; provenance does not determine ownership or visibility.
 _Avoid_: Ownership, permission
 
 **Scope**:
-A Memory's visibility classification: shared or private.
+A Memory or Episode's visibility classification: shared or private. Observations
+inherit their Episode's scope.
 _Avoid_: Access role, Agent scope
 
 **Shared Memory**:
@@ -72,6 +73,31 @@ define a human-readable `metadata.reference`; imports may preserve their source
 reference in provenance metadata; otherwise its UUID is the reference. Ambiguous
 or unreadable references never resolve.
 _Avoid_: Global slug, authorization key, gbrain page slug
+
+**Episode**:
+A bounded, ordered recording of one real-world interaction or ingest session in a
+Workspace. An Episode groups its Observations but is not an Actor, a Memory, or a
+generic content source.
+_Avoid_: Source, Agent session, conversation Memory
+
+**Observation**:
+An immutable, durable piece of evidence recorded inside one Episode, such as a
+message, tool result, document fragment, or event. It remains until explicitly
+forgotten, may support a Memory Proposal, and is not canonical Memory.
+_Avoid_: Source, raw Memory, automatic Memory
+
+**Memory Proposal**:
+A content-bearing suggestion to create or change a canonical Memory, submitted by
+an Actor for review by its owner User. It is owner-private, may cite only Memories
+and Observations visible to its submitting Actor, and binds an update to one exact
+Memory version. A proposal is not searchable Memory and cannot change canonical
+Memory until that User explicitly accepts it. Acceptance also requires every cited
+Observation to remain visible; a content-free cited id survives explicit forget so
+missing raw evidence cannot be silently ignored. Each owner has at most 100 pending
+proposals in one Workspace; reviewing one frees capacity for another submission.
+Pending and reviewed proposal content expires after 30 days. Forgetting a target or
+accepted Memory removes its associated proposal content immediately.
+_Avoid_: Draft Memory, automatic Memory, AutoDream result
 
 ## Graph
 

@@ -5,11 +5,15 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { typeColor } from "@/lib/colors";
 import type { GraphData, GraphNode } from "@/lib/types";
-import { mountGraph } from "@/lib/viz/graph";
+import { type GraphInstance, graphLabelText, mountGraph } from "@/lib/viz/graph";
+import { graphNodeCentrality } from "@/lib/viz/graph-centrality";
 
 export type PrototypeVariant = "canvas" | "worker" | "svg";
 
 interface PositionedNode extends GraphNode {
+  degree: number;
+  gravity: number;
+  hub: boolean;
   x: number;
   y: number;
   radius: number;
@@ -33,6 +37,7 @@ interface PositionDelta {
 type PositionSink = (delta: PositionDelta) => void;
 type LayoutPreviewSink = (delta: Omit<PositionDelta, "lockedId">) => void;
 type LayoutCompleteSink = () => void;
+type GraphInstanceSink = (instance: GraphInstance | null) => void;
 
 interface CanvasDragSubject {
   node: PositionedNode;
@@ -43,10 +48,12 @@ interface CanvasDragSubject {
 const LAYOUT_WIDTH = 1_600;
 const LAYOUT_HEIGHT = 1_000;
 const COLLISION_GAP = 13;
+const PRODUCTION_COLLISION_GAP = 12;
 const MIN_COLLISION_RADIUS = 4 + COLLISION_GAP;
 const MAX_COLLISION_RADIUS = 16 + COLLISION_GAP;
 const MAX_RENDERED_LINKS = 40_000;
 const LAYOUT_REVEAL_TRANSITION_MS = 220;
+const WORKER_READY_TIMEOUT_MS = 30_000;
 const INITIAL_REVEAL_FIT_RATIO = 0.02;
 const INITIAL_REVEAL_FIT_MIN_NODES = 64;
 const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
@@ -67,26 +74,18 @@ const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] =
   },
 ];
 
-function nodeDegrees(data: GraphData) {
-  const degrees = new Map<string, number>();
-  for (const link of data.links) {
-    degrees.set(link.source, (degrees.get(link.source) ?? 0) + 1);
-    degrees.set(link.target, (degrees.get(link.target) ?? 0) + 1);
-  }
-  return degrees;
-}
-
 function staticPositions(data: GraphData): PositionedNode[] {
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-  const degrees = nodeDegrees(data);
+  const centrality = graphNodeCentrality(data.nodes, data.links);
   return data.nodes.map((node, index) => {
-    const radius = 8.2 * Math.sqrt(index);
+    const metric = centrality.get(node.id) ?? { degree: 0, gravity: 0, hub: false, radius: 4 };
+    const placementRadius = 8.2 * Math.sqrt(index);
     const angle = index * goldenAngle;
     return {
       ...node,
-      x: LAYOUT_WIDTH / 2 + Math.cos(angle) * radius,
-      y: LAYOUT_HEIGHT / 2 + Math.sin(angle) * radius,
-      radius: 4 + Math.min(12, (degrees.get(node.id) ?? 0) * 1.1),
+      ...metric,
+      x: LAYOUT_WIDTH / 2 + Math.cos(angle) * placementRadius,
+      y: LAYOUT_HEIGHT / 2 + Math.sin(angle) * placementRadius,
     };
   });
 }
@@ -96,19 +95,25 @@ function CanvasRenderer({
   nodes,
   onMetrics,
   onNodeDrag,
+  onSelect,
+  registerGraphInstance,
   registerPositionSink,
   layoutPending = false,
   registerLayoutPreviewSink,
   registerLayoutCompleteSink,
+  production = false,
 }: {
   data: GraphData;
   nodes: PositionedNode[];
   onMetrics: (metrics: RenderMetrics) => void;
   onNodeDrag?: (event: NodeDragEvent) => void;
+  onSelect?: (memoryId: string | null) => void;
+  registerGraphInstance?: GraphInstanceSink;
   registerPositionSink?: (sink: PositionSink | null) => void;
   layoutPending?: boolean;
   registerLayoutPreviewSink?: (sink: LayoutPreviewSink | null) => void;
   registerLayoutCompleteSink?: (sink: LayoutCompleteSink | null) => void;
+  production?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -120,6 +125,14 @@ function CanvasRenderer({
     const mutableNodes = nodes.map((node) => ({ ...node }));
     const nodeById = new Map(mutableNodes.map((node) => [node.id, node]));
     const nodeIndexById = new Map(mutableNodes.map((node, index) => [node.id, index]));
+    const adjacentIds = new Map(mutableNodes.map((node) => [node.id, new Set([node.id])]));
+    for (const link of data.links) {
+      adjacentIds.get(link.source)?.add(link.target);
+      adjacentIds.get(link.target)?.add(link.source);
+    }
+    const labelOrder = [...mutableNodes].sort(
+      (left, right) => right.radius - left.radius || left.label.localeCompare(right.label),
+    );
     const visibleNodeMask = layoutPending ? new Uint8Array(mutableNodes.length) : null;
     const revealStartedAt = layoutPending ? new Float64Array(mutableNodes.length).fill(-1) : null;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -143,6 +156,11 @@ function CanvasRenderer({
     let dragged: PositionedNode | null = null;
     let revealedNodeCount = 0;
     let previewFitStarted = false;
+    let activeIds: Set<string> | null = null;
+    let selectedId: string | null = null;
+    let hoveredId: string | null = null;
+    let layoutReady = !layoutPending;
+    let measured = false;
 
     const currentLayoutBounds = (visibleOnly = false) =>
       mutableNodes.reduce(
@@ -172,71 +190,174 @@ function CanvasRenderer({
         width + MAX_COLLISION_RADIUS,
         height + MAX_COLLISION_RADIUS,
       ]);
-
-      context.beginPath();
-      let renderedLinks = 0;
-      for (const link of renderLinks) {
-        const source = nodeById.get(link.source);
-        const target = nodeById.get(link.target);
-        if (!source || !target) continue;
-        if (
-          visibleNodeMask &&
-          (!visibleNodeMask[nodeIndexById.get(source.id) ?? -1] ||
-            !visibleNodeMask[nodeIndexById.get(target.id) ?? -1])
-        ) {
-          continue;
-        }
-        if (
-          Math.max(source.x, target.x) < minimumX ||
-          Math.min(source.x, target.x) > maximumX ||
-          Math.max(source.y, target.y) < minimumY ||
-          Math.min(source.y, target.y) > maximumY
-        ) {
-          continue;
-        }
-        context.moveTo(source.x, source.y);
-        context.lineTo(target.x, target.y);
-        renderedLinks += 1;
-      }
-      context.strokeStyle = "rgba(23, 23, 23, 0.085)";
-      context.lineWidth = 0.72 / transform.k;
-      context.stroke();
-
-      let renderedNodes = 0;
-      let revealAnimationActive = false;
+      const focusId = selectedId ?? hoveredId;
+      const focusedIds = focusId ? adjacentIds.get(focusId) : null;
       const revealNow = performance.now();
-      for (const [type, typedNodes] of groups) {
+      let revealAnimationActive = false;
+
+      const nodeIsVisible = (node: PositionedNode) => {
+        const nodeIndex = nodeIndexById.get(node.id) ?? -1;
+        if (visibleNodeMask && !visibleNodeMask[nodeIndex]) return false;
+        return !(
+          node.x + node.radius < minimumX ||
+          node.x - node.radius > maximumX ||
+          node.y + node.radius < minimumY ||
+          node.y - node.radius > maximumY
+        );
+      };
+      const visibleRadius = (node: PositionedNode) => {
+        const nodeIndex = nodeIndexById.get(node.id) ?? -1;
+        const revealProgress = revealStartedAt
+          ? Math.min(
+              1,
+              Math.max(
+                0,
+                (revealNow - (revealStartedAt[nodeIndex] ?? 0)) / LAYOUT_REVEAL_TRANSITION_MS,
+              ),
+            )
+          : 1;
+        if (revealProgress < 1) revealAnimationActive = true;
+        return node.radius * (1 - (1 - revealProgress) ** 3);
+      };
+
+      const drawLinks = (focusedOnly: boolean) => {
         context.beginPath();
-        for (const node of typedNodes) {
-          const nodeIndex = nodeIndexById.get(node.id) ?? -1;
-          if (visibleNodeMask && !visibleNodeMask[nodeIndex]) continue;
+        let count = 0;
+        for (const link of renderLinks) {
+          const source = nodeById.get(link.source);
+          const target = nodeById.get(link.target);
+          if (!source || !target) continue;
           if (
-            node.x + node.radius < minimumX ||
-            node.x - node.radius > maximumX ||
-            node.y + node.radius < minimumY ||
-            node.y - node.radius > maximumY
+            visibleNodeMask &&
+            (!visibleNodeMask[nodeIndexById.get(source.id) ?? -1] ||
+              !visibleNodeMask[nodeIndexById.get(target.id) ?? -1])
           ) {
             continue;
           }
-          const revealProgress = revealStartedAt
-            ? Math.min(
-                1,
-                Math.max(
-                  0,
-                  (revealNow - (revealStartedAt[nodeIndex] ?? 0)) / LAYOUT_REVEAL_TRANSITION_MS,
-                ),
-              )
-            : 1;
-          const revealScale = 1 - (1 - revealProgress) ** 3;
-          const radius = node.radius * revealScale;
-          if (revealProgress < 1) revealAnimationActive = true;
-          if (radius <= 0) continue;
-          context.moveTo(node.x + radius, node.y);
-          context.arc(node.x, node.y, radius, 0, Math.PI * 2);
-          renderedNodes += 1;
+          if (focusedOnly && link.source !== focusId && link.target !== focusId) continue;
+          if (
+            Math.max(source.x, target.x) < minimumX ||
+            Math.min(source.x, target.x) > maximumX ||
+            Math.max(source.y, target.y) < minimumY ||
+            Math.min(source.y, target.y) > maximumY
+          ) {
+            continue;
+          }
+          context.moveTo(source.x, source.y);
+          context.lineTo(target.x, target.y);
+          count += 1;
         }
-        context.fillStyle = typeColor(type);
-        context.fill();
+        context.strokeStyle = focusedOnly
+          ? "rgba(23, 23, 23, 0.44)"
+          : focusedIds
+            ? "rgba(23, 23, 23, 0.025)"
+            : "rgba(23, 23, 23, 0.085)";
+        context.lineWidth = (focusedOnly ? 1.15 : 0.72) / transform.k;
+        context.stroke();
+        return count;
+      };
+
+      const renderedLinks = drawLinks(false);
+      if (focusedIds) drawLinks(true);
+
+      let renderedNodes = 0;
+      const drawNodeGroups = (focusedOnly: boolean) => {
+        for (const [type, typedNodes] of groups) {
+          context.beginPath();
+          for (const node of typedNodes) {
+            if (!nodeIsVisible(node)) continue;
+            if (focusedOnly && !focusedIds?.has(node.id)) continue;
+            const radius = visibleRadius(node);
+            if (radius <= 0) continue;
+            context.moveTo(node.x + radius, node.y);
+            context.arc(node.x, node.y, radius, 0, Math.PI * 2);
+            if (!focusedOnly) renderedNodes += 1;
+          }
+          context.fillStyle = typeColor(type);
+          context.globalAlpha = focusedOnly ? 1 : focusedIds ? 0.14 : 1;
+          context.fill();
+        }
+        context.globalAlpha = 1;
+      };
+      drawNodeGroups(false);
+      if (focusedIds) drawNodeGroups(true);
+
+      for (const node of mutableNodes) {
+        if (!nodeIsVisible(node)) continue;
+        const isMatch = activeIds?.has(node.id) ?? false;
+        const isSelected = node.id === selectedId;
+        const isHovered = node.id === hoveredId;
+        if (!isMatch && !isSelected && !isHovered) continue;
+        const radius = visibleRadius(node);
+        if (radius <= 0) continue;
+        context.beginPath();
+        context.arc(node.x, node.y, radius + (isSelected ? 4 : 2.5) / transform.k, 0, Math.PI * 2);
+        context.strokeStyle = isSelected ? "#171717" : typeColor(node.type);
+        context.lineWidth = (isSelected ? 2 : 1.5) / transform.k;
+        context.stroke();
+      }
+
+      if (production) {
+        const occupied: { x0: number; x1: number; y0: number; y1: number }[] = [];
+        context.textBaseline = "middle";
+        for (const node of labelOrder) {
+          if (!nodeIsVisible(node)) continue;
+          const directLabel = node.id === selectedId || node.id === hoveredId;
+          if (!directLabel && !activeIds?.has(node.id)) continue;
+          const label = graphLabelText(node.label);
+          const labelHeight = 14;
+          const labelGap = 6;
+          context.font = "500 9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+          const textWidth = context.measureText(label).width;
+          const radius = Math.max(1, visibleRadius(node));
+          const side = node.x > transform.invertX(width / 2) ? -1 : 1;
+          const placements = [
+            {
+              x: node.x + side * (radius + labelGap),
+              y: node.y,
+              align: side > 0 ? ("left" as const) : ("right" as const),
+            },
+            { x: node.x, y: node.y - radius - labelGap, align: "center" as const },
+            { x: node.x, y: node.y + radius + labelGap, align: "center" as const },
+          ];
+          let placement: (typeof placements)[number] | null = null;
+          let bounds: { x0: number; x1: number; y0: number; y1: number } | null = null;
+          for (const candidate of placements) {
+            const x0 =
+              candidate.align === "left"
+                ? candidate.x
+                : candidate.align === "right"
+                  ? candidate.x - textWidth
+                  : candidate.x - textWidth / 2;
+            const candidateBounds = {
+              x0: x0 - 2,
+              x1: x0 + textWidth + 2,
+              y0: candidate.y - labelHeight / 2,
+              y1: candidate.y + labelHeight / 2,
+            };
+            if (
+              directLabel ||
+              !occupied.some(
+                (box) =>
+                  candidateBounds.x0 < box.x1 &&
+                  candidateBounds.x1 > box.x0 &&
+                  candidateBounds.y0 < box.y1 &&
+                  candidateBounds.y1 > box.y0,
+              )
+            ) {
+              placement = candidate;
+              bounds = candidateBounds;
+              break;
+            }
+          }
+          if (!placement || !bounds) continue;
+          occupied.push(bounds);
+          context.textAlign = placement.align;
+          context.fillStyle = "#525252";
+          context.globalAlpha = focusedIds && !focusedIds.has(node.id) ? 0.18 : 0.86;
+          context.fillText(label, placement.x, placement.y);
+          context.globalAlpha = 1;
+        }
       }
 
       if (dragged) {
@@ -343,6 +464,7 @@ function CanvasRenderer({
       .on("start", (event) => {
         const node = event.subject.node;
         dragged = node;
+        if (production) hoveredId = node.id;
         onNodeDrag?.({ phase: "start", id: node.id, x: node.x, y: node.y });
         scheduleDraw();
       })
@@ -355,8 +477,13 @@ function CanvasRenderer({
       })
       .on("end", (event) => {
         const node = event.subject.node;
-        onNodeDrag?.({ phase: "end", id: node.id, x: node.x, y: node.y });
+        const [x, y] = transform.invert([event.x, event.y]);
+        onNodeDrag?.({ phase: "end", id: node.id, x, y });
         dragged = null;
+        if (production) {
+          hoveredId = null;
+          canvas.classList.remove("graph-canvas-node-hover");
+        }
         scheduleDraw();
       });
     const zoomBehavior = d3
@@ -372,11 +499,11 @@ function CanvasRenderer({
       const layoutBounds = currentLayoutBounds(visibleOnly);
       const layoutWidth = Math.max(1, layoutBounds.maxX - layoutBounds.minX);
       const layoutHeight = Math.max(1, layoutBounds.maxY - layoutBounds.minY);
-      const scale = Math.min(
-        (width - padding * 2) / layoutWidth,
-        (height - padding * 2) / layoutHeight,
+      const scale = Math.max(
+        0.0001,
+        Math.min((width - padding * 2) / layoutWidth, (height - padding * 2) / layoutHeight),
       );
-      zoomBehavior.scaleExtent([layoutPending ? 0.0001 : Math.max(0.0001, Math.min(scale, 1)), 8]);
+      zoomBehavior.scaleExtent([layoutReady ? Math.min(scale, 1) : 0.0001, 8]);
       const nextTransform = d3.zoomIdentity
         .translate(
           (width - layoutWidth * scale) / 2 - layoutBounds.minX * scale,
@@ -411,28 +538,108 @@ function CanvasRenderer({
 
     const resize = () => {
       const box = canvas.getBoundingClientRect();
-      width = Math.max(1, box.width);
-      height = Math.max(1, box.height);
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (box.width <= 0 || box.height <= 0) return;
+      const nextWidth = box.width;
+      const nextHeight = box.height;
+      const nextDpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (measured && nextWidth === width && nextHeight === height && nextDpr === dpr) {
+        return;
+      }
+      width = nextWidth;
+      height = nextHeight;
+      dpr = nextDpr;
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
-      fitCanvas();
+      if (!measured) {
+        measured = true;
+        fitCanvas();
+      } else {
+        scheduleDraw();
+      }
     };
 
     const observer = new ResizeObserver(resize);
     selection.call(dragBehavior).call(zoomBehavior);
+    selection.on("dblclick.zoom", null);
+    if (production) {
+      selection
+        .on("pointermove.graph-focus", (event: PointerEvent) => {
+          if (dragged || event.buttons) return;
+          const [screenX, screenY] = d3.pointer(event, canvas);
+          const [worldX, worldY] = transform.invert([screenX, screenY]);
+          const nextId = findNode(worldX, worldY, 12 / transform.k)?.id ?? null;
+          if (nextId === hoveredId) return;
+          hoveredId = nextId;
+          canvas.classList.toggle("graph-canvas-node-hover", Boolean(nextId));
+          scheduleDraw();
+        })
+        .on("pointerleave.graph-focus", () => {
+          if (dragged || !hoveredId) return;
+          hoveredId = null;
+          canvas.classList.remove("graph-canvas-node-hover");
+          scheduleDraw();
+        })
+        .on("click.graph-select", (event: MouseEvent) => {
+          const [screenX, screenY] = d3.pointer(event, canvas);
+          const [worldX, worldY] = transform.invert([screenX, screenY]);
+          const nextId = findNode(worldX, worldY, 12 / transform.k)?.id ?? null;
+          if (nextId) event.stopPropagation();
+          onSelect?.(nextId);
+        })
+        .on("dblclick.graph-fit", (event: MouseEvent) => {
+          const [screenX, screenY] = d3.pointer(event, canvas);
+          const [worldX, worldY] = transform.invert([screenX, screenY]);
+          if (findNode(worldX, worldY, 12 / transform.k)) return;
+          event.preventDefault();
+          fitCanvas(true);
+        });
+    }
     observer.observe(canvas);
     resize();
-    registerLayoutCompleteSink?.(() => fitCanvas(true));
+    registerLayoutCompleteSink?.(() => {
+      layoutReady = true;
+      fitCanvas(true);
+    });
+    registerGraphInstance?.({
+      destroy() {},
+      fit() {
+        fitCanvas(true);
+      },
+      highlight(ids) {
+        activeIds = ids;
+        scheduleDraw();
+      },
+      resetZoom() {
+        selection.call(zoomBehavior.transform, d3.zoomIdentity);
+      },
+      select(id) {
+        selectedId = id;
+        if (id) hoveredId = null;
+        scheduleDraw();
+      },
+      zoomIn() {
+        selection.call(zoomBehavior.scaleBy, 1.25);
+      },
+      zoomOut() {
+        selection.call(zoomBehavior.scaleBy, 0.8);
+      },
+    });
 
     return () => {
       observer.disconnect();
+      registerGraphInstance?.(null);
       registerPositionSink?.(null);
       registerLayoutPreviewSink?.(null);
       registerLayoutCompleteSink?.(null);
       if (frame) cancelAnimationFrame(frame);
       if (fitFrame) cancelAnimationFrame(fitFrame);
-      selection.on(".drag", null).on(".zoom", null);
+      canvas.classList.remove("graph-canvas-node-hover");
+      selection
+        .on(".drag", null)
+        .on(".zoom", null)
+        .on(".graph-focus", null)
+        .on(".graph-select", null)
+        .on(".graph-fit", null);
     };
   }, [
     data.links,
@@ -440,12 +647,21 @@ function CanvasRenderer({
     nodes,
     onMetrics,
     onNodeDrag,
+    onSelect,
+    production,
+    registerGraphInstance,
     registerLayoutPreviewSink,
     registerLayoutCompleteSink,
     registerPositionSink,
   ]);
 
-  return <canvas ref={canvasRef} className="graph-scale-canvas" aria-label="Graph benchmark" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className={`graph-scale-canvas${production ? " graph-canvas" : ""}`}
+      aria-label={production ? "Memory graph" : "Graph benchmark"}
+    />
+  );
 }
 
 function StaticCanvasVariant({ data }: { data: GraphData }) {
@@ -471,8 +687,33 @@ function StaticCanvasVariant({ data }: { data: GraphData }) {
   );
 }
 
-function WorkerCanvasVariant({ data }: { data: GraphData }) {
+export function WorkerCanvasGraph({
+  data,
+  onSelect,
+  registerGraphInstance,
+  production = false,
+  showMetrics = true,
+}: {
+  data: GraphData;
+  onSelect?: (memoryId: string | null) => void;
+  registerGraphInstance?: GraphInstanceSink;
+  production?: boolean;
+  showMetrics?: boolean;
+}) {
   const fallback = useMemo(() => staticPositions(data), [data]);
+  const workerGraph = useMemo(
+    () => ({
+      nodes: fallback.map((node) => ({
+        id: node.id,
+        gravity: node.gravity,
+        hub: node.hub,
+        radius: node.radius,
+      })),
+      links: data.links.map((link) => ({ source: link.source, target: link.target })),
+      collisionGap: production ? PRODUCTION_COLLISION_GAP : COLLISION_GAP,
+    }),
+    [data.links, fallback, production],
+  );
   const workerRef = useRef<Worker | null>(null);
   const positionSinkRef = useRef<PositionSink | null>(null);
   const layoutPreviewSinkRef = useRef<LayoutPreviewSink | null>(null);
@@ -482,7 +723,17 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
     totalTicks: 0,
     revealedNodes: 0,
   });
-  const [layoutMs, setLayoutMs] = useState<number | null>(null);
+  const [completedLayout, setCompletedLayout] = useState<{
+    graph: typeof workerGraph;
+    milliseconds: number;
+  } | null>(null);
+  const layoutMs = completedLayout?.graph === workerGraph ? completedLayout.milliseconds : null;
+  const [layoutFailure, setLayoutFailure] = useState<{
+    graph: typeof workerGraph;
+    message: string;
+  } | null>(null);
+  const layoutError = layoutFailure?.graph === workerGraph ? layoutFailure.message : null;
+  const [workerAttempt, setWorkerAttempt] = useState(0);
   const [layoutTicks, setLayoutTicks] = useState<number | null>(null);
   const [physicsState, setPhysicsState] = useState<"dragging" | "settling" | "settled">("settled");
   const [physicsFrames, setPhysicsFrames] = useState(0);
@@ -498,7 +749,12 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
     renderedNodes: 0,
     renderedLinks: 0,
   });
-  const updateMetrics = useCallback((next: RenderMetrics) => setMetrics(next), []);
+  const updateMetrics = useCallback(
+    (next: RenderMetrics) => {
+      if (showMetrics) setMetrics(next);
+    },
+    [showMetrics],
+  );
   const registerPositionSink = useCallback((sink: PositionSink | null) => {
     positionSinkRef.current = sink;
   }, []);
@@ -511,14 +767,44 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
   const dragNode = useCallback((event: NodeDragEvent) => {
     workerRef.current?.postMessage({ type: `drag-${event.phase}`, ...event });
   }, []);
+  const retryLayout = useCallback(() => {
+    setLayoutFailure(null);
+    setWorkerAttempt((attempt) => attempt + 1);
+  }, []);
 
   useEffect(() => {
-    const worker = new Worker(new URL("./graph-scale.worker.ts", import.meta.url));
+    setLayoutTicks(null);
+    setLayoutProgress({ tick: 0, totalTicks: 0, revealedNodes: 0 });
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./graph-canvas.worker.ts", import.meta.url), {
+        name: `lore-graph-layout-${workerAttempt}`,
+      });
+    } catch {
+      setLayoutFailure({ graph: workerGraph, message: "The graph renderer could not start." });
+      return;
+    }
+    let failed = false;
     let completionTimer: ReturnType<typeof setTimeout> | null = null;
+    let readyTimer: ReturnType<typeof setTimeout> | null = null;
     const revealTransitionMs = window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0
       : LAYOUT_REVEAL_TRANSITION_MS;
+    const failLayout = (message: string) => {
+      if (failed) return;
+      failed = true;
+      if (readyTimer) clearTimeout(readyTimer);
+      if (completionTimer) clearTimeout(completionTimer);
+      if (workerRef.current === worker) workerRef.current = null;
+      worker.terminate();
+      setLayoutFailure({ graph: workerGraph, message });
+    };
     workerRef.current = worker;
+    worker.onerror = (event) => {
+      event.preventDefault();
+      failLayout("The graph renderer stopped unexpectedly.");
+    };
+    worker.onmessageerror = () => failLayout("The graph renderer returned unreadable data.");
     worker.onmessage = (
       event: MessageEvent<
         | {
@@ -546,6 +832,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         | { type: "status"; state: "dragging" | "settling" | "settled" }
       >,
     ) => {
+      if (failed) return;
       if (event.data.type === "progress") {
         layoutPreviewSinkRef.current?.({
           nodeIndices: event.data.nodeIndices,
@@ -564,7 +851,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
           positions: event.data.positions,
           lockedId: event.data.lockedId,
         });
-        if (event.data.frame % 6 === 0 || event.data.activeNodes === 0) {
+        if (showMetrics && (event.data.frame % 6 === 0 || event.data.activeNodes === 0)) {
           setPhysicsFrames(event.data.frame);
           setActiveParticles(event.data.activeNodes);
           setActiveLinks(event.data.activeLinks);
@@ -576,7 +863,7 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
         return;
       }
       if (event.data.type === "status") {
-        if (event.data.state === "dragging") {
+        if (showMetrics && event.data.state === "dragging") {
           setPhysicsFrames(0);
           setActiveParticles(0);
           setActiveLinks(0);
@@ -585,95 +872,127 @@ function WorkerCanvasVariant({ data }: { data: GraphData }) {
           setSimulatedLinks(0);
           setPhysicsFps(0);
         }
-        setPhysicsState(event.data.state);
+        if (showMetrics) setPhysicsState(event.data.state);
         return;
       }
       const result = event.data;
-      setLayoutTicks(result.layoutTicks);
+      if (readyTimer) {
+        clearTimeout(readyTimer);
+        readyTimer = null;
+      }
+      if (showMetrics) setLayoutTicks(result.layoutTicks);
       const completeLayout = () => {
         layoutCompleteSinkRef.current?.();
-        setLayoutMs(result.layoutMs);
+        setCompletedLayout({ graph: workerGraph, milliseconds: result.layoutMs });
       };
       if (revealTransitionMs === 0) completeLayout();
       else completionTimer = setTimeout(completeLayout, revealTransitionMs);
     };
-    worker.postMessage({
-      type: "init",
-      nodes: data.nodes.map((node) => ({ id: node.id })),
-      links: data.links.map((link) => ({ source: link.source, target: link.target })),
-      width: LAYOUT_WIDTH,
-      height: LAYOUT_HEIGHT,
-      collisionGap: COLLISION_GAP,
-    });
+    readyTimer = setTimeout(
+      () => failLayout("The graph layout took too long to finish."),
+      WORKER_READY_TIMEOUT_MS,
+    );
+    try {
+      worker.postMessage({
+        type: "init",
+        nodes: workerGraph.nodes,
+        links: workerGraph.links,
+        width: LAYOUT_WIDTH,
+        height: LAYOUT_HEIGHT,
+        collisionGap: workerGraph.collisionGap,
+      });
+    } catch {
+      failLayout("The graph renderer could not receive the layout data.");
+    }
     return () => {
+      failed = true;
+      if (readyTimer) clearTimeout(readyTimer);
       if (completionTimer) clearTimeout(completionTimer);
-      workerRef.current = null;
+      if (workerRef.current === worker) workerRef.current = null;
       worker.terminate();
     };
-  }, [data]);
+  }, [showMetrics, workerAttempt, workerGraph]);
 
   return (
-    <div className="graph-scale-stage">
+    <div className={production ? "graph-canvas-stage" : "graph-scale-stage"}>
       <CanvasRenderer
         data={data}
         nodes={fallback}
         onMetrics={updateMetrics}
         onNodeDrag={dragNode}
+        onSelect={onSelect}
+        registerGraphInstance={registerGraphInstance}
         registerPositionSink={registerPositionSink}
         layoutPending
         registerLayoutPreviewSink={registerLayoutPreviewSink}
         registerLayoutCompleteSink={registerLayoutCompleteSink}
+        production={production}
       />
       <div
         className={`graph-scale-layout-curtain${layoutMs === null ? "" : " graph-scale-layout-curtain-ready"}`}
-        role="status"
+        role={layoutError ? "alert" : "status"}
         aria-live="polite"
         aria-hidden={layoutMs !== null}
-        aria-label={`Settling memory field, ${layoutProgress.revealedNodes} of ${data.nodes.length} Memories`}
       >
-        <div className="graph-scale-layout-loader">
-          <span className="graph-scale-layout-spinner" aria-hidden="true" />
-          <div>
-            <strong>Settling memory field</strong>
-          </div>
-          <span className="graph-scale-layout-progress" aria-hidden="true">
-            <span
-              style={{
-                width: `${
-                  data.nodes.length > 0
-                    ? (layoutProgress.revealedNodes / data.nodes.length) * 100
-                    : 0
-                }%`,
-              }}
-            />
+        <div
+          className={`graph-scale-layout-loader${layoutError ? " graph-scale-layout-loader-error" : ""}`}
+        >
+          <span
+            className={`graph-scale-layout-spinner${layoutError ? " graph-scale-layout-spinner-error" : ""}`}
+            aria-hidden="true"
+          >
+            {layoutError ? "!" : null}
           </span>
+          <div>
+            <strong>{layoutError ? "Graph layout unavailable" : "Settling memory field"}</strong>
+            {layoutError ? <small>{layoutError}</small> : null}
+          </div>
+          {layoutError ? (
+            <button type="button" className="graph-scale-layout-retry" onClick={retryLayout}>
+              Retry
+            </button>
+          ) : (
+            <span className="graph-scale-layout-progress" aria-hidden="true">
+              <span
+                style={{
+                  width: `${
+                    data.nodes.length > 0
+                      ? (layoutProgress.revealedNodes / data.nodes.length) * 100
+                      : 0
+                  }%`,
+                }}
+              />
+            </span>
+          )}
         </div>
       </div>
-      <div className="graph-scale-render-state">
-        <span>
-          {layoutMs === null
-            ? `worker tick ${layoutProgress.tick}/${layoutProgress.totalTicks || "—"}`
-            : physicsState === "settled"
-              ? "particles settled"
-              : `particles ${physicsState}`}
-        </span>
-        <span>{layoutMs === null ? "main thread free" : `${layoutMs.toFixed(0)}ms layout`}</span>
-        <span>{layoutTicks === null ? "— ticks" : `${layoutTicks} layout ticks`}</span>
-        <span>
-          {MIN_COLLISION_RADIUS}–{MAX_COLLISION_RADIUS}px collision
-        </span>
-        <span>{physicsFrames} physics frames</span>
-        <span>{physicsFps.toFixed(0)} physics fps</span>
-        <span>{activeParticles} active particles</span>
-        <span>{activeLinks} influencing links</span>
-        <span>{simulatedNodes} simulated nodes</span>
-        <span>{simulatedLinks} simulated links</span>
-        <span>{transferredNodes} position deltas/frame</span>
-        <span>{metrics.drawMs.toFixed(1)}ms draw</span>
-        <span>{metrics.renderedNodes.toLocaleString()} visible nodes</span>
-        <span>{metrics.renderedLinks.toLocaleString()} visible links</span>
-        <span>{metrics.frames} frames</span>
-      </div>
+      {showMetrics ? (
+        <div className="graph-scale-render-state">
+          <span>
+            {layoutMs === null
+              ? `worker tick ${layoutProgress.tick}/${layoutProgress.totalTicks || "—"}`
+              : physicsState === "settled"
+                ? "particles settled"
+                : `particles ${physicsState}`}
+          </span>
+          <span>{layoutMs === null ? "main thread free" : `${layoutMs.toFixed(0)}ms layout`}</span>
+          <span>{layoutTicks === null ? "— ticks" : `${layoutTicks} layout ticks`}</span>
+          <span>
+            {MIN_COLLISION_RADIUS}–{MAX_COLLISION_RADIUS}px collision
+          </span>
+          <span>{physicsFrames} physics frames</span>
+          <span>{physicsFps.toFixed(0)} physics fps</span>
+          <span>{activeParticles} active particles</span>
+          <span>{activeLinks} influencing links</span>
+          <span>{simulatedNodes} simulated nodes</span>
+          <span>{simulatedLinks} simulated links</span>
+          <span>{transferredNodes} position deltas/frame</span>
+          <span>{metrics.drawMs.toFixed(1)}ms draw</span>
+          <span>{metrics.renderedNodes.toLocaleString()} visible nodes</span>
+          <span>{metrics.renderedLinks.toLocaleString()} visible links</span>
+          <span>{metrics.frames} frames</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -809,7 +1128,7 @@ export function GraphScalePrototype({ initialVariant }: { initialVariant: Protot
       ) : variant === "canvas" ? (
         <StaticCanvasVariant data={data} />
       ) : variant === "worker" ? (
-        <WorkerCanvasVariant data={data} />
+        <WorkerCanvasGraph data={data} />
       ) : (
         <SvgVariant data={data} />
       )}

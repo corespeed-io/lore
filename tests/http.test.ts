@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import {
+  createActorHandlers,
+  createAgentByIdHandlers,
   createAgentCredentialByIdHandlers,
   createAgentCredentialHandlers,
   createAgentGrantHandlers,
@@ -12,6 +14,7 @@ import {
   createGraphHandlers,
   createMemoryByIdHandlers,
   createMemoryHandlers,
+  createPortabilityHandlers,
   createWorkspaceHandlers,
 } from "@/lib/http";
 import { createMemoryTestContext } from "./support/memory-context";
@@ -77,6 +80,160 @@ test("Human can create a Workspace then write and list native Memories over HTTP
   await testContext.close();
 });
 
+test("Workspace portability HTTP is RLS-scoped, dry-runnable, and human-only", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-portability-user";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const memories = createMemoryHandlers(testContext.database);
+  const agents = createAgentHandlers(testContext.database);
+  const actorHandlers = createActorHandlers(testContext.database);
+  const credentials = createAgentCredentialHandlers(testContext.database);
+  const portability = createPortabilityHandlers(testContext.database);
+  const createWorkspace = async (name: string) =>
+    (await (
+      await workspaces.POST(
+        new Request("http://lore.local/api/workspaces", {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        }),
+      )
+    ).json()) as { id: string };
+  const sourceWorkspace = await createWorkspace("Portability source");
+  const targetWorkspace = await createWorkspace("Portability target");
+  const sourceHeaders = { "x-lore-workspace-id": sourceWorkspace.id };
+  const targetHeaders = { "x-lore-workspace-id": targetWorkspace.id };
+
+  const sourceMemory = (await (
+    await memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers: sourceHeaders,
+        body: JSON.stringify({ content: "Source-only private Memory.", scope: "private" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const targetMemory = (await (
+    await memories.POST(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers: targetHeaders,
+        body: JSON.stringify({ content: "Target-only shared Memory." }),
+      }),
+    )
+  ).json()) as { id: string };
+
+  const sourceExportResponse = await portability.EXPORT(
+    new Request("http://lore.local/api/v1/workspaces/export", { headers: sourceHeaders }),
+  );
+  const sourceArchive = (await sourceExportResponse.json()) as {
+    manifest: { checksum: string };
+    memories: Array<{ id: string; ownerUserId: string }>;
+  };
+  const targetArchive = (await (
+    await portability.EXPORT(
+      new Request("http://lore.local/api/v1/workspaces/export", { headers: targetHeaders }),
+    )
+  ).json()) as { memories: Array<{ id: string }> };
+
+  expect(sourceExportResponse.status).toBe(200);
+  expect(sourceExportResponse.headers.get("cache-control")).toBe("private, no-store");
+  expect(sourceExportResponse.headers.get("content-disposition")).toContain(sourceWorkspace.id);
+  expect(sourceArchive.memories.map((memory) => memory.id)).toEqual([sourceMemory.id]);
+  expect(targetArchive.memories.map((memory) => memory.id)).toEqual([targetMemory.id]);
+
+  const sourceOwnerId = sourceArchive.memories[0]?.ownerUserId;
+  if (!sourceOwnerId) throw new Error("Expected the source archive owner");
+  const humanActorResponse = await actorHandlers.GET(
+    new Request("http://lore.local/api/v1/actor", { headers: targetHeaders }),
+  );
+  expect(humanActorResponse.status).toBe(200);
+  expect(humanActorResponse.headers.get("cache-control")).toBe("private, no-store");
+  await expect(humanActorResponse.json()).resolves.toEqual({
+    kind: "human",
+    userId: sourceOwnerId,
+  });
+  const importBody = {
+    archive: sourceArchive,
+    ownerMap: { [sourceOwnerId]: sourceOwnerId },
+    conflictPolicy: "remap",
+  };
+  const dryRunResponse = await portability.IMPORT(
+    new Request("http://lore.local/api/v1/workspaces/import", {
+      method: "POST",
+      headers: targetHeaders,
+      body: JSON.stringify({ ...importBody, dryRun: true }),
+    }),
+  );
+  expect(dryRunResponse.status).toBe(200);
+  await expect(dryRunResponse.json()).resolves.toMatchObject({
+    dryRun: true,
+    importedMemories: 1,
+  });
+  const beforeImport = await memories.GET(
+    new Request("http://lore.local/api/memories", { headers: targetHeaders }),
+  );
+  await expect(beforeImport.json()).resolves.toHaveLength(1);
+
+  const agent = (await (
+    await agents.POST(
+      new Request("http://lore.local/api/v1/agents", {
+        method: "POST",
+        headers: sourceHeaders,
+        body: JSON.stringify({ name: "Portability probe" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const credential = (await (
+    await credentials.POST(
+      new Request(`http://lore.local/api/v1/agents/${agent.id}/credentials`, {
+        method: "POST",
+        headers: sourceHeaders,
+      }),
+      agent.id,
+    )
+  ).json()) as { token: string };
+  const agentHeaders = {
+    authorization: `Bearer ${credential.token}`,
+    "x-lore-workspace-id": sourceWorkspace.id,
+  };
+  const [agentActor, agentExport, agentImport] = await Promise.all([
+    actorHandlers.GET(new Request("http://lore.local/api/v1/actor", { headers: agentHeaders })),
+    portability.EXPORT(
+      new Request("http://lore.local/api/v1/workspaces/export", { headers: agentHeaders }),
+    ),
+    portability.IMPORT(
+      new Request("http://lore.local/api/v1/workspaces/import", {
+        method: "POST",
+        headers: agentHeaders,
+        body: JSON.stringify({ ...importBody, dryRun: true }),
+      }),
+    ),
+  ]);
+  expect([agentActor.status, agentExport.status, agentImport.status]).toEqual([403, 403, 403]);
+
+  const importResponse = await portability.IMPORT(
+    new Request("http://lore.local/api/v1/workspaces/import", {
+      method: "POST",
+      headers: targetHeaders,
+      body: JSON.stringify({ ...importBody, dryRun: false }),
+    }),
+  );
+  expect(importResponse.status).toBe(200);
+  await expect(importResponse.json()).resolves.toMatchObject({
+    dryRun: false,
+    importedMemories: 1,
+    replayed: false,
+  });
+  const afterImport = await memories.GET(
+    new Request("http://lore.local/api/memories", { headers: targetHeaders }),
+  );
+  await expect(afterImport.json()).resolves.toHaveLength(2);
+
+  await testContext.close();
+});
+
 test("Capabilities verifies Agent credentials and Workspace grants in the handler", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);
@@ -101,7 +258,7 @@ test("Capabilities verifies Agent credentials and Workspace grants in the handle
 
   expect(accepted.status).toBe(200);
   expect(accepted.headers.get("cache-control")).toBe("private, no-store");
-  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 6 });
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 9 });
   expect(shapeOnly.status).toBe(403);
   await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
   expect(revoked.status).toBe(403);
@@ -481,6 +638,7 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
   const testContext = await createMemoryTestContext();
   const workspaces = createWorkspaceHandlers(testContext.database);
   const agents = createAgentHandlers(testContext.database);
+  const agentById = createAgentByIdHandlers(testContext.database);
   const credentials = createAgentCredentialHandlers(testContext.database);
   const credentialById = createAgentCredentialByIdHandlers(testContext.database);
   const grants = createAgentGrantHandlers(testContext.database);
@@ -586,6 +744,21 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
         body: JSON.stringify({ name: "Forbidden assistant", permission: "read" }),
       }),
     ),
+    agentById.PATCH(
+      new Request(`http://lore.local/api/agents/${agent.id}`, {
+        method: "PATCH",
+        headers: agentHeaders,
+        body: JSON.stringify({ name: "Forbidden rename" }),
+      }),
+      agent.id,
+    ),
+    agentById.DELETE(
+      new Request(`http://lore.local/api/agents/${agent.id}`, {
+        method: "DELETE",
+        headers: agentHeaders,
+      }),
+      agent.id,
+    ),
     credentials.GET(
       new Request(`http://lore.local/api/agents/${agent.id}/credentials`, {
         headers: agentHeaders,
@@ -623,7 +796,7 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
     ),
   ]);
   expect(forbiddenAdministrationResponses.map((response) => response.status)).toEqual(
-    Array(7).fill(403),
+    Array(9).fill(403),
   );
 
   const revokeGrantResponse = await grants.DELETE(
@@ -695,6 +868,150 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
       workspace.id,
     ),
   ).resolves.toMatchObject({ agentId: agent.id });
+
+  const invalidLifecycleResponses = await Promise.all([
+    agentById.PATCH(
+      new Request(`http://lore.local/api/agents/${agent.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({}),
+      }),
+      agent.id,
+    ),
+    agentById.PATCH(
+      new Request(`http://lore.local/api/agents/${agent.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ status: "paused" }),
+      }),
+      agent.id,
+    ),
+    agentById.PATCH(
+      new Request("http://lore.local/api/agents/not-a-uuid", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ name: "Invalid identifier" }),
+      }),
+      "not-a-uuid",
+    ),
+    agentById.PATCH(
+      new Request(`http://lore.local/api/agents/${agent.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ name: "Should not apply", permission: "write" }),
+      }),
+      agent.id,
+    ),
+  ]);
+  expect(invalidLifecycleResponses.map((response) => response.status)).toEqual([
+    400, 400, 400, 400,
+  ]);
+  await expect(invalidLifecycleResponses[3]?.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "permission is not a supported Agent field",
+  });
+
+  const renamedResponse = await agentById.PATCH(
+    new Request(`http://lore.local/api/agents/${agent.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "Deployment assistant" }),
+    }),
+    agent.id,
+  );
+  expect(renamedResponse.status).toBe(200);
+  expect(renamedResponse.headers.get("cache-control")).toBe("private, no-store");
+  await expect(renamedResponse.json()).resolves.toMatchObject({
+    id: agent.id,
+    name: "Deployment assistant",
+    status: "active",
+  });
+
+  const activeDeleteResponse = await agentById.DELETE(
+    new Request(`http://lore.local/api/agents/${agent.id}`, { method: "DELETE", headers }),
+    agent.id,
+  );
+  expect(activeDeleteResponse.status).toBe(409);
+  expect(activeDeleteResponse.headers.get("cache-control")).toBe("private, no-store");
+  await expect(activeDeleteResponse.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "Disable Agent before deleting it",
+  });
+
+  const disabledResponse = await agentById.PATCH(
+    new Request(`http://lore.local/api/agents/${agent.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "disabled" }),
+    }),
+    agent.id,
+  );
+  expect(disabledResponse.status).toBe(200);
+  await expect(disabledResponse.json()).resolves.toMatchObject({ status: "disabled" });
+  await expect(
+    createAccessModule(testContext.database).authenticateAgent(
+      secondCredential.token,
+      workspace.id,
+    ),
+  ).resolves.toBeNull();
+  expect(
+    (
+      await credentials.POST(
+        new Request(`http://lore.local/api/agents/${agent.id}/credentials`, {
+          method: "POST",
+          headers,
+        }),
+        agent.id,
+      )
+    ).status,
+  ).toBe(403);
+
+  const reenabledResponse = await agentById.PATCH(
+    new Request(`http://lore.local/api/agents/${agent.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "active" }),
+    }),
+    agent.id,
+  );
+  expect(reenabledResponse.status).toBe(200);
+  await expect(
+    createAccessModule(testContext.database).authenticateAgent(
+      secondCredential.token,
+      workspace.id,
+    ),
+  ).resolves.toMatchObject({ agentId: agent.id });
+
+  await agentById.PATCH(
+    new Request(`http://lore.local/api/agents/${agent.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "disabled" }),
+    }),
+    agent.id,
+  );
+  const deleteResponse = await agentById.DELETE(
+    new Request(`http://lore.local/api/agents/${agent.id}`, { method: "DELETE", headers }),
+    agent.id,
+  );
+  expect(deleteResponse.status).toBe(204);
+  const afterDeleteResponse = await agents.GET(
+    new Request("http://lore.local/api/agents", { headers }),
+  );
+  await expect(afterDeleteResponse.json()).resolves.not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: agent.id })]),
+  );
+
+  const missingResponse = await agentById.PATCH(
+    new Request("http://lore.local/api/agents/30000000-0000-4000-8000-000000000099", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "Missing assistant" }),
+    }),
+    "30000000-0000-4000-8000-000000000099",
+  );
+  expect(missingResponse.status).toBe(404);
+  expect(missingResponse.headers.get("cache-control")).toBe("private, no-store");
 
   await testContext.close();
 });

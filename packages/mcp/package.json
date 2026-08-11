@@ -1,0 +1,39 @@
+{
+  "name": "@corespeed/lore-mcp",
+  "version": "0.1.0",
+  "description": "External Model Context Protocol adapter for Lore.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "lore-mcp": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && chmod +x dist/bin.js",
+    "prepack": "bun run --cwd ../.. sdk:check && bun run --cwd ../typescript-sdk build && bun run build"
+  },
+  "dependencies": {
+    "@corespeed/lore-sdk": "^0.1.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

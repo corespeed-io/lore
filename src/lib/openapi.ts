@@ -17,6 +17,8 @@ const errorSchema = {
         "invalid_request",
         "not_found",
         "precondition_required",
+        "proposal_capacity_exceeded",
+        "proposal_review_conflict",
         "version_conflict",
         "workspace_export_limit_exceeded",
       ],
@@ -58,6 +60,66 @@ const memorySchema = {
   },
 } as const;
 
+const memoryProposalUpdateProperties = {
+  kind: { const: "update" },
+  targetMemoryId: { type: "string", format: "uuid" },
+  expectedVersion: { type: "integer", minimum: 1 },
+  content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+  scope: { type: "string", enum: ["shared", "private"] },
+  metadata: { type: "object", additionalProperties: true },
+  evidenceMemoryIds: {
+    type: "array",
+    maxItems: 50,
+    description: "Memory and Observation evidence ids have a combined limit of 50.",
+    items: { type: "string", format: "uuid" },
+  },
+  evidenceObservationIds: {
+    type: "array",
+    maxItems: 50,
+    description: "Memory and Observation evidence ids have a combined limit of 50.",
+    items: { type: "string", format: "uuid" },
+  },
+} as const;
+
+const episodeSummaryProperties = {
+  id: { type: "string", format: "uuid" },
+  workspaceId: { type: "string", format: "uuid" },
+  ownerUserId: { type: "string", format: "uuid" },
+  recordedByActorKind: { type: "string", enum: ["human", "agent"] },
+  recordedByAgentId: {
+    oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+  },
+  kind: { type: "string", enum: ["conversation", "workflow", "document", "event"] },
+  scope: { type: "string", enum: ["shared", "private"] },
+  startedAt: { type: "string", format: "date-time" },
+  endedAt: { type: "string", format: "date-time" },
+  observationCount: { type: "integer", minimum: 1, maximum: 100 },
+  createdAt: { type: "string", format: "date-time" },
+} as const;
+
+const episodeSummaryRequired = [
+  "id",
+  "workspaceId",
+  "ownerUserId",
+  "recordedByActorKind",
+  "recordedByAgentId",
+  "kind",
+  "scope",
+  "startedAt",
+  "endedAt",
+  "observationCount",
+  "createdAt",
+] as const;
+
+function memoryProposalUpdateVariant(change: "content" | "metadata" | "scope") {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["kind", "targetMemoryId", "expectedVersion", change],
+    properties: memoryProposalUpdateProperties,
+  } as const;
+}
+
 const workspaceHeader = {
   name: "x-lore-workspace-id",
   in: "header",
@@ -81,6 +143,13 @@ const ifMatchHeader = {
 
 const memoryIdParameter = {
   name: "memoryId",
+  in: "path",
+  required: true,
+  schema: { type: "string", format: "uuid" },
+} as const;
+
+const agentIdParameter = {
+  name: "agentId",
   in: "path",
   required: true,
   schema: { type: "string", format: "uuid" },
@@ -121,6 +190,18 @@ export function loreOpenApiDocument(): Record<string, unknown> {
     servers: [{ url: "/" }],
     security: actorSecurity,
     paths: {
+      "/api/v1/actor": {
+        get: {
+          operationId: "getCurrentHumanActor",
+          security: humanSecurity,
+          parameters: [workspaceHeader],
+          responses: {
+            "200": jsonResponse("Verified human Actor for the active Workspace", {
+              $ref: "#/components/schemas/HumanActor",
+            }),
+          },
+        },
+      },
       "/api/v1/workspaces": {
         get: {
           operationId: "listWorkspaces",
@@ -259,6 +340,193 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           },
         },
       },
+      "/api/v1/episodes": {
+        get: {
+          operationId: "listEpisodes",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "kind",
+              in: "query",
+              schema: {
+                type: "string",
+                enum: ["conversation", "workflow", "document", "event"],
+              },
+            },
+            {
+              name: "scope",
+              in: "query",
+              schema: { type: "string", enum: ["shared", "private"] },
+            },
+            {
+              name: "cursor",
+              in: "query",
+              description: "Opaque Episode browse cursor.",
+              schema: { type: "string" },
+            },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+          ],
+          responses: {
+            "200": jsonResponse(
+              "Actor-visible immutable Episode envelopes",
+              {
+                type: "array",
+                items: { $ref: "#/components/schemas/EpisodeSummary" },
+              },
+              {
+                "x-lore-next-cursor": {
+                  description: "Present on a full page; opaque to clients.",
+                  schema: { type: "string" },
+                },
+              },
+            ),
+          },
+        },
+        post: {
+          operationId: "recordEpisode",
+          parameters: [workspaceHeader, idempotencyHeader],
+          requestBody: requestBody({ $ref: "#/components/schemas/RecordEpisodeInput" }),
+          responses: {
+            "201": jsonResponse("Recorded immutable Episode evidence", {
+              $ref: "#/components/schemas/Episode",
+            }),
+            "403": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/episodes/{episodeId}": {
+        get: {
+          operationId: "getEpisode",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "episodeId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Episode with available Observation payloads", {
+              $ref: "#/components/schemas/Episode",
+            }),
+            "404": { $ref: "#/components/responses/Error" },
+          },
+        },
+        delete: {
+          operationId: "deleteEpisode",
+          parameters: [
+            workspaceHeader,
+            idempotencyHeader,
+            {
+              name: "episodeId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          responses: {
+            "204": { description: "Deleted Episode and Observation evidence" },
+            "404": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/observations": {
+        get: {
+          operationId: "getObservations",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "id",
+              in: "query",
+              required: true,
+              description: "Repeat for 1 to 50 RLS-visible Observation ids.",
+              schema: {
+                type: "array",
+                minItems: 1,
+                maxItems: 50,
+                items: { type: "string", format: "uuid" },
+              },
+              style: "form",
+              explode: true,
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Visible immutable Observation evidence in request order", {
+              type: "array",
+              items: { $ref: "#/components/schemas/Observation" },
+            }),
+          },
+        },
+      },
+      "/api/v1/memory-proposals": {
+        get: {
+          operationId: "listMemoryProposals",
+          security: humanSecurity,
+          parameters: [
+            workspaceHeader,
+            {
+              name: "status",
+              in: "query",
+              schema: { type: "string", enum: ["pending", "accepted", "rejected"] },
+            },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+          ],
+          responses: {
+            "200": jsonResponse("Owner-private Memory Proposals", {
+              type: "array",
+              items: { $ref: "#/components/schemas/MemoryProposal" },
+            }),
+            "403": { $ref: "#/components/responses/Error" },
+          },
+        },
+        post: {
+          operationId: "createMemoryProposal",
+          parameters: [workspaceHeader, idempotencyHeader],
+          requestBody: requestBody({ $ref: "#/components/schemas/CreateMemoryProposalInput" }),
+          responses: {
+            "201": jsonResponse("Submitted owner-private Memory Proposal", {
+              $ref: "#/components/schemas/MemoryProposal",
+            }),
+            "403": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+            "412": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/memory-proposals/{proposalId}/review": {
+        post: {
+          operationId: "reviewMemoryProposal",
+          security: humanSecurity,
+          parameters: [
+            workspaceHeader,
+            {
+              name: "proposalId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          requestBody: requestBody({
+            type: "object",
+            additionalProperties: false,
+            required: ["decision"],
+            properties: { decision: { type: "string", enum: ["accept", "reject"] } },
+          }),
+          responses: {
+            "200": jsonResponse(
+              "Reviewed Memory Proposal",
+              { $ref: "#/components/schemas/MemoryProposalReviewResult" },
+              { ETag: { schema: { type: "string" } } },
+            ),
+            "403": { $ref: "#/components/responses/Error" },
+            "404": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+            "412": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/api/v1/graph": {
         get: {
           operationId: "getMemoryGraph",
@@ -305,19 +573,35 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           },
         },
       },
+      "/api/v1/agents/{agentId}": {
+        patch: {
+          operationId: "updateAgent",
+          security: humanSecurity,
+          parameters: [workspaceHeader, agentIdParameter],
+          requestBody: requestBody({ $ref: "#/components/schemas/UpdateAgentInput" }),
+          responses: {
+            "200": jsonResponse("Updated global Agent identity and status", {
+              $ref: "#/components/schemas/WorkspaceAgent",
+            }),
+            "404": { $ref: "#/components/responses/Error" },
+          },
+        },
+        delete: {
+          operationId: "deleteAgent",
+          security: humanSecurity,
+          parameters: [workspaceHeader, agentIdParameter],
+          responses: {
+            "204": { description: "Disabled Agent, grants, and credentials deleted" },
+            "404": { $ref: "#/components/responses/Error" },
+            "409": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
       "/api/v1/agents/{agentId}/credentials": {
         get: {
           operationId: "listAgentCredentials",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           responses: {
             "200": jsonResponse("Agent credential metadata without secret hashes", {
               type: "array",
@@ -328,15 +612,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         post: {
           operationId: "issueAgentCredential",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           responses: {
             "201": jsonResponse("One-time Agent credential", {
               $ref: "#/components/schemas/IssuedAgentCredential",
@@ -348,15 +624,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         put: {
           operationId: "setAgentGrant",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           requestBody: requestBody({
             type: "object",
             additionalProperties: false,
@@ -372,15 +640,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         delete: {
           operationId: "revokeAgentGrant",
           security: humanSecurity,
-          parameters: [
-            workspaceHeader,
-            {
-              name: "agentId",
-              in: "path",
-              required: true,
-              schema: { type: "string", format: "uuid" },
-            },
-          ],
+          parameters: [workspaceHeader, agentIdParameter],
           responses: { "204": { description: "Grant revoked" } },
         },
       },
@@ -555,6 +815,201 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             metadata: { type: "object", additionalProperties: true },
           },
         },
+        RecordObservationInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "content"],
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["message", "tool_call", "tool_result", "document_fragment", "event"],
+            },
+            content: { type: "string", minLength: 1, maxLength: 100_000 },
+            metadata: { type: "object", additionalProperties: true },
+            observedAt: { type: "string", format: "date-time" },
+          },
+        },
+        RecordEpisodeInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "observations"],
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["conversation", "workflow", "document", "event"],
+            },
+            scope: { type: "string", enum: ["shared", "private"], default: "private" },
+            observations: {
+              type: "array",
+              minItems: 1,
+              maxItems: 100,
+              items: { $ref: "#/components/schemas/RecordObservationInput" },
+            },
+          },
+        },
+        Observation: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "workspaceId",
+            "episodeId",
+            "ordinal",
+            "kind",
+            "observedAt",
+            "payloadSha256",
+            "content",
+            "metadata",
+            "createdAt",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            workspaceId: { type: "string", format: "uuid" },
+            episodeId: { type: "string", format: "uuid" },
+            ordinal: { type: "integer", minimum: 0, maximum: 99 },
+            kind: {
+              type: "string",
+              enum: ["message", "tool_call", "tool_result", "document_fragment", "event"],
+            },
+            observedAt: { type: "string", format: "date-time" },
+            payloadSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            content: { type: "string", minLength: 1, maxLength: 100_000 },
+            metadata: { type: "object", additionalProperties: true },
+            createdAt: { type: "string", format: "date-time" },
+          },
+        },
+        EpisodeSummary: {
+          type: "object",
+          additionalProperties: false,
+          required: episodeSummaryRequired,
+          properties: episodeSummaryProperties,
+        },
+        Episode: {
+          type: "object",
+          additionalProperties: false,
+          required: [...episodeSummaryRequired, "observations"],
+          properties: {
+            ...episodeSummaryProperties,
+            observations: {
+              type: "array",
+              minItems: 1,
+              maxItems: 100,
+              items: { $ref: "#/components/schemas/Observation" },
+            },
+          },
+        },
+        CreateMemoryProposalInput: {
+          oneOf: [
+            { $ref: "#/components/schemas/CreateMemoryProposalCreateInput" },
+            { $ref: "#/components/schemas/CreateMemoryProposalUpdateInput" },
+          ],
+        },
+        CreateMemoryProposalCreateInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "content"],
+          properties: {
+            kind: { const: "create" },
+            content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            scope: { type: "string", enum: ["shared", "private"], default: "shared" },
+            metadata: { type: "object", additionalProperties: true },
+            evidenceMemoryIds: {
+              type: "array",
+              maxItems: 50,
+              description: "Memory and Observation evidence ids have a combined limit of 50.",
+              items: { type: "string", format: "uuid" },
+            },
+            evidenceObservationIds: {
+              type: "array",
+              maxItems: 50,
+              description: "Memory and Observation evidence ids have a combined limit of 50.",
+              items: { type: "string", format: "uuid" },
+            },
+          },
+        },
+        CreateMemoryProposalUpdateInput: {
+          anyOf: [
+            { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
+            { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
+            { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
+          ],
+        },
+        MemoryProposalUpdateContentInput: memoryProposalUpdateVariant("content"),
+        MemoryProposalUpdateScopeInput: memoryProposalUpdateVariant("scope"),
+        MemoryProposalUpdateMetadataInput: memoryProposalUpdateVariant("metadata"),
+        MemoryProposal: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "workspaceId",
+            "ownerUserId",
+            "proposedByActorKind",
+            "proposedByAgentId",
+            "kind",
+            "targetMemoryId",
+            "baseMemoryVersion",
+            "proposedContent",
+            "proposedScope",
+            "proposedMetadata",
+            "evidenceMemoryIds",
+            "evidenceObservationIds",
+            "status",
+            "reviewedByUserId",
+            "acceptedMemoryId",
+            "createdAt",
+            "reviewedAt",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            workspaceId: { type: "string", format: "uuid" },
+            ownerUserId: { type: "string", format: "uuid" },
+            proposedByActorKind: { type: "string", enum: ["human", "agent"] },
+            proposedByAgentId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            kind: { type: "string", enum: ["create", "update"] },
+            targetMemoryId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            baseMemoryVersion: {
+              oneOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
+            },
+            proposedContent: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            proposedScope: { type: "string", enum: ["shared", "private"] },
+            proposedMetadata: { type: "object", additionalProperties: true },
+            evidenceMemoryIds: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", format: "uuid" },
+            },
+            evidenceObservationIds: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", format: "uuid" },
+            },
+            status: { type: "string", enum: ["pending", "accepted", "rejected"] },
+            reviewedByUserId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            acceptedMemoryId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            createdAt: { type: "string", format: "date-time" },
+            reviewedAt: {
+              oneOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+            },
+          },
+        },
+        MemoryProposalReviewResult: {
+          type: "object",
+          additionalProperties: false,
+          required: ["proposal", "memory"],
+          properties: {
+            proposal: { $ref: "#/components/schemas/MemoryProposal" },
+            memory: { oneOf: [{ $ref: "#/components/schemas/Memory" }, { type: "null" }] },
+          },
+        },
         MemorySearchResult: {
           type: "object",
           additionalProperties: false,
@@ -579,6 +1034,15 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             id: { type: "string", format: "uuid" },
             name: { type: "string" },
             ...timestampProperties,
+          },
+        },
+        HumanActor: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "userId"],
+          properties: {
+            kind: { const: "human" },
+            userId: { type: "string", format: "uuid" },
           },
         },
         WorkspaceSummary: {
@@ -613,6 +1077,15 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             permission: { type: "string", enum: ["read", "write"] },
             grantStatus: { type: "string", enum: ["active", "revoked"] },
             ...timestampProperties,
+          },
+        },
+        UpdateAgentInput: {
+          type: "object",
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 120 },
+            status: { type: "string", enum: ["active", "disabled"] },
           },
         },
         AgentWorkspaceGrant: {
@@ -1018,6 +1491,8 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 "workspacePortability",
                 "embeddingGenerations",
                 "cursorPagination",
+                "memoryProposals",
+                "observationEvidence",
               ],
               properties: {
                 idempotency: { const: true },
@@ -1026,15 +1501,38 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 workspacePortability: { const: true },
                 embeddingGenerations: { const: true },
                 cursorPagination: { const: true },
+                memoryProposals: { const: true },
+                observationEvidence: { const: true },
               },
             },
             limits: {
               type: "object",
               additionalProperties: false,
-              required: ["workspaceArchiveMemories", "workspaceArchiveLinks"],
+              required: [
+                "workspaceArchiveMemories",
+                "workspaceArchiveLinks",
+                "memoryProposalEvidence",
+                "memoryProposalList",
+                "memoryProposalPending",
+                "memoryProposalRetentionSeconds",
+                "episodeObservations",
+                "episodeContentCharacters",
+                "episodeMetadataCharacters",
+                "observationContentCharacters",
+                "observationBatchRead",
+              ],
               properties: {
                 workspaceArchiveMemories: { const: MAX_WORKSPACE_ARCHIVE_MEMORIES },
                 workspaceArchiveLinks: { const: MAX_WORKSPACE_ARCHIVE_LINKS },
+                memoryProposalEvidence: { const: 50 },
+                memoryProposalList: { const: 100 },
+                memoryProposalPending: { const: 100 },
+                memoryProposalRetentionSeconds: { const: 2_592_000 },
+                episodeObservations: { const: 100 },
+                episodeContentCharacters: { const: 1_000_000 },
+                episodeMetadataCharacters: { const: 1_000_000 },
+                observationContentCharacters: { const: 100_000 },
+                observationBatchRead: { const: 50 },
               },
             },
             activeEmbeddingGeneration: {

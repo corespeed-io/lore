@@ -21,12 +21,14 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0006_memory_chunk_entity_aliases.sql`
+- migrations `0001_initial.sql` through `0009_observation_evidence.sql`
   define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
-  a content-free event outbox, Workspace portability, and embedding generations
-  with RLS;
-- `src/lib/identity.ts`, `access.ts`, `memory.ts`, and `evaluation.ts` are the
+  a content-free event outbox, Workspace portability, embedding generations, Agent
+  lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
+  evidence with RLS;
+- `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
+  `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
@@ -53,9 +55,15 @@ been removed. Lore now has a native implementation:
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
   references remain inert, and raw HTML stays escaped;
-- `src/lib/viz/graph.ts` is the restored, performance-tuned D3 renderer. Keep its
-  headless settle, delta-painted focus state, capped edge hit layer, label
-  collision, drag focus hold, zoom/pan, and fit behavior when changing Graph UI;
+- `src/components/WorkerCanvasGraph.tsx` and its colocated Worker own the production
+  Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
+  one Canvas, cold layout reveals progressively, and interaction frames transfer
+  coordinate deltas. Preserve viewport culling, the 40,000-link paint cap, label
+  collision, elastic drag, user zoom/pan across hide/show and resize, and fit behavior.
+  Labels are intentionally interaction-driven (hover, selection, or filtering),
+  while centrality is expressed through node size and physics rather than persistent
+  degree annotations. `src/lib/viz/graph.ts` retains the shared Graph instance contract,
+  label helpers, and the legacy SVG benchmark control;
 - `src/lib/maintenance.ts` owns leased, idempotent document embedding and
   deployment-wide re-index discovery. A provider/model/revision change builds
   generation-scoped vectors beside the active generation without rewriting
@@ -70,7 +78,31 @@ been removed. Lore now has a native implementation:
   own the Portable Core seams. Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
-  `/readyz`, and `/api/v1/capabilities` are the stable operational surface;
+  `/readyz`, `/api/v1/actor`, and `/api/v1/capabilities` are the stable operational
+  surface;
+- Memory Proposals are the safe boundary for suggested create/update operations:
+  an Actor with write authority may submit complete proposed content and up to 50
+  visible Memory/Observation evidence ids, but only the owner human may accept or
+  reject it.
+  Pending proposals never enter Memory browse/search/Graph/export/outbox. Update
+  acceptance is exact-version and never silently rebases; future opt-in AutoDream
+  work must use this boundary instead of silently persisting generated content.
+  Proposal content expires after 30 days, and hard-deleting a target or accepted
+  Memory removes its associated proposals and replay bodies immediately;
+- Episodes are bounded, ordered evidence envelopes; their immutable Observations
+  preserve message, tool, document-fragment, or event content until the owner User
+  or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
+  Memory retrieval or Graph, and may be read as Proposal evidence only through
+  current Actor/RLS visibility. An Agent records provenance; it is not a generic
+  Source. Any future automatic retention must be an explicit opt-in deployment
+  policy;
+- `packages/typescript-sdk` generates its public types from the canonical OpenAPI
+  document and owns the deep integration client. `packages/cli` and the external
+  stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
+  scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
+  MCP outside Portable Core and never accept a model-supplied Workspace override.
+  `packages/python-sdk` provides the equivalent dependency-light Python seam from
+  the same generated OpenAPI contract; keep both SDKs behaviorally aligned;
 - Node/self-host exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
@@ -96,9 +128,13 @@ been removed. Lore now has a native implementation:
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers.
 
-Still incomplete: full Evaluation management UI and Agent rename/disable/delete
-controls. Workspace-scoped Agent creation plus grant and credential lifecycle
-management is available in the native `/agents` surface.
+Still incomplete: full Evaluation management UI. Workspace-scoped Agent creation,
+grant and credential lifecycle management, plus global rename/disable/delete
+controls are available in the native `/agents` surface. Agent deletion requires a
+disabled Agent, removes every grant and credential, and preserves Memories while
+clearing their creating-Agent reference. Human-only Workspace
+export/download, checksum-backed import dry-run, explicit owner remap, import
+receipts, and deployment readiness/capabilities are available in `/operations`.
 Chunking and lexical indexing
 are synchronous; document embedding, retry, and deployment-wide re-indexing are
 background maintenance. The Ollama, Google Gemini, and OpenAI adapters are
@@ -216,11 +252,12 @@ generic upstream adapter to support the historical component structure.
 The native Graph endpoint caps reads at 5,000 visible Memories. It returns all
 RLS-visible Memory Links whose endpoints are in that node set, then derives at most
 three affinities per Memory among the first 500 otherwise isolated nodes. The
-optimized SVG renderer is measured against the migrated ~1,000-node / ~2,200-link
-graph. At benchmark scale, preserve D3 as the layout engine but move static
-simulation to a Web Worker and links to Canvas before increasing the SVG DOM budget.
-The throwaway `/prototype/graph-scale` benchmark uses one compact radial layout and
-one adaptive interaction model at every scale: at most 900 active nodes plus
+Worker + Canvas renderer is measured against the migrated ~1,000-node / ~2,200-link
+graph. Preserve D3 as the layout engine without moving the simulation or links back
+onto the main-thread SVG DOM. The `/prototype/graph-scale` benchmark shell reuses
+the production renderer and compares it with static Canvas and legacy SVG controls.
+It uses one compact radial layout and one adaptive interaction model at every scale:
+at most 900 active nodes plus
 pinned real boundary endpoints. Its Worker frames contain active coordinate deltas,
 while Canvas culls the viewport and caps rendered links at 40,000. Do not describe
 the interactive field as exact far-field physics; the initial Worker layout still
@@ -245,9 +282,11 @@ invariants.
 The v1 system must provide:
 
 - Memory create, read, update, delete, and provenance;
+- immutable, durable Observation evidence grouped into bounded Episodes;
 - hybrid retrieval over only the Memories the caller may see;
 - Users, Identities, Workspaces, Memberships, Agents, and agent Workspace grants;
 - user-private and Workspace-shared Memory enforced with Postgres RLS;
+- owner-private Memory Proposals with human-only acceptance into canonical Memory;
 - deterministic background maintenance: chunking, embedding, indexing, retries,
   re-indexing, and deletion/permission-change invalidation;
 - a Benchmark/Evaluation suite covering retrieval quality, isolation, latency, and
@@ -269,6 +308,11 @@ User ──< Membership >── Workspace
 User ──< Agent ──< Agent Workspace Grant >── Workspace
 Workspace ──< Memory >── owner User
 Agent ──< Memory.created_by_agent_id (provenance only)
+Workspace ──< Memory Proposal >── owner User
+Agent ──< Memory Proposal.proposed_by_agent_id (provenance only)
+Workspace ──< Episode >── owner User
+Episode ──< Observation
+Agent ──< Episode.recorded_by_agent_id (provenance only)
 ```
 
 Memory isolation rules:
@@ -285,6 +329,12 @@ Memory isolation rules:
   grant.
 - `created_by_agent_id` records provenance. It does not own the Memory and does not
   define visibility.
+- A Memory Proposal is owner-private review state, not a draft Memory. Write-authorized
+  Actors may submit it, but only its owner human may accept or reject it. Until
+  acceptance it is absent from canonical retrieval, Graph, export, and outbox.
+- An Observation is immutable evidence, not Memory. It inherits owner/scope
+  visibility from its Episode, remains until explicit Episode forget, and never
+  enters ordinary Memory retrieval or Graph.
 - Visibility and write authority are separate: sharing a Memory does not transfer
   ownership or grant other members permission to mutate it. Only the owner User or
   an authorized Agent acting for that User may mutate it.
@@ -295,7 +345,9 @@ The relational model centers on:
 
 - `users`, `identities`, `workspaces`, `memberships`;
 - `agents`, `agent_workspace_grants`, `agent_credentials`;
-- `memories`, `memory_chunks`, `memory_links`, and embedding/index state;
+- `memories`, `memory_chunks`, `memory_links`, Memory Proposals/evidence, and
+  embedding/index state;
+- `episodes` and `observations` for durable non-canonical evidence;
 - `evaluation_suites`, `evaluation_cases`, `evaluation_runs`, and
   `evaluation_results`.
 
@@ -388,6 +440,9 @@ surfaces:
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
   chunking, indexing, provenance, and permission invalidation.
+- **Observation module:** atomically record, list, retrieve, and explicitly forget
+  bounded immutable Episodes while keeping their Observations outside canonical
+  Memory retrieval and enforcing the same owner/scope/RLS rules.
 - **Graph module:** return visible Memory nodes, durable Memory Links, and derived
   affinities while guaranteeing that every relationship endpoint is present in the
   same authorized read model.
@@ -565,7 +620,8 @@ Benchmark is part of the product quality system even without AutoDream.
 The existing application uses:
 
 - Next.js 16 (App Router), React 19, Bun 1.3.14+ for package management,
-  Node 24 LTS for self-hosted execution, and TypeScript 7;
+  Node 24 LTS for self-hosted execution, TypeScript 7, and Python 3.12+ for the
+  generated Python SDK and source verification;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
@@ -601,8 +657,13 @@ bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
 bun run design:check # enforce and self-test the Lore UI contract
-bun run test       # vitest run
-bun run build      # next build (production)
+bun run sdk:generate # regenerate TypeScript/Python contracts and package versions
+bun run sdk:check  # fail when generated developer contracts drift
+bun run test:python # run the Python 3.12+ SDK tests
+bun run test       # vitest plus the Python SDK tests
+bun run build:packages # build the TypeScript SDK, CLI, and external MCP packages
+bun run packages:smoke # pack/install/import the release artifacts
+bun run build      # Next production, maintenance, and developer-package builds
 bun run build:maintenance # bundle the self-host Node maintenance entrypoint
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
@@ -621,7 +682,9 @@ the `graph_benchmark` schema. The seeder refuses to rebuild its schema in a
 database without `bench` or `benchmark` in the name. It is renderer load data,
 not a persisted Memory Affinity model and not an Evaluation Suite.
 
-Before opening a PR, design:check, typecheck, lint, test, and build must all pass.
+Before opening a PR, design:check, typecheck, lint, test, build, packages:smoke,
+and the deployment dry runs must all pass. `bun run test` requires Python 3.12+
+because it includes the generated Python SDK suite.
 
 Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but

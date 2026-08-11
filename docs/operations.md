@@ -16,7 +16,9 @@ a Workspace export.
 document, while `GET /api/v1/capabilities` reports the live schema revision and
 active embedding generation without tenant data. Capabilities still requires a
 verified Actor and `x-lore-workspace-id`; a bearer token's shape alone never grants
-access. Existing unversioned routes remain available to the bundled UI, but clients
+access. `GET /api/v1/actor` is human-only and returns the verified importing User id
+for explicit owner remap; an archive-provided identity is never trusted as that
+target. Existing unversioned routes remain available to the bundled UI, but clients
 should generate integrations from the v1 document.
 
 Migration `0003` adds and backfills nullable job generation ids so legacy writers
@@ -224,6 +226,33 @@ Memory chunks are not rewritten during a model switch.
 - An embedding-provider failure produces `status: degraded` but HTTP 200 because
   lexical retrieval remains available. Database, role, schema, vector, or RLS
   failure produces `status: unready` and HTTP 503.
+
+### Memory Core product smoke
+
+`bun run smoke:memory-core` exercises the complete migration chain and the stable
+HTTP handler seam against a real Postgres/pgvector database. It covers the runtime
+`lore_app` role, readiness and capabilities, Workspace and private-Memory RLS,
+Agent credentials, Observation evidence, human-only Proposal review, lexical
+retrieval without a working embedding generation, Graph visibility, and explicit
+Episode forgetting.
+
+The command is intentionally mutation-only: it never resets or drops a database.
+Provide a fresh, empty disposable database whose name contains `smoke` as a
+distinct `-` or `_` token; the command refuses any other target or a non-empty
+database. The caller owns database cleanup after the run.
+The bootstrap also configures two login roles derived from the smoke database name;
+on a persistent local Postgres cluster, remove those roles when the smoke fixture is
+no longer needed.
+
+The URL must authenticate a trusted migration administrator that owns the fresh
+database and can install pgvector, create the schema, create or alter login roles,
+and grant the `lore_app` and `lore_maintenance` roles. Do not supply a Lore runtime
+login.
+
+```bash
+LORE_SMOKE_DATABASE_URL=postgres://postgres:password@localhost:5432/lore_memory_core_smoke_local \
+  bun run smoke:memory-core
+```
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (and
 optionally `OTEL_EXPORTER_OTLP_HEADERS`) to export Next.js and Lore spans through OTLP. Lore's

@@ -8,6 +8,11 @@ export interface WorkspaceSummary {
   updatedAt: string;
 }
 
+export interface HumanActorSummary {
+  kind: "human";
+  userId: string;
+}
+
 export type AgentGrantPermission = "read" | "write";
 
 export interface WorkspaceAgent {
@@ -63,6 +68,74 @@ export interface MemorySearchResult {
   score: number;
   rerankScore?: number;
   evidence: string;
+}
+
+export type EpisodeKind = "conversation" | "workflow" | "document" | "event";
+
+export type ObservationKind =
+  | "message"
+  | "tool_call"
+  | "tool_result"
+  | "document_fragment"
+  | "event";
+
+export interface Observation {
+  id: string;
+  workspaceId: string;
+  episodeId: string;
+  ordinal: number;
+  kind: ObservationKind;
+  observedAt: string;
+  payloadSha256: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface EpisodeSummary {
+  id: string;
+  workspaceId: string;
+  ownerUserId: string;
+  recordedByActorKind: "human" | "agent";
+  recordedByAgentId: string | null;
+  kind: EpisodeKind;
+  scope: MemoryScope;
+  startedAt: string;
+  endedAt: string;
+  observationCount: number;
+  createdAt: string;
+}
+
+export interface Episode extends EpisodeSummary {
+  observations: Observation[];
+}
+
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+
+export interface MemoryProposal {
+  id: string;
+  workspaceId: string;
+  ownerUserId: string;
+  proposedByActorKind: "human" | "agent";
+  proposedByAgentId: string | null;
+  kind: "create" | "update";
+  targetMemoryId: string | null;
+  baseMemoryVersion: number | null;
+  proposedContent: string;
+  proposedScope: MemoryScope;
+  proposedMetadata: Record<string, unknown>;
+  evidenceMemoryIds: string[];
+  evidenceObservationIds: string[];
+  status: MemoryProposalStatus;
+  reviewedByUserId: string | null;
+  acceptedMemoryId: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+export interface MemoryProposalReviewResult {
+  proposal: MemoryProposal;
+  memory: Memory | null;
 }
 
 export interface GraphNode {

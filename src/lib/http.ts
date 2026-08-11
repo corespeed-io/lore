@@ -1,4 +1,9 @@
-import { AccessDeniedError, type AgentGrantPermission, createAccessModule } from "./access";
+import {
+  AccessDeniedError,
+  type AgentGrantPermission,
+  type AgentStatus,
+  createAccessModule,
+} from "./access";
 import type { ActorContext } from "./actor-context";
 import type { PostgresDatabase } from "./db";
 import {
@@ -17,10 +22,26 @@ import {
   createMemoryModule,
   MemoryAccessDeniedError,
   type MemoryModuleOptions,
+  MemoryProposalAccessDeniedError,
+  MemoryProposalCapacityError,
+  MemoryProposalReviewConflictError,
+  type MemoryProposalStatus,
   type MemoryScope,
   MemoryVersionConflictError,
 } from "./memory";
-import { createOperationsModule } from "./operations";
+import {
+  createObservationModule,
+  type EpisodeKind,
+  MAX_EPISODE_CONTENT_CHARACTERS,
+  MAX_EPISODE_METADATA_CHARACTERS,
+  MAX_EPISODE_OBSERVATIONS,
+  MAX_OBSERVATION_BATCH_READ,
+  MAX_OBSERVATION_CONTENT_CHARACTERS,
+  ObservationAccessDeniedError,
+  type ObservationKind,
+  type RecordObservation,
+} from "./observations";
+import { createOperationsModule, type OperationsOptions } from "./operations";
 import {
   createPortabilityModule,
   type ImportWorkspaceArchive,
@@ -48,6 +69,8 @@ class PreconditionRequiredError extends Error {
 function errorCode(error: unknown): string {
   if (error instanceof PreconditionRequiredError) return "precondition_required";
   if (error instanceof MemoryVersionConflictError) return "version_conflict";
+  if (error instanceof MemoryProposalCapacityError) return "proposal_capacity_exceeded";
+  if (error instanceof MemoryProposalReviewConflictError) return "proposal_review_conflict";
   if (error instanceof IdempotencyConflictError) return "idempotency_conflict";
   if (error instanceof WorkspaceExportLimitError) return error.code;
   if (error instanceof BadRequestError || error instanceof RequestInputError)
@@ -56,7 +79,9 @@ function errorCode(error: unknown): string {
   if (
     error instanceof WorkspaceAccessError ||
     error instanceof AccessDeniedError ||
-    error instanceof MemoryAccessDeniedError
+    error instanceof MemoryAccessDeniedError ||
+    error instanceof MemoryProposalAccessDeniedError ||
+    error instanceof ObservationAccessDeniedError
   ) {
     return "access_denied";
   }
@@ -74,6 +99,8 @@ function errorResponse(error: unknown): Response {
     error instanceof WorkspaceAccessError ||
     error instanceof PreconditionRequiredError ||
     error instanceof MemoryVersionConflictError ||
+    error instanceof MemoryProposalCapacityError ||
+    error instanceof MemoryProposalReviewConflictError ||
     error instanceof IdempotencyConflictError ||
     error instanceof PortabilityValidationError ||
     error instanceof PortabilityAccessDeniedError ||
@@ -84,14 +111,28 @@ function errorResponse(error: unknown): Response {
       { status: error.status, headers: { "cache-control": "private, no-store" } },
     );
   }
-  if (error instanceof AccessDeniedError || error instanceof MemoryAccessDeniedError) {
-    return Response.json({ code: errorCode(error), error: error.message }, { status: 403 });
+  if (
+    error instanceof AccessDeniedError ||
+    error instanceof MemoryAccessDeniedError ||
+    error instanceof MemoryProposalAccessDeniedError ||
+    error instanceof ObservationAccessDeniedError
+  ) {
+    return Response.json(
+      { code: errorCode(error), error: error.message },
+      { status: 403, headers: { "cache-control": "private, no-store" } },
+    );
   }
   if (error instanceof EvaluationSuiteNotFoundError) {
-    return Response.json({ code: errorCode(error), error: error.message }, { status: 404 });
+    return Response.json(
+      { code: errorCode(error), error: error.message },
+      { status: 404, headers: { "cache-control": "private, no-store" } },
+    );
   }
   console.error("Unhandled Lore request error", error);
-  return Response.json({ code: "internal_error", error: "Internal server error" }, { status: 500 });
+  return Response.json(
+    { code: "internal_error", error: "Internal server error" },
+    { status: 500, headers: { "cache-control": "private, no-store" } },
+  );
 }
 
 function memoryEtag(version: number): string {
@@ -178,16 +219,139 @@ function requiredString(value: unknown, name: string, maximumLength: number): st
   if (normalized.includes("\0")) {
     throw new BadRequestError(`${name} contains an invalid null character`);
   }
+  if (hasLoneSurrogate(normalized)) {
+    throw new BadRequestError(`${name} contains invalid Unicode`);
+  }
   if (normalized.length > maximumLength) {
     throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
   }
   return normalized;
 }
 
+function requiredRawString(value: unknown, name: string, maximumLength: number): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new BadRequestError(`${name} is required`);
+  }
+  if (value.includes("\0")) {
+    throw new BadRequestError(`${name} contains an invalid null character`);
+  }
+  if (hasLoneSurrogate(value)) {
+    throw new BadRequestError(`${name} contains invalid Unicode`);
+  }
+  if (value.length > maximumLength) {
+    throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
+  }
+  return value;
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xd800 && current <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (current >= 0xdc00 && current <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function memoryScope(value: unknown): MemoryScope | undefined {
   if (value === undefined) return undefined;
   if (value === "shared" || value === "private") return value;
   throw new BadRequestError("scope must be shared or private");
+}
+
+function memoryProposalStatus(value: string | null): MemoryProposalStatus | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  if (value === "pending" || value === "accepted" || value === "rejected") return value;
+  throw new BadRequestError("status must be pending, accepted, or rejected");
+}
+
+function episodeKind(value: unknown, optional = false): EpisodeKind | undefined {
+  if (optional && (value === undefined || value === null || value === "")) return undefined;
+  if (
+    value === "conversation" ||
+    value === "workflow" ||
+    value === "document" ||
+    value === "event"
+  ) {
+    return value;
+  }
+  throw new BadRequestError("kind must be conversation, workflow, document, or event");
+}
+
+function observationKind(value: unknown, name: string): ObservationKind {
+  if (
+    value === "message" ||
+    value === "tool_call" ||
+    value === "tool_result" ||
+    value === "document_fragment" ||
+    value === "event"
+  ) {
+    return value;
+  }
+  throw new BadRequestError(
+    `${name} must be message, tool_call, tool_result, document_fragment, or event`,
+  );
+}
+
+function episodeObservations(value: unknown): RecordObservation[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_EPISODE_OBSERVATIONS) {
+    throw new BadRequestError(`observations must contain 1 to ${MAX_EPISODE_OBSERVATIONS} items`);
+  }
+  const observations = value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new BadRequestError(`observations[${index}] must be an object`);
+    }
+    const observation = item as Record<string, unknown>;
+    if (observation.observedAt !== undefined && typeof observation.observedAt !== "string") {
+      throw new BadRequestError(`observations[${index}].observedAt must be an ISO 8601 timestamp`);
+    }
+    const observedAt = optionalTimestamp(
+      observation.observedAt ?? null,
+      `observations[${index}].observedAt`,
+    );
+    return {
+      kind: observationKind(observation.kind, `observations[${index}].kind`),
+      content: requiredRawString(
+        observation.content,
+        `observations[${index}].content`,
+        MAX_OBSERVATION_CONTENT_CHARACTERS,
+      ),
+      metadata: metadata(observation.metadata),
+      observedAt,
+    };
+  });
+  const totalCharacters = observations.reduce(
+    (total, observation) => total + observation.content.length,
+    0,
+  );
+  if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
+    throw new BadRequestError(
+      `Episode content exceeds ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
+    );
+  }
+  const totalMetadataCharacters = observations.reduce(
+    (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
+    0,
+  );
+  if (totalMetadataCharacters > MAX_EPISODE_METADATA_CHARACTERS) {
+    throw new BadRequestError(
+      `Episode metadata exceeds ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
+    );
+  }
+  return observations;
+}
+
+function positiveInteger(value: unknown, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new BadRequestError(`${name} must be a positive integer`);
+  }
+  return parsed;
 }
 
 function optionalTimestamp(value: string | null, name: string): string | undefined {
@@ -238,6 +402,9 @@ function validateJsonStrings(value: unknown, path: string): void {
       if (current.value.includes("\0")) {
         throw new BadRequestError(`${current.path} contains an invalid null character`);
       }
+      if (hasLoneSurrogate(current.value)) {
+        throw new BadRequestError(`${current.path} contains invalid Unicode`);
+      }
       continue;
     }
     if (Array.isArray(current.value)) {
@@ -257,6 +424,9 @@ function validateJsonStrings(value: unknown, path: string): void {
       for (const [key, item] of entries) {
         if (key.includes("\0")) {
           throw new BadRequestError(`${current.path} contains an invalid null character`);
+        }
+        if (hasLoneSurrogate(key)) {
+          throw new BadRequestError(`${current.path} contains invalid Unicode`);
         }
         pending.push({ depth: current.depth + 1, path: `${current.path}.${key}`, value: item });
       }
@@ -287,6 +457,11 @@ function agentPermission(
   if (value === undefined && defaultPermission) return defaultPermission;
   if (value === "read" || value === "write") return value;
   throw new BadRequestError("permission must be read or write");
+}
+
+function agentStatus(value: unknown): AgentStatus {
+  if (value === "active" || value === "disabled") return value;
+  throw new BadRequestError("status must be active or disabled");
 }
 
 function uuidString(value: unknown, name: string): string {
@@ -338,8 +513,25 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
 }
 
 function requireHumanActor(actor: ActorContext): ActorContext {
-  if (actor.agentId) throw new AccessDeniedError("Agent administration requires a User");
+  if (actor.agentId) throw new AccessDeniedError("This operation requires a User");
   return actor;
+}
+
+export function createActorHandlers(database: PostgresDatabase) {
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        return Response.json(
+          { kind: "human", userId: actor.userId },
+          { headers: { "cache-control": "private, no-store" } },
+        );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
 }
 
 export function createCapabilitiesHandlers(
@@ -358,6 +550,19 @@ export function createCapabilitiesHandlers(
       } catch (error) {
         return errorResponse(error);
       }
+    },
+  };
+}
+
+export function createReadinessHandlers(database: PostgresDatabase, options: OperationsOptions) {
+  const operations = createOperationsModule(database, options);
+  return {
+    async GET(): Promise<Response> {
+      const report = await operations.readiness();
+      return Response.json(report, {
+        status: report.status === "unready" ? 503 : 200,
+        headers: { "cache-control": "no-store" },
+      });
     },
   };
 }
@@ -417,6 +622,78 @@ export function createAgentHandlers(database: PostgresDatabase) {
           status: 201,
           headers: { "cache-control": "private, no-store" },
         });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createAgentByIdHandlers(database: PostgresDatabase) {
+  const access = createAccessModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async PATCH(request: Request, agentId: string): Promise<Response> {
+      try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const body = await jsonObject(request);
+        const unsupportedField = Object.keys(body).find(
+          (field) => field !== "name" && field !== "status",
+        );
+        if (unsupportedField) {
+          throw new BadRequestError(`${unsupportedField} is not a supported Agent field`);
+        }
+        if (body.name === undefined && body.status === undefined) {
+          throw new BadRequestError("name or status is required");
+        }
+        const agent = await access.updateAgent(actor, normalizedAgentId, {
+          name: body.name === undefined ? undefined : requiredString(body.name, "name", 120),
+          status: body.status === undefined ? undefined : agentStatus(body.status),
+        });
+        return agent
+          ? Response.json(agent, {
+              headers: { "cache-control": "private, no-store" },
+            })
+          : Response.json(
+              { code: "not_found", error: "Agent not found" },
+              {
+                status: 404,
+                headers: { "cache-control": "private, no-store" },
+              },
+            );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async DELETE(request: Request, agentId: string): Promise<Response> {
+      try {
+        const normalizedAgentId = uuidString(agentId, "agentId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const result = await access.deleteAgent(actor, normalizedAgentId);
+        if (result === "deleted") {
+          return new Response(null, {
+            status: 204,
+            headers: { "cache-control": "private, no-store" },
+          });
+        }
+        if (result === "must_disable") {
+          return Response.json(
+            { code: "invalid_request", error: "Disable Agent before deleting it" },
+            {
+              status: 409,
+              headers: { "cache-control": "private, no-store" },
+            },
+          );
+        }
+        return Response.json(
+          { code: "not_found", error: "Agent not found" },
+          {
+            status: 404,
+            headers: { "cache-control": "private, no-store" },
+          },
+        );
       } catch (error) {
         return errorResponse(error);
       }
@@ -694,6 +971,260 @@ export function createMemoryHandlers(
           status: 201,
           headers: { etag: memoryEtag(memory.version), "cache-control": "private, no-store" },
         });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createMemoryProposalHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
+  const memories = createMemoryModule(database, options);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const url = new URL(request.url);
+        const proposals = await observeOperation("memory-proposal.list", () =>
+          memories.listProposals(actor, {
+            limit: queryInteger(url, "limit", 50, 1, 100),
+            status: memoryProposalStatus(url.searchParams.get("status")),
+          }),
+        );
+        return Response.json(proposals, {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async POST(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const body = await jsonObject(request);
+        const evidenceMemoryIds =
+          body.evidenceMemoryIds === undefined
+            ? []
+            : uuidArray(body.evidenceMemoryIds, "evidenceMemoryIds", true);
+        const evidenceObservationIds =
+          body.evidenceObservationIds === undefined
+            ? []
+            : uuidArray(body.evidenceObservationIds, "evidenceObservationIds", true);
+        if (evidenceMemoryIds.length + evidenceObservationIds.length > 50) {
+          throw new BadRequestError("Proposal evidence exceeds 50 items");
+        }
+
+        const input =
+          body.kind === "create"
+            ? {
+                kind: "create" as const,
+                content: requiredString(body.content, "content", 1_000_000),
+                scope: memoryScope(body.scope),
+                metadata: metadata(body.metadata),
+                evidenceMemoryIds,
+                evidenceObservationIds,
+              }
+            : body.kind === "update"
+              ? {
+                  kind: "update" as const,
+                  targetMemoryId: uuidString(body.targetMemoryId, "targetMemoryId"),
+                  expectedVersion: positiveInteger(body.expectedVersion, "expectedVersion"),
+                  content:
+                    body.content === undefined
+                      ? undefined
+                      : requiredString(body.content, "content", 1_000_000),
+                  scope: memoryScope(body.scope),
+                  metadata: metadata(body.metadata),
+                  evidenceMemoryIds,
+                  evidenceObservationIds,
+                }
+              : null;
+        if (!input) throw new BadRequestError("kind must be create or update");
+        if (
+          input.kind === "update" &&
+          input.content === undefined &&
+          input.scope === undefined &&
+          input.metadata === undefined
+        ) {
+          throw new BadRequestError("An update proposal must change content, scope, or metadata");
+        }
+        const proposal = await observeOperation("memory-proposal.create", async () =>
+          memories.propose(actor, input, {
+            idempotency: await idempotencyRequest(request, "memory-proposal.create", input),
+          }),
+        );
+        return Response.json(proposal, {
+          status: 201,
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createEpisodeHandlers(database: PostgresDatabase) {
+  const observations = createObservationModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const url = new URL(request.url);
+        const cursor = decodeCursor(url.searchParams.get("cursor"));
+        const limit = queryInteger(url, "limit", 50, 1, 100);
+        const episodes = await observeOperation("episode.list", () =>
+          observations.list(actor, {
+            cursor: cursor ? { id: cursor.id, createdAt: cursor.updatedAt } : undefined,
+            kind: episodeKind(url.searchParams.get("kind"), true),
+            limit,
+            scope: memoryScope(url.searchParams.get("scope") ?? undefined),
+          }),
+        );
+        const headers = new Headers({ "cache-control": "private, no-store" });
+        const last = episodes.length === limit ? episodes.at(-1) : undefined;
+        if (last) {
+          headers.set(
+            "x-lore-next-cursor",
+            encodeCursor({ id: last.id, updatedAt: last.createdAt }),
+          );
+        }
+        return Response.json(episodes, { headers });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async POST(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const body = await jsonObject(request);
+        const input = {
+          kind: episodeKind(body.kind) as EpisodeKind,
+          scope: memoryScope(body.scope) ?? "private",
+          observations: episodeObservations(body.observations),
+        };
+        const episode = await observeOperation("episode.record", async () =>
+          observations.record(actor, input, {
+            idempotency: await idempotencyRequest(request, "episode.record", input),
+          }),
+        );
+        return Response.json(episode, {
+          status: 201,
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createObservationHandlers(database: PostgresDatabase) {
+  const observations = createObservationModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const requestedIds = new URL(request.url).searchParams.getAll("id");
+        if (requestedIds.length < 1 || requestedIds.length > MAX_OBSERVATION_BATCH_READ) {
+          throw new BadRequestError(`id must be repeated 1 to ${MAX_OBSERVATION_BATCH_READ} times`);
+        }
+        const ids = requestedIds.map((id, index) => uuidString(id, `id[${index}]`));
+        const visible = await observeOperation("observation.retrieve-many", () =>
+          observations.retrieveObservations(actor, ids),
+        );
+        return Response.json(visible, {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createEpisodeByIdHandlers(database: PostgresDatabase) {
+  const observations = createObservationModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request, id: string): Promise<Response> {
+      try {
+        const episodeId = uuidString(id, "episodeId");
+        const actor = await resolver.resolveActor(request);
+        const episode = await observeOperation("episode.retrieve", () =>
+          observations.retrieve(actor, episodeId),
+        );
+        return episode
+          ? Response.json(episode, { headers: { "cache-control": "private, no-store" } })
+          : Response.json(
+              { code: "not_found", error: "Episode not found" },
+              { status: 404, headers: { "cache-control": "private, no-store" } },
+            );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async DELETE(request: Request, id: string): Promise<Response> {
+      try {
+        const episodeId = uuidString(id, "episodeId");
+        const actor = await resolver.resolveActor(request);
+        const deleted = await observeOperation("episode.forget", async () =>
+          observations.forget(actor, episodeId, {
+            idempotency: await idempotencyRequest(request, "episode.forget", { episodeId }),
+          }),
+        );
+        return deleted
+          ? new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } })
+          : Response.json(
+              { code: "not_found", error: "Episode not found" },
+              { status: 404, headers: { "cache-control": "private, no-store" } },
+            );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createMemoryProposalReviewHandlers(
+  database: PostgresDatabase,
+  options: MemoryModuleOptions = {},
+) {
+  const memories = createMemoryModule(database, options);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async POST(request: Request, id: string): Promise<Response> {
+      try {
+        const proposalId = uuidString(id, "proposalId");
+        const actor = requireHumanActor(await resolver.resolveActor(request));
+        const body = await jsonObject(request);
+        if (body.decision !== "accept" && body.decision !== "reject") {
+          throw new BadRequestError("decision must be accept or reject");
+        }
+        const decision = body.decision;
+        const reviewed = await observeOperation("memory-proposal.review", () =>
+          memories.reviewProposal(actor, proposalId, decision),
+        );
+        return reviewed
+          ? Response.json(reviewed, {
+              headers: {
+                ...(reviewed.memory ? { etag: memoryEtag(reviewed.memory.version) } : {}),
+                "cache-control": "private, no-store",
+              },
+            })
+          : Response.json(
+              { code: "not_found", error: "Memory Proposal not found" },
+              { status: 404, headers: { "cache-control": "private, no-store" } },
+            );
       } catch (error) {
         return errorResponse(error);
       }

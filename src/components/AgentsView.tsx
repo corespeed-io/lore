@@ -42,7 +42,17 @@ export function AgentsView({
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [dismissedListError, setDismissedListError] = useState<unknown>(null);
   const [issuedCredential, setIssuedCredential] = useState<IssuedCredentialState | null>(null);
+  const [managedAgentId, setManagedAgentId] = useState<string | null>(null);
   const listError = error && error !== dismissedListError ? errorMessage(error) : null;
+  const managedAgent = agents.find((agent) => agent.id === managedAgentId) ?? null;
+
+  function updateAgentInList(updated: WorkspaceAgent) {
+    return mutate(
+      (current = []) =>
+        current.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
+      { revalidate: false },
+    );
+  }
 
   async function createNewAgent() {
     const normalizedName = name.trim();
@@ -135,13 +145,8 @@ export function AgentsView({
               key={agent.id}
               agent={agent}
               workspaceId={workspaceId}
-              onAgentChange={(updated) =>
-                mutate(
-                  (current = []) =>
-                    current.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
-                  { revalidate: false },
-                )
-              }
+              onAgentChange={updateAgentInList}
+              onManage={() => setManagedAgentId(agent.id)}
               onIssued={(credential) =>
                 setIssuedCredential({ ...credential, agentName: agent.name })
               }
@@ -153,6 +158,22 @@ export function AgentsView({
       {issuedCredential && (
         <CredentialReveal credential={issuedCredential} onClose={() => setIssuedCredential(null)} />
       )}
+
+      {managedAgent && (
+        <AgentLifecycleDialog
+          agent={managedAgent}
+          workspaceId={workspaceId}
+          onAgentChange={updateAgentInList}
+          onClose={() => setManagedAgentId(null)}
+          onDeleted={async () => {
+            await mutate(
+              (current = []) => current.filter((candidate) => candidate.id !== managedAgent.id),
+              { revalidate: false },
+            );
+            setManagedAgentId(null);
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -161,11 +182,13 @@ function AgentCard({
   agent,
   workspaceId,
   onAgentChange,
+  onManage,
   onIssued,
 }: {
   agent: WorkspaceAgent;
   workspaceId: string;
   onAgentChange: (agent: WorkspaceAgent) => Promise<unknown> | unknown;
+  onManage: () => void;
   onIssued: (credential: IssuedAgentCredential) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -296,6 +319,16 @@ function AgentCard({
               Restore access
             </button>
           )}
+          <button
+            type="button"
+            className="agent-manage"
+            aria-label={`Manage ${agent.name}`}
+            aria-haspopup="dialog"
+            disabled={busy}
+            onClick={onManage}
+          >
+            Manage
+          </button>
         </div>
       </div>
 
@@ -385,6 +418,292 @@ function AgentCard({
         </section>
       )}
     </article>
+  );
+}
+
+function AgentLifecycleDialog({
+  agent,
+  workspaceId,
+  onAgentChange,
+  onDeleted,
+  onClose,
+}: {
+  agent: WorkspaceAgent;
+  workspaceId: string;
+  onAgentChange: (agent: WorkspaceAgent) => Promise<unknown> | unknown;
+  onDeleted: () => Promise<unknown> | unknown;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const [renameValue, setRenameValue] = useState(agent.name);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [statusConfirmation, setStatusConfirmation] = useState<WorkspaceAgent["status"] | null>(
+    null,
+  );
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<"delete" | "rename" | "status" | null>(null);
+  const mutations = useLoreAgentMutations(workspaceId);
+  const busy =
+    pendingAction !== null || mutations.updateAgent.isMutating || mutations.deleteAgent.isMutating;
+  const agentDisabled = agent.status === "disabled";
+  const normalizedName = renameValue.trim();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    closeButtonRef.current?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    setRenameValue(agent.name);
+    setDeleteConfirmation("");
+  }, [agent.name]);
+
+  async function saveRename() {
+    if (!normalizedName || normalizedName === agent.name) return;
+    setMutationError(null);
+    setPendingAction("rename");
+    try {
+      const updated = await mutations.updateAgent.trigger({
+        agentId: agent.id,
+        name: normalizedName,
+      });
+      await onAgentChange(updated);
+    } catch (cause) {
+      setMutationError(errorMessage(cause));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function changeStatus(status: WorkspaceAgent["status"]) {
+    setMutationError(null);
+    setPendingAction("status");
+    try {
+      const updated = await mutations.updateAgent.trigger({ agentId: agent.id, status });
+      await onAgentChange(updated);
+      setStatusConfirmation(null);
+    } catch (cause) {
+      setMutationError(errorMessage(cause));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function permanentlyDelete() {
+    if (!agentDisabled || deleteConfirmation !== agent.name) return;
+    setMutationError(null);
+    setPendingAction("delete");
+    try {
+      await mutations.deleteAgent.trigger({ agentId: agent.id });
+      await onDeleted();
+    } catch (cause) {
+      setMutationError(errorMessage(cause));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="agent-lifecycle-dialog"
+      aria-modal="true"
+      aria-labelledby="agent-lifecycle-title"
+      aria-describedby="agent-lifecycle-summary"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        onClose();
+      }}
+      onMouseDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const outsideDialog =
+          event.clientX < bounds.left ||
+          event.clientX > bounds.right ||
+          event.clientY < bounds.top ||
+          event.clientY > bounds.bottom;
+        if (outsideDialog) onClose();
+      }}
+    >
+      <header className="agent-lifecycle-head">
+        <div>
+          <p className="memory-editor-kicker">Global Agent identity</p>
+          <h2 id="agent-lifecycle-title">Manage {agent.name}</h2>
+          <code>{agent.id}</code>
+        </div>
+        <button
+          ref={closeButtonRef}
+          type="button"
+          className="agent-lifecycle-close"
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </header>
+
+      <p id="agent-lifecycle-summary" className="agent-lifecycle-summary">
+        This Agent belongs to you, not to one Workspace. Name and status changes apply everywhere it
+        has a grant.
+      </p>
+
+      {mutationError && (
+        <InlineError message={mutationError} onDismiss={() => setMutationError(null)} />
+      )}
+
+      <section className="agent-lifecycle-section" aria-labelledby="agent-rename-title">
+        <div>
+          <h3 id="agent-rename-title">Name</h3>
+          <p>Rename this Agent across every Workspace where it appears.</p>
+        </div>
+        <form
+          className="agent-rename-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveRename();
+          }}
+        >
+          <label>
+            <span>Agent name</span>
+            <input
+              value={renameValue}
+              maxLength={120}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              disabled={busy}
+              onChange={(event) => setRenameValue(event.target.value)}
+            />
+          </label>
+          <button
+            type="submit"
+            className="agent-lifecycle-primary"
+            disabled={!normalizedName || normalizedName === agent.name || busy}
+          >
+            {pendingAction === "rename" ? "Saving…" : "Save name"}
+          </button>
+        </form>
+      </section>
+
+      <section className="agent-lifecycle-section" aria-labelledby="agent-status-title">
+        <div>
+          <div className="agent-lifecycle-title-row">
+            <h3 id="agent-status-title">Authentication status</h3>
+            <span className={`agent-status agent-status-${agent.status}`}>{agent.status}</span>
+          </div>
+          {agentDisabled ? (
+            <p>
+              Re-enabling lets unrevoked credentials authenticate wherever you remain an active
+              Workspace member and this Agent has an active grant. Revoked grants and credentials
+              stay revoked.
+            </p>
+          ) : (
+            <p>
+              Disabling immediately blocks every credential in every Workspace. Grants and
+              credential metadata remain available for diagnosis and recovery.
+            </p>
+          )}
+        </div>
+        {statusConfirmation ? (
+          <fieldset className="agent-status-confirmation">
+            <legend>Confirm status change</legend>
+            <p>
+              {statusConfirmation === "active"
+                ? "Confirm global re-enable. Unrevoked credentials may authenticate again in other Workspaces not shown here."
+                : "Confirm global disable. Every credential will stop authenticating, including in other Workspaces not shown here."}
+            </p>
+            <div>
+              <button
+                type="button"
+                className="agent-lifecycle-secondary"
+                disabled={busy}
+                onClick={() => setStatusConfirmation(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={
+                  statusConfirmation === "active"
+                    ? "agent-lifecycle-primary"
+                    : "agent-lifecycle-secondary"
+                }
+                disabled={busy}
+                onClick={() => void changeStatus(statusConfirmation)}
+              >
+                {pendingAction === "status"
+                  ? "Updating…"
+                  : statusConfirmation === "active"
+                    ? "Confirm re-enable"
+                    : "Confirm disable"}
+              </button>
+            </div>
+          </fieldset>
+        ) : (
+          <button
+            type="button"
+            className={agentDisabled ? "agent-lifecycle-primary" : "agent-lifecycle-secondary"}
+            disabled={busy}
+            onClick={() => setStatusConfirmation(agentDisabled ? "active" : "disabled")}
+          >
+            {agentDisabled ? "Re-enable Agent" : "Disable Agent"}
+          </button>
+        )}
+      </section>
+
+      <section
+        className="agent-lifecycle-section agent-lifecycle-danger-zone"
+        aria-labelledby="agent-delete-title"
+      >
+        <div>
+          <h3 id="agent-delete-title">Delete Agent</h3>
+          <p>
+            This view only shows the selected Workspace. Permanent deletion also removes grants and
+            credentials in every other Workspace, without listing them here. Memories remain, but
+            their creating-Agent reference is cleared. The Agent must be disabled first.
+          </p>
+        </div>
+        {agentDisabled ? (
+          <div className="agent-delete-confirmation">
+            <label>
+              <span>
+                Type <strong>{agent.name}</strong> to confirm
+              </span>
+              <input
+                value={deleteConfirmation}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                disabled={busy}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="agent-lifecycle-delete"
+              disabled={deleteConfirmation !== agent.name || busy}
+              onClick={() => void permanentlyDelete()}
+            >
+              {pendingAction === "delete" ? "Deleting…" : "Delete permanently"}
+            </button>
+          </div>
+        ) : (
+          <p className="agent-delete-gate">Disable this Agent before permanent deletion.</p>
+        )}
+      </section>
+    </dialog>
   );
 }
 

@@ -1,6 +1,6 @@
 // Pure URL <-> route-state mapping for the client shell.
 
-export type Tab = "overview" | "graph" | "search" | "agents";
+export type Tab = "overview" | "graph" | "search" | "agents" | "proposals" | "operations";
 
 export interface RouteState {
   tab: Tab;
@@ -52,13 +52,30 @@ export function parseRoute(pathname: string, search: string): RouteState {
     return { tab: "agents" };
   }
 
+  if (segments[0] === "proposals") {
+    return {
+      tab: "proposals",
+      memoryId: segments[1] === "memory" ? segments[2] : undefined,
+    };
+  }
+
+  if (segments[0] === "operations") {
+    return { tab: "operations" };
+  }
+
   if (segments[0] === "memory") {
     return { tab: "overview", memoryId: segments[1] };
   }
 
   const tabParam = params.get("tab");
   const tab: Tab =
-    tabParam === "graph" || tabParam === "search" || tabParam === "agents" ? tabParam : "overview";
+    tabParam === "graph" ||
+    tabParam === "search" ||
+    tabParam === "agents" ||
+    tabParam === "proposals" ||
+    tabParam === "operations"
+      ? tabParam
+      : "overview";
   return {
     tab,
     memoryId: queryValue(params, "memory"),
@@ -78,6 +95,10 @@ export function routeUrl(route: RouteState): string {
     path = route.memoryId ? `/memories/${encoded(route.memoryId)}` : "/memories";
   } else if (route.tab === "agents") {
     path = "/agents";
+  } else if (route.tab === "proposals") {
+    path = route.memoryId ? `/proposals/memory/${encoded(route.memoryId)}` : "/proposals";
+  } else if (route.tab === "operations") {
+    path = "/operations";
   } else if (route.memoryId) {
     path = `/memory/${encoded(route.memoryId)}`;
   }

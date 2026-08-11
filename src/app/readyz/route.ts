@@ -1,4 +1,4 @@
-import { createOperationsModule } from "@/lib/operations";
+import { createReadinessHandlers } from "@/lib/http";
 import { getRuntimeDatabase } from "@/lib/runtime/database";
 import { getRuntimeEmbeddingProvider } from "@/lib/runtime/embedding";
 
@@ -9,13 +9,8 @@ export async function GET() {
   // always has a deployment-level embedding space (with local Ollama defaults),
   // so failure to construct it is not the same as an intentional disabled mode.
   const embeddingProvider = getRuntimeEmbeddingProvider();
-  const operations = createOperationsModule(await getRuntimeDatabase(), {
+  return createReadinessHandlers(await getRuntimeDatabase(), {
     embeddingConfigured: true,
     embeddingIdentity: embeddingProvider,
-  });
-  const report = await operations.readiness();
-  return Response.json(report, {
-    status: report.status === "unready" ? 503 : 200,
-    headers: { "cache-control": "no-store" },
-  });
+  }).GET();
 }

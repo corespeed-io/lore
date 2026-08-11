@@ -25,6 +25,8 @@ const NAV: { id: Tab; label: string }[] = [
   { id: "graph", label: "Graph" },
   { id: "search", label: "Memories" },
   { id: "agents", label: "Agents" },
+  { id: "proposals", label: "Proposals" },
+  { id: "operations", label: "Operations" },
 ];
 
 const ICONS: Partial<Record<Tab, React.ReactNode>> = {
@@ -89,6 +91,34 @@ const ICONS: Partial<Record<Tab, React.ReactNode>> = {
     >
       <rect x="3" y="4.5" width="10" height="8" rx="2" />
       <path d="M8 2v2.5M5.5 8h.01M10.5 8h.01M6 10.5h4" strokeLinecap="round" />
+    </svg>
+  ),
+  proposals: (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+    >
+      <path d="M4 2.5h6l2 2v9H4z" strokeLinejoin="round" />
+      <path d="M10 2.5v2h2M6 7h4M6 9.5h4M6 12h2.5" strokeLinecap="round" />
+    </svg>
+  ),
+  operations: (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+    >
+      <path d="M3 3.5h10v3H3zM3 9.5h10v3H3z" strokeLinejoin="round" />
+      <path d="M5.5 5h5M5.5 11h5" strokeLinecap="round" />
     </svg>
   ),
 };

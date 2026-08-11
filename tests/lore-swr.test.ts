@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
 import {
+  isLoreAgentCredentialsCacheKey,
+  isLoreAgentsCacheKey,
   loreKeys,
   MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
@@ -37,9 +39,51 @@ test("Lore cache keys isolate Workspace, query, and result shape", () => {
   expect(loreKeys.agents(workspaceId)).not.toEqual(
     loreKeys.agents("10000000-0000-4000-8000-000000000002"),
   );
+  expect(loreKeys.memoryProposals(workspaceId, "pending")).not.toEqual(
+    loreKeys.memoryProposals(workspaceId, "accepted"),
+  );
+  expect(loreKeys.observations(workspaceId, ["observation-a"])).not.toEqual(
+    loreKeys.observations(workspaceId, ["observation-b"]),
+  );
+  expect(loreKeys.observations(workspaceId, ["observation-a"])).not.toEqual(
+    loreKeys.observations("10000000-0000-4000-8000-000000000002", ["observation-a"]),
+  );
+  expect(loreKeys.memoryProposals(workspaceId, "pending")).not.toEqual(
+    loreKeys.memoryProposals("10000000-0000-4000-8000-000000000002", "pending"),
+  );
   expect(loreKeys.agentCredentials(workspaceId, "agent-a")).not.toEqual(
     loreKeys.agentCredentials(workspaceId, "agent-b"),
   );
+  expect(loreKeys.capabilities(workspaceId)).not.toEqual(
+    loreKeys.capabilities("10000000-0000-4000-8000-000000000002"),
+  );
+  expect(loreKeys.currentActor(workspaceId)).not.toEqual(
+    loreKeys.currentActor("10000000-0000-4000-8000-000000000002"),
+  );
+  expect(loreKeys.validateWorkspaceImport(workspaceId)).not.toEqual(
+    loreKeys.importWorkspace(workspaceId),
+  );
+});
+
+test("Agent cache predicates reconcile global identity without crossing credential owners", () => {
+  const otherWorkspaceId = "10000000-0000-4000-8000-000000000002";
+  const agentId = "30000000-0000-4000-8000-000000000001";
+  const otherAgentId = "30000000-0000-4000-8000-000000000002";
+
+  expect(isLoreAgentsCacheKey(loreKeys.agents(workspaceId))).toBe(true);
+  expect(isLoreAgentsCacheKey(loreKeys.agents(otherWorkspaceId))).toBe(true);
+  expect(isLoreAgentsCacheKey(loreKeys.agentCredentials(workspaceId, agentId))).toBe(false);
+
+  expect(
+    isLoreAgentCredentialsCacheKey(loreKeys.agentCredentials(workspaceId, agentId), agentId),
+  ).toBe(true);
+  expect(
+    isLoreAgentCredentialsCacheKey(loreKeys.agentCredentials(otherWorkspaceId, agentId), agentId),
+  ).toBe(true);
+  expect(
+    isLoreAgentCredentialsCacheKey(loreKeys.agentCredentials(workspaceId, otherAgentId), agentId),
+  ).toBe(false);
+  expect(isLoreAgentCredentialsCacheKey(loreKeys.agents(workspaceId), agentId)).toBe(false);
 });
 
 test("upserting a Memory preserves page boundaries without duplicates", () => {

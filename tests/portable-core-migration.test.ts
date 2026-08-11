@@ -5,6 +5,63 @@ import { expect, test } from "vitest";
 
 const migrations = new URL("../db/migrations/", import.meta.url);
 
+test("Memory Proposal migration fails closed without Agent lifecycle revision 7", async () => {
+  const postgres = new PGlite({ extensions: { vector } });
+  try {
+    await postgres.waitReady;
+    for (const migrationId of [
+      "0001_initial.sql",
+      "0002_memory_embedding_jobs.sql",
+      "0003_portable_core.sql",
+      "0004_english_lexical_search.sql",
+      "0005_memory_metadata_search.sql",
+      "0006_memory_chunk_entity_aliases.sql",
+    ]) {
+      await postgres.exec(await readFile(new URL(migrationId, migrations), "utf8"));
+    }
+
+    await expect(
+      postgres.exec(await readFile(new URL("0008_memory_proposals.sql", migrations), "utf8")),
+    ).rejects.toThrow("Expected Lore schema revision 7 before migration 0008");
+    await expect(
+      postgres.query<{ schema_revision: number }>(
+        "SELECT schema_revision FROM lore_system_state WHERE singleton",
+      ),
+    ).resolves.toMatchObject({ rows: [{ schema_revision: 6 }] });
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Observation evidence migration fails closed without Memory Proposals revision 8", async () => {
+  const postgres = new PGlite({ extensions: { vector } });
+  try {
+    await postgres.waitReady;
+    for (const migrationId of [
+      "0001_initial.sql",
+      "0002_memory_embedding_jobs.sql",
+      "0003_portable_core.sql",
+      "0004_english_lexical_search.sql",
+      "0005_memory_metadata_search.sql",
+      "0006_memory_chunk_entity_aliases.sql",
+      "0007_agent_lifecycle.sql",
+    ]) {
+      await postgres.exec(await readFile(new URL(migrationId, migrations), "utf8"));
+    }
+
+    await expect(
+      postgres.exec(await readFile(new URL("0009_observation_evidence.sql", migrations), "utf8")),
+    ).rejects.toThrow("Expected Lore schema revision 8 before migration 0009");
+    await expect(
+      postgres.query<{ schema_revision: number }>(
+        "SELECT schema_revision FROM lore_system_state WHERE singleton",
+      ),
+    ).resolves.toMatchObject({ rows: [{ schema_revision: 7 }] });
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("Portable Core adopts jobs written during the additive generation rollout", async () => {
   const postgres = new PGlite({ extensions: { vector } });
   try {

@@ -435,6 +435,18 @@ test("Workspace export is actor-visible, checksummed, dry-runnable, and replay-s
   });
   const replayed = await portability.importWorkspace(testContext.carol, { archive, ownerMap });
   expect(replayed).toMatchObject({ ...imported, replayed: true });
+  const replayedDryRun = await portability.importWorkspace(testContext.carol, {
+    archive,
+    ownerMap,
+    dryRun: true,
+  });
+  expect(replayedDryRun).toMatchObject({
+    dryRun: true,
+    importedLinks: imported.importedLinks,
+    importedMemories: imported.importedMemories,
+    memoryIdMap: {},
+    replayed: true,
+  });
   await expect(memories.list(testContext.carol)).resolves.toHaveLength(3);
 
   const tampered = structuredClone(archive);
@@ -581,15 +593,26 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 6,
+    schemaRevision: 9,
     features: {
       idempotency: true,
       optimisticConcurrency: true,
+      memoryProposals: true,
+      observationEvidence: true,
       transactionalOutbox: true,
     },
     limits: {
       workspaceArchiveLinks: MAX_WORKSPACE_ARCHIVE_LINKS,
       workspaceArchiveMemories: MAX_WORKSPACE_ARCHIVE_MEMORIES,
+      memoryProposalEvidence: 50,
+      memoryProposalList: 100,
+      memoryProposalPending: 100,
+      memoryProposalRetentionSeconds: 2_592_000,
+      episodeObservations: 100,
+      episodeContentCharacters: 1_000_000,
+      episodeMetadataCharacters: 1_000_000,
+      observationContentCharacters: 100_000,
+      observationBatchRead: 50,
     },
   });
   await expect(operations.readiness()).resolves.toMatchObject({
@@ -645,7 +668,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 6 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 7 WHERE singleton"),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>

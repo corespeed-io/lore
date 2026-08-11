@@ -1,7 +1,23 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { listAgentCredentials, listMemories, listWorkspaces, setAgentGrant } from "@/lib/lore-api";
+import {
+  deleteAgent,
+  exportWorkspaceArchive,
+  getCurrentHumanActor,
+  getDeploymentCapabilities,
+  getObservations,
+  getReadiness,
+  importWorkspaceArchive,
+  listAgentCredentials,
+  listMemories,
+  listMemoryProposals,
+  listWorkspaces,
+  reviewMemoryProposal,
+  setAgentGrant,
+  updateAgent,
+} from "@/lib/lore-api";
+import type { WorkspaceArchive } from "@/lib/portability";
 import { clearRequestLog, getRequestLog } from "@/lib/request-log";
-import type { Memory } from "@/lib/types";
+import type { Memory, MemoryProposal } from "@/lib/types";
 
 function memory(index: number): Memory {
   return {
@@ -15,6 +31,29 @@ function memory(index: number): Memory {
     version: 1,
     createdAt: "2026-08-05T00:00:00.000Z",
     updatedAt: "2026-08-05T00:00:00.000Z",
+  };
+}
+
+function proposal(): MemoryProposal {
+  return {
+    id: "50000000-0000-4000-8000-000000000001",
+    workspaceId: "10000000-0000-4000-8000-000000000001",
+    ownerUserId: "20000000-0000-4000-8000-000000000001",
+    proposedByActorKind: "agent",
+    proposedByAgentId: "30000000-0000-4000-8000-000000000001",
+    kind: "create",
+    targetMemoryId: null,
+    baseMemoryVersion: null,
+    proposedContent: "Proposed fact",
+    proposedScope: "private",
+    proposedMetadata: {},
+    evidenceMemoryIds: [],
+    evidenceObservationIds: [],
+    status: "pending",
+    reviewedByUserId: null,
+    acceptedMemoryId: null,
+    createdAt: "2026-08-10T00:00:00.000Z",
+    reviewedAt: null,
   };
 }
 
@@ -70,4 +109,188 @@ test("Agent browser client scopes credential reads and grant updates to one Work
   expect((credentialRequest.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
   expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "PUT" });
   expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ permission: "write" }));
+});
+
+test("Agent browser client scopes global lifecycle mutations through the selected Workspace", async () => {
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const agentId = "30000000-0000-4000-8000-000000000001";
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json({
+        id: agentId,
+        ownerUserId: "20000000-0000-4000-8000-000000000001",
+        name: "Deployment assistant",
+        status: "disabled",
+        permission: "write",
+        grantStatus: "active",
+        createdAt: "2026-08-09T00:00:00.000Z",
+        updatedAt: "2026-08-09T00:01:00.000Z",
+      }),
+    )
+    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await updateAgent(workspaceId, agentId, {
+    name: "Deployment assistant",
+    status: "disabled",
+  });
+  await deleteAgent(workspaceId, agentId);
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  for (const call of fetchMock.mock.calls) {
+    const options = call[1];
+    if (!options) throw new Error("Expected request options");
+    expect((options.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
+    expect(String(call[0])).toContain(`/api/v1/agents/${agentId}`);
+  }
+  expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+    method: "PATCH",
+    body: JSON.stringify({ name: "Deployment assistant", status: "disabled" }),
+  });
+  expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
+});
+
+test("Proposal browser client scopes review history and decisions to one Workspace", async () => {
+  const pending = proposal();
+  const reviewed = {
+    proposal: {
+      ...pending,
+      status: "rejected" as const,
+      reviewedByUserId: pending.ownerUserId,
+      reviewedAt: "2026-08-10T00:05:00.000Z",
+    },
+    memory: null,
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json([pending]))
+    .mockResolvedValueOnce(Response.json(reviewed));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(listMemoryProposals(pending.workspaceId, "pending")).resolves.toEqual([pending]);
+  await expect(reviewMemoryProposal(pending.workspaceId, pending.id, "reject")).resolves.toEqual(
+    reviewed,
+  );
+
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain("status=pending&limit=100");
+  expect(String(fetchMock.mock.calls[1]?.[0])).toContain(`/${pending.id}/review`);
+  for (const call of fetchMock.mock.calls) {
+    expect(new Headers(call[1]?.headers).get("x-lore-workspace-id")).toBe(pending.workspaceId);
+  }
+  expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+    method: "POST",
+    body: JSON.stringify({ decision: "reject" }),
+  });
+});
+
+test("Observation browser client preserves evidence order inside one Workspace", async () => {
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const first = "60000000-0000-4000-8000-000000000001";
+  const second = "60000000-0000-4000-8000-000000000002";
+  const fetchMock = vi.fn().mockResolvedValueOnce(Response.json([]));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(getObservations(workspaceId, [second, first])).resolves.toEqual([]);
+
+  const [requestUrl, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+  const url = new URL(requestUrl, "http://lore.local");
+  expect(url.pathname + url.search).toBe(`/api/v1/observations?id=${second}&id=${first}`);
+  expect(new Headers(options.headers).get("x-lore-workspace-id")).toBe(workspaceId);
+});
+
+test("Operations browser client treats bounded 503 readiness as a typed unready report", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      Response.json(
+        {
+          status: "unready",
+          components: {
+            database: "unavailable",
+            embedding: "unknown",
+            rlsRole: "unavailable",
+            schema: "unavailable",
+            vector: "unavailable",
+          },
+        },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  await expect(getReadiness()).resolves.toMatchObject({ status: "unready" });
+  expect(getRequestLog()).toMatchObject([{ operation: "GET /readyz", ok: true }]);
+});
+
+test("Operations browser client scopes Actor, capabilities, export, and dry-run import to one Workspace", async () => {
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const archive: WorkspaceArchive = {
+    manifest: {
+      checksum: "a".repeat(64),
+      exportedAt: "2026-08-09T00:00:00.000Z",
+      format: "lore-workspace-v1",
+      memoryCount: 0,
+      linkCount: 0,
+      sourceDeploymentId: "20000000-0000-4000-8000-000000000001",
+      sourceWorkspaceId: workspaceId,
+      visibility: "actor-visible",
+    },
+    memories: [],
+    links: [],
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json({ kind: "human", userId: "30000000-0000-4000-8000-000000000001" }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({
+        apiVersion: "v1",
+        schemaRevision: 9,
+        deploymentId: "20000000-0000-4000-8000-000000000001",
+        features: {},
+        limits: {
+          workspaceArchiveMemories: 10_000,
+          workspaceArchiveLinks: 50_000,
+          memoryProposalEvidence: 50,
+          memoryProposalList: 100,
+          episodeObservations: 100,
+          episodeContentCharacters: 1_000_000,
+          observationContentCharacters: 100_000,
+          observationBatchRead: 50,
+        },
+        activeEmbeddingGeneration: null,
+      }),
+    )
+    .mockResolvedValueOnce(Response.json(archive))
+    .mockResolvedValueOnce(
+      Response.json({
+        archiveChecksum: archive.manifest.checksum,
+        dryRun: true,
+        importedLinks: 0,
+        importedMemories: 0,
+        memoryIdMap: {},
+        replayed: false,
+        skippedMemories: 0,
+      }),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(getCurrentHumanActor(workspaceId)).resolves.toMatchObject({ kind: "human" });
+  await getDeploymentCapabilities(workspaceId);
+  await expect(exportWorkspaceArchive(workspaceId)).resolves.toEqual(archive);
+  await importWorkspaceArchive(workspaceId, { archive, ownerMap: {}, dryRun: true });
+
+  for (const call of fetchMock.mock.calls) {
+    const options = call[1];
+    if (!options) throw new Error("Expected request options");
+    expect((options.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
+  }
+  expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "POST" });
+  expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
+    archive,
+    ownerMap: {},
+    dryRun: true,
+  });
 });

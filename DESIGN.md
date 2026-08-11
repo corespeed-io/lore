@@ -2,7 +2,7 @@
 
 > Status: Active
 > Canonical source: `DESIGN.md`
-> Last decision review: 2026-08-08
+> Last decision review: 2026-08-10
 
 This document is Lore's binding UI contract. Lore is a native Memory System;
 the product model in `CONTEXT.md` defines every frontend data contract.
@@ -46,8 +46,9 @@ retrieval remains a full-width browse/search surface.
 ### Responsive completeness
 
 Workspace selection, search, Memory browse, Graph exploration, create, inspect,
-edit, scope change, forget, and Agent management must all remain complete on
-mobile. The sidebar becomes a drawer; the product model does not change.
+edit, scope change, forget, Agent management, Proposal review, and Workspace
+portability must all remain complete on mobile. The sidebar becomes a drawer; the
+product model does not change.
 
 ## 3. Information architecture
 
@@ -57,6 +58,8 @@ mobile. The sidebar becomes a drawer; the product model does not change.
 | Memories | Capture and retrieve Memory | Searchable chronological rows | Errors render inline near the workflow |
 | Graph | Explore authorized Memory relationships | Interactive affinity map + selection inspector | Errors remain inside the Graph workspace |
 | Agents | Connect user-owned Agents to the active Workspace | Agent creation, grants, and credential lifecycle | Secrets are one-time; restore/revoke consequences stay explicit |
+| Proposals | Review Agent-suggested Memory changes | Owner-private create/update proposals and evidence | Nothing enters searchable Memory before explicit human acceptance |
+| Operations | Move visible Memory and inspect deployment health | Export/import workflow, readiness, and capabilities | Dry-run gates imports; degraded is distinct from unready |
 
 Search is global to the active Workspace and always returns to Memories. Selecting
 a Memory replaces the list with a detail workspace; Back returns to the same query.
@@ -98,6 +101,9 @@ scrolling and the sidebar remains viewport-height.
 | `--hairline-soft` | `#f2f2f2` | Hover and selected navigation |
 | `--link` | `#0070f3` | Focus, links, active semantic accents |
 | `--danger` | `#c9352b` | Destructive actions only |
+| `--status-degraded-border` | `#ead7a4` | Degraded-status border |
+| `--status-degraded-surface` | `#fffaf0` | Degraded-status surface |
+| `--status-degraded-ink` | `#8a5a00` | Degraded-status text |
 
 Hover uses `--hairline-soft`; selected states combine it with `--ink`; focus uses
 a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
@@ -133,9 +139,16 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `App.tsx` owns Workspace selection, native data, routing, mutations, and workflow composition.
 - `GraphView.tsx` owns Graph filtering, selection, and inspection.
 - `AgentsView.tsx` owns Workspace-scoped Agent creation, grant lifecycle, credential
-  metadata, one-time credential reveal, and credential revocation.
-- `src/lib/viz/graph.ts` owns the optimized D3 force layout, zoom/pan, node drag,
-  label collision, and neighborhood paint state.
+  metadata, one-time credential reveal, credential revocation, and global Agent
+  rename/status/deletion controls.
+- `MemoryProposalsView.tsx` owns the human review inbox, evidence navigation,
+  version-conflict state, and explicit proposal acceptance or rejection.
+- `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
+  dry-run/import, owner remap, and read-only deployment readiness/capabilities.
+- `WorkerCanvasGraph.tsx` and `graph-canvas.worker.ts` own the production Graph's
+  Worker-based D3 layout, Canvas paint, progressive reveal, elastic node drag,
+  label collision, and zoom/pan state. `src/lib/viz/graph.ts` retains the shared
+  instance contract and the legacy SVG benchmark control.
 - `Sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
 - Route files only load runtime configuration and render the feature boundary.
 
@@ -146,7 +159,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Composer | feature panel | empty, ready, saving, error |
 | Detail | feature workspace | view/edit, saving, destructive, mobile stack |
 | Graph | `GraphView` | loading, empty, mapped, filtered, selected, error |
-| Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, error |
+| Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, lifecycle dialog, destructive confirmation, error |
+| Proposal review | `MemoryProposalsView` | loading, empty, pending, selected, stale target, accepted/rejected receipt, error |
+| Workspace operations | `WorkspaceOperationsView` | loading, ready/degraded/unready, export, file selected, dry-run, importing, receipt, error |
 
 ## 10. Workflow specifications
 
@@ -179,6 +194,12 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Search dims non-matches; selection keeps the chosen Memory and its neighbors prominent.
 - The graph supports free node drag, background pan, wheel/buttons zoom, fit-to-view,
   hover focus, and empty-canvas/Escape deselection.
+- Default nodes stay unlabeled so the field remains readable at ~1,000 nodes. Labels
+  appear for hover, selection, and active search/type/focus filters; node size and
+  motion express centrality without persistent degree or hub annotations.
+- Workspace navigation and responsive resizing preserve the actor's current zoom/pan.
+  A graph-data refresh returns to the centered settling state until the new layout
+  is ready.
 - `Open Memory` enters the standard detail workspace; Back returns to Graph.
 - Scope uses the graph palette plus explicit text in the inspector and legend, never
   color alone.
@@ -194,7 +215,55 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Credential metadata may be revisited, but a new secret is shown exactly once and
   Lore retains only its prefix and hash. Revocation is explicit and irreversible.
 - Disabled Agents remain visible for diagnosis but cannot authenticate or receive a
-  new credential. Rename, disable, and delete controls are outside this workflow today.
+  new credential. Rename and status changes are global across the User-owned Agent's
+  Workspace grants. Re-enabling may restore unrevoked credentials only where grants
+  are active. Permanent deletion requires the Agent to be disabled plus an exact-name
+  confirmation; it removes grants and credentials while retaining Memories and
+  clearing their creating-Agent reference.
+
+### Operate a Workspace
+
+- Entry: Operations navigation in the active Workspace; export and import require a
+  human Actor and remain scoped by the ordinary Workspace request context and RLS.
+- Export downloads a checksummed, actor-visible logical archive. The interface names
+  excluded data explicitly and never presents the archive as a PostgreSQL backup.
+- Import begins with a bounded local file check, requires an explicit target-owner
+  remap to the human returned by `/api/v1/actor` and a collision policy, then requires
+  a successful server dry-run before the write action becomes available. An archive
+  identity is never trusted as the target. Any changed input invalidates the dry-run
+  receipt.
+- The completed receipt reports imported/skipped counts and replay status without
+  echoing Memory content. Successful import revalidates Memory, search, and Graph data.
+- Readiness distinguishes `ready`, lexical-safe `degraded`, and request-blocking
+  `unready`. Capabilities and the active embedding generation are read-only
+  deployment facts, never Workspace/User/Agent settings.
+
+### Review Memory Proposals
+
+- Entry: Proposals navigation in the active Workspace; listing and review require a
+  human Actor. Pending proposal content is owner-private and never appears in Memory
+  browse, search, Graph, export, or outbox before acceptance.
+- The inbox identifies create versus update, proposed scope, submitting human or
+  Agent, evidence Memories, and the exact base Memory version for an update.
+- An owner may have at most 100 pending proposals in one Workspace. New submission
+  is refused until review frees an inbox slot, so no pending proposal becomes
+  unreachable behind the native list bound.
+- Selecting a proposal exposes its complete proposed content and metadata before
+  actions. Canonical Memory evidence opens through the standard authorized Memory
+  detail workflow. Raw Observation evidence is shown inline with kind, full
+  currently visible content, and SHA-256; loading, request-failed, and
+  unavailable-or-forgotten states remain distinguishable. Observation evidence is durable until
+  its Episode is explicitly forgotten and does not become searchable Memory merely
+  by appearing in review.
+- Accept creates or updates canonical Memory exactly once. An update whose target
+  version changed remains pending, disables acceptance, and explains the conflict;
+  it is never silently rebased. Reject is explicit and irreversible but does not
+  alter canonical Memory.
+- Up to the latest 100 accepted and rejected proposals remain available in each
+  recent-history view for 30 days. Pending proposals also expire after 30 days;
+  forgetting a target or accepted Memory removes associated proposal content
+  immediately. Successful acceptance updates Memory browse and revalidates search
+  and Graph state without turning Proposal into a searchable Memory type.
 
 ## 11. Loading, empty, error, and attention states
 
@@ -240,6 +309,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
+| 2026-08-10 | Promote the measured Worker + Canvas renderer to the native Graph and keep labels interaction-driven | Keep ~1,000-node layout and drag responsive while making centrality visible without persistent annotation clutter | Main-thread SVG production renderer and always-on labels |
+| 2026-08-09 | Add Operations as the human-only Workspace portability and deployment-health destination | Keep high-consequence export/import behind checksum validation, owner remap, and dry-run while making lexical-safe degradation visible | CLI/API-only Workspace portability |
+| 2026-08-10 | Add Proposals as the human approval boundary for Agent-suggested Memory changes | Enable opt-in automated reasoning without allowing model output to silently become canonical Memory | Direct model-authored canonical writes as an evolution workflow |
 | 2026-08-08 | Add Agents as a standard Lore destination on the canonical 1100px content track | Make human-only Agent creation, Workspace grants, and credential lifecycle a first-class native workflow without creating a second visual system | Agent administration without a binding UI contract |
 | 2026-08-05 | Restore Lore's complete Dashboard/Graph/Memories shell and optimized graph interaction around native Memory types | Preserve the product's mature interface without importing an external domain model | The temporary simplified Memory console |
 | 2026-08-06 | Fix Lore v1 at 1024 dimensions while allowing one provider/model per deployment | Self-host operators retain model choice without turning the database vector protocol into runtime configuration | Workspace/User model selection |

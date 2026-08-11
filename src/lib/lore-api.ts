@@ -1,24 +1,36 @@
+import type { DeploymentCapabilities, ReadinessReport } from "./operations";
+import type {
+  ImportWorkspaceArchive,
+  WorkspaceArchive,
+  WorkspaceImportResult,
+} from "./portability";
 import { recordRequest } from "./request-log";
 import type {
   AgentCredential,
   AgentGrantPermission,
   AgentWorkspaceGrant,
   GraphData,
+  HumanActorSummary,
   IssuedAgentCredential,
   Memory,
+  MemoryProposal,
+  MemoryProposalReviewResult,
+  MemoryProposalStatus,
   MemoryScope,
   MemorySearchResult,
+  Observation,
   WorkspaceAgent,
   WorkspaceSummary,
 } from "./types";
 
 interface RequestOptions extends RequestInit {
+  acceptedStatuses?: readonly number[];
   workspaceId?: string;
   operation: string;
 }
 
 async function requestJson<Result>(path: string, options: RequestOptions): Promise<Result> {
-  const { workspaceId, operation, ...init } = options;
+  const { acceptedStatuses = [], workspaceId, operation, ...init } = options;
   const startedAt = Date.now();
   const headers = new Headers(init.headers);
   if (init.body) headers.set("content-type", "application/json");
@@ -26,7 +38,7 @@ async function requestJson<Result>(path: string, options: RequestOptions): Promi
 
   try {
     const response = await fetch(path, { ...init, headers });
-    if (!response.ok) {
+    if (!response.ok && !acceptedStatuses.includes(response.status)) {
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       throw new Error(payload.error ?? `Request failed (${response.status})`);
     }
@@ -84,6 +96,59 @@ export function listAgents(workspaceId: string, signal?: AbortSignal): Promise<W
   });
 }
 
+export function getCurrentHumanActor(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<HumanActorSummary> {
+  return requestJson("/api/v1/actor", {
+    workspaceId,
+    operation: "GET /api/v1/actor",
+    signal,
+  });
+}
+
+export function getDeploymentCapabilities(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<DeploymentCapabilities> {
+  return requestJson("/api/v1/capabilities", {
+    workspaceId,
+    operation: "GET /api/v1/capabilities",
+    signal,
+  });
+}
+
+export function getReadiness(signal?: AbortSignal): Promise<ReadinessReport> {
+  return requestJson("/readyz", {
+    acceptedStatuses: [503],
+    operation: "GET /readyz",
+    signal,
+  });
+}
+
+export function exportWorkspaceArchive(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceArchive> {
+  return requestJson("/api/v1/workspaces/export", {
+    workspaceId,
+    operation: "GET /api/v1/workspaces/export",
+    signal,
+  });
+}
+
+export function importWorkspaceArchive(
+  workspaceId: string,
+  input: ImportWorkspaceArchive,
+): Promise<WorkspaceImportResult> {
+  return requestJson("/api/v1/workspaces/import", {
+    method: "POST",
+    body: JSON.stringify(input),
+    workspaceId,
+    operation: "POST /api/v1/workspaces/import",
+  });
+}
+
 export function createAgent(
   workspaceId: string,
   input: { name: string; permission: AgentGrantPermission },
@@ -93,6 +158,27 @@ export function createAgent(
     body: JSON.stringify(input),
     workspaceId,
     operation: "POST /api/v1/agents",
+  });
+}
+
+export function updateAgent(
+  workspaceId: string,
+  agentId: string,
+  input: { name?: string; status?: WorkspaceAgent["status"] },
+): Promise<WorkspaceAgent> {
+  return requestJson(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    workspaceId,
+    operation: "PATCH /api/v1/agents/:id",
+  });
+}
+
+export function deleteAgent(workspaceId: string, agentId: string): Promise<void> {
+  return requestJson(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
+    method: "DELETE",
+    workspaceId,
+    operation: "DELETE /api/v1/agents/:id",
   });
 }
 
@@ -260,6 +346,46 @@ export function forgetMemory(
     },
     workspaceId,
     operation: "DELETE /api/memories/:id",
+  });
+}
+
+export function listMemoryProposals(
+  workspaceId: string,
+  status: MemoryProposalStatus,
+  signal?: AbortSignal,
+): Promise<MemoryProposal[]> {
+  const params = new URLSearchParams({ status, limit: "100" });
+  return requestJson(`/api/v1/memory-proposals?${params}`, {
+    workspaceId,
+    operation: "GET /api/v1/memory-proposals",
+    signal,
+  });
+}
+
+export function getObservations(
+  workspaceId: string,
+  observationIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<Observation[]> {
+  const params = new URLSearchParams();
+  for (const id of observationIds) params.append("id", id);
+  return requestJson(`/api/v1/observations?${params}`, {
+    workspaceId,
+    operation: "GET /api/v1/observations",
+    signal,
+  });
+}
+
+export function reviewMemoryProposal(
+  workspaceId: string,
+  proposalId: string,
+  decision: "accept" | "reject",
+): Promise<MemoryProposalReviewResult> {
+  return requestJson(`/api/v1/memory-proposals/${encodeURIComponent(proposalId)}/review`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+    workspaceId,
+    operation: "POST /api/v1/memory-proposals/:id/review",
   });
 }
 

@@ -2,7 +2,42 @@ import type { PostgresDatabase } from "./db";
 import { observeOperation, runtimeDependencyStatus } from "./telemetry";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 6;
+export const LORE_SCHEMA_REVISION = 9;
+
+export interface DeploymentCapabilities {
+  apiVersion: "v1";
+  schemaRevision: number;
+  deploymentId: string;
+  features: {
+    idempotency: boolean;
+    optimisticConcurrency: boolean;
+    transactionalOutbox: boolean;
+    workspacePortability: boolean;
+    embeddingGenerations: boolean;
+    cursorPagination: boolean;
+    memoryProposals: boolean;
+    observationEvidence: boolean;
+  };
+  limits: {
+    workspaceArchiveMemories: number;
+    workspaceArchiveLinks: number;
+    memoryProposalEvidence: number;
+    memoryProposalList: number;
+    memoryProposalPending: number;
+    memoryProposalRetentionSeconds: number;
+    episodeObservations: number;
+    episodeContentCharacters: number;
+    episodeMetadataCharacters: number;
+    observationContentCharacters: number;
+    observationBatchRead: number;
+  };
+  activeEmbeddingGeneration: {
+    provider: string;
+    model: string;
+    dimensions: number;
+    revision: string;
+  } | null;
+}
 
 export interface ReadinessReport {
   status: "degraded" | "ready" | "unready";
@@ -23,23 +58,22 @@ interface ReadinessRow {
   rls_probe: boolean;
 }
 
-export function createOperationsModule(
-  database: PostgresDatabase,
-  options: {
-    embeddingConfigured: boolean;
-    embeddingIdentity?: {
-      dimensions: number;
-      model: string;
-      provider: string;
-      revision: string;
-    };
-  },
-) {
+export interface OperationsOptions {
+  embeddingConfigured: boolean;
+  embeddingIdentity?: {
+    dimensions: number;
+    model: string;
+    provider: string;
+    revision: string;
+  };
+}
+
+export function createOperationsModule(database: PostgresDatabase, options: OperationsOptions) {
   return {
-    async capabilities(): Promise<Record<string, unknown>> {
+    async capabilities(): Promise<DeploymentCapabilities> {
       return observeOperation("operations.capabilities", () =>
         database.transaction(async (transaction) => {
-          const result = await transaction.query<{ capabilities: Record<string, unknown> }>(
+          const result = await transaction.query<{ capabilities: DeploymentCapabilities }>(
             "SELECT lore.portable_core_capabilities() AS capabilities",
           );
           const capabilities = result.rows[0]?.capabilities;
@@ -73,7 +107,10 @@ export function createOperationsModule(
                    ('evaluation_results'), ('memory_embedding_jobs'),
                    ('request_idempotency_records'), ('memory_events'),
                    ('embedding_generations'), ('memory_chunk_embeddings'),
-                   ('workspace_imports'), ('memory_import_provenance')
+                   ('workspace_imports'), ('memory_import_provenance'),
+                   ('memory_proposals'), ('memory_proposal_evidence'),
+                   ('episodes'), ('observations'),
+                   ('memory_proposal_observation_evidence')
                ), rls_state AS (
                  SELECT
                    count(relation.oid) = count(*)
