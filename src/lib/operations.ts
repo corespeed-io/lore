@@ -1,4 +1,5 @@
-import type { PostgresDatabase } from "./db";
+import { sql } from "drizzle-orm";
+import type { LoreDatabase } from "./db";
 import { observeOperation, runtimeDependencyStatus } from "./telemetry";
 
 export const LORE_API_VERSION = "v1";
@@ -68,13 +69,13 @@ export interface OperationsOptions {
   };
 }
 
-export function createOperationsModule(database: PostgresDatabase, options: OperationsOptions) {
+export function createOperationsModule(database: LoreDatabase, options: OperationsOptions) {
   return {
     async capabilities(): Promise<DeploymentCapabilities> {
       return observeOperation("operations.capabilities", () =>
         database.transaction(async (transaction) => {
-          const result = await transaction.query<{ capabilities: DeploymentCapabilities }>(
-            "SELECT lore.portable_core_capabilities() AS capabilities",
+          const result = await transaction.execute<{ capabilities: DeploymentCapabilities }>(
+            sql`SELECT lore.portable_core_capabilities() AS capabilities`,
           );
           const capabilities = result.rows[0]?.capabilities;
           if (!capabilities) throw new Error("Portable Core capabilities are unavailable");
@@ -96,9 +97,10 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
       try {
         const row = await observeOperation("operations.readiness", () =>
           database.transaction(async (transaction) => {
-            await transaction.query("SELECT set_config('statement_timeout', '2000', true)");
-            const result = await transaction.query<ReadinessRow>(
-              `WITH required_rls_tables(table_name) AS (
+            await transaction.execute(sql`SELECT set_config('statement_timeout', '2000', true)`);
+            const embedding = options.embeddingIdentity;
+            const result = await transaction.execute<ReadinessRow>(
+              sql`WITH required_rls_tables(table_name) AS (
                  VALUES
                    ('users'), ('workspaces'), ('memberships'), ('agents'),
                    ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
@@ -125,13 +127,13 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                )
                SELECT
                  lore.portable_core_capabilities() AS capabilities,
-                 CASE WHEN $1::text IS NULL THEN true ELSE EXISTS (
+                 CASE WHEN ${embedding?.provider ?? null}::text IS NULL THEN true ELSE EXISTS (
                    SELECT 1
                    FROM embedding_generations generation
-                   WHERE generation.embedding_provider = $1
-                     AND generation.embedding_model = $2
-                     AND generation.embedding_dimensions = $3
-                     AND generation.embedding_revision = $4
+                   WHERE generation.embedding_provider = ${embedding?.provider ?? null}
+                     AND generation.embedding_model = ${embedding?.model ?? null}
+                     AND generation.embedding_dimensions = ${embedding?.dimensions ?? null}
+                     AND generation.embedding_revision = ${embedding?.revision ?? null}
                      AND generation.status IN ('active', 'retiring')
                  ) END AS embedding_matches,
                  EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_vector,
@@ -143,14 +145,6 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                    AND NULLIF(current_setting('lore.user_id', true), '') IS NULL
                    AND NULLIF(current_setting('lore.agent_id', true), '') IS NULL
                    AND NOT EXISTS (SELECT 1 FROM memories LIMIT 1) AS rls_probe`,
-              options.embeddingIdentity
-                ? [
-                    options.embeddingIdentity.provider,
-                    options.embeddingIdentity.model,
-                    options.embeddingIdentity.dimensions,
-                    options.embeddingIdentity.revision,
-                  ]
-                : [null, null, null, null],
             );
             const value = result.rows[0];
             if (!value) throw new Error("Readiness query returned no result");

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   type ActorContext,
   installActorContext,
@@ -5,7 +6,7 @@ import {
   type UserContext,
 } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase } from "./db";
+import type { LoreDatabase } from "./db";
 
 export type AgentStatus = "active" | "disabled";
 export type AgentGrantPermission = "read" | "write";
@@ -217,12 +218,12 @@ function toWorkspaceSummary(row: WorkspaceSummaryRow): WorkspaceSummary {
   return { ...toWorkspace(row), role: row.role };
 }
 
-export function createAccessModule(database: PostgresDatabase) {
+export function createAccessModule(database: LoreDatabase) {
   async function listWorkspaces(user: UserContext): Promise<WorkspaceSummary[]> {
     return database.transaction(async (transaction) => {
       await installUserContext(transaction, user);
-      const result = await transaction.query<WorkspaceSummaryRow>(
-        "SELECT * FROM lore.list_workspaces()",
+      const result = await transaction.execute<WorkspaceSummaryRow>(
+        sql`SELECT * FROM lore.list_workspaces()`,
       );
       return result.rows.map(toWorkspaceSummary);
     });
@@ -233,9 +234,8 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installUserContext(transaction, user);
-          const result = await transaction.query<WorkspaceRow>(
-            "SELECT * FROM lore.create_workspace($1, $2)",
-            [crypto.randomUUID(), input.name],
+          const result = await transaction.execute<WorkspaceRow>(
+            sql`SELECT * FROM lore.create_workspace(${crypto.randomUUID()}, ${input.name})`,
           );
           return toWorkspace(result.rows[0]);
         }),
@@ -260,13 +260,12 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const result = await transaction.query<MembershipRow>(
-            `INSERT INTO memberships (workspace_id, user_id, role)
-             VALUES ($1, $2, $3)
+          const result = await transaction.execute<MembershipRow>(
+            sql`INSERT INTO memberships (workspace_id, user_id, role)
+             VALUES (${actor.workspaceId}, ${userId}, ${input.role})
              ON CONFLICT (workspace_id, user_id) DO UPDATE
              SET role = EXCLUDED.role, status = 'active', updated_at = now()
              RETURNING *`,
-            [actor.workspaceId, userId, input.role],
           );
           return toMembership(result.rows[0]);
         }),
@@ -277,11 +276,10 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const result = await transaction.query<AgentRow>(
-            `INSERT INTO agents (id, owner_user_id, name)
-             VALUES ($1, $2, $3)
+          const result = await transaction.execute<AgentRow>(
+            sql`INSERT INTO agents (id, owner_user_id, name)
+             VALUES (${crypto.randomUUID()}, ${actor.userId}, ${input.name})
              RETURNING *`,
-            [crypto.randomUUID(), actor.userId, input.name],
           );
           return toAgent(result.rows[0]);
         }),
@@ -296,19 +294,17 @@ export function createAccessModule(database: PostgresDatabase) {
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const agentId = crypto.randomUUID();
-          const agentResult = await transaction.query<AgentRow>(
-            `INSERT INTO agents (id, owner_user_id, name)
-             VALUES ($1, $2, $3)
+          const agentResult = await transaction.execute<AgentRow>(
+            sql`INSERT INTO agents (id, owner_user_id, name)
+             VALUES (${agentId}, ${actor.userId}, ${input.name})
              RETURNING *`,
-            [agentId, actor.userId, input.name],
           );
-          const grantResult = await transaction.query<AgentGrantRow>(
-            `INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
-             VALUES ($1, $2, $3)
+          const grantResult = await transaction.execute<AgentGrantRow>(
+            sql`INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
+             VALUES (${actor.workspaceId}, ${agentId}, ${input.permission})
              ON CONFLICT (workspace_id, agent_id) DO UPDATE
              SET permission = EXCLUDED.permission, status = 'active', updated_at = now()
              RETURNING *`,
-            [actor.workspaceId, agentId, input.permission],
           );
           return {
             ...toAgent(agentResult.rows[0]),
@@ -323,18 +319,17 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const result = await transaction.query<WorkspaceAgentRow>(
-            `SELECT
+          const result = await transaction.execute<WorkspaceAgentRow>(
+            sql`SELECT
                agent.*,
                workspace_grant.permission,
                workspace_grant.status AS grant_status
              FROM agents agent
              JOIN agent_workspace_grants workspace_grant
                ON workspace_grant.agent_id = agent.id
-              AND workspace_grant.workspace_id = $1
-             WHERE agent.owner_user_id = $2
+              AND workspace_grant.workspace_id = ${actor.workspaceId}
+             WHERE agent.owner_user_id = ${actor.userId}
              ORDER BY agent.created_at DESC, agent.id`,
-            [actor.workspaceId, actor.userId],
           );
           return result.rows.map(toWorkspaceAgent);
         }),
@@ -349,22 +344,21 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const result = await transaction.query<WorkspaceAgentRow>(
-            `UPDATE agents agent
+          const result = await transaction.execute<WorkspaceAgentRow>(
+            sql`UPDATE agents agent
              SET
-               name = COALESCE($4, agent.name),
-               status = COALESCE($5::agent_status, agent.status),
+               name = COALESCE(${input.name ?? null}, agent.name),
+               status = COALESCE(${input.status ?? null}::agent_status, agent.status),
                updated_at = now()
              FROM agent_workspace_grants workspace_grant
-             WHERE agent.id = $1
-               AND agent.owner_user_id = $2
-               AND workspace_grant.workspace_id = $3
+             WHERE agent.id = ${agentId}
+               AND agent.owner_user_id = ${actor.userId}
+               AND workspace_grant.workspace_id = ${actor.workspaceId}
                AND workspace_grant.agent_id = agent.id
              RETURNING
                agent.*,
                workspace_grant.permission,
                workspace_grant.status AS grant_status`,
-            [agentId, actor.userId, actor.workspaceId, input.name ?? null, input.status ?? null],
           );
           return result.rows[0] ? toWorkspaceAgent(result.rows[0]) : null;
         }),
@@ -375,35 +369,33 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const target = await transaction.query<{ status: AgentStatus }>(
-            `SELECT agent.status
+          const target = await transaction.execute<{ status: AgentStatus }>(
+            sql`SELECT agent.status
              FROM agents agent
-             WHERE agent.id = $1
-               AND agent.owner_user_id = $2
+             WHERE agent.id = ${agentId}
+               AND agent.owner_user_id = ${actor.userId}
                AND EXISTS (
                  SELECT 1
                  FROM agent_workspace_grants workspace_grant
-                 WHERE workspace_grant.workspace_id = $3
+                 WHERE workspace_grant.workspace_id = ${actor.workspaceId}
                    AND workspace_grant.agent_id = agent.id
                )
              FOR UPDATE`,
-            [agentId, actor.userId, actor.workspaceId],
           );
           if (!target.rows[0]) return "not_found";
           if (target.rows[0].status !== "disabled") return "must_disable";
-          const deleted = await transaction.query<{ id: string }>(
-            `DELETE FROM agents agent
-             WHERE agent.id = $1
-               AND agent.owner_user_id = $2
+          const deleted = await transaction.execute<{ id: string }>(
+            sql`DELETE FROM agents agent
+             WHERE agent.id = ${agentId}
+               AND agent.owner_user_id = ${actor.userId}
                AND agent.status = 'disabled'
                AND EXISTS (
                  SELECT 1
                  FROM agent_workspace_grants workspace_grant
-                 WHERE workspace_grant.workspace_id = $3
+                 WHERE workspace_grant.workspace_id = ${actor.workspaceId}
                    AND workspace_grant.agent_id = agent.id
                )
              RETURNING agent.id`,
-            [agentId, actor.userId, actor.workspaceId],
           );
           return deleted.rows[0] ? "deleted" : "not_found";
         }),
@@ -418,13 +410,12 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const result = await transaction.query<AgentGrantRow>(
-            `INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
-             VALUES ($1, $2, $3)
+          const result = await transaction.execute<AgentGrantRow>(
+            sql`INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
+             VALUES (${actor.workspaceId}, ${agentId}, ${input.permission})
              ON CONFLICT (workspace_id, agent_id) DO UPDATE
              SET permission = EXCLUDED.permission, status = 'active', updated_at = now()
              RETURNING *`,
-            [actor.workspaceId, agentId, input.permission],
           );
           return toGrant(result.rows[0]);
         }),
@@ -444,17 +435,16 @@ export function createAccessModule(database: PostgresDatabase) {
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const id = crypto.randomUUID();
-          const result = await transaction.query<{ id: string; secret_prefix: string }>(
-            `INSERT INTO agent_credentials (id, agent_id, secret_prefix, secret_hash)
-             SELECT $1, agent.id, $3, $4
+          const result = await transaction.execute<{ id: string; secret_prefix: string }>(
+            sql`INSERT INTO agent_credentials (id, agent_id, secret_prefix, secret_hash)
+             SELECT ${id}, agent.id, ${prefix}, ${secretHash}
              FROM agent_workspace_grants workspace_grant
              JOIN agents agent ON agent.id = workspace_grant.agent_id
-             WHERE workspace_grant.workspace_id = $2
-               AND workspace_grant.agent_id = $5
+             WHERE workspace_grant.workspace_id = ${actor.workspaceId}
+               AND workspace_grant.agent_id = ${agentId}
                AND workspace_grant.status = 'active'
                AND agent.status = 'active'
              RETURNING id, secret_prefix`,
-            [id, actor.workspaceId, prefix, secretHash, agentId],
           );
           if (!result.rows[0]) {
             throw new AccessDeniedError("Agent is not active in the selected Workspace");
@@ -468,8 +458,8 @@ export function createAccessModule(database: PostgresDatabase) {
       return translateAccessError(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const result = await transaction.query<AgentCredentialRow>(
-            `SELECT
+          const result = await transaction.execute<AgentCredentialRow>(
+            sql`SELECT
                credential.id,
                credential.agent_id,
                credential.secret_prefix,
@@ -477,15 +467,14 @@ export function createAccessModule(database: PostgresDatabase) {
                credential.last_used_at,
                credential.revoked_at
              FROM agent_credentials credential
-             WHERE credential.agent_id = $1
+             WHERE credential.agent_id = ${agentId}
                AND EXISTS (
                  SELECT 1
                  FROM agent_workspace_grants workspace_grant
-                 WHERE workspace_grant.workspace_id = $2
+                 WHERE workspace_grant.workspace_id = ${actor.workspaceId}
                    AND workspace_grant.agent_id = credential.agent_id
                )
              ORDER BY credential.created_at DESC, credential.id`,
-            [agentId, actor.workspaceId],
           );
           return result.rows.map(toAgentCredential);
         }),
@@ -495,9 +484,8 @@ export function createAccessModule(database: PostgresDatabase) {
     async authenticateAgent(token: string, workspaceId: string): Promise<ActorContext | null> {
       const secretHash = await sha256Hex(token);
       return database.transaction(async (transaction) => {
-        const result = await transaction.query<AuthenticatedAgentRow>(
-          "SELECT * FROM lore.authenticate_agent_credential($1, $2)",
-          [secretHash, workspaceId],
+        const result = await transaction.execute<AuthenticatedAgentRow>(
+          sql`SELECT * FROM lore.authenticate_agent_credential(${secretHash}, ${workspaceId})`,
         );
         const authenticated = result.rows[0];
         return authenticated
@@ -513,19 +501,18 @@ export function createAccessModule(database: PostgresDatabase) {
     async revokeAgentCredential(actor: ActorContext, credentialId: string): Promise<boolean> {
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<{ id: string }>(
-          `UPDATE agent_credentials credential
+        const result = await transaction.execute<{ id: string }>(
+          sql`UPDATE agent_credentials credential
            SET revoked_at = now()
-           WHERE credential.id = $1
+           WHERE credential.id = ${credentialId}
              AND credential.revoked_at IS NULL
              AND EXISTS (
                SELECT 1
                FROM agent_workspace_grants workspace_grant
-               WHERE workspace_grant.workspace_id = $2
+               WHERE workspace_grant.workspace_id = ${actor.workspaceId}
                  AND workspace_grant.agent_id = credential.agent_id
              )
            RETURNING credential.id`,
-          [credentialId, actor.workspaceId],
         );
         return result.rows.length === 1;
       });
@@ -534,12 +521,11 @@ export function createAccessModule(database: PostgresDatabase) {
     async revokeAgentGrant(actor: ActorContext, agentId: string): Promise<boolean> {
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<{ agent_id: string }>(
-          `UPDATE agent_workspace_grants
+        const result = await transaction.execute<{ agent_id: string }>(
+          sql`UPDATE agent_workspace_grants
            SET status = 'revoked', updated_at = now()
-           WHERE workspace_id = $1 AND agent_id = $2 AND status = 'active'
+           WHERE workspace_id = ${actor.workspaceId} AND agent_id = ${agentId} AND status = 'active'
            RETURNING agent_id`,
-          [actor.workspaceId, agentId],
         );
         return result.rows.length === 1;
       });

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { afterEach, expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import {
@@ -450,12 +451,9 @@ test("Memory HTTP cursor advances within the authorized ordering", async () => {
   }
   await testContext.adminDatabase.transaction(async (transaction) => {
     for (const [index, memoryId] of memoryIds.entries()) {
-      await transaction.query(
-        `UPDATE memories
-         SET updated_at = $2::timestamptz
-         WHERE id = $1`,
-        [memoryId, `2026-08-07T12:00:00.12345${6 - index}Z`],
-      );
+      await transaction.execute(sql`UPDATE memories
+         SET updated_at = ${`2026-08-07T12:00:00.12345${6 - index}Z`}::timestamptz
+         WHERE id = ${memoryId}`);
     }
   });
 
@@ -467,12 +465,9 @@ test("Memory HTTP cursor advances within the authorized ordering", async () => {
   const firstPageMemories = (await firstPage.json()) as Array<{ id: string }>;
   expect(firstPageMemories).toHaveLength(2);
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query(
-      `UPDATE memories
+    transaction.execute(sql`UPDATE memories
        SET updated_at = '2026-08-07T13:00:00Z'
-       WHERE id = $1`,
-      [firstPageMemories[1].id],
-    ),
+       WHERE id = ${firstPageMemories[1].id}`),
   );
   const secondPage = await memories.GET(
     new Request(`http://lore.local/api/memories?limit=2&cursor=${cursor}`, { headers }),

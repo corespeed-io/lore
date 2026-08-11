@@ -4,6 +4,10 @@ FROM node:24-bookworm-slim AS builder
 WORKDIR /app
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
+COPY packages/cli/package.json ./packages/cli/package.json
+COPY packages/mcp/package.json ./packages/mcp/package.json
+COPY packages/typescript-sdk/package.json ./packages/typescript-sdk/package.json
+COPY tools/sdk-codegen/package.json ./tools/sdk-codegen/package.json
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
@@ -65,8 +66,8 @@ test("Agent proposal remains private and non-canonical until its owner accepts i
   });
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    const events = await transaction.query<{ resource_id: string }>(
-      "SELECT resource_id FROM memory_events ORDER BY sequence",
+    const events = await transaction.execute<{ resource_id: string }>(
+      sql.raw("SELECT resource_id FROM memory_events ORDER BY sequence"),
     );
     expect(events.rows).toEqual([{ resource_id: evidence.id }]);
   });
@@ -151,16 +152,13 @@ test("Database review transition rejects a forged accepted receipt", async () =>
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
     await expect(
-      transaction.query(
-        `UPDATE memory_proposals
+      transaction.execute(sql`UPDATE memory_proposals
          SET status = 'accepted',
-             reviewed_by_user_id = $2,
-             accepted_memory_id = $3,
+             reviewed_by_user_id = ${testContext.alice.userId},
+             accepted_memory_id = ${crypto.randomUUID()},
              reviewed_at = now(),
              expires_at = now() + interval '30 days'
-         WHERE id = $1`,
-        [proposal.id, testContext.alice.userId, crypto.randomUUID()],
-      ),
+         WHERE id = ${proposal.id}`),
     ).rejects.toThrow("Accepted create receipt must match the canonical Memory");
   });
   await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
@@ -179,16 +177,13 @@ test("Database review transition rejects a forged accepted receipt", async () =>
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
     await expect(
-      transaction.query(
-        `UPDATE memory_proposals
+      transaction.execute(sql`UPDATE memory_proposals
          SET status = 'accepted',
-             reviewed_by_user_id = $2,
-             accepted_memory_id = $3,
+             reviewed_by_user_id = ${testContext.alice.userId},
+             accepted_memory_id = ${crypto.randomUUID()},
              reviewed_at = now(),
              expires_at = now() + interval '30 days'
-         WHERE id = $1`,
-        [updateProposal.id, testContext.alice.userId, crypto.randomUUID()],
-      ),
+         WHERE id = ${updateProposal.id}`),
     ).rejects.toThrow("Accepted update receipt must match the canonical Memory");
   });
 
@@ -199,19 +194,16 @@ test("Pending proposal capacity keeps every proposal manageable in the native in
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.query(
-      `INSERT INTO memory_proposals (
+    await transaction.execute(sql`INSERT INTO memory_proposals (
          id, workspace_id, owner_user_id, proposed_by_actor_kind,
          proposed_by_agent_id, kind, target_memory_id, base_memory_version,
          proposed_content, proposed_scope, proposed_metadata,
          changes_content, changes_scope, changes_metadata
        )
-       SELECT gen_random_uuid(), $1, $2, 'human', NULL, 'create', NULL, NULL,
+       SELECT gen_random_uuid(), ${testContext.alice.workspaceId}, ${testContext.alice.userId}, 'human', NULL, 'create', NULL, NULL,
               'Pending proposal ' || ordinal, 'shared', '{}'::jsonb,
               true, true, true
-       FROM generate_series(1, 100) ordinal`,
-      [testContext.alice.workspaceId, testContext.alice.userId],
-    );
+       FROM generate_series(1, 100) ordinal`);
   });
 
   await expect(
@@ -250,13 +242,15 @@ test("Only the owner human can list or review an Agent proposal", async () => {
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, agentActor);
     await expect(
-      transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposal.id]),
+      transaction.execute(sql`SELECT id FROM memory_proposals WHERE id = ${proposal.id}`),
     ).resolves.toMatchObject({ rows: [] });
   });
 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
-    await expect(transaction.query("SELECT id FROM memory_proposals")).resolves.toMatchObject({
+    await expect(
+      transaction.execute(sql.raw("SELECT id FROM memory_proposals")),
+    ).resolves.toMatchObject({
       rows: [],
     });
   });
@@ -275,14 +269,14 @@ test("Deleting the submitting Agent preserves proposal content and actor kind", 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
     await expect(
-      transaction.query("UPDATE memory_proposals SET proposed_by_agent_id = NULL WHERE id = $1", [
-        proposal.id,
-      ]),
+      transaction.execute(
+        sql`UPDATE memory_proposals SET proposed_by_agent_id = NULL WHERE id = ${proposal.id}`,
+      ),
     ).rejects.toThrow("Memory Proposal provenance is immutable");
   });
 
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.query("DELETE FROM agents WHERE id = $1", [agent.id]);
+    await transaction.execute(sql`DELETE FROM agents WHERE id = ${agent.id}`);
   });
 
   await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
@@ -364,27 +358,24 @@ test("Expired proposal content is purged with Portable Core retention", async ()
   const proposalId = crypto.randomUUID();
 
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.query(
-      `INSERT INTO memory_proposals (
+    await transaction.execute(sql`INSERT INTO memory_proposals (
          id, workspace_id, owner_user_id, proposed_by_actor_kind,
          kind, proposed_content, proposed_scope, proposed_metadata,
          changes_content, changes_scope, changes_metadata, status,
          reviewed_by_user_id, created_at, reviewed_at, expires_at
        ) VALUES (
-         $1, $2, $3, 'human', 'create', 'Expired private proposal',
-         'private', '{}'::jsonb, true, true, true, 'rejected', $3,
+         ${proposalId}, ${testContext.alice.workspaceId}, ${testContext.alice.userId}, 'human', 'create', 'Expired private proposal',
+         'private', '{}'::jsonb, true, true, true, 'rejected', ${testContext.alice.userId},
          now() - interval '61 days', now() - interval '31 days',
          now() - interval '1 day'
-       )`,
-      [proposalId, testContext.alice.workspaceId, testContext.alice.userId],
-    );
+       )`);
   });
   const memories = createMemoryModule(testContext.database);
   await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
   await purgeExpiredPortableCoreRecords(testContext.maintenanceDatabase);
   await testContext.adminDatabase.transaction(async (transaction) => {
     await expect(
-      transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposalId]),
+      transaction.execute(sql`SELECT id FROM memory_proposals WHERE id = ${proposalId}`),
     ).resolves.toMatchObject({ rows: [] });
   });
 
@@ -401,24 +392,15 @@ test("Database target validation rejects a cross-owner update proposal", async (
 
   await testContext.adminDatabase.transaction(async (transaction) => {
     await expect(
-      transaction.query(
-        `INSERT INTO memory_proposals (
+      transaction.execute(sql`INSERT INTO memory_proposals (
            id, workspace_id, owner_user_id, proposed_by_actor_kind, kind,
            target_memory_id, base_memory_version, proposed_content,
            proposed_scope, proposed_metadata, changes_content, changes_scope,
            changes_metadata
          ) VALUES (
-           $1, $2, $3, 'human', 'update', $4, 1, $5, 'private', '{}'::jsonb,
+           ${crypto.randomUUID()}, ${testContext.alice.workspaceId}, ${testContext.alice.userId}, 'human', 'update', ${bobPrivate.id}, 1, ${"Cross-owner proposal"}, 'private', '{}'::jsonb,
            true, false, false
-         )`,
-        [
-          crypto.randomUUID(),
-          testContext.alice.workspaceId,
-          testContext.alice.userId,
-          bobPrivate.id,
-          "Cross-owner proposal",
-        ],
-      ),
+         )`),
     ).rejects.toThrow("Memory Proposal target must be an owned Memory in this Workspace");
   });
 
@@ -459,17 +441,13 @@ test("Accepted update changes canonical content, chunks, and outbox in one trans
   });
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    const chunks = await transaction.query<{ content: string }>(
-      "SELECT content FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
-      [original.id],
+    const chunks = await transaction.execute<{ content: string }>(
+      sql`SELECT content FROM memory_chunks WHERE memory_id = ${original.id} ORDER BY ordinal`,
     );
-    const events = await transaction.query<{ event_type: string }>(
-      `SELECT event_type
+    const events = await transaction.execute<{ event_type: string }>(sql`SELECT event_type
        FROM memory_events
-       WHERE resource_id = $1
-       ORDER BY sequence`,
-      [original.id],
-    );
+       WHERE resource_id = ${original.id}
+       ORDER BY sequence`);
     expect(chunks.rows).toEqual([{ content: "New operational fact" }]);
     expect(events.rows.map((row) => row.event_type)).toEqual(["memory.created", "memory.updated"]);
   });
@@ -487,9 +465,8 @@ test("Accepting a metadata-only proposal preserves canonical chunks", async () =
   });
   const before = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    return transaction.query<{ id: string }>(
-      "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
-      [original.id],
+    return transaction.execute<{ id: string }>(
+      sql`SELECT id FROM memory_chunks WHERE memory_id = ${original.id} ORDER BY ordinal`,
     );
   });
   const proposal = await memories.propose(testContext.alice, {
@@ -502,9 +479,8 @@ test("Accepting a metadata-only proposal preserves canonical chunks", async () =
   const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
   const after = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    return transaction.query<{ id: string }>(
-      "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
-      [original.id],
+    return transaction.execute<{ id: string }>(
+      sql`SELECT id FROM memory_chunks WHERE memory_id = ${original.id} ORDER BY ordinal`,
     );
   });
 
@@ -642,7 +618,7 @@ test("A read-only sibling Agent cannot submit or inspect another Agent proposal"
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, readActor);
     await expect(
-      transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposal.id]),
+      transaction.execute(sql`SELECT id FROM memory_proposals WHERE id = ${proposal.id}`),
     ).resolves.toMatchObject({ rows: [] });
   });
 

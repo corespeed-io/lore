@@ -1,36 +1,39 @@
 import { describe, expect, test } from "vitest";
-import {
-  hasCompleteLegacyBaseline,
-  LEGACY_BASELINE_MIGRATIONS,
-} from "../scripts/migration-baseline.mjs";
+import { LEGACY_CUTOVER_MIGRATIONS, legacyCutoverIssues } from "../scripts/lib/drizzle-migrations";
 
-const completeLegacyHistory = [...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({
+const completeLegacyHistory = [...LEGACY_CUTOVER_MIGRATIONS].map(([id, checksum]) => ({
   id,
   checksum,
 }));
 
-describe("squashed migration baseline", () => {
-  test("leaves fresh databases alone", () => {
-    expect(hasCompleteLegacyBaseline([])).toBe(false);
-  });
-
-  test("recognizes the exact complete legacy history", () => {
-    expect(hasCompleteLegacyBaseline(completeLegacyHistory)).toBe(true);
+describe("Drizzle cutover baseline", () => {
+  test("recognizes only the exact complete pre-cutover history", () => {
+    expect(legacyCutoverIssues(completeLegacyHistory)).toEqual([]);
   });
 
   test("rejects a partial legacy history", () => {
-    expect(() => hasCompleteLegacyBaseline(completeLegacyHistory.slice(0, -1))).toThrow(
-      "found 12 of 13 legacy migrations",
-    );
+    expect(legacyCutoverIssues(completeLegacyHistory.slice(0, -1))).toContainEqual({
+      id: "0009_observation_evidence.sql",
+      reason: "missing",
+    });
   });
 
   test("rejects modified legacy SQL", () => {
-    const modifiedHistory = completeLegacyHistory.map((migration, index) =>
+    const modified = completeLegacyHistory.map((migration, index) =>
       index === 0 ? { ...migration, checksum: "modified" } : migration,
     );
+    expect(legacyCutoverIssues(modified)).toContainEqual({
+      id: "0001_initial.sql",
+      reason: "modified",
+    });
+  });
 
-    expect(() => hasCompleteLegacyBaseline(modifiedHistory)).toThrow(
-      "legacy migration 0001_memory.sql was modified",
-    );
+  test("rejects unknown history instead of guessing schema state", () => {
+    expect(
+      legacyCutoverIssues([
+        ...completeLegacyHistory,
+        { id: "0099_unknown.sql", checksum: "unknown" },
+      ]),
+    ).toContainEqual({ id: "0099_unknown.sql", reason: "unknown" });
   });
 });

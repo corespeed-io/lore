@@ -6,7 +6,7 @@ import {
   evaluateLongMemEvalV2Answer,
   isUnknownLongMemEvalV2Answer,
 } from "../src/lib/answer-evaluation";
-import { createPostgresDatabase } from "../src/lib/db/postgres";
+import { createDrizzleDatabase } from "../src/lib/db/drizzle";
 import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
 import { createMemoryMaintenanceModule } from "../src/lib/maintenance";
 import {
@@ -366,8 +366,8 @@ const rerankWeight = numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1);
 const semanticDistanceThreshold = numericSetting("LORE_SEMANTIC_DISTANCE_THRESHOLD", 0.5, 0, 2);
 
 const admin = new pg.Client({ connectionString: databaseUrl });
-const requestDatabase = createPostgresDatabase({ connectionString: databaseUrl });
-const maintenanceDatabase = createPostgresDatabase(
+const requestDatabase = createDrizzleDatabase({ connectionString: databaseUrl });
+const maintenanceDatabase = createDrizzleDatabase(
   { connectionString: databaseUrl },
   { role: "lore_maintenance" },
 );

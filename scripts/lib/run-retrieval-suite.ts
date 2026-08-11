@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import pg from "pg";
-import { createPostgresDatabase } from "../../src/lib/db/postgres";
+import { createDrizzleDatabase } from "../../src/lib/db/drizzle";
 import { createMemoryMaintenanceModule } from "../../src/lib/maintenance";
 import {
   type ActorContext,
@@ -354,8 +354,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     ? memoizeQueryPlanningProvider(metering.queryPlanningProvider)
     : undefined;
   const admin = new pg.Client({ connectionString: input.databaseUrl });
-  const requestDatabase = createPostgresDatabase({ connectionString: input.databaseUrl });
-  const maintenanceDatabase = createPostgresDatabase(
+  const requestDatabase = createDrizzleDatabase({ connectionString: input.databaseUrl });
+  const maintenanceDatabase = createDrizzleDatabase(
     { connectionString: input.databaseUrl },
     { role: "lore_maintenance" },
   );

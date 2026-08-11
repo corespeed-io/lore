@@ -1,0 +1,4187 @@
+{
+  "id": "441fdde6-8f7d-47b0-bd56-e4a89048b447",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.agent_credentials": {
+      "name": "agent_credentials",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "secret_prefix": {
+          "name": "secret_prefix",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "secret_hash": {
+          "name": "secret_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_used_at": {
+          "name": "last_used_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "agent_credentials_agent_id_fkey": {
+          "name": "agent_credentials_agent_id_fkey",
+          "tableFrom": "agent_credentials",
+          "tableTo": "agents",
+          "columnsFrom": ["agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "agent_credentials_secret_hash_key": {
+          "name": "agent_credentials_secret_hash_key",
+          "nullsNotDistinct": false,
+          "columns": ["secret_hash"]
+        }
+      },
+      "policies": {
+        "agent_credentials_update": {
+          "name": "agent_credentials_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "(lore.agent_owned_by_current_user(agent_id) AND (lore.current_agent_id() IS NULL))",
+          "withCheck": "(lore.agent_owned_by_current_user(agent_id) AND (lore.current_agent_id() IS NULL))"
+        },
+        "agent_credentials_insert": {
+          "name": "agent_credentials_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "(lore.agent_owned_by_current_user(agent_id) AND (lore.current_agent_id() IS NULL))"
+        },
+        "agent_credentials_select": {
+          "name": "agent_credentials_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "(lore.agent_owned_by_current_user(agent_id) AND (lore.current_agent_id() IS NULL))"
+        }
+      },
+      "checkConstraints": {
+        "agent_credentials_secret_hash_check": {
+          "name": "agent_credentials_secret_hash_check",
+          "value": "length(secret_hash) = 64"
+        },
+        "agent_credentials_secret_prefix_check": {
+          "name": "agent_credentials_secret_prefix_check",
+          "value": "(length(secret_prefix) >= 8) AND (length(secret_prefix) <= 32)"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.agent_workspace_grants": {
+      "name": "agent_workspace_grants",
+      "schema": "",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "permission": {
+          "name": "permission",
+          "type": "agent_grant_permission",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'read'"
+        },
+        "status": {
+          "name": "status",
+          "type": "agent_grant_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "agent_workspace_grants_agent_id_fkey": {
+          "name": "agent_workspace_grants_agent_id_fkey",
+          "tableFrom": "agent_workspace_grants",
+          "tableTo": "agents",
+          "columnsFrom": ["agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agent_workspace_grants_workspace_id_fkey": {
+          "name": "agent_workspace_grants_workspace_id_fkey",
+          "tableFrom": "agent_workspace_grants",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "agent_workspace_grants_pkey": {
+          "name": "agent_workspace_grants_pkey",
+          "columns": ["workspace_id", "agent_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "agent_grants_delete": {
+          "name": "agent_grants_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["public"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (lore.current_agent_id() IS NULL) AND lore.is_active_member(workspace_id) AND lore.agent_owned_by_current_user(agent_id))"
+        },
+        "agent_grants_update": {
+          "name": "agent_grants_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (lore.current_agent_id() IS NULL) AND lore.is_active_member(workspace_id) AND lore.agent_owned_by_current_user(agent_id))",
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (lore.current_agent_id() IS NULL) AND lore.is_active_member(workspace_id) AND lore.agent_owned_by_current_user(agent_id))"
+        },
+        "agent_grants_insert": {
+          "name": "agent_grants_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (lore.current_agent_id() IS NULL) AND lore.is_active_member(workspace_id) AND lore.agent_owned_by_current_user(agent_id))"
+        },
+        "agent_grants_select": {
+          "name": "agent_grants_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (lore.current_agent_id() IS NULL) AND lore.agent_owned_by_current_user(agent_id))"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.agents": {
+      "name": "agents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "agent_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "agents_owner_user_id_fkey": {
+          "name": "agents_owner_user_id_fkey",
+          "tableFrom": "agents",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "agents_delete": {
+          "name": "agents_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["public"],
+          "using": "((owner_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL))"
+        },
+        "agents_update": {
+          "name": "agents_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "((owner_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL))",
+          "withCheck": "((owner_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL))"
+        },
+        "agents_insert": {
+          "name": "agents_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "((owner_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL))"
+        },
+        "agents_select": {
+          "name": "agents_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "((owner_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL))"
+        }
+      },
+      "checkConstraints": {
+        "agents_name_check": {
+          "name": "agents_name_check",
+          "value": "btrim(name) <> ''::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.embedding_generations": {
+      "name": "embedding_generations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "embedding_provider": {
+          "name": "embedding_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_model": {
+          "name": "embedding_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_dimensions": {
+          "name": "embedding_dimensions",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_revision": {
+          "name": "embedding_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "embedding_generation_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "activated_at": {
+          "name": "activated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "validated_at": {
+          "name": "validated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_detail": {
+          "name": "failure_detail",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "embedding_generations_one_active_idx": {
+          "name": "embedding_generations_one_active_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "(status = 'active'::embedding_generation_status)",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "embedding_generations_embedding_provider_embedding_model_em_key": {
+          "name": "embedding_generations_embedding_provider_embedding_model_em_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dimensions",
+            "embedding_revision"
+          ]
+        }
+      },
+      "policies": {
+        "embedding_generations_select": {
+          "name": "embedding_generations_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["lore_app"],
+          "using": "(status = ANY (ARRAY['active'::embedding_generation_status, 'retiring'::embedding_generation_status]))"
+        }
+      },
+      "checkConstraints": {
+        "embedding_generations_check": {
+          "name": "embedding_generations_check",
+          "value": "((status = 'active'::embedding_generation_status) AND (activated_at IS NOT NULL) AND (retired_at IS NULL)) OR ((status = 'retiring'::embedding_generation_status) AND (activated_at IS NOT NULL) AND (retired_at IS NOT NULL)) OR ((status = ANY (ARRAY['building'::embedding_generation_status, 'failed'::embedding_generation_status])) AND (activated_at IS NULL))"
+        },
+        "embedding_generations_embedding_dimensions_check": {
+          "name": "embedding_generations_embedding_dimensions_check",
+          "value": "embedding_dimensions = 1024"
+        },
+        "embedding_generations_embedding_model_check": {
+          "name": "embedding_generations_embedding_model_check",
+          "value": "btrim(embedding_model) <> ''::text"
+        },
+        "embedding_generations_embedding_provider_check": {
+          "name": "embedding_generations_embedding_provider_check",
+          "value": "btrim(embedding_provider) <> ''::text"
+        },
+        "embedding_generations_embedding_revision_check": {
+          "name": "embedding_generations_embedding_revision_check",
+          "value": "btrim(embedding_revision) <> ''::text"
+        },
+        "embedding_generations_failure_detail_check": {
+          "name": "embedding_generations_failure_detail_check",
+          "value": "(failure_detail IS NULL) OR (length(failure_detail) <= 1000)"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.episodes": {
+      "name": "episodes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_actor_kind": {
+          "name": "recorded_by_actor_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_agent_id": {
+          "name": "recorded_by_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "episode_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "memory_scope",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'private'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "episodes_owner_created_idx": {
+          "name": "episodes_owner_created_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "episodes_workspace_created_idx": {
+          "name": "episodes_workspace_created_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "episodes_owner_user_id_fkey": {
+          "name": "episodes_owner_user_id_fkey",
+          "tableFrom": "episodes",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "episodes_recorded_by_agent_id_fkey": {
+          "name": "episodes_recorded_by_agent_id_fkey",
+          "tableFrom": "episodes",
+          "tableTo": "agents",
+          "columnsFrom": ["recorded_by_agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "episodes_workspace_id_fkey": {
+          "name": "episodes_workspace_id_fkey",
+          "tableFrom": "episodes",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "episodes_workspace_id_id_key": {
+          "name": "episodes_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        }
+      },
+      "policies": {
+        "episodes_delete": {
+          "name": "episodes_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["public"],
+          "using": "lore.can_write_memory(workspace_id, owner_user_id)"
+        },
+        "episodes_select": {
+          "name": "episodes_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "lore.can_read_memory(workspace_id, owner_user_id, scope)"
+        }
+      },
+      "checkConstraints": {
+        "episodes_check": {
+          "name": "episodes_check",
+          "value": "ended_at >= started_at"
+        },
+        "episodes_check1": {
+          "name": "episodes_check1",
+          "value": "(recorded_by_actor_kind = 'agent'::text) OR (recorded_by_agent_id IS NULL)"
+        },
+        "episodes_recorded_by_actor_kind_check": {
+          "name": "episodes_recorded_by_actor_kind_check",
+          "value": "recorded_by_actor_kind = ANY (ARRAY['human'::text, 'agent'::text])"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.evaluation_cases": {
+      "name": "evaluation_cases",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "suite_id": {
+          "name": "suite_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "query": {
+          "name": "query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expected_memory_ids": {
+          "name": "expected_memory_ids",
+          "type": "uuid[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "forbidden_memory_ids": {
+          "name": "forbidden_memory_ids",
+          "type": "uuid[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{\"\"}'"
+        },
+        "result_limit": {
+          "name": "result_limit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 10
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "evaluation_cases_suite_idx": {
+          "name": "evaluation_cases_suite_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "suite_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "evaluation_cases_created_by_user_id_fkey": {
+          "name": "evaluation_cases_created_by_user_id_fkey",
+          "tableFrom": "evaluation_cases",
+          "tableTo": "users",
+          "columnsFrom": ["created_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_cases_workspace_id_suite_id_created_by_user_id_fkey": {
+          "name": "evaluation_cases_workspace_id_suite_id_created_by_user_id_fkey",
+          "tableFrom": "evaluation_cases",
+          "tableTo": "evaluation_suites",
+          "columnsFrom": ["workspace_id", "suite_id", "created_by_user_id"],
+          "columnsTo": ["workspace_id", "id", "created_by_user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "evaluation_cases_workspace_id_id_key": {
+          "name": "evaluation_cases_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        },
+        "evaluation_cases_workspace_id_id_created_by_user_id_key": {
+          "name": "evaluation_cases_workspace_id_id_created_by_user_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id", "created_by_user_id"]
+        },
+        "evaluation_cases_suite_id_ordinal_key": {
+          "name": "evaluation_cases_suite_id_ordinal_key",
+          "nullsNotDistinct": false,
+          "columns": ["suite_id", "ordinal"]
+        }
+      },
+      "policies": {
+        "evaluation_cases_all": {
+          "name": "evaluation_cases_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["public"],
+          "using": "lore.can_manage_evaluations(workspace_id, created_by_user_id)",
+          "withCheck": "lore.can_manage_evaluations(workspace_id, created_by_user_id)"
+        }
+      },
+      "checkConstraints": {
+        "evaluation_cases_expected_memory_ids_check": {
+          "name": "evaluation_cases_expected_memory_ids_check",
+          "value": "cardinality(expected_memory_ids) > 0"
+        },
+        "evaluation_cases_ordinal_check": {
+          "name": "evaluation_cases_ordinal_check",
+          "value": "ordinal >= 0"
+        },
+        "evaluation_cases_query_check": {
+          "name": "evaluation_cases_query_check",
+          "value": "btrim(query) <> ''::text"
+        },
+        "evaluation_cases_result_limit_check": {
+          "name": "evaluation_cases_result_limit_check",
+          "value": "(result_limit >= 1) AND (result_limit <= 100)"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.evaluation_results": {
+      "name": "evaluation_results",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "retrieved_memory_ids": {
+          "name": "retrieved_memory_ids",
+          "type": "uuid[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metrics": {
+          "name": "metrics",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estimated_cost_usd": {
+          "name": "estimated_cost_usd",
+          "type": "numeric(16, 8)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "evaluation_results_created_by_user_id_fkey": {
+          "name": "evaluation_results_created_by_user_id_fkey",
+          "tableFrom": "evaluation_results",
+          "tableTo": "users",
+          "columnsFrom": ["created_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_results_workspace_id_case_id_created_by_user_id_fkey": {
+          "name": "evaluation_results_workspace_id_case_id_created_by_user_id_fkey",
+          "tableFrom": "evaluation_results",
+          "tableTo": "evaluation_cases",
+          "columnsFrom": ["workspace_id", "case_id", "created_by_user_id"],
+          "columnsTo": ["workspace_id", "id", "created_by_user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_results_workspace_id_run_id_created_by_user_id_fkey": {
+          "name": "evaluation_results_workspace_id_run_id_created_by_user_id_fkey",
+          "tableFrom": "evaluation_results",
+          "tableTo": "evaluation_runs",
+          "columnsFrom": ["workspace_id", "run_id", "created_by_user_id"],
+          "columnsTo": ["workspace_id", "id", "created_by_user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "evaluation_results_run_id_case_id_key": {
+          "name": "evaluation_results_run_id_case_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["run_id", "case_id"]
+        }
+      },
+      "policies": {
+        "evaluation_results_all": {
+          "name": "evaluation_results_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["public"],
+          "using": "lore.can_manage_evaluations(workspace_id, created_by_user_id)",
+          "withCheck": "lore.can_manage_evaluations(workspace_id, created_by_user_id)"
+        }
+      },
+      "checkConstraints": {
+        "evaluation_results_estimated_cost_usd_check": {
+          "name": "evaluation_results_estimated_cost_usd_check",
+          "value": "estimated_cost_usd >= (0)::numeric"
+        },
+        "evaluation_results_latency_ms_check": {
+          "name": "evaluation_results_latency_ms_check",
+          "value": "latency_ms >= (0)::double precision"
+        },
+        "evaluation_results_metrics_check": {
+          "name": "evaluation_results_metrics_check",
+          "value": "jsonb_typeof(metrics) = 'object'::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.evaluation_runs": {
+      "name": "evaluation_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "suite_id": {
+          "name": "suite_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "evaluation_run_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'running'"
+        },
+        "metrics": {
+          "name": "metrics",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "evaluation_runs_suite_idx": {
+          "name": "evaluation_runs_suite_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "suite_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "evaluation_runs_created_by_user_id_fkey": {
+          "name": "evaluation_runs_created_by_user_id_fkey",
+          "tableFrom": "evaluation_runs",
+          "tableTo": "users",
+          "columnsFrom": ["created_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_runs_workspace_id_suite_id_created_by_user_id_fkey": {
+          "name": "evaluation_runs_workspace_id_suite_id_created_by_user_id_fkey",
+          "tableFrom": "evaluation_runs",
+          "tableTo": "evaluation_suites",
+          "columnsFrom": ["workspace_id", "suite_id", "created_by_user_id"],
+          "columnsTo": ["workspace_id", "id", "created_by_user_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "evaluation_runs_workspace_id_id_key": {
+          "name": "evaluation_runs_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        },
+        "evaluation_runs_workspace_id_id_created_by_user_id_key": {
+          "name": "evaluation_runs_workspace_id_id_created_by_user_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id", "created_by_user_id"]
+        }
+      },
+      "policies": {
+        "evaluation_runs_all": {
+          "name": "evaluation_runs_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["public"],
+          "using": "lore.can_manage_evaluations(workspace_id, created_by_user_id)",
+          "withCheck": "lore.can_manage_evaluations(workspace_id, created_by_user_id)"
+        }
+      },
+      "checkConstraints": {
+        "evaluation_runs_check": {
+          "name": "evaluation_runs_check",
+          "value": "((status = 'running'::evaluation_run_status) AND (completed_at IS NULL)) OR ((status <> 'running'::evaluation_run_status) AND (completed_at IS NOT NULL))"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.evaluation_suites": {
+      "name": "evaluation_suites",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "evaluation_suites_workspace_idx": {
+          "name": "evaluation_suites_workspace_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "evaluation_suites_created_by_user_id_fkey": {
+          "name": "evaluation_suites_created_by_user_id_fkey",
+          "tableFrom": "evaluation_suites",
+          "tableTo": "users",
+          "columnsFrom": ["created_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "evaluation_suites_workspace_id_fkey": {
+          "name": "evaluation_suites_workspace_id_fkey",
+          "tableFrom": "evaluation_suites",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "evaluation_suites_workspace_id_id_key": {
+          "name": "evaluation_suites_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        },
+        "evaluation_suites_workspace_id_id_created_by_user_id_key": {
+          "name": "evaluation_suites_workspace_id_id_created_by_user_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id", "created_by_user_id"]
+        },
+        "evaluation_suites_workspace_id_created_by_user_id_name_vers_key": {
+          "name": "evaluation_suites_workspace_id_created_by_user_id_name_vers_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "created_by_user_id", "name", "version"]
+        }
+      },
+      "policies": {
+        "evaluation_suites_all": {
+          "name": "evaluation_suites_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["public"],
+          "using": "lore.can_manage_evaluations(workspace_id, created_by_user_id)",
+          "withCheck": "lore.can_manage_evaluations(workspace_id, created_by_user_id)"
+        }
+      },
+      "checkConstraints": {
+        "evaluation_suites_name_check": {
+          "name": "evaluation_suites_name_check",
+          "value": "btrim(name) <> ''::text"
+        },
+        "evaluation_suites_version_check": {
+          "name": "evaluation_suites_version_check",
+          "value": "version > 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.identities": {
+      "name": "identities",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "identities_user_id_fkey": {
+          "name": "identities_user_id_fkey",
+          "tableFrom": "identities",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "identities_provider_subject_key": {
+          "name": "identities_provider_subject_key",
+          "nullsNotDistinct": false,
+          "columns": ["provider", "subject"]
+        }
+      },
+      "policies": {
+        "identities_select": {
+          "name": "identities_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "(user_id = lore.current_user_id())"
+        }
+      },
+      "checkConstraints": {
+        "identities_provider_check": {
+          "name": "identities_provider_check",
+          "value": "btrim(provider) <> ''::text"
+        },
+        "identities_subject_check": {
+          "name": "identities_subject_check",
+          "value": "btrim(subject) <> ''::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.lore_system_state": {
+      "name": "lore_system_state",
+      "schema": "",
+      "columns": {
+        "singleton": {
+          "name": "singleton",
+          "type": "boolean",
+          "primaryKey": true,
+          "notNull": true,
+          "default": true
+        },
+        "deployment_id": {
+          "name": "deployment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "schema_revision": {
+          "name": "schema_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "api_version": {
+          "name": "api_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "lore_system_state_api_version_check": {
+          "name": "lore_system_state_api_version_check",
+          "value": "btrim(api_version) <> ''::text"
+        },
+        "lore_system_state_schema_revision_check": {
+          "name": "lore_system_state_schema_revision_check",
+          "value": "schema_revision > 0"
+        },
+        "lore_system_state_singleton_check": {
+          "name": "lore_system_state_singleton_check",
+          "value": "CHECK (singleton)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.memberships": {
+      "name": "memberships",
+      "schema": "",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "membership_role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'member'"
+        },
+        "status": {
+          "name": "status",
+          "type": "membership_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "memberships_user_id_fkey": {
+          "name": "memberships_user_id_fkey",
+          "tableFrom": "memberships",
+          "tableTo": "users",
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memberships_workspace_id_fkey": {
+          "name": "memberships_workspace_id_fkey",
+          "tableFrom": "memberships",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "memberships_pkey": {
+          "name": "memberships_pkey",
+          "columns": ["workspace_id", "user_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "memberships_delete": {
+          "name": "memberships_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["public"],
+          "using": "lore.can_manage_workspace(workspace_id)"
+        },
+        "memberships_update": {
+          "name": "memberships_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "lore.can_manage_workspace(workspace_id)",
+          "withCheck": "lore.can_manage_workspace(workspace_id)"
+        },
+        "memberships_insert": {
+          "name": "memberships_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "lore.can_manage_workspace(workspace_id)"
+        },
+        "memberships_select": {
+          "name": "memberships_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND lore.is_active_member(workspace_id))"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.memories": {
+      "name": "memories",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_agent_id": {
+          "name": "created_by_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "memory_scope",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'shared'"
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "memories_created_by_agent_idx": {
+          "name": "memories_created_by_agent_idx",
+          "columns": [
+            {
+              "expression": "created_by_agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "(created_by_agent_id IS NOT NULL)",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memories_metadata_gin_idx": {
+          "name": "memories_metadata_gin_idx",
+          "columns": [
+            {
+              "expression": "metadata",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "jsonb_path_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
+          "with": {}
+        },
+        "memories_owner_updated_idx": {
+          "name": "memories_owner_updated_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memories_workspace_updated_idx": {
+          "name": "memories_workspace_updated_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memories_created_by_agent_fk": {
+          "name": "memories_created_by_agent_fk",
+          "tableFrom": "memories",
+          "tableTo": "agents",
+          "columnsFrom": ["created_by_agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "memories_owner_user_id_fkey": {
+          "name": "memories_owner_user_id_fkey",
+          "tableFrom": "memories",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memories_workspace_id_fkey": {
+          "name": "memories_workspace_id_fkey",
+          "tableFrom": "memories",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memories_workspace_id_id_key": {
+          "name": "memories_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        }
+      },
+      "policies": {
+        "memories_delete": {
+          "name": "memories_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["public"],
+          "using": "lore.can_write_memory(workspace_id, owner_user_id)"
+        },
+        "memories_update": {
+          "name": "memories_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "lore.can_write_memory(workspace_id, owner_user_id)",
+          "withCheck": "lore.can_write_memory(workspace_id, owner_user_id)"
+        },
+        "memories_insert": {
+          "name": "memories_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "(lore.can_write_memory(workspace_id, owner_user_id) AND (NOT (created_by_agent_id IS DISTINCT FROM lore.current_agent_id())))"
+        },
+        "memories_select": {
+          "name": "memories_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "lore.can_read_memory(workspace_id, owner_user_id, scope)"
+        }
+      },
+      "checkConstraints": {
+        "memories_content_check": {
+          "name": "memories_content_check",
+          "value": "btrim(content) <> ''::text"
+        },
+        "memories_metadata_check": {
+          "name": "memories_metadata_check",
+          "value": "jsonb_typeof(metadata) = 'object'::text"
+        },
+        "memories_version_check": {
+          "name": "memories_version_check",
+          "value": "version > 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_chunk_embeddings": {
+      "name": "memory_chunk_embeddings",
+      "schema": "",
+      "columns": {
+        "generation_id": {
+          "name": "generation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_id": {
+          "name": "memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chunk_id": {
+          "name": "chunk_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding": {
+          "name": "embedding",
+          "type": "vector(1024)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedded_at": {
+          "name": "embedded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "memory_chunk_embeddings_cosine_idx": {
+          "name": "memory_chunk_embeddings_cosine_idx",
+          "columns": [
+            {
+              "expression": "embedding",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "vector_cosine_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "hnsw",
+          "with": {
+            "m": "16",
+            "ef_construction": "64"
+          }
+        },
+        "memory_chunk_embeddings_workspace_memory_idx": {
+          "name": "memory_chunk_embeddings_workspace_memory_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "memory_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "generation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_chunk_embeddings_chunk_id_fkey": {
+          "name": "memory_chunk_embeddings_chunk_id_fkey",
+          "tableFrom": "memory_chunk_embeddings",
+          "tableTo": "memory_chunks",
+          "columnsFrom": ["chunk_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_chunk_embeddings_generation_id_fkey": {
+          "name": "memory_chunk_embeddings_generation_id_fkey",
+          "tableFrom": "memory_chunk_embeddings",
+          "tableTo": "embedding_generations",
+          "columnsFrom": ["generation_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_chunk_embeddings_workspace_id_memory_id_fkey": {
+          "name": "memory_chunk_embeddings_workspace_id_memory_id_fkey",
+          "tableFrom": "memory_chunk_embeddings",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "memory_chunk_embeddings_pkey": {
+          "name": "memory_chunk_embeddings_pkey",
+          "columns": ["generation_id", "chunk_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "memory_chunk_embeddings_maintenance_all": {
+          "name": "memory_chunk_embeddings_maintenance_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["lore_maintenance"],
+          "using": "lore.can_maintain_embedding(generation_id, workspace_id, memory_id)",
+          "withCheck": "lore.can_maintain_embedding(generation_id, workspace_id, memory_id)"
+        },
+        "memory_chunk_embeddings_delete": {
+          "name": "memory_chunk_embeddings_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["lore_app"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.workspace_id = memory_chunk_embeddings.workspace_id) AND (memory.id = memory_chunk_embeddings.memory_id) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id))))"
+        },
+        "memory_chunk_embeddings_select": {
+          "name": "memory_chunk_embeddings_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["lore_app"],
+          "using": "(EXISTS ( SELECT 1\n   FROM (embedding_generations generation\n     JOIN memories memory ON (((memory.workspace_id = memory_chunk_embeddings.workspace_id) AND (memory.id = memory_chunk_embeddings.memory_id))))\n  WHERE ((generation.id = memory_chunk_embeddings.generation_id) AND (generation.status = ANY (ARRAY['active'::embedding_generation_status, 'retiring'::embedding_generation_status])) AND lore.can_read_memory(memory.workspace_id, memory.owner_user_id, memory.scope))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_chunk_embeddings_embedding_check": {
+          "name": "memory_chunk_embeddings_embedding_check",
+          "value": "vector_dims(embedding) = 1024"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_chunks": {
+      "name": "memory_chunks",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_id": {
+          "name": "memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "search_vector": {
+          "name": "search_vector",
+          "type": "tsvector",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "to_tsvector('simple'::regconfig, content)",
+            "type": "stored"
+          }
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "embedding": {
+          "name": "embedding",
+          "type": "vector(1024)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "embedding_model": {
+          "name": "embedding_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "embedded_at": {
+          "name": "embedded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "embedding_provider": {
+          "name": "embedding_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "embedding_revision": {
+          "name": "embedding_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "search_vector_english": {
+          "name": "search_vector_english",
+          "type": "tsvector",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "to_tsvector('english'::regconfig, content)",
+            "type": "stored"
+          }
+        },
+        "entity_aliases": {
+          "name": "entity_aliases",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "lore.extract_entity_aliases(content)",
+            "type": "stored"
+          }
+        }
+      },
+      "indexes": {
+        "memory_chunks_embedding_cosine_idx": {
+          "name": "memory_chunks_embedding_cosine_idx",
+          "columns": [
+            {
+              "expression": "embedding",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "vector_cosine_ops"
+            }
+          ],
+          "isUnique": false,
+          "where": "(embedding IS NOT NULL)",
+          "concurrently": false,
+          "method": "hnsw",
+          "with": {}
+        },
+        "memory_chunks_entity_aliases_idx": {
+          "name": "memory_chunks_entity_aliases_idx",
+          "columns": [
+            {
+              "expression": "entity_aliases",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "array_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
+          "with": {}
+        },
+        "memory_chunks_search_english_idx": {
+          "name": "memory_chunks_search_english_idx",
+          "columns": [
+            {
+              "expression": "search_vector_english",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "tsvector_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
+          "with": {}
+        },
+        "memory_chunks_search_idx": {
+          "name": "memory_chunks_search_idx",
+          "columns": [
+            {
+              "expression": "search_vector",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last",
+              "opclass": "tsvector_ops"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
+          "with": {}
+        },
+        "memory_chunks_workspace_memory_idx": {
+          "name": "memory_chunks_workspace_memory_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "memory_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_chunks_workspace_id_memory_id_fkey": {
+          "name": "memory_chunks_workspace_id_memory_id_fkey",
+          "tableFrom": "memory_chunks",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memory_chunks_memory_id_ordinal_key": {
+          "name": "memory_chunks_memory_id_ordinal_key",
+          "nullsNotDistinct": false,
+          "columns": ["memory_id", "ordinal"]
+        }
+      },
+      "policies": {
+        "memory_chunks_maintenance_update": {
+          "name": "memory_chunks_maintenance_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["lore_maintenance"],
+          "using": "lore.can_maintain_memory(workspace_id, memory_id)",
+          "withCheck": "lore.can_maintain_memory(workspace_id, memory_id)"
+        },
+        "memory_chunks_maintenance_select": {
+          "name": "memory_chunks_maintenance_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["lore_maintenance"],
+          "using": "lore.can_maintain_memory(workspace_id, memory_id)"
+        },
+        "memory_chunks_delete": {
+          "name": "memory_chunks_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["lore_app"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_chunks.memory_id) AND (memory.workspace_id = memory_chunks.workspace_id) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id))))"
+        },
+        "memory_chunks_update": {
+          "name": "memory_chunks_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["lore_app"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_chunks.memory_id) AND (memory.workspace_id = memory_chunks.workspace_id) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id))))",
+          "withCheck": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_chunks.memory_id) AND (memory.workspace_id = memory_chunks.workspace_id) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id))))"
+        },
+        "memory_chunks_insert": {
+          "name": "memory_chunks_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["lore_app"],
+          "withCheck": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_chunks.memory_id) AND (memory.workspace_id = memory_chunks.workspace_id) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id))))"
+        },
+        "memory_chunks_select": {
+          "name": "memory_chunks_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["lore_app"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_chunks.memory_id) AND (memory.workspace_id = memory_chunks.workspace_id) AND lore.can_read_memory(memory.workspace_id, memory.owner_user_id, memory.scope))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_chunks_content_check": {
+          "name": "memory_chunks_content_check",
+          "value": "btrim(content) <> ''::text"
+        },
+        "memory_chunks_embedding_state_check": {
+          "name": "memory_chunks_embedding_state_check",
+          "value": "((embedding IS NULL) AND (embedding_provider IS NULL) AND (embedding_model IS NULL) AND (embedding_revision IS NULL) AND (embedded_at IS NULL)) OR ((embedding IS NOT NULL) AND (btrim(embedding_provider) <> ''::text) AND (btrim(embedding_model) <> ''::text) AND (btrim(embedding_revision) <> ''::text) AND (vector_dims(embedding) = 1024) AND (embedded_at IS NOT NULL))"
+        },
+        "memory_chunks_ordinal_check": {
+          "name": "memory_chunks_ordinal_check",
+          "value": "ordinal >= 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_embedding_jobs": {
+      "name": "memory_embedding_jobs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_id": {
+          "name": "memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_scope": {
+          "name": "memory_scope",
+          "type": "memory_scope",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_version": {
+          "name": "memory_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_provider": {
+          "name": "embedding_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_model": {
+          "name": "embedding_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_revision": {
+          "name": "embedding_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "memory_embedding_job_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "max_attempts": {
+          "name": "max_attempts",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 8
+        },
+        "available_at": {
+          "name": "available_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "leased_at": {
+          "name": "leased_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "generation_id": {
+          "name": "generation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "memory_embedding_jobs_generation_status_idx": {
+          "name": "memory_embedding_jobs_generation_status_idx",
+          "columns": [
+            {
+              "expression": "generation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "available_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memory_embedding_jobs_pending_idx": {
+          "name": "memory_embedding_jobs_pending_idx",
+          "columns": [
+            {
+              "expression": "embedding_provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "embedding_model",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "embedding_revision",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "available_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "(status = ANY (ARRAY['pending'::memory_embedding_job_status, 'processing'::memory_embedding_job_status]))",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memory_embedding_jobs_terminal_completed_idx": {
+          "name": "memory_embedding_jobs_terminal_completed_idx",
+          "columns": [
+            {
+              "expression": "completed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "(status = ANY (ARRAY['succeeded'::memory_embedding_job_status, 'dead'::memory_embedding_job_status, 'cancelled'::memory_embedding_job_status]))",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_embedding_jobs_generation_id_fkey": {
+          "name": "memory_embedding_jobs_generation_id_fkey",
+          "tableFrom": "memory_embedding_jobs",
+          "tableTo": "embedding_generations",
+          "columnsFrom": ["generation_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "memory_embedding_jobs_owner_user_id_fkey": {
+          "name": "memory_embedding_jobs_owner_user_id_fkey",
+          "tableFrom": "memory_embedding_jobs",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_embedding_jobs_workspace_id_memory_id_fkey": {
+          "name": "memory_embedding_jobs_workspace_id_memory_id_fkey",
+          "tableFrom": "memory_embedding_jobs",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memory_embedding_jobs_workspace_id_memory_id_memory_version_key": {
+          "name": "memory_embedding_jobs_workspace_id_memory_id_memory_version_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "workspace_id",
+            "memory_id",
+            "memory_version",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_revision"
+          ]
+        }
+      },
+      "policies": {
+        "memory_embedding_jobs_insert": {
+          "name": "memory_embedding_jobs_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["lore_app"],
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.workspace_id = memory_embedding_jobs.workspace_id) AND (memory.id = memory_embedding_jobs.memory_id) AND (memory.owner_user_id = memory_embedding_jobs.owner_user_id) AND (memory.scope = memory_embedding_jobs.memory_scope) AND (memory.version = memory_embedding_jobs.memory_version) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id)))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_embedding_jobs_attempt_count_check": {
+          "name": "memory_embedding_jobs_attempt_count_check",
+          "value": "attempt_count >= 0"
+        },
+        "memory_embedding_jobs_check": {
+          "name": "memory_embedding_jobs_check",
+          "value": "((status = 'pending'::memory_embedding_job_status) AND (lease_token IS NULL) AND (leased_at IS NULL) AND (completed_at IS NULL)) OR ((status = 'processing'::memory_embedding_job_status) AND (lease_token IS NOT NULL) AND (leased_at IS NOT NULL) AND (completed_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::memory_embedding_job_status, 'dead'::memory_embedding_job_status, 'cancelled'::memory_embedding_job_status])) AND (lease_token IS NULL) AND (leased_at IS NULL) AND (completed_at IS NOT NULL))"
+        },
+        "memory_embedding_jobs_embedding_model_check": {
+          "name": "memory_embedding_jobs_embedding_model_check",
+          "value": "btrim(embedding_model) <> ''::text"
+        },
+        "memory_embedding_jobs_embedding_provider_check": {
+          "name": "memory_embedding_jobs_embedding_provider_check",
+          "value": "btrim(embedding_provider) <> ''::text"
+        },
+        "memory_embedding_jobs_embedding_revision_check": {
+          "name": "memory_embedding_jobs_embedding_revision_check",
+          "value": "btrim(embedding_revision) <> ''::text"
+        },
+        "memory_embedding_jobs_last_error_check": {
+          "name": "memory_embedding_jobs_last_error_check",
+          "value": "(last_error IS NULL) OR (length(last_error) <= 1000)"
+        },
+        "memory_embedding_jobs_max_attempts_check": {
+          "name": "memory_embedding_jobs_max_attempts_check",
+          "value": "(max_attempts >= 1) AND (max_attempts <= 32)"
+        },
+        "memory_embedding_jobs_memory_version_check": {
+          "name": "memory_embedding_jobs_memory_version_check",
+          "value": "memory_version > 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_events": {
+      "name": "memory_events",
+      "schema": "",
+      "columns": {
+        "sequence": {
+          "name": "sequence",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "memory_events_sequence_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_scope": {
+          "name": "memory_scope",
+          "type": "memory_scope",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_type": {
+          "name": "resource_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_id": {
+          "name": "resource_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_memory_id": {
+          "name": "source_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "related_memory_id": {
+          "name": "related_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_user_id": {
+          "name": "actor_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actor_agent_id": {
+          "name": "actor_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "before_version": {
+          "name": "before_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "after_version": {
+          "name": "after_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "changed_fields": {
+          "name": "changed_fields",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{\"RAY\"}'"
+        },
+        "before_content_sha256": {
+          "name": "before_content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "after_content_sha256": {
+          "name": "after_content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() + '90 days'::interval)"
+        }
+      },
+      "indexes": {
+        "memory_events_expiry_idx": {
+          "name": "memory_events_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memory_events_workspace_sequence_idx": {
+          "name": "memory_events_workspace_sequence_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memory_events_id_key": {
+          "name": "memory_events_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["id"]
+        }
+      },
+      "policies": {
+        "memory_events_select": {
+          "name": "memory_events_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["lore_app"],
+          "using": "(((resource_type = 'memory'::text) AND ((EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.workspace_id = memory_events.workspace_id) AND (memory.id = memory_events.resource_id) AND lore.can_read_memory(memory.workspace_id, memory.owner_user_id, memory.scope)))) OR ((event_type = 'memory.deleted'::text) AND lore.can_read_memory(workspace_id, owner_user_id, memory_scope)))) OR ((resource_type = 'memory_link'::text) AND (EXISTS ( SELECT 1\n   FROM (memories source_memory\n     JOIN memories target_memory ON (((target_memory.workspace_id = source_memory.workspace_id) AND (target_memory.id = memory_events.related_memory_id))))\n  WHERE ((source_memory.workspace_id = memory_events.workspace_id) AND (source_memory.id = memory_events.source_memory_id) AND lore.can_read_memory(source_memory.workspace_id, source_memory.owner_user_id, source_memory.scope) AND lore.can_read_memory(target_memory.workspace_id, target_memory.owner_user_id, target_memory.scope))))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_events_after_content_sha256_check": {
+          "name": "memory_events_after_content_sha256_check",
+          "value": "(after_content_sha256 IS NULL) OR (after_content_sha256 ~ '^[0-9a-f]{64}$'::text)"
+        },
+        "memory_events_before_content_sha256_check": {
+          "name": "memory_events_before_content_sha256_check",
+          "value": "(before_content_sha256 IS NULL) OR (before_content_sha256 ~ '^[0-9a-f]{64}$'::text)"
+        },
+        "memory_events_check": {
+          "name": "memory_events_check",
+          "value": "((resource_type = 'memory'::text) AND (source_memory_id IS NULL) AND (related_memory_id IS NULL)) OR ((resource_type = 'memory_link'::text) AND (source_memory_id IS NOT NULL) AND (related_memory_id IS NOT NULL))"
+        },
+        "memory_events_event_type_check": {
+          "name": "memory_events_event_type_check",
+          "value": "event_type = ANY (ARRAY['memory.created'::text, 'memory.updated'::text, 'memory.deleted'::text, 'memory_link.created'::text, 'memory_link.updated'::text, 'memory_link.deleted'::text])"
+        },
+        "memory_events_resource_type_check": {
+          "name": "memory_events_resource_type_check",
+          "value": "resource_type = ANY (ARRAY['memory'::text, 'memory_link'::text])"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_import_provenance": {
+      "name": "memory_import_provenance",
+      "schema": "",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_id": {
+          "name": "memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "import_id": {
+          "name": "import_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_memory_id": {
+          "name": "source_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_owner_user_id": {
+          "name": "source_owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_created_at": {
+          "name": "source_created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_updated_at": {
+          "name": "source_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "memory_import_provenance_import_id_fkey": {
+          "name": "memory_import_provenance_import_id_fkey",
+          "tableFrom": "memory_import_provenance",
+          "tableTo": "workspace_imports",
+          "columnsFrom": ["import_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_import_provenance_workspace_id_memory_id_fkey": {
+          "name": "memory_import_provenance_workspace_id_memory_id_fkey",
+          "tableFrom": "memory_import_provenance",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "memory_import_provenance_pkey": {
+          "name": "memory_import_provenance_pkey",
+          "columns": ["workspace_id", "memory_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "memory_import_provenance_insert": {
+          "name": "memory_import_provenance_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["lore_app"],
+          "withCheck": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.workspace_id = memory_import_provenance.workspace_id) AND (memory.id = memory_import_provenance.memory_id) AND lore.can_write_memory(memory.workspace_id, memory.owner_user_id))))"
+        },
+        "memory_import_provenance_select": {
+          "name": "memory_import_provenance_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["lore_app"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.workspace_id = memory_import_provenance.workspace_id) AND (memory.id = memory_import_provenance.memory_id) AND lore.can_read_memory(memory.workspace_id, memory.owner_user_id, memory.scope))))"
+        }
+      },
+      "checkConstraints": {},
+      "isRLSEnabled": true
+    },
+    "public.memory_links": {
+      "name": "memory_links",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_memory_id": {
+          "name": "source_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_memory_id": {
+          "name": "target_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "weight": {
+          "name": "weight",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "memory_links_workspace_source_idx": {
+          "name": "memory_links_workspace_source_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_memory_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memory_links_workspace_target_idx": {
+          "name": "memory_links_workspace_target_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_memory_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_links_workspace_id_fkey": {
+          "name": "memory_links_workspace_id_fkey",
+          "tableFrom": "memory_links",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_links_workspace_id_source_memory_id_fkey": {
+          "name": "memory_links_workspace_id_source_memory_id_fkey",
+          "tableFrom": "memory_links",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "source_memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_links_workspace_id_target_memory_id_fkey": {
+          "name": "memory_links_workspace_id_target_memory_id_fkey",
+          "tableFrom": "memory_links",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "target_memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memory_links_workspace_id_source_memory_id_target_memory_id_key": {
+          "name": "memory_links_workspace_id_source_memory_id_target_memory_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "source_memory_id", "target_memory_id", "kind"]
+        }
+      },
+      "policies": {
+        "memory_links_delete": {
+          "name": "memory_links_delete",
+          "as": "PERMISSIVE",
+          "for": "DELETE",
+          "to": ["public"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (EXISTS ( SELECT 1\n   FROM memories source\n  WHERE ((source.workspace_id = memory_links.workspace_id) AND (source.id = memory_links.source_memory_id) AND lore.can_write_memory(source.workspace_id, source.owner_user_id)))))"
+        },
+        "memory_links_update": {
+          "name": "memory_links_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memories source\n  WHERE ((source.workspace_id = memory_links.workspace_id) AND (source.id = memory_links.source_memory_id) AND lore.can_write_memory(source.workspace_id, source.owner_user_id))))",
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (EXISTS ( SELECT 1\n   FROM (memories source\n     JOIN memories target ON ((target.workspace_id = source.workspace_id)))\n  WHERE ((source.workspace_id = memory_links.workspace_id) AND (source.id = memory_links.source_memory_id) AND (target.id = memory_links.target_memory_id) AND lore.can_write_memory(source.workspace_id, source.owner_user_id) AND lore.can_read_memory(target.workspace_id, target.owner_user_id, target.scope)))))"
+        },
+        "memory_links_insert": {
+          "name": "memory_links_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (EXISTS ( SELECT 1\n   FROM (memories source\n     JOIN memories target ON ((target.workspace_id = source.workspace_id)))\n  WHERE ((source.workspace_id = memory_links.workspace_id) AND (source.id = memory_links.source_memory_id) AND (target.id = memory_links.target_memory_id) AND lore.can_write_memory(source.workspace_id, source.owner_user_id) AND lore.can_read_memory(target.workspace_id, target.owner_user_id, target.scope)))))"
+        },
+        "memory_links_select": {
+          "name": "memory_links_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (EXISTS ( SELECT 1\n   FROM (memories source\n     JOIN memories target ON ((target.workspace_id = source.workspace_id)))\n  WHERE ((source.workspace_id = memory_links.workspace_id) AND (source.id = memory_links.source_memory_id) AND (target.id = memory_links.target_memory_id) AND lore.can_read_memory(source.workspace_id, source.owner_user_id, source.scope) AND lore.can_read_memory(target.workspace_id, target.owner_user_id, target.scope)))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_links_check": {
+          "name": "memory_links_check",
+          "value": "source_memory_id <> target_memory_id"
+        },
+        "memory_links_kind_check": {
+          "name": "memory_links_kind_check",
+          "value": "(btrim(kind) <> ''::text) AND (length(kind) <= 64)"
+        },
+        "memory_links_metadata_check": {
+          "name": "memory_links_metadata_check",
+          "value": "jsonb_typeof(metadata) = 'object'::text"
+        },
+        "memory_links_weight_check": {
+          "name": "memory_links_weight_check",
+          "value": "(weight >= (0)::double precision) AND (weight <= (1)::double precision)"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_proposal_evidence": {
+      "name": "memory_proposal_evidence",
+      "schema": "",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "memory_id": {
+          "name": "memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "memory_proposal_evidence_memory_idx": {
+          "name": "memory_proposal_evidence_memory_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "memory_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "proposal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_proposal_evidence_workspace_id_memory_id_fkey": {
+          "name": "memory_proposal_evidence_workspace_id_memory_id_fkey",
+          "tableFrom": "memory_proposal_evidence",
+          "tableTo": "memories",
+          "columnsFrom": ["workspace_id", "memory_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_proposal_evidence_workspace_id_proposal_id_fkey": {
+          "name": "memory_proposal_evidence_workspace_id_proposal_id_fkey",
+          "tableFrom": "memory_proposal_evidence",
+          "tableTo": "memory_proposals",
+          "columnsFrom": ["workspace_id", "proposal_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "memory_proposal_evidence_pkey": {
+          "name": "memory_proposal_evidence_pkey",
+          "columns": ["proposal_id", "memory_id"]
+        }
+      },
+      "uniqueConstraints": {
+        "memory_proposal_evidence_proposal_id_ordinal_key": {
+          "name": "memory_proposal_evidence_proposal_id_ordinal_key",
+          "nullsNotDistinct": false,
+          "columns": ["proposal_id", "ordinal"]
+        }
+      },
+      "policies": {
+        "memory_proposal_evidence_insert": {
+          "name": "memory_proposal_evidence_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "(lore.can_append_memory_proposal_evidence(workspace_id, proposal_id) AND (EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_proposal_evidence.memory_id) AND (memory.workspace_id = memory_proposal_evidence.workspace_id) AND lore.can_read_memory(memory.workspace_id, memory.owner_user_id, memory.scope)))))"
+        },
+        "memory_proposal_evidence_select": {
+          "name": "memory_proposal_evidence_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "((EXISTS ( SELECT 1\n   FROM memory_proposals proposal\n  WHERE ((proposal.id = memory_proposal_evidence.proposal_id) AND (proposal.workspace_id = memory_proposal_evidence.workspace_id)))) AND (EXISTS ( SELECT 1\n   FROM memories memory\n  WHERE ((memory.id = memory_proposal_evidence.memory_id) AND (memory.workspace_id = memory_proposal_evidence.workspace_id) AND lore.can_read_memory(memory.workspace_id, memory.owner_user_id, memory.scope)))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_proposal_evidence_ordinal_check": {
+          "name": "memory_proposal_evidence_ordinal_check",
+          "value": "ordinal >= 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_proposal_observation_evidence": {
+      "name": "memory_proposal_observation_evidence",
+      "schema": "",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observation_id": {
+          "name": "observation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observation_reference_id": {
+          "name": "observation_reference_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "memory_proposal_observation_evidence_observation_idx": {
+          "name": "memory_proposal_observation_evidence_observation_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "proposal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_proposal_observation_evide_workspace_id_proposal_id_fkey": {
+          "name": "memory_proposal_observation_evide_workspace_id_proposal_id_fkey",
+          "tableFrom": "memory_proposal_observation_evidence",
+          "tableTo": "memory_proposals",
+          "columnsFrom": ["workspace_id", "proposal_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_proposal_observation_evidence_observation_id_fkey": {
+          "name": "memory_proposal_observation_evidence_observation_id_fkey",
+          "tableFrom": "memory_proposal_observation_evidence",
+          "tableTo": "observations",
+          "columnsFrom": ["observation_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "memory_proposal_observation_evidence_pkey": {
+          "name": "memory_proposal_observation_evidence_pkey",
+          "columns": ["proposal_id", "observation_reference_id"]
+        }
+      },
+      "uniqueConstraints": {
+        "memory_proposal_observation_evidence_proposal_id_ordinal_key": {
+          "name": "memory_proposal_observation_evidence_proposal_id_ordinal_key",
+          "nullsNotDistinct": false,
+          "columns": ["proposal_id", "ordinal"]
+        }
+      },
+      "policies": {
+        "memory_proposal_observation_evidence_insert": {
+          "name": "memory_proposal_observation_evidence_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "(lore.can_append_memory_proposal_evidence(workspace_id, proposal_id) AND (observation_id = observation_reference_id) AND (EXISTS ( SELECT 1\n   FROM observations observation\n  WHERE ((observation.id = memory_proposal_observation_evidence.observation_id) AND (observation.workspace_id = memory_proposal_observation_evidence.workspace_id)))))"
+        },
+        "memory_proposal_observation_evidence_select": {
+          "name": "memory_proposal_observation_evidence_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "(EXISTS ( SELECT 1\n   FROM memory_proposals proposal\n  WHERE ((proposal.id = memory_proposal_observation_evidence.proposal_id) AND (proposal.workspace_id = memory_proposal_observation_evidence.workspace_id))))"
+        }
+      },
+      "checkConstraints": {
+        "memory_proposal_observation_evidence_check": {
+          "name": "memory_proposal_observation_evidence_check",
+          "value": "(observation_id IS NULL) OR (observation_id = observation_reference_id)"
+        },
+        "memory_proposal_observation_evidence_ordinal_check": {
+          "name": "memory_proposal_observation_evidence_ordinal_check",
+          "value": "ordinal >= 0"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.memory_proposals": {
+      "name": "memory_proposals",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposed_by_actor_kind": {
+          "name": "proposed_by_actor_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposed_by_agent_id": {
+          "name": "proposed_by_agent_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "memory_proposal_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_memory_id": {
+          "name": "target_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_memory_version": {
+          "name": "base_memory_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "proposed_content": {
+          "name": "proposed_content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposed_scope": {
+          "name": "proposed_scope",
+          "type": "memory_scope",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposed_metadata": {
+          "name": "proposed_metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "changes_content": {
+          "name": "changes_content",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "changes_scope": {
+          "name": "changes_scope",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "changes_metadata": {
+          "name": "changes_metadata",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "memory_proposal_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "reviewed_by_user_id": {
+          "name": "reviewed_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accepted_memory_id": {
+          "name": "accepted_memory_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reviewed_at": {
+          "name": "reviewed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() + '30 days'::interval)"
+        }
+      },
+      "indexes": {
+        "memory_proposals_expiry_idx": {
+          "name": "memory_proposals_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "memory_proposals_owner_status_idx": {
+          "name": "memory_proposals_owner_status_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "memory_proposals_owner_user_id_fkey": {
+          "name": "memory_proposals_owner_user_id_fkey",
+          "tableFrom": "memory_proposals",
+          "tableTo": "users",
+          "columnsFrom": ["owner_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_proposals_proposed_by_agent_id_fkey": {
+          "name": "memory_proposals_proposed_by_agent_id_fkey",
+          "tableFrom": "memory_proposals",
+          "tableTo": "agents",
+          "columnsFrom": ["proposed_by_agent_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "memory_proposals_reviewed_by_user_id_fkey": {
+          "name": "memory_proposals_reviewed_by_user_id_fkey",
+          "tableFrom": "memory_proposals",
+          "tableTo": "users",
+          "columnsFrom": ["reviewed_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "memory_proposals_workspace_id_fkey": {
+          "name": "memory_proposals_workspace_id_fkey",
+          "tableFrom": "memory_proposals",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "memory_proposals_workspace_id_id_key": {
+          "name": "memory_proposals_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        }
+      },
+      "policies": {
+        "memory_proposals_update": {
+          "name": "memory_proposals_update",
+          "as": "PERMISSIVE",
+          "for": "UPDATE",
+          "to": ["public"],
+          "using": "lore.can_review_memory_proposal(workspace_id, owner_user_id)",
+          "withCheck": "lore.can_review_memory_proposal(workspace_id, owner_user_id)"
+        },
+        "memory_proposals_insert": {
+          "name": "memory_proposals_insert",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": ["public"],
+          "withCheck": "(lore.can_write_memory(workspace_id, owner_user_id) AND (proposed_by_actor_kind =\nCASE\n    WHEN (lore.current_agent_id() IS NULL) THEN 'human'::text\n    ELSE 'agent'::text\nEND) AND (NOT (proposed_by_agent_id IS DISTINCT FROM lore.current_agent_id())) AND (status = 'pending'::memory_proposal_status))"
+        },
+        "memory_proposals_select": {
+          "name": "memory_proposals_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "(lore.can_read_memory_proposal(workspace_id, owner_user_id) AND (expires_at > now()))"
+        }
+      },
+      "checkConstraints": {
+        "memory_proposals_check": {
+          "name": "memory_proposals_check",
+          "value": "(proposed_by_actor_kind = 'agent'::text) OR (proposed_by_agent_id IS NULL)"
+        },
+        "memory_proposals_check1": {
+          "name": "memory_proposals_check1",
+          "value": "((kind = 'create'::memory_proposal_kind) AND (target_memory_id IS NULL) AND (base_memory_version IS NULL) AND changes_content AND changes_scope AND changes_metadata) OR ((kind = 'update'::memory_proposal_kind) AND (target_memory_id IS NOT NULL) AND (base_memory_version > 0) AND (changes_content OR changes_scope OR changes_metadata))"
+        },
+        "memory_proposals_check2": {
+          "name": "memory_proposals_check2",
+          "value": "((status = 'pending'::memory_proposal_status) AND (reviewed_by_user_id IS NULL) AND (accepted_memory_id IS NULL) AND (reviewed_at IS NULL) AND (expires_at = (created_at + '30 days'::interval))) OR ((status = 'accepted'::memory_proposal_status) AND (reviewed_by_user_id IS NOT NULL) AND (accepted_memory_id IS NOT NULL) AND (reviewed_at IS NOT NULL) AND (expires_at = (reviewed_at + '30 days'::interval))) OR ((status = 'rejected'::memory_proposal_status) AND (reviewed_by_user_id IS NOT NULL) AND (accepted_memory_id IS NULL) AND (reviewed_at IS NOT NULL) AND (expires_at = (reviewed_at + '30 days'::interval)))"
+        },
+        "memory_proposals_proposed_by_actor_kind_check": {
+          "name": "memory_proposals_proposed_by_actor_kind_check",
+          "value": "proposed_by_actor_kind = ANY (ARRAY['human'::text, 'agent'::text])"
+        },
+        "memory_proposals_proposed_content_check": {
+          "name": "memory_proposals_proposed_content_check",
+          "value": "btrim(proposed_content) <> ''::text"
+        },
+        "memory_proposals_proposed_metadata_check": {
+          "name": "memory_proposals_proposed_metadata_check",
+          "value": "jsonb_typeof(proposed_metadata) = 'object'::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.observations": {
+      "name": "observations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "episode_id": {
+          "name": "episode_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "observation_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload_sha256": {
+          "name": "payload_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "observations_episode_idx": {
+          "name": "observations_episode_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "episode_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "observations_workspace_id_episode_id_fkey": {
+          "name": "observations_workspace_id_episode_id_fkey",
+          "tableFrom": "observations",
+          "tableTo": "episodes",
+          "columnsFrom": ["workspace_id", "episode_id"],
+          "columnsTo": ["workspace_id", "id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "observations_workspace_id_id_key": {
+          "name": "observations_workspace_id_id_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "id"]
+        },
+        "observations_episode_id_ordinal_key": {
+          "name": "observations_episode_id_ordinal_key",
+          "nullsNotDistinct": false,
+          "columns": ["episode_id", "ordinal"]
+        }
+      },
+      "policies": {
+        "observations_select": {
+          "name": "observations_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "(EXISTS ( SELECT 1\n   FROM episodes episode\n  WHERE ((episode.id = observations.episode_id) AND (episode.workspace_id = observations.workspace_id))))"
+        }
+      },
+      "checkConstraints": {
+        "observations_content_check": {
+          "name": "observations_content_check",
+          "value": "(btrim(content) <> ''::text) AND (length(content) <= 100000)"
+        },
+        "observations_metadata_check": {
+          "name": "observations_metadata_check",
+          "value": "jsonb_typeof(metadata) = 'object'::text"
+        },
+        "observations_ordinal_check": {
+          "name": "observations_ordinal_check",
+          "value": "ordinal >= 0"
+        },
+        "observations_payload_sha256_check": {
+          "name": "observations_payload_sha256_check",
+          "value": "payload_sha256 ~ '^[0-9a-f]{64}$'::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.request_idempotency_records": {
+      "name": "request_idempotency_records",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_user_id": {
+          "name": "actor_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_kind": {
+          "name": "actor_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation": {
+          "name": "operation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_sha256": {
+          "name": "request_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'in_progress'"
+        },
+        "response_status": {
+          "name": "response_status",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "response_body": {
+          "name": "response_body",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() + '24:00:00'::interval)"
+        }
+      },
+      "indexes": {
+        "request_idempotency_records_expiry_idx": {
+          "name": "request_idempotency_records_expiry_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "request_idempotency_records_actor_user_id_fkey": {
+          "name": "request_idempotency_records_actor_user_id_fkey",
+          "tableFrom": "request_idempotency_records",
+          "tableTo": "users",
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "request_idempotency_records_workspace_id_fkey": {
+          "name": "request_idempotency_records_workspace_id_fkey",
+          "tableFrom": "request_idempotency_records",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "request_idempotency_records_workspace_id_actor_kind_actor_i_key": {
+          "name": "request_idempotency_records_workspace_id_actor_kind_actor_i_key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "actor_kind", "actor_id", "operation", "idempotency_key"]
+        }
+      },
+      "policies": {
+        "request_idempotency_records_all": {
+          "name": "request_idempotency_records_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["lore_app"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (actor_user_id = lore.current_user_id()) AND (actor_kind =\nCASE\n    WHEN (lore.current_agent_id() IS NULL) THEN 'user'::text\n    ELSE 'agent'::text\nEND) AND (actor_id = COALESCE(lore.current_agent_id(), lore.current_user_id())))",
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (actor_user_id = lore.current_user_id()) AND (actor_kind =\nCASE\n    WHEN (lore.current_agent_id() IS NULL) THEN 'user'::text\n    ELSE 'agent'::text\nEND) AND (actor_id = COALESCE(lore.current_agent_id(), lore.current_user_id())))"
+        }
+      },
+      "checkConstraints": {
+        "request_idempotency_records_actor_kind_check": {
+          "name": "request_idempotency_records_actor_kind_check",
+          "value": "actor_kind = ANY (ARRAY['user'::text, 'agent'::text])"
+        },
+        "request_idempotency_records_check": {
+          "name": "request_idempotency_records_check",
+          "value": "((status = 'in_progress'::text) AND (response_status IS NULL) AND (response_body IS NULL) AND (completed_at IS NULL)) OR ((status = 'completed'::text) AND (response_status IS NOT NULL) AND (response_body IS NOT NULL) AND (completed_at IS NOT NULL))"
+        },
+        "request_idempotency_records_idempotency_key_check": {
+          "name": "request_idempotency_records_idempotency_key_check",
+          "value": "(btrim(idempotency_key) <> ''::text) AND (length(idempotency_key) <= 128)"
+        },
+        "request_idempotency_records_operation_check": {
+          "name": "request_idempotency_records_operation_check",
+          "value": "(btrim(operation) <> ''::text) AND (length(operation) <= 128)"
+        },
+        "request_idempotency_records_request_sha256_check": {
+          "name": "request_idempotency_records_request_sha256_check",
+          "value": "request_sha256 ~ '^[0-9a-f]{64}$'::text"
+        },
+        "request_idempotency_records_response_status_check": {
+          "name": "request_idempotency_records_response_status_check",
+          "value": "(response_status >= 100) AND (response_status <= 599)"
+        },
+        "request_idempotency_records_status_check": {
+          "name": "request_idempotency_records_status_check",
+          "value": "status = ANY (ARRAY['in_progress'::text, 'completed'::text])"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "users_select": {
+          "name": "users_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "lore.can_read_user(id)"
+        }
+      },
+      "checkConstraints": {
+        "users_display_name_check": {
+          "name": "users_display_name_check",
+          "value": "btrim(display_name) <> ''::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.workspace_imports": {
+      "name": "workspace_imports",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "imported_by_user_id": {
+          "name": "imported_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "archive_sha256": {
+          "name": "archive_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_deployment_id": {
+          "name": "source_deployment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_workspace_id": {
+          "name": "source_workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "workspace_imports_imported_by_user_id_fkey": {
+          "name": "workspace_imports_imported_by_user_id_fkey",
+          "tableFrom": "workspace_imports",
+          "tableTo": "users",
+          "columnsFrom": ["imported_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workspace_imports_workspace_id_fkey": {
+          "name": "workspace_imports_workspace_id_fkey",
+          "tableFrom": "workspace_imports",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "workspace_imports_workspace_id_imported_by_user_id_archive__key": {
+          "name": "workspace_imports_workspace_id_imported_by_user_id_archive__key",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "imported_by_user_id", "archive_sha256"]
+        }
+      },
+      "policies": {
+        "workspace_imports_all": {
+          "name": "workspace_imports_all",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": ["lore_app"],
+          "using": "((workspace_id = lore.current_workspace_id()) AND (imported_by_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL) AND lore.is_active_member(workspace_id))",
+          "withCheck": "((workspace_id = lore.current_workspace_id()) AND (imported_by_user_id = lore.current_user_id()) AND (lore.current_agent_id() IS NULL) AND lore.is_active_member(workspace_id))"
+        }
+      },
+      "checkConstraints": {
+        "workspace_imports_archive_sha256_check": {
+          "name": "workspace_imports_archive_sha256_check",
+          "value": "archive_sha256 ~ '^[0-9a-f]{64}$'::text"
+        },
+        "workspace_imports_summary_check": {
+          "name": "workspace_imports_summary_check",
+          "value": "jsonb_typeof(summary) = 'object'::text"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.workspaces": {
+      "name": "workspaces",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {
+        "workspaces_select": {
+          "name": "workspaces_select",
+          "as": "PERMISSIVE",
+          "for": "SELECT",
+          "to": ["public"],
+          "using": "((id = lore.current_workspace_id()) AND lore.is_active_member(id))"
+        }
+      },
+      "checkConstraints": {
+        "workspaces_name_check": {
+          "name": "workspaces_name_check",
+          "value": "btrim(name) <> ''::text"
+        }
+      },
+      "isRLSEnabled": true
+    }
+  },
+  "enums": {
+    "public.agent_grant_permission": {
+      "name": "agent_grant_permission",
+      "schema": "public",
+      "values": ["read", "write"]
+    },
+    "public.agent_grant_status": {
+      "name": "agent_grant_status",
+      "schema": "public",
+      "values": ["active", "revoked"]
+    },
+    "public.agent_status": {
+      "name": "agent_status",
+      "schema": "public",
+      "values": ["active", "disabled"]
+    },
+    "public.embedding_generation_status": {
+      "name": "embedding_generation_status",
+      "schema": "public",
+      "values": ["building", "active", "retiring", "failed"]
+    },
+    "public.episode_kind": {
+      "name": "episode_kind",
+      "schema": "public",
+      "values": ["conversation", "workflow", "document", "event"]
+    },
+    "public.evaluation_run_status": {
+      "name": "evaluation_run_status",
+      "schema": "public",
+      "values": ["running", "completed", "failed"]
+    },
+    "public.membership_role": {
+      "name": "membership_role",
+      "schema": "public",
+      "values": ["owner", "admin", "member"]
+    },
+    "public.membership_status": {
+      "name": "membership_status",
+      "schema": "public",
+      "values": ["active", "suspended"]
+    },
+    "public.memory_embedding_job_status": {
+      "name": "memory_embedding_job_status",
+      "schema": "public",
+      "values": ["pending", "processing", "succeeded", "dead", "cancelled"]
+    },
+    "public.memory_proposal_kind": {
+      "name": "memory_proposal_kind",
+      "schema": "public",
+      "values": ["create", "update"]
+    },
+    "public.memory_proposal_status": {
+      "name": "memory_proposal_status",
+      "schema": "public",
+      "values": ["pending", "accepted", "rejected"]
+    },
+    "public.memory_scope": {
+      "name": "memory_scope",
+      "schema": "public",
+      "values": ["shared", "private"]
+    },
+    "public.observation_kind": {
+      "name": "observation_kind",
+      "schema": "public",
+      "values": ["message", "tool_call", "tool_result", "document_fragment", "event"]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

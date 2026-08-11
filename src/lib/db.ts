@@ -1,16 +1,23 @@
-export interface PostgresQueryResult<Row> {
-  rows: Row[];
-}
+import type { SQLWrapper } from "drizzle-orm";
 
-export interface PostgresTransaction {
-  query<Row>(sql: string, params?: unknown[]): Promise<PostgresQueryResult<Row>>;
+export interface LoreTransaction {
+  execute<Row>(statement: SQLWrapper): Promise<{ rows: Row[] }>;
 }
 
 /**
- * The narrow Postgres transaction seam used by domain modules and PGlite tests.
- * Lore does not support interchangeable storage engines: SQL, transactions, and
- * database-enforced RLS are part of this contract.
+ * Lore's Drizzle transaction boundary. Postgres, transaction-scoped roles, and
+ * database-enforced RLS are architectural requirements; this is not a generic
+ * storage-provider abstraction.
  */
-export interface PostgresDatabase {
-  transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>): Promise<Result>;
+export interface LoreDatabase {
+  transaction<Result>(use: (transaction: LoreTransaction) => Promise<Result>): Promise<Result>;
+}
+
+/** Drizzle preserves the driver error as `cause`; domain code needs its SQLSTATE. */
+export function throwDatabaseCause(error: unknown): never {
+  if (error && typeof error === "object" && "cause" in error) {
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause !== undefined) throw cause;
+  }
+  throw error;
 }

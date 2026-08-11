@@ -1,4 +1,5 @@
-import type { PostgresTransaction } from "./db";
+import { sql } from "drizzle-orm";
+import type { LoreTransaction } from "./db";
 
 export interface ActorContext {
   workspaceId: string;
@@ -11,27 +12,25 @@ export interface UserContext {
 }
 
 export async function installUserContext(
-  transaction: PostgresTransaction,
+  transaction: LoreTransaction,
   user: UserContext,
 ): Promise<void> {
-  await transaction.query(
-    `SELECT
+  await transaction.execute(
+    sql`SELECT
        set_config('lore.workspace_id', '', true),
-       set_config('lore.user_id', $1, true),
+       set_config('lore.user_id', ${user.userId}, true),
        set_config('lore.agent_id', '', true)`,
-    [user.userId],
   );
 }
 
 export async function installActorContext(
-  transaction: PostgresTransaction,
+  transaction: LoreTransaction,
   actor: ActorContext,
 ): Promise<void> {
-  await transaction.query(
-    `SELECT
-       set_config('lore.workspace_id', $1, true),
-       set_config('lore.user_id', $2, true),
-       set_config('lore.agent_id', $3, true)`,
-    [actor.workspaceId, actor.userId, actor.agentId ?? ""],
+  await transaction.execute(
+    sql`SELECT
+       set_config('lore.workspace_id', ${actor.workspaceId}, true),
+       set_config('lore.user_id', ${actor.userId}, true),
+       set_config('lore.agent_id', ${actor.agentId ?? ""}, true)`,
   );
 }

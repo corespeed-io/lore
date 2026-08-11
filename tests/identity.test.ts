@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { AccessDeniedError, createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
@@ -32,7 +33,7 @@ test("Verified provider identity resolves to one stable internal User", async ()
       workspaceId: testContext.alice.workspaceId,
     });
     await expect(
-      transaction.query("SELECT provider, subject FROM identities"),
+      transaction.execute(sql.raw("SELECT provider, subject FROM identities")),
     ).resolves.toMatchObject({
       rows: [{ provider: "oidc:https://identity.example", subject: "external-user-42" }],
     });
@@ -40,7 +41,7 @@ test("Verified provider identity resolves to one stable internal User", async ()
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.bob);
     await expect(
-      transaction.query("SELECT provider, subject FROM identities"),
+      transaction.execute(sql.raw("SELECT provider, subject FROM identities")),
     ).resolves.toMatchObject({ rows: [] });
   });
 
