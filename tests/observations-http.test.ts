@@ -227,3 +227,48 @@ test("Episode HTTP input is bounded and returns stable 400 responses", async () 
 
   await testContext.close();
 });
+
+test("Episode metadata budgets use the original JSON representation", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "episode-http-json-budget";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const episodes = createEpisodeHandlers(testContext.database);
+  const workspace = (await (
+    await workspaces.POST(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Evidence JSON budget" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const manyKeys = Object.fromEntries(
+    Array.from({ length: 9_000 }, (_, index) => [`k${index}`, index % 10]),
+  );
+  const manyValues = { values: Array.from({ length: 4_900 }, () => 0) };
+  expect(JSON.stringify(manyKeys).length).toBeLessThan(100_000);
+  expect(JSON.stringify(manyValues).length * 100).toBeLessThan(1_000_000);
+
+  const responses = await Promise.all(
+    [
+      [{ kind: "event", content: "Many metadata keys.", metadata: manyKeys }],
+      Array.from({ length: 100 }, () => ({
+        kind: "event",
+        content: "Many aggregate metadata values.",
+        metadata: manyValues,
+      })),
+    ].map((observations) =>
+      episodes.POST(
+        new Request("http://lore.local/api/v1/episodes", {
+          method: "POST",
+          headers: { "x-lore-workspace-id": workspace.id },
+          body: JSON.stringify({ kind: "event", observations }),
+        }),
+      ),
+    ),
+  );
+
+  expect(responses.map((response) => response.status)).toEqual([201, 201]);
+  await testContext.close();
+});

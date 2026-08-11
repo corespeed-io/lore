@@ -301,7 +301,7 @@ export function createObservationModule(database: PostgresDatabase) {
           if (claim.replay) return claim.replay.body.episode;
           const result = await transaction.query<{ id: string }>(
             `SELECT lore.record_episode(
-               $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb
+               $1, $2, $3, $4, $5, $6, $7, $8, $9::json
              ) AS id`,
             [
               actor.workspaceId,

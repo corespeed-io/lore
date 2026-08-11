@@ -76,7 +76,7 @@ CREATE TABLE memory_proposal_observation_evidence (
 CREATE INDEX episodes_owner_created_idx
   ON episodes (workspace_id, owner_user_id, created_at DESC, id);
 CREATE INDEX episodes_workspace_created_idx
-  ON episodes (workspace_id, created_at DESC, id DESC);
+  ON episodes (workspace_id, created_at DESC, id);
 CREATE INDEX observations_episode_idx
   ON observations (workspace_id, episode_id, ordinal);
 CREATE INDEX memory_proposal_observation_evidence_observation_idx
@@ -91,7 +91,7 @@ CREATE FUNCTION lore.record_episode(
   target_scope memory_scope,
   target_started_at timestamptz,
   target_ended_at timestamptz,
-  target_observations jsonb
+  target_observations json
 )
 RETURNS uuid
 LANGUAGE plpgsql
@@ -102,7 +102,7 @@ DECLARE
   episode_identifier uuid := gen_random_uuid();
   observation_record record;
   observation_identifier uuid;
-  observation_metadata jsonb;
+  observation_metadata json;
   observation_timestamp timestamptz;
   total_characters bigint;
   total_metadata_characters bigint;
@@ -119,8 +119,8 @@ BEGIN
   END IF;
 
   IF target_ended_at < target_started_at
-    OR jsonb_typeof(target_observations) IS DISTINCT FROM 'array'
-    OR jsonb_array_length(target_observations) NOT BETWEEN 1 AND 100
+    OR json_typeof(target_observations) IS DISTINCT FROM 'array'
+    OR json_array_length(target_observations) NOT BETWEEN 1 AND 100
   THEN
     RAISE EXCEPTION 'Episode observations are invalid'
       USING ERRCODE = '22023';
@@ -128,14 +128,14 @@ BEGIN
 
   SELECT
     sum(length(observation.value->>'content')),
-    sum(length((observation.value->'metadata')::text))
+    COALESCE(sum(length((observation.value->'metadata')::text)), 0)
   INTO total_characters, total_metadata_characters
-  FROM jsonb_array_elements(target_observations) observation(value);
+  FROM json_array_elements(target_observations) observation(value);
   IF total_characters IS NULL OR total_characters > 1000000 THEN
     RAISE EXCEPTION 'Episode observation content exceeds its bound'
       USING ERRCODE = '22023';
   END IF;
-  IF total_metadata_characters IS NULL OR total_metadata_characters > 1000000 THEN
+  IF total_metadata_characters > 1000000 THEN
     RAISE EXCEPTION 'Episode observation metadata exceeds its bound'
       USING ERRCODE = '22023';
   END IF;
@@ -150,7 +150,7 @@ BEGIN
 
   FOR observation_record IN
     SELECT value, ordinal - 1 AS ordinal
-    FROM jsonb_array_elements(target_observations) WITH ORDINALITY item(value, ordinal)
+    FROM json_array_elements(target_observations) WITH ORDINALITY item(value, ordinal)
     ORDER BY ordinal
   LOOP
     observation_identifier := gen_random_uuid();
@@ -158,7 +158,7 @@ BEGIN
     observation_timestamp := (observation_record.value->>'observedAt')::timestamptz;
     IF observation_timestamp < target_started_at
       OR observation_timestamp > target_ended_at
-      OR jsonb_typeof(observation_metadata) IS DISTINCT FROM 'object'
+      OR json_typeof(observation_metadata) IS DISTINCT FROM 'object'
       OR length(observation_metadata::text) > 100000
     THEN
       RAISE EXCEPTION 'Observation is outside its Episode envelope'
@@ -181,7 +181,7 @@ BEGIN
             jsonb_build_object(
               'kind', observation_record.value->>'kind',
               'content', observation_record.value->>'content',
-              'metadata', observation_metadata,
+              'metadata', observation_metadata::jsonb,
               'observedAt', to_char(
                 observation_timestamp AT TIME ZONE 'UTC',
                 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
@@ -193,7 +193,7 @@ BEGIN
         'hex'
       ),
       observation_record.value->>'content',
-      observation_metadata
+      observation_metadata::jsonb
     );
   END LOOP;
 
@@ -302,13 +302,13 @@ CREATE POLICY memory_proposal_observation_evidence_insert
 
 REVOKE ALL ON FUNCTION lore.record_episode(
   uuid, uuid, text, uuid, episode_kind, memory_scope,
-  timestamptz, timestamptz, jsonb
+  timestamptz, timestamptz, json
 ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.scrub_deleted_episode_replay() FROM PUBLIC;
 REVOKE ALL ON FUNCTION lore.lock_reviewable_proposal_observations(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION lore.record_episode(
   uuid, uuid, text, uuid, episode_kind, memory_scope,
-  timestamptz, timestamptz, jsonb
+  timestamptz, timestamptz, json
 ) TO lore_app;
 GRANT EXECUTE ON FUNCTION lore.lock_reviewable_proposal_observations(uuid, uuid) TO lore_app;
 GRANT SELECT, DELETE ON episodes TO lore_app;
