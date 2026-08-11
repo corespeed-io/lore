@@ -28,6 +28,7 @@ const FEATURE_LABELS = {
   embeddingGenerations: "Embedding generations",
   cursorPagination: "Cursor pagination",
   memoryProposals: "Memory Proposals",
+  observationEvidence: "Observation evidence",
 } as const;
 
 const COMPONENT_LABELS: Record<keyof ReadinessReport["components"], string> = {
@@ -435,7 +436,8 @@ export function WorkspaceOperationsView({
             <h3 id="export-title">Download a logical archive</h3>
             <p>
               Includes shared Memories you can see, your private Memories, and Links whose endpoints
-              are both visible. Credentials, Agents, embeddings, jobs, and events stay out.
+              are both visible. Episodes, Observations, Proposals, credentials, Agents, embeddings,
+              jobs, and events stay out.
             </p>
             <button
               type="button"

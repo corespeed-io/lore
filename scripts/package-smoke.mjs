@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { supportedPythonInterpreter } from "./python-interpreter.mjs";
 
 const repository = new URL("../", import.meta.url);
 
@@ -120,7 +121,12 @@ try {
     throw new Error("Packed MCP executable did not start and validate configuration safely");
   }
 
-  const python = process.env.PYTHON ?? "python3";
+  const python = supportedPythonInterpreter();
+  if (!python) {
+    throw new Error(
+      "Lore Python package smoke requires Python 3.12 or newer. Set LORE_PYTHON to a supported interpreter.",
+    );
+  }
   run(python, [
     "-m",
     "pip",

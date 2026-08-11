@@ -13,6 +13,7 @@ import {
   getCurrentHumanActor,
   getDeploymentCapabilities,
   getMemory,
+  getObservations,
   getReadiness,
   importWorkspaceArchive,
   issueAgentCredential,
@@ -55,6 +56,8 @@ export const loreKeys = {
   agents: (workspaceId: string) => ["lore", "agents", workspaceId] as const,
   memoryProposals: (workspaceId: string, status: MemoryProposalStatus) =>
     ["lore", "memory-proposals", workspaceId, status] as const,
+  observations: (workspaceId: string, observationIds: readonly string[]) =>
+    ["lore", "observations", workspaceId, observationIds.join(",")] as const,
   capabilities: (workspaceId: string) => ["lore", "capabilities", workspaceId] as const,
   currentActor: (workspaceId: string) => ["lore", "current-actor", workspaceId] as const,
   readiness: ["lore", "readiness"] as const,
@@ -227,6 +230,13 @@ export function useLoreMemoryProposals(workspaceId: string, status: MemoryPropos
   return useSWR(
     workspaceId ? loreKeys.memoryProposals(workspaceId, status) : null,
     ([, , scopedWorkspaceId, scopedStatus]) => listMemoryProposals(scopedWorkspaceId, scopedStatus),
+  );
+}
+
+export function useLoreObservations(workspaceId: string, observationIds: readonly string[]) {
+  const ids = useMemo(() => [...new Set(observationIds)], [observationIds]);
+  return useSWR(workspaceId && ids.length ? loreKeys.observations(workspaceId, ids) : null, () =>
+    getObservations(workspaceId, ids),
   );
 }
 

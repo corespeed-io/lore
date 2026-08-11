@@ -10,6 +10,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
             features: {
               properties: {
                 memoryProposals: { const: true };
+                observationEvidence: { const: true };
               };
             };
             limits: {
@@ -19,6 +20,11 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
                 memoryProposalEvidence: { const: number };
                 memoryProposalList: { const: number };
                 memoryProposalPending: { const: number };
+                episodeObservations: { const: number };
+                episodeContentCharacters: { const: number };
+                episodeMetadataCharacters: { const: number };
+                observationContentCharacters: { const: number };
+                observationBatchRead: { const: number };
               };
             };
           };
@@ -53,11 +59,14 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/api/v1/evaluations/runs/{runId}",
       "/api/v1/evaluations/suites",
       "/api/v1/evaluations/suites/{suiteId}/runs",
+      "/api/v1/episodes",
+      "/api/v1/episodes/{episodeId}",
       "/api/v1/graph",
       "/api/v1/memories",
       "/api/v1/memories/{memoryId}",
       "/api/v1/memory-proposals",
       "/api/v1/memory-proposals/{proposalId}/review",
+      "/api/v1/observations",
       "/api/v1/workspaces",
       "/api/v1/workspaces/export",
       "/api/v1/workspaces/import",
@@ -77,15 +86,24 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   );
   expect(document.paths["/api/v1/workspaces/export"].get.responses).toHaveProperty("409");
   expect(document.components.schemas.Capabilities.properties.limits.properties).toEqual({
+    episodeContentCharacters: { const: 1_000_000 },
+    episodeMetadataCharacters: { const: 1_000_000 },
+    episodeObservations: { const: 100 },
     memoryProposalEvidence: { const: 50 },
     memoryProposalList: { const: 100 },
     memoryProposalPending: { const: 100 },
     memoryProposalRetentionSeconds: { const: 2_592_000 },
+    observationContentCharacters: { const: 100_000 },
+    observationBatchRead: { const: 50 },
     workspaceArchiveLinks: { const: 50_000 },
     workspaceArchiveMemories: { const: 10_000 },
   });
   expect(document.components.schemas.Capabilities.properties.features.properties).toHaveProperty(
     "memoryProposals",
+    { const: true },
+  );
+  expect(document.components.schemas.Capabilities.properties.features.properties).toHaveProperty(
+    "observationEvidence",
     { const: true },
   );
   expect(document.components.schemas.CreateMemoryProposalUpdateInput.anyOf).toEqual([

@@ -6,6 +6,7 @@ import {
   type LoreClientOptions,
   loreConfigurationFromEnvironment,
   type MemoryScope,
+  type RecordEpisodeInput,
   type UpdateMemoryInput,
 } from "@corespeed/lore-sdk";
 import { LORE_CLI_VERSION } from "./generated/version.js";
@@ -38,11 +39,15 @@ Commands:
   memory search --stdin [--limit N] [--scope shared|private]
   memory remember <content> [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory remember --stdin [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
-  memory propose create <content>|--stdin [--scope shared|private] [--metadata JSON] [--evidence UUID] [--idempotency-key KEY]
-  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--evidence UUID] [--idempotency-key KEY]
+  memory propose create <content>|--stdin [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--idempotency-key KEY]
+  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--idempotency-key KEY]
   memory get <memory-id>
   memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory forget <memory-id> --version N [--idempotency-key KEY]
+  episode list [--limit N] [--cursor CURSOR] [--kind conversation|workflow|document|event] [--scope shared|private]
+  episode record --stdin [--idempotency-key KEY]
+  episode get <episode-id>
+  episode forget <episode-id> [--idempotency-key KEY]
   capabilities
   readiness
 
@@ -59,7 +64,7 @@ Connection environment:
   LORE_ALLOW_INSECURE      Explicitly allow authenticated non-loopback HTTP
 
 Secrets are intentionally accepted only through environment variables. Prefer
---stdin for private query or Memory content. Reuse --idempotency-key when retrying
+--stdin for private query, Memory content, or Episode JSON. Reuse --idempotency-key when retrying
 a mutation after an unknown response outcome.
 `;
 
@@ -126,15 +131,31 @@ function allowedOptions(
   if (unexpected) throw new CliUsageError(`--${unexpected[0]} is not valid for this command`);
 }
 
-function optionEvidence(values: readonly string[] | undefined): string[] | undefined {
+function optionEvidence(
+  values: readonly string[] | undefined,
+  name = "--evidence",
+): string[] | undefined {
   if (values === undefined) return undefined;
-  if (values.length > 50) throw new CliUsageError("--evidence may be repeated at most 50 times");
+  if (values.length > 50) throw new CliUsageError(`${name} may be repeated at most 50 times`);
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const normalized = values.map((value) => value.trim().toLowerCase());
   if (normalized.some((value) => !uuidPattern.test(value))) {
-    throw new CliUsageError("--evidence must be a UUID");
+    throw new CliUsageError(`${name} must be a UUID`);
   }
   return [...new Set(normalized)];
+}
+
+function episodeInput(value: string): RecordEpisodeInput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new CliUsageError("Episode stdin must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new CliUsageError("Episode stdin must be a JSON object");
+  }
+  return parsed as RecordEpisodeInput;
 }
 
 function optionInteger(value: string | undefined, name: string): number | undefined {
@@ -194,10 +215,12 @@ export async function runLoreCli(
         cursor: { type: "string" },
         evidence: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
+        kind: { type: "string" },
         "idempotency-key": { type: "string" },
         limit: { type: "string" },
         metadata: { type: "string" },
         offset: { type: "string" },
+        "observation-evidence": { type: "string", multiple: true },
         pretty: { type: "boolean" },
         scope: { type: "string" },
         stdin: { type: "boolean" },
@@ -256,6 +279,66 @@ export async function runLoreCli(
       exactPositionals(parsed.positionals, 1, "capabilities");
       allowedOptions(parsed.values, []);
       output(io, await workspace.capabilities(), pretty);
+      return 0;
+    }
+    if (group === "episode" && action === "list") {
+      exactPositionals(parsed.positionals, 2, "episode list");
+      allowedOptions(parsed.values, ["cursor", "kind", "limit", "scope"]);
+      const kind = parsed.values.kind;
+      if (
+        kind !== undefined &&
+        kind !== "conversation" &&
+        kind !== "workflow" &&
+        kind !== "document" &&
+        kind !== "event"
+      ) {
+        throw new CliUsageError("--kind must be conversation, workflow, document, or event");
+      }
+      output(
+        io,
+        await workspace.listEpisodes({
+          cursor: parsed.values.cursor,
+          kind,
+          limit: optionInteger(parsed.values.limit, "--limit"),
+          scope: optionScope(parsed.values.scope),
+        }),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "episode" && action === "record") {
+      exactPositionals(parsed.positionals, 2, "episode record --stdin");
+      allowedOptions(parsed.values, ["idempotency-key", "stdin"]);
+      if (parsed.values.stdin !== true) {
+        throw new CliUsageError("episode record requires --stdin");
+      }
+      output(
+        io,
+        await workspace.recordEpisode(
+          episodeInput(await stdinValue(io, 2_500_000, "Episode JSON")),
+          { idempotencyKey: parsed.values["idempotency-key"] },
+        ),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "episode" && action === "get") {
+      exactPositionals(parsed.positionals, 3, "episode get <episode-id>");
+      allowedOptions(parsed.values, []);
+      output(
+        io,
+        await workspace.getEpisode(requiredPosition(parsed.positionals, 2, "episode id")),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "episode" && action === "forget") {
+      exactPositionals(parsed.positionals, 3, "episode forget <episode-id>");
+      allowedOptions(parsed.values, ["idempotency-key"]);
+      await workspace.forgetEpisode(requiredPosition(parsed.positionals, 2, "episode id"), {
+        idempotencyKey: parsed.values["idempotency-key"],
+      });
+      output(io, { deleted: true }, pretty);
       return 0;
     }
     if (group === "memory" && action === "list") {
@@ -329,6 +412,7 @@ export async function runLoreCli(
           "evidence",
           "idempotency-key",
           "metadata",
+          "observation-evidence",
           "scope",
           "stdin",
         ]);
@@ -340,6 +424,10 @@ export async function runLoreCli(
           scope: optionScope(parsed.values.scope),
           metadata: optionMetadata(parsed.values.metadata),
           evidenceMemoryIds: optionEvidence(parsed.values.evidence),
+          evidenceObservationIds: optionEvidence(
+            parsed.values["observation-evidence"],
+            "--observation-evidence",
+          ),
         };
       } else if (mode === "update") {
         exactPositionals(parsed.positionals, 4, "memory propose update <memory-id> --version N");
@@ -348,6 +436,7 @@ export async function runLoreCli(
           "evidence",
           "idempotency-key",
           "metadata",
+          "observation-evidence",
           "scope",
           "stdin",
           "version",
@@ -361,6 +450,10 @@ export async function runLoreCli(
           targetMemoryId: requiredPosition(parsed.positionals, 3, "memory id"),
           expectedVersion,
           evidenceMemoryIds: optionEvidence(parsed.values.evidence),
+          evidenceObservationIds: optionEvidence(
+            parsed.values["observation-evidence"],
+            "--observation-evidence",
+          ),
         };
         const content = fromStdin
           ? await stdinValue(io, 1_000_000, "content")
@@ -382,6 +475,12 @@ export async function runLoreCli(
         throw new CliUsageError(
           "Usage: lore memory propose create <content>|--stdin, or memory propose update <memory-id> --version N",
         );
+      }
+      if (
+        (proposal.evidenceMemoryIds?.length ?? 0) + (proposal.evidenceObservationIds?.length ?? 0) >
+        50
+      ) {
+        throw new CliUsageError("Proposal evidence may contain at most 50 total items");
       }
       output(
         io,

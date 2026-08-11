@@ -593,11 +593,12 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 8,
+    schemaRevision: 9,
     features: {
       idempotency: true,
       optimisticConcurrency: true,
       memoryProposals: true,
+      observationEvidence: true,
       transactionalOutbox: true,
     },
     limits: {
@@ -607,6 +608,11 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
       memoryProposalList: 100,
       memoryProposalPending: 100,
       memoryProposalRetentionSeconds: 2_592_000,
+      episodeObservations: 100,
+      episodeContentCharacters: 1_000_000,
+      episodeMetadataCharacters: 1_000_000,
+      observationContentCharacters: 100_000,
+      observationBatchRead: 50,
     },
   });
   await expect(operations.readiness()).resolves.toMatchObject({

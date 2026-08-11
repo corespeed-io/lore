@@ -47,10 +47,38 @@ class CreateMemoryProposalCreateInput(TypedDict):
     scope: NotRequired[Literal["shared", "private"]]
     metadata: NotRequired[dict[str, Any]]
     evidenceMemoryIds: NotRequired[list[str]]
+    evidenceObservationIds: NotRequired[list[str]]
 
 CreateMemoryProposalInput: TypeAlias = Union["CreateMemoryProposalCreateInput", "CreateMemoryProposalUpdateInput"]
 
 CreateMemoryProposalUpdateInput: TypeAlias = Union["MemoryProposalUpdateContentInput", "MemoryProposalUpdateScopeInput", "MemoryProposalUpdateMetadataInput"]
+
+class Episode(TypedDict):
+    id: str
+    workspaceId: str
+    ownerUserId: str
+    recordedByActorKind: Literal["human", "agent"]
+    recordedByAgentId: Union[str, None]
+    kind: Literal["conversation", "workflow", "document", "event"]
+    scope: Literal["shared", "private"]
+    startedAt: str
+    endedAt: str
+    observationCount: int
+    createdAt: str
+    observations: list[Observation]
+
+class EpisodeSummary(TypedDict):
+    id: str
+    workspaceId: str
+    ownerUserId: str
+    recordedByActorKind: Literal["human", "agent"]
+    recordedByAgentId: Union[str, None]
+    kind: Literal["conversation", "workflow", "document", "event"]
+    scope: Literal["shared", "private"]
+    startedAt: str
+    endedAt: str
+    observationCount: int
+    createdAt: str
 
 class Error(TypedDict):
     code: Literal["access_denied", "authentication_required", "idempotency_conflict", "internal_error", "invalid_archive", "invalid_request", "not_found", "precondition_required", "proposal_capacity_exceeded", "proposal_review_conflict", "version_conflict", "workspace_export_limit_exceeded"]
@@ -169,6 +197,7 @@ class MemoryProposal(TypedDict):
     proposedScope: Literal["shared", "private"]
     proposedMetadata: dict[str, Any]
     evidenceMemoryIds: list[str]
+    evidenceObservationIds: list[str]
     status: Literal["pending", "accepted", "rejected"]
     reviewedByUserId: Union[str, None]
     acceptedMemoryId: Union[str, None]
@@ -187,6 +216,7 @@ class MemoryProposalUpdateContentInput(TypedDict):
     scope: NotRequired[Literal["shared", "private"]]
     metadata: NotRequired[dict[str, Any]]
     evidenceMemoryIds: NotRequired[list[str]]
+    evidenceObservationIds: NotRequired[list[str]]
 
 class MemoryProposalUpdateMetadataInput(TypedDict):
     kind: Literal["update"]
@@ -196,6 +226,7 @@ class MemoryProposalUpdateMetadataInput(TypedDict):
     scope: NotRequired[Literal["shared", "private"]]
     metadata: dict[str, Any]
     evidenceMemoryIds: NotRequired[list[str]]
+    evidenceObservationIds: NotRequired[list[str]]
 
 class MemoryProposalUpdateScopeInput(TypedDict):
     kind: Literal["update"]
@@ -205,12 +236,25 @@ class MemoryProposalUpdateScopeInput(TypedDict):
     scope: Literal["shared", "private"]
     metadata: NotRequired[dict[str, Any]]
     evidenceMemoryIds: NotRequired[list[str]]
+    evidenceObservationIds: NotRequired[list[str]]
 
 class MemorySearchResult(TypedDict):
     memory: Memory
     score: float
     rerankScore: NotRequired[float]
     evidence: str
+
+class Observation(TypedDict):
+    id: str
+    workspaceId: str
+    episodeId: str
+    ordinal: int
+    kind: Literal["message", "tool_call", "tool_result", "document_fragment", "event"]
+    observedAt: str
+    payloadSha256: str
+    content: str
+    metadata: dict[str, Any]
+    createdAt: str
 
 class RankingMetrics(TypedDict):
     recallAtK: float
@@ -222,6 +266,17 @@ class RankingMetrics(TypedDict):
 class ReadinessReport(TypedDict):
     status: Literal["ready", "degraded", "unready"]
     components: dict[str, Any]
+
+class RecordEpisodeInput(TypedDict):
+    kind: Literal["conversation", "workflow", "document", "event"]
+    scope: NotRequired[Literal["shared", "private"]]
+    observations: list[RecordObservationInput]
+
+class RecordObservationInput(TypedDict):
+    kind: Literal["message", "tool_call", "tool_result", "document_fragment", "event"]
+    content: str
+    metadata: NotRequired[dict[str, Any]]
+    observedAt: NotRequired[str]
 
 class UpdateAgentInput(TypedDict):
     name: NotRequired[str]

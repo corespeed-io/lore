@@ -10,6 +10,7 @@ import {
   MemoryProposalReviewConflictError,
   MemoryVersionConflictError,
 } from "@/lib/memory";
+import { createObservationModule } from "@/lib/observations";
 import { createPortabilityModule } from "@/lib/portability";
 import { createMemoryTestContext } from "./support/memory-context";
 
@@ -534,6 +535,80 @@ test("Proposal evidence cannot include a private Memory hidden from the Actor", 
     }),
   ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
   await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.close();
+});
+
+test("A Proposal cites only RLS-visible Observation evidence without making it Memory", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const observations = createObservationModule(testContext.database);
+  const visibleEpisode = await observations.record(agentActor, {
+    kind: "conversation",
+    observations: [{ kind: "message", content: "The owner prefers tea." }],
+  });
+  const hiddenEpisode = await observations.record(testContext.bob, {
+    kind: "conversation",
+    observations: [{ kind: "message", content: "Bob prefers coffee." }],
+  });
+  const visibleObservationId = visibleEpisode.observations[0].id;
+
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The owner prefers tea.",
+    evidenceObservationIds: [visibleObservationId],
+  });
+
+  expect(proposal).toMatchObject({
+    evidenceMemoryIds: [],
+    evidenceObservationIds: [visibleObservationId],
+  });
+  await expect(memories.list(testContext.alice)).resolves.toEqual([]);
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    { id: proposal.id, evidenceObservationIds: [visibleObservationId] },
+  ]);
+  await expect(
+    memories.propose(agentActor, {
+      kind: "create",
+      content: "Attempted cross-owner synthesis",
+      evidenceObservationIds: [hiddenEpisode.observations[0].id],
+    }),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+  await expect(observations.forget(testContext.alice, visibleEpisode.id)).resolves.toBe(true);
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    { id: proposal.id, evidenceObservationIds: [visibleObservationId] },
+  ]);
+  await expect(
+    memories.reviewProposal(testContext.alice, proposal.id, "accept"),
+  ).rejects.toBeInstanceOf(MemoryProposalReviewConflictError);
+
+  await testContext.close();
+});
+
+test("A human accepts a Proposal while its cited Observation remains visible", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createMemoryModule(testContext.database);
+  const observations = createObservationModule(testContext.database);
+  const episode = await observations.record(agentActor, {
+    kind: "conversation",
+    observations: [{ kind: "message", content: "The owner prefers tea." }],
+  });
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The owner prefers tea.",
+    evidenceObservationIds: [episode.observations[0].id],
+  });
+
+  await expect(
+    memories.reviewProposal(testContext.alice, proposal.id, "accept"),
+  ).resolves.toMatchObject({
+    proposal: {
+      id: proposal.id,
+      status: "accepted",
+      evidenceObservationIds: [episode.observations[0].id],
+    },
+    memory: { content: "The owner prefers tea." },
+  });
 
   await testContext.close();
 });

@@ -42,6 +42,12 @@ test("Lore cache keys isolate Workspace, query, and result shape", () => {
   expect(loreKeys.memoryProposals(workspaceId, "pending")).not.toEqual(
     loreKeys.memoryProposals(workspaceId, "accepted"),
   );
+  expect(loreKeys.observations(workspaceId, ["observation-a"])).not.toEqual(
+    loreKeys.observations(workspaceId, ["observation-b"]),
+  );
+  expect(loreKeys.observations(workspaceId, ["observation-a"])).not.toEqual(
+    loreKeys.observations("10000000-0000-4000-8000-000000000002", ["observation-a"]),
+  );
   expect(loreKeys.memoryProposals(workspaceId, "pending")).not.toEqual(
     loreKeys.memoryProposals("10000000-0000-4000-8000-000000000002", "pending"),
   );

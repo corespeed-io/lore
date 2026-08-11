@@ -1,10 +1,41 @@
 import { createLoreMcpServer, type LoreMcpMemoryClient } from "@corespeed/lore-mcp";
-import type { Memory, MemoryProposal } from "@corespeed/lore-sdk";
+import type { Episode, Memory, MemoryProposal } from "@corespeed/lore-sdk";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000001";
 const MEMORY_ID = "20000000-0000-4000-8000-000000000001";
+const EPISODE_ID = "60000000-0000-4000-8000-000000000001";
+
+function episode(): Episode {
+  return {
+    id: EPISODE_ID,
+    workspaceId: WORKSPACE_ID,
+    ownerUserId: "30000000-0000-4000-8000-000000000001",
+    recordedByActorKind: "agent",
+    recordedByAgentId: "40000000-0000-4000-8000-000000000001",
+    kind: "conversation",
+    scope: "private",
+    startedAt: "2026-08-10T00:00:00.000Z",
+    endedAt: "2026-08-10T00:00:00.000Z",
+    observationCount: 1,
+    createdAt: "2026-08-10T00:00:01.000Z",
+    observations: [
+      {
+        id: "70000000-0000-4000-8000-000000000001",
+        workspaceId: WORKSPACE_ID,
+        episodeId: EPISODE_ID,
+        ordinal: 0,
+        kind: "message",
+        observedAt: "2026-08-10T00:00:00.000Z",
+        payloadSha256: "a".repeat(64),
+        content: "Private raw observation",
+        metadata: { role: "user" },
+        createdAt: "2026-08-10T00:00:01.000Z",
+      },
+    ],
+  };
+}
 
 function memory(overrides: Partial<Memory> = {}): Memory {
   return {
@@ -36,6 +67,7 @@ function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
     proposedScope: "private",
     proposedMetadata: {},
     evidenceMemoryIds: [],
+    evidenceObservationIds: [],
     status: "pending",
     reviewedByUserId: null,
     acceptedMemoryId: null,
@@ -47,6 +79,7 @@ function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
 
 function fakeMemories(): LoreMcpMemoryClient {
   return {
+    recordEpisode: vi.fn().mockResolvedValue(episode()),
     forgetMemory: vi.fn().mockResolvedValue(undefined),
     getMemory: vi.fn().mockResolvedValue(memory()),
     listMemories: vi.fn().mockResolvedValue({ memories: [memory()], nextCursor: null }),
@@ -88,6 +121,7 @@ describe("Lore external MCP adapter", () => {
       "lore_search",
       "lore_get",
       "lore_remember",
+      "lore_observe",
       "lore_propose",
       "lore_update",
       "lore_forget",
@@ -133,11 +167,64 @@ describe("Lore external MCP adapter", () => {
         baseMemoryVersion: null,
         proposedScope: "private",
         evidenceMemoryIds: [],
+        evidenceObservationIds: [],
         status: "pending",
         createdAt: proposal().createdAt,
       },
     });
     expect(JSON.stringify(result.structuredContent)).not.toContain("Proposed fact");
+  });
+
+  test("records bounded Observation evidence without returning raw payload content", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    const rawContent = "  Private raw observation\n";
+
+    const result = await client.callTool({
+      name: "lore_observe",
+      arguments: {
+        kind: "conversation",
+        observations: [{ kind: "message", content: rawContent }],
+        idempotencyKey: "observe-1",
+      },
+    });
+
+    expect(memories.recordEpisode).toHaveBeenCalledWith(
+      {
+        kind: "conversation",
+        scope: "private",
+        observations: [{ kind: "message", content: rawContent }],
+      },
+      { idempotencyKey: "observe-1" },
+    );
+    expect(result.structuredContent).toMatchObject({
+      episode: {
+        id: EPISODE_ID,
+        observations: [{ id: episode().observations[0].id, payloadSha256: "a".repeat(64) }],
+      },
+    });
+    expect(JSON.stringify(result.structuredContent)).not.toContain("Private raw observation");
+    expect(JSON.stringify(result.structuredContent)).not.toContain(WORKSPACE_ID);
+  });
+
+  test("rejects an Episode whose aggregate metadata exceeds the tool budget", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+
+    const result = await client.callTool({
+      name: "lore_observe",
+      arguments: {
+        kind: "event",
+        observations: Array.from({ length: 11 }, () => ({
+          kind: "event",
+          content: "Bound metadata.",
+          metadata: { payload: "m".repeat(99_000) },
+        })),
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(memories.recordEpisode).not.toHaveBeenCalled();
   });
 
   test("calls Lore through the injected deep client and removes tenant identity fields", async () => {

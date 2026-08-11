@@ -90,6 +90,7 @@ test("CLI submits a non-canonical proposal with evidence and a stable retry key"
       proposedScope: "private",
       proposedMetadata: {},
       evidenceMemoryIds: [evidenceId],
+      evidenceObservationIds: [],
       status: "pending",
       reviewedByUserId: null,
       acceptedMemoryId: null,
@@ -153,6 +154,7 @@ test("CLI submits versioned update proposals and rejects an empty patch", async 
       proposedScope: "shared",
       proposedMetadata: { state: "approved" },
       evidenceMemoryIds: [evidenceId],
+      evidenceObservationIds: [],
       status: "pending",
       reviewedByUserId: null,
       acceptedMemoryId: null,
@@ -215,6 +217,51 @@ test("CLI submits versioned update proposals and rejects an empty patch", async 
   expect(invalid.stderr.join("")).toContain(
     "memory propose update requires --content, --scope, or --metadata",
   );
+});
+
+test("CLI records private Episode evidence from stdin without putting payloads in argv", async () => {
+  const episodeId = "60000000-0000-4000-8000-000000000001";
+  const input = {
+    kind: "conversation",
+    observations: [{ kind: "message", content: "Private observation" }],
+  };
+  const captured = captureIo(`${JSON.stringify(input)}\n`);
+  const fetchMock = vi.fn().mockResolvedValue(
+    Response.json({
+      id: episodeId,
+      workspaceId: WORKSPACE_ID,
+      ownerUserId: "30000000-0000-4000-8000-000000000001",
+      recordedByActorKind: "agent",
+      recordedByAgentId: "40000000-0000-4000-8000-000000000001",
+      kind: "conversation",
+      scope: "private",
+      startedAt: "2026-08-10T00:00:00.000Z",
+      endedAt: "2026-08-10T00:00:00.000Z",
+      observationCount: 1,
+      createdAt: "2026-08-10T00:00:00.000Z",
+      observations: [],
+    }),
+  );
+
+  const exitCode = await runLoreCli(
+    ["episode", "record", "--stdin", "--idempotency-key", "episode-1"],
+    {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    },
+  );
+
+  expect(exitCode).toBe(0);
+  const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(url.pathname).toBe("/api/v1/episodes");
+  expect(new Headers(init.headers).get("idempotency-key")).toBe("episode-1");
+  expect(JSON.parse(String(init.body))).toEqual(input);
+  expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ id: episodeId });
 });
 
 test("CLI reports missing Workspace as a usage error", async () => {
@@ -326,6 +373,22 @@ test("CLI stdin accepts valid multibyte content up to the character limit", asyn
   }
 
   await expect(readBoundedUtf8Stdin(input())).resolves.toBe(content);
+});
+
+test("CLI stdin leaves envelope room around a maximal multibyte Episode payload", async () => {
+  const episode = JSON.stringify({
+    kind: "document",
+    observations: Array.from({ length: 10 }, () => ({
+      kind: "document_fragment",
+      content: "界".repeat(100_000),
+    })),
+  });
+  const bytes = new TextEncoder().encode(episode);
+  async function* input() {
+    yield bytes;
+  }
+
+  await expect(readBoundedUtf8Stdin(input())).resolves.toBe(episode);
 });
 
 test("CLI stdin rejects malformed UTF-8 instead of changing Memory content", async () => {

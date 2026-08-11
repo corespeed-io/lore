@@ -13,12 +13,16 @@ from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_o
 from .generated_contract import (
     Capabilities,
     CreateMemoryProposalInput,
+    Episode,
+    EpisodeSummary,
     Memory,
     MemoryGraph,
     MemoryProposal,
     MemoryProposalReviewResult,
     MemorySearchResult,
+    Observation,
     ReadinessReport,
+    RecordEpisodeInput,
     Workspace,
     WorkspaceSummary,
     LORE_ERROR_CODES,
@@ -129,6 +133,12 @@ def _scope(value: Optional[str]) -> Optional[str]:
 @dataclass(frozen=True)
 class MemoryPage:
     memories: Sequence[Memory]
+    next_cursor: Optional[str]
+
+
+@dataclass(frozen=True)
+class EpisodePage:
+    episodes: Sequence[EpisodeSummary]
     next_cursor: Optional[str]
 
 
@@ -407,6 +417,88 @@ class LoreWorkspaceClient:
                 body={"content": content, "scope": _scope(scope), "metadata": dict(metadata or {})},
                 headers={"idempotency-key": _idempotency_key(idempotency_key)},
             ),
+        )
+
+    def list_episodes(
+        self,
+        *,
+        cursor: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: int = 50,
+        scope: Optional[str] = None,
+    ) -> EpisodePage:
+        if kind is not None and kind not in {"conversation", "workflow", "document", "event"}:
+            raise TypeError("kind must be conversation, workflow, document, or event")
+        params: MutableMapping[str, Union[str, int]] = {"limit": _limit(limit, 50)}
+        if cursor:
+            params["cursor"] = cursor
+        if kind:
+            params["kind"] = kind
+        if scope is not None:
+            params["scope"] = cast(str, _scope(scope))
+        response = self.client._request_with_response(
+            f"api/v1/episodes?{urlencode(params)}", workspace_id=self.workspace_id
+        )
+        return EpisodePage(
+            episodes=cast(Sequence[EpisodeSummary], response[0]),
+            next_cursor=response[1].get("x-lore-next-cursor"),
+        )
+
+    def record_episode(
+        self,
+        episode: RecordEpisodeInput,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> Episode:
+        return cast(
+            Episode,
+            self.client._request(
+                "api/v1/episodes",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body=episode,
+                headers={"idempotency-key": _idempotency_key(idempotency_key)},
+            ),
+        )
+
+    def get_episode(self, episode_id: str) -> Episode:
+        identifier = _normalized_uuid(episode_id, "episode_id")
+        return cast(
+            Episode,
+            self.client._request(
+                f"api/v1/episodes/{identifier}", workspace_id=self.workspace_id
+            ),
+        )
+
+    def get_observations(self, observation_ids: Sequence[str]) -> Sequence[Observation]:
+        identifiers = list(
+            dict.fromkeys(
+                _normalized_uuid(identifier, "observation_id")
+                for identifier in observation_ids
+            )
+        )
+        if not identifiers or len(identifiers) > 50:
+            raise TypeError("observation_ids must contain 1 to 50 UUIDs")
+        return cast(
+            Sequence[Observation],
+            self.client._request(
+                f"api/v1/observations?{urlencode([('id', identifier) for identifier in identifiers])}",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
+    def forget_episode(
+        self,
+        episode_id: str,
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> None:
+        identifier = _normalized_uuid(episode_id, "episode_id")
+        self.client._request(
+            f"api/v1/episodes/{identifier}",
+            method="DELETE",
+            workspace_id=self.workspace_id,
+            headers={"idempotency-key": _idempotency_key(idempotency_key)},
         )
 
     def list_memory_proposals(

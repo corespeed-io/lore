@@ -1,6 +1,7 @@
 import {
   type CreateMemoryInput,
   type CreateMemoryProposalInput,
+  type Episode,
   LoreApiError,
   LoreClient,
   loreConfigurationFromEnvironment,
@@ -10,6 +11,7 @@ import {
   type MemorySearchInput,
   type MemorySearchResult,
   type MutationOptions,
+  type RecordEpisodeInput,
   type UpdateMemoryInput,
   type VersionedMutationOptions,
 } from "@corespeed/lore-sdk";
@@ -21,6 +23,7 @@ import { LORE_MCP_VERSION } from "./generated/version.js";
 export { LORE_MCP_VERSION };
 
 export interface LoreMcpMemoryClient {
+  recordEpisode(input: RecordEpisodeInput, options?: MutationOptions): Promise<Episode>;
   forgetMemory(memoryId: string, options: VersionedMutationOptions): Promise<void>;
   getMemory(memoryId: string, signal?: AbortSignal): Promise<Memory>;
   listMemories(input?: {
@@ -127,7 +130,25 @@ const proposalSubmissionSchema = z.object({
   baseMemoryVersion: z.number().int().positive().nullable(),
   proposedScope: scopeSchema,
   evidenceMemoryIds: z.array(z.string().uuid()).max(50),
+  evidenceObservationIds: z.array(z.string().uuid()).max(50),
   status: z.enum(["pending", "accepted", "rejected"]),
+  createdAt: z.string(),
+});
+const episodeSubmissionSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(["conversation", "workflow", "document", "event"]),
+  scope: scopeSchema,
+  observations: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        kind: z.enum(["message", "tool_call", "tool_result", "document_fragment", "event"]),
+        observedAt: z.string(),
+        payloadSha256: z.string().regex(/^[0-9a-f]{64}$/),
+      }),
+    )
+    .min(1)
+    .max(100),
   createdAt: z.string(),
 });
 
@@ -228,8 +249,24 @@ function proposalSubmission(proposal: MemoryProposal): z.infer<typeof proposalSu
     baseMemoryVersion: proposal.baseMemoryVersion,
     proposedScope: proposal.proposedScope,
     evidenceMemoryIds: [...proposal.evidenceMemoryIds],
+    evidenceObservationIds: [...proposal.evidenceObservationIds],
     status: proposal.status,
     createdAt: proposal.createdAt,
+  };
+}
+
+function episodeSubmission(episode: Episode): z.infer<typeof episodeSubmissionSchema> {
+  return {
+    id: episode.id,
+    kind: episode.kind,
+    scope: episode.scope,
+    observations: episode.observations.map((observation) => ({
+      id: observation.id,
+      kind: observation.kind,
+      observedAt: observation.observedAt,
+      payloadSha256: observation.payloadSha256,
+    })),
+    createdAt: episode.createdAt,
   };
 }
 
@@ -359,20 +396,99 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
   );
 
   server.registerTool(
+    "lore_observe",
+    {
+      title: "Record a Lore Episode",
+      description:
+        "Record an ordered Episode of durable, immutable Observation evidence. This does not create searchable Memory. Reuse idempotencyKey when retrying an unknown outcome.",
+      inputSchema: z
+        .object({
+          kind: z.enum(["conversation", "workflow", "document", "event"]),
+          scope: scopeSchema.default("private"),
+          observations: z
+            .array(
+              z.object({
+                kind: z.enum(["message", "tool_call", "tool_result", "document_fragment", "event"]),
+                content: z
+                  .string()
+                  .min(1)
+                  .max(100_000)
+                  .refine((content) => content.trim().length > 0, {
+                    message: "Observation content is required",
+                  }),
+                metadata: metadataSchema.optional(),
+                observedAt: z.iso.datetime().optional(),
+              }),
+            )
+            .min(1)
+            .max(100),
+          idempotencyKey: idempotencyKeySchema,
+        })
+        .superRefine((input, context) => {
+          const characters = input.observations.reduce(
+            (total, observation) => total + observation.content.length,
+            0,
+          );
+          if (characters > 1_000_000) {
+            context.addIssue({
+              code: "custom",
+              message: "Episode content exceeds 1000000 characters",
+              path: ["observations"],
+            });
+          }
+          const metadataCharacters = input.observations.reduce(
+            (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
+            0,
+          );
+          if (metadataCharacters > 1_000_000) {
+            context.addIssue({
+              code: "custom",
+              message: "Episode metadata exceeds 1000000 characters",
+              path: ["observations"],
+            });
+          }
+        }),
+      outputSchema: z.object({ episode: episodeSubmissionSchema }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const { idempotencyKey, ...episodeInput } = input;
+        return success({
+          episode: episodeSubmission(
+            await memories.recordEpisode(episodeInput, mutationOptions(idempotencyKey)),
+          ),
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
     "lore_propose",
     {
       title: "Propose a Lore Memory",
       description:
         "Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. Reuse idempotencyKey when retrying an unknown outcome.",
       inputSchema: z.discriminatedUnion("kind", [
-        z.object({
-          kind: z.literal("create"),
-          content: z.string().trim().min(1).max(1_000_000),
-          scope: scopeSchema.default("shared"),
-          metadata: metadataSchema.optional(),
-          evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
-          idempotencyKey: idempotencyKeySchema,
-        }),
+        z
+          .object({
+            kind: z.literal("create"),
+            content: z.string().trim().min(1).max(1_000_000),
+            scope: scopeSchema.default("shared"),
+            metadata: metadataSchema.optional(),
+            evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
+            evidenceObservationIds: z.array(z.string().uuid()).max(50).optional(),
+            idempotencyKey: idempotencyKeySchema,
+          })
+          .refine(
+            (input) =>
+              (input.evidenceMemoryIds?.length ?? 0) +
+                (input.evidenceObservationIds?.length ?? 0) <=
+              50,
+            { message: "proposal evidence exceeds 50 items" },
+          ),
         z
           .object({
             kind: z.literal("update"),
@@ -382,6 +498,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             scope: scopeSchema.optional(),
             metadata: metadataSchema.optional(),
             evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
+            evidenceObservationIds: z.array(z.string().uuid()).max(50).optional(),
             idempotencyKey: idempotencyKeySchema,
           })
           .refine(
@@ -390,6 +507,13 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
               input.scope !== undefined ||
               input.metadata !== undefined,
             { message: "content, scope, or metadata is required" },
+          )
+          .refine(
+            (input) =>
+              (input.evidenceMemoryIds?.length ?? 0) +
+                (input.evidenceObservationIds?.length ?? 0) <=
+              50,
+            { message: "proposal evidence exceeds 50 items" },
           ),
       ]),
       outputSchema: z.object({ proposal: proposalSubmissionSchema }),

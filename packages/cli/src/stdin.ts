@@ -1,4 +1,7 @@
-const MAX_STDIN_CHARACTERS = 1_000_000;
+// Episode JSON needs envelope space around its independent 1,000,000-character
+// content and metadata budgets. Individual Memory/query commands apply their
+// narrower decoded limits after this transport-level read.
+const MAX_STDIN_CHARACTERS = 2_500_000;
 // A JavaScript UTF-16 code unit occupies at most three UTF-8 bytes. The extra
 // bytes permit a trailing CRLF without weakening the decoded character limit.
 const MAX_STDIN_BYTES = MAX_STDIN_CHARACTERS * 3 + 2;

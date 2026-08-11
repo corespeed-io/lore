@@ -29,6 +29,18 @@ import {
   type MemoryScope,
   MemoryVersionConflictError,
 } from "./memory";
+import {
+  createObservationModule,
+  type EpisodeKind,
+  MAX_EPISODE_CONTENT_CHARACTERS,
+  MAX_EPISODE_METADATA_CHARACTERS,
+  MAX_EPISODE_OBSERVATIONS,
+  MAX_OBSERVATION_BATCH_READ,
+  MAX_OBSERVATION_CONTENT_CHARACTERS,
+  ObservationAccessDeniedError,
+  type ObservationKind,
+  type RecordObservation,
+} from "./observations";
 import { createOperationsModule } from "./operations";
 import {
   createPortabilityModule,
@@ -68,7 +80,8 @@ function errorCode(error: unknown): string {
     error instanceof WorkspaceAccessError ||
     error instanceof AccessDeniedError ||
     error instanceof MemoryAccessDeniedError ||
-    error instanceof MemoryProposalAccessDeniedError
+    error instanceof MemoryProposalAccessDeniedError ||
+    error instanceof ObservationAccessDeniedError
   ) {
     return "access_denied";
   }
@@ -101,7 +114,8 @@ function errorResponse(error: unknown): Response {
   if (
     error instanceof AccessDeniedError ||
     error instanceof MemoryAccessDeniedError ||
-    error instanceof MemoryProposalAccessDeniedError
+    error instanceof MemoryProposalAccessDeniedError ||
+    error instanceof ObservationAccessDeniedError
   ) {
     return Response.json(
       { code: errorCode(error), error: error.message },
@@ -205,10 +219,43 @@ function requiredString(value: unknown, name: string, maximumLength: number): st
   if (normalized.includes("\0")) {
     throw new BadRequestError(`${name} contains an invalid null character`);
   }
+  if (hasLoneSurrogate(normalized)) {
+    throw new BadRequestError(`${name} contains invalid Unicode`);
+  }
   if (normalized.length > maximumLength) {
     throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
   }
   return normalized;
+}
+
+function requiredRawString(value: unknown, name: string, maximumLength: number): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new BadRequestError(`${name} is required`);
+  }
+  if (value.includes("\0")) {
+    throw new BadRequestError(`${name} contains an invalid null character`);
+  }
+  if (hasLoneSurrogate(value)) {
+    throw new BadRequestError(`${name} contains invalid Unicode`);
+  }
+  if (value.length > maximumLength) {
+    throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
+  }
+  return value;
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value.charCodeAt(index);
+    if (current >= 0xd800 && current <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (current >= 0xdc00 && current <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function memoryScope(value: unknown): MemoryScope | undefined {
@@ -221,6 +268,82 @@ function memoryProposalStatus(value: string | null): MemoryProposalStatus | unde
   if (value === null || value.trim() === "") return undefined;
   if (value === "pending" || value === "accepted" || value === "rejected") return value;
   throw new BadRequestError("status must be pending, accepted, or rejected");
+}
+
+function episodeKind(value: unknown, optional = false): EpisodeKind | undefined {
+  if (optional && (value === undefined || value === null || value === "")) return undefined;
+  if (
+    value === "conversation" ||
+    value === "workflow" ||
+    value === "document" ||
+    value === "event"
+  ) {
+    return value;
+  }
+  throw new BadRequestError("kind must be conversation, workflow, document, or event");
+}
+
+function observationKind(value: unknown, name: string): ObservationKind {
+  if (
+    value === "message" ||
+    value === "tool_call" ||
+    value === "tool_result" ||
+    value === "document_fragment" ||
+    value === "event"
+  ) {
+    return value;
+  }
+  throw new BadRequestError(
+    `${name} must be message, tool_call, tool_result, document_fragment, or event`,
+  );
+}
+
+function episodeObservations(value: unknown): RecordObservation[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_EPISODE_OBSERVATIONS) {
+    throw new BadRequestError(`observations must contain 1 to ${MAX_EPISODE_OBSERVATIONS} items`);
+  }
+  const observations = value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new BadRequestError(`observations[${index}] must be an object`);
+    }
+    const observation = item as Record<string, unknown>;
+    if (observation.observedAt !== undefined && typeof observation.observedAt !== "string") {
+      throw new BadRequestError(`observations[${index}].observedAt must be an ISO 8601 timestamp`);
+    }
+    const observedAt = optionalTimestamp(
+      observation.observedAt ?? null,
+      `observations[${index}].observedAt`,
+    );
+    return {
+      kind: observationKind(observation.kind, `observations[${index}].kind`),
+      content: requiredRawString(
+        observation.content,
+        `observations[${index}].content`,
+        MAX_OBSERVATION_CONTENT_CHARACTERS,
+      ),
+      metadata: metadata(observation.metadata),
+      observedAt,
+    };
+  });
+  const totalCharacters = observations.reduce(
+    (total, observation) => total + observation.content.length,
+    0,
+  );
+  if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
+    throw new BadRequestError(
+      `Episode content exceeds ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
+    );
+  }
+  const totalMetadataCharacters = observations.reduce(
+    (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
+    0,
+  );
+  if (totalMetadataCharacters > MAX_EPISODE_METADATA_CHARACTERS) {
+    throw new BadRequestError(
+      `Episode metadata exceeds ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
+    );
+  }
+  return observations;
 }
 
 function positiveInteger(value: unknown, name: string): number {
@@ -279,6 +402,9 @@ function validateJsonStrings(value: unknown, path: string): void {
       if (current.value.includes("\0")) {
         throw new BadRequestError(`${current.path} contains an invalid null character`);
       }
+      if (hasLoneSurrogate(current.value)) {
+        throw new BadRequestError(`${current.path} contains invalid Unicode`);
+      }
       continue;
     }
     if (Array.isArray(current.value)) {
@@ -298,6 +424,9 @@ function validateJsonStrings(value: unknown, path: string): void {
       for (const [key, item] of entries) {
         if (key.includes("\0")) {
           throw new BadRequestError(`${current.path} contains an invalid null character`);
+        }
+        if (hasLoneSurrogate(key)) {
+          throw new BadRequestError(`${current.path} contains invalid Unicode`);
         }
         pending.push({ depth: current.depth + 1, path: `${current.path}.${key}`, value: item });
       }
@@ -869,8 +998,12 @@ export function createMemoryProposalHandlers(
           body.evidenceMemoryIds === undefined
             ? []
             : uuidArray(body.evidenceMemoryIds, "evidenceMemoryIds", true);
-        if (evidenceMemoryIds.length > 50) {
-          throw new BadRequestError("evidenceMemoryIds exceeds 50 items");
+        const evidenceObservationIds =
+          body.evidenceObservationIds === undefined
+            ? []
+            : uuidArray(body.evidenceObservationIds, "evidenceObservationIds", true);
+        if (evidenceMemoryIds.length + evidenceObservationIds.length > 50) {
+          throw new BadRequestError("Proposal evidence exceeds 50 items");
         }
 
         const input =
@@ -881,6 +1014,7 @@ export function createMemoryProposalHandlers(
                 scope: memoryScope(body.scope),
                 metadata: metadata(body.metadata),
                 evidenceMemoryIds,
+                evidenceObservationIds,
               }
             : body.kind === "update"
               ? {
@@ -894,6 +1028,7 @@ export function createMemoryProposalHandlers(
                   scope: memoryScope(body.scope),
                   metadata: metadata(body.metadata),
                   evidenceMemoryIds,
+                  evidenceObservationIds,
                 }
               : null;
         if (!input) throw new BadRequestError("kind must be create or update");
@@ -914,6 +1049,132 @@ export function createMemoryProposalHandlers(
           status: 201,
           headers: { "cache-control": "private, no-store" },
         });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createEpisodeHandlers(database: PostgresDatabase) {
+  const observations = createObservationModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const url = new URL(request.url);
+        const cursor = decodeCursor(url.searchParams.get("cursor"));
+        const limit = queryInteger(url, "limit", 50, 1, 100);
+        const episodes = await observeOperation("episode.list", () =>
+          observations.list(actor, {
+            cursor: cursor ? { id: cursor.id, createdAt: cursor.updatedAt } : undefined,
+            kind: episodeKind(url.searchParams.get("kind"), true),
+            limit,
+            scope: memoryScope(url.searchParams.get("scope") ?? undefined),
+          }),
+        );
+        const headers = new Headers({ "cache-control": "private, no-store" });
+        const last = episodes.length === limit ? episodes.at(-1) : undefined;
+        if (last) {
+          headers.set(
+            "x-lore-next-cursor",
+            encodeCursor({ id: last.id, updatedAt: last.createdAt }),
+          );
+        }
+        return Response.json(episodes, { headers });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async POST(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const body = await jsonObject(request);
+        const input = {
+          kind: episodeKind(body.kind) as EpisodeKind,
+          scope: memoryScope(body.scope) ?? "private",
+          observations: episodeObservations(body.observations),
+        };
+        const episode = await observeOperation("episode.record", async () =>
+          observations.record(actor, input, {
+            idempotency: await idempotencyRequest(request, "episode.record", input),
+          }),
+        );
+        return Response.json(episode, {
+          status: 201,
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createObservationHandlers(database: PostgresDatabase) {
+  const observations = createObservationModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const requestedIds = new URL(request.url).searchParams.getAll("id");
+        if (requestedIds.length < 1 || requestedIds.length > MAX_OBSERVATION_BATCH_READ) {
+          throw new BadRequestError(`id must be repeated 1 to ${MAX_OBSERVATION_BATCH_READ} times`);
+        }
+        const ids = requestedIds.map((id, index) => uuidString(id, `id[${index}]`));
+        const visible = await observeOperation("observation.retrieve-many", () =>
+          observations.retrieveObservations(actor, ids),
+        );
+        return Response.json(visible, {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+  };
+}
+
+export function createEpisodeByIdHandlers(database: PostgresDatabase) {
+  const observations = createObservationModule(database);
+  const resolver = createRequestContextResolver(database);
+  return {
+    async GET(request: Request, id: string): Promise<Response> {
+      try {
+        const episodeId = uuidString(id, "episodeId");
+        const actor = await resolver.resolveActor(request);
+        const episode = await observeOperation("episode.retrieve", () =>
+          observations.retrieve(actor, episodeId),
+        );
+        return episode
+          ? Response.json(episode, { headers: { "cache-control": "private, no-store" } })
+          : Response.json(
+              { code: "not_found", error: "Episode not found" },
+              { status: 404, headers: { "cache-control": "private, no-store" } },
+            );
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
+    async DELETE(request: Request, id: string): Promise<Response> {
+      try {
+        const episodeId = uuidString(id, "episodeId");
+        const actor = await resolver.resolveActor(request);
+        const deleted = await observeOperation("episode.forget", async () =>
+          observations.forget(actor, episodeId, {
+            idempotency: await idempotencyRequest(request, "episode.forget", { episodeId }),
+          }),
+        );
+        return deleted
+          ? new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } })
+          : Response.json(
+              { code: "not_found", error: "Episode not found" },
+              { status: 404, headers: { "cache-control": "private, no-store" } },
+            );
       } catch (error) {
         return errorResponse(error);
       }

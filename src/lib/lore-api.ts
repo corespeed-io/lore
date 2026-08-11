@@ -18,6 +18,7 @@ import type {
   MemoryProposalStatus,
   MemoryScope,
   MemorySearchResult,
+  Observation,
   WorkspaceAgent,
   WorkspaceSummary,
 } from "./types";
@@ -357,6 +358,20 @@ export function listMemoryProposals(
   return requestJson(`/api/v1/memory-proposals?${params}`, {
     workspaceId,
     operation: "GET /api/v1/memory-proposals",
+    signal,
+  });
+}
+
+export function getObservations(
+  workspaceId: string,
+  observationIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<Observation[]> {
+  const params = new URLSearchParams();
+  for (const id of observationIds) params.append("id", id);
+  return requestJson(`/api/v1/observations?${params}`, {
+    workspaceId,
+    operation: "GET /api/v1/observations",
     signal,
   });
 }
