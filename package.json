@@ -31,8 +31,9 @@
   ],
   "scripts": {
     "dev": "next dev",
-    "build": "next build && bun run build:maintenance && bun run build:packages",
+    "build": "next build && bun run build:maintenance && bun run build:migrate && bun run build:packages",
     "build:maintenance": "bun build src/worker/node-maintenance.ts --target=node --outfile=.worker/maintenance-worker.js --external pg",
+    "build:migrate": "bun build scripts/migrate.ts --target=node --outfile=.worker/migrate.js --external pg",
     "build:packages": "bun run sdk:check && bun run --cwd packages/typescript-sdk build && bun run --cwd packages/cli build && bun run --cwd packages/mcp build",
     "packages:smoke": "bun run sdk:check && node scripts/package-smoke.mjs",
     "smoke:memory-core": "bun scripts/smoke-memory-core.ts",

@@ -673,6 +673,7 @@ bun run build:packages # build the TypeScript SDK, CLI, and external MCP package
 bun run packages:smoke # pack/install/import the release artifacts
 bun run build      # Next production, maintenance, and developer-package builds
 bun run build:maintenance # bundle the self-host Node maintenance entrypoint
+bun run build:migrate # bundle the self-host Node migration entrypoint
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```

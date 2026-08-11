@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { type MigrationMeta, readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -10,7 +10,7 @@ export const MIGRATION_LOCK_ID = 1_280_263_749;
 
 const DRIZZLE_SCHEMA = "drizzle";
 const DRIZZLE_TABLE = "__drizzle_migrations";
-const MIGRATIONS_FOLDER = fileURLToPath(new URL("../../db/drizzle", import.meta.url));
+const MIGRATIONS_FOLDER = resolve(process.cwd(), "db/drizzle");
 
 const migrationConfig = {
   migrationsFolder: MIGRATIONS_FOLDER,

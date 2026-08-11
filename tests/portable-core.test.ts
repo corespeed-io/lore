@@ -80,6 +80,46 @@ function exportLimitDatabase(options: {
   };
 }
 
+test("Hybrid search binds the query text and dense vector only once", async () => {
+  const dialect = new PgDialect();
+  let searchQuery: { params: unknown[]; sql: string } | undefined;
+  const database: LoreDatabase = {
+    transaction: (use) =>
+      use({
+        async execute<Row>(statement: SQLWrapper): Promise<{ rows: Row[] }> {
+          const query = dialect.sqlToQuery(statement.getSQL());
+          if (query.sql.includes("raw_query_parameters")) searchQuery = query;
+          return { rows: [] };
+        },
+      }),
+  };
+  const queryText = "single binding sentinel";
+  await createMemoryModule(database, {
+    embeddingProvider: {
+      provider: "test",
+      model: "deterministic",
+      dimensions: 1024,
+      revision: "test-v1",
+      embed: async () => [Array(1024).fill(0.125)],
+    },
+  }).search(
+    {
+      workspaceId: "20000000-0000-4000-8000-000000000001",
+      userId: "10000000-0000-4000-8000-000000000001",
+    },
+    { query: queryText, limit: 5 },
+  );
+
+  expect(searchQuery).toBeDefined();
+  expect(searchQuery?.params.filter((parameter) => parameter === queryText)).toHaveLength(1);
+  expect(
+    searchQuery?.params.filter(
+      (parameter) =>
+        typeof parameter === "string" && parameter.startsWith("[") && parameter.endsWith("]"),
+    ),
+  ).toHaveLength(1);
+});
+
 test("Memory create replays the same Idempotency-Key and rejects a changed payload", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);

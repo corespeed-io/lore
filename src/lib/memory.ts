@@ -841,7 +841,21 @@ async function searchOneQuery(input: {
   };
   const relaxedTerms = relaxedEnglishTerms(input.query);
   const result = await input.transaction.execute<SearchRow>(
-    sql`WITH simple_lexical_candidates AS (
+    sql`WITH raw_query_parameters AS MATERIALIZED (
+       SELECT
+         ${input.query}::text AS query_text,
+         ${input.queryEmbedding}::vector(1024) AS query_embedding
+     ),
+     query_parameters AS MATERIALIZED (
+       SELECT
+         query_text,
+         query_embedding,
+         websearch_to_tsquery('simple', query_text) AS simple_query,
+         websearch_to_tsquery('english', query_text) AS english_query,
+         lore.extract_entity_aliases(query_text) AS entity_aliases
+       FROM raw_query_parameters
+     ),
+     simple_lexical_candidates AS (
        SELECT
          chunk.id AS chunk_id,
          memory.id AS memory_id,
@@ -850,7 +864,7 @@ async function searchOneQuery(input: {
          row_number() OVER (
            ORDER BY ts_rank_cd(
              chunk.search_vector,
-             websearch_to_tsquery('simple', ${input.query}),
+             (SELECT simple_query FROM query_parameters),
              32
            ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
@@ -864,10 +878,10 @@ async function searchOneQuery(input: {
          AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
          AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
          AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
-         AND chunk.search_vector @@ websearch_to_tsquery('simple', ${input.query})
+         AND chunk.search_vector @@ (SELECT simple_query FROM query_parameters)
        ORDER BY ts_rank_cd(
          chunk.search_vector,
-         websearch_to_tsquery('simple', ${input.query}),
+         (SELECT simple_query FROM query_parameters),
          32
        ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT ${input.candidateLimit}
@@ -881,7 +895,7 @@ async function searchOneQuery(input: {
          row_number() OVER (
            ORDER BY ts_rank_cd(
              chunk.search_vector_english,
-             websearch_to_tsquery('english', ${input.query}),
+             (SELECT english_query FROM query_parameters),
              32
            ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
@@ -895,10 +909,10 @@ async function searchOneQuery(input: {
          AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
          AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
          AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
-         AND chunk.search_vector_english @@ websearch_to_tsquery('english', ${input.query})
+         AND chunk.search_vector_english @@ (SELECT english_query FROM query_parameters)
        ORDER BY ts_rank_cd(
          chunk.search_vector_english,
-         websearch_to_tsquery('english', ${input.query}),
+         (SELECT english_query FROM query_parameters),
          32
        ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT ${input.candidateLimit}
@@ -920,7 +934,7 @@ async function searchOneQuery(input: {
      ),
      query_entity_aliases AS MATERIALIZED (
        SELECT alias
-       FROM unnest(lore.extract_entity_aliases(${input.query})) WITH ORDINALITY AS extracted(alias, ordinal)
+       FROM unnest((SELECT entity_aliases FROM query_parameters)) WITH ORDINALITY AS extracted(alias, ordinal)
        WHERE ${input.entityAliasRecall}::boolean
        ORDER BY ordinal
        LIMIT 8
@@ -1014,7 +1028,7 @@ async function searchOneQuery(input: {
         AND embedded.chunk_id = chunk.id
        JOIN embedding_generations generation
          ON generation.id = embedded.generation_id
-       WHERE ${input.queryEmbedding}::text IS NOT NULL
+       WHERE (SELECT query_embedding FROM query_parameters) IS NOT NULL
          AND chunk.workspace_id = ${input.actor.workspaceId}
          AND generation.embedding_provider = ${embeddingProviderIdentity.provider}
          AND generation.embedding_model = ${embeddingProviderIdentity.model}
@@ -1034,12 +1048,12 @@ async function searchOneQuery(input: {
          chunk.ordinal AS chunk_ordinal,
          chunk.memory_updated_at,
          row_number() OVER (
-           ORDER BY chunk.embedding <=> ${input.queryEmbedding}::vector(1024),
+           ORDER BY chunk.embedding <=> (SELECT query_embedding FROM query_parameters),
                     chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
        FROM active_semantic_chunks chunk
-       WHERE (chunk.embedding <=> ${input.queryEmbedding}::vector(1024)) <= ${input.semanticDistanceThreshold}
-       ORDER BY chunk.embedding <=> ${input.queryEmbedding}::vector(1024),
+       WHERE (chunk.embedding <=> (SELECT query_embedding FROM query_parameters)) <= ${input.semanticDistanceThreshold}
+       ORDER BY chunk.embedding <=> (SELECT query_embedding FROM query_parameters),
                 chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT ${input.candidateLimit}
      ),
