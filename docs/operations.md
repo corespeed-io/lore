@@ -21,17 +21,20 @@ for explicit owner remap; an archive-provided identity is never trusted as that
 target. Existing unversioned routes remain available to the bundled UI, but clients
 should generate integrations from the v1 document.
 
-Migration `0003` adds and backfills nullable job generation ids so legacy writers
-can overlap with the generation-aware application. The bounded maintenance sweep
-adopts generation-less jobs for its configured embedding identity. Migrations
-`0004` through `0006` add the English lexical, metadata, and entity-alias indexes;
-`0004` and `0006` also add stored generated columns to `memory_chunks`, so PostgreSQL
-rewrites that table while holding an `ACCESS EXCLUSIVE` lock. Schedule those two
-migrations as write-downtime maintenance on an existing large corpus rather than
-treating them as online index-only changes. Schema revision 6 is the current
-application contract. A future contract migration
-may enforce generation-id `NOT NULL` only after generation-aware application
-instances have replaced every legacy writer.
+`src/lib/db/schema.ts` is the canonical schema and
+`db/drizzle/0000_baseline.sql` is the canonical fresh-install migration. Drizzle's
+`drizzle.__drizzle_migrations` table is the only active ledger. An installation on
+the exact, complete legacy `0001` through `0009` checksum history is adopted once
+without replaying DDL; the migration transaction seeds the Drizzle journal and
+removes `public.schema_migrations`. Partial, changed, unknown, or dual histories
+fail closed.
+
+The baseline includes the English lexical and entity-alias stored generated
+columns on `memory_chunks`. Those columns historically required an `ACCESS
+EXCLUSIVE` table rewrite. Operators below legacy revision 9 must first upgrade with
+a prior Lore release; this cutover deliberately does not preserve a second,
+partially upgradeable migration chain. Schema revision 9 is the current application
+contract.
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
@@ -271,4 +274,7 @@ the migration lock. It blocks unsupported PostgreSQL versions, missing pgvector,
 insufficient create privilege, changed/unknown applied migration checksums, and a
 database schema newer than this application. For production, set
 `LORE_MIGRATION_BACKUP_CONFIRMED=1` only after verifying a restorable backup; the
-flag is recorded as an advisory, never as proof that the backup exists.
+flag is recorded as an advisory, never as proof that the backup exists. New schema
+changes start in `src/lib/db/schema.ts`, are generated with `bun run db:generate`,
+and are checked with `bun run db:schema:check`; do not add migrations to the removed
+legacy directory or create another ledger.

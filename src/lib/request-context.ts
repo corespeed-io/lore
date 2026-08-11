@@ -1,7 +1,7 @@
 import { createAccessModule } from "./access";
 import type { ActorContext, UserContext } from "./actor-context";
 import { checkAuth } from "./auth";
-import type { PostgresDatabase } from "./db";
+import type { LoreDatabase } from "./db";
 import { createIdentityModule } from "./identity";
 
 export class RequestAuthenticationError extends Error {
@@ -56,7 +56,7 @@ function requestedWorkspace(request: Request): string {
   return workspaceId;
 }
 
-export function createRequestContextResolver(database: PostgresDatabase) {
+export function createRequestContextResolver(database: LoreDatabase) {
   const access = createAccessModule(database);
   const identities = createIdentityModule(database);
 

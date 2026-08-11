@@ -1,6 +1,7 @@
+import { sql } from "drizzle-orm";
 import { type ActorContext, installActorContext } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
+import type { LoreDatabase, LoreTransaction } from "./db";
 import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
 import type { MemoryScope } from "./memory";
 
@@ -105,7 +106,7 @@ interface ObservationRow {
   created_at: string;
 }
 
-const episodeColumns = `
+const episodeColumns = sql.raw(`
   episode.id,
   episode.workspace_id,
   episode.owner_user_id,
@@ -126,9 +127,9 @@ const episodeColumns = `
     episode.created_at AT TIME ZONE 'UTC',
     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
   ) AS created_at
-`;
+`);
 
-const episodeGroup = `
+const episodeGroup = sql.raw(`
   episode.id,
   episode.workspace_id,
   episode.owner_user_id,
@@ -139,7 +140,7 @@ const episodeGroup = `
   episode.started_at,
   episode.ended_at,
   episode.created_at
-`;
+`);
 
 function toEpisodeSummary(row: EpisodeRow): EpisodeSummary {
   return {
@@ -237,24 +238,23 @@ function normalizedEpisode(input: RecordEpisode): {
 }
 
 async function episodeFromId(
-  transaction: PostgresTransaction,
+  transaction: LoreTransaction,
   workspaceId: string,
   id: string,
 ): Promise<Episode | null> {
-  const episodeResult = await transaction.query<EpisodeRow>(
-    `SELECT ${episodeColumns}
+  const episodeResult = await transaction.execute<EpisodeRow>(
+    sql`SELECT ${episodeColumns}
      FROM episodes episode
      LEFT JOIN observations observation
        ON observation.workspace_id = episode.workspace_id
       AND observation.episode_id = episode.id
-     WHERE episode.workspace_id = $1 AND episode.id = $2
+     WHERE episode.workspace_id = ${workspaceId} AND episode.id = ${id}
      GROUP BY ${episodeGroup}`,
-    [workspaceId, id],
   );
   const episode = episodeResult.rows[0];
   if (!episode) return null;
-  const observationResult = await transaction.query<ObservationRow>(
-    `SELECT
+  const observationResult = await transaction.execute<ObservationRow>(
+    sql`SELECT
        observation.id,
        observation.workspace_id,
        observation.episode_id,
@@ -272,9 +272,8 @@ async function episodeFromId(
          'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
        ) AS created_at
      FROM observations observation
-     WHERE observation.workspace_id = $1 AND observation.episode_id = $2
+     WHERE observation.workspace_id = ${workspaceId} AND observation.episode_id = ${id}
      ORDER BY observation.ordinal`,
-    [workspaceId, id],
   );
   return {
     ...toEpisodeSummary(episode),
@@ -282,7 +281,7 @@ async function episodeFromId(
   };
 }
 
-export function createObservationModule(database: PostgresDatabase) {
+export function createObservationModule(database: LoreDatabase) {
   return {
     async record(
       actor: ActorContext,
@@ -299,21 +298,18 @@ export function createObservationModule(database: PostgresDatabase) {
             options.idempotency,
           );
           if (claim.replay) return claim.replay.body.episode;
-          const result = await transaction.query<{ id: string }>(
-            `SELECT lore.record_episode(
-               $1, $2, $3, $4, $5, $6, $7, $8, $9::json
+          const result = await transaction.execute<{ id: string }>(
+            sql`SELECT lore.record_episode(
+               ${actor.workspaceId},
+               ${actor.userId},
+               ${actor.agentId ? "agent" : "human"},
+               ${actor.agentId ?? null},
+               ${input.kind},
+               ${input.scope ?? "private"},
+               ${normalized.startedAt},
+               ${normalized.endedAt},
+               ${JSON.stringify(normalized.observations)}::json
              ) AS id`,
-            [
-              actor.workspaceId,
-              actor.userId,
-              actor.agentId ? "agent" : "human",
-              actor.agentId ?? null,
-              input.kind,
-              input.scope ?? "private",
-              normalized.startedAt,
-              normalized.endedAt,
-              JSON.stringify(normalized.observations),
-            ],
           );
           const episode = await episodeFromId(transaction, actor.workspaceId, result.rows[0].id);
           if (!episode) throw new Error("Recorded Episode was not readable in its transaction");
@@ -356,8 +352,8 @@ export function createObservationModule(database: PostgresDatabase) {
       if (uniqueIds.length === 0) return [];
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<ObservationRow>(
-          `SELECT
+        const result = await transaction.execute<ObservationRow>(
+          sql`SELECT
              observation.id,
              observation.workspace_id,
              observation.episode_id,
@@ -375,10 +371,9 @@ export function createObservationModule(database: PostgresDatabase) {
                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
              ) AS created_at
            FROM observations observation
-           WHERE observation.workspace_id = $1
-             AND observation.id = ANY($2::uuid[])
-           ORDER BY array_position($2::uuid[], observation.id)`,
-          [actor.workspaceId, uniqueIds],
+           WHERE observation.workspace_id = ${actor.workspaceId}
+             AND observation.id = ANY(${sql.param(uniqueIds)}::uuid[])
+           ORDER BY array_position(${sql.param(uniqueIds)}::uuid[], observation.id)`,
         );
         return result.rows.map(toObservation);
       });
@@ -388,31 +383,26 @@ export function createObservationModule(database: PostgresDatabase) {
       const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<EpisodeRow>(
-          `SELECT ${episodeColumns}
+        const result = await transaction.execute<EpisodeRow>(
+          sql`SELECT ${episodeColumns}
            FROM episodes episode
            LEFT JOIN observations observation
              ON observation.workspace_id = episode.workspace_id
             AND observation.episode_id = episode.id
-           WHERE episode.workspace_id = $1
-             AND ($2::episode_kind IS NULL OR episode.kind = $2::episode_kind)
-             AND ($3::memory_scope IS NULL OR episode.scope = $3::memory_scope)
+           WHERE episode.workspace_id = ${actor.workspaceId}
+             AND (${input.kind ?? null}::episode_kind IS NULL OR episode.kind = ${input.kind ?? null}::episode_kind)
+             AND (${input.scope ?? null}::memory_scope IS NULL OR episode.scope = ${input.scope ?? null}::memory_scope)
              AND (
-               $4::timestamptz IS NULL
-               OR episode.created_at < $4::timestamptz
-               OR (episode.created_at = $4::timestamptz AND episode.id > $5::uuid)
+               ${input.cursor?.createdAt ?? null}::timestamptz IS NULL
+               OR episode.created_at < ${input.cursor?.createdAt ?? null}::timestamptz
+               OR (
+                 episode.created_at = ${input.cursor?.createdAt ?? null}::timestamptz
+                 AND episode.id > ${input.cursor?.id ?? null}::uuid
+               )
              )
            GROUP BY ${episodeGroup}
            ORDER BY episode.created_at DESC, episode.id
-           LIMIT $6`,
-          [
-            actor.workspaceId,
-            input.kind ?? null,
-            input.scope ?? null,
-            input.cursor?.createdAt ?? null,
-            input.cursor?.id ?? null,
-            limit,
-          ],
+           LIMIT ${limit}`,
         );
         return result.rows.map(toEpisodeSummary);
       });
@@ -432,13 +422,12 @@ export function createObservationModule(database: PostgresDatabase) {
             options.idempotency,
           );
           if (claim.replay) return claim.replay.body.deleted;
-          const result = await transaction.query<{ id: string }>(
-            `DELETE FROM episodes
-             WHERE workspace_id = $1
-               AND id = $2
+          const result = await transaction.execute<{ id: string }>(
+            sql`DELETE FROM episodes
+             WHERE workspace_id = ${actor.workspaceId}
+               AND id = ${id}
                AND lore.can_write_memory(workspace_id, owner_user_id)
              RETURNING id`,
-            [actor.workspaceId, id],
           );
           const deleted = result.rows.length === 1;
           await completeMutation(

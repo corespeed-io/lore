@@ -1,5 +1,6 @@
+import { sql } from "drizzle-orm";
 import { type ActorContext, installActorContext } from "./actor-context";
-import type { PostgresDatabase } from "./db";
+import type { LoreDatabase } from "./db";
 import type { Memory, MemoryScope } from "./memory";
 
 export interface MemoryGraphNode {
@@ -293,7 +294,7 @@ function buildGraph(
  * Actor context before Postgres RLS selects nodes and links. Link policies require
  * both endpoints to be visible, so hidden-neighbor ids and degree never leak.
  */
-export function createMemoryGraphModule(database: PostgresDatabase) {
+export function createMemoryGraphModule(database: LoreDatabase) {
   return {
     async connect(actor: ActorContext, input: ConnectMemories): Promise<MemoryLink> {
       const kind = input.kind?.trim() || "related";
@@ -303,20 +304,15 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
         : 1;
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<MemoryLinkRow>(
-          `INSERT INTO memory_links (
+        const result = await transaction.execute<MemoryLinkRow>(
+          sql`INSERT INTO memory_links (
              id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+           ) VALUES (
+             ${crypto.randomUUID()}, ${actor.workspaceId}, ${input.sourceMemoryId},
+             ${input.targetMemoryId}, ${kind}, ${weight},
+             ${JSON.stringify(input.metadata ?? {})}::jsonb
+           )
            RETURNING *`,
-          [
-            crypto.randomUUID(),
-            actor.workspaceId,
-            input.sourceMemoryId,
-            input.targetMemoryId,
-            kind,
-            weight,
-            JSON.stringify(input.metadata ?? {}),
-          ],
         );
         return toMemoryLink(result.rows[0]);
       });
@@ -326,24 +322,22 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
       const limit = boundedInteger(input.limit, 5_000, 1, 5_000);
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const memoryResult = await transaction.query<MemoryRow>(
-          `SELECT *
+        const memoryResult = await transaction.execute<MemoryRow>(
+          sql`SELECT *
            FROM memories
-           WHERE workspace_id = $1
+           WHERE workspace_id = ${actor.workspaceId}
            ORDER BY updated_at DESC, id
-           LIMIT $2`,
-          [actor.workspaceId, limit],
+           LIMIT ${limit}`,
         );
         if (memoryResult.rows.length === 0) return { nodes: [], links: [] };
         const memoryIds = memoryResult.rows.map((memory) => memory.id);
-        const linkResult = await transaction.query<MemoryLinkRow>(
-          `SELECT *
+        const linkResult = await transaction.execute<MemoryLinkRow>(
+          sql`SELECT *
            FROM memory_links
-           WHERE workspace_id = $1
-             AND source_memory_id = ANY($2::uuid[])
-             AND target_memory_id = ANY($2::uuid[])
+           WHERE workspace_id = ${actor.workspaceId}
+             AND source_memory_id = ANY(${sql.param(memoryIds)}::uuid[])
+             AND target_memory_id = ANY(${sql.param(memoryIds)}::uuid[])
            ORDER BY created_at, id`,
-          [actor.workspaceId, memoryIds],
         );
         return buildGraph(memoryResult.rows.map(toMemory), linkResult.rows, input);
       });

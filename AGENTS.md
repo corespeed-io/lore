@@ -21,16 +21,22 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0009_observation_evidence.sql`
-  define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
+- `src/lib/db/schema.ts` is the canonical Drizzle schema, and
+  `db/drizzle/0000_baseline.sql` is the canonical fresh-install migration. Together
+  they define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, embedding generations, Agent
   lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
-  evidence with RLS;
+  evidence with RLS. Drizzle's `drizzle.__drizzle_migrations` is the only active
+  migration ledger. The migration command may adopt an exact, complete legacy
+  `0001`-through-`0009` checksum history once, then deletes the legacy ledger; never
+  add a second migration path or a new file to the removed legacy chain;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
-  context for every request transaction;
+  context for every request transaction. Runtime and test database access goes
+  through Drizzle transactions. PostgreSQL-specific SQL remains valid when carried
+  by Drizzle's typed `sql` objects, especially for RLS-sensitive hybrid retrieval;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   native routes built through the pure handler seam in `src/lib/http.ts`;
 - `src/components/App.tsx` owns the native Memory workflow and client routing,
@@ -626,17 +632,19 @@ The existing application uses:
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
 
-`bun.lock` is the only dependency lockfile. Bun installs dependencies and dispatches
-scripts; Next.js self-hosting and migration scripts execute on Node 24, and the
-Cloudflare bundle executes on Workerd. Do not add an npm/pnpm/Yarn lockfile or claim
-that Cloudflare runs Bun/Node as a process.
+`bun.lock` is the only dependency lockfile. Bun installs dependencies, dispatches
+scripts, and runs the TypeScript migration CLI; Next.js self-hosting executes on
+Node 24, and the Cloudflare bundle executes on Workerd. Do not add an npm/pnpm/Yarn
+lockfile or claim that Cloudflare runs Bun/Node as a process.
 
 These commands remain the current verification loop:
 
 ```bash
 bun run dev        # localhost:3000
-bun run db:migrate # apply checksum-protected SQL migrations
+bun run db:migrate # apply checksum-protected Drizzle migrations
 bun run db:preflight # validate server/schema/history before migration
+bun run db:generate # generate the next migration from the canonical Drizzle schema
+bun run db:schema:check # validate the Drizzle migration journal/snapshots
 bun run db:bootstrap # migrate + provision separate request/maintenance logins
 bun run db:backup # create an operator-owned PostgreSQL custom-format backup
 bun run db:restore # restore into an explicitly named target database

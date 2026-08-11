@@ -1,9 +1,11 @@
 import "server-only";
 
+import { sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import type { GraphData, MemoryScope } from "@/lib/types";
 
-interface NodeRow {
+interface NodeRow extends Record<string, unknown> {
   id: string;
   label: string;
   preview: string;
@@ -12,7 +14,7 @@ interface NodeRow {
   updated_at: Date;
 }
 
-interface LinkRow {
+interface LinkRow extends Record<string, unknown> {
   source: string;
   target: string;
   weight: number;
@@ -25,8 +27,9 @@ export async function readGraphScaleBenchmark(): Promise<GraphData> {
   const client = new pg.Client({ connectionString });
   await client.connect();
   try {
-    const dataset = await client.query<{ id: string; node_count: number }>(
-      `SELECT id, node_count
+    const database = drizzle(client);
+    const dataset = await database.execute<{ id: string; node_count: number }>(
+      sql`SELECT id, node_count
        FROM graph_benchmark.datasets
        ORDER BY generated_at DESC
        LIMIT 1`,
@@ -35,20 +38,18 @@ export async function readGraphScaleBenchmark(): Promise<GraphData> {
     if (!row) throw new Error("The graph benchmark database has not been seeded");
 
     const [nodeResult, linkResult] = await Promise.all([
-      client.query<NodeRow>(
-        `SELECT id::text, label, preview, type, scope, updated_at
+      database.execute<NodeRow>(
+        sql`SELECT id::text, label, preview, type, scope, updated_at
          FROM graph_benchmark.nodes
-         WHERE dataset_id = $1
+         WHERE dataset_id = ${row.id}
          ORDER BY id`,
-        [row.id],
       ),
-      client.query<LinkRow>(
-        `SELECT source::text, target::text, weight
+      database.execute<LinkRow>(
+        sql`SELECT source::text, target::text, weight
          FROM graph_benchmark.links
-         WHERE dataset_id = $1
-           AND least(target - source, $2 - (target - source)) <= 4
+         WHERE dataset_id = ${row.id}
+           AND least(target - source, ${row.node_count} - (target - source)) <= 4
          ORDER BY source, target`,
-        [row.id, row.node_count],
       ),
     ]);
 

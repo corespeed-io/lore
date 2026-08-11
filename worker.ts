@@ -1,6 +1,6 @@
 // OpenNext generates this module before Wrangler bundles the custom worker.
 import openNextWorker from "./.open-next/worker.js";
-import { createRequestPostgresDatabase } from "./src/lib/db/postgres";
+import { createRequestDrizzleDatabase } from "./src/lib/db/drizzle";
 import {
   createEmbeddingProviderFromEnvironment,
   createMaintenanceEmbeddingProvidersFromEnvironment,
@@ -38,7 +38,7 @@ function maintenanceForEnvironment(env: CloudflareEnv) {
     (message) => console.warn(message),
   );
   if (providers.length === 0) return null;
-  const database = createRequestPostgresDatabase(
+  const database = createRequestDrizzleDatabase(
     { connectionString: env.MAINTENANCE_HYPERDRIVE.connectionString },
     { role: "lore_maintenance" },
   );
@@ -63,7 +63,7 @@ function maintenanceForEnvironment(env: CloudflareEnv) {
 }
 
 function maintenanceDatabaseForEnvironment(env: CloudflareEnv) {
-  return createRequestPostgresDatabase(
+  return createRequestDrizzleDatabase(
     { connectionString: env.MAINTENANCE_HYPERDRIVE.connectionString },
     { role: "lore_maintenance" },
   );
@@ -77,7 +77,7 @@ function probeResponse(body: unknown, status = 200): Response {
 }
 
 async function readinessResponse(env: CloudflareEnv): Promise<Response> {
-  const database = createRequestPostgresDatabase(
+  const database = createRequestDrizzleDatabase(
     { connectionString: env.HYPERDRIVE.connectionString },
     { role: "lore_app" },
   );

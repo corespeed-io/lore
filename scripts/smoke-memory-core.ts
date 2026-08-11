@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
-import { createPostgresDatabase } from "../src/lib/db/postgres";
+import { createDrizzleDatabase } from "../src/lib/db/drizzle";
 import {
   createActorHandlers,
   createAgentCredentialHandlers,
@@ -99,8 +99,23 @@ async function runNodeScript(
   file: string,
   environment: Record<string, string | undefined>,
 ): Promise<void> {
+  return runScript("node", file, environment);
+}
+
+async function runBunScript(
+  file: string,
+  environment: Record<string, string | undefined>,
+): Promise<void> {
+  return runScript("bun", file, environment);
+}
+
+async function runScript(
+  runtime: "bun" | "node",
+  file: string,
+  environment: Record<string, string | undefined>,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("node", [file], {
+    const child = spawn(runtime, [file], {
       cwd: repositoryRoot,
       env: { ...process.env, ...environment },
       stdio: "inherit",
@@ -172,7 +187,7 @@ const maintenanceRole = `lore_smoke_maintenance_${roleSuffix}`;
 const runtimePassword = randomBytes(32).toString("base64url");
 const maintenancePassword = randomBytes(32).toString("base64url");
 
-await runNodeScript("scripts/migrate.mjs", { DATABASE_URL: smokeDatabaseUrl });
+await runBunScript("scripts/migrate.ts", { DATABASE_URL: smokeDatabaseUrl });
 await runNodeScript("scripts/create-runtime-role.mjs", {
   DATABASE_URL: smokeDatabaseUrl,
   LORE_RUNTIME_ROLE: runtimeRole,
@@ -185,7 +200,7 @@ process.env.AUTH_MODE = "none";
 process.env.ALLOW_INSECURE = "1";
 selectHumanPrincipal("smoke-alice");
 
-const database = createPostgresDatabase(
+const database = createDrizzleDatabase(
   {
     connectionString: runtimeConnection(adminUrl, runtimeRole, runtimePassword),
     max: 4,
