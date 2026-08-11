@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
@@ -78,9 +77,9 @@ test("An Episode records immutable ordered Observation evidence with private def
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
     await expect(
-      transaction.execute(
-        sql`UPDATE observations SET observed_at = now() WHERE id = ${episode.observations[0].id}`,
-      ),
+      transaction.query("UPDATE observations SET observed_at = now() WHERE id = $1", [
+        episode.observations[0].id,
+      ]),
     ).rejects.toThrow();
   });
 

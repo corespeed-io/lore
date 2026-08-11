@@ -1,51 +1,171 @@
+import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
-import { sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import { expect, test } from "vitest";
-import * as schema from "@/lib/db/schema";
 
-const migrationsFolder = new URL("../db/drizzle", import.meta.url).pathname;
+const migrations = new URL("../db/migrations/", import.meta.url);
 
-test("Drizzle baseline creates the complete Lore schema and is replay-safe", async () => {
+test("Memory Proposal migration fails closed without Agent lifecycle revision 7", async () => {
   const postgres = new PGlite({ extensions: { vector } });
   try {
     await postgres.waitReady;
-    const database = drizzle({ client: postgres, schema });
-    await migrate(database, { migrationsFolder });
-    await migrate(database, { migrationsFolder });
+    for (const migrationId of [
+      "0001_initial.sql",
+      "0002_memory_embedding_jobs.sql",
+      "0003_portable_core.sql",
+      "0004_english_lexical_search.sql",
+      "0005_memory_metadata_search.sql",
+      "0006_memory_chunk_entity_aliases.sql",
+    ]) {
+      await postgres.exec(await readFile(new URL(migrationId, migrations), "utf8"));
+    }
 
-    const state = await database.execute<{
-      journal_rows: number;
-      legacy_ledger: string | null;
-      policy_count: number;
-      product_tables: number;
-      rls_enabled_tables: number;
-      schema_revision: number;
-    }>(sql`SELECT
-      (SELECT count(*)::integer FROM drizzle.__drizzle_migrations) AS journal_rows,
-      to_regclass('public.schema_migrations')::text AS legacy_ledger,
-      (SELECT count(*)::integer FROM pg_policies WHERE schemaname = 'public') AS policy_count,
-      (SELECT count(*)::integer FROM pg_tables WHERE schemaname = 'public') AS product_tables,
-      (SELECT count(*)::integer
-         FROM pg_class relation
-         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
-        WHERE namespace.nspname = 'public'
-          AND relation.relkind = 'r'
-          AND relation.relrowsecurity) AS rls_enabled_tables,
-      (SELECT schema_revision FROM lore_system_state WHERE singleton) AS schema_revision`);
+    await expect(
+      postgres.exec(await readFile(new URL("0008_memory_proposals.sql", migrations), "utf8")),
+    ).rejects.toThrow("Expected Lore schema revision 7 before migration 0008");
+    await expect(
+      postgres.query<{ schema_revision: number }>(
+        "SELECT schema_revision FROM lore_system_state WHERE singleton",
+      ),
+    ).resolves.toMatchObject({ rows: [{ schema_revision: 6 }] });
+  } finally {
+    await postgres.close();
+  }
+});
 
-    expect(state.rows).toEqual([
-      {
-        journal_rows: 1,
-        legacy_ledger: null,
-        policy_count: 56,
-        product_tables: 27,
-        rls_enabled_tables: 26,
-        schema_revision: 9,
-      },
+test("Observation evidence migration fails closed without Memory Proposals revision 8", async () => {
+  const postgres = new PGlite({ extensions: { vector } });
+  try {
+    await postgres.waitReady;
+    for (const migrationId of [
+      "0001_initial.sql",
+      "0002_memory_embedding_jobs.sql",
+      "0003_portable_core.sql",
+      "0004_english_lexical_search.sql",
+      "0005_memory_metadata_search.sql",
+      "0006_memory_chunk_entity_aliases.sql",
+      "0007_agent_lifecycle.sql",
+    ]) {
+      await postgres.exec(await readFile(new URL(migrationId, migrations), "utf8"));
+    }
+
+    await expect(
+      postgres.exec(await readFile(new URL("0009_observation_evidence.sql", migrations), "utf8")),
+    ).rejects.toThrow("Expected Lore schema revision 8 before migration 0009");
+    await expect(
+      postgres.query<{ schema_revision: number }>(
+        "SELECT schema_revision FROM lore_system_state WHERE singleton",
+      ),
+    ).resolves.toMatchObject({ rows: [{ schema_revision: 7 }] });
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("Portable Core adopts jobs written during the additive generation rollout", async () => {
+  const postgres = new PGlite({ extensions: { vector } });
+  try {
+    await postgres.waitReady;
+    await postgres.exec(await readFile(new URL("0001_initial.sql", migrations), "utf8"));
+    await postgres.exec(
+      await readFile(new URL("0002_memory_embedding_jobs.sql", migrations), "utf8"),
+    );
+    await postgres.exec(`
+      INSERT INTO users (id, display_name)
+      VALUES ('10000000-0000-4000-8000-000000000001', 'Alice');
+      INSERT INTO workspaces (id, name)
+      VALUES ('20000000-0000-4000-8000-000000000001', 'Workspace');
+      INSERT INTO memories (id, workspace_id, owner_user_id, content)
+      VALUES
+        (
+          '30000000-0000-4000-8000-000000000001',
+          '20000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          'First Memory'
+        ),
+        (
+          '30000000-0000-4000-8000-000000000002',
+          '20000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          'Second Memory'
+        ),
+        (
+          '30000000-0000-4000-8000-000000000003',
+          '20000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          'Memory written during the rolling deployment'
+        );
+      INSERT INTO memory_embedding_jobs (
+        id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
+        embedding_provider, embedding_model, embedding_revision
+      ) VALUES
+        (
+          '40000000-0000-4000-8000-000000000001',
+          '20000000-0000-4000-8000-000000000001',
+          '30000000-0000-4000-8000-000000000001',
+          '10000000-0000-4000-8000-000000000001',
+          'shared', 1, 'ollama', 'model-a', 'revision-a'
+        ),
+        (
+          '40000000-0000-4000-8000-000000000002',
+          '20000000-0000-4000-8000-000000000001',
+          '30000000-0000-4000-8000-000000000002',
+          '10000000-0000-4000-8000-000000000001',
+          'shared', 1, 'google', 'model-b', 'revision-b'
+        );
+    `);
+
+    await postgres.exec(await readFile(new URL("0003_portable_core.sql", migrations), "utf8"));
+    const expandedColumn = await postgres.query<{ is_nullable: string }>(
+      `SELECT is_nullable
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'memory_embedding_jobs'
+         AND column_name = 'generation_id'`,
+    );
+    expect(expandedColumn.rows).toEqual([{ is_nullable: "YES" }]);
+
+    // A pre-Portable-Core instance may still enqueue a generation-less job while
+    // the additive migration and generation-aware application overlap.
+    await postgres.exec(`
+      INSERT INTO memory_embedding_jobs (
+        id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
+        embedding_provider, embedding_model, embedding_revision
+      ) VALUES (
+        '40000000-0000-4000-8000-000000000003',
+        '20000000-0000-4000-8000-000000000001',
+        '30000000-0000-4000-8000-000000000003',
+        '10000000-0000-4000-8000-000000000001',
+        'shared', 1, 'ollama', 'model-c', 'revision-c'
+      );
+    `);
+
+    await postgres.query("SELECT * FROM lore.enqueue_stale_memory_embedding_jobs($1, $2, $3, $4)", [
+      "ollama",
+      "model-c",
+      "revision-c",
+      100,
     ]);
+    const generations = await postgres.query<{ status: string }>(
+      "SELECT status::text FROM embedding_generations ORDER BY status, embedding_provider",
+    );
+    const jobs = await postgres.query<{
+      generation_id: string | null;
+      id: string;
+      status: string;
+    }>("SELECT id, generation_id, status::text FROM memory_embedding_jobs ORDER BY id");
+    const state = await postgres.query<{ schema_revision: number }>(
+      "SELECT schema_revision FROM lore_system_state WHERE singleton",
+    );
+
+    expect(generations.rows.filter((row) => row.status === "active")).toHaveLength(1);
+    expect(generations.rows.filter((row) => row.status === "building")).toHaveLength(2);
+    expect(jobs.rows.every((row) => row.generation_id !== null)).toBe(true);
+    expect(jobs.rows.at(-1)).toMatchObject({
+      id: "40000000-0000-4000-8000-000000000003",
+      status: "pending",
+    });
+    expect(state.rows).toEqual([{ schema_revision: 3 }]);
   } finally {
     await postgres.close();
   }

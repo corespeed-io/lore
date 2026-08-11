@@ -1,48 +1,37 @@
+import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
-import { drizzleHistoryIssues } from "../scripts/lib/drizzle-migrations";
+import { migrationHistoryStatus } from "../scripts/lib/migration-preflight.mjs";
+import { LEGACY_BASELINE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
 
-const expected = [
-  { folderMillis: 1, hash: "one", sql: ["one"], bps: true },
-  { folderMillis: 2, hash: "two", sql: ["two"], bps: true },
-  { folderMillis: 3, hash: "three", sql: ["three"], bps: true },
-];
+const currentMigrations = [{ id: "0001_initial.sql", checksum: "current" }];
 
-test("Drizzle preflight accepts a fresh database and exact journal", () => {
-  expect(drizzleHistoryIssues([], expected)).toEqual([]);
-  expect(
-    drizzleHistoryIssues(
-      expected.map((migration) => ({
-        created_at: migration.folderMillis,
-        hash: migration.hash,
-      })),
-      expected,
-    ),
-  ).toEqual([]);
+test("migration preflight permits the exact legacy history that migrate can adopt", () => {
+  const applied = [...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({ id, checksum }));
+  expect(migrationHistoryStatus(applied, currentMigrations)).toEqual({
+    missing: [],
+    modified: [],
+    unknown: [],
+  });
 });
 
-test("Drizzle preflight rejects modified and unknown journal records", () => {
-  expect(
-    drizzleHistoryIssues(
-      [
-        { created_at: 1, hash: "modified" },
-        { created_at: 99, hash: "unknown" },
-      ],
-      expected,
-    ),
-  ).toEqual([
-    { id: "1", reason: "modified" },
-    { id: "99", reason: "unknown" },
-  ]);
+test("migration preflight still rejects extra history beside an adoptable legacy baseline", () => {
+  const applied = [
+    ...[...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({ id, checksum })),
+    {
+      id: "0099_unknown.sql",
+      checksum: createHash("sha256").update("unknown").digest("hex"),
+    },
+  ];
+  expect(migrationHistoryStatus(applied, currentMigrations).unknown).toEqual([applied.at(-1)]);
 });
 
-test("Drizzle preflight rejects gaps before the highest applied migration", () => {
-  expect(
-    drizzleHistoryIssues(
-      [
-        { created_at: 1, hash: "one" },
-        { created_at: 3, hash: "three" },
-      ],
-      expected,
-    ),
-  ).toEqual([{ id: "2", reason: "missing" }]);
+test("migration preflight rejects gaps before the highest applied migration", () => {
+  const migrations = [
+    { id: "0001_initial.sql", checksum: "one" },
+    { id: "0002_jobs.sql", checksum: "two" },
+    { id: "0003_portable_core.sql", checksum: "three" },
+  ];
+  const applied = [migrations[0], migrations[2]];
+
+  expect(migrationHistoryStatus(applied, migrations).missing).toEqual([migrations[1]]);
 });

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import pg from "pg";
-import { createDrizzleDatabase } from "../src/lib/db/drizzle";
+import { createPostgresDatabase } from "../src/lib/db/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
 import {
   type ActorContext,
@@ -306,7 +306,7 @@ const metering = createBenchmarkMetering({
   rerankingProvider: configuredRerankingProvider,
 });
 const { embeddingProvider, queryPlanningProvider, rerankingProvider } = metering;
-const requestDatabase = createDrizzleDatabase({ connectionString: databaseUrl });
+const requestDatabase = createPostgresDatabase({ connectionString: databaseUrl });
 const admin = new pg.Client({ connectionString: databaseUrl });
 const startedAt = performance.now();
 await admin.connect();

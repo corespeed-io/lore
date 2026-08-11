@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
 import {
@@ -58,17 +57,20 @@ test("Memory writes enqueue document embeddings without waiting for the provider
 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    const result = await transaction.execute<{
+    const result = await transaction.query<{
       embedding_provider: string;
       embedding_model: string;
       embedding_revision: string;
-    }>(sql`SELECT
+    }>(
+      `SELECT
          generation.embedding_provider,
          generation.embedding_model,
          generation.embedding_revision
        FROM memory_chunk_embeddings embedded
        JOIN embedding_generations generation ON generation.id = embedded.generation_id
-       WHERE embedded.memory_id = ${created.id}`);
+       WHERE embedded.memory_id = $1`,
+      [created.id],
+    );
     expect(result.rows).toEqual([
       {
         embedding_provider: provider.provider,
@@ -120,12 +122,12 @@ test("failed providers release the lease with exponential retry state", async ()
   });
 
   const job = await testContext.adminDatabase.transaction(async (transaction) => {
-    const result = await transaction.execute<{
+    const result = await transaction.query<{
       status: string;
       attempt_count: number;
       last_error: string;
       lease_token: string | null;
-    }>(sql.raw("SELECT status, attempt_count, last_error, lease_token FROM memory_embedding_jobs"));
+    }>("SELECT status, attempt_count, last_error, lease_token FROM memory_embedding_jobs");
     return result.rows[0];
   });
   expect(job).toMatchObject({
@@ -145,7 +147,7 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
   const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
   const created = await memories.remember(testContext.alice, { content: "Do not retry forever." });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(sql.raw("UPDATE memory_embedding_jobs SET max_attempts = 1"));
+    await transaction.query("UPDATE memory_embedding_jobs SET max_attempts = 1");
   });
 
   const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
@@ -158,10 +160,10 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
   await memories.update(testContext.alice, created.id, { content: "A new version may retry." });
   await expect(maintenance.seedStale()).resolves.toEqual([]);
   const statuses = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ memory_version: number; status: string }>(
-      sql.raw(`SELECT memory_version, status::text
+    transaction.query<{ memory_version: number; status: string }>(
+      `SELECT memory_version, status::text
        FROM memory_embedding_jobs
-       ORDER BY memory_version`),
+       ORDER BY memory_version`,
     ),
   );
   expect(statuses.rows).toEqual([
@@ -176,10 +178,10 @@ test("deployment sweeps bound and retire exhausted processing leases", async () 
   const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
   await memories.remember(testContext.alice, { content: "An abandoned final attempt." });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw(`UPDATE memory_embedding_jobs
+    transaction.query(
+      `UPDATE memory_embedding_jobs
        SET status = 'processing', attempt_count = max_attempts,
-           lease_token = gen_random_uuid(), leased_at = now() - interval '2 hours'`),
+           lease_token = gen_random_uuid(), leased_at = now() - interval '2 hours'`,
     ),
   );
 
@@ -188,9 +190,7 @@ test("deployment sweeps bound and retire exhausted processing leases", async () 
   });
   await expect(maintenance.seedStale(1)).resolves.toEqual([]);
   const job = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ status: string }>(
-      sql.raw("SELECT status::text FROM memory_embedding_jobs"),
-    ),
+    transaction.query<{ status: string }>("SELECT status::text FROM memory_embedding_jobs"),
   );
   expect(job.rows).toEqual([{ status: "dead" }]);
 });
@@ -205,15 +205,15 @@ test("deployment sweeps prune expired terminal job history", async () => {
   });
   await expect(maintenance.run()).resolves.toMatchObject({ status: "complete" });
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(
-      sql.raw("UPDATE memory_embedding_jobs SET completed_at = now() - interval '8 days'"),
+    await transaction.query(
+      "UPDATE memory_embedding_jobs SET completed_at = now() - interval '8 days'",
     );
   });
 
   await expect(maintenance.seedStale()).resolves.toEqual([]);
 
   const jobs = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(sql.raw("SELECT id FROM memory_embedding_jobs")),
+    transaction.query("SELECT id FROM memory_embedding_jobs"),
   );
   expect(jobs.rows).toEqual([]);
 });
@@ -239,10 +239,10 @@ test("stale jobs cannot write chunks after a Memory version changes", async () =
   await expect(maintenance.run(notifications[1])).resolves.toMatchObject({ status: "complete" });
 
   const statuses = await testContext.adminDatabase.transaction(async (transaction) => {
-    const result = await transaction.execute<{ memory_version: number; status: string }>(
-      sql.raw(`SELECT memory_version, status
+    const result = await transaction.query<{ memory_version: number; status: string }>(
+      `SELECT memory_version, status
        FROM memory_embedding_jobs
-       ORDER BY memory_version`),
+       ORDER BY memory_version`,
     );
     return result.rows;
   });
@@ -274,10 +274,13 @@ test("a requested embedding hint cleans only its own stale job", async () => {
   });
 
   const oldStatuses = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ id: string; status: string }>(sql`SELECT id, status::text
+    transaction.query<{ id: string; status: string }>(
+      `SELECT id, status::text
        FROM memory_embedding_jobs
-       WHERE id = ANY(${sql.param([notifications[0], notifications[1]])}::uuid[])
-       ORDER BY id`),
+       WHERE id = ANY($1::uuid[])
+       ORDER BY id`,
+      [[notifications[0], notifications[1]]],
+    ),
   );
   expect(oldStatuses.rows).toEqual(
     [
@@ -296,25 +299,31 @@ test("maintenance role cannot mutate private chunks without the claimed lease co
   });
 
   await testContext.maintenanceDatabase.transaction(async (transaction) => {
-    const result = await transaction.execute<{ id: string }>(sql`UPDATE memory_chunks
+    const result = await transaction.query<{ id: string }>(
+      `UPDATE memory_chunks
        SET updated_at = now()
-       WHERE memory_id = ${created.id}
-       RETURNING id`);
+       WHERE memory_id = $1
+       RETURNING id`,
+      [created.id],
+    );
     expect(result.rows).toEqual([]);
   });
 
   await expect(
     testContext.maintenanceDatabase.transaction((transaction) =>
-      transaction.execute(
-        sql`DELETE FROM memory_chunks WHERE memory_id = ${created.id} RETURNING id`,
-      ),
+      transaction.query("DELETE FROM memory_chunks WHERE memory_id = $1 RETURNING id", [
+        created.id,
+      ]),
     ),
   ).rejects.toMatchObject({ code: "42501" });
 
   await expect(
     testContext.maintenanceDatabase.transaction((transaction) =>
-      transaction.execute(sql`INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
-         VALUES (${crypto.randomUUID()}, ${testContext.alice.workspaceId}, ${created.id}, 1, 'Unauthorized maintenance content')`),
+      transaction.query(
+        `INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
+         VALUES ($1, $2, $3, 1, 'Unauthorized maintenance content')`,
+        [crypto.randomUUID(), testContext.alice.workspaceId, created.id],
+      ),
     ),
   ).rejects.toMatchObject({ code: "42501" });
 });
@@ -328,13 +337,13 @@ test("request actors cannot inspect jobs and deleting a Memory cascades its job"
   await expect(
     testContext.database.transaction(async (transaction) => {
       await installActorContext(transaction, testContext.alice);
-      await transaction.execute(sql.raw("SELECT id FROM memory_embedding_jobs"));
+      await transaction.query("SELECT id FROM memory_embedding_jobs");
     }),
   ).rejects.toMatchObject({ code: "42501" });
 
   await expect(memories.forget(testContext.alice, created.id)).resolves.toBe(true);
   const jobs = await testContext.adminDatabase.transaction(async (transaction) =>
-    transaction.execute(sql.raw("SELECT id FROM memory_embedding_jobs")),
+    transaction.query("SELECT id FROM memory_embedding_jobs"),
   );
   expect(jobs.rows).toEqual([]);
 });
@@ -395,10 +404,10 @@ test("embedding revisions build beside the active generation and cut over atomic
   });
 
   const beforeActivation = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ embedding_revision: string; status: string }>(
-      sql.raw(`SELECT embedding_revision, status
+    transaction.query<{ embedding_revision: string; status: string }>(
+      `SELECT embedding_revision, status
        FROM embedding_generations
-       ORDER BY embedding_revision`),
+       ORDER BY embedding_revision`,
     ),
   );
   expect(beforeActivation.rows).toEqual([
@@ -409,18 +418,21 @@ test("embedding revisions build beside the active generation and cut over atomic
   await expect(replacementMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
 
   const chunks = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ content: string; ordinal: number }>(sql`SELECT ordinal, content
+    transaction.query<{ content: string; ordinal: number }>(
+      `SELECT ordinal, content
        FROM memory_chunks
-       WHERE memory_id = ${created.id}
-       ORDER BY ordinal`),
+       WHERE memory_id = $1
+       ORDER BY ordinal`,
+      [created.id],
+    ),
   );
   expect(chunks.rows).toEqual([{ ordinal: 0, content }]);
 
   const afterActivation = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ embedding_revision: string; status: string }>(
-      sql.raw(`SELECT embedding_revision, status
+    transaction.query<{ embedding_revision: string; status: string }>(
+      `SELECT embedding_revision, status
        FROM embedding_generations
-       ORDER BY embedding_revision`),
+       ORDER BY embedding_revision`,
     ),
   );
   expect(afterActivation.rows).toEqual([
@@ -430,10 +442,10 @@ test("embedding revisions build beside the active generation and cut over atomic
 
   await expect(firstMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
   const afterRollback = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ embedding_revision: string; status: string }>(
-      sql.raw(`SELECT embedding_revision, status
+    transaction.query<{ embedding_revision: string; status: string }>(
+      `SELECT embedding_revision, status
        FROM embedding_generations
-       ORDER BY embedding_revision`),
+       ORDER BY embedding_revision`,
     ),
   );
   expect(afterRollback.rows).toEqual([
@@ -442,21 +454,21 @@ test("embedding revisions build beside the active generation and cut over atomic
   ]);
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw(`UPDATE embedding_generations
+    transaction.query(
+      `UPDATE embedding_generations
        SET retired_at = now() - interval '2 hours'
-       WHERE status = 'retiring'`),
+       WHERE status = 'retiring'`,
     ),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw(`UPDATE memory_embedding_jobs job
+    transaction.query(
+      `UPDATE memory_embedding_jobs job
        SET status = 'processing', lease_token = gen_random_uuid(), leased_at = now(),
            completed_at = NULL, updated_at = now()
        FROM embedding_generations generation
        WHERE generation.id = job.generation_id
-         AND generation.status = 'retiring'`),
+         AND generation.status = 'retiring'`,
     ),
   );
   await expect(
@@ -464,20 +476,20 @@ test("embedding revisions build beside the active generation and cut over atomic
   ).resolves.toBe(0);
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute(
-      sql.raw(`UPDATE memory_embedding_jobs job
+    transaction.query(
+      `UPDATE memory_embedding_jobs job
        SET leased_at = now() - interval '2 hours', updated_at = now()
        FROM embedding_generations generation
        WHERE generation.id = job.generation_id
-         AND generation.status = 'retiring'`),
+         AND generation.status = 'retiring'`,
     ),
   );
   await expect(
     pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
   ).resolves.toBe(1);
   const afterPrune = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ embedding_revision: string; status: string }>(
-      sql.raw("SELECT embedding_revision, status FROM embedding_generations"),
+    transaction.query<{ embedding_revision: string; status: string }>(
+      "SELECT embedding_revision, status FROM embedding_generations",
     ),
   );
   expect(afterPrune.rows).toEqual([{ embedding_revision: "fixture-v1", status: "active" }]);
@@ -590,27 +602,27 @@ test("expired retiring generations cancel abandoned pending jobs before pruning"
   await expect(replacementMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
 
   await testContext.adminDatabase.transaction(async (transaction) => {
-    await transaction.execute(
-      sql.raw(`UPDATE embedding_generations generation
+    await transaction.query(
+      `UPDATE embedding_generations generation
        SET retired_at = now() - interval '2 hours'
-       WHERE generation.status = 'retiring'`),
+       WHERE generation.status = 'retiring'`,
     );
-    await transaction.execute(
-      sql.raw(`UPDATE memory_embedding_jobs job
+    await transaction.query(
+      `UPDATE memory_embedding_jobs job
        SET status = 'pending', lease_token = NULL, leased_at = NULL,
            completed_at = NULL, updated_at = now()
        FROM embedding_generations generation
        WHERE generation.id = job.generation_id
-         AND generation.status = 'retiring'`),
+         AND generation.status = 'retiring'`,
     );
   });
 
   const retiredJob = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ id: string }>(
-      sql.raw(`SELECT job.id
+    transaction.query<{ id: string }>(
+      `SELECT job.id
        FROM memory_embedding_jobs job
        JOIN embedding_generations generation ON generation.id = job.generation_id
-       WHERE generation.status = 'retiring'`),
+       WHERE generation.status = 'retiring'`,
     ),
   );
   expect(retiredJob.rows).toHaveLength(1);
@@ -623,13 +635,13 @@ test("expired retiring generations cancel abandoned pending jobs before pruning"
     jobId: retiredJob.rows[0].id,
   });
   const retiredState = await testContext.adminDatabase.transaction((transaction) =>
-    transaction.execute<{ generation_count: string; job_count: string }>(
-      sql.raw(`SELECT
+    transaction.query<{ generation_count: string; job_count: string }>(
+      `SELECT
          count(DISTINCT generation.id)::text AS generation_count,
          count(job.id)::text AS job_count
        FROM embedding_generations generation
        LEFT JOIN memory_embedding_jobs job ON job.generation_id = generation.id
-       WHERE generation.embedding_revision = 'fixture-v1'`),
+       WHERE generation.embedding_revision = 'fixture-v1'`,
     ),
   );
   expect(retiredState.rows).toEqual([{ generation_count: "0", job_count: "0" }]);

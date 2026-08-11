@@ -1,7 +1,6 @@
-import { sql } from "drizzle-orm";
 import { type ActorContext, installActorContext } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
-import type { LoreDatabase, LoreTransaction } from "./db";
+import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiteral } from "./embedding/vector";
 import type { EmbeddingDimensions } from "./embedding-config";
 import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
@@ -547,7 +546,7 @@ function normalizeContextGroupExpansion(
 }
 
 async function expandContextGroupResults(input: {
-  transaction: LoreTransaction;
+  transaction: PostgresTransaction;
   actor: ActorContext;
   results: InternalMemorySearchResult[];
   targetLimit: number;
@@ -593,8 +592,8 @@ async function expandContextGroupResults(input: {
     RETRIEVAL_CONTEXT_GROUP_POLICY.maximumFetchedMemories,
     Math.max(input.targetLimit * 4, input.targetLimit * groups.size),
   );
-  const expanded = await input.transaction.execute<SearchRow>(
-    sql`SELECT
+  const expanded = await input.transaction.query<SearchRow>(
+    `SELECT
        memory.id,
        memory.workspace_id,
        memory.owner_user_id,
@@ -614,25 +613,36 @@ async function expandContextGroupResults(input: {
        FROM (
          SELECT chunk.content, chunk.ordinal
          FROM memory_chunks chunk
-         WHERE chunk.workspace_id = ${input.actor.workspaceId}
+         WHERE chunk.workspace_id = $1
            AND chunk.memory_id = memory.id
          ORDER BY chunk.ordinal
-         LIMIT ${input.evidenceTopChunks}
+         LIMIT $10
        ) selected
      ) evidence ON evidence.content IS NOT NULL
-     WHERE memory.workspace_id = ${input.actor.workspaceId}
-       AND (${input.scope}::memory_scope IS NULL OR memory.scope = ${input.scope}::memory_scope)
-       AND (${input.updatedAfter}::timestamptz IS NULL OR memory.updated_at >= ${input.updatedAfter}::timestamptz)
-       AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
-       AND (${input.metadataFilter ? JSON.stringify(input.metadataFilter) : null}::jsonb IS NULL
-         OR memory.metadata @> ${input.metadataFilter ? JSON.stringify(input.metadataFilter) : null}::jsonb)
-       AND (memory.metadata ->> ${input.expansion.groupMetadataKey}) = ANY(${sql.param(groupValues)}::text[])
-       AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
+     WHERE memory.workspace_id = $1
+       AND ($2::memory_scope IS NULL OR memory.scope = $2::memory_scope)
+       AND ($3::timestamptz IS NULL OR memory.updated_at >= $3::timestamptz)
+       AND ($4::timestamptz IS NULL OR memory.updated_at < $4::timestamptz)
+       AND ($5::jsonb IS NULL OR memory.metadata @> $5::jsonb)
+       AND (memory.metadata ->> $6) = ANY($7::text[])
+       AND NOT (memory.id = ANY($8::uuid[]))
      ORDER BY
-       array_position(${sql.param(groupValues)}::text[], memory.metadata ->> ${input.expansion.groupMetadataKey}),
+       array_position($7::text[], memory.metadata ->> $6),
        memory.updated_at DESC,
        memory.id
-     LIMIT ${fetchLimit}`,
+     LIMIT $9`,
+    [
+      input.actor.workspaceId,
+      input.scope,
+      input.updatedAfter,
+      input.updatedBefore,
+      input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+      input.expansion.groupMetadataKey,
+      groupValues,
+      excludedMemoryIds,
+      fetchLimit,
+      input.evidenceTopChunks,
+    ],
   );
   const rankedExpanded = expanded.rows
     .map((row) => {
@@ -815,7 +825,7 @@ async function embedRetrievalQueries(
 }
 
 async function searchOneQuery(input: {
-  transaction: LoreTransaction;
+  transaction: PostgresTransaction;
   actor: ActorContext;
   query: string;
   queryEmbedding: string | null;
@@ -832,30 +842,8 @@ async function searchOneQuery(input: {
   excludedMemoryIds?: string[];
   embeddingProvider?: EmbeddingProvider;
 }): Promise<MemorySearchResult[]> {
-  const metadataFilterJson = input.metadataFilter ? JSON.stringify(input.metadataFilter) : null;
-  const excludedMemoryIds = input.excludedMemoryIds ?? [];
-  const embeddingProviderIdentity = input.embeddingProvider ?? {
-    provider: "",
-    model: "",
-    revision: "",
-  };
-  const relaxedTerms = relaxedEnglishTerms(input.query);
-  const result = await input.transaction.execute<SearchRow>(
-    sql`WITH raw_query_parameters AS MATERIALIZED (
-       SELECT
-         ${input.query}::text AS query_text,
-         ${input.queryEmbedding}::vector(1024) AS query_embedding
-     ),
-     query_parameters AS MATERIALIZED (
-       SELECT
-         query_text,
-         query_embedding,
-         websearch_to_tsquery('simple', query_text) AS simple_query,
-         websearch_to_tsquery('english', query_text) AS english_query,
-         lore.extract_entity_aliases(query_text) AS entity_aliases
-       FROM raw_query_parameters
-     ),
-     simple_lexical_candidates AS (
+  const result = await input.transaction.query<SearchRow>(
+    `WITH simple_lexical_candidates AS (
        SELECT
          chunk.id AS chunk_id,
          memory.id AS memory_id,
@@ -864,7 +852,7 @@ async function searchOneQuery(input: {
          row_number() OVER (
            ORDER BY ts_rank_cd(
              chunk.search_vector,
-             (SELECT simple_query FROM query_parameters),
+             websearch_to_tsquery('simple', $1),
              32
            ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
@@ -872,19 +860,19 @@ async function searchOneQuery(input: {
        JOIN memories memory
          ON memory.id = chunk.memory_id
         AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = ${input.actor.workspaceId}
-         AND (${input.scope}::memory_scope IS NULL OR memory.scope = ${input.scope}::memory_scope)
-         AND (${input.updatedAfter}::timestamptz IS NULL OR memory.updated_at >= ${input.updatedAfter}::timestamptz)
-         AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
-         AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
-         AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
-         AND chunk.search_vector @@ (SELECT simple_query FROM query_parameters)
+       WHERE chunk.workspace_id = $2
+         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
+         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
+         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
+         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
+         AND NOT (memory.id = ANY($16::uuid[]))
+         AND chunk.search_vector @@ websearch_to_tsquery('simple', $1)
        ORDER BY ts_rank_cd(
          chunk.search_vector,
-         (SELECT simple_query FROM query_parameters),
+         websearch_to_tsquery('simple', $1),
          32
        ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT ${input.candidateLimit}
+       LIMIT $4
      ),
      english_lexical_candidates AS (
        SELECT
@@ -895,7 +883,7 @@ async function searchOneQuery(input: {
          row_number() OVER (
            ORDER BY ts_rank_cd(
              chunk.search_vector_english,
-             (SELECT english_query FROM query_parameters),
+             websearch_to_tsquery('english', $1),
              32
            ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
@@ -903,19 +891,19 @@ async function searchOneQuery(input: {
        JOIN memories memory
          ON memory.id = chunk.memory_id
         AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = ${input.actor.workspaceId}
-         AND (${input.scope}::memory_scope IS NULL OR memory.scope = ${input.scope}::memory_scope)
-         AND (${input.updatedAfter}::timestamptz IS NULL OR memory.updated_at >= ${input.updatedAfter}::timestamptz)
-         AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
-         AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
-         AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
-         AND chunk.search_vector_english @@ (SELECT english_query FROM query_parameters)
+       WHERE chunk.workspace_id = $2
+         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
+         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
+         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
+         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
+         AND NOT (memory.id = ANY($16::uuid[]))
+         AND chunk.search_vector_english @@ websearch_to_tsquery('english', $1)
        ORDER BY ts_rank_cd(
          chunk.search_vector_english,
-         (SELECT english_query FROM query_parameters),
+         websearch_to_tsquery('english', $1),
          32
        ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT ${input.candidateLimit}
+       LIMIT $4
      ),
      english_query_terms AS MATERIALIZED (
        SELECT
@@ -928,14 +916,14 @@ async function searchOneQuery(input: {
              ELSE 1.0
            END
          ) AS weight
-       FROM unnest(${sql.param(relaxedTerms)}::text[]) AS term
+       FROM unnest($10::text[]) AS term
        WHERE numnode(plainto_tsquery('english', term)) > 0
        GROUP BY plainto_tsquery('english', term)
      ),
      query_entity_aliases AS MATERIALIZED (
        SELECT alias
-       FROM unnest((SELECT entity_aliases FROM query_parameters)) WITH ORDINALITY AS extracted(alias, ordinal)
-       WHERE ${input.entityAliasRecall}::boolean
+       FROM unnest(lore.extract_entity_aliases($1)) WITH ORDINALITY AS extracted(alias, ordinal)
+       WHERE $18::boolean
        ORDER BY ordinal
        LIMIT 8
      ),
@@ -953,16 +941,16 @@ async function searchOneQuery(input: {
        JOIN memories memory
          ON memory.id = chunk.memory_id
         AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = ${input.actor.workspaceId}
-         AND (${input.scope}::memory_scope IS NULL OR memory.scope = ${input.scope}::memory_scope)
-         AND (${input.updatedAfter}::timestamptz IS NULL OR memory.updated_at >= ${input.updatedAfter}::timestamptz)
-         AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
-         AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
-         AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
+       WHERE chunk.workspace_id = $2
+         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
+         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
+         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
+         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
+         AND NOT (memory.id = ANY($16::uuid[]))
        GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
        ORDER BY count(*) DESC, max(char_length(query_alias.alias)) DESC,
                 memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT ${input.candidateLimit}
+       LIMIT $4
      ),
      entity_alias_candidates AS (
        SELECT
@@ -992,17 +980,17 @@ async function searchOneQuery(input: {
         AND memory.workspace_id = chunk.workspace_id
        JOIN english_query_terms term
          ON chunk.search_vector_english @@ term.query
-       WHERE chunk.workspace_id = ${input.actor.workspaceId}
-         AND (${input.scope}::memory_scope IS NULL OR memory.scope = ${input.scope}::memory_scope)
-         AND (${input.updatedAfter}::timestamptz IS NULL OR memory.updated_at >= ${input.updatedAfter}::timestamptz)
-         AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
-         AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
-         AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
+       WHERE chunk.workspace_id = $2
+         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
+         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
+         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
+         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
+         AND NOT (memory.id = ANY($16::uuid[]))
        GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
        HAVING count(*) >= 2
        ORDER BY sum(ts_rank_cd(chunk.search_vector_english, term.query, 32) * term.weight) DESC,
                 memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT ${input.candidateLimit}
+       LIMIT $4
      ),
      lexical_candidates AS (
        SELECT * FROM simple_lexical_candidates
@@ -1028,18 +1016,18 @@ async function searchOneQuery(input: {
         AND embedded.chunk_id = chunk.id
        JOIN embedding_generations generation
          ON generation.id = embedded.generation_id
-       WHERE (SELECT query_embedding FROM query_parameters) IS NOT NULL
-         AND chunk.workspace_id = ${input.actor.workspaceId}
-         AND generation.embedding_provider = ${embeddingProviderIdentity.provider}
-         AND generation.embedding_model = ${embeddingProviderIdentity.model}
-         AND generation.embedding_revision = ${embeddingProviderIdentity.revision}
+       WHERE $3::text IS NOT NULL
+         AND chunk.workspace_id = $2
+         AND generation.embedding_provider = $7
+         AND generation.embedding_model = $8
+         AND generation.embedding_revision = $9
          AND generation.embedding_dimensions = 1024
          AND generation.status IN ('active', 'retiring')
-         AND (${input.scope}::memory_scope IS NULL OR memory.scope = ${input.scope}::memory_scope)
-         AND (${input.updatedAfter}::timestamptz IS NULL OR memory.updated_at >= ${input.updatedAfter}::timestamptz)
-         AND (${input.updatedBefore}::timestamptz IS NULL OR memory.updated_at < ${input.updatedBefore}::timestamptz)
-         AND (${metadataFilterJson}::jsonb IS NULL OR memory.metadata @> ${metadataFilterJson}::jsonb)
-         AND NOT (memory.id = ANY(${sql.param(excludedMemoryIds)}::uuid[]))
+         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
+         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
+         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
+         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
+         AND NOT (memory.id = ANY($16::uuid[]))
      ),
      semantic_candidates AS (
        SELECT
@@ -1048,14 +1036,14 @@ async function searchOneQuery(input: {
          chunk.ordinal AS chunk_ordinal,
          chunk.memory_updated_at,
          row_number() OVER (
-           ORDER BY chunk.embedding <=> (SELECT query_embedding FROM query_parameters),
+           ORDER BY chunk.embedding <=> $3::vector(1024),
                     chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
        FROM active_semantic_chunks chunk
-       WHERE (chunk.embedding <=> (SELECT query_embedding FROM query_parameters)) <= ${input.semanticDistanceThreshold}
-       ORDER BY chunk.embedding <=> (SELECT query_embedding FROM query_parameters),
+       WHERE (chunk.embedding <=> $3::vector(1024)) <= $5
+       ORDER BY chunk.embedding <=> $3::vector(1024),
                 chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT ${input.candidateLimit}
+       LIMIT $4
      ),
      reciprocal_rank AS (
        SELECT
@@ -1081,7 +1069,7 @@ async function searchOneQuery(input: {
        FROM reciprocal_rank
        GROUP BY memory_id
        ORDER BY max(score) DESC, max(memory_updated_at) DESC, memory_id
-       LIMIT ${input.resultLimit}
+       LIMIT $6
      )
      SELECT
        memory.id,
@@ -1100,19 +1088,19 @@ async function searchOneQuery(input: {
      FROM ranked_memories
      JOIN memories memory
        ON memory.id = ranked_memories.memory_id
-      AND memory.workspace_id = ${input.actor.workspaceId}
+      AND memory.workspace_id = $2
      JOIN LATERAL (
        SELECT string_agg(selected.content, E'\n' ORDER BY selected.ordinal) AS content
        FROM memory_chunks selected
-       WHERE selected.workspace_id = ${input.actor.workspaceId}
+       WHERE selected.workspace_id = $2
          AND selected.memory_id = memory.id
          AND (
            (
              SELECT count(*)
              FROM memory_chunks sibling
-             WHERE sibling.workspace_id = ${input.actor.workspaceId}
+             WHERE sibling.workspace_id = $2
                AND sibling.memory_id = memory.id
-           ) <= ${input.evidenceTopChunks}::integer * (2 * ${input.evidenceNeighborChunks}::integer + 1)
+           ) <= $17::integer * (2 * $11::integer + 1)
            OR EXISTS (
              SELECT 1
              FROM (
@@ -1120,17 +1108,17 @@ async function searchOneQuery(input: {
                FROM reciprocal_rank
                WHERE memory_id = memory.id
                ORDER BY score DESC, chunk_ordinal DESC, chunk_id
-               LIMIT ${input.evidenceTopChunks}
+               LIMIT $17
              ) evidence_anchor
-             WHERE selected.ordinal BETWEEN evidence_anchor.chunk_ordinal - ${input.evidenceNeighborChunks}::integer
-                                        AND evidence_anchor.chunk_ordinal + ${input.evidenceNeighborChunks}::integer
+             WHERE selected.ordinal BETWEEN evidence_anchor.chunk_ordinal - $11::integer
+                                        AND evidence_anchor.chunk_ordinal + $11::integer
            )
          )
      ) evidence ON true
      JOIN LATERAL (
        SELECT string_agg(selected.content, E'\n' ORDER BY selected.ordinal) AS content
        FROM memory_chunks selected
-       WHERE selected.workspace_id = ${input.actor.workspaceId}
+       WHERE selected.workspace_id = $2
          AND selected.memory_id = memory.id
          AND EXISTS (
            SELECT 1
@@ -1141,11 +1129,31 @@ async function searchOneQuery(input: {
              ORDER BY score DESC, chunk_ordinal DESC, chunk_id
              LIMIT 1
            ) anchor
-           WHERE selected.ordinal BETWEEN anchor.chunk_ordinal - ${input.evidenceNeighborChunks}::integer
-                                      AND anchor.chunk_ordinal + ${input.evidenceNeighborChunks}::integer
+           WHERE selected.ordinal BETWEEN anchor.chunk_ordinal - $11::integer
+                                      AND anchor.chunk_ordinal + $11::integer
          )
      ) rerank_evidence ON true
      ORDER BY ranked_memories.score DESC, memory.updated_at DESC, memory.id`,
+    [
+      input.query,
+      input.actor.workspaceId,
+      input.queryEmbedding,
+      input.candidateLimit,
+      input.semanticDistanceThreshold,
+      input.resultLimit,
+      input.embeddingProvider?.provider ?? "",
+      input.embeddingProvider?.model ?? "",
+      input.embeddingProvider?.revision ?? "",
+      relaxedEnglishTerms(input.query),
+      input.evidenceNeighborChunks,
+      input.scope,
+      input.updatedAfter,
+      input.updatedBefore,
+      input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+      input.excludedMemoryIds ?? [],
+      input.evidenceTopChunks,
+      input.entityAliasRecall,
+    ],
   );
   return result.rows.map((row) => ({
     memory: toMemory(row),
@@ -1156,64 +1164,77 @@ async function searchOneQuery(input: {
 }
 
 async function insertChunks(
-  transaction: LoreTransaction,
+  transaction: PostgresTransaction,
   workspaceId: string,
   memoryId: string,
   chunks: PreparedChunk[],
 ): Promise<void> {
   for (const [ordinal, chunk] of chunks.entries()) {
-    await transaction.execute(
-      sql`INSERT INTO memory_chunks (
+    await transaction.query(
+      `INSERT INTO memory_chunks (
          id, workspace_id, memory_id, ordinal, content, embedding,
          embedding_provider, embedding_model, embedding_revision, embedded_at
        ) VALUES (
-         ${crypto.randomUUID()}, ${workspaceId}, ${memoryId}, ${ordinal}, ${chunk.content},
-         NULL, NULL, NULL, NULL, NULL
+         $1, $2, $3, $4, $5, NULL, NULL, NULL, NULL, NULL
        )`,
+      [crypto.randomUUID(), workspaceId, memoryId, ordinal, chunk.content],
     );
   }
 }
 
 async function enqueueEmbeddingJob(
-  transaction: LoreTransaction,
+  transaction: PostgresTransaction,
   memory: MemoryRow,
   embeddingProvider: EmbeddingProvider,
   onlyWhenStale = false,
 ): Promise<string | null> {
-  const generation = await transaction.execute<{ id: string }>(
-    sql`SELECT id
-     FROM lore.ensure_embedding_generation(
-       ${embeddingProvider.provider}, ${embeddingProvider.model},
-       ${embeddingProvider.dimensions}, ${embeddingProvider.revision}
-     )`,
+  const generation = await transaction.query<{ id: string }>(
+    `SELECT id
+     FROM lore.ensure_embedding_generation($1, $2, $3, $4)`,
+    [
+      embeddingProvider.provider,
+      embeddingProvider.model,
+      embeddingProvider.dimensions,
+      embeddingProvider.revision,
+    ],
   );
   const generationId = generation.rows[0]?.id;
   if (!generationId) throw new Error("Embedding generation could not be resolved");
   const jobId = crypto.randomUUID();
-  await transaction.execute(
-    sql`INSERT INTO memory_embedding_jobs (
+  await transaction.query(
+    `INSERT INTO memory_embedding_jobs (
        id, workspace_id, memory_id, owner_user_id, memory_scope,
        memory_version, embedding_provider, embedding_model, embedding_revision,
        generation_id
      )
-     SELECT
-       ${jobId}, ${memory.workspace_id}, ${memory.id}, ${memory.owner_user_id},
-       ${memory.scope}, ${memory.version}, ${embeddingProvider.provider},
-       ${embeddingProvider.model}, ${embeddingProvider.revision}, ${generationId}
-     WHERE NOT ${onlyWhenStale}::boolean
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $11
+     WHERE NOT $10::boolean
         OR EXISTS (
           SELECT 1
           FROM memory_chunks chunk
-          WHERE chunk.workspace_id = ${memory.workspace_id}
-            AND chunk.memory_id = ${memory.id}
+          WHERE chunk.workspace_id = $2
+            AND chunk.memory_id = $3
             AND NOT EXISTS (
               SELECT 1
               FROM memory_chunk_embeddings embedded
-              WHERE embedded.generation_id = ${generationId}
+              WHERE embedded.generation_id = $11
                 AND embedded.chunk_id = chunk.id
             )
         )
     `,
+    [
+      jobId,
+      memory.workspace_id,
+      memory.id,
+      memory.owner_user_id,
+      memory.scope,
+      memory.version,
+      embeddingProvider.provider,
+      embeddingProvider.model,
+      embeddingProvider.revision,
+      onlyWhenStale,
+      generationId,
+    ],
   );
   // The request role deliberately cannot SELECT this private table, so callers
   // use the allocated id only when the write guarantees that a job was inserted.
@@ -1262,7 +1283,7 @@ function toMemoryProposal(
   };
 }
 
-export function createMemoryModule(database: LoreDatabase, options: MemoryModuleOptions = {}) {
+export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
   const contextGroupExpansion = normalizeContextGroupExpansion(options.contextGroupExpansion);
   const embeddingProvider = options.embeddingProvider;
   const entityAliasRecall = options.entityAliasRecall ?? false;
@@ -1300,22 +1321,27 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
   }
 
   async function insertMemoryInTransaction(
-    transaction: LoreTransaction,
+    transaction: PostgresTransaction,
     actor: ActorContext,
     input: RememberMemory,
     createdByAgentId: string | null = actor.agentId ?? null,
   ): Promise<{ jobId: string | null; memory: Memory }> {
     const chunks = prepareChunks(input.content);
     const id = crypto.randomUUID();
-    const result = await transaction.execute<MemoryRow>(
-      sql`INSERT INTO memories (
+    const result = await transaction.query<MemoryRow>(
+      `INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
-       ) VALUES (
-         ${id}, ${actor.workspaceId}, ${actor.userId}, ${createdByAgentId},
-         ${input.scope ?? "shared"}, ${input.content},
-         ${JSON.stringify(input.metadata ?? {})}::jsonb
-       )
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
        RETURNING *`,
+      [
+        id,
+        actor.workspaceId,
+        actor.userId,
+        createdByAgentId,
+        input.scope ?? "shared",
+        input.content,
+        JSON.stringify(input.metadata ?? {}),
+      ],
     );
     const memory = result.rows[0];
     await insertChunks(transaction, actor.workspaceId, id, chunks);
@@ -1326,19 +1352,20 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
   }
 
   async function updateMemoryInTransaction(
-    transaction: LoreTransaction,
+    transaction: PostgresTransaction,
     actor: ActorContext,
     id: string,
     input: UpdateMemory,
     expectedVersion?: number,
   ): Promise<{ chunksChanged: boolean; jobId: string | null; memory: Memory } | null> {
-    const current = await transaction.execute<MemoryRow>(
-      sql`SELECT *
+    const current = await transaction.query<MemoryRow>(
+      `SELECT *
        FROM memories
-       WHERE id = ${id}
-         AND workspace_id = ${actor.workspaceId}
+       WHERE id = $1
+         AND workspace_id = $2
          AND lore.can_write_memory(workspace_id, owner_user_id)
        FOR UPDATE`,
+      [id, actor.workspaceId],
     );
     const currentMemory = current.rows[0];
     if (!currentMemory) return null;
@@ -1348,26 +1375,34 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
     const contentToEmbed =
       input.content ?? (input.scope === undefined ? null : currentMemory.content);
     const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
-    const result = await transaction.execute<MemoryRow>(
-      sql`UPDATE memories
-       SET content = COALESCE(${input.content ?? null}::text, content),
-           scope = COALESCE(${input.scope ?? null}::memory_scope, scope),
-           metadata = COALESCE(${input.metadata === undefined ? null : JSON.stringify(input.metadata)}::jsonb, metadata),
+    const result = await transaction.query<MemoryRow>(
+      `UPDATE memories
+       SET content = COALESCE($3::text, content),
+           scope = COALESCE($4::memory_scope, scope),
+           metadata = COALESCE($5::jsonb, metadata),
            version = version + 1,
            updated_at = now()
-       WHERE id = ${id}
-         AND workspace_id = ${actor.workspaceId}
-         AND version = ${currentMemory.version}
+       WHERE id = $1
+         AND workspace_id = $2
+         AND version = $6
        RETURNING *`,
+      [
+        id,
+        actor.workspaceId,
+        input.content ?? null,
+        input.scope ?? null,
+        input.metadata === undefined ? null : JSON.stringify(input.metadata),
+        currentMemory.version,
+      ],
     );
     const updated = result.rows[0];
     if (!updated) {
       throw new MemoryVersionConflictError(currentMemory.version, currentMemory.version + 1);
     }
     if (chunks) {
-      await transaction.execute(
-        sql`DELETE FROM memory_chunks
-          WHERE workspace_id = ${actor.workspaceId} AND memory_id = ${id}`,
+      await transaction.query(
+        "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
+        [actor.workspaceId, id],
       );
       await insertChunks(transaction, actor.workspaceId, id, chunks);
     }
@@ -1378,20 +1413,22 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
   }
 
   async function proposalEvidenceIds(
-    transaction: LoreTransaction,
+    transaction: PostgresTransaction,
     proposalId: string,
   ): Promise<{ memoryIds: string[]; observationIds: string[] }> {
-    const memoryEvidence = await transaction.execute<MemoryProposalEvidenceRow>(
-      sql`SELECT proposal_id, memory_id
+    const memoryEvidence = await transaction.query<MemoryProposalEvidenceRow>(
+      `SELECT proposal_id, memory_id
        FROM memory_proposal_evidence
-       WHERE proposal_id = ${proposalId}
+       WHERE proposal_id = $1
        ORDER BY ordinal`,
+      [proposalId],
     );
-    const observationEvidence = await transaction.execute<MemoryProposalObservationEvidenceRow>(
-      sql`SELECT proposal_id, observation_reference_id AS observation_id
+    const observationEvidence = await transaction.query<MemoryProposalObservationEvidenceRow>(
+      `SELECT proposal_id, observation_reference_id AS observation_id
        FROM memory_proposal_observation_evidence
-       WHERE proposal_id = ${proposalId}
+       WHERE proposal_id = $1
        ORDER BY ordinal`,
+      [proposalId],
     );
     return {
       memoryIds: memoryEvidence.rows.map((row) => row.memory_id),
@@ -1400,7 +1437,7 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
   }
 
   async function proposalFromRow(
-    transaction: LoreTransaction,
+    transaction: PostgresTransaction,
     row: MemoryProposalRow,
   ): Promise<MemoryProposal> {
     const evidence = await proposalEvidenceIds(transaction, row.id);
@@ -1408,22 +1445,23 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
   }
 
   async function proposalsFromRows(
-    transaction: LoreTransaction,
+    transaction: PostgresTransaction,
     rows: readonly MemoryProposalRow[],
   ): Promise<MemoryProposal[]> {
     if (!rows.length) return [];
-    const proposalIds = rows.map((row) => row.id);
-    const memoryEvidence = await transaction.execute<MemoryProposalEvidenceRow>(
-      sql`SELECT proposal_id, memory_id
+    const memoryEvidence = await transaction.query<MemoryProposalEvidenceRow>(
+      `SELECT proposal_id, memory_id
        FROM memory_proposal_evidence
-       WHERE proposal_id = ANY(${sql.param(proposalIds)}::uuid[])
+       WHERE proposal_id = ANY($1::uuid[])
        ORDER BY proposal_id, ordinal`,
+      [rows.map((row) => row.id)],
     );
-    const observationEvidence = await transaction.execute<MemoryProposalObservationEvidenceRow>(
-      sql`SELECT proposal_id, observation_reference_id AS observation_id
+    const observationEvidence = await transaction.query<MemoryProposalObservationEvidenceRow>(
+      `SELECT proposal_id, observation_reference_id AS observation_id
        FROM memory_proposal_observation_evidence
-       WHERE proposal_id = ANY(${sql.param(proposalIds)}::uuid[])
+       WHERE proposal_id = ANY($1::uuid[])
        ORDER BY proposal_id, ordinal`,
+      [rows.map((row) => row.id)],
     );
     const memoriesByProposal = new Map<string, string[]>();
     for (const row of memoryEvidence.rows) {
@@ -1463,8 +1501,9 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
           if (claim.replay) {
             return { memory: claim.replay.body.memory, jobId: null, replayed: true };
           }
-          const access = await transaction.execute<{ allowed: boolean }>(
-            sql`SELECT lore.can_write_memory(${actor.workspaceId}, ${actor.userId}) AS allowed`,
+          const access = await transaction.query<{ allowed: boolean }>(
+            "SELECT lore.can_write_memory($1, $2) AS allowed",
+            [actor.workspaceId, actor.userId],
           );
           if (access.rows[0]?.allowed !== true) {
             throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
@@ -1494,9 +1533,9 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
     async retrieve(actor: ActorContext, id: string): Promise<Memory | null> {
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.execute<MemoryRow>(
-          sql`SELECT * FROM memories
-            WHERE id = ${id} AND workspace_id = ${actor.workspaceId}`,
+        const result = await transaction.query<MemoryRow>(
+          "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
+          [id, actor.workspaceId],
         );
         return result.rows[0] ? toMemory(result.rows[0]) : null;
       });
@@ -1530,8 +1569,9 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
             options.idempotency,
           );
           if (claim.replay) return claim.replay.body.proposal;
-          const access = await transaction.execute<{ allowed: boolean }>(
-            sql`SELECT lore.can_write_memory(${actor.workspaceId}, ${actor.userId}) AS allowed`,
+          const access = await transaction.query<{ allowed: boolean }>(
+            "SELECT lore.can_write_memory($1, $2) AS allowed",
+            [actor.workspaceId, actor.userId],
           );
           if (access.rows[0]?.allowed !== true) {
             throw new MemoryProposalAccessDeniedError(
@@ -1560,12 +1600,13 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
             changesScope = true;
             changesMetadata = true;
           } else {
-            const target = await transaction.execute<MemoryRow>(
-              sql`SELECT *
+            const target = await transaction.query<MemoryRow>(
+              `SELECT *
                FROM memories
-               WHERE id = ${input.targetMemoryId}
-                 AND workspace_id = ${actor.workspaceId}
+               WHERE id = $1
+                 AND workspace_id = $2
                  AND lore.can_write_memory(workspace_id, owner_user_id)`,
+              [input.targetMemoryId, actor.workspaceId],
             );
             const current = target.rows[0];
             if (!current) {
@@ -1588,11 +1629,12 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
           }
 
           if (evidenceMemoryIds.length) {
-            const visibleEvidence = await transaction.execute<{ id: string }>(
-              sql`SELECT id
+            const visibleEvidence = await transaction.query<{ id: string }>(
+              `SELECT id
                FROM memories
-               WHERE workspace_id = ${actor.workspaceId}
-                 AND id = ANY(${sql.param(evidenceMemoryIds)}::uuid[])`,
+               WHERE workspace_id = $1
+                 AND id = ANY($2::uuid[])`,
+              [actor.workspaceId, evidenceMemoryIds],
             );
             const visibleIds = new Set(visibleEvidence.rows.map((row) => row.id));
             if (evidenceMemoryIds.some((id) => !visibleIds.has(id))) {
@@ -1603,11 +1645,12 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
           }
 
           if (evidenceObservationIds.length) {
-            const visibleEvidence = await transaction.execute<{ id: string }>(
-              sql`SELECT id
+            const visibleEvidence = await transaction.query<{ id: string }>(
+              `SELECT id
                FROM observations
-               WHERE workspace_id = ${actor.workspaceId}
-                 AND id = ANY(${sql.param(evidenceObservationIds)}::uuid[])`,
+               WHERE workspace_id = $1
+                 AND id = ANY($2::uuid[])`,
+              [actor.workspaceId, evidenceObservationIds],
             );
             const visibleIds = new Set(visibleEvidence.rows.map((row) => row.id));
             if (evidenceObservationIds.some((id) => !visibleIds.has(id))) {
@@ -1617,31 +1660,43 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
             }
           }
 
-          const inserted = await transaction.execute<MemoryProposalRow>(
-            sql`SELECT *
+          const inserted = await transaction.query<MemoryProposalRow>(
+            `SELECT *
              FROM lore.submit_memory_proposal(
-               ${actor.workspaceId}, ${actor.userId},
-               ${actor.agentId ? "agent" : "human"}, ${actor.agentId ?? null},
-               ${kind}, ${targetMemoryId}, ${baseMemoryVersion}, ${proposedContent},
-               ${proposedScope}, ${JSON.stringify(proposedMetadata)}::jsonb,
-               ${changesContent}, ${changesScope}, ${changesMetadata}
+               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
+               $11, $12, $13
              )`,
+            [
+              actor.workspaceId,
+              actor.userId,
+              actor.agentId ? "agent" : "human",
+              actor.agentId ?? null,
+              kind,
+              targetMemoryId,
+              baseMemoryVersion,
+              proposedContent,
+              proposedScope,
+              JSON.stringify(proposedMetadata),
+              changesContent,
+              changesScope,
+              changesMetadata,
+            ],
           );
           const id = inserted.rows[0].id;
           for (const [ordinal, memoryId] of evidenceMemoryIds.entries()) {
-            await transaction.execute(
-              sql`INSERT INTO memory_proposal_evidence (
+            await transaction.query(
+              `INSERT INTO memory_proposal_evidence (
                  workspace_id, proposal_id, memory_id, ordinal
-               ) VALUES (${actor.workspaceId}, ${id}, ${memoryId}, ${ordinal})`,
+               ) VALUES ($1, $2, $3, $4)`,
+              [actor.workspaceId, id, memoryId, ordinal],
             );
           }
           for (const [ordinal, observationId] of evidenceObservationIds.entries()) {
-            await transaction.execute(
-              sql`INSERT INTO memory_proposal_observation_evidence (
+            await transaction.query(
+              `INSERT INTO memory_proposal_observation_evidence (
                  workspace_id, proposal_id, observation_id, observation_reference_id, ordinal
-               ) VALUES (
-                 ${actor.workspaceId}, ${id}, ${observationId}, ${observationId}, ${ordinal}
-               )`,
+               ) VALUES ($1, $2, $3, $3, $4)`,
+              [actor.workspaceId, id, observationId, ordinal],
             );
           }
           const proposal = toMemoryProposal(
@@ -1685,16 +1740,16 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
       const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.execute<MemoryProposalRow>(
-          sql`SELECT *
+        const result = await transaction.query<MemoryProposalRow>(
+          `SELECT *
            FROM memory_proposals
-           WHERE workspace_id = ${actor.workspaceId}
-             AND owner_user_id = ${actor.userId}
+           WHERE workspace_id = $1
+             AND owner_user_id = $2
              AND expires_at > now()
-             AND (${input.status ?? null}::memory_proposal_status IS NULL
-               OR status = ${input.status ?? null}::memory_proposal_status)
+             AND ($3::memory_proposal_status IS NULL OR status = $3::memory_proposal_status)
            ORDER BY created_at DESC, id
-           LIMIT ${limit}`,
+           LIMIT $4`,
+          [actor.workspaceId, actor.userId, input.status ?? null, limit],
         );
         return proposalsFromRows(transaction, result.rows);
       });
@@ -1711,14 +1766,15 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
       try {
         const reviewed = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const selected = await transaction.execute<MemoryProposalRow>(
-            sql`SELECT *
+          const selected = await transaction.query<MemoryProposalRow>(
+            `SELECT *
              FROM memory_proposals
-             WHERE id = ${id}
-               AND workspace_id = ${actor.workspaceId}
-               AND owner_user_id = ${actor.userId}
+             WHERE id = $1
+               AND workspace_id = $2
+               AND owner_user_id = $3
                AND expires_at > now()
              FOR UPDATE`,
+            [id, actor.workspaceId, actor.userId],
           );
           const current = selected.rows[0];
           if (!current) return null;
@@ -1733,10 +1789,9 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
               );
             }
             const accepted = current.accepted_memory_id
-              ? await transaction.execute<MemoryRow>(
-                  sql`SELECT * FROM memories
-                    WHERE id = ${current.accepted_memory_id}
-                      AND workspace_id = ${actor.workspaceId}`,
+              ? await transaction.query<MemoryRow>(
+                  "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
+                  [current.accepted_memory_id, actor.workspaceId],
                 )
               : null;
             return {
@@ -1748,14 +1803,15 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
           }
 
           if (decision === "reject") {
-            const rejected = await transaction.execute<MemoryProposalRow>(
-              sql`UPDATE memory_proposals
+            const rejected = await transaction.query<MemoryProposalRow>(
+              `UPDATE memory_proposals
                SET status = 'rejected',
-                   reviewed_by_user_id = ${actor.userId},
+                   reviewed_by_user_id = $3,
                    reviewed_at = now(),
                    expires_at = now() + interval '30 days'
-               WHERE id = ${id} AND workspace_id = ${actor.workspaceId}
+               WHERE id = $1 AND workspace_id = $2
                RETURNING *`,
+              [id, actor.workspaceId, actor.userId],
             );
             return {
               proposal: await proposalFromRow(transaction, rejected.rows[0]),
@@ -1767,10 +1823,9 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
 
           const evidence = await proposalEvidenceIds(transaction, current.id);
           if (evidence.observationIds.length) {
-            const visibleObservations = await transaction.execute<{ id: string }>(
-              sql`SELECT lore.lock_reviewable_proposal_observations(
-                ${actor.workspaceId}, ${current.id}
-              ) AS id`,
+            const visibleObservations = await transaction.query<{ id: string }>(
+              `SELECT lore.lock_reviewable_proposal_observations($1, $2) AS id`,
+              [actor.workspaceId, current.id],
             );
             if (visibleObservations.rows.length !== evidence.observationIds.length) {
               throw new MemoryProposalReviewConflictError(
@@ -1817,15 +1872,16 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
           if (!applied) {
             throw new MemoryProposalAccessDeniedError("The target Memory is no longer writable");
           }
-          const accepted = await transaction.execute<MemoryProposalRow>(
-            sql`UPDATE memory_proposals
+          const accepted = await transaction.query<MemoryProposalRow>(
+            `UPDATE memory_proposals
              SET status = 'accepted',
-                 reviewed_by_user_id = ${actor.userId},
-                 accepted_memory_id = ${applied.memory.id},
+                 reviewed_by_user_id = $3,
+                 accepted_memory_id = $4,
                  reviewed_at = now(),
                  expires_at = now() + interval '30 days'
-             WHERE id = ${id} AND workspace_id = ${actor.workspaceId}
+             WHERE id = $1 AND workspace_id = $2
              RETURNING *`,
+            [id, actor.workspaceId, actor.userId, applied.memory.id],
           );
           return {
             proposal: await proposalFromRow(transaction, accepted.rows[0]),
@@ -1914,13 +1970,14 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
           options.idempotency,
         );
         if (claim.replay) return claim.replay.body.deleted;
-        const current = await transaction.execute<{ version: number }>(
-          sql`SELECT version
+        const current = await transaction.query<{ version: number }>(
+          `SELECT version
            FROM memories
-           WHERE id = ${id}
-             AND workspace_id = ${actor.workspaceId}
+           WHERE id = $1
+             AND workspace_id = $2
              AND lore.can_write_memory(workspace_id, owner_user_id)
            FOR UPDATE`,
+          [id, actor.workspaceId],
         );
         const currentVersion = current.rows[0]?.version;
         if (currentVersion === undefined) {
@@ -1936,12 +1993,11 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
         if (options.expectedVersion !== undefined && currentVersion !== options.expectedVersion) {
           throw new MemoryVersionConflictError(options.expectedVersion, currentVersion);
         }
-        const result = await transaction.execute<{ id: string }>(
-          sql`DELETE FROM memories
-           WHERE id = ${id}
-             AND workspace_id = ${actor.workspaceId}
-             AND version = ${currentVersion}
+        const result = await transaction.query<{ id: string }>(
+          `DELETE FROM memories
+           WHERE id = $1 AND workspace_id = $2 AND version = $3
            RETURNING id`,
+          [id, actor.workspaceId, currentVersion],
         );
         const deleted = result.rows.length === 1;
         await completeMutation(
@@ -1960,36 +2016,41 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
       const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const metadataFilterJson = input.metadataFilter
-          ? JSON.stringify(input.metadataFilter)
-          : null;
-        const result = await transaction.execute<MemoryRow>(
-          sql`SELECT id, workspace_id, owner_user_id, created_by_agent_id, scope,
+        const result = await transaction.query<MemoryRow>(
+          `SELECT id, workspace_id, owner_user_id, created_by_agent_id, scope,
                   content, metadata, version, created_at,
                   to_char(
                     updated_at AT TIME ZONE 'UTC',
                     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
                   ) AS updated_at
            FROM memories
-           WHERE workspace_id = ${actor.workspaceId}
-             AND (${input.scope ?? null}::memory_scope IS NULL
-               OR scope = ${input.scope ?? null}::memory_scope)
-             AND (${input.updatedAfter ?? null}::timestamptz IS NULL
-               OR updated_at >= ${input.updatedAfter ?? null}::timestamptz)
-             AND (${input.updatedBefore ?? null}::timestamptz IS NULL
-               OR updated_at < ${input.updatedBefore ?? null}::timestamptz)
-             AND (${metadataFilterJson}::jsonb IS NULL OR metadata @> ${metadataFilterJson}::jsonb)
+           WHERE workspace_id = $1
+             AND ($4::memory_scope IS NULL OR scope = $4::memory_scope)
+             AND ($5::timestamptz IS NULL OR updated_at >= $5::timestamptz)
+             AND ($6::timestamptz IS NULL OR updated_at < $6::timestamptz)
+             AND ($7::jsonb IS NULL OR metadata @> $7::jsonb)
              AND (
-               ${input.cursor?.updatedAt ?? null}::timestamptz IS NULL
-               OR updated_at < ${input.cursor?.updatedAt ?? null}::timestamptz
+               $8::timestamptz IS NULL
+               OR updated_at < $8::timestamptz
                OR (
-                 updated_at = ${input.cursor?.updatedAt ?? null}::timestamptz
-                 AND id > ${input.cursor?.id ?? null}::uuid
+                 updated_at = $8::timestamptz
+                 AND id > $9::uuid
                )
              )
            ORDER BY updated_at DESC, id
-           LIMIT ${limit}
-           OFFSET ${offset}`,
+           LIMIT $2
+           OFFSET $3`,
+          [
+            actor.workspaceId,
+            limit,
+            offset,
+            input.scope ?? null,
+            input.updatedAfter ?? null,
+            input.updatedBefore ?? null,
+            input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+            input.cursor?.updatedAt ?? null,
+            input.cursor?.id ?? null,
+          ],
         );
         return result.rows.map(toMemory);
       });
@@ -2072,17 +2133,23 @@ export function createMemoryModule(database: LoreDatabase, options: MemoryModule
         ]);
         const feedbackRead = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const feedbackMetadataFilterJson = metadataFilter ? JSON.stringify(metadataFilter) : null;
-          const stillVisible = await transaction.execute<{ id: string }>(
-            sql`SELECT id
+          const stillVisible = await transaction.query<{ id: string }>(
+            `SELECT id
              FROM memories
-             WHERE workspace_id = ${actor.workspaceId}
-               AND id = ANY(${sql.param(fusionResults.map((result) => result.memory.id))}::uuid[])
-               AND (${scope}::memory_scope IS NULL OR scope = ${scope}::memory_scope)
-               AND (${updatedAfter}::timestamptz IS NULL OR updated_at >= ${updatedAfter}::timestamptz)
-               AND (${updatedBefore}::timestamptz IS NULL OR updated_at < ${updatedBefore}::timestamptz)
-               AND (${feedbackMetadataFilterJson}::jsonb IS NULL
-                 OR metadata @> ${feedbackMetadataFilterJson}::jsonb)`,
+             WHERE workspace_id = $1
+               AND id = ANY($2::uuid[])
+               AND ($3::memory_scope IS NULL OR scope = $3::memory_scope)
+               AND ($4::timestamptz IS NULL OR updated_at >= $4::timestamptz)
+               AND ($5::timestamptz IS NULL OR updated_at < $5::timestamptz)
+               AND ($6::jsonb IS NULL OR metadata @> $6::jsonb)`,
+            [
+              actor.workspaceId,
+              fusionResults.map((result) => result.memory.id),
+              scope,
+              updatedAfter,
+              updatedBefore,
+              metadataFilter ? JSON.stringify(metadataFilter) : null,
+            ],
           );
           const results = await searchOneQuery({
             transaction,

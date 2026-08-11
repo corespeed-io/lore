@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { installActorContext } from "@/lib/actor-context";
 import {
@@ -107,17 +106,15 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
   ]) {
     await testContext.database.transaction(async (transaction) => {
       await installActorContext(transaction, testContext.alice);
-      const visible = await transaction.execute<{ count: string }>(
-        sql.raw(`SELECT count(*)::text AS count FROM ${table}`),
+      const visible = await transaction.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM ${table}`,
       );
       expect(Number(visible.rows[0].count)).toBeGreaterThan(0);
     });
     for (const deniedActor of [testContext.bob, testContext.carol]) {
       await testContext.database.transaction(async (transaction) => {
         await installActorContext(transaction, deniedActor);
-        await expect(
-          transaction.execute(sql.raw(`SELECT id FROM ${table}`)),
-        ).resolves.toMatchObject({
+        await expect(transaction.query(`SELECT id FROM ${table}`)).resolves.toMatchObject({
           rows: [],
         });
       });
@@ -192,8 +189,9 @@ test("A crashed Evaluation run records fail-closed isolation metrics", async () 
   );
   const runId = await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
-    const result = await transaction.execute<{ id: string }>(
-      sql`SELECT id FROM evaluation_runs WHERE suite_id = ${suite.id}`,
+    const result = await transaction.query<{ id: string }>(
+      "SELECT id FROM evaluation_runs WHERE suite_id = $1",
+      [suite.id],
     );
     return result.rows[0].id;
   });
