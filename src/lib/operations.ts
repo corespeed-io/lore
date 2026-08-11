@@ -58,18 +58,17 @@ interface ReadinessRow {
   rls_probe: boolean;
 }
 
-export function createOperationsModule(
-  database: PostgresDatabase,
-  options: {
-    embeddingConfigured: boolean;
-    embeddingIdentity?: {
-      dimensions: number;
-      model: string;
-      provider: string;
-      revision: string;
-    };
-  },
-) {
+export interface OperationsOptions {
+  embeddingConfigured: boolean;
+  embeddingIdentity?: {
+    dimensions: number;
+    model: string;
+    provider: string;
+    revision: string;
+  };
+}
+
+export function createOperationsModule(database: PostgresDatabase, options: OperationsOptions) {
   return {
     async capabilities(): Promise<DeploymentCapabilities> {
       return observeOperation("operations.capabilities", () =>
