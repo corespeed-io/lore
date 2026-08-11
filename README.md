@@ -73,6 +73,49 @@ The example configuration uses `OLLAMA_KEEP_ALIVE=0`, so Ollama unloads the mode
 after each request instead of holding roughly 1.4 GB of unified memory. Set a
 duration such as `5m` when lower query latency matters more than idle RAM.
 
+### One-command native local service on Apple Silicon
+
+Lore can run entirely against a local Postgres installation, with the frontend
+and maintenance worker managed as background processes. The default search mode
+is the measured low-latency hybrid retrieval path. Install and start Postgres with
+pgvector and Ollama:
+
+```bash
+brew install postgresql@18 pgvector ollama
+brew services start postgresql@18
+ollama pull qwen3-embedding:0.6b
+bun run service:up
+```
+
+On first use, `service:up` creates an ignored `.env` with separate random request
+and maintenance passwords, creates the local `lore` database if necessary, runs
+migrations, and provisions narrow `lore_app` and `lore_maintenance` login roles.
+It then starts the native Next.js frontend and maintenance worker. Hybrid retrieval
+uses exact and relaxed lexical channels plus Qwen3-Embedding 0.6B dense retrieval,
+fused with reciprocal rank fusion at semantic distance `0.6`.
+
+Reranking remains available as an explicit deployment-level diagnostic mode. It
+adds the Qwen3-Reranker 0.6B Q8 server to the service and uses the measured
+`--parallel 2 --ctx-size 8192` profile with a 2,048-token physical batch:
+
+```bash
+brew install llama.cpp
+# Set LORE_LOCAL_SEARCH_MODE=rerank in .env, then restart the service.
+bun run service:restart
+```
+
+```bash
+bun run service:status
+bun run service:logs
+bun run service:restart
+bun run service:down
+```
+
+Postgres and Ollama remain system-managed and are deliberately left running by
+`service:down`. Lore stops only its frontend, worker, and any reranker that it
+started; an existing external llama-server is reused and left alone. Runtime state
+and logs live under the ignored `tmp/local-service/` directory.
+
 Self-host operators choose the deployment-wide provider and model. Lore v1 fixes
 the vector protocol at 1024 dimensions, so the database and every adapter share
 one exact storage contract. The default local recipe is:
