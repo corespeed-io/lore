@@ -126,7 +126,17 @@ been removed. Lore now has a native implementation:
   that question, runs every generated query under the same Actor/RLS transaction,
   fuses only visible results, and then optionally reranks them;
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
-  bindings target CoreSpeed Cloud on Cloudflare Workers.
+  bindings target CoreSpeed Cloud on Cloudflare Workers;
+- `scripts/local-service.mjs` owns the native Apple Silicon development loop exposed
+  by `bun run service:{up,down,restart,status,logs}`; keep its tests in
+  `bun run service:test` and CI. It may idempotently extend an existing `.env` only
+  when the complete native database block is absent, provisions distinct request and
+  maintenance Postgres roles, and gives each managed process only its own database
+  credential. The app and an optional managed llama.cpp reranker bind to
+  `127.0.0.1` regardless of `LORE_BIND_ADDRESS`; use Docker or a manual deployment
+  for network-reachable service. Keep native overrides under
+  `LORE_LOCAL_POSTGRES_*`, `LORE_LOCAL_RERANK_*`, `LORE_LOCAL_SEARCH_MODE`, and
+  `LORE_PORT`.
 
 Still incomplete: full Evaluation management UI. Workspace-scoped Agent creation,
 grant and credential lifecycle management, plus global rename/disable/delete
