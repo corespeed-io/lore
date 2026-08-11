@@ -1,21 +1,77 @@
-import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { runMigrationPreflight } from "./lib/migration-preflight.mjs";
 import {
-  BASELINE_MIGRATION_ID,
-  hasCompleteLegacyBaseline,
-  LEGACY_BASELINE_MIGRATIONS,
-} from "./migration-baseline.mjs";
+  adoptMigrationHistory,
+  MIGRATION_LOCK_ID,
+  migrationFiles,
+  recordDbmateChecksums,
+  runMigrationPreflight,
+} from "./lib/migration-preflight.mjs";
+import { DBMATE_MIGRATIONS_TABLE } from "./migration-baseline.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
 const migrationsDirectory = fileURLToPath(new URL("../db/migrations", import.meta.url));
-const client = new pg.Client({ connectionString: databaseUrl });
-const lockId = 1_280_263_749; // stable project-scoped advisory lock key
 
+async function executableDbmate() {
+  const executable = process.platform === "win32" ? "dbmate.cmd" : "dbmate";
+  const candidates = [
+    process.env.LORE_DBMATE_BINARY,
+    fileURLToPath(new URL(`../.worker/${executable}`, import.meta.url)),
+    fileURLToPath(new URL(`../node_modules/.bin/${executable}`, import.meta.url)),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next explicit installation location.
+    }
+  }
+  throw new Error("dbmate binary is unavailable; run bun install or build the self-host image");
+}
+
+function dbmateDatabaseUrl(value) {
+  if (process.env.LORE_DBMATE_DATABASE_URL) return process.env.LORE_DBMATE_DATABASE_URL;
+  const parsed = new URL(value);
+  if (
+    ["postgres:", "postgresql:"].includes(parsed.protocol) &&
+    !parsed.searchParams.has("sslmode") &&
+    ["", "localhost", "127.0.0.1", "::1", "postgres"].includes(parsed.hostname)
+  ) {
+    parsed.searchParams.set("sslmode", "disable");
+  }
+  return parsed.toString();
+}
+
+async function runDbmate() {
+  const binary = await executableDbmate();
+  const child = spawn(
+    binary,
+    [
+      "--migrations-dir",
+      migrationsDirectory,
+      "--migrations-table",
+      DBMATE_MIGRATIONS_TABLE,
+      "--no-dump-schema",
+      "migrate",
+    ],
+    {
+      stdio: "inherit",
+      env: { ...process.env, DATABASE_URL: dbmateDatabaseUrl(databaseUrl) },
+    },
+  );
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+}
+
+const client = new pg.Client({ connectionString: databaseUrl });
 await client.connect();
 try {
   const preflight = await runMigrationPreflight(client);
@@ -23,84 +79,39 @@ try {
     throw new Error(
       `Migration preflight failed: ${preflight.checks
         .filter((check) => !check.ok && !check.advisory)
-        .map((check) => check.check)
+        .map((check) => `${check.check}${check.detail ? ` (${check.detail})` : ""}`)
         .join(", ")}`,
     );
   }
-  await client.query("SELECT pg_advisory_lock($1)", [lockId]);
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      id text PRIMARY KEY,
-      checksum text NOT NULL,
-      applied_at timestamptz NOT NULL DEFAULT now()
-    )
-  `);
 
-  const migrationIds = (await readdir(migrationsDirectory))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  const migrations = await Promise.all(
-    migrationIds.map(async (id) => {
-      const sql = await readFile(new URL(`../db/migrations/${id}`, import.meta.url), "utf8");
-      return { id, sql, checksum: createHash("sha256").update(sql).digest("hex") };
-    }),
-  );
-
-  const baseline = migrations.find(({ id }) => id === BASELINE_MIGRATION_ID);
-  if (baseline) {
-    const applied = await client.query("SELECT id, checksum FROM schema_migrations");
-    const baselineApplied = applied.rows.some(({ id }) => id === BASELINE_MIGRATION_ID);
-
-    if (!baselineApplied && hasCompleteLegacyBaseline(applied.rows)) {
-      await client.query("BEGIN");
-      try {
-        // The original chain revoked PUBLIC function access before later functions
-        // were created. Finish that grant hardening while adopting the equivalent
-        // squashed schema so legacy and fresh databases converge on one baseline.
-        await client.query("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA lore FROM PUBLIC");
-        await client.query("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA lore TO lore_app");
-        await client.query("DELETE FROM schema_migrations WHERE id = ANY($1::text[])", [
-          [...LEGACY_BASELINE_MIGRATIONS.keys()],
-        ]);
-        await client.query("INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2)", [
-          baseline.id,
-          baseline.checksum,
-        ]);
-        await client.query("COMMIT");
-        console.log(`adopted ${baseline.id} from legacy migration history`);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      }
-    }
+  await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
+  const migrations = await migrationFiles();
+  const adoption = await adoptMigrationHistory(client, migrations);
+  if (adoption.adopted) {
+    console.log(`adopted ${adoption.source} migration history into dbmate without replaying DDL`);
   }
 
-  for (const { id, sql, checksum } of migrations) {
-    const applied = await client.query("SELECT checksum FROM schema_migrations WHERE id = $1", [
-      id,
-    ]);
-    if (applied.rows[0]) {
-      if (applied.rows[0].checksum !== checksum) {
-        throw new Error(`Applied migration ${id} has been modified`);
-      }
-      continue;
-    }
-
-    await client.query("BEGIN");
-    try {
-      await client.query(sql);
-      await client.query("INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2)", [
-        id,
-        checksum,
-      ]);
-      await client.query("COMMIT");
-      console.log(`applied ${id}`);
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    }
+  const result = await runDbmate();
+  // dbmate owns SQL parsing and application. Lore adds immutable-file checksums
+  // after every successfully recorded version so later deployments fail closed.
+  await recordDbmateChecksums(client, migrations);
+  if (result.code !== 0) {
+    throw new Error(
+      `dbmate exited ${result.signal ? `after signal ${result.signal}` : `with status ${result.code}`}`,
+    );
   }
+
+  const postflight = await runMigrationPreflight(client);
+  if (!postflight.ok) {
+    throw new Error(
+      `Migration postflight failed: ${postflight.checks
+        .filter((check) => !check.ok && !check.advisory)
+        .map((check) => `${check.check}${check.detail ? ` (${check.detail})` : ""}`)
+        .join(", ")}`,
+    );
+  }
+  console.log("dbmate migrations complete");
 } finally {
-  await client.query("SELECT pg_advisory_unlock($1)", [lockId]).catch(() => undefined);
+  await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_ID]).catch(() => undefined);
   await client.end();
 }

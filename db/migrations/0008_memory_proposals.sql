@@ -1,3 +1,5 @@
+-- migrate:up
+
 CREATE TYPE memory_proposal_kind AS ENUM ('create', 'update');
 CREATE TYPE memory_proposal_status AS ENUM ('pending', 'accepted', 'rejected');
 
@@ -559,3 +561,5 @@ BEGIN
   END IF;
 END
 $$;
+
+-- migrate:down

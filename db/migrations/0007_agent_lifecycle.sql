@@ -1,3 +1,5 @@
+-- migrate:up
+
 CREATE INDEX memories_created_by_agent_idx
   ON memories (created_by_agent_id)
   WHERE created_by_agent_id IS NOT NULL;
@@ -53,3 +55,5 @@ BEGIN
   END IF;
 END
 $$;
+
+-- migrate:down

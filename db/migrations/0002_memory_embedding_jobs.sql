@@ -1,3 +1,5 @@
+-- migrate:up
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'lore_maintenance') THEN
@@ -510,3 +512,5 @@ GRANT EXECUTE ON FUNCTION lore.enqueue_stale_memory_embedding_jobs(text, text, t
   TO lore_maintenance;
 GRANT EXECUTE ON FUNCTION lore.list_pending_memory_embedding_jobs(text, text, text, integer, integer)
   TO lore_maintenance;
+
+-- migrate:down

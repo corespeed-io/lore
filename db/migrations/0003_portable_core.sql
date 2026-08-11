@@ -1,3 +1,5 @@
+-- migrate:up
+
 CREATE TYPE embedding_generation_status AS ENUM (
   'building',
   'active',
@@ -1465,3 +1467,5 @@ COMMENT ON TABLE memory_events IS
   'Content-free transactional mutation outbox and bounded deletion tombstones.';
 COMMENT ON TABLE memory_chunk_embeddings IS
   'Generation-scoped vectors; incompatible spaces are never searched together.';
+
+-- migrate:down

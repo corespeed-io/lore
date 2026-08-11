@@ -1,37 +1,37 @@
-import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
-import { migrationHistoryStatus } from "../scripts/lib/migration-preflight.mjs";
-import { LEGACY_BASELINE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
+import { dbmateHistoryStatus } from "../scripts/lib/migration-preflight.mjs";
 
-const currentMigrations = [{ id: "0001_initial.sql", checksum: "current" }];
+const migrations = [
+  { version: "0001", checksum: "one" },
+  { version: "0002", checksum: "two" },
+  { version: "0003", checksum: "three" },
+];
 
-test("migration preflight permits the exact legacy history that migrate can adopt", () => {
-  const applied = [...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({ id, checksum }));
-  expect(migrationHistoryStatus(applied, currentMigrations)).toEqual({
-    missing: [],
-    modified: [],
+test("dbmate preflight accepts an exact checksum-protected prefix", () => {
+  expect(
+    dbmateHistoryStatus(
+      [
+        { version: "0001", checksum: "one" },
+        { version: "0002", checksum: "two" },
+      ],
+      migrations,
+    ),
+  ).toEqual({ missing: [], modified: [], unknown: [] });
+});
+
+test("dbmate preflight rejects missing or modified checksums", () => {
+  const applied = [
+    { version: "0001", checksum: null },
+    { version: "0003", checksum: "modified" },
+  ];
+  expect(dbmateHistoryStatus(applied, migrations)).toEqual({
+    missing: ["0002"],
+    modified: applied,
     unknown: [],
   });
 });
 
-test("migration preflight still rejects extra history beside an adoptable legacy baseline", () => {
-  const applied = [
-    ...[...LEGACY_BASELINE_MIGRATIONS].map(([id, checksum]) => ({ id, checksum })),
-    {
-      id: "0099_unknown.sql",
-      checksum: createHash("sha256").update("unknown").digest("hex"),
-    },
-  ];
-  expect(migrationHistoryStatus(applied, currentMigrations).unknown).toEqual([applied.at(-1)]);
-});
-
-test("migration preflight rejects gaps before the highest applied migration", () => {
-  const migrations = [
-    { id: "0001_initial.sql", checksum: "one" },
-    { id: "0002_jobs.sql", checksum: "two" },
-    { id: "0003_portable_core.sql", checksum: "three" },
-  ];
-  const applied = [migrations[0], migrations[2]];
-
-  expect(migrationHistoryStatus(applied, migrations).missing).toEqual([migrations[1]]);
+test("dbmate preflight rejects unknown versions", () => {
+  const unknown = { version: "0099", checksum: "unknown" };
+  expect(dbmateHistoryStatus([unknown], migrations).unknown).toEqual([unknown]);
 });

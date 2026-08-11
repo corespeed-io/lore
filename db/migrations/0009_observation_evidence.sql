@@ -1,3 +1,5 @@
+-- migrate:up
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -400,3 +402,5 @@ BEGIN
   END IF;
 END
 $$;
+
+-- migrate:down

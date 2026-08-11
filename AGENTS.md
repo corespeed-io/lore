@@ -27,6 +27,13 @@ been removed. Lore now has a native implementation:
   a content-free event outbox, Workspace portability, embedding generations, Agent
   lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
   evidence with RLS;
+- dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
+  not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
+  transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
+  dbmate with a PostgreSQL advisory lock, stores SHA-256 values beside dbmate's
+  versions in `lore_schema_migrations`, and can adopt the exact earlier SQL or
+  Drizzle ledger without replaying DDL or changing tenant data. Keep migration
+  `down` sections empty: production recovery is forward-only;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
@@ -632,6 +639,8 @@ The existing application uses:
 - Next.js 16 (App Router), React 19, Bun 1.3.14+ for package management,
   Node 24 LTS for self-hosted execution, TypeScript 7, and Python 3.12+ for the
   generated Python SDK and source verification;
+- dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
+  PostgreSQL transactions; Lore has no runtime ORM;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
@@ -645,7 +654,7 @@ These commands remain the current verification loop:
 
 ```bash
 bun run dev        # localhost:3000
-bun run db:migrate # apply checksum-protected SQL migrations
+bun run db:migrate # preflight/adopt, then apply checksum-protected dbmate migrations
 bun run db:preflight # validate server/schema/history before migration
 bun run db:bootstrap # migrate + provision separate request/maintenance logins
 bun run db:backup # create an operator-owned PostgreSQL custom-format backup

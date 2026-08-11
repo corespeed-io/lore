@@ -31,8 +31,9 @@
   ],
   "scripts": {
     "dev": "next dev",
-    "build": "next build && bun run build:maintenance && bun run build:packages",
+    "build": "next build && bun run build:maintenance && bun run build:dbmate && bun run build:packages",
     "build:maintenance": "bun build src/worker/node-maintenance.ts --target=node --outfile=.worker/maintenance-worker.js --external pg",
+    "build:dbmate": "node scripts/build-dbmate.mjs",
     "build:packages": "bun run sdk:check && bun run --cwd packages/typescript-sdk build && bun run --cwd packages/cli build && bun run --cwd packages/mcp build",
     "packages:smoke": "bun run sdk:check && node scripts/package-smoke.mjs",
     "smoke:memory-core": "bun scripts/smoke-memory-core.ts",
@@ -106,6 +107,7 @@
     "@types/pg": "^8.20.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "dbmate": "2.35.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "wrangler": "^4.119.0"

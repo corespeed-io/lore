@@ -1,3 +1,5 @@
+-- migrate:up
+
 ALTER TABLE memory_chunks
   ADD COLUMN search_vector_english tsvector
   GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
@@ -15,3 +17,5 @@ BEGIN
   END IF;
 END
 $$;
+
+-- migrate:down

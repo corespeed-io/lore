@@ -1,3 +1,5 @@
+-- migrate:up
+
 CREATE FUNCTION lore.extract_entity_aliases(input text)
 RETURNS text[]
 LANGUAGE sql
@@ -106,3 +108,5 @@ BEGIN
   END IF;
 END
 $$;
+
+-- migrate:down

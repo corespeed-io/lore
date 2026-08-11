@@ -16,9 +16,9 @@ docker compose up --build
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The Compose stack runs every
-SQL migration, provisions separate non-owner request and maintenance logins, and
-starts both Lore and its embedding worker under narrow RLS roles. The example binds
-to `127.0.0.1` and opts into
+plain-SQL migration through dbmate, provisions separate non-owner request and
+maintenance logins, and starts both Lore and its embedding worker under narrow RLS
+roles. The example binds to `127.0.0.1` and opts into
 unauthenticated local access; never expose `AUTH_MODE=none` or `ALLOW_INSECURE=1`
 to the internet.
 
@@ -585,11 +585,12 @@ configuration and command surface.
 
 ## Operations and portability
 
-`bun run db:preflight` validates migration history and application/schema
-compatibility. `bun run db:backup`, `db:restore`, and `db:pitr:check` cover the
-operator PostgreSQL plane; Workspace export/import is a separate RLS-scoped logical
-plane. See [`docs/operations.md`](operations.md) for backup ownership,
-restore drills, generation activation, degraded readiness, and telemetry privacy.
+`bun run db:preflight` validates dbmate history, Lore's stored migration checksums,
+and application/schema compatibility. `bun run db:backup`, `db:restore`, and
+`db:pitr:check` cover the operator PostgreSQL plane; Workspace export/import is a
+separate RLS-scoped logical plane. See [`docs/operations.md`](operations.md) for
+backup ownership, restore drills, generation activation, degraded readiness, and
+telemetry privacy.
 
 ## CoreSpeed Cloud / Cloudflare
 

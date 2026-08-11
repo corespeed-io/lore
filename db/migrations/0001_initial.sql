@@ -1,3 +1,5 @@
+-- migrate:up
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE SCHEMA lore;
@@ -917,3 +919,5 @@ GRANT SELECT (id, agent_id, secret_prefix, created_at, last_used_at, revoked_at)
   ON agent_credentials TO lore_app;
 GRANT SELECT (id, user_id, provider, subject, email, created_at, updated_at)
   ON identities TO lore_app;
+
+-- migrate:down

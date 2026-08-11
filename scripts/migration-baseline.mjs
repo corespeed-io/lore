@@ -1,5 +1,38 @@
-export const BASELINE_MIGRATION_ID = "0001_initial.sql";
+export const DBMATE_MIGRATIONS_TABLE = "lore_schema_migrations";
 
+/**
+ * Checksums written by Lore's pre-dbmate runner. The SQL remains equivalent after
+ * adding dbmate's comment directives, so an exact prefix can be adopted without
+ * replaying DDL or touching tenant data.
+ */
+export const PRE_DBMATE_MIGRATIONS = new Map([
+  ["0001_initial.sql", "79e160c1cd812f973baacb1d4bb10d9f10ee495fdcb73a64f0581cb0f14d5a40"],
+  [
+    "0002_memory_embedding_jobs.sql",
+    "e1075a30e35e5d18f3c28c12f8366b42bf62481a0dd196995b23794ee1a038b5",
+  ],
+  ["0003_portable_core.sql", "4ba5ae39c9771fce5d2f16371974c140160e68e7a89e190f751153bc7651704b"],
+  [
+    "0004_english_lexical_search.sql",
+    "edb1be778f9a19bbe4d0bba96360f344d2cdbcb19d4face56ef684aa4ae5f7f",
+  ],
+  [
+    "0005_memory_metadata_search.sql",
+    "1e4efdc91f03e7922bfd16a9d6fbec0f6e49f80cf9b9d36a2ec66d64fa145d89",
+  ],
+  [
+    "0006_memory_chunk_entity_aliases.sql",
+    "66821ec21a99a91c6e6f89ede1985c737216d567b38dc70c5edcc45e827bfdf1",
+  ],
+  ["0007_agent_lifecycle.sql", "bd677a854281d84f55115b3f4b2fdf9d5d6a62f0d3f1d7266e870b83c4f62cec"],
+  ["0008_memory_proposals.sql", "85f72f4b125a525369bbd274f3ee023d0688b8a36ecfa1947d53718280155036"],
+  [
+    "0009_observation_evidence.sql",
+    "706f27c235b8040a406a49174c84cfc7986d22e36d3a751641e44528b825c627",
+  ],
+]);
+
+/** The original 13-file history already represented by 0001_initial.sql. */
 export const LEGACY_BASELINE_MIGRATIONS = new Map([
   ["0001_memory.sql", "cad2fd73c45112ac5363d3d623d05247f679756002dd4dc7fae9c8a4aed5a396"],
   ["0002_agents.sql", "5d308521092f29ec3d63c011de7b4928175b6fdb5f9a2e28e7a632504b9b0283"],
@@ -31,23 +64,72 @@ export const LEGACY_BASELINE_MIGRATIONS = new Map([
   ],
 ]);
 
-export function hasCompleteLegacyBaseline(appliedMigrations) {
-  const legacyRows = appliedMigrations.filter(({ id }) => LEGACY_BASELINE_MIGRATIONS.has(id));
-  if (legacyRows.length === 0) return false;
+export const DRIZZLE_CUTOVER = {
+  hash: "5ed7330b7da0b598120e1fabbda090c997ef362d91829cb63bc68e7eae027f1d",
+  createdAt: 1_786_471_877_999,
+  schemaRevision: 9,
+};
 
-  if (legacyRows.length !== LEGACY_BASELINE_MIGRATIONS.size) {
-    throw new Error(
-      `Cannot adopt squashed migration baseline: found ${legacyRows.length} of ${LEGACY_BASELINE_MIGRATIONS.size} legacy migrations`,
-    );
+function exactHistory(rows, expected, label) {
+  if (rows.length !== expected.size) {
+    throw new Error(`Cannot adopt ${label}: found ${rows.length} of ${expected.size} migrations`);
   }
-
-  for (const { id, checksum } of legacyRows) {
-    if (LEGACY_BASELINE_MIGRATIONS.get(id) !== checksum) {
-      throw new Error(
-        `Cannot adopt squashed migration baseline: legacy migration ${id} was modified`,
-      );
+  for (const { id, checksum } of rows) {
+    const expectedChecksum = expected.get(id);
+    if (!expectedChecksum) throw new Error(`Cannot adopt ${label}: unknown migration ${id}`);
+    if (expectedChecksum !== checksum) {
+      throw new Error(`Cannot adopt ${label}: migration ${id} was modified`);
     }
   }
+}
 
+export function hasCompleteLegacyBaseline(rows) {
+  if (!rows.some(({ id }) => LEGACY_BASELINE_MIGRATIONS.has(id))) return false;
+  exactHistory(rows, LEGACY_BASELINE_MIGRATIONS, "legacy baseline");
   return true;
+}
+
+export function preDbmateAdoption(rows) {
+  if (rows.length === 0) return { kind: "empty", versions: [] };
+  if (rows.some(({ id }) => LEGACY_BASELINE_MIGRATIONS.has(id))) {
+    exactHistory(rows, LEGACY_BASELINE_MIGRATIONS, "legacy baseline");
+    return { kind: "legacy-baseline", versions: ["0001"] };
+  }
+
+  const expectedEntries = [...PRE_DBMATE_MIGRATIONS];
+  const applied = new Set();
+  for (const { id, checksum } of rows) {
+    const expectedChecksum = PRE_DBMATE_MIGRATIONS.get(id);
+    if (!expectedChecksum)
+      throw new Error(`Cannot adopt pre-dbmate history: unknown migration ${id}`);
+    if (expectedChecksum !== checksum) {
+      throw new Error(`Cannot adopt pre-dbmate history: migration ${id} was modified`);
+    }
+    applied.add(id);
+  }
+  const highestApplied = expectedEntries.reduce(
+    (highest, [id], index) => (applied.has(id) ? index : highest),
+    -1,
+  );
+  const missing = expectedEntries
+    .slice(0, highestApplied + 1)
+    .map(([id]) => id)
+    .filter((id) => !applied.has(id));
+  if (missing.length > 0) {
+    throw new Error(`Cannot adopt pre-dbmate history: missing migration ${missing.join(", ")}`);
+  }
+  return {
+    kind: "pre-dbmate",
+    versions: expectedEntries.slice(0, highestApplied + 1).map(([id]) => /^([0-9]+)/.exec(id)?.[1]),
+  };
+}
+
+export function verifyDrizzleCutover(rows) {
+  if (
+    rows.length !== 1 ||
+    rows[0]?.hash !== DRIZZLE_CUTOVER.hash ||
+    Number(rows[0]?.created_at) !== DRIZZLE_CUTOVER.createdAt
+  ) {
+    throw new Error("Cannot adopt Drizzle history: expected the exact Lore cutover baseline");
+  }
 }
