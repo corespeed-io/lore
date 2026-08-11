@@ -75,6 +75,8 @@ CREATE TABLE memory_proposal_observation_evidence (
 
 CREATE INDEX episodes_owner_created_idx
   ON episodes (workspace_id, owner_user_id, created_at DESC, id);
+CREATE INDEX episodes_workspace_created_idx
+  ON episodes (workspace_id, created_at DESC, id DESC);
 CREATE INDEX observations_episode_idx
   ON observations (workspace_id, episode_id, ordinal);
 CREATE INDEX memory_proposal_observation_evidence_observation_idx
@@ -103,6 +105,7 @@ DECLARE
   observation_metadata jsonb;
   observation_timestamp timestamptz;
   total_characters bigint;
+  total_metadata_characters bigint;
 BEGIN
   IF NOT lore.can_write_memory(target_workspace_id, target_owner_user_id)
     OR target_actor_kind IS DISTINCT FROM (CASE
@@ -123,11 +126,17 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  SELECT sum(length(observation.value->>'content'))
-  INTO total_characters
+  SELECT
+    sum(length(observation.value->>'content')),
+    sum(length((observation.value->'metadata')::text))
+  INTO total_characters, total_metadata_characters
   FROM jsonb_array_elements(target_observations) observation(value);
   IF total_characters IS NULL OR total_characters > 1000000 THEN
     RAISE EXCEPTION 'Episode observation content exceeds its bound'
+      USING ERRCODE = '22023';
+  END IF;
+  IF total_metadata_characters IS NULL OR total_metadata_characters > 1000000 THEN
+    RAISE EXCEPTION 'Episode observation metadata exceeds its bound'
       USING ERRCODE = '22023';
   END IF;
 
@@ -336,6 +345,7 @@ AS $$
       'memoryProposalRetentionSeconds', 2592000,
       'episodeObservations', 100,
       'episodeContentCharacters', 1000000,
+      'episodeMetadataCharacters', 1000000,
       'observationContentCharacters', 100000,
       'observationBatchRead', 50
     ),

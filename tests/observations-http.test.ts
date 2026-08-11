@@ -200,6 +200,14 @@ test("Episode HTTP input is bounded and returns stable 400 responses", async () 
           { kind: "message", content: "valid content", metadata: { invalid: "\ud800" } },
         ],
       },
+      {
+        kind: "conversation",
+        observations: Array.from({ length: 11 }, () => ({
+          kind: "message",
+          content: "valid content",
+          metadata: { payload: "m".repeat(99_000) },
+        })),
+      },
     ].map((body) =>
       episodes.POST(
         new Request("http://lore.local/api/v1/episodes", {
@@ -211,7 +219,7 @@ test("Episode HTTP input is bounded and returns stable 400 responses", async () 
     ),
   );
   expect(invalidResponses.map((invalidResponse) => invalidResponse.status)).toEqual([
-    400, 400, 400,
+    400, 400, 400, 400,
   ]);
   for (const invalidResponse of invalidResponses) {
     await expect(invalidResponse.json()).resolves.toMatchObject({ code: "invalid_request" });

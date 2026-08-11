@@ -182,6 +182,24 @@ test("Observation content remains durable across Portable Core retention purges"
   await testContext.close();
 });
 
+test("An Episode has an aggregate metadata budget", async () => {
+  const testContext = await createMemoryTestContext();
+  const observations = createObservationModule(testContext.database);
+
+  await expect(
+    observations.record(testContext.alice, {
+      kind: "event",
+      observations: Array.from({ length: 11 }, () => ({
+        kind: "event" as const,
+        content: "Bound metadata across the Episode.",
+        metadata: { payload: "m".repeat(99_000) },
+      })),
+    }),
+  ).rejects.toThrow("Episode metadata may contain at most 1000000 characters");
+
+  await testContext.close();
+});
+
 test("Episode listing remains scoped when one owner belongs to two Workspaces", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);

@@ -436,6 +436,17 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
               path: ["observations"],
             });
           }
+          const metadataCharacters = input.observations.reduce(
+            (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
+            0,
+          );
+          if (metadataCharacters > 1_000_000) {
+            context.addIssue({
+              code: "custom",
+              message: "Episode metadata exceeds 1000000 characters",
+              path: ["observations"],
+            });
+          }
         }),
       outputSchema: z.object({ episode: episodeSubmissionSchema }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },

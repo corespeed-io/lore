@@ -6,6 +6,7 @@ import type { MemoryScope } from "./memory";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
+export const MAX_EPISODE_METADATA_CHARACTERS = 1_000_000;
 export const MAX_OBSERVATION_CONTENT_CHARACTERS = 100_000;
 export const MAX_OBSERVATION_BATCH_READ = 50;
 
@@ -197,6 +198,7 @@ function normalizedEpisode(input: RecordEpisode): {
   }
   const recordedAt = new Date().toISOString();
   let totalCharacters = 0;
+  let totalMetadataCharacters = 0;
   const observations = input.observations.map((observation) => {
     if (
       typeof observation.content !== "string" ||
@@ -208,6 +210,7 @@ function normalizedEpisode(input: RecordEpisode): {
       );
     }
     totalCharacters += observation.content.length;
+    totalMetadataCharacters += JSON.stringify(observation.metadata ?? {}).length;
     return {
       kind: observation.kind,
       content: observation.content,
@@ -218,6 +221,11 @@ function normalizedEpisode(input: RecordEpisode): {
   if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
     throw new TypeError(
       `Episode content may contain at most ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
+    );
+  }
+  if (totalMetadataCharacters > MAX_EPISODE_METADATA_CHARACTERS) {
+    throw new TypeError(
+      `Episode metadata may contain at most ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
     );
   }
   const timestamps = observations.map((observation) => Date.parse(observation.observedAt));

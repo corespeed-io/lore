@@ -27,6 +27,7 @@ export interface DeploymentCapabilities {
     memoryProposalRetentionSeconds: number;
     episodeObservations: number;
     episodeContentCharacters: number;
+    episodeMetadataCharacters: number;
     observationContentCharacters: number;
     observationBatchRead: number;
   };

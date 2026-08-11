@@ -22,6 +22,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
                 memoryProposalPending: { const: number };
                 episodeObservations: { const: number };
                 episodeContentCharacters: { const: number };
+                episodeMetadataCharacters: { const: number };
                 observationContentCharacters: { const: number };
                 observationBatchRead: { const: number };
               };
@@ -86,6 +87,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.paths["/api/v1/workspaces/export"].get.responses).toHaveProperty("409");
   expect(document.components.schemas.Capabilities.properties.limits.properties).toEqual({
     episodeContentCharacters: { const: 1_000_000 },
+    episodeMetadataCharacters: { const: 1_000_000 },
     episodeObservations: { const: 100 },
     memoryProposalEvidence: { const: 50 },
     memoryProposalList: { const: 100 },

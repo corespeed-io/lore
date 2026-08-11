@@ -431,6 +431,8 @@ export interface components {
                 /** @constant */
                 readonly episodeContentCharacters: 1000000;
                 /** @constant */
+                readonly episodeMetadataCharacters: 1000000;
+                /** @constant */
                 readonly episodeObservations: 100;
                 /** @constant */
                 readonly memoryProposalEvidence: 50;

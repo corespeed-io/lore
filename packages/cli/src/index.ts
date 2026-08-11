@@ -315,7 +315,7 @@ export async function runLoreCli(
       output(
         io,
         await workspace.recordEpisode(
-          episodeInput(await stdinValue(io, 2_000_000, "Episode JSON")),
+          episodeInput(await stdinValue(io, 2_500_000, "Episode JSON")),
           { idempotencyKey: parsed.values["idempotency-key"] },
         ),
         pretty,

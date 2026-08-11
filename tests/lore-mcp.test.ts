@@ -207,6 +207,26 @@ describe("Lore external MCP adapter", () => {
     expect(JSON.stringify(result.structuredContent)).not.toContain(WORKSPACE_ID);
   });
 
+  test("rejects an Episode whose aggregate metadata exceeds the tool budget", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+
+    const result = await client.callTool({
+      name: "lore_observe",
+      arguments: {
+        kind: "event",
+        observations: Array.from({ length: 11 }, () => ({
+          kind: "event",
+          content: "Bound metadata.",
+          metadata: { payload: "m".repeat(99_000) },
+        })),
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(memories.recordEpisode).not.toHaveBeenCalled();
+  });
+
   test("calls Lore through the injected deep client and removes tenant identity fields", async () => {
     const memories = fakeMemories();
     const client = await connect(memories);

@@ -33,6 +33,7 @@ import {
   createObservationModule,
   type EpisodeKind,
   MAX_EPISODE_CONTENT_CHARACTERS,
+  MAX_EPISODE_METADATA_CHARACTERS,
   MAX_EPISODE_OBSERVATIONS,
   MAX_OBSERVATION_BATCH_READ,
   MAX_OBSERVATION_CONTENT_CHARACTERS,
@@ -331,6 +332,15 @@ function episodeObservations(value: unknown): RecordObservation[] {
   if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
     throw new BadRequestError(
       `Episode content exceeds ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
+    );
+  }
+  const totalMetadataCharacters = observations.reduce(
+    (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
+    0,
+  );
+  if (totalMetadataCharacters > MAX_EPISODE_METADATA_CHARACTERS) {
+    throw new BadRequestError(
+      `Episode metadata exceeds ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
     );
   }
   return observations;
