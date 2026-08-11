@@ -41,6 +41,7 @@ jobs:
       - run: bun run lint
       - run: bun run design:check
       - run: bun run typecheck
+      - run: bun run service:test
       - run: bun run test
       - run: bun run smoke:memory-core
         env:

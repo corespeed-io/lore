@@ -70,7 +70,9 @@ ollama pull qwen3-embedding:0.6b
 ```
 
 The example configuration is intentionally local-only. Never expose
-`AUTH_MODE=none` or `ALLOW_INSECURE=1` to the internet.
+`AUTH_MODE=none` or `ALLOW_INSECURE=1` to the internet. Apple Silicon users can
+also run the frontend, worker, Ollama, and a local Postgres installation through
+the [native one-command service](docs/reference.md#native-one-command-service-on-apple-silicon).
 
 ## What Lore gives you
 

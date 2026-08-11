@@ -406,6 +406,59 @@ while the Cloudflare artifact executes on Workerd.
 
 ## Local development
 
+### Native one-command service on Apple Silicon
+
+Lore can run entirely against a local Postgres installation, with the frontend
+and maintenance worker managed as background processes. The default search mode
+is the low-latency Hybrid path: exact and relaxed lexical channels plus
+Qwen3-Embedding 0.6B dense retrieval, fused with reciprocal rank fusion. Retrieval
+settings continue to come from `.env`; the repository default semantic distance
+is `0.5`.
+
+```bash
+brew install postgresql@18 pgvector ollama
+brew services start postgresql@18
+ollama pull qwen3-embedding:0.6b
+bun run service:up
+```
+
+On first use, `service:up` creates an ignored `.env` with separate random request
+and maintenance passwords, creates the local `lore` database if necessary, runs
+migrations, and provisions narrow `lore_app` and `lore_maintenance` login roles.
+If `.env` already exists without native database settings, `service:up` extends it
+idempotently; a partial native configuration fails with the exact missing keys.
+It then starts the loopback-only Next.js development server and maintenance worker.
+
+Reranking remains available as an explicit deployment-level diagnostic mode. To
+add a Qwen3-Reranker 0.6B Q8 llama.cpp server, install llama.cpp, set
+`LORE_LOCAL_SEARCH_MODE=rerank` in `.env`, and restart:
+
+```bash
+brew install llama.cpp
+bun run service:restart
+```
+
+The measured reranker profile uses `--parallel 2 --ctx-size 8192` and a
+2,048-token physical batch. Manage and inspect the service with:
+
+```bash
+bun run service:status
+bun run service:logs
+bun run service:restart
+bun run service:down
+```
+
+Postgres and Ollama remain system-managed and are deliberately left running by
+`service:down`. Lore stops only its frontend, worker, and any reranker that it
+started; an existing external llama-server is reused and left alone. Runtime state
+and mode-0600 logs live under the ignored `tmp/local-service/` directory. The
+service intentionally ignores `LORE_BIND_ADDRESS` and binds the app and managed
+reranker to `127.0.0.1`; use the Docker or manual deployment profiles for anything
+reachable beyond the local machine. Native process, port, database, and reranker
+overrides use `LORE_LOCAL_POSTGRES_*`, `LORE_LOCAL_RERANK_*`, and `LORE_PORT`.
+
+### Manual process setup
+
 Start Postgres/pgvector, then bootstrap the schema and runtime login with an admin
 connection:
 
