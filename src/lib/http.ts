@@ -41,7 +41,7 @@ import {
   type ObservationKind,
   type RecordObservation,
 } from "./observations";
-import { createOperationsModule } from "./operations";
+import { createOperationsModule, type OperationsOptions } from "./operations";
 import {
   createPortabilityModule,
   type ImportWorkspaceArchive,
@@ -550,6 +550,19 @@ export function createCapabilitiesHandlers(
       } catch (error) {
         return errorResponse(error);
       }
+    },
+  };
+}
+
+export function createReadinessHandlers(database: PostgresDatabase, options: OperationsOptions) {
+  const operations = createOperationsModule(database, options);
+  return {
+    async GET(): Promise<Response> {
+      const report = await operations.readiness();
+      return Response.json(report, {
+        status: report.status === "unready" ? 503 : 200,
+        headers: { "cache-control": "no-store" },
+      });
     },
   };
 }
