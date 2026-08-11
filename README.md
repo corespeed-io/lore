@@ -111,6 +111,8 @@ See the documentation before deploying beyond localhost:
 
 ## Development
 
+Full source verification requires Bun 1.3.14+, Node 24 LTS, and Python 3.12+.
+
 ```bash
 bun install --frozen-lockfile
 bun run typecheck
