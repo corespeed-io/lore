@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -24,6 +25,21 @@ const maintenanceWorkerPath = join(repositoryRoot, ".worker", "maintenance-worke
 
 const defaultRerankerModel = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF:Q8_0";
 const managedProcessNames = ["app", "maintenance", "reranker"];
+const nativeDatabaseSettings = [
+  "DATABASE_URL",
+  "LORE_LOCAL_POSTGRES_ADMIN_URL",
+  "LORE_LOCAL_POSTGRES_DATABASE",
+  "LORE_MAINTENANCE_DATABASE_URL",
+  "LORE_MAINTENANCE_PASSWORD",
+  "LORE_MAINTENANCE_ROLE",
+  "LORE_RUNTIME_PASSWORD",
+  "LORE_RUNTIME_ROLE",
+];
+const bootstrapSecretSettings = [
+  "LORE_DB_ADMIN_PASSWORD",
+  "LORE_DB_MAINTENANCE_PASSWORD",
+  "LORE_DB_RUNTIME_PASSWORD",
+];
 
 function configuredValue(environment, name, fallback) {
   const value = environment[name]?.trim();
@@ -53,17 +69,63 @@ function searchMode(environment) {
   return mode;
 }
 
-export function targetDatabaseUrl(adminUrl, databaseName) {
-  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(databaseName)) {
-    throw new Error("LORE_LOCAL_POSTGRES_DATABASE must be a safe lowercase Postgres identifier");
+function safePostgresIdentifier(value, name) {
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(value)) {
+    throw new Error(`${name} must be a safe lowercase Postgres identifier`);
   }
+  return value;
+}
+
+function assertDatabaseUrlMatches(urlString, name, databaseName, role) {
+  let url;
+  try {
+    url = new URL(urlString);
+  } catch {
+    throw new Error(`${name} must be a valid PostgreSQL URL`);
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error(`${name} must use postgres:// or postgresql://`);
+  }
+  const configuredDatabase = decodeURIComponent(url.pathname.replace(/^\//, ""));
+  const configuredRole = decodeURIComponent(url.username);
+  if (configuredDatabase !== databaseName || configuredRole !== role) {
+    throw new Error(`${name} must connect to database ${databaseName} as role ${role}`);
+  }
+}
+
+function assertRerankerConfiguration(environment, configuration) {
+  const provider = environment.LORE_RERANK_PROVIDER?.trim().toLowerCase();
+  const baseUrl = environment.LORE_RERANK_BASE_URL?.trim();
+  if (provider && (configuration.searchMode !== "rerank" || provider !== "llamacpp")) {
+    throw new Error(
+      "LORE_RERANK_PROVIDER conflicts with LORE_LOCAL_SEARCH_MODE; unset it for hybrid or use llamacpp with rerank",
+    );
+  }
+  if (baseUrl) {
+    const expected = `http://127.0.0.1:${configuration.reranker.port}/`;
+    let normalized;
+    try {
+      normalized = new URL(baseUrl).toString();
+    } catch {
+      throw new Error("LORE_RERANK_BASE_URL must be a valid URL");
+    }
+    if (configuration.searchMode !== "rerank" || normalized !== expected) {
+      throw new Error(
+        `LORE_RERANK_BASE_URL conflicts with the local service; unset it or use ${expected}`,
+      );
+    }
+  }
+}
+
+export function targetDatabaseUrl(adminUrl, databaseName) {
+  safePostgresIdentifier(databaseName, "LORE_LOCAL_POSTGRES_DATABASE");
   const url = new URL(adminUrl);
   url.pathname = `/${databaseName}`;
   return url.toString();
 }
 
 export function localServiceConfiguration(environment = process.env) {
-  return {
+  const configuration = {
     appPort: integerSetting(environment, "LORE_PORT", 3000, 1, 65535),
     searchMode: searchMode(environment),
     database: {
@@ -72,15 +134,20 @@ export function localServiceConfiguration(environment = process.env) {
         "LORE_LOCAL_POSTGRES_ADMIN_URL",
         "postgresql:///postgres",
       ),
-      maintenanceRole: configuredValue(
-        environment,
+      maintenanceRole: safePostgresIdentifier(
+        configuredValue(environment, "LORE_MAINTENANCE_ROLE", "lore_local_maintenance_runtime"),
         "LORE_MAINTENANCE_ROLE",
-        "lore_local_maintenance_runtime",
       ),
       maintenanceUrl: requiredValue(environment, "LORE_MAINTENANCE_DATABASE_URL"),
       maintenancePassword: requiredValue(environment, "LORE_MAINTENANCE_PASSWORD"),
-      name: configuredValue(environment, "LORE_LOCAL_POSTGRES_DATABASE", "lore"),
-      requestRole: configuredValue(environment, "LORE_RUNTIME_ROLE", "lore_local_runtime"),
+      name: safePostgresIdentifier(
+        configuredValue(environment, "LORE_LOCAL_POSTGRES_DATABASE", "lore"),
+        "LORE_LOCAL_POSTGRES_DATABASE",
+      ),
+      requestRole: safePostgresIdentifier(
+        configuredValue(environment, "LORE_RUNTIME_ROLE", "lore_local_runtime"),
+        "LORE_RUNTIME_ROLE",
+      ),
       requestUrl: requiredValue(environment, "DATABASE_URL"),
       requestPassword: requiredValue(environment, "LORE_RUNTIME_PASSWORD"),
     },
@@ -106,6 +173,20 @@ export function localServiceConfiguration(environment = process.env) {
       ),
     },
   };
+  assertDatabaseUrlMatches(
+    configuration.database.requestUrl,
+    "DATABASE_URL",
+    configuration.database.name,
+    configuration.database.requestRole,
+  );
+  assertDatabaseUrlMatches(
+    configuration.database.maintenanceUrl,
+    "LORE_MAINTENANCE_DATABASE_URL",
+    configuration.database.name,
+    configuration.database.maintenanceRole,
+  );
+  assertRerankerConfiguration(environment, configuration);
+  return configuration;
 }
 
 export function buildRerankerArguments(configuration) {
@@ -130,12 +211,11 @@ export function buildRerankerArguments(configuration) {
 }
 
 export function buildRuntimeEnvironment(environment, configuration) {
-  return {
+  const runtime = {
     ...environment,
     DATABASE_URL: configuration.database.requestUrl,
-    LORE_MAINTENANCE_DATABASE_URL: configuration.database.maintenanceUrl,
     LORE_RERANK_BASE_URL: `http://127.0.0.1:${configuration.reranker.port}`,
-    LORE_RERANK_CANDIDATE_LIMIT: configuredValue(environment, "LORE_RERANK_CANDIDATE_LIMIT", "10"),
+    LORE_RERANK_CANDIDATE_LIMIT: configuredValue(environment, "LORE_RERANK_CANDIDATE_LIMIT", "20"),
     LORE_RERANK_DIVERSITY_LAMBDA: configuredValue(environment, "LORE_RERANK_DIVERSITY_LAMBDA", "1"),
     LORE_RERANK_MIN_SCORE: configuredValue(environment, "LORE_RERANK_MIN_SCORE", "0.01"),
     LORE_RERANK_MODEL: configuration.reranker.model,
@@ -145,34 +225,101 @@ export function buildRuntimeEnvironment(environment, configuration) {
     LORE_SEMANTIC_DISTANCE_THRESHOLD: configuredValue(
       environment,
       "LORE_SEMANTIC_DISTANCE_THRESHOLD",
-      "0.6",
+      "0.5",
     ),
     PORT: String(configuration.appPort),
   };
+  for (const name of [
+    ...bootstrapSecretSettings,
+    "LORE_LOCAL_POSTGRES_ADMIN_URL",
+    "LORE_MAINTENANCE_DATABASE_URL",
+    "LORE_MAINTENANCE_PASSWORD",
+    "LORE_RUNTIME_PASSWORD",
+  ]) {
+    delete runtime[name];
+  }
+  return runtime;
+}
+
+export function buildMaintenanceEnvironment(environment, configuration) {
+  const runtime = {
+    ...environment,
+    LORE_MAINTENANCE_DATABASE_URL: configuration.database.maintenanceUrl,
+  };
+  for (const name of [
+    ...bootstrapSecretSettings,
+    "DATABASE_URL",
+    "LORE_LOCAL_POSTGRES_ADMIN_URL",
+    "LORE_MAINTENANCE_PASSWORD",
+    "LORE_RUNTIME_PASSWORD",
+  ]) {
+    delete runtime[name];
+  }
+  return runtime;
+}
+
+function buildRerankerEnvironment(environment) {
+  const runtime = { ...environment };
+  for (const name of [
+    ...bootstrapSecretSettings,
+    "DATABASE_URL",
+    "LORE_LOCAL_POSTGRES_ADMIN_URL",
+    "LORE_MAINTENANCE_DATABASE_URL",
+    "LORE_MAINTENANCE_PASSWORD",
+    "LORE_RUNTIME_PASSWORD",
+  ]) {
+    delete runtime[name];
+  }
+  return runtime;
+}
+
+function generatedCredentials(secret) {
+  return {
+    adminPassword: secret(),
+    requestPassword: secret(),
+    maintenancePassword: secret(),
+  };
+}
+
+function nativeSettings(credentials) {
+  return new Map([
+    ["LORE_LOCAL_SEARCH_MODE", "hybrid"],
+    ["LORE_LOCAL_POSTGRES_ADMIN_URL", "postgresql:///postgres"],
+    ["LORE_LOCAL_POSTGRES_DATABASE", "lore"],
+    ["LORE_RUNTIME_ROLE", "lore_local_runtime"],
+    ["LORE_RUNTIME_PASSWORD", credentials.requestPassword],
+    ["LORE_MAINTENANCE_ROLE", "lore_local_maintenance_runtime"],
+    ["LORE_MAINTENANCE_PASSWORD", credentials.maintenancePassword],
+    [
+      "DATABASE_URL",
+      `postgresql://lore_local_runtime:${credentials.requestPassword}@127.0.0.1:5432/lore`,
+    ],
+    [
+      "LORE_MAINTENANCE_DATABASE_URL",
+      `postgresql://lore_local_maintenance_runtime:${credentials.maintenancePassword}@127.0.0.1:5432/lore`,
+    ],
+  ]);
 }
 
 export function renderLocalEnvironment(
   example,
   secret = () => randomBytes(24).toString("base64url"),
 ) {
-  const adminPassword = secret();
-  const requestPassword = secret();
-  const maintenancePassword = secret();
+  const credentials = generatedCredentials(secret);
   let rendered = example;
   const replacements = new Map([
     [
       "LORE_DB_ADMIN_PASSWORD=change-this-admin-password",
-      `LORE_DB_ADMIN_PASSWORD=${adminPassword}`,
+      `LORE_DB_ADMIN_PASSWORD=${credentials.adminPassword}`,
     ],
     [
       "LORE_DB_RUNTIME_PASSWORD=change-this-runtime-password",
-      `LORE_DB_RUNTIME_PASSWORD=${requestPassword}`,
+      `LORE_DB_RUNTIME_PASSWORD=${credentials.requestPassword}`,
     ],
     [
       "LORE_DB_MAINTENANCE_PASSWORD=change-this-maintenance-password",
-      `LORE_DB_MAINTENANCE_PASSWORD=${maintenancePassword}`,
+      `LORE_DB_MAINTENANCE_PASSWORD=${credentials.maintenancePassword}`,
     ],
-    ["LORE_SEMANTIC_DISTANCE_THRESHOLD=0.5", "LORE_SEMANTIC_DISTANCE_THRESHOLD=0.6"],
   ]);
   for (const [placeholder, replacement] of replacements) {
     if (!rendered.includes(placeholder)) {
@@ -181,33 +328,65 @@ export function renderLocalEnvironment(
     rendered = rendered.replace(placeholder, replacement);
   }
 
-  const nativeSettings = [
-    "",
-    "# Native one-command local service.",
-    "LORE_LOCAL_SEARCH_MODE=hybrid",
-    "LORE_LOCAL_POSTGRES_ADMIN_URL=postgresql:///postgres",
-    "LORE_LOCAL_POSTGRES_DATABASE=lore",
-    "LORE_RUNTIME_ROLE=lore_local_runtime",
-    `LORE_RUNTIME_PASSWORD=${requestPassword}`,
-    "LORE_MAINTENANCE_ROLE=lore_local_maintenance_runtime",
-    `LORE_MAINTENANCE_PASSWORD=${maintenancePassword}`,
-    `DATABASE_URL=postgresql://lore_local_runtime:${requestPassword}@127.0.0.1:5432/lore`,
-    `LORE_MAINTENANCE_DATABASE_URL=postgresql://lore_local_maintenance_runtime:${maintenancePassword}@127.0.0.1:5432/lore`,
-    `LORE_RERANK_MODEL=${defaultRerankerModel}`,
-    "LORE_RERANK_CANDIDATE_LIMIT=10",
-    "LORE_RERANK_MIN_SCORE=0.01",
-    "LORE_RERANK_DIVERSITY_LAMBDA=1",
-    "LORE_RERANK_WEIGHT=0.75",
-    "",
-  ];
-  return `${rendered.trimEnd()}\n${nativeSettings.join("\n")}`;
+  const settings = [...nativeSettings(credentials)].map(([name, value]) => `${name}=${value}`);
+  return `${rendered.trimEnd()}\n\n# Native one-command local service.\n${settings.join("\n")}\n`;
+}
+
+export function extendLocalEnvironment(
+  existing,
+  secret = () => randomBytes(24).toString("base64url"),
+) {
+  const parsed = parseEnv(existing);
+  const presentDatabaseSettings = nativeDatabaseSettings.filter((name) => parsed[name]?.trim());
+  if (presentDatabaseSettings.length === nativeDatabaseSettings.length) return existing;
+  if (presentDatabaseSettings.length > 0) {
+    const missing = nativeDatabaseSettings.filter((name) => !parsed[name]?.trim());
+    throw new Error(
+      `Existing .env has partial native service configuration; add ${missing.join(", ")}`,
+    );
+  }
+
+  const credentials = generatedCredentials(secret);
+  let rendered = existing;
+  const placeholders = new Map([
+    [
+      "LORE_DB_ADMIN_PASSWORD=change-this-admin-password",
+      `LORE_DB_ADMIN_PASSWORD=${credentials.adminPassword}`,
+    ],
+    [
+      "LORE_DB_RUNTIME_PASSWORD=change-this-runtime-password",
+      `LORE_DB_RUNTIME_PASSWORD=${credentials.requestPassword}`,
+    ],
+    [
+      "LORE_DB_MAINTENANCE_PASSWORD=change-this-maintenance-password",
+      `LORE_DB_MAINTENANCE_PASSWORD=${credentials.maintenancePassword}`,
+    ],
+  ]);
+  for (const [placeholder, replacement] of placeholders) {
+    rendered = rendered.replace(placeholder, replacement);
+  }
+  const settings = [...nativeSettings(credentials)]
+    .filter(([name]) => !parsed[name]?.trim())
+    .map(([name, value]) => `${name}=${value}`);
+  return `${rendered.trimEnd()}\n\n# Native one-command local service.\n${settings.join("\n")}\n`;
 }
 
 function initializeEnvironment() {
-  if (existsSync(environmentPath)) return false;
-  const example = readFileSync(environmentExamplePath, "utf8");
-  writeFileSync(environmentPath, renderLocalEnvironment(example), { mode: 0o600 });
-  console.log("Created .env with unique local Postgres runtime credentials.");
+  if (!existsSync(environmentPath)) {
+    const example = readFileSync(environmentExamplePath, "utf8");
+    writeFileSync(environmentPath, renderLocalEnvironment(example), { mode: 0o600 });
+    console.log("Created .env with unique local Postgres runtime credentials.");
+    return true;
+  }
+  const existing = readFileSync(environmentPath, "utf8");
+  const extended = extendLocalEnvironment(existing);
+  if (extended === existing) {
+    chmodSync(environmentPath, 0o600);
+    return false;
+  }
+  writeFileSync(environmentPath, extended, { mode: 0o600 });
+  chmodSync(environmentPath, 0o600);
+  console.log("Extended existing .env with unique local Postgres runtime credentials.");
   return true;
 }
 
@@ -224,6 +403,14 @@ function statePath(name) {
 
 function logPath(name) {
   return join(stateDirectory, `${name}.log`);
+}
+
+function secureManagedFiles() {
+  for (const name of managedProcessNames) {
+    for (const path of [statePath(name), logPath(name)]) {
+      if (existsSync(path)) chmodSync(path, 0o600);
+    }
+  }
 }
 
 function commandWorks(command, arguments_) {
@@ -366,7 +553,9 @@ async function startManagedProcess(definition) {
   if (existingState) rmSync(statePath(definition.name), { force: true });
 
   mkdirSync(stateDirectory, { recursive: true });
-  const descriptor = openSync(logPath(definition.name), "a");
+  const processLogPath = logPath(definition.name);
+  const descriptor = openSync(processLogPath, "a", 0o600);
+  chmodSync(processLogPath, 0o600);
   let child;
   try {
     child = spawn(definition.command, definition.arguments, {
@@ -479,6 +668,7 @@ async function ensureDatabase(configuration, environment) {
 
 async function up() {
   initializeEnvironment();
+  secureManagedFiles();
   const environment = loadEnvironment();
   const configuration = localServiceConfiguration(environment);
   if (!commandWorks("bun", ["--version"])) throw new Error("Bun is unavailable");
@@ -495,6 +685,8 @@ async function up() {
   await run("bun", ["run", "build:maintenance"], { env: environment });
 
   const runtimeEnvironment = buildRuntimeEnvironment(environment, configuration);
+  const maintenanceEnvironment = buildMaintenanceEnvironment(environment, configuration);
+  const rerankerEnvironment = buildRerankerEnvironment(environment);
   const started = [];
   try {
     if (
@@ -503,7 +695,7 @@ async function up() {
         allowExternal: true,
         arguments: buildRerankerArguments(configuration.reranker),
         command: configuration.reranker.command,
-        environment: runtimeEnvironment,
+        environment: rerankerEnvironment,
         healthUrl: `http://127.0.0.1:${configuration.reranker.port}/health`,
         matchTokens: ["--reranking", configuration.reranker.model],
         name: "reranker",
@@ -516,7 +708,7 @@ async function up() {
       await startManagedProcess({
         arguments: [maintenanceWorkerPath],
         command: process.execPath,
-        environment: runtimeEnvironment,
+        environment: maintenanceEnvironment,
         matchTokens: ["maintenance-worker.js"],
         name: "maintenance",
       })
@@ -553,7 +745,7 @@ async function up() {
 }
 
 async function down() {
-  for (const name of [...managedProcessNames].reverse()) await stopManagedProcess(name);
+  for (const name of managedProcessNames) await stopManagedProcess(name);
   console.log("postgres/ollama: left running (system-managed)");
 }
 

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  buildMaintenanceEnvironment,
   buildRerankerArguments,
   buildRuntimeEnvironment,
+  extendLocalEnvironment,
   localServiceConfiguration,
   renderLocalEnvironment,
   targetDatabaseUrl,
@@ -49,15 +51,26 @@ test("hybrid runtime disables reranking and keeps calibrated retrieval settings"
   const configuration = localServiceConfiguration(databaseEnvironment);
   const environment = buildRuntimeEnvironment(databaseEnvironment, configuration);
   assert.equal(environment.DATABASE_URL, databaseEnvironment.DATABASE_URL);
+  assert.equal(environment.LORE_MAINTENANCE_DATABASE_URL, undefined);
+  assert.equal(environment.LORE_MAINTENANCE_PASSWORD, undefined);
+  assert.equal(environment.LORE_RUNTIME_PASSWORD, undefined);
+  assert.equal(environment.LORE_RERANK_BASE_URL, "http://127.0.0.1:8080");
+  assert.equal(environment.LORE_RERANK_PROVIDER, "");
+  assert.equal(environment.LORE_SEMANTIC_DISTANCE_THRESHOLD, "0.5");
+  assert.equal(environment.LORE_RERANK_CANDIDATE_LIMIT, "20");
+  assert.equal(environment.LORE_RERANK_WEIGHT, "0.75");
+});
+
+test("maintenance runtime receives only its database credential", () => {
+  const configuration = localServiceConfiguration(databaseEnvironment);
+  const environment = buildMaintenanceEnvironment(databaseEnvironment, configuration);
+  assert.equal(environment.DATABASE_URL, undefined);
   assert.equal(
     environment.LORE_MAINTENANCE_DATABASE_URL,
     databaseEnvironment.LORE_MAINTENANCE_DATABASE_URL,
   );
-  assert.equal(environment.LORE_RERANK_BASE_URL, "http://127.0.0.1:8080");
-  assert.equal(environment.LORE_RERANK_PROVIDER, "");
-  assert.equal(environment.LORE_SEMANTIC_DISTANCE_THRESHOLD, "0.6");
-  assert.equal(environment.LORE_RERANK_CANDIDATE_LIMIT, "10");
-  assert.equal(environment.LORE_RERANK_WEIGHT, "0.75");
+  assert.equal(environment.LORE_MAINTENANCE_PASSWORD, undefined);
+  assert.equal(environment.LORE_RUNTIME_PASSWORD, undefined);
 });
 
 test("reranking remains an explicit deployment-level mode", () => {
@@ -98,14 +111,77 @@ test("environment initialization creates distinct native runtime credentials", (
     rendered,
     /DATABASE_URL=postgresql:\/\/lore_local_runtime:secret-2@127\.0\.0\.1:5432\/lore/,
   );
-  assert.match(rendered, /LORE_SEMANTIC_DISTANCE_THRESHOLD=0\.6/);
+  assert.match(rendered, /LORE_SEMANTIC_DISTANCE_THRESHOLD=0\.5/);
   assert.match(rendered, /LORE_LOCAL_SEARCH_MODE=hybrid/);
+});
+
+test("existing Docker environment is extended idempotently for the native service", () => {
+  const existing = [
+    "LORE_DB_ADMIN_PASSWORD=change-this-admin-password",
+    "LORE_DB_RUNTIME_PASSWORD=change-this-runtime-password",
+    "LORE_DB_MAINTENANCE_PASSWORD=change-this-maintenance-password",
+    "AUTH_MODE=none",
+  ].join("\n");
+  let index = 0;
+  const extended = extendLocalEnvironment(existing, () => `secret-${++index}`);
+  assert.match(extended, /LORE_DB_ADMIN_PASSWORD=secret-1/);
+  assert.match(extended, /DATABASE_URL=postgresql:\/\/lore_local_runtime:secret-2@/);
+  assert.match(extended, /LORE_MAINTENANCE_DATABASE_URL=.*secret-3@/);
+  assert.equal(
+    extendLocalEnvironment(extended, () => "unused"),
+    extended,
+  );
+});
+
+test("partial native environment reports every missing database setting", () => {
+  assert.throws(
+    () => extendLocalEnvironment("DATABASE_URL=postgresql://partial@127.0.0.1/lore\n"),
+    /partial native service configuration.*LORE_LOCAL_POSTGRES_ADMIN_URL/,
+  );
 });
 
 test("local search mode rejects unknown values", () => {
   assert.throws(
     () => localServiceConfiguration({ ...databaseEnvironment, LORE_LOCAL_SEARCH_MODE: "both" }),
     /must be hybrid or rerank/,
+  );
+});
+
+test("native service rejects conflicting reranker configuration", () => {
+  assert.throws(
+    () =>
+      localServiceConfiguration({
+        ...databaseEnvironment,
+        LORE_RERANK_PROVIDER: "vllm-score",
+      }),
+    /conflicts with LORE_LOCAL_SEARCH_MODE/,
+  );
+});
+
+test("native service rejects database and role drift between settings and URLs", () => {
+  assert.throws(
+    () =>
+      localServiceConfiguration({
+        ...databaseEnvironment,
+        LORE_LOCAL_POSTGRES_DATABASE: "lore_v2",
+      }),
+    /DATABASE_URL must connect to database lore_v2/,
+  );
+  assert.throws(
+    () =>
+      localServiceConfiguration({
+        ...databaseEnvironment,
+        LORE_RUNTIME_ROLE: "another_runtime",
+      }),
+    /DATABASE_URL must connect to database lore as role another_runtime/,
+  );
+  assert.throws(
+    () =>
+      localServiceConfiguration({
+        ...databaseEnvironment,
+        LORE_LOCAL_POSTGRES_DATABASE: "unsafe-name",
+      }),
+    /safe lowercase Postgres identifier/,
   );
 });
 
