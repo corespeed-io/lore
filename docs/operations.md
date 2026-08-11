@@ -278,3 +278,7 @@ create privilege, changed/unknown applied migration checksums, migration gaps, a
 database schema newer than this application. For production, set
 `LORE_MIGRATION_BACKUP_CONFIRMED=1` only after verifying a restorable backup; the
 flag is recorded as an advisory, never as proof that the backup exists.
+
+Always invoke migrations through `bun run db:migrate`. Production recovery is
+forward-only: the `down` sections are intentionally empty, so running `dbmate down`
+directly would remove a ledger version without reverting its schema changes.

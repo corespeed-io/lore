@@ -1,11 +1,31 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
 import { adoptMigrationHistory, migrationFiles } from "../scripts/lib/migration-preflight.mjs";
-import { PRE_DBMATE_MIGRATIONS } from "../scripts/migration-baseline.mjs";
 
 const migrationsUrl = new URL("../db/migrations/", import.meta.url);
+const dbmateUpMarker = "-- migrate:up\n\n";
+const dbmateDownMarker = "\n-- migrate:down\n";
+
+function preDbmateChecksum(sql: string): string {
+  if (!sql.startsWith(dbmateUpMarker) || !sql.endsWith(dbmateDownMarker)) {
+    throw new Error("Migration does not have the expected dbmate wrapper");
+  }
+  const originalSql = sql.slice(dbmateUpMarker.length, -dbmateDownMarker.length);
+  return createHash("sha256").update(originalSql).digest("hex");
+}
+
+async function preDbmateHistory(): Promise<Array<[string, string]>> {
+  const ids = (await readdir(migrationsUrl)).filter((name) => /^\d+.*\.sql$/.test(name)).sort();
+  return Promise.all(
+    ids.map(async (id): Promise<[string, string]> => {
+      const sql = await readFile(new URL(id, migrationsUrl), "utf8");
+      return [id, preDbmateChecksum(sql)];
+    }),
+  );
+}
 
 async function migratedDatabase() {
   const postgres = new PGlite({ extensions: { vector } });
@@ -44,7 +64,7 @@ test("dbmate adopts the exact SQL ledger without changing Memory data", async ()
       'must survive dbmate adoption'
     );
   `);
-  for (const [id, checksum] of PRE_DBMATE_MIGRATIONS) {
+  for (const [id, checksum] of await preDbmateHistory()) {
     await postgres.query("INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2)", [
       id,
       checksum,

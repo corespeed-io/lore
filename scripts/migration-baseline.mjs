@@ -14,7 +14,7 @@ export const PRE_DBMATE_MIGRATIONS = new Map([
   ["0003_portable_core.sql", "4ba5ae39c9771fce5d2f16371974c140160e68e7a89e190f751153bc7651704b"],
   [
     "0004_english_lexical_search.sql",
-    "edb1be778f9a19bbe4d0bba96360f344d2cdbcb19d4face56ef684aa4ae5f7f",
+    "edb1be778f9a19bbe4d0bba96360f344d2cdbdcb19d4face56ef684aa4ae5f7f",
   ],
   [
     "0005_memory_metadata_search.sql",

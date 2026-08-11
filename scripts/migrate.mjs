@@ -41,7 +41,7 @@ function dbmateDatabaseUrl(value) {
   if (
     ["postgres:", "postgresql:"].includes(parsed.protocol) &&
     !parsed.searchParams.has("sslmode") &&
-    ["", "localhost", "127.0.0.1", "::1", "postgres"].includes(parsed.hostname)
+    ["", "localhost", "127.0.0.1", "::1"].includes(parsed.hostname)
   ) {
     parsed.searchParams.set("sslmode", "disable");
   }
