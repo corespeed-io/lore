@@ -4,13 +4,13 @@ import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import {
-  adoptMigrationHistory,
+  DBMATE_MIGRATIONS_TABLE,
   MIGRATION_LOCK_ID,
   migrationFiles,
+  prepareDbmateHistory,
   recordDbmateChecksums,
   runMigrationPreflight,
 } from "./lib/migration-preflight.mjs";
-import { DBMATE_MIGRATIONS_TABLE } from "./migration-baseline.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -86,10 +86,7 @@ try {
 
   await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
   const migrations = await migrationFiles();
-  const adoption = await adoptMigrationHistory(client, migrations);
-  if (adoption.adopted) {
-    console.log(`adopted ${adoption.source} migration history into dbmate without replaying DDL`);
-  }
+  await prepareDbmateHistory(client, migrations);
 
   const result = await runDbmate();
   // dbmate owns SQL parsing and application. Lore adds immutable-file checksums

@@ -21,8 +21,8 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- migrations `0001_initial.sql` through `0009_observation_evidence.sql`
-  define identity, tenancy, user-private Agents, Memory/chunks/links, pgvector
+- the single `0001_v1_baseline.sql` migration defines identity, tenancy,
+  user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, embedding generations, Agent
   lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
@@ -30,10 +30,10 @@ been removed. Lore now has a native implementation:
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
   transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
-  dbmate with a PostgreSQL advisory lock, stores SHA-256 values beside dbmate's
-  versions in `lore_schema_migrations`, and can adopt the exact earlier SQL ledger
-  without replaying DDL or changing tenant data. Keep migration `down` sections
-  empty: production recovery is forward-only;
+  dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
+  versions in `lore_schema_migrations`. The pre-launch schema is greenfield-only:
+  older ledgers are deliberately unsupported. Keep migration `down` sections empty:
+  production recovery is forward-only;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent

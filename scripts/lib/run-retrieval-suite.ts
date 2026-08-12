@@ -393,7 +393,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       );
     }
     if (!schemaResult.rows[0]?.entity_alias_index) {
-      throw new Error("Lore Memory search requires migration 0006_memory_chunk_entity_aliases.sql");
+      throw new Error("Lore v1 baseline with the entity-alias index is required");
     }
 
     if (!input.reuseIndexed) {

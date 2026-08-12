@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import pg from "pg";
+import { LATEST_SCHEMA_REVISION } from "./lib/migration-preflight.mjs";
 
 const databaseUrl = process.env.LORE_RESTORE_DATABASE_URL;
 const requestedPath = process.env.LORE_BACKUP_PATH;
@@ -145,7 +146,7 @@ try {
     !row.has_vector ||
     !row.app_can_select ||
     !row.maintenance_can_select ||
-    Number(row.schema_revision) < 3
+    Number(row.schema_revision) !== LATEST_SCHEMA_REVISION
   ) {
     throw new Error("Restored database failed Lore schema, RLS, or extension verification");
   }

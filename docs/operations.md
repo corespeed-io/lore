@@ -21,17 +21,12 @@ for explicit owner remap; an archive-provided identity is never trusted as that
 target. Existing unversioned routes remain available to the bundled UI, but clients
 should generate integrations from the v1 document.
 
-Migration `0003` adds and backfills nullable job generation ids so legacy writers
-can overlap with the generation-aware application. The bounded maintenance sweep
-adopts generation-less jobs for its configured embedding identity. Migrations
-`0004` through `0006` add the English lexical, metadata, and entity-alias indexes;
-`0004` and `0006` also add stored generated columns to `memory_chunks`, so PostgreSQL
-rewrites that table while holding an `ACCESS EXCLUSIVE` lock. Schedule those two
-migrations as write-downtime maintenance on an existing large corpus rather than
-treating them as online index-only changes. Schema revision 6 is the current
-application contract. A future contract migration
-may enforce generation-id `NOT NULL` only after generation-aware application
-instances have replaced every legacy writer.
+Lore v1 starts from one complete `0001_v1_baseline.sql` migration and schema
+revision 1. The product is pre-launch, so migrations support greenfield databases
+only. Earlier development ledgers are deliberately rejected instead of becoming a
+permanent compatibility surface; recreate those development databases from the v1
+baseline. Once published, the baseline is immutable and future schema work begins
+at `0002`.
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
@@ -269,13 +264,12 @@ worker. CoreSpeed Cloud uses Cloudflare Workers native observability from
 `bun run db:migrate` runs the same preflight as `bun run db:preflight` before taking
 the migration lock. dbmate owns SQL parsing and application; Lore owns the advisory
 lock, schema compatibility checks, and SHA-256 values stored beside dbmate versions
-in `lore_schema_migrations`. An exact earlier `schema_migrations` history is adopted
-transactionally by seeding the new ledger and removing only the obsolete ledger.
-Tenant tables and their data are never rebuilt or replayed during adoption.
+in `lore_schema_migrations`. A Lore schema without that current ledger is rejected;
+pre-launch development schemas must be recreated from the greenfield v1 baseline.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a
-database schema newer than this application. For production, set
+database schema that does not exactly match this application. For production, set
 `LORE_MIGRATION_BACKUP_CONFIRMED=1` only after verifying a restorable backup; the
 flag is recorded as an advisory, never as proof that the backup exists.
 

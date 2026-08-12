@@ -593,7 +593,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 9,
+    schemaRevision: 1,
     features: {
       idempotency: true,
       optimisticConcurrency: true,
@@ -661,14 +661,14 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 3 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 2 WHERE singleton"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 7 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 1 WHERE singleton"),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
