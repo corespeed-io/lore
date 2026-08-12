@@ -247,7 +247,7 @@ test("Operations browser client scopes Actor, capabilities, export, and dry-run 
     .mockResolvedValueOnce(
       Response.json({
         apiVersion: "v1",
-        schemaRevision: 9,
+        schemaRevision: 1,
         deploymentId: "20000000-0000-4000-8000-000000000001",
         features: {},
         limits: {

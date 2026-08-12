@@ -259,7 +259,7 @@ try {
     200,
     "read capabilities",
   );
-  assert.equal(deployment.schemaRevision, 9);
+  assert.equal(deployment.schemaRevision, 1);
   assert.equal(deployment.features.observationEvidence, true);
   assert.equal(
     deployment.activeEmbeddingGeneration === null,

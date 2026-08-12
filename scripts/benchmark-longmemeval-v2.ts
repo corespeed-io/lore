@@ -385,7 +385,7 @@ try {
        to_regclass('public.memories_metadata_gin_idx')::text AS metadata_index`,
   );
   if (!schema.rows[0]?.memories || !schema.rows[0]?.metadata_index) {
-    throw new Error("Lore migrations including 0004_memory_metadata_search.sql are required");
+    throw new Error("Lore v1 baseline with the Memory metadata index is required");
   }
 
   const trajectoryMemoryIds = new Map<string, string>();

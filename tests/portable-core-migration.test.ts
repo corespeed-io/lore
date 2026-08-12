@@ -3,169 +3,56 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, test } from "vitest";
 
-const migrations = new URL("../db/migrations/", import.meta.url);
+const baseline = new URL("../db/migrations/0001_v1_baseline.sql", import.meta.url);
 
-test("Memory Proposal migration fails closed without Agent lifecycle revision 7", async () => {
+test("the v1 baseline installs the complete Portable Core schema", async () => {
   const postgres = new PGlite({ extensions: { vector } });
   try {
     await postgres.waitReady;
-    for (const migrationId of [
-      "0001_initial.sql",
-      "0002_memory_embedding_jobs.sql",
-      "0003_portable_core.sql",
-      "0004_english_lexical_search.sql",
-      "0005_memory_metadata_search.sql",
-      "0006_memory_chunk_entity_aliases.sql",
-    ]) {
-      await postgres.exec(await readFile(new URL(migrationId, migrations), "utf8"));
-    }
+    await postgres.exec(await readFile(baseline, "utf8"));
 
     await expect(
-      postgres.exec(await readFile(new URL("0008_memory_proposals.sql", migrations), "utf8")),
-    ).rejects.toThrow("Expected Lore schema revision 7 before migration 0008");
+      postgres.query("SELECT schema_revision, api_version FROM lore_system_state WHERE singleton"),
+    ).resolves.toMatchObject({ rows: [{ schema_revision: 1, api_version: "v1" }] });
     await expect(
-      postgres.query<{ schema_revision: number }>(
-        "SELECT schema_revision FROM lore_system_state WHERE singleton",
-      ),
-    ).resolves.toMatchObject({ rows: [{ schema_revision: 6 }] });
-  } finally {
-    await postgres.close();
-  }
-});
-
-test("Observation evidence migration fails closed without Memory Proposals revision 8", async () => {
-  const postgres = new PGlite({ extensions: { vector } });
-  try {
-    await postgres.waitReady;
-    for (const migrationId of [
-      "0001_initial.sql",
-      "0002_memory_embedding_jobs.sql",
-      "0003_portable_core.sql",
-      "0004_english_lexical_search.sql",
-      "0005_memory_metadata_search.sql",
-      "0006_memory_chunk_entity_aliases.sql",
-      "0007_agent_lifecycle.sql",
-    ]) {
-      await postgres.exec(await readFile(new URL(migrationId, migrations), "utf8"));
-    }
-
-    await expect(
-      postgres.exec(await readFile(new URL("0009_observation_evidence.sql", migrations), "utf8")),
-    ).rejects.toThrow("Expected Lore schema revision 8 before migration 0009");
-    await expect(
-      postgres.query<{ schema_revision: number }>(
-        "SELECT schema_revision FROM lore_system_state WHERE singleton",
-      ),
-    ).resolves.toMatchObject({ rows: [{ schema_revision: 7 }] });
-  } finally {
-    await postgres.close();
-  }
-});
-
-test("Portable Core adopts jobs written during the additive generation rollout", async () => {
-  const postgres = new PGlite({ extensions: { vector } });
-  try {
-    await postgres.waitReady;
-    await postgres.exec(await readFile(new URL("0001_initial.sql", migrations), "utf8"));
-    await postgres.exec(
-      await readFile(new URL("0002_memory_embedding_jobs.sql", migrations), "utf8"),
-    );
-    await postgres.exec(`
-      INSERT INTO users (id, display_name)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Alice');
-      INSERT INTO workspaces (id, name)
-      VALUES ('20000000-0000-4000-8000-000000000001', 'Workspace');
-      INSERT INTO memories (id, workspace_id, owner_user_id, content)
-      VALUES
-        (
-          '30000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'First Memory'
-        ),
-        (
-          '30000000-0000-4000-8000-000000000002',
-          '20000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'Second Memory'
-        ),
-        (
-          '30000000-0000-4000-8000-000000000003',
-          '20000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'Memory written during the rolling deployment'
-        );
-      INSERT INTO memory_embedding_jobs (
-        id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
-        embedding_provider, embedding_model, embedding_revision
-      ) VALUES
-        (
-          '40000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
-          '30000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'shared', 1, 'ollama', 'model-a', 'revision-a'
-        ),
-        (
-          '40000000-0000-4000-8000-000000000002',
-          '20000000-0000-4000-8000-000000000001',
-          '30000000-0000-4000-8000-000000000002',
-          '10000000-0000-4000-8000-000000000001',
-          'shared', 1, 'google', 'model-b', 'revision-b'
-        );
-    `);
-
-    await postgres.exec(await readFile(new URL("0003_portable_core.sql", migrations), "utf8"));
-    const expandedColumn = await postgres.query<{ is_nullable: string }>(
-      `SELECT is_nullable
-       FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND table_name = 'memory_embedding_jobs'
-         AND column_name = 'generation_id'`,
-    );
-    expect(expandedColumn.rows).toEqual([{ is_nullable: "YES" }]);
-
-    // A pre-Portable-Core instance may still enqueue a generation-less job while
-    // the additive migration and generation-aware application overlap.
-    await postgres.exec(`
-      INSERT INTO memory_embedding_jobs (
-        id, workspace_id, memory_id, owner_user_id, memory_scope, memory_version,
-        embedding_provider, embedding_model, embedding_revision
-      ) VALUES (
-        '40000000-0000-4000-8000-000000000003',
-        '20000000-0000-4000-8000-000000000001',
-        '30000000-0000-4000-8000-000000000003',
-        '10000000-0000-4000-8000-000000000001',
-        'shared', 1, 'ollama', 'model-c', 'revision-c'
-      );
-    `);
-
-    await postgres.query("SELECT * FROM lore.enqueue_stale_memory_embedding_jobs($1, $2, $3, $4)", [
-      "ollama",
-      "model-c",
-      "revision-c",
-      100,
-    ]);
-    const generations = await postgres.query<{ status: string }>(
-      "SELECT status::text FROM embedding_generations ORDER BY status, embedding_provider",
-    );
-    const jobs = await postgres.query<{
-      generation_id: string | null;
-      id: string;
-      status: string;
-    }>("SELECT id, generation_id, status::text FROM memory_embedding_jobs ORDER BY id");
-    const state = await postgres.query<{ schema_revision: number }>(
-      "SELECT schema_revision FROM lore_system_state WHERE singleton",
-    );
-
-    expect(generations.rows.filter((row) => row.status === "active")).toHaveLength(1);
-    expect(generations.rows.filter((row) => row.status === "building")).toHaveLength(2);
-    expect(jobs.rows.every((row) => row.generation_id !== null)).toBe(true);
-    expect(jobs.rows.at(-1)).toMatchObject({
-      id: "40000000-0000-4000-8000-000000000003",
-      status: "pending",
+      postgres.query(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN (
+            'embedding_generations',
+            'episodes',
+            'memory_proposals',
+            'observations',
+            'request_idempotency_records'
+          )
+        ORDER BY table_name
+      `),
+    ).resolves.toMatchObject({
+      rows: [
+        { table_name: "embedding_generations" },
+        { table_name: "episodes" },
+        { table_name: "memory_proposals" },
+        { table_name: "observations" },
+        { table_name: "request_idempotency_records" },
+      ],
     });
-    expect(state.rows).toEqual([{ schema_revision: 3 }]);
+    await expect(
+      postgres.query(`
+        SELECT relname, relrowsecurity
+        FROM pg_class
+        WHERE relnamespace = 'public'::regnamespace
+          AND relname IN ('memories', 'memory_chunks', 'memory_proposals', 'observations')
+        ORDER BY relname
+      `),
+    ).resolves.toMatchObject({
+      rows: [
+        { relname: "memories", relrowsecurity: true },
+        { relname: "memory_chunks", relrowsecurity: true },
+        { relname: "memory_proposals", relrowsecurity: true },
+        { relname: "observations", relrowsecurity: true },
+      ],
+    });
   } finally {
     await postgres.close();
   }

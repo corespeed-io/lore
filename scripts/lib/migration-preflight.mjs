@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { DBMATE_MIGRATIONS_TABLE, preDbmateAdoption } from "../migration-baseline.mjs";
-
 export const MINIMUM_POSTGRES_VERSION = 150000;
-export const LATEST_SCHEMA_REVISION = 9;
+export const LATEST_SCHEMA_REVISION = 1;
 export const MIGRATION_LOCK_ID = 1_280_263_749;
+export const DBMATE_MIGRATIONS_TABLE = "lore_schema_migrations";
+
+export function isSchemaRevisionSupported(revision, latest = LATEST_SCHEMA_REVISION) {
+  return Number.isInteger(revision) && revision >= 1 && revision <= latest;
+}
 
 const migrationsDirectory = fileURLToPath(new URL("../../db/migrations/", import.meta.url));
 
@@ -91,7 +94,7 @@ function expectedRevision(versions) {
 
 function revisionIssue(versions, revision) {
   const expected = expectedRevision(versions);
-  if (expected === null || expected < 3)
+  if (expected === null)
     return revision === null ? undefined : `unexpected schema revision ${revision}`;
   return revision === expected
     ? undefined
@@ -103,19 +106,8 @@ export async function inspectMigrationHistory(client, migrations) {
   // A pg Client serializes work on one socket. Keep these probes sequential so
   // pg@9 does not reject concurrent client.query calls.
   const dbmateExists = await relationExists(client, `public.${DBMATE_MIGRATIONS_TABLE}`);
-  const legacyExists = await relationExists(client, "public.schema_migrations");
   const domainExists = await relationExists(client, "public.memories");
   const revision = await readSchemaRevision(client);
-
-  const histories = [dbmateExists, legacyExists].filter(Boolean).length;
-  if (histories > 1) {
-    return {
-      kind: "invalid",
-      ok: false,
-      detail: "multiple migration ledgers are present",
-      revision,
-    };
-  }
 
   if (dbmateExists) {
     const hasChecksum = await columnExists(client, DBMATE_MIGRATIONS_TABLE, "checksum");
@@ -151,33 +143,6 @@ export async function inspectMigrationHistory(client, migrations) {
     };
   }
 
-  if (legacyExists) {
-    const result = await client.query("SELECT id, checksum FROM schema_migrations ORDER BY id");
-    try {
-      const adoption = preDbmateAdoption(result.rows);
-      const revisionProblem =
-        adoption.kind === "legacy-baseline"
-          ? undefined
-          : revisionIssue(adoption.versions, revision);
-      return {
-        kind: "pre-dbmate",
-        ok: !revisionProblem,
-        detail:
-          revisionProblem ??
-          `${adoption.kind} history verified; ready for data-preserving adoption`,
-        revision,
-        adoption,
-      };
-    } catch (error) {
-      return {
-        kind: "invalid",
-        ok: false,
-        detail: error instanceof Error ? error.message : "invalid pre-dbmate history",
-        revision,
-      };
-    }
-  }
-
   if (domainExists || revision !== null) {
     return {
       kind: "invalid",
@@ -199,37 +164,16 @@ async function ensureDbmateLedger(client) {
   );
 }
 
-async function seedDbmateHistory(client, versions, migrations) {
-  const byVersion = new Map(migrations.map((migration) => [migration.version, migration]));
-  for (const version of versions) {
-    const migration = byVersion.get(version);
-    if (!migration) throw new Error(`Cannot seed unknown dbmate migration ${version}`);
-    await client.query(
-      `INSERT INTO ${DBMATE_MIGRATIONS_TABLE} (version, checksum) VALUES ($1, $2)`,
-      [version, migration.checksum],
-    );
-  }
-}
-
-export async function adoptMigrationHistory(client, migrations) {
+export async function prepareDbmateHistory(client, migrations) {
   migrations ??= await migrationFiles();
   const history = await inspectMigrationHistory(client, migrations);
-  if (!history.ok) throw new Error(`Migration history cannot be adopted: ${history.detail}`);
-  if (history.kind === "dbmate") return { adopted: false, source: "dbmate" };
+  if (!history.ok) throw new Error(`Migration history is invalid: ${history.detail}`);
+  if (history.kind === "dbmate") return;
 
   await client.query("BEGIN");
   try {
     await ensureDbmateLedger(client);
-    if (history.kind === "pre-dbmate") {
-      if (history.adoption.kind === "legacy-baseline") {
-        await client.query("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA lore FROM PUBLIC");
-        await client.query("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA lore TO lore_app");
-      }
-      await seedDbmateHistory(client, history.adoption.versions, migrations);
-      await client.query("DROP TABLE public.schema_migrations");
-    }
     await client.query("COMMIT");
-    return { adopted: history.kind !== "fresh", source: history.kind };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -289,7 +233,7 @@ export async function runMigrationPreflight(client) {
   checks.push({ check: "migration_history", ok: history.ok, detail: history.detail });
   checks.push({
     check: "app_schema_compatibility",
-    ok: history.revision === null || history.revision <= LATEST_SCHEMA_REVISION,
+    ok: history.revision === null || isSchemaRevisionSupported(history.revision),
     detail:
       history.revision === null
         ? "Lore schema will be created by migration"
