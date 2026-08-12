@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
-import { dbmateHistoryStatus } from "../scripts/lib/migration-preflight.mjs";
+import {
+  dbmateHistoryStatus,
+  isSchemaRevisionSupported,
+} from "../scripts/lib/migration-preflight.mjs";
 
 const migrations = [
   { version: "0001", checksum: "one" },
@@ -34,4 +37,11 @@ test("dbmate preflight rejects missing or modified checksums", () => {
 test("dbmate preflight rejects unknown versions", () => {
   const unknown = { version: "0099", checksum: "unknown" };
   expect(dbmateHistoryStatus([unknown], migrations).unknown).toEqual([unknown]);
+});
+
+test("schema compatibility permits the next migration to upgrade an older database", () => {
+  expect(isSchemaRevisionSupported(1, 2)).toBe(true);
+  expect(isSchemaRevisionSupported(2, 2)).toBe(true);
+  expect(isSchemaRevisionSupported(3, 2)).toBe(false);
+  expect(isSchemaRevisionSupported(0, 2)).toBe(false);
 });

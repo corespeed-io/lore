@@ -269,7 +269,7 @@ pre-launch development schemas must be recreated from the greenfield v1 baseline
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a
-database schema that does not exactly match this application. For production, set
+database schema newer than this application. For production, set
 `LORE_MIGRATION_BACKUP_CONFIRMED=1` only after verifying a restorable backup; the
 flag is recorded as an advisory, never as proof that the backup exists.
 

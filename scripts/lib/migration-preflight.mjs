@@ -6,6 +6,10 @@ export const LATEST_SCHEMA_REVISION = 1;
 export const MIGRATION_LOCK_ID = 1_280_263_749;
 export const DBMATE_MIGRATIONS_TABLE = "lore_schema_migrations";
 
+export function isSchemaRevisionSupported(revision, latest = LATEST_SCHEMA_REVISION) {
+  return Number.isInteger(revision) && revision >= 1 && revision <= latest;
+}
+
 const migrationsDirectory = fileURLToPath(new URL("../../db/migrations/", import.meta.url));
 
 export function migrationVersion(id) {
@@ -229,7 +233,7 @@ export async function runMigrationPreflight(client) {
   checks.push({ check: "migration_history", ok: history.ok, detail: history.detail });
   checks.push({
     check: "app_schema_compatibility",
-    ok: history.revision === null || history.revision === LATEST_SCHEMA_REVISION,
+    ok: history.revision === null || isSchemaRevisionSupported(history.revision),
     detail:
       history.revision === null
         ? "Lore schema will be created by migration"
