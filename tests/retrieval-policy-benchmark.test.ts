@@ -5,6 +5,7 @@ import {
   parseRetrievalPolicySuite,
   scoreRetrievalPolicyTrial,
 } from "../scripts/lib/retrieval-policy-benchmark";
+import { parseClaudeRetrievalPolicyArtifacts } from "../scripts/lib/retrieval-policy-claude";
 import {
   codexRetrievalPolicyToolFilter,
   parseCodexRetrievalPolicyArtifacts,
@@ -102,6 +103,49 @@ test("Codex benchmark traces keep MCP calls, outcomes, and actual token usage", 
       },
     ],
   });
+});
+
+test("Claude benchmark traces parse the result envelope, fenced JSON, and token usage", () => {
+  const trace = parseClaudeRetrievalPolicyArtifacts({
+    resultEnvelopeJson: JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: '```json\n{"outcome":"answered","answer":"src/lib/memory.ts"}\n```',
+      usage: { input_tokens: 90, output_tokens: 12 },
+    }),
+    toolTraceJsonLines: [
+      JSON.stringify({
+        name: "lore_retrieve_context",
+        arguments: { query: "Where?" },
+        result: { deliveredRoute: "code-only" },
+      }),
+    ],
+    latencyMs: 300,
+  });
+
+  expect(trace).toEqual({
+    assistantOutcome: "answered",
+    answer: "src/lib/memory.ts",
+    latencyMs: 300,
+    inputTokens: 90,
+    outputTokens: 12,
+    toolCalls: [
+      {
+        name: "lore_retrieve_context",
+        arguments: { query: "Where?" },
+        result: { deliveredRoute: "code-only" },
+      },
+    ],
+  });
+
+  expect(() =>
+    parseClaudeRetrievalPolicyArtifacts({
+      resultEnvelopeJson: JSON.stringify({ is_error: true, result: "credit exhausted" }),
+      toolTraceJsonLines: [],
+      latencyMs: 10,
+    }),
+  ).toThrow(/reported an error/);
 });
 
 test("the model-facing harness uses Lore's real compound MCP contract", async () => {

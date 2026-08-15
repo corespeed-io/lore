@@ -14,6 +14,7 @@ import {
   type RetrievalPolicyTrialScore,
   scoreRetrievalPolicyTrial,
 } from "./lib/retrieval-policy-benchmark";
+import { runClaudeRetrievalPolicyTurn } from "./lib/retrieval-policy-claude";
 import { runCodexRetrievalPolicyTurn } from "./lib/retrieval-policy-codex";
 import { createRetrievalPolicyMcpHarness } from "./lib/retrieval-policy-mcp";
 
@@ -251,6 +252,7 @@ function percent(value: number | null): string {
 function markdownReport(report: {
   generatedAt: string;
   groundingPolicyRevision: string;
+  provider: string;
   model: string;
   trialsPerCase: number;
   suite: { name: string; version: number; caseCount: number };
@@ -312,14 +314,19 @@ function markdownReport(report: {
     "",
     "- The model saw schemas emitted by Lore's real MCP adapter. Tool results came from deterministic authorized benchmark fixtures.",
     "- `primitive-auto`, `compound-auto`, and `compound-guided` measure model-selected invocation. `host-policy` applies the production required/auto/off gate; the oracle and always-on variants remain controls.",
-    "- Codex exec includes its agent harness context, so token counts are useful for comparing these variants but are not representative of a lean Responses API integration.",
+    `- ${report.provider} includes its CLI agent harness context, so token counts are useful for comparing these variants but are not representative of a lean direct-API integration.`,
     "",
   );
   return lines.join("\n");
 }
 
 const suite = parseRetrievalPolicySuite(suiteSource);
-const model = optionalArgument("model") ?? "gpt-5.6-sol";
+const runner = optionalArgument("runner") ?? "codex";
+if (runner !== "codex" && runner !== "claude") {
+  throw new Error(`--runner must be codex or claude, got ${JSON.stringify(runner)}`);
+}
+const model =
+  optionalArgument("model") ?? (runner === "claude" ? "claude-sonnet-5" : "gpt-5.6-sol");
 const trialsPerCase = positiveIntegerArgument("trials", 1);
 const maximumCases = Math.min(
   positiveIntegerArgument("max-cases", suite.cases.length),
@@ -341,7 +348,9 @@ for (const variant of variants) {
       const hostCall = hostShouldRetrieve(variant, evaluationCase)
         ? await hostRetrieval(evaluationCase)
         : null;
-      const modelTrace = await runCodexRetrievalPolicyTurn({
+      const runTurn =
+        runner === "claude" ? runClaudeRetrievalPolicyTurn : runCodexRetrievalPolicyTurn;
+      const modelTrace = await runTurn({
         model,
         toolNames: toolNamesFor(variant, evaluationCase),
         prompt: promptFor({ evaluationCase, variant, hostCall }),
@@ -387,7 +396,7 @@ const report = {
   benchmark: "lore-retrieval-policy-v1",
   groundingPolicyRevision: RETRIEVAL_GROUNDING_POLICY_REVISION,
   generatedAt: new Date().toISOString(),
-  provider: "OpenAI via Codex exec",
+  provider: runner === "claude" ? "Anthropic via Claude Code CLI" : "OpenAI via Codex exec",
   model,
   trialsPerCase,
   suite: { name: suite.name, version: suite.version, caseCount: selectedCases.length },
