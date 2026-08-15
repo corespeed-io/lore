@@ -15,9 +15,7 @@ const COMMIT_OID = "a".repeat(40);
 
 test("the Codex harness represents an intentionally empty tool set explicitly", () => {
   expect(codexRetrievalPolicyToolFilter([])).toBe("__none__");
-  expect(codexRetrievalPolicyToolFilter(["lore_retrieve_context"])).toBe(
-    "lore_retrieve_context",
-  );
+  expect(codexRetrievalPolicyToolFilter(["lore_retrieve_context"])).toBe("lore_retrieve_context");
 });
 
 test("a compound exact-revision Code retrieval satisfies a must-call policy case", () => {

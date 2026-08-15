@@ -127,12 +127,14 @@ function hostShouldRetrieve(variant: Variant, evaluationCase: RetrievalPolicyCas
   if (variant.hostPolicy === "always") return true;
   if (variant.hostPolicy === "none") return false;
   if (variant.hostPolicy === "production") {
-    return planRetrievalGrounding({
-      query: evaluationCase.prompt,
-      hasRepositoryContext: Boolean(
-        evaluationCase.expectation.repositoryKey && evaluationCase.expectation.commitOid,
-      ),
-    }).mode === "required";
+    return (
+      planRetrievalGrounding({
+        query: evaluationCase.prompt,
+        hasRepositoryContext: Boolean(
+          evaluationCase.expectation.repositoryKey && evaluationCase.expectation.commitOid,
+        ),
+      }).mode === "required"
+    );
   }
   return (
     evaluationCase.expectation.invocation === "must-call" ||
@@ -140,10 +142,7 @@ function hostShouldRetrieve(variant: Variant, evaluationCase: RetrievalPolicyCas
   );
 }
 
-function toolNamesFor(
-  variant: Variant,
-  evaluationCase: RetrievalPolicyCase,
-): readonly string[] {
+function toolNamesFor(variant: Variant, evaluationCase: RetrievalPolicyCase): readonly string[] {
   if (variant.hostPolicy !== "production") return variant.tools;
   const plan = planRetrievalGrounding({
     query: evaluationCase.prompt,

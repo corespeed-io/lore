@@ -123,7 +123,8 @@ const CODE_PATTERN =
 const STALE_CONFIRMATION_PATTERN = /\b(recollection|remember)\b/i;
 const SUPPLIED_TRANSFORMATION_PATTERN =
   /\b(rewrite|translate|summarize|shorten|proofread|format)\b[^.!?]{0,80}\b(this|following|supplied|provided)\b/i;
-const GENERAL_BRAINSTORM_PATTERN = /\b(brainstorm|ideate|generate\s+ideas?)\b|头脑风暴|起.{0,12}名字|想.{0,12}名字/i;
+const GENERAL_BRAINSTORM_PATTERN =
+  /\b(brainstorm|ideate|generate\s+ideas?)\b|头脑风暴|起.{0,12}名字|想.{0,12}名字/i;
 const REPOSITORY_TRUTH_PATTERN =
   /\b(exact\s+revision|revision|commit|current\s+(?:code|implementation)|implemented|symbol|path|callers?|callees?|dependency|dependencies|guards?|guarded\s+by)\b|代码|实现|提交|函数|符号|路径|调用方|被谁调用|依赖|当前实现/i;
 const CURRENT_STATE_PATTERN = /\b(now|currently|today|still)\b/i;
