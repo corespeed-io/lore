@@ -8,7 +8,7 @@
 import type { CodeEvidenceRelationship, CodeEvidenceValidationState } from "./code-evidence";
 
 export const JOINT_MEMORY_CODE_PROTOTYPE_REVISION = "joint-memory-code-prototype-v2";
-export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v1";
+export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v2";
 
 export type JointEvidenceRoute = "abstain" | "both" | "code-only" | "memory-only";
 export type RetrievalGroundingMode = "auto" | "off" | "required";
@@ -38,6 +38,11 @@ export interface RetrievalGroundingPlan {
   mode: RetrievalGroundingMode;
   shouldRetrieve: boolean;
   shouldClarify: boolean;
+  /**
+   * User-facing clarification a host returns verbatim, without a model turn,
+   * whenever `shouldClarify` is true. Null otherwise.
+   */
+  clarification: string | null;
   reasons: string[];
 }
 
@@ -131,6 +136,9 @@ const CURRENT_STATE_PATTERN = /\b(now|currently|today|still)\b/i;
 const CODE_BEHAVIOR_PATTERN =
   /\b(write|writes|writing|written|read|reads|insert|inserts|enforce|enforces|guard|guards|allow|allows|reject|rejects|return|returns|call|calls)\b/i;
 
+const MISSING_REVISION_CLARIFICATION =
+  "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.";
+
 export function planRetrievalGrounding(input: RetrievalGroundingQuery): RetrievalGroundingPlan {
   const query = input.query.trim();
   if (!query) {
@@ -138,6 +146,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: false,
+      clarification: null,
       reasons: ["empty query"],
     };
   }
@@ -147,6 +156,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: false,
+      clarification: null,
       reasons: ["supplied content is sufficient for the requested transformation"],
     };
   }
@@ -160,6 +170,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: false,
+      clarification: null,
       reasons: ["general brainstorming does not require stored evidence"],
     };
   }
@@ -173,6 +184,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: true,
+      clarification: MISSING_REVISION_CLARIFICATION,
       reasons: ["current Code verification requires repository and exact commit context"],
     };
   }
@@ -182,6 +194,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "required",
       shouldRetrieve: true,
       shouldClarify: false,
+      clarification: null,
       reasons: ["possibly stale recollection requires authorized evidence"],
     };
   }
@@ -191,6 +204,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: true,
+      clarification: MISSING_REVISION_CLARIFICATION,
       reasons: ["exact-revision Code grounding requires repository and commit context"],
     };
   }
@@ -200,6 +214,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "required",
       shouldRetrieve: true,
       shouldClarify: false,
+      clarification: null,
       reasons: ["exact-revision Code truth requires authorized Code evidence"],
     };
   }
@@ -209,6 +224,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       mode: "required",
       shouldRetrieve: true,
       shouldClarify: false,
+      clarification: null,
       reasons: ["Workspace or user-specific history requires authorized Memory evidence"],
     };
   }
@@ -217,6 +233,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
     mode: "auto",
     shouldRetrieve: false,
     shouldClarify: false,
+    clarification: null,
     reasons: ["retrieval may help but is not required"],
   };
 }

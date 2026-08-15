@@ -4,6 +4,7 @@ import suiteSource from "../evaluation/suites/retrieval-policy-v1.json";
 import {
   planRetrievalGrounding,
   RETRIEVAL_GROUNDING_POLICY_REVISION,
+  type RetrievalGroundingPlan,
 } from "../src/lib/joint-memory-code";
 import {
   aggregateRetrievalPolicyTrials,
@@ -48,6 +49,7 @@ interface TrialRecord {
   }>;
   inputTokens: number | null;
   outputTokens: number | null;
+  hostShortCircuit: boolean;
 }
 
 const PRIMITIVE_TOOLS = ["lore_search", "lore_code_search", "lore_code_dependencies"] as const;
@@ -124,35 +126,40 @@ function selectedVariants(): Variant[] {
   return VARIANTS.filter((variant) => selected.has(variant.id));
 }
 
-function hostShouldRetrieve(variant: Variant, evaluationCase: RetrievalPolicyCase): boolean {
+function groundingPlanFor(
+  variant: Variant,
+  evaluationCase: RetrievalPolicyCase,
+): RetrievalGroundingPlan | null {
+  if (variant.hostPolicy !== "production") return null;
+  return planRetrievalGrounding({
+    query: evaluationCase.prompt,
+    hasRepositoryContext: Boolean(
+      evaluationCase.expectation.repositoryKey && evaluationCase.expectation.commitOid,
+    ),
+  });
+}
+
+function hostShouldRetrieve(
+  variant: Variant,
+  evaluationCase: RetrievalPolicyCase,
+  groundingPlan: RetrievalGroundingPlan | null,
+): boolean {
   if (variant.hostPolicy === "always") return true;
   if (variant.hostPolicy === "none") return false;
-  if (variant.hostPolicy === "production") {
-    return (
-      planRetrievalGrounding({
-        query: evaluationCase.prompt,
-        hasRepositoryContext: Boolean(
-          evaluationCase.expectation.repositoryKey && evaluationCase.expectation.commitOid,
-        ),
-      }).mode === "required"
-    );
-  }
+  if (variant.hostPolicy === "production") return groundingPlan?.mode === "required";
   return (
     evaluationCase.expectation.invocation === "must-call" ||
     evaluationCase.expectation.invocation === "drill-down"
   );
 }
 
-function toolNamesFor(variant: Variant, evaluationCase: RetrievalPolicyCase): readonly string[] {
-  if (variant.hostPolicy !== "production") return variant.tools;
-  const plan = planRetrievalGrounding({
-    query: evaluationCase.prompt,
-    hasRepositoryContext: Boolean(
-      evaluationCase.expectation.repositoryKey && evaluationCase.expectation.commitOid,
-    ),
-  });
-  if (plan.mode === "off") return [];
-  if (plan.mode === "required") return PRIMITIVE_TOOLS;
+function toolNamesFor(
+  variant: Variant,
+  groundingPlan: RetrievalGroundingPlan | null,
+): readonly string[] {
+  if (variant.hostPolicy !== "production" || !groundingPlan) return variant.tools;
+  if (groundingPlan.mode === "off") return [];
+  if (groundingPlan.mode === "required") return PRIMITIVE_TOOLS;
   return variant.tools;
 }
 
@@ -313,7 +320,7 @@ function markdownReport(report: {
     "## Notes",
     "",
     "- The model saw schemas emitted by Lore's real MCP adapter. Tool results came from deterministic authorized benchmark fixtures.",
-    "- `primitive-auto`, `compound-auto`, and `compound-guided` measure model-selected invocation. `host-policy` applies the production required/auto/off gate; the oracle and always-on variants remain controls.",
+    "- `primitive-auto`, `compound-auto`, and `compound-guided` measure model-selected invocation. `host-policy` applies the production required/auto/off gate and, since `retrieval-grounding-v2`, returns the gate's clarification deterministically without a model turn when exact revision context is missing; the oracle and always-on variants remain controls.",
     `- ${report.provider} includes its CLI agent harness context, so token counts are useful for comparing these variants but are not representative of a lean direct-API integration.`,
     "",
   );
@@ -345,14 +352,37 @@ for (const variant of variants) {
     for (let trial = 1; trial <= trialsPerCase; trial += 1) {
       console.error(`[${variant.id}] ${evaluationCase.id} trial ${trial}/${trialsPerCase}`);
       const startedAt = performance.now();
-      const hostCall = hostShouldRetrieve(variant, evaluationCase)
+      const groundingPlan = groundingPlanFor(variant, evaluationCase);
+      if (groundingPlan?.shouldClarify) {
+        // Production hosts return the gate's clarification deterministically,
+        // without a model turn, when the exact revision is missing.
+        const trace: RetrievalPolicyTrace = {
+          assistantOutcome: "clarified",
+          latencyMs: performance.now() - startedAt,
+          toolCalls: [],
+        };
+        records.push({
+          variant: variant.id,
+          caseId: evaluationCase.id,
+          trial,
+          score: scoreRetrievalPolicyTrial({ case: evaluationCase, trace }),
+          outcome: trace.assistantOutcome,
+          answer: groundingPlan.clarification ?? "",
+          toolCalls: [],
+          inputTokens: null,
+          outputTokens: null,
+          hostShortCircuit: true,
+        });
+        continue;
+      }
+      const hostCall = hostShouldRetrieve(variant, evaluationCase, groundingPlan)
         ? await hostRetrieval(evaluationCase)
         : null;
       const runTurn =
         runner === "claude" ? runClaudeRetrievalPolicyTurn : runCodexRetrievalPolicyTurn;
       const modelTrace = await runTurn({
         model,
-        toolNames: toolNamesFor(variant, evaluationCase),
+        toolNames: toolNamesFor(variant, groundingPlan),
         prompt: promptFor({ evaluationCase, variant, hostCall }),
       });
       const trace: RetrievalPolicyTrace = {
@@ -370,6 +400,7 @@ for (const variant of variants) {
         toolCalls: compactToolCalls(trace.toolCalls),
         inputTokens: trace.inputTokens ?? null,
         outputTokens: trace.outputTokens ?? null,
+        hostShortCircuit: false,
       });
     }
   }

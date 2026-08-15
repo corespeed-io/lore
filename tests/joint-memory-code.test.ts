@@ -43,6 +43,7 @@ test("grounding requests an exact revision before a revision-bound Code answer",
     mode: "off",
     shouldRetrieve: false,
     shouldClarify: true,
+    clarification: expect.stringContaining("commit OID"),
   });
 });
 
@@ -56,6 +57,7 @@ test("grounding is required for a prior Workspace decision", () => {
     mode: "required",
     shouldRetrieve: true,
     shouldClarify: false,
+    clarification: null,
   });
 });
 
@@ -165,6 +167,7 @@ test("grounding asks for exact revision before verifying a stale current-Code re
     mode: "off",
     shouldRetrieve: false,
     shouldClarify: true,
+    clarification: expect.stringContaining("commit OID"),
   });
 });
 

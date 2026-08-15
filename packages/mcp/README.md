@@ -30,9 +30,11 @@ Hosts should apply Lore's `required | auto | off` grounding policy before model
 tool selection. Grounding is required for prior Workspace decisions, user-specific
 facts, and current or exact-revision repository claims; it stays off for tasks fully
 supported by supplied text and unconstrained brainstorming. When Code truth is
-required but the exact commit is unavailable, ask for the revision instead of
-substituting Memory search. After a required compound read, expose specialist
-Memory, Code search, or dependency tools only for bounded follow-up.
+required but the exact commit is unavailable, the gate returns `shouldClarify` with
+a ready-made clarification; return it to the user deterministically, without a
+model turn, instead of substituting Memory search or letting the model choose
+between clarifying and abstaining. After a required compound read, expose
+specialist Memory, Code search, or dependency tools only for bounded follow-up.
 
 Memory tools accept one coherent canonical record, with a hard limit of 32,000
 Unicode characters and 64 derived chunks. Use `lore_observe` with a document
