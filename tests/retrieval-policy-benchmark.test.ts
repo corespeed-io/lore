@@ -112,7 +112,12 @@ test("Claude benchmark traces parse the result envelope, fenced JSON, and token 
       subtype: "success",
       is_error: false,
       result: '```json\n{"outcome":"answered","answer":"src/lib/memory.ts"}\n```',
-      usage: { input_tokens: 90, output_tokens: 12 },
+      usage: {
+        input_tokens: 30,
+        cache_creation_input_tokens: 40,
+        cache_read_input_tokens: 20,
+        output_tokens: 12,
+      },
     }),
     toolTraceJsonLines: [
       JSON.stringify({

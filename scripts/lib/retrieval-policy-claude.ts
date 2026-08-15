@@ -89,11 +89,17 @@ export function parseClaudeRetrievalPolicyArtifacts(input: {
   }
   const finalOutput = parseFinalOutput(envelope.structured_output ?? envelope.result);
   const usage = record(envelope.usage);
+  // Claude's envelope splits prompt tokens across direct input and cache creation/read.
+  const inputParts = [
+    nonnegativeNumber(usage?.input_tokens),
+    nonnegativeNumber(usage?.cache_creation_input_tokens),
+    nonnegativeNumber(usage?.cache_read_input_tokens),
+  ].filter((value): value is number => value !== null);
   return {
     assistantOutcome: finalOutput.outcome,
     answer: finalOutput.answer,
     latencyMs: input.latencyMs,
-    inputTokens: nonnegativeNumber(usage?.input_tokens),
+    inputTokens: inputParts.length === 0 ? null : inputParts.reduce((sum, value) => sum + value, 0),
     outputTokens: nonnegativeNumber(usage?.output_tokens),
     toolCalls: parseToolTrace(input.toolTraceJsonLines),
   };
