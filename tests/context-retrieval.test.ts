@@ -194,3 +194,84 @@ test("HTTP retrieves Memory plus exact-revision Code with side-effect-free ancho
   );
   expect(missingCommit.status).toBe(400);
 }, 90_000);
+
+test("a co-member's private Memory and its Code anchor never enter the packet", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "context-retrieval-alice";
+  const context = await createMemoryTestContext();
+  await context.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO identities (id, user_id, provider, subject)
+       VALUES ($1, $2, 'local', $3)`,
+      [crypto.randomUUID(), context.alice.userId, process.env.LORE_LOCAL_SUBJECT],
+    );
+  });
+  const memories = createMemoryModule(context.database);
+  const code = createCodeIndexModule(context.database);
+  const codeRead = createCodeIndexReadModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+
+  // Bob shares Alice's Workspace, so only scope keeps this out of her packet.
+  const bobPrivate = await memories.remember(context.bob, {
+    content: "Bob's private rationale: tenantGuard must stay strict for audit.",
+    scope: "private",
+  });
+  await code.indexRevision(context.bob, {
+    repositoryKey: REPOSITORY_KEY,
+    displayName: "Context Retrieval",
+    commitOid: BASE_COMMIT,
+    files: [
+      {
+        path: "src/tenant-guard.ts",
+        content: [
+          "export function tenantGuard() { return policyCheck(); }",
+          policyCheck(true),
+        ].join("\n"),
+      },
+    ],
+  });
+  const [artifact] = await codeRead.search(context.bob, {
+    repositoryKey: REPOSITORY_KEY,
+    commitOid: BASE_COMMIT,
+    query: "tenantGuard",
+  });
+  if (!artifact) throw new Error("Expected the tenantGuard Artifact");
+  const bobCitation = await evidence.cite(context.bob, {
+    memoryId: bobPrivate.id,
+    artifactId: artifact.id,
+    relationship: "rationale",
+  });
+
+  const handler = createContextRetrievalHandlers(context.database);
+  const response = await handler.POST(
+    new Request("http://lore.local/api/v1/context/retrieve", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-lore-workspace-id": context.alice.workspaceId,
+      },
+      body: JSON.stringify({
+        query: "What changed about the tenantGuard rationale?",
+        memoryQuery: "tenantGuard rationale audit",
+        repositoryKey: REPOSITORY_KEY,
+        commitOid: BASE_COMMIT,
+        memoryLimit: 10,
+        codeLimit: 10,
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  const packet = (await response.json()) as {
+    memories: Array<{ id: string; evidence: string }>;
+    anchors: Array<{ id: string; memoryId: string }>;
+    receipt: { memoryCandidates: number; anchorCandidates: number };
+  };
+
+  expect(packet.memories.map((entry) => entry.id)).not.toContain(bobPrivate.id);
+  expect(packet.anchors.map((entry) => entry.id)).not.toContain(bobCitation.id);
+  expect(packet.anchors.map((entry) => entry.memoryId)).not.toContain(bobPrivate.id);
+  // Not even the content may leak through the evidence excerpt.
+  expect(JSON.stringify(packet)).not.toContain("Bob's private rationale");
+  expect(packet.receipt.anchorCandidates).toBe(0);
+}, 90_000);

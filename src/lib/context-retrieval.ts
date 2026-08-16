@@ -237,11 +237,12 @@ function limit(value: number | undefined, fallback: number, maximum: number, nam
   return normalized;
 }
 
-function deliveredRoute(memoryCount: number, codeCount: number, planned: JointEvidenceRoute) {
+function deliveredRoute(memoryCount: number, codeCount: number) {
   if (memoryCount > 0 && codeCount > 0) return "both" as const;
   if (memoryCount > 0) return "memory-only" as const;
   if (codeCount > 0) return "code-only" as const;
-  return planned === "abstain" ? planned : ("abstain" as const);
+  // No evidence in either family: abstain regardless of what was planned.
+  return "abstain" as const;
 }
 
 export function createContextRetrievalModule(
@@ -431,6 +432,11 @@ export function createContextRetrievalModule(
       let contextualImpact: ContextualImpactAssessment | null = null;
       if (
         plan.needsContextualImpact &&
+        // With no cited declaration to compare, there is nothing to assess:
+        // reporting `unknown` here would brand every dependency question with
+        // a permanent conflict that describes the absence of anchors, not the
+        // code. Truncated or unresolved traversal still reports `unknown`.
+        contextualSubjects.length > 0 &&
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
       ) {
@@ -474,7 +480,7 @@ export function createContextRetrievalModule(
         revision: CONTEXT_RETRIEVAL_REVISION,
         query,
         plan,
-        deliveredRoute: deliveredRoute(memoryContext.length, codeContext.length, plan.route),
+        deliveredRoute: deliveredRoute(memoryContext.length, codeContext.length),
         memories: memoryContext,
         code: codeContext,
         anchors,

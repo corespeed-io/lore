@@ -105,6 +105,21 @@ class GroundingGateParityTest(unittest.TestCase):
             "workspace_history",
         )
 
+    def test_unicode_whitespace_matches_the_typescript_source(self) -> None:
+        # re.ASCII narrows \s; multi-word alternations must still match the
+        # NBSP / ideographic spaces Chinese IMEs and pasted docs produce,
+        # or a Python host skips grounding TypeScript still requires.
+        for space in (" ", "\u00a0", "\u3000", "\u202f"):
+            for query in (
+                f"Does the current{space}code reject that?",
+                f"Is submitMemoryProposal guarded{space}by reviewRequired?",
+                f"At which exact{space}revision does it change?",
+            ):
+                plan = plan_retrieval_grounding(query, "configured")
+                self.assertEqual(plan.mode, "off", repr(query))
+                self.assertTrue(plan.should_clarify, repr(query))
+                self.assertEqual(plan.reason_code, "missing_commit_oid", repr(query))
+
     def test_impersonal_revision_question_still_clarifies(self) -> None:
         plan = plan_retrieval_grounding(
             "Where is submitMemoryProposal implemented right now?", "none"

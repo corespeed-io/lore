@@ -95,7 +95,11 @@ export function createCodeIndexQueueModule(
       input: EnqueueConfiguredCodeRevisionInput,
     ): Promise<CodeIndexJob> {
       const repositoryKey = plainText(input.repositoryKey, "repositoryKey", 512);
-      const configured = repositories[repositoryKey];
+      // Own-property only: a bare index would resolve inherited members, so a
+      // model-supplied "toString" would read as a configured repository.
+      const configured = Object.hasOwn(repositories, repositoryKey)
+        ? repositories[repositoryKey]
+        : undefined;
       if (!configured) {
         throw new CodeIndexValidationError("repositoryKey is not configured by this deployment");
       }

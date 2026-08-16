@@ -308,3 +308,21 @@ test("grounding reason codes let hosts render their own clarification copy", () 
     planRetrievalGrounding({ query: "Rewrite this supplied line.", repositoryContext: "none" }),
   ).toMatchObject({ reasonCode: "supplied_content_sufficient", mode: "off" });
 });
+
+test("multi-word grounding triggers match every JavaScript whitespace form", () => {
+  // Pinned in lockstep with the Python port, whose re.ASCII flag narrows \s:
+  // an ASCII-only suite let the two implementations diverge unnoticed.
+  for (const space of [" ", " ", "　", " "]) {
+    for (const query of [
+      `Does the current${space}code reject that?`,
+      `Is submitMemoryProposal guarded${space}by reviewRequired?`,
+      `At which exact${space}revision does it change?`,
+    ]) {
+      expect(planRetrievalGrounding({ query, repositoryContext: "configured" })).toMatchObject({
+        mode: "off",
+        shouldClarify: true,
+        reasonCode: "missing_commit_oid",
+      });
+    }
+  }
+});

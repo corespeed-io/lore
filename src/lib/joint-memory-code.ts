@@ -276,15 +276,13 @@ export function assessContextualImpact(
   return { state: "unaffected", changes };
 }
 
-function deliveredRoute(
-  planned: JointEvidenceRoute,
-  memoryCount: number,
-  codeCount: number,
-): JointEvidenceRoute {
+function deliveredRoute(memoryCount: number, codeCount: number): JointEvidenceRoute {
   if (memoryCount > 0 && codeCount > 0) return "both";
   if (memoryCount > 0) return "memory-only";
   if (codeCount > 0) return "code-only";
-  return planned === "abstain" ? planned : "abstain";
+  // No evidence in either family: the delivered route is abstain whatever was
+  // planned. (Kept explicit — the planned route still travels in `plan`.)
+  return "abstain";
 }
 
 export function assembleGroupedJointEvidence(input: {
@@ -316,7 +314,7 @@ export function assembleGroupedJointEvidence(input: {
     revision: JOINT_MEMORY_CODE_PROTOTYPE_REVISION,
     query: input.query,
     plan: input.plan,
-    deliveredRoute: deliveredRoute(input.plan.route, memories.length, code.length),
+    deliveredRoute: deliveredRoute(memories.length, code.length),
     memories,
     code,
     anchors,

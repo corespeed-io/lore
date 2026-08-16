@@ -6,6 +6,8 @@ import {
   createMemoryCodeEvidenceHandlers,
 } from "@/lib/code-http";
 import { createCodeIndexModule } from "@/lib/code-index";
+import { CodeIndexValidationError } from "@/lib/code-index-errors";
+import { createCodeIndexQueueModule } from "@/lib/code-index-queue";
 import { createMemoryModule } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
@@ -192,4 +194,18 @@ test("HTTP queues only an operator-configured Code Repository without accepting 
     }),
   );
   expect(unknown.status).toBe(400);
+});
+
+test("an inherited object key is not a configured repository", async () => {
+  const module = createCodeIndexQueueModule(
+    { transaction: async () => expect.unreachable("no database work for a rejected key") } as never,
+    { "corespeed/lore": { displayName: "Lore", repositoryPath: "/srv/lore" } },
+  );
+  const actor = {} as never;
+
+  for (const repositoryKey of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+    await expect(
+      module.enqueue(actor, { repositoryKey, commitOid: "a".repeat(40) }),
+    ).rejects.toThrow(CodeIndexValidationError);
+  }
 });

@@ -514,7 +514,7 @@ The relational model centers on:
   `code_symbol_payloads`, `code_dependency_sets`, `code_dependency_payloads`,
   `code_artifacts`, and `code_dependency_edges` for rebuildable, revision-bound
   code evidence;
-- `code_index_jobs` for leased resumable indexing and `memory_code_evidence` for
+- `code_index_jobs` for leased, bounded-attempt indexing and `memory_code_evidence` for
   typed durable citation anchors;
 - `evaluation_suites`, `evaluation_cases`, `evaluation_runs`, and
   `evaluation_results`.

@@ -33,6 +33,11 @@ RetrievalGroundingReasonCode = Literal[
 ]
 
 _FLAGS = re.IGNORECASE | re.ASCII
+#: JavaScript's ``\s`` set, spelled out because ``re.ASCII`` narrows Python's.
+#: Without this the multi-word alternations below would silently fail on
+#: U+00A0 / U+3000 and a Python host would skip grounding the TypeScript
+#: source still requires — divergence in the unsafe direction.
+_WS = "[ \t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
 
 _MEMORY_PATTERN = re.compile(
     r"\b(remember(?:ed|ing)?|recollect(?:ion|ed|ing)?|preference|prefer(?:red|s|ring)?"
@@ -47,12 +52,13 @@ _SUPPLIED_TRANSFORMATION_PATTERN = re.compile(
     _FLAGS,
 )
 _GENERAL_BRAINSTORM_PATTERN = re.compile(
-    r"\b(brainstorm|ideate|generate\s+ideas?)\b|头脑风暴|起.{0,12}名字|想.{0,12}名字",
+    r"\b(brainstorm|ideate|generate" + _WS + r"+ideas?)\b|头脑风暴|起.{0,12}名字|想.{0,12}名字",
     _FLAGS,
 )
 _REPOSITORY_TRUTH_PATTERN = re.compile(
-    r"\b(exact\s+revision|revision|commit|current\s+(?:code|implementation)|implemented"
-    r"|symbol|path|callers?|callees?|dependency|dependencies|guards?|guarded\s+by)\b"
+    r"\b(exact" + _WS + r"+revision|revision|commit|current" + _WS + r"+(?:code|implementation)"
+    r"|implemented|symbol|path|callers?|callees?|dependency|dependencies|guards?"
+    r"|guarded" + _WS + r"+by)\b"
     r"|代码|实现|提交|函数|符号|路径|调用方|被谁调用|依赖|当前实现",
     _FLAGS,
 )
