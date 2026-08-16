@@ -1,0 +1,254 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "generatedAt": "2026-08-15T22:13:06.854Z",
+  "provider": "OpenAI via Codex exec",
+  "model": "gpt-5.6-sol",
+  "trialsPerCase": 1,
+  "suite": {
+    "name": "Lore Retrieval Invocation Policy",
+    "version": 1,
+    "caseCount": 1
+  },
+  "variants": {
+    "primitive-auto": {
+      "description": "Primitive Memory and Code tools; model chooses whether and what to call.",
+      "metrics": {
+        "caseCount": 1,
+        "passRate": 0,
+        "requiredRetrievalRecall": 0,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 0,
+        "exactRevisionAccuracy": 0,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 8976.060542,
+        "p95LatencyMs": 8976.060542
+      },
+      "inputTokens": 32301,
+      "outputTokens": 264,
+      "toolCalls": 0,
+      "averageToolCalls": 0
+    },
+    "compound-auto": {
+      "description": "Compound context tool plus primitives; model receives no trigger contract.",
+      "metrics": {
+        "caseCount": 1,
+        "passRate": 0,
+        "requiredRetrievalRecall": 0,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 0,
+        "exactRevisionAccuracy": 0,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 11686.020292000001,
+        "p95LatencyMs": 11686.020292000001
+      },
+      "inputTokens": 32916,
+      "outputTokens": 319,
+      "toolCalls": 0,
+      "averageToolCalls": 0
+    },
+    "compound-guided": {
+      "description": "Compound context tool plus primitives and explicit grounding triggers.",
+      "metrics": {
+        "caseCount": 1,
+        "passRate": 1,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 1,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 12424.799124999998,
+        "p95LatencyMs": 12424.799124999998
+      },
+      "inputTokens": 49259,
+      "outputTokens": 337,
+      "toolCalls": 1,
+      "averageToolCalls": 1
+    },
+    "host-forced-oracle": {
+      "description": "Evaluation upper bound: host invokes compound retrieval for labeled must-call/drill-down cases, then the model may use primitives.",
+      "metrics": {
+        "caseCount": 1,
+        "passRate": 0,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 0,
+        "exactRevisionAccuracy": 0,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 4332.424500000001,
+        "p95LatencyMs": 4332.424500000001
+      },
+      "inputTokens": 15935,
+      "outputTokens": 59,
+      "toolCalls": 1,
+      "averageToolCalls": 1
+    },
+    "always-on": {
+      "description": "Host invokes compound retrieval before every case, including transformations and brainstorming.",
+      "metrics": {
+        "caseCount": 1,
+        "passRate": 0,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 0,
+        "exactRevisionAccuracy": 0,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 5252.064791999997,
+        "p95LatencyMs": 5252.064791999997
+      },
+      "inputTokens": 15932,
+      "outputTokens": 61,
+      "toolCalls": 1,
+      "averageToolCalls": 1
+    }
+  },
+  "records": [
+    {
+      "variant": "primitive-auto",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": false,
+        "exactRevisionCorrect": false,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": true,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 8976.060542
+      },
+      "outcome": "abstained",
+      "answer": "I can’t confirm that recollection without retrieving repository evidence, and you explicitly asked me not to search.",
+      "toolCalls": [],
+      "inputTokens": 32301,
+      "outputTokens": 264
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": false,
+        "exactRevisionCorrect": false,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": true,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 11686.020292000001
+      },
+      "outcome": "abstained",
+      "answer": "I can’t confirm that recollection from authorized evidence without querying the repository or Lore Memory, and you asked me not to search.",
+      "toolCalls": [],
+      "inputTokens": 32916,
+      "outputTokens": 319
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 12424.799124999998
+      },
+      "outcome": "answered",
+      "answer": "No. At commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, proposals still require human review before changing canonical Memory. `submitMemoryProposal()` returns `reviewRequired()`, consistent with the recorded Workspace decision.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Confirm whether proposals write directly to canonical Memory now, comparing prior Workspace decisions with current code at the exact configured revision.",
+            "route": "both",
+            "scope": "shared",
+            "memoryQuery": "proposals write directly to canonical Memory decision",
+            "codeQuery": "proposal canonical Memory write persistence",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "memoryLimit": 8,
+            "codeLimit": 12
+          },
+          "deliveredRoute": "both"
+        }
+      ],
+      "inputTokens": 49259,
+      "outputTokens": 337
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": true,
+        "routeCorrect": false,
+        "exactRevisionCorrect": false,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 4332.424500000001
+      },
+      "outcome": "abstained",
+      "answer": "I can’t confirm that recollection from the supplied evidence. The grounding result found no memory, code, or anchor evidence for the specified revision, and you asked me not to search further.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "abstain"
+        }
+      ],
+      "inputTokens": 15935,
+      "outputTokens": 59
+    },
+    {
+      "variant": "always-on",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": true,
+        "routeCorrect": false,
+        "exactRevisionCorrect": false,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 5252.064791999997
+      },
+      "outcome": "abstained",
+      "answer": "I can’t confirm that recollection from the authorized evidence: the supplied grounding packet contains no memory or code results for commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, and you asked me not to search further.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "abstain"
+        }
+      ],
+      "inputTokens": 15932,
+      "outputTokens": 61
+    }
+  ]
+}

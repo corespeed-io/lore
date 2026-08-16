@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outcome", "answer"],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["answered", "clarified", "abstained"]
+    },
+    "answer": {
+      "type": "string"
+    }
+  }
+}
