@@ -387,6 +387,16 @@ export function WorkspaceOperationsView({
                 )}
               </ul>
               <div className="operations-embedding">
+                <p>Memory chunking</p>
+                <strong>{deploymentCapabilities.memoryChunking.revision}</strong>
+                <code>
+                  ≤ {deploymentCapabilities.memoryChunking.maximumCharacters.toLocaleString()}{" "}
+                  Unicode characters · {deploymentCapabilities.memoryChunking.overlapCharacters}{" "}
+                  overlap
+                </code>
+                <small>Versioned derived evidence, never a Workspace setting.</small>
+              </div>
+              <div className="operations-embedding">
                 <p>Active embedding generation</p>
                 {deploymentCapabilities.activeEmbeddingGeneration ? (
                   <>

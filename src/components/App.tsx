@@ -22,6 +22,7 @@ import {
   useLoreSearch,
   useLoreWorkspaces,
 } from "@/lib/lore-swr";
+import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@/lib/memory-content";
 import { parseRoute, type RouteState, routeUrl, type Tab } from "@/lib/route";
 import type { GraphData, Memory, MemoryProposalReviewResult, MemoryScope } from "@/lib/types";
 
@@ -655,6 +656,21 @@ function MemoryEditor({
   const [content, setContent] = useState(memory?.content ?? "");
   const [scope, setScope] = useState<MemoryScope>(memory?.scope ?? "shared");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const contentCharacterCount = Array.from(content).length;
+  const contentTooLong = contentCharacterCount > MEMORY_CONTENT_LIMITS.maximumCharacters;
+  const contentBeyondRecommendation =
+    contentCharacterCount > MEMORY_CONTENT_LIMITS.recommendedCharacters;
+  const contentIndexing = useMemo(() => {
+    if (!content.trim()) return { chunkCount: 0, error: null };
+    try {
+      return { chunkCount: prepareMemoryContent(content.trim()).chunks.length, error: null };
+    } catch (error) {
+      return {
+        chunkCount: null,
+        error: error instanceof Error ? error.message : "Memory content cannot be indexed safely",
+      };
+    }
+  }, [content]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -682,7 +698,9 @@ function MemoryEditor({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (content.trim()) void onSave(content.trim(), scope);
+            if (content.trim() && !contentTooLong && contentIndexing.error === null) {
+              void onSave(content.trim(), scope);
+            }
           }}
         >
           <header className="memory-editor-header">
@@ -705,10 +723,31 @@ function MemoryEditor({
             id="memory-editor-content"
             value={content}
             rows={12}
-            maxLength={1_000_000}
+            maxLength={MEMORY_CONTENT_LIMITS.maximumCharacters * 2}
+            aria-describedby="memory-editor-content-guidance"
+            aria-invalid={contentTooLong || contentIndexing.error !== null}
             placeholder="Write a durable fact, decision, preference, or piece of context…"
             onChange={(event) => setContent(event.target.value)}
           />
+          <p
+            id="memory-editor-content-guidance"
+            className={`memory-editor-guidance${
+              contentTooLong || contentIndexing.error !== null
+                ? " memory-editor-guidance-error"
+                : ""
+            }`}
+          >
+            {contentCharacterCount.toLocaleString()} /
+            {MEMORY_CONTENT_LIMITS.maximumCharacters.toLocaleString()} characters · recommended ≤
+            {MEMORY_CONTENT_LIMITS.recommendedCharacters.toLocaleString()}
+            {contentIndexing.chunkCount !== null
+              ? ` · ${contentIndexing.chunkCount} / ${MEMORY_CONTENT_LIMITS.maximumChunks} chunks`
+              : ""}
+            {contentBeyondRecommendation && !contentTooLong
+              ? " · Store long source material as document evidence."
+              : ""}
+            {contentIndexing.error && !contentTooLong ? ` · ${contentIndexing.error}` : ""}
+          </p>
           <fieldset className="memory-scope-control">
             <legend>Visibility</legend>
             {(["shared", "private"] as const).map((value) => (
@@ -730,7 +769,9 @@ function MemoryEditor({
             <button
               type="submit"
               className="memory-editor-primary"
-              disabled={saving || !content.trim()}
+              disabled={
+                saving || !content.trim() || contentTooLong || contentIndexing.error !== null
+              }
             >
               {saving ? "Saving…" : memory ? "Save changes" : "Remember"}
             </button>
