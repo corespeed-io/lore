@@ -7,7 +7,7 @@ import {
 import { type CodeDependencyDirection, createCodeDependencyGraphModule } from "./code-graph";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./code-index-errors";
 import { type ConfiguredCodeRepositories, createCodeIndexQueueModule } from "./code-index-queue";
-import { createCodeIndexReadModule } from "./code-index-read";
+import { createCodeIndexReadModule, MAXIMUM_CODE_INDEX_JOB_LIST } from "./code-index-read";
 import type { PostgresDatabase } from "./db";
 import {
   createRequestContextResolver,
@@ -80,6 +80,18 @@ function optionalDependencyLimit(url: URL): number | undefined {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
     throw new CodeHttpBadRequestError("limit must be an integer from 1 through 200");
+  }
+  return parsed;
+}
+
+function optionalJobListLimit(url: URL): number | undefined {
+  const value = url.searchParams.get("limit");
+  if (value === null) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAXIMUM_CODE_INDEX_JOB_LIST) {
+    throw new CodeHttpBadRequestError(
+      `limit must be an integer from 1 through ${MAXIMUM_CODE_INDEX_JOB_LIST}`,
+    );
   }
   return parsed;
 }
@@ -196,9 +208,25 @@ export function createCodeIndexJobHandlers(
   database: PostgresDatabase,
   repositories: ConfiguredCodeRepositories,
 ) {
+  const code = createCodeIndexReadModule(database);
   const queue = createCodeIndexQueueModule(database, repositories);
   const resolver = createRequestContextResolver(database);
   return {
+    async GET(request: Request): Promise<Response> {
+      try {
+        const actor = await resolver.resolveActor(request);
+        const url = new URL(request.url);
+        const jobs = await observeOperation("code-index.jobs", () =>
+          code.listIndexJobs(actor, { limit: optionalJobListLimit(url) }),
+        );
+        return Response.json(jobs, {
+          headers: { "cache-control": "private, no-store" },
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    },
+
     async POST(request: Request): Promise<Response> {
       try {
         const actor = await resolver.resolveActor(request);

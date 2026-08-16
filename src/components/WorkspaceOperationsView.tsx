@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { type CodeIndexJobSummary, summarizeCodeIndexJobs } from "@/lib/code-index-job-view";
 import {
+  useLoreCodeIndexJobs,
   useLoreCurrentHumanActor,
   useLoreDeploymentCapabilities,
   useLoreReadiness,
@@ -89,6 +91,93 @@ function StatusBadge({ value }: { value: string }) {
   return <span className={`operations-status operations-status-${tone}`}>{value}</span>;
 }
 
+function CodeIndexJobs({
+  summary,
+  isLoading,
+  errorText,
+}: {
+  summary: CodeIndexJobSummary;
+  isLoading: boolean;
+  errorText: string | null;
+}) {
+  return (
+    <section className="operations-transfer" aria-labelledby="code-index-title">
+      <div className="operations-section-head">
+        <div>
+          <p className="operations-eyebrow">Rebuildable code evidence</p>
+          <h2 id="code-index-title">Code index jobs</h2>
+        </div>
+        <span>
+          {summary.failedCount
+            ? `${summary.failedCount} failed · ${summary.total} recent`
+            : summary.runningCount
+              ? `${summary.runningCount} in flight · ${summary.total} recent`
+              : `${summary.total} recent`}
+        </span>
+      </div>
+
+      <p className="operations-summary">
+        Each job indexes one exact commit from a repository in this deployment's{" "}
+        <code>LORE_CODE_REPOSITORIES</code> registry. Jobs are Workspace-scoped derived evidence;
+        they never change canonical Memory.
+      </p>
+
+      {isLoading ? (
+        <p className="operations-loading">Loading index jobs…</p>
+      ) : errorText ? (
+        <p className="operations-loading">{errorText}</p>
+      ) : summary.total === 0 ? (
+        <p className="operations-loading">
+          No index jobs have been enqueued in this Workspace. Enqueue a commit through the API or
+          SDK to build code evidence.
+        </p>
+      ) : (
+        <ul className="code-job-list">
+          {summary.rows.map((row) => (
+            <li key={row.id} className="code-job-item">
+              <div className="code-job-head">
+                <span className={`operations-status operations-status-${row.badgeTone}`}>
+                  {row.status}
+                </span>
+                <strong>{row.repositoryKey}</strong>
+                <code>{row.shortCommitOid}</code>
+              </div>
+              <p className="code-job-description">{row.statusDescription}</p>
+              <dl className="code-job-facts">
+                <div>
+                  <dt>Attempts</dt>
+                  <dd>{row.attempts}</dd>
+                </div>
+                <div>
+                  <dt>Indexer</dt>
+                  <dd>{row.indexerRevision}</dd>
+                </div>
+                {row.sourceRef && (
+                  <div>
+                    <dt>Ref</dt>
+                    <dd>{row.sourceRef}</dd>
+                  </div>
+                )}
+                <div>
+                  <dt>Enqueued</dt>
+                  <dd>{displayUtc(row.createdAt)}</dd>
+                </div>
+                {row.completedAt && (
+                  <div>
+                    <dt>Completed</dt>
+                    <dd>{displayUtc(row.completedAt)}</dd>
+                  </div>
+                )}
+              </dl>
+              {row.lastError && <p className="code-job-error">{row.lastError}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function InlineError({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
     <div className="operations-error" role="alert">
@@ -111,6 +200,7 @@ export function WorkspaceOperationsView({
 }) {
   const capabilities = useLoreDeploymentCapabilities(workspaceId);
   const currentActor = useLoreCurrentHumanActor(workspaceId);
+  const codeIndexJobs = useLoreCodeIndexJobs(workspaceId);
   const readiness = useLoreReadiness();
   const mutations = useLoreWorkspaceOperationMutations(workspaceId);
   const archiveSelection = useRef(0);
@@ -159,6 +249,10 @@ export function WorkspaceOperationsView({
     capabilitiesErrorMessage !== dismissedCapabilitiesError ? capabilitiesErrorMessage : null;
   const actorErrorMessage = currentActor.error ? errorMessage(currentActor.error) : null;
   const actorError = actorErrorMessage !== dismissedActorError ? actorErrorMessage : null;
+  const codeIndexJobSummary = useMemo(
+    () => summarizeCodeIndexJobs(codeIndexJobs.data ?? []),
+    [codeIndexJobs.data],
+  );
 
   function resetValidation() {
     setValidatedFingerprint(null);
@@ -196,7 +290,12 @@ export function WorkspaceOperationsView({
     setDismissedReadinessError(null);
     setDismissedCapabilitiesError(null);
     setDismissedActorError(null);
-    await Promise.all([capabilities.mutate(), currentActor.mutate(), readiness.mutate()]);
+    await Promise.all([
+      capabilities.mutate(),
+      codeIndexJobs.mutate(),
+      currentActor.mutate(),
+      readiness.mutate(),
+    ]);
   }
 
   async function downloadArchive() {
@@ -424,6 +523,16 @@ export function WorkspaceOperationsView({
           )}
         </section>
       </div>
+
+      <CodeIndexJobs
+        summary={codeIndexJobSummary}
+        isLoading={!codeIndexJobs.data && !codeIndexJobs.error}
+        errorText={
+          codeIndexJobs.error
+            ? `Index jobs could not be loaded — ${errorMessage(codeIndexJobs.error)}.`
+            : null
+        }
+      />
 
       <section className="operations-transfer" aria-labelledby="portability-title">
         <div className="operations-section-head">

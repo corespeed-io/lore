@@ -723,6 +723,18 @@ export class LoreWorkspaceClient {
     ).data;
   }
 
+  async listCodeIndexJobs(
+    input: { limit?: number; signal?: AbortSignal } = {},
+  ): Promise<readonly CodeIndexJob[]> {
+    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 20, 100)) });
+    return (
+      await this.transport.json<readonly CodeIndexJob[]>(`api/v1/code/index-jobs?${params}`, {
+        workspaceId: this.workspaceId,
+        signal: input.signal,
+      })
+    ).data;
+  }
+
   async enqueueCodeIndex(
     input: EnqueueCodeIndexInput,
     signal?: AbortSignal,

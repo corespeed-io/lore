@@ -19,7 +19,9 @@ import {
   issueAgentCredential,
   listAgentCredentials,
   listAgents,
+  listCodeIndexJobs,
   listMemories,
+  listMemoryCodeEvidence,
   listMemoryProposals,
   listWorkspaces,
   readGraph,
@@ -56,6 +58,10 @@ export const loreKeys = {
   agents: (workspaceId: string) => ["lore", "agents", workspaceId] as const,
   memoryProposals: (workspaceId: string, status: MemoryProposalStatus) =>
     ["lore", "memory-proposals", workspaceId, status] as const,
+  memoryCodeEvidence: (workspaceId: string, memoryId: string) =>
+    ["lore", "memory-code-evidence", workspaceId, memoryId] as const,
+  codeIndexJobs: (workspaceId: string, limit: number) =>
+    ["lore", "code-index-jobs", workspaceId, limit] as const,
   observations: (workspaceId: string, observationIds: readonly string[]) =>
     ["lore", "observations", workspaceId, observationIds.join(",")] as const,
   capabilities: (workspaceId: string) => ["lore", "capabilities", workspaceId] as const,
@@ -230,6 +236,22 @@ export function useLoreMemoryProposals(workspaceId: string, status: MemoryPropos
   return useSWR(
     workspaceId ? loreKeys.memoryProposals(workspaceId, status) : null,
     ([, , scopedWorkspaceId, scopedStatus]) => listMemoryProposals(scopedWorkspaceId, scopedStatus),
+  );
+}
+
+export function useLoreMemoryCodeEvidence(workspaceId: string, memoryId: string | null) {
+  return useSWR(
+    workspaceId && memoryId ? loreKeys.memoryCodeEvidence(workspaceId, memoryId) : null,
+    ([, , scopedWorkspaceId, scopedMemoryId]) =>
+      listMemoryCodeEvidence(scopedWorkspaceId, scopedMemoryId),
+  );
+}
+
+export function useLoreCodeIndexJobs(workspaceId: string, limit = 20) {
+  return useSWR(
+    workspaceId ? loreKeys.codeIndexJobs(workspaceId, limit) : null,
+    ([, , scopedWorkspaceId, scopedLimit]) => listCodeIndexJobs(scopedWorkspaceId, scopedLimit),
+    { refreshInterval: 15_000, revalidateOnFocus: true },
   );
 }
 

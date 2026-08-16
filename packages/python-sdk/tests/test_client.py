@@ -151,6 +151,7 @@ class LorePythonSdkTests(unittest.TestCase):
         transport = QueueTransport(
             FakeResponse(job, status=202),
             FakeResponse(job),
+            FakeResponse([job]),
             FakeResponse([]),
             FakeResponse(dependencies),
         )
@@ -162,6 +163,7 @@ class LorePythonSdkTests(unittest.TestCase):
             "corespeed/lore", COMMIT_OID, source_ref="refs/heads/main"
         )
         workspace.get_code_index_job(JOB_ID)
+        self.assertEqual(workspace.list_code_index_jobs(limit=5), [job])
         workspace.search_code("corespeed/lore", COMMIT_OID, "fetch<User>", path_prefix="src/")
         self.assertEqual(
             workspace.query_code_dependencies(
@@ -183,11 +185,15 @@ class LorePythonSdkTests(unittest.TestCase):
         self.assertNotIn("repositoryPath", json.loads(enqueue.data))
         self.assertEqual(
             transport.requests[2][0].full_url,
+            "http://127.0.0.1:3000/api/v1/code/index-jobs?limit=5",
+        )
+        self.assertEqual(
+            transport.requests[3][0].full_url,
             "http://127.0.0.1:3000/api/v1/code/search?repository_key=corespeed%2Flore"
             f"&commit_oid={COMMIT_OID}&q=fetch%3CUser%3E&limit=10&path_prefix=src%2F",
         )
         self.assertEqual(
-            transport.requests[3][0].full_url,
+            transport.requests[4][0].full_url,
             "http://127.0.0.1:3000/api/v1/code/dependencies?repository_key=corespeed%2Flore"
             f"&commit_oid={COMMIT_OID}&direction=callees&symbol=run&limit=25",
         )

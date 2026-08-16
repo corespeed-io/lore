@@ -564,6 +564,15 @@ class LoreWorkspaceClient:
             ),
         )
 
+    def list_code_index_jobs(self, limit: Optional[int] = None) -> Sequence[CodeIndexJob]:
+        return cast(
+            Sequence[CodeIndexJob],
+            self.client._request(
+                f"api/v1/code/index-jobs?{urlencode({'limit': _limit(limit, 20, 100)})}",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
     def get_code_index_job(self, job_id: str) -> CodeIndexJob:
         return cast(
             CodeIndexJob,

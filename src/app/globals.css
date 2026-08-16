@@ -5417,6 +5417,185 @@ a.ext {
   cursor: pointer;
 }
 
+/* Memory Code Evidence — citation anchors and their drift state.
+   These are flat context rows in the established Memory-detail vocabulary: the
+   `type-badge` shape carries the state, `property-row` carries the facts, and no
+   citation gets card chrome or a colored fill. Only a drifted anchor tints its
+   badge, and it always states the condition in words as well. */
+.code-evidence-notice {
+  display: block;
+  margin: 0 0 18px;
+  border: 1px solid var(--status-degraded-border);
+  border-radius: 12px;
+  background: var(--status-degraded-surface);
+  color: var(--status-degraded-ink);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 12px 14px;
+}
+
+.code-evidence-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-evidence-item {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 12px 0;
+}
+
+.code-evidence-item + .code-evidence-item {
+  border-top: 1px solid var(--hairline);
+}
+
+.code-evidence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* One accent, not a palette: the degraded tokens mark the anchors that need a
+   human, and every other state stays plain and is told apart by its word. */
+.code-evidence-state-alert {
+  border-color: var(--status-degraded-border);
+  background: var(--status-degraded-surface);
+  color: var(--status-degraded-ink);
+}
+
+.code-evidence-state-ok,
+.code-evidence-state-notice,
+.code-evidence-state-unknown {
+  color: var(--mute);
+}
+
+.code-evidence-relationship {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.code-evidence-locator {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.code-evidence-state-description {
+  margin: 0;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.code-evidence-item .property-row {
+  padding: 4px 0;
+}
+
+.code-evidence-relationship-description,
+.code-evidence-footnote {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.code-evidence-footnote {
+  margin-top: 10px;
+}
+
+/* Code Index jobs — read-only operator visibility into derived code evidence. */
+.code-job-list {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-job-item {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border-top: 1px solid var(--hairline-soft);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+.code-job-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.code-job-head strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.code-job-head code {
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.code-job-description {
+  margin: 0;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.code-job-facts {
+  display: flex;
+  gap: 4px 20px;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.code-job-facts > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.code-job-facts dt {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.code-job-facts dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.code-job-error {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 @media (max-width: 760px) {
   .workspace-onboarding {
     grid-template-columns: 1fr;

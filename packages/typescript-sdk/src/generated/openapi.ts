@@ -152,7 +152,7 @@ export interface paths {
             readonly path?: never;
             readonly cookie?: never;
         };
-        readonly get?: never;
+        readonly get: operations["listCodeIndexJobs"];
         readonly put?: never;
         readonly post: operations["enqueueCodeIndex"];
         readonly delete?: never;
@@ -1733,6 +1733,32 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["CodeDependencyQueryResult"];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 403: components["responses"]["Error"];
+        };
+    };
+    readonly listCodeIndexJobs: {
+        readonly parameters: {
+            readonly query?: {
+                readonly limit?: number;
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Bounded newest-first Code Index job status for the Workspace */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["CodeIndexJob"][];
                 };
             };
             readonly 400: components["responses"]["Error"];

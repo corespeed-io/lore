@@ -59,7 +59,7 @@ product model does not change.
 | Graph | Explore authorized Memory relationships | Interactive affinity map + selection inspector | Errors remain inside the Graph workspace |
 | Agents | Connect user-owned Agents to the active Workspace | Agent creation, grants, and credential lifecycle | Secrets are one-time; restore/revoke consequences stay explicit |
 | Proposals | Review Agent-suggested Memory changes | Owner-private create/update proposals and evidence | Nothing enters searchable Memory before explicit human acceptance |
-| Operations | Move visible Memory and inspect deployment health | Export/import workflow, readiness, and capabilities | Dry-run gates imports; degraded is distinct from unready |
+| Operations | Move visible Memory and inspect deployment health | Export/import workflow, readiness, capabilities, and Code Index jobs | Dry-run gates imports; degraded is distinct from unready; a dead index job is distinct from an empty queue |
 
 Search is global to the active Workspace and always returns to Memories. Selecting
 a Memory replaces the list with a detail workspace; Back returns to the same query.
@@ -143,8 +143,13 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   rename/status/deletion controls.
 - `MemoryProposalsView.tsx` owns the human review inbox, evidence navigation,
   version-conflict state, and explicit proposal acceptance or rejection.
+- `MemoryView.tsx` owns the Memory detail workspace, including the Memory's Code
+  citations and their six-state drift assessment. `src/lib/code-evidence-view.ts`
+  owns that pure presentation model.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
-  dry-run/import, owner remap, and read-only deployment readiness/capabilities.
+  dry-run/import, owner remap, read-only deployment readiness/capabilities, and
+  read-only Code Index job state. `src/lib/code-index-job-view.ts` owns that pure
+  presentation model.
 - `WorkerCanvasGraph.tsx` and `graph-canvas.worker.ts` own the production Graph's
   Worker-based D3 layout, Canvas paint, progressive reveal, elastic node drag,
   label collision, and zoom/pan state. `src/lib/viz/graph.ts` retains the shared
@@ -157,11 +162,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Shell | `Sidebar` | desktop, mobile closed/open, Workspace-selected |
 | Memory row | feature row | rest, hover, selected via detail, scope, search evidence |
 | Composer | feature panel | empty, ready, saving, error |
-| Detail | feature workspace | view/edit, saving, destructive, mobile stack |
+| Detail | feature workspace | view/edit, saving, destructive, mobile stack, code citations absent/settled/drifted/unreadable |
 | Graph | `GraphView` | loading, empty, mapped, filtered, selected, error |
 | Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, lifecycle dialog, destructive confirmation, error |
 | Proposal review | `MemoryProposalsView` | loading, empty, pending, selected, stale target, accepted/rejected receipt, error |
-| Workspace operations | `WorkspaceOperationsView` | loading, ready/degraded/unready, export, file selected, dry-run, importing, receipt, error |
+| Workspace operations | `WorkspaceOperationsView` | loading, ready/degraded/unready, export, file selected, dry-run, importing, receipt, error, index jobs loading/empty/running/dead |
 
 ## 10. Workflow specifications
 
@@ -179,6 +184,30 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Default scope: shared; private requires explicit selection.
 - Saving disables duplicate submission and closes only after success.
 - On mobile the composer is full-width and all actions remain reachable.
+
+### Inspect a Memory's Code citations
+
+- Entry: the Memory detail workspace. Citations are read with the same Actor and
+  Workspace request context as the Memory, so a citation the Actor may not see never
+  reaches the browser and never renders.
+- Most Memories never cite code, so the section is absent rather than empty. It
+  appears only once the Actor's read returns at least one citation; a permanent
+  placeholder would be dead chrome in every ordinary Memory's context column. A
+  failed read is the exception and stays visible, because an unread list cannot be
+  told apart from an empty one and hiding it could hide drift.
+- Each citation names its relationship (`supports`, `contradicts`, `implements`, or
+  `rationale`), the most specific locator Lore froze at citation time (declaration,
+  else symbol, else the cited file), the abbreviated cited commit, and the UTC date
+  of the last assessment. Repository identity is a key and a commit OID; an
+  operator-configured repository path is server-only and is never displayed.
+- Validation state is one of `current`, `moved`, `changed`, `deleted`, `ambiguous`,
+  or `unverifiable`. `changed`, `deleted`, and `ambiguous` mean the Memory's claim may
+  no longer describe the code it cites. Those sort first and the detail workspace
+  states the count in one sentence, so drift is not hidden below settled citations.
+- Every state is stated in words as well as tone; nothing depends on color alone.
+- Lore validates the anchor and never rewrites the Memory. Loading and no-citation
+  are both absent by design; a failed read stays visible, and a failed refresh
+  keeps the last successful read on screen instead of replacing it with an error.
 
 ### Workspace selection
 
@@ -237,6 +266,12 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Readiness distinguishes `ready`, lexical-safe `degraded`, and request-blocking
   `unready`. Capabilities and the active embedding generation are read-only
   deployment facts, never Workspace/User/Agent settings.
+- Code Index jobs are a bounded, newest-first, read-only view of this Workspace's
+  queue. `dead` is terminal failure after the attempt budget and sorts first, then
+  work still in flight, then settled history. Each row shows the repository key,
+  abbreviated commit, attempt count, indexer revision, UTC timestamps, and the
+  queue's own `lastError`. Enqueueing stays an API/SDK operator action; the
+  interface never accepts a repository path and never displays one.
 
 ### Review Memory Proposals
 
@@ -309,6 +344,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
+| 2026-08-15 | Surface Memory Code citations in the Memory detail context and Code Index jobs in Operations, both read-only | Make the six-state drift assessment and the indexing queue observable to the human who owns the Memory without building a code browser Lore does not need | Code-aware Memory reachable only through HTTP/SDK/CLI/MCP |
 | 2026-08-10 | Promote the measured Worker + Canvas renderer to the native Graph and keep labels interaction-driven | Keep ~1,000-node layout and drag responsive while making centrality visible without persistent annotation clutter | Main-thread SVG production renderer and always-on labels |
 | 2026-08-09 | Add Operations as the human-only Workspace portability and deployment-health destination | Keep high-consequence export/import behind checksum validation, owner remap, and dry-run while making lexical-safe degradation visible | CLI/API-only Workspace portability |
 | 2026-08-10 | Add Proposals as the human approval boundary for Agent-suggested Memory changes | Enable opt-in automated reasoning without allowing model output to silently become canonical Memory | Direct model-authored canonical writes as an evolution workflow |
