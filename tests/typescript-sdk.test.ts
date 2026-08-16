@@ -160,6 +160,38 @@ describe("Lore TypeScript SDK", () => {
     );
   });
 
+  test("lists Code Index jobs through one bounded Workspace-scoped request", async () => {
+    const job = {
+      id: "80000000-0000-4000-8000-000000000001",
+      repositoryId: "90000000-0000-4000-8000-000000000001",
+      repositoryKey: "corespeed/lore",
+      commitOid: "b".repeat(40),
+      sourceRef: null,
+      indexerRevision: "code-index-v1",
+      status: "dead",
+      attemptCount: 5,
+      maximumAttempts: 5,
+      availableAt: "2026-08-15T00:00:00.000Z",
+      completedAt: null,
+      lastError: "Git object is unreachable",
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:01:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(Response.json([job]));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(workspace.listCodeIndexJobs({ limit: 5 })).resolves.toEqual([job]);
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname + url.search).toBe("/api/v1/code/index-jobs?limit=5");
+    expect(new Headers(init.headers).get("x-lore-workspace-id")).toBe(WORKSPACE_ID);
+    // The job contract identifies a repository by key and commit only.
+    expect(JSON.stringify(job)).not.toMatch(/repositoryPath/i);
+  });
+
   test("retrieves joint context through one Workspace-scoped request", async () => {
     const packet = {
       revision: "joint-memory-code-v2",

@@ -140,3 +140,31 @@ test("Memory pagination advances only from a settled full page inside the browse
     }),
   ).toBe(false);
 });
+
+test("code cache keys isolate the Memory, Workspace, and requested job depth", () => {
+  const memoryId = "40000000-0000-4000-8000-000000000001";
+  const otherWorkspaceId = "10000000-0000-4000-8000-000000000002";
+
+  expect(loreKeys.memoryCodeEvidence(workspaceId, memoryId)).toEqual([
+    "lore",
+    "memory-code-evidence",
+    workspaceId,
+    memoryId,
+  ]);
+  expect(loreKeys.memoryCodeEvidence(workspaceId, memoryId)).not.toEqual(
+    loreKeys.memoryCodeEvidence(otherWorkspaceId, memoryId),
+  );
+  expect(loreKeys.memoryCodeEvidence(workspaceId, memoryId)).not.toEqual(
+    loreKeys.memoryCodeEvidence(workspaceId, "40000000-0000-4000-8000-000000000002"),
+  );
+  expect(loreKeys.codeIndexJobs(workspaceId, 20)).not.toEqual(
+    loreKeys.codeIndexJobs(otherWorkspaceId, 20),
+  );
+  expect(loreKeys.codeIndexJobs(workspaceId, 20)).not.toEqual(
+    loreKeys.codeIndexJobs(workspaceId, 50),
+  );
+  // Code reads must never collide with the Memory caches they sit beside.
+  expect(loreKeys.memoryCodeEvidence(workspaceId, memoryId)).not.toEqual(
+    loreKeys.memory(workspaceId, memoryId),
+  );
+});

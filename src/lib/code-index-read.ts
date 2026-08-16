@@ -19,6 +19,7 @@ import type { PostgresDatabase } from "./db";
 
 export interface CodeIndexReadModule {
   getIndexJob(actor: ActorContext, input: CodeIndexJobSelector): Promise<CodeIndexJob>;
+  listIndexJobs(actor: ActorContext, input?: ListCodeIndexJobsInput): Promise<CodeIndexJob[]>;
   getGitRevisionManifest(
     actor: ActorContext,
     input: CodeRevisionSelector,
@@ -34,6 +35,13 @@ export interface CodeIndexReadModule {
 export interface GetCodeArtifactsInput extends CodeRevisionSelector {
   artifactIds: readonly string[];
 }
+
+export interface ListCodeIndexJobsInput {
+  limit?: number;
+}
+
+export const MAXIMUM_CODE_INDEX_JOB_LIST = 100;
+const DEFAULT_CODE_INDEX_JOB_LIST = 20;
 
 export interface CodeArtifactLogicalDigest {
   artifactId: string;
@@ -375,6 +383,33 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
           throw new CodeIndexAccessDeniedError("Index job is not visible to this Actor");
         }
         return toCodeIndexJob(job);
+      });
+    },
+
+    async listIndexJobs(actor, input = {}) {
+      const limit = input.limit ?? DEFAULT_CODE_INDEX_JOB_LIST;
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_CODE_INDEX_JOB_LIST) {
+        throw new CodeIndexValidationError(
+          `limit must be an integer from 1 through ${MAXIMUM_CODE_INDEX_JOB_LIST}`,
+        );
+      }
+      return database.transaction(async (transaction) => {
+        await installActorContext(transaction, actor);
+        const result = await transaction.query<CodeIndexJobRow>(
+          `SELECT job.id, job.repository_id, repository.repository_key,
+             job.commit_oid, job.source_ref, job.indexer_revision, job.status,
+             job.attempt_count, job.max_attempts, job.available_at,
+             job.completed_at, job.last_error, job.created_at, job.updated_at
+           FROM code_index_jobs job
+           JOIN code_repositories repository
+             ON repository.workspace_id = job.workspace_id
+            AND repository.id = job.repository_id
+           WHERE job.workspace_id = $1
+           ORDER BY job.created_at DESC, job.id DESC
+           LIMIT $2`,
+          [actor.workspaceId, limit],
+        );
+        return result.rows.map(toCodeIndexJob);
       });
     },
 

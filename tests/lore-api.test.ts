@@ -8,7 +8,9 @@ import {
   getReadiness,
   importWorkspaceArchive,
   listAgentCredentials,
+  listCodeIndexJobs,
   listMemories,
+  listMemoryCodeEvidence,
   listMemoryProposals,
   listWorkspaces,
   reviewMemoryProposal,
@@ -302,4 +304,52 @@ test("Operations browser client scopes Actor, capabilities, export, and dry-run 
     ownerMap: {},
     dryRun: true,
   });
+});
+
+test("code transport scopes citation and job reads to the active Workspace", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(Response.json([]));
+  vi.stubGlobal("fetch", fetchMock);
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const memoryId = "40000000-0000-4000-8000-000000000001";
+
+  await listMemoryCodeEvidence(workspaceId, memoryId);
+  await listCodeIndexJobs(workspaceId, 5);
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(String(fetchMock.mock.calls[0][0])).toBe(`/api/v1/memories/${memoryId}/code-evidence`);
+  expect(String(fetchMock.mock.calls[1][0])).toBe("/api/v1/code/index-jobs?limit=5");
+  for (const call of fetchMock.mock.calls) {
+    const options = call[1];
+    if (!options) throw new Error("Expected code request options");
+    expect((options.headers as Headers).get("x-lore-workspace-id")).toBe(workspaceId);
+  }
+  // The request log is newest-first.
+  expect(getRequestLog().map((entry) => entry.operation)).toEqual([
+    "GET /api/v1/code/index-jobs",
+    "GET /api/v1/memories/:id/code-evidence",
+  ]);
+});
+
+test("an unreadable citation surfaces the server error rather than an empty citation list", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      Response.json(
+        { code: "access_denied", error: "Memory is not visible to this Actor" },
+        {
+          status: 403,
+        },
+      ),
+    ),
+  );
+
+  await expect(
+    listMemoryCodeEvidence(
+      "10000000-0000-4000-8000-000000000001",
+      "40000000-0000-4000-8000-000000000001",
+    ),
+  ).rejects.toThrow("Memory is not visible to this Actor");
 });

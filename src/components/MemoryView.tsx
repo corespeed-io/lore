@@ -1,6 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import {
+  type CodeEvidenceRow,
+  type CodeEvidenceSummary,
+  shortCommitOid,
+  summarizeCodeEvidence,
+} from "@/lib/code-evidence-view";
+import { useLoreMemoryCodeEvidence } from "@/lib/lore-swr";
 import { renderMarkdown } from "@/lib/markdown";
 import type { MemoryScope } from "@/lib/types";
 
@@ -10,6 +17,7 @@ interface MemoryLink {
 }
 
 interface MemoryViewProps {
+  workspaceId: string;
   title: string;
   type: string;
   id: string;
@@ -78,7 +86,87 @@ function RelatedMemories({
   );
 }
 
+function CodeCitation({ row }: { row: CodeEvidenceRow }) {
+  return (
+    <li className="code-evidence-item">
+      <div className="code-evidence-header">
+        <span className={`type-badge code-evidence-state-${row.tone}`}>{row.stateLabel}</span>
+        <span className="code-evidence-relationship">{row.relationship}</span>
+      </div>
+      <span className="code-evidence-locator">{row.locator}</span>
+      <p className="code-evidence-state-description">{row.stateDescription}</p>
+      <dl className="property-list">
+        <div className="property-row">
+          <dt>Cited</dt>
+          <dd>{shortCommitOid(row.citedCommitOid)}</dd>
+        </div>
+        {row.declarationChunkOrdinal !== null && (
+          <div className="property-row">
+            <dt>Chunk</dt>
+            <dd>{row.declarationChunkOrdinal}</dd>
+          </div>
+        )}
+        {row.movedToPath && (
+          <div className="property-row">
+            <dt>Now at</dt>
+            <dd>{row.movedToPath}</dd>
+          </div>
+        )}
+        {row.validatedCommitOid && (
+          <div className="property-row">
+            <dt>Against</dt>
+            <dd>{shortCommitOid(row.validatedCommitOid)}</dd>
+          </div>
+        )}
+        <div className="property-row">
+          <dt>Checked</dt>
+          <dd>{displayDate(row.validatedAt)}</dd>
+        </div>
+      </dl>
+      <p className="code-evidence-relationship-description">{row.relationshipDescription}</p>
+    </li>
+  );
+}
+
+function CodeCitations({
+  summary,
+  isLoading,
+  hasError,
+}: {
+  summary: CodeEvidenceSummary;
+  isLoading: boolean;
+  hasError: boolean;
+}) {
+  return (
+    <section className="context-section">
+      <div className="context-heading">
+        <h3>Code citations</h3>
+        <span>{hasError || isLoading ? "—" : summary.total}</span>
+      </div>
+      {isLoading ? (
+        <p className="context-empty">Loading code citations…</p>
+      ) : hasError ? (
+        <p className="context-empty">Code citations could not be loaded.</p>
+      ) : summary.total === 0 ? (
+        <p className="context-empty">No code citations</p>
+      ) : (
+        <>
+          <ul className="code-evidence-list">
+            {summary.rows.map((row) => (
+              <CodeCitation key={row.id} row={row} />
+            ))}
+          </ul>
+          <p className="code-evidence-footnote">
+            Lore validates each anchor against the code it cited; it never rewrites the Memory.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function MemoryView({
+  workspaceId,
   title,
   type,
   id,
@@ -105,6 +193,11 @@ export function MemoryView({
     [body, wikilinkTargets],
   );
   const bodyRef = useRef<HTMLDivElement>(null);
+  const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
+  const codeEvidenceSummary = useMemo(
+    () => summarizeCodeEvidence(codeEvidence.data ?? []),
+    [codeEvidence.data],
+  );
 
   useEffect(() => {
     const bodyElement = bodyRef.current;
@@ -135,6 +228,11 @@ export function MemoryView({
             <span className="type-badge">{type}</span>
             <span className="detail-id">{id}</span>
           </div>
+          {codeEvidenceSummary.attentionMessage && (
+            <p className="code-evidence-notice" role="status">
+              {codeEvidenceSummary.attentionMessage}
+            </p>
+          )}
           {body.trim() ? (
             <div ref={bodyRef} className="detail-body" />
           ) : (
@@ -213,6 +311,12 @@ export function MemoryView({
               </button>
             </div>
           </section>
+
+          <CodeCitations
+            summary={codeEvidenceSummary}
+            isLoading={!codeEvidence.data && !codeEvidence.error}
+            hasError={Boolean(codeEvidence.error)}
+          />
 
           <RelatedMemories memories={related} onOpen={onOpen} />
         </aside>

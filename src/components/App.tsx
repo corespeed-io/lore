@@ -464,6 +464,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
           >
             {selectedMemory ? (
               <MemoryView
+                workspaceId={activeWorkspaceId}
                 title={selectedMemory.title}
                 type={selectedMemory.type}
                 id={selectedMemory.id}

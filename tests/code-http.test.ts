@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "vitest";
+import { createCodeEvidenceModule } from "@/lib/code-evidence";
 import {
   createCodeDependencyHandlers,
   createCodeIndexJobHandlers,
@@ -208,4 +209,130 @@ test("an inherited object key is not a configured repository", async () => {
       module.enqueue(actor, { repositoryKey, commitOid: "a".repeat(40) }),
     ).rejects.toThrow(CodeIndexValidationError);
   }
+});
+
+test("the operator job list stays Workspace-scoped, bounded, and free of any repository path", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "code-http-jobs-alice";
+  const context = await createMemoryTestContext();
+  await context.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO identities (id, user_id, provider, subject)
+       VALUES ($1, $2, 'local', $3)`,
+      [crypto.randomUUID(), context.alice.userId, process.env.LORE_LOCAL_SUBJECT],
+    );
+  });
+  const handlers = createCodeIndexJobHandlers(context.database, {
+    "corespeed/lore": { displayName: "Lore", repositoryPath: "/operator/configured/lore" },
+    "corespeed/other": { displayName: "Other", repositoryPath: "/operator/configured/other" },
+  });
+  const headers = { "x-lore-workspace-id": context.alice.workspaceId };
+  const queue = createCodeIndexQueueModule(context.database, {
+    "corespeed/lore": { displayName: "Lore", repositoryPath: "/operator/configured/lore" },
+    "corespeed/other": { displayName: "Other", repositoryPath: "/operator/configured/other" },
+  });
+  const first = await queue.enqueue(context.alice, {
+    repositoryKey: "corespeed/lore",
+    commitOid: COMMIT,
+  });
+  const second = await queue.enqueue(context.alice, {
+    repositoryKey: "corespeed/other",
+    commitOid: "b".repeat(40),
+    sourceRef: "refs/heads/main",
+  });
+
+  const response = await handlers.GET(
+    new Request("http://lore.local/api/v1/code/index-jobs", { headers }),
+  );
+  const jobs = (await response.json()) as Array<Record<string, unknown>>;
+  expect(response.status).toBe(200);
+  expect(jobs.map((job) => job.id)).toEqual([second.id, first.id]);
+  expect(jobs[0]).toMatchObject({
+    repositoryKey: "corespeed/other",
+    commitOid: "b".repeat(40),
+    sourceRef: "refs/heads/main",
+    status: "pending",
+    attemptCount: 0,
+    lastError: null,
+  });
+  for (const job of jobs) {
+    expect(job).not.toHaveProperty("repositoryPath");
+    expect(JSON.stringify(job)).not.toContain("/operator/configured/");
+  }
+
+  const bounded = await handlers.GET(
+    new Request("http://lore.local/api/v1/code/index-jobs?limit=1", { headers }),
+  );
+  await expect(bounded.json()).resolves.toHaveLength(1);
+
+  for (const limit of ["0", "101", "2.5", "all"]) {
+    const rejected = await handlers.GET(
+      new Request(`http://lore.local/api/v1/code/index-jobs?limit=${limit}`, { headers }),
+    );
+    expect(rejected.status).toBe(400);
+  }
+
+  const otherWorkspace = await handlers.GET(
+    new Request("http://lore.local/api/v1/code/index-jobs", {
+      headers: { "x-lore-workspace-id": context.carol.workspaceId },
+    }),
+  );
+  expect(otherWorkspace.status).toBe(403);
+});
+
+test("a co-member never receives the Code citations of a private Memory", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "code-http-evidence-bob";
+  const context = await createMemoryTestContext();
+  await context.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO identities (id, user_id, provider, subject)
+       VALUES ($1, $2, 'local', $3)`,
+      [crypto.randomUUID(), context.bob.userId, process.env.LORE_LOCAL_SUBJECT],
+    );
+  });
+  const code = createCodeIndexModule(context.database);
+  const memories = createMemoryModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+  const repositoryKey = "corespeed/private-evidence";
+  const secret = await memories.remember(context.alice, {
+    content: "Alice's private note about the retrieval guard.",
+    scope: "private",
+  });
+  await code.indexRevision(context.alice, {
+    repositoryKey,
+    displayName: "Private evidence",
+    commitOid: COMMIT,
+    files: [{ path: "src/secret-guard.ts", content: "export function secretGuard() {}\n" }],
+  });
+  const [artifact] = await code.search(context.alice, {
+    repositoryKey,
+    commitOid: COMMIT,
+    query: "secretGuard",
+  });
+  if (!artifact) throw new Error("Expected secretGuard Artifact");
+  await evidence.cite(context.alice, {
+    memoryId: secret.id,
+    artifactId: artifact.id,
+    relationship: "supports",
+  });
+
+  // Bob is an active member of the same Workspace, so only Memory scope stands
+  // between him and the citation.
+  const handlers = createMemoryCodeEvidenceHandlers(context.database);
+  const response = await handlers.GET(
+    new Request(`http://lore.local/api/v1/memories/${secret.id}/code-evidence`, {
+      headers: { "x-lore-workspace-id": context.alice.workspaceId },
+    }),
+    secret.id,
+  );
+  const body = await response.text();
+
+  expect(response.status).toBe(403);
+  expect(body).not.toContain("src/secret-guard.ts");
+  expect(body).not.toContain(artifact.id);
+  await expect(evidence.list(context.bob, { memoryId: secret.id })).rejects.toThrow(/not visible/);
+  await expect(evidence.list(context.alice, { memoryId: secret.id })).resolves.toHaveLength(1);
 });

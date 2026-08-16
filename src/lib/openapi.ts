@@ -491,6 +491,25 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         },
       },
       "/api/v1/code/index-jobs": {
+        get: {
+          operationId: "listCodeIndexJobs",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Bounded newest-first Code Index job status for the Workspace", {
+              type: "array",
+              items: { $ref: "#/components/schemas/CodeIndexJob" },
+            }),
+            "400": { $ref: "#/components/responses/Error" },
+            "403": { $ref: "#/components/responses/Error" },
+          },
+        },
         post: {
           operationId: "enqueueCodeIndex",
           parameters: [workspaceHeader],

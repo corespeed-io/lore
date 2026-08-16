@@ -171,6 +171,17 @@ been removed. Lore now has a native implementation:
   paged list plus active search and graph keys. Browse eagerly fills at most 5,000
   Memories (50 × 100-row pages), aligned with the Graph read budget; ranked search
   is the access path beyond that browse window;
+- code-aware Memory has exactly two human surfaces, both read-only. `MemoryView.tsx`
+  renders a Memory's Code citations from `GET /api/v1/memories/{id}/code-evidence`
+  and `WorkspaceOperationsView.tsx` renders this Workspace's Code Index queue from
+  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/lib/code-evidence-view.ts`
+  and `src/lib/code-index-job-view.ts` own their pure presentation models: the six
+  validation states rank `changed`/`deleted`/`ambiguous` first, job tones rank `dead`
+  first, and each state is stated in words as well as tone. Repository identity in the
+  browser is a `repositoryKey` plus a commit OID; the operator-configured
+  `repositoryPath` is server-only and must never reach a response body or the DOM.
+  Do not grow these into a code browser, a code-search UI, or a dependency-graph
+  visualization — Code Artifacts are agent-facing rebuildable evidence by design;
 - `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
   `/memories`, and Memory detail deep links so browser refresh never loses the
   client route;
@@ -903,6 +914,15 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's
   `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
+- Component tests are `tests/**/*.test.tsx` and run in Vitest's default `node`
+  environment through `renderToStaticMarkup`. There is no DOM testing library. Seed
+  server data with an `SWRConfig` `fallback` keyed by `unstable_serialize(loreKeys…)`
+  and a fresh `provider`, which is also how an Actor's empty or denied RLS-filtered
+  read is modelled. `useEffect` never runs, so anything painted from an effect (the
+  Markdown body, the Graph canvas) is absent from the markup.
+- `bun run lint` silently checks nothing when the working tree sits under a path
+  containing `/tmp`, because `biome.json` excludes `**/tmp`. "Checked 0 files" means
+  the path excluded everything, not that the tree is clean.
 
 ## Commit / PR conventions
 
