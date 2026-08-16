@@ -205,8 +205,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   no longer describe the code it cites. Those sort first and the detail workspace
   states the count in one sentence, so drift is not hidden below settled citations.
 - Every state is stated in words as well as tone; nothing depends on color alone.
-- Lore validates the anchor and never rewrites the Memory. Loading, request-failed,
-  and no-citation states remain distinguishable.
+- Lore validates the anchor and never rewrites the Memory. Loading and no-citation
+  are both absent by design; a failed read stays visible, and a failed refresh
+  keeps the last successful read on screen instead of replacing it with an error.
 
 ### Workspace selection
 
@@ -269,7 +270,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   queue. `dead` is terminal failure after the attempt budget and sorts first, then
   work still in flight, then settled history. Each row shows the repository key,
   abbreviated commit, attempt count, indexer revision, UTC timestamps, and the
-  queue's own `lastError`. Enqueueing stays an API/SDK/CLI operator action; the
+  queue's own `lastError`. Enqueueing stays an API/SDK operator action; the
   interface never accepts a repository path and never displays one.
 
 ### Review Memory Proposals

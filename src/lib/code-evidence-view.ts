@@ -27,7 +27,9 @@ const STATE_PRESENTATION: Record<CodeEvidenceValidationState, CodeEvidenceStateP
   current: {
     tone: "ok",
     label: "current",
-    description: "The cited code still matches this citation.",
+    // Past tense on purpose: nothing revalidates automatically, so this state
+    // asserts the last check, never present-time freshness.
+    description: "The cited code matched this citation when it was last checked.",
   },
   moved: {
     tone: "notice",
@@ -110,7 +112,10 @@ export function codeEvidenceSectionState(input: {
   hasError: boolean;
   total: number;
 }): "error" | "hidden" | "list" {
-  if (input.hasError) return "error";
+  // A failed refresh with cached citations keeps the list: the last successful
+  // read (drift included) beats an error row. `error` only when there is
+  // nothing to show, so an unreadable list is never silently hidden.
+  if (input.hasError) return input.total === 0 ? "error" : "list";
   return input.total === 0 ? "hidden" : "list";
 }
 
@@ -132,10 +137,9 @@ function toRow(evidence: MemoryCodeEvidence): CodeEvidenceRow {
     locator: evidence.citedDeclarationKey ?? evidence.citedSymbolKey ?? evidence.citedPath,
     declarationChunkOrdinal: evidence.citedDeclarationChunkOrdinal,
     citedCommitOid: evidence.citedCommitOid,
-    validatedCommitOid:
-      evidence.validatedCommitOid && evidence.validatedCommitOid !== evidence.citedCommitOid
-        ? evidence.validatedCommitOid
-        : null,
+    // Always surfaced, even when it equals the cited commit: suppressing the
+    // equal case hid the only clue that no independent recheck ever happened.
+    validatedCommitOid: evidence.validatedCommitOid,
     validatedAt: evidence.validatedAt,
   };
 }

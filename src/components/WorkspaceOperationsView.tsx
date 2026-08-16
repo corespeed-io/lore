@@ -128,8 +128,8 @@ function CodeIndexJobs({
         <p className="operations-loading">{errorText}</p>
       ) : summary.total === 0 ? (
         <p className="operations-loading">
-          No index jobs have been enqueued in this Workspace. Enqueue a commit through the API, SDK,
-          or CLI to build code evidence.
+          No index jobs have been enqueued in this Workspace. Enqueue a commit through the API or
+          SDK to build code evidence.
         </p>
       ) : (
         <ul className="code-job-list">

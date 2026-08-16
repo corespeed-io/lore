@@ -147,7 +147,7 @@ test("the locator falls back from declaration to symbol to the cited file", () =
   expect(file?.locator).toBe("src/module-3.ts");
 });
 
-test("a moved citation reports its new path and validated commit, unchanged ones stay quiet", () => {
+test("a moved citation reports its new path; the validated commit always shows", () => {
   const [moved] = summarizeCodeEvidence([
     citation(1, "moved", {
       validatedPath: "src/renamed.ts",
@@ -164,7 +164,9 @@ test("a moved citation reports its new path and validated commit, unchanged ones
   expect(moved?.movedToPath).toBe("src/renamed.ts");
   expect(moved?.validatedCommitOid).toBe("e".repeat(40));
   expect(current?.movedToPath).toBeNull();
-  expect(current?.validatedCommitOid).toBeNull();
+  // Equal cited/validated commits are still shown: hiding the equal case hid
+  // the only clue that no independent recheck ever happened.
+  expect(current?.validatedCommitOid).toBe("a".repeat(40));
 });
 
 test("commit OIDs are abbreviated for display without losing the stored value", () => {
@@ -194,5 +196,10 @@ test("an unreadable citation list is reported, never silently hidden", () => {
   // Absent and unreadable are different: hiding a failed read could hide drift
   // on a Memory that does cite code.
   expect(codeEvidenceSectionState({ hasError: true, total: 0 })).toBe("error");
-  expect(codeEvidenceSectionState({ hasError: true, total: 3 })).toBe("error");
+});
+
+test("a failed refresh keeps the last successful read on screen", () => {
+  // Cached citations (drift included) beat an error row; SWR keeps stale data
+  // on a failed background revalidation and the view must not discard it.
+  expect(codeEvidenceSectionState({ hasError: true, total: 3 })).toBe("list");
 });
