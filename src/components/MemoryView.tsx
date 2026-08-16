@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import {
   type CodeEvidenceRow,
   type CodeEvidenceSummary,
+  codeEvidenceSectionState,
   shortCommitOid,
   summarizeCodeEvidence,
 } from "@/lib/code-evidence-view";
@@ -128,39 +129,41 @@ function CodeCitation({ row }: { row: CodeEvidenceRow }) {
   );
 }
 
-function CodeCitations({
-  summary,
-  isLoading,
-  hasError,
-}: {
-  summary: CodeEvidenceSummary;
-  isLoading: boolean;
-  hasError: boolean;
-}) {
+/**
+ * Most Memories never cite code, so this section is absent rather than empty:
+ * a permanent "no code citations" row would be dead chrome in the context
+ * column of every ordinary Memory. A failed read still renders, because an
+ * unread list cannot be distinguished from an empty one and silently hiding it
+ * could hide drift on a Memory that does cite code.
+ */
+function CodeCitations({ summary, hasError }: { summary: CodeEvidenceSummary; hasError: boolean }) {
+  const state = codeEvidenceSectionState({ hasError, total: summary.total });
+  if (state === "hidden") return null;
+  if (state === "error") {
+    return (
+      <section className="context-section">
+        <div className="context-heading">
+          <h3>Code citations</h3>
+          <span>—</span>
+        </div>
+        <p className="context-empty">Code citations could not be loaded.</p>
+      </section>
+    );
+  }
   return (
     <section className="context-section">
       <div className="context-heading">
         <h3>Code citations</h3>
-        <span>{hasError || isLoading ? "—" : summary.total}</span>
+        <span>{summary.total}</span>
       </div>
-      {isLoading ? (
-        <p className="context-empty">Loading code citations…</p>
-      ) : hasError ? (
-        <p className="context-empty">Code citations could not be loaded.</p>
-      ) : summary.total === 0 ? (
-        <p className="context-empty">No code citations</p>
-      ) : (
-        <>
-          <ul className="code-evidence-list">
-            {summary.rows.map((row) => (
-              <CodeCitation key={row.id} row={row} />
-            ))}
-          </ul>
-          <p className="code-evidence-footnote">
-            Lore validates each anchor against the code it cited; it never rewrites the Memory.
-          </p>
-        </>
-      )}
+      <ul className="code-evidence-list">
+        {summary.rows.map((row) => (
+          <CodeCitation key={row.id} row={row} />
+        ))}
+      </ul>
+      <p className="code-evidence-footnote">
+        Lore validates each anchor against the code it cited; it never rewrites the Memory.
+      </p>
     </section>
   );
 }
@@ -312,11 +315,7 @@ export function MemoryView({
             </div>
           </section>
 
-          <CodeCitations
-            summary={codeEvidenceSummary}
-            isLoading={!codeEvidence.data && !codeEvidence.error}
-            hasError={Boolean(codeEvidence.error)}
-          />
+          <CodeCitations summary={codeEvidenceSummary} hasError={Boolean(codeEvidence.error)} />
 
           <RelatedMemories memories={related} onOpen={onOpen} />
         </aside>

@@ -97,6 +97,23 @@ export function shortCommitOid(commitOid: string): string {
   return commitOid.slice(0, 12);
 }
 
+/**
+ * Whether the Memory detail shows a citation section at all.
+ *
+ * Most Memories never cite code, so "no citations" is `hidden`, not an empty
+ * row — a permanent placeholder would be dead chrome in every ordinary
+ * Memory's context column. A failed read is `error` rather than `hidden`,
+ * because an unread list cannot be told apart from an empty one and quietly
+ * hiding it could hide drift on a Memory that does cite code.
+ */
+export function codeEvidenceSectionState(input: {
+  hasError: boolean;
+  total: number;
+}): "error" | "hidden" | "list" {
+  if (input.hasError) return "error";
+  return input.total === 0 ? "hidden" : "list";
+}
+
 function toRow(evidence: MemoryCodeEvidence): CodeEvidenceRow {
   const state = STATE_PRESENTATION[evidence.validationState];
   const movedToPath =

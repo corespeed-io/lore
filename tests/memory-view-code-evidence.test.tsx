@@ -49,15 +49,17 @@ function citation(
  * modelled the only way it can reach the browser: as absent data.
  */
 function renderMemoryView(evidence: readonly MemoryCodeEvidence[] | undefined): string {
+  return renderMemoryViewWith({
+    fallback: {
+      [unstable_serialize(loreKeys.memoryCodeEvidence(WORKSPACE_ID, MEMORY_ID))]: evidence,
+    },
+    provider: () => new Map(),
+  });
+}
+
+function renderMemoryViewWith(config: Record<string, unknown>): string {
   return renderToStaticMarkup(
-    <SWRConfig
-      value={{
-        fallback: {
-          [unstable_serialize(loreKeys.memoryCodeEvidence(WORKSPACE_ID, MEMORY_ID))]: evidence,
-        },
-        provider: () => new Map(),
-      }}
-    >
+    <SWRConfig value={config}>
       <MemoryView
         workspaceId={WORKSPACE_ID}
         title="Retrieval grounding gate"
@@ -105,17 +107,25 @@ test("a Memory with drifted code citations makes the drift unmissable", () => {
 });
 
 test("a citation the Actor cannot read never renders", () => {
-  // Bob is a co-member who cannot see Alice's private Memory citation, so his
-  // RLS-filtered read returns an empty list.
+  // An Actor whose RLS-filtered read returns nothing gets no trace of the
+  // citation — not its path, not its commit, not even the section heading.
   const markup = renderMemoryView([]);
 
-  expect(markup).toContain("Code citations");
-  expect(markup).toContain("No code citations");
+  expect(markup).not.toContain("Code citations");
   expect(markup).not.toContain("code-evidence-notice");
   expect(markup).not.toContain("code-evidence-state-alert");
   expect(markup).not.toContain("src/module-1.ts");
   expect(markup).not.toContain("ab12cd34ef56");
   expect(markup).not.toMatch(/no longer match/);
+  // The rest of the Memory detail is untouched.
+  expect(markup).toContain("Retrieval grounding gate");
+  expect(markup).toContain("Related");
+});
+
+test("a Memory that cites no code carries no citation section at all", () => {
+  // Most Memories never cite code; an always-present empty section would be
+  // dead chrome in every ordinary Memory's context column.
+  expect(renderMemoryView([])).not.toContain("Code citations");
 });
 
 test("settled citations render without an attention notice", () => {
@@ -130,10 +140,10 @@ test("settled citations render without an attention notice", () => {
   expect(markup).not.toMatch(/no longer match/);
 });
 
-test("an unread citation list renders a loading state instead of an empty one", () => {
+test("an unread citation list stays silent until it resolves", () => {
+  // No flicker: the section appears when data arrives, not before.
   const markup = renderMemoryView(undefined);
 
-  expect(markup).toContain("Loading code citations…");
-  expect(markup).not.toContain("No code citations");
+  expect(markup).not.toContain("Code citations");
   expect(markup).not.toContain("code-evidence-notice");
 });

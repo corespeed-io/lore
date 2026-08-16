@@ -162,7 +162,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Shell | `Sidebar` | desktop, mobile closed/open, Workspace-selected |
 | Memory row | feature row | rest, hover, selected via detail, scope, search evidence |
 | Composer | feature panel | empty, ready, saving, error |
-| Detail | feature workspace | view/edit, saving, destructive, mobile stack, code citations loading/empty/settled/drifted/unreadable |
+| Detail | feature workspace | view/edit, saving, destructive, mobile stack, code citations absent/settled/drifted/unreadable |
 | Graph | `GraphView` | loading, empty, mapped, filtered, selected, error |
 | Agent management | `AgentsView` | loading, empty, create, active/revoked/disabled, credential reveal, lifecycle dialog, destructive confirmation, error |
 | Proposal review | `MemoryProposalsView` | loading, empty, pending, selected, stale target, accepted/rejected receipt, error |
@@ -190,6 +190,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Entry: the Memory detail workspace. Citations are read with the same Actor and
   Workspace request context as the Memory, so a citation the Actor may not see never
   reaches the browser and never renders.
+- Most Memories never cite code, so the section is absent rather than empty. It
+  appears only once the Actor's read returns at least one citation; a permanent
+  placeholder would be dead chrome in every ordinary Memory's context column. A
+  failed read is the exception and stays visible, because an unread list cannot be
+  told apart from an empty one and hiding it could hide drift.
 - Each citation names its relationship (`supports`, `contradicts`, `implements`, or
   `rationale`), the most specific locator Lore froze at citation time (declaration,
   else symbol, else the cited file), the abbreviated cited commit, and the UTC date

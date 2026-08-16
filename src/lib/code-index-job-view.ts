@@ -47,6 +47,18 @@ const TONE_ORDER: Record<CodeIndexJobTone, number> = {
   ok: 3,
 };
 
+/**
+ * A `pending` job that has already burned attempts is waiting out its retry
+ * backoff, not sitting in a fresh queue. Reporting it as merely "queued" beside
+ * an attempt count and a `lastError` reads as though nothing has gone wrong.
+ */
+function statusDescription(job: CodeIndexJob): string {
+  if (job.status === "pending" && job.attemptCount > 0) {
+    return `Attempt ${job.attemptCount} failed. Lore is waiting to retry this revision.`;
+  }
+  return STATUS_PRESENTATION[job.status].description;
+}
+
 export interface CodeIndexJobRow {
   id: string;
   repositoryKey: string;
@@ -81,7 +93,7 @@ function toRow(job: CodeIndexJob): CodeIndexJobRow {
     status: job.status,
     tone: status.tone,
     badgeTone: BADGE_TONE[status.tone],
-    statusDescription: status.description,
+    statusDescription: statusDescription(job),
     attempts: `${job.attemptCount}/${job.maximumAttempts}`,
     lastError: job.lastError,
     indexerRevision: job.indexerRevision,

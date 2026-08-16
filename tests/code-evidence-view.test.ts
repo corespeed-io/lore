@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { MemoryCodeEvidence as ServerMemoryCodeEvidence } from "@/lib/code-evidence";
-import { shortCommitOid, summarizeCodeEvidence } from "@/lib/code-evidence-view";
+import {
+  codeEvidenceSectionState,
+  shortCommitOid,
+  summarizeCodeEvidence,
+} from "@/lib/code-evidence-view";
 import type { CodeIndexJob as ServerCodeIndexJob } from "@/lib/code-index";
 import type { CodeEvidenceValidationState, CodeIndexJob, MemoryCodeEvidence } from "@/lib/types";
 
@@ -178,4 +182,17 @@ test("the citation view model exposes no filesystem location", () => {
     expect(Object.keys(row)).not.toContain("repositoryPath");
     expect(row.citedPath.startsWith("/")).toBe(false);
   }
+});
+
+test("the citation section is absent for a Memory that cites no code", () => {
+  // Most Memories never cite code; a permanent empty row would be dead chrome.
+  expect(codeEvidenceSectionState({ hasError: false, total: 0 })).toBe("hidden");
+  expect(codeEvidenceSectionState({ hasError: false, total: 1 })).toBe("list");
+});
+
+test("an unreadable citation list is reported, never silently hidden", () => {
+  // Absent and unreadable are different: hiding a failed read could hide drift
+  // on a Memory that does cite code.
+  expect(codeEvidenceSectionState({ hasError: true, total: 0 })).toBe("error");
+  expect(codeEvidenceSectionState({ hasError: true, total: 3 })).toBe("error");
 });

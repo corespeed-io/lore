@@ -104,3 +104,19 @@ test("job rows identify a repository by key and commit, never by filesystem path
     expect(row.shortCommitOid).toHaveLength(12);
   }
 });
+
+test("a pending job that already burned attempts reads as retrying, not queued", () => {
+  const [fresh] = summarizeCodeIndexJobs([job(1, "pending", { attemptCount: 0 })]).rows;
+  const [retrying] = summarizeCodeIndexJobs([
+    job(2, "pending", { attemptCount: 3, lastError: "Code Index processing failed" }),
+  ]).rows;
+
+  expect(fresh?.statusDescription).toBe("Queued and waiting for a maintenance worker.");
+  expect(retrying?.statusDescription).toBe(
+    "Attempt 3 failed. Lore is waiting to retry this revision.",
+  );
+  expect(retrying?.attempts).toBe("3/5");
+  expect(retrying?.lastError).toBe("Code Index processing failed");
+  // Still in flight, so it ranks with running work rather than with failures.
+  expect(retrying?.tone).toBe("running");
+});
