@@ -39,8 +39,8 @@ Commands:
   memory search --stdin [--limit N] [--scope shared|private]
   memory remember <content> [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory remember --stdin [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
-  memory propose create <content>|--stdin [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--idempotency-key KEY]
-  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--idempotency-key KEY]
+  memory propose create <content>|--stdin [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
+  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
   memory get <memory-id>
   memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory forget <memory-id> --version N [--idempotency-key KEY]
@@ -48,6 +48,7 @@ Commands:
   episode record --stdin [--idempotency-key KEY]
   episode get <episode-id>
   episode forget <episode-id> [--idempotency-key KEY]
+  code dependencies callers|callees --repository KEY --commit OID (--symbol SYMBOL|--path PATH) [--limit N]
   capabilities
   readiness
 
@@ -71,6 +72,8 @@ a mutation after an unknown response outcome.
 class CliUsageError extends Error {
   override name = "CliUsageError";
 }
+
+const MAX_MEMORY_CONTENT_CHARACTERS = 32_000;
 
 function defaultIo(): LoreCliIo {
   return {
@@ -97,6 +100,24 @@ async function stdinValue(
     );
   }
   return value;
+}
+
+function memoryContentValue(value: string): string {
+  if (!value.trim()) {
+    throw new CliUsageError("Memory content is required");
+  }
+  if (Array.from(value).length > MAX_MEMORY_CONTENT_CHARACTERS) {
+    throw new CliUsageError(
+      `Memory content may contain at most ${MAX_MEMORY_CONTENT_CHARACTERS} Unicode characters`,
+    );
+  }
+  return value;
+}
+
+async function memoryContentFromStdin(io: LoreCliIo): Promise<string> {
+  // stdin is already byte-bounded by readBoundedUtf8Stdin. Keep this first
+  // bound loose so astral characters reach the code-point-aware public limit.
+  return memoryContentValue(await stdinValue(io, 2_500_000, "content"));
 }
 
 function output(io: LoreCliIo, value: unknown, pretty: boolean): void {
@@ -143,6 +164,40 @@ function optionEvidence(
     throw new CliUsageError(`${name} must be a UUID`);
   }
   return [...new Set(normalized)];
+}
+
+function optionCodeEvidence(values: readonly string[] | undefined):
+  | Array<{
+      artifactId: string;
+      relationship: "contradicts" | "implements" | "rationale" | "supports";
+    }>
+  | undefined {
+  if (values === undefined) return undefined;
+  if (values.length > 50) {
+    throw new CliUsageError("--code-evidence may be repeated at most 50 times");
+  }
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const relationships = new Set(["contradicts", "implements", "rationale", "supports"]);
+  const normalized = values.map((value) => {
+    const [rawArtifactId, relationship, extra] = value.trim().toLowerCase().split(":");
+    if (!rawArtifactId || !relationship || extra || !uuidPattern.test(rawArtifactId)) {
+      throw new CliUsageError("--code-evidence must be ARTIFACT_UUID:RELATIONSHIP");
+    }
+    if (!relationships.has(relationship)) {
+      throw new CliUsageError(
+        "--code-evidence relationship must be supports, contradicts, implements, or rationale",
+      );
+    }
+    return {
+      artifactId: rawArtifactId,
+      relationship: relationship as "contradicts" | "implements" | "rationale" | "supports",
+    };
+  });
+  return [
+    ...new Map(
+      normalized.map((evidence) => [`${evidence.artifactId}:${evidence.relationship}`, evidence]),
+    ).values(),
+  ];
 }
 
 function episodeInput(value: string): RecordEpisodeInput {
@@ -212,6 +267,8 @@ export async function runLoreCli(
       options: {
         "allow-insecure": { type: "boolean" },
         content: { type: "string" },
+        commit: { type: "string" },
+        "code-evidence": { type: "string", multiple: true },
         cursor: { type: "string" },
         evidence: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
@@ -222,8 +279,11 @@ export async function runLoreCli(
         offset: { type: "string" },
         "observation-evidence": { type: "string", multiple: true },
         pretty: { type: "boolean" },
+        path: { type: "string" },
+        repository: { type: "string" },
         scope: { type: "string" },
         stdin: { type: "boolean" },
+        symbol: { type: "string" },
         url: { type: "string" },
         version: { type: "string", short: "v" },
         workspace: { type: "string", short: "w" },
@@ -279,6 +339,39 @@ export async function runLoreCli(
       exactPositionals(parsed.positionals, 1, "capabilities");
       allowedOptions(parsed.values, []);
       output(io, await workspace.capabilities(), pretty);
+      return 0;
+    }
+    if (group === "code" && action === "dependencies") {
+      exactPositionals(
+        parsed.positionals,
+        3,
+        "code dependencies callers|callees --repository KEY --commit OID (--symbol SYMBOL|--path PATH)",
+      );
+      allowedOptions(parsed.values, ["commit", "limit", "path", "repository", "symbol"]);
+      const direction = parsed.positionals[2];
+      if (direction !== "callers" && direction !== "callees") {
+        throw new CliUsageError("Code Dependency direction must be callers or callees");
+      }
+      const repositoryKey = parsed.values.repository?.trim();
+      const commitOid = parsed.values.commit?.trim();
+      if (!repositoryKey) throw new CliUsageError("--repository is required");
+      if (!commitOid) throw new CliUsageError("--commit is required");
+      if ((parsed.values.symbol === undefined) === (parsed.values.path === undefined)) {
+        throw new CliUsageError("Provide exactly one of --symbol or --path");
+      }
+      output(
+        io,
+        await workspace.queryCodeDependencies({
+          repositoryKey,
+          commitOid,
+          direction,
+          limit: optionInteger(parsed.values.limit, "--limit"),
+          ...(parsed.values.symbol !== undefined
+            ? { symbol: parsed.values.symbol }
+            : { path: parsed.values.path }),
+        }),
+        pretty,
+      );
       return 0;
     }
     if (group === "episode" && action === "list") {
@@ -384,8 +477,8 @@ export async function runLoreCli(
         await workspace.remember(
           {
             content: fromStdin
-              ? await stdinValue(io, 1_000_000, "content")
-              : requiredPosition(parsed.positionals, 2, "content"),
+              ? await memoryContentFromStdin(io)
+              : memoryContentValue(requiredPosition(parsed.positionals, 2, "content")),
             scope: optionScope(parsed.values.scope),
             metadata: optionMetadata(parsed.values.metadata),
           },
@@ -410,6 +503,7 @@ export async function runLoreCli(
         );
         allowedOptions(parsed.values, [
           "evidence",
+          "code-evidence",
           "idempotency-key",
           "metadata",
           "observation-evidence",
@@ -419,8 +513,8 @@ export async function runLoreCli(
         proposal = {
           kind: "create",
           content: fromStdin
-            ? await stdinValue(io, 1_000_000, "content")
-            : requiredPosition(parsed.positionals, 3, "content"),
+            ? await memoryContentFromStdin(io)
+            : memoryContentValue(requiredPosition(parsed.positionals, 3, "content")),
           scope: optionScope(parsed.values.scope),
           metadata: optionMetadata(parsed.values.metadata),
           evidenceMemoryIds: optionEvidence(parsed.values.evidence),
@@ -428,11 +522,13 @@ export async function runLoreCli(
             parsed.values["observation-evidence"],
             "--observation-evidence",
           ),
+          codeEvidence: optionCodeEvidence(parsed.values["code-evidence"]),
         };
       } else if (mode === "update") {
         exactPositionals(parsed.positionals, 4, "memory propose update <memory-id> --version N");
         allowedOptions(parsed.values, [
           "content",
+          "code-evidence",
           "evidence",
           "idempotency-key",
           "metadata",
@@ -454,10 +550,13 @@ export async function runLoreCli(
             parsed.values["observation-evidence"],
             "--observation-evidence",
           ),
+          codeEvidence: optionCodeEvidence(parsed.values["code-evidence"]),
         };
         const content = fromStdin
-          ? await stdinValue(io, 1_000_000, "content")
-          : parsed.values.content;
+          ? await memoryContentFromStdin(io)
+          : parsed.values.content === undefined
+            ? undefined
+            : memoryContentValue(parsed.values.content);
         const scope = optionScope(parsed.values.scope);
         const proposalMetadata = optionMetadata(parsed.values.metadata);
         if (content !== undefined) {
@@ -477,7 +576,9 @@ export async function runLoreCli(
         );
       }
       if (
-        (proposal.evidenceMemoryIds?.length ?? 0) + (proposal.evidenceObservationIds?.length ?? 0) >
+        (proposal.evidenceMemoryIds?.length ?? 0) +
+          (proposal.evidenceObservationIds?.length ?? 0) +
+          (proposal.codeEvidence?.length ?? 0) >
         50
       ) {
         throw new CliUsageError("Proposal evidence may contain at most 50 total items");
@@ -516,8 +617,10 @@ export async function runLoreCli(
       }
       const update: UpdateMemoryInput = {
         content: parsed.values.stdin
-          ? await stdinValue(io, 1_000_000, "content")
-          : parsed.values.content,
+          ? await memoryContentFromStdin(io)
+          : parsed.values.content === undefined
+            ? undefined
+            : memoryContentValue(parsed.values.content),
         scope: optionScope(parsed.values.scope),
         metadata: optionMetadata(parsed.values.metadata),
       };

@@ -112,6 +112,104 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/code-evidence/{evidenceId}/revalidate": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: operations["revalidateMemoryCodeEvidence"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/code/dependencies": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /** @description Return bounded callers or callees from one Workspace-visible repository, exact full commit OID, and active Code Index Generation. Exactly one of symbol or path is required. */
+        readonly get: operations["queryCodeDependencies"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/code/index-jobs": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        readonly post: operations["enqueueCodeIndex"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/code/index-jobs/{jobId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["getCodeIndexJob"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/code/search": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["searchCode"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/context/retrieve": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** @description Retrieve one bounded packet from Actor-visible Memory and an optional exact-revision Code Index. Code Evidence assessment is side-effect-free and does not update canonical Memory or citation state. */
+        readonly post: operations["retrieveContext"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/episodes": {
         readonly parameters: {
             readonly query?: never;
@@ -238,6 +336,22 @@ export interface paths {
         readonly options?: never;
         readonly head?: never;
         readonly patch: operations["updateMemory"];
+        readonly trace?: never;
+    };
+    readonly "/api/v1/memories/{memoryId}/code-evidence": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get: operations["listMemoryCodeEvidence"];
+        readonly put?: never;
+        readonly post: operations["citeMemoryCodeEvidence"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
         readonly trace?: never;
     };
     readonly "/api/v1/memory-proposals": {
@@ -411,6 +525,12 @@ export interface components {
             readonly deploymentId: string;
             readonly features: {
                 /** @constant */
+                readonly codeDependencies: true;
+                /** @constant */
+                readonly codeEvidence: true;
+                /** @constant */
+                readonly codeIndex: true;
+                /** @constant */
                 readonly cursorPagination: true;
                 /** @constant */
                 readonly embeddingGenerations: true;
@@ -429,11 +549,27 @@ export interface components {
             };
             readonly limits: {
                 /** @constant */
+                readonly codeDependencyResults: 200;
+                /** @constant */
+                readonly codeIndexArtifacts: 100000;
+                /** @constant */
+                readonly codeIndexFiles: 20000;
+                /** @constant */
+                readonly codeIndexSourceBytes: 134217728;
+                /** @constant */
+                readonly codeSearchResults: 100;
+                /** @constant */
                 readonly episodeContentCharacters: 1000000;
                 /** @constant */
                 readonly episodeMetadataCharacters: 1000000;
                 /** @constant */
                 readonly episodeObservations: 100;
+                /** @constant */
+                readonly memoryContentMaximumCharacters: 32000;
+                /** @constant */
+                readonly memoryContentRecommendedCharacters: 8000;
+                /** @constant */
+                readonly memoryMaximumChunks: 64;
                 /** @constant */
                 readonly memoryProposalEvidence: 50;
                 /** @constant */
@@ -451,7 +587,158 @@ export interface components {
                 /** @constant */
                 readonly workspaceArchiveMemories: 10000;
             };
+            readonly memoryChunking: {
+                /** @constant */
+                readonly maximumCharacters: 1200;
+                /** @constant */
+                readonly overlapCharacters: 0;
+                /** @constant */
+                readonly revision: "lore-memory-chunking-v2";
+            };
             readonly schemaRevision: number;
+        };
+        readonly CiteMemoryCodeEvidenceInput: {
+            /** Format: uuid */
+            readonly artifactId: string;
+            /** @enum {string} */
+            readonly relationship: "supports" | "contradicts" | "implements" | "rationale";
+        };
+        readonly CodeArtifact: {
+            readonly commitOid: string;
+            readonly content: string;
+            readonly contentSha256: string;
+            readonly declarationChunkOrdinal: number | null;
+            readonly declarationKey: string | null;
+            readonly endLine: number;
+            /** Format: uuid */
+            readonly generationId: string;
+            /** Format: uuid */
+            readonly id: string;
+            readonly kind: string;
+            readonly language: string;
+            readonly matchedChannels: readonly ("symbol" | "literal" | "lexical" | "path")[];
+            readonly ordinal: number;
+            /** @enum {string} */
+            readonly parser: "tree_sitter" | "text";
+            /** @enum {string} */
+            readonly parseStatus: "parsed" | "recovered" | "fallback";
+            readonly path: string;
+            /** Format: uuid */
+            readonly repositoryId: string;
+            /** Format: uuid */
+            readonly revisionId: string;
+            readonly score: number;
+            readonly startLine: number;
+            readonly symbol: string | null;
+            readonly symbolKey: string | null;
+            readonly symbols: readonly components["schemas"]["CodeArtifactSymbol"][];
+        };
+        readonly CodeArtifactSymbol: {
+            readonly declarationKey: string;
+            readonly symbol: string;
+            readonly symbolKey: string;
+        };
+        readonly CodeDependencyEdge: {
+            readonly from: components["schemas"]["CodeGraphLocator"];
+            /** Format: uuid */
+            readonly id: string;
+            /** @enum {string} */
+            readonly kind: "calls" | "imports" | "references";
+            /** @enum {string} */
+            readonly resolution: "resolved" | "ambiguous" | "unresolved";
+            readonly site: components["schemas"]["CodeDependencySite"];
+            readonly targetText: string;
+            readonly to: components["schemas"]["CodeGraphLocator"];
+        };
+        readonly CodeDependencyQueryAmbiguous: {
+            readonly candidates: readonly components["schemas"]["CodeGraphLocator"][];
+            readonly commitOid: string;
+            /** @enum {string} */
+            readonly direction: "callers" | "callees";
+            readonly repositoryKey: string;
+            /** @constant */
+            readonly status: "ambiguous";
+            readonly truncated: boolean;
+        };
+        readonly CodeDependencyQueryNotFound: {
+            readonly candidates: readonly components["schemas"]["CodeGraphLocator"][];
+            readonly commitOid: string;
+            /** @enum {string} */
+            readonly direction: "callers" | "callees";
+            readonly repositoryKey: string;
+            /** @constant */
+            readonly status: "not_found";
+        };
+        readonly CodeDependencyQueryOk: {
+            readonly commitOid: string;
+            /** @enum {string} */
+            readonly direction: "callers" | "callees";
+            readonly edges: readonly components["schemas"]["CodeDependencyEdge"][];
+            readonly repositoryKey: string;
+            /** @constant */
+            readonly status: "ok";
+            readonly subject: components["schemas"]["CodeGraphLocator"];
+            readonly truncated: boolean;
+        };
+        readonly CodeDependencyQueryResult: components["schemas"]["CodeDependencyQueryOk"] | components["schemas"]["CodeDependencyQueryAmbiguous"] | components["schemas"]["CodeDependencyQueryNotFound"];
+        readonly CodeDependencySite: {
+            readonly endColumn: number;
+            readonly endLine: number;
+            readonly path: string;
+            readonly startColumn: number;
+            readonly startLine: number;
+        };
+        readonly CodeGraphLocator: {
+            readonly artifactId: string | null;
+            readonly path: string | null;
+            readonly symbol: string | null;
+            readonly symbolKey: string | null;
+        };
+        readonly CodeIndexJob: {
+            readonly attemptCount: number;
+            /** Format: date-time */
+            readonly availableAt: string;
+            readonly commitOid: string;
+            readonly completedAt: string | null;
+            /** Format: date-time */
+            readonly createdAt: string;
+            /** Format: uuid */
+            readonly id: string;
+            readonly indexerRevision: string;
+            readonly lastError: string | null;
+            readonly maximumAttempts: number;
+            /** Format: uuid */
+            readonly repositoryId: string;
+            readonly repositoryKey: string;
+            readonly sourceRef: string | null;
+            /** @enum {string} */
+            readonly status: "pending" | "processing" | "succeeded" | "dead" | "cancelled";
+            /** Format: date-time */
+            readonly updatedAt: string;
+        };
+        readonly ContextRetrievalPlan: {
+            /** @enum {string} */
+            readonly intent: "blast-radius" | "change" | "current-code" | "memory-recall" | "rationale" | "unknown";
+            readonly needsAnchorExpansion: boolean;
+            readonly needsContextualImpact: boolean;
+            readonly needsLocalAssessment: boolean;
+            readonly reasons: readonly string[];
+            /** @enum {string} */
+            readonly route: "abstain" | "both" | "code-only" | "memory-only";
+        };
+        readonly ContextRetrievalReceipt: {
+            readonly anchorCandidates: number;
+            readonly codeCandidates: number;
+            readonly codeQuery: string | null;
+            readonly contextualImpact: components["schemas"]["ContextualImpactAssessment"] | null;
+            readonly memoryCandidates: number;
+            readonly memoryQuery: string | null;
+            readonly requestedCommitOid: string | null;
+        };
+        readonly ContextualImpactAssessment: {
+            readonly changes: readonly string[];
+            /** @enum {string} */
+            readonly state: "affected" | "possibly_affected" | "unaffected" | "unknown";
         };
         readonly CreateEvaluationSuiteInput: {
             readonly cases: readonly components["schemas"]["EvaluationCaseInput"][];
@@ -472,10 +759,12 @@ export interface components {
             readonly scope?: "shared" | "private";
         };
         readonly CreateMemoryProposalCreateInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
             readonly content: string;
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             /** @constant */
             readonly kind: "create";
@@ -490,6 +779,11 @@ export interface components {
         };
         readonly CreateMemoryProposalInput: components["schemas"]["CreateMemoryProposalCreateInput"] | components["schemas"]["CreateMemoryProposalUpdateInput"];
         readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
+        readonly EnqueueCodeIndexInput: {
+            readonly commitOid: string;
+            readonly repositoryKey: string;
+            readonly sourceRef?: string;
+        };
         readonly Episode: {
             /** Format: date-time */
             readonly createdAt: string;
@@ -652,6 +946,43 @@ export interface components {
             /** Format: uuid */
             readonly workspaceId: string;
         };
+        readonly MemoryCodeEvidence: {
+            /** Format: uuid */
+            readonly citedArtifactId: string;
+            readonly citedCommitOid: string;
+            readonly citedContentSha256: string;
+            readonly citedDeclarationChunkOrdinal: number | null;
+            readonly citedDeclarationContextSha256: string | null;
+            readonly citedDeclarationKey: string | null;
+            /** Format: uuid */
+            readonly citedGenerationId: string;
+            readonly citedPath: string;
+            /** Format: uuid */
+            readonly citedRevisionId: string;
+            readonly citedSymbolKey: string | null;
+            /** Format: date-time */
+            readonly createdAt: string;
+            readonly createdByAgentId: string | null;
+            /** Format: uuid */
+            readonly createdByUserId: string;
+            /** Format: uuid */
+            readonly id: string;
+            /** Format: uuid */
+            readonly memoryId: string;
+            /** @enum {string} */
+            readonly relationship: "supports" | "contradicts" | "implements" | "rationale";
+            /** Format: uuid */
+            readonly repositoryId: string;
+            readonly validatedArtifactId: string | null;
+            /** Format: date-time */
+            readonly validatedAt: string;
+            readonly validatedCommitOid: string | null;
+            readonly validatedGenerationId: string | null;
+            readonly validatedPath: string | null;
+            readonly validatedRevisionId: string | null;
+            /** @enum {string} */
+            readonly validationState: "current" | "moved" | "changed" | "deleted" | "ambiguous" | "unverifiable";
+        };
         readonly MemoryGraph: {
             readonly links: readonly components["schemas"]["MemoryGraphLink"][];
             readonly nodes: readonly components["schemas"]["MemoryGraphNode"][];
@@ -679,6 +1010,7 @@ export interface components {
         readonly MemoryProposal: {
             readonly acceptedMemoryId: string | null;
             readonly baseMemoryVersion: number | null;
+            readonly codeEvidence: readonly components["schemas"]["MemoryProposalCodeEvidence"][];
             /** Format: date-time */
             readonly createdAt: string;
             readonly evidenceMemoryIds: readonly string[];
@@ -706,15 +1038,37 @@ export interface components {
             /** Format: uuid */
             readonly workspaceId: string;
         };
+        readonly MemoryProposalCodeEvidence: {
+            /** Format: uuid */
+            readonly citedArtifactId: string;
+            readonly citedCommitOid: string;
+            readonly citedContentSha256: string;
+            readonly citedDeclarationChunkOrdinal: number | null;
+            readonly citedDeclarationContextSha256: string | null;
+            readonly citedDeclarationKey: string | null;
+            /** Format: uuid */
+            readonly citedGenerationId: string;
+            readonly citedPath: string;
+            /** Format: uuid */
+            readonly citedRevisionId: string;
+            readonly citedSymbolKey: string | null;
+            readonly ordinal: number;
+            /** @enum {string} */
+            readonly relationship: "supports" | "contradicts" | "implements" | "rationale";
+            /** Format: uuid */
+            readonly repositoryId: string;
+        };
         readonly MemoryProposalReviewResult: {
             readonly memory: components["schemas"]["Memory"] | null;
             readonly proposal: components["schemas"]["MemoryProposal"];
         };
         readonly MemoryProposalUpdateContentInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
             readonly content: string;
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
             /** @constant */
@@ -728,10 +1082,12 @@ export interface components {
             readonly targetMemoryId: string;
         };
         readonly MemoryProposalUpdateMetadataInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
             readonly content?: string;
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
             /** @constant */
@@ -745,10 +1101,12 @@ export interface components {
             readonly targetMemoryId: string;
         };
         readonly MemoryProposalUpdateScopeInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
             readonly content?: string;
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceMemoryIds?: readonly string[];
-            /** @description Memory and Observation evidence ids have a combined limit of 50. */
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
             /** @constant */
@@ -787,6 +1145,12 @@ export interface components {
             readonly payloadSha256: string;
             /** Format: uuid */
             readonly workspaceId: string;
+        };
+        readonly ProposeMemoryCodeEvidenceInput: {
+            /** Format: uuid */
+            readonly artifactId: string;
+            /** @enum {string} */
+            readonly relationship: "supports" | "contradicts" | "implements" | "rationale";
         };
         readonly RankingMetrics: {
             readonly forbiddenRetrievedIds: readonly string[];
@@ -830,6 +1194,82 @@ export interface components {
             };
             /** Format: date-time */
             readonly observedAt?: string;
+        };
+        readonly RetrieveContextInput: {
+            /** @default 10 */
+            readonly codeLimit?: number;
+            readonly codeQuery?: string;
+            readonly commitOid?: string;
+            /** @default 5 */
+            readonly memoryLimit?: number;
+            readonly memoryQuery?: string;
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            readonly pathPrefix?: string;
+            readonly query: string;
+            readonly repositoryKey?: string;
+            /**
+             * @default auto
+             * @enum {string}
+             */
+            readonly route?: "auto" | "both" | "code-only" | "memory-only";
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
+        };
+        readonly RetrievedAnchorContext: {
+            readonly citedCommitOid: string;
+            readonly citedPath: string;
+            /** Format: uuid */
+            readonly id: string;
+            /** @enum {string} */
+            readonly localState: "current" | "moved" | "changed" | "deleted" | "ambiguous" | "unverifiable";
+            /** Format: uuid */
+            readonly memoryId: string;
+            /** @enum {string} */
+            readonly relationship: "supports" | "contradicts" | "implements" | "rationale";
+            readonly validatedCommitOid: string | null;
+            readonly validatedPath: string | null;
+        };
+        readonly RetrievedCodeContext: {
+            /** Format: uuid */
+            readonly artifactId: string;
+            readonly commitOid: string;
+            readonly content: string;
+            readonly endLine: number;
+            readonly matchedChannels: readonly ("symbol" | "literal" | "lexical" | "path")[];
+            readonly path: string;
+            readonly score: number;
+            readonly startLine: number;
+            readonly symbol: string | null;
+        };
+        readonly RetrievedContext: {
+            readonly anchors: readonly components["schemas"]["RetrievedAnchorContext"][];
+            readonly code: readonly components["schemas"]["RetrievedCodeContext"][];
+            readonly conflicts: readonly string[];
+            /** @enum {string} */
+            readonly deliveredRoute: "abstain" | "both" | "code-only" | "memory-only";
+            readonly memories: readonly components["schemas"]["RetrievedMemoryContext"][];
+            readonly plan: components["schemas"]["ContextRetrievalPlan"];
+            readonly query: string;
+            readonly receipt: components["schemas"]["ContextRetrievalReceipt"];
+            /** @constant */
+            readonly revision: "joint-memory-code-v2";
+        };
+        readonly RetrievedMemoryContext: {
+            readonly evidence: string;
+            /** Format: uuid */
+            readonly id: string;
+            readonly rerankScore?: number;
+            /** @enum {string} */
+            readonly scope: "shared" | "private";
+            readonly score: number;
+            /** Format: date-time */
+            readonly updatedAt: string;
+        };
+        readonly RevalidateMemoryCodeEvidenceInput: {
+            readonly commitOid: string;
+            readonly repositoryKey: string;
         };
         readonly UpdateAgentInput: {
             readonly name?: string;
@@ -1240,6 +1680,171 @@ export interface operations {
             };
         };
     };
+    readonly revalidateMemoryCodeEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly evidenceId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["RevalidateMemoryCodeEvidenceInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Revalidated Code Evidence without changing Memory */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryCodeEvidence"];
+                };
+            };
+        };
+    };
+    readonly queryCodeDependencies: {
+        readonly parameters: {
+            readonly query: {
+                readonly commit_oid: string;
+                readonly direction: "callers" | "callees";
+                readonly limit?: number;
+                readonly path?: string;
+                readonly repository_key: string;
+                readonly symbol?: string;
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Bounded exact-revision Code Dependency result */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["CodeDependencyQueryResult"];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 403: components["responses"]["Error"];
+        };
+    };
+    readonly enqueueCodeIndex: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["EnqueueCodeIndexInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Queued exact revision from an operator-configured repository */
+            readonly 202: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["CodeIndexJob"];
+                };
+            };
+        };
+    };
+    readonly getCodeIndexJob: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly jobId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Safe Code Index job status */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["CodeIndexJob"];
+                };
+            };
+        };
+    };
+    readonly searchCode: {
+        readonly parameters: {
+            readonly query: {
+                readonly commit_oid: string;
+                readonly limit?: number;
+                readonly path_prefix?: string;
+                readonly q: string;
+                readonly repository_key: string;
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description RLS-visible exact-revision Code Artifacts */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["CodeArtifact"][];
+                };
+            };
+        };
+    };
+    readonly retrieveContext: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["RetrieveContextInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Bounded, provenance-bearing Memory and Code context */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["RetrievedContext"];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 403: components["responses"]["Error"];
+        };
+    };
     readonly listEpisodes: {
         readonly parameters: {
             readonly query?: {
@@ -1617,6 +2222,58 @@ export interface operations {
             };
             readonly 412: components["responses"]["Error"];
             readonly 428: components["responses"]["Error"];
+        };
+    };
+    readonly listMemoryCodeEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Typed Code Evidence visible with the Memory */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["MemoryCodeEvidence"][];
+                };
+            };
+        };
+    };
+    readonly citeMemoryCodeEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["CiteMemoryCodeEvidenceInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Created immutable Code Evidence citation */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryCodeEvidence"];
+                };
+            };
         };
     };
     readonly listMemoryProposals: {

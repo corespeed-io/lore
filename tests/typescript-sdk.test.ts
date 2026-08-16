@@ -73,6 +73,7 @@ function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
     proposedMetadata: {},
     evidenceMemoryIds: [],
     evidenceObservationIds: [],
+    codeEvidence: [],
     status: "pending",
     reviewedByUserId: null,
     acceptedMemoryId: null,
@@ -105,6 +106,107 @@ describe("Lore TypeScript SDK", () => {
     expect(headers.get("authorization")).toBe(`Bearer ${AGENT_TOKEN}`);
     expect(headers.get("x-lore-workspace-id")).toBe(WORKSPACE_ID);
     expect(init.redirect).toBe("error");
+  });
+
+  test("queries one bounded exact-revision Code Dependency subject", async () => {
+    const result = {
+      status: "ok" as const,
+      repositoryKey: "corespeed/lore",
+      commitOid: "a".repeat(40),
+      direction: "callees" as const,
+      subject: {
+        artifactId: "80000000-0000-4000-8000-000000000001",
+        path: "src/index.ts",
+        symbol: "run",
+        symbolKey: "src/index.ts#function_declaration:run",
+      },
+      edges: [],
+      truncated: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(result));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(
+      workspace.queryCodeDependencies({
+        repositoryKey: "corespeed/lore",
+        commitOid: "A".repeat(40),
+        direction: "callees",
+        symbol: "run",
+        limit: 25,
+      }),
+    ).resolves.toEqual(result);
+
+    const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname + url.search).toBe(
+      `/api/v1/code/dependencies?repository_key=corespeed%2Flore&commit_oid=${"a".repeat(40)}&direction=callees&symbol=run&limit=25`,
+    );
+  });
+
+  test("retrieves joint context through one Workspace-scoped request", async () => {
+    const packet = {
+      revision: "joint-memory-code-v2",
+      query: "Why did the guard change?",
+      plan: {
+        intent: "change" as const,
+        route: "both" as const,
+        needsAnchorExpansion: true,
+        needsContextualImpact: true,
+        needsLocalAssessment: true,
+        reasons: ["change questions require historical claims and current evidence"],
+      },
+      deliveredRoute: "both" as const,
+      memories: [],
+      code: [],
+      anchors: [],
+      conflicts: [],
+      receipt: {
+        memoryCandidates: 0,
+        codeCandidates: 0,
+        anchorCandidates: 0,
+        requestedCommitOid: "a".repeat(40),
+        memoryQuery: "guard decision",
+        codeQuery: "guard",
+        contextualImpact: null,
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(packet));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(
+      workspace.retrieveContext({
+        query: "Why did the guard change?",
+        memoryQuery: "guard decision",
+        codeQuery: "guard",
+        repositoryKey: "corespeed/lore",
+        commitOid: "A".repeat(40),
+        route: "auto",
+        memoryLimit: 4,
+        codeLimit: 6,
+      }),
+    ).resolves.toEqual(packet);
+
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/api/v1/context/retrieve");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        query: "Why did the guard change?",
+        memoryQuery: "guard decision",
+        codeQuery: "guard",
+        repositoryKey: "corespeed/lore",
+        commitOid: "a".repeat(40),
+        route: "auto",
+        memoryLimit: 4,
+        codeLimit: 6,
+      }),
+    );
+    expect(new Headers(init.headers).get("x-lore-workspace-id")).toBe(WORKSPACE_ID);
   });
 
   test("sends strong version and replay protection on mutations", async () => {

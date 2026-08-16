@@ -34,6 +34,48 @@ interface OpenApiDocument {
   info: { version: string };
 }
 
+const PYTHON_KEYWORDS = new Set([
+  "False",
+  "None",
+  "True",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
+]);
+
+function isPythonIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && !PYTHON_KEYWORDS.has(value);
+}
+
 function generatedHeader(source: string): string {
   return `// Generated from ${source}. Do not edit by hand.\n`;
 }
@@ -100,6 +142,16 @@ function generatedPythonContract(document: OpenApiDocument, errorCodes: readonly
         return `${name}: TypeAlias = ${pythonType(schema, true)}`;
       }
       const required = new Set(schema.required ?? []);
+      const requiresFunctionalSyntax = Object.keys(schema.properties).some(
+        (field) => !isPythonIdentifier(field),
+      );
+      if (requiresFunctionalSyntax) {
+        const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {
+          const annotation = pythonType(fieldSchema, true);
+          return `    ${JSON.stringify(field)}: ${required.has(field) ? annotation : `NotRequired[${annotation}]`},`;
+        });
+        return `${name} = TypedDict(\n    ${JSON.stringify(name)},\n  {\n${fields.join("\n")}\n  },\n)`;
+      }
       const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {
         const annotation = pythonType(fieldSchema);
         return `    ${field}: ${required.has(field) ? annotation : `NotRequired[${annotation}]`}`;

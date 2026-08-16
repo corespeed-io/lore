@@ -26,9 +26,132 @@ class Capabilities(TypedDict):
     apiVersion: Literal["v1"]
     schemaRevision: int
     deploymentId: str
+    memoryChunking: dict[str, Any]
     features: dict[str, Any]
     limits: dict[str, Any]
     activeEmbeddingGeneration: Union[dict[str, Any], None]
+
+class CiteMemoryCodeEvidenceInput(TypedDict):
+    artifactId: str
+    relationship: Literal["supports", "contradicts", "implements", "rationale"]
+
+class CodeArtifact(TypedDict):
+    id: str
+    repositoryId: str
+    revisionId: str
+    generationId: str
+    commitOid: str
+    path: str
+    language: str
+    parser: Literal["tree_sitter", "text"]
+    parseStatus: Literal["parsed", "recovered", "fallback"]
+    kind: str
+    symbol: Union[str, None]
+    symbolKey: Union[str, None]
+    declarationKey: Union[str, None]
+    declarationChunkOrdinal: Union[int, None]
+    symbols: list[CodeArtifactSymbol]
+    ordinal: int
+    startLine: int
+    endLine: int
+    content: str
+    contentSha256: str
+    matchedChannels: list[Literal["symbol", "literal", "lexical", "path"]]
+    score: float
+
+class CodeArtifactSymbol(TypedDict):
+    symbol: str
+    symbolKey: str
+    declarationKey: str
+
+CodeDependencyEdge = TypedDict(
+    "CodeDependencyEdge",
+  {
+    "id": str,
+    "kind": Literal["calls", "imports", "references"],
+    "resolution": Literal["resolved", "ambiguous", "unresolved"],
+    "targetText": str,
+    "from": "CodeGraphLocator",
+    "to": "CodeGraphLocator",
+    "site": "CodeDependencySite",
+  },
+)
+
+class CodeDependencyQueryAmbiguous(TypedDict):
+    status: Literal["ambiguous"]
+    repositoryKey: str
+    commitOid: str
+    direction: Literal["callers", "callees"]
+    candidates: list[CodeGraphLocator]
+    truncated: bool
+
+class CodeDependencyQueryNotFound(TypedDict):
+    status: Literal["not_found"]
+    repositoryKey: str
+    commitOid: str
+    direction: Literal["callers", "callees"]
+    candidates: list[CodeGraphLocator]
+
+class CodeDependencyQueryOk(TypedDict):
+    status: Literal["ok"]
+    repositoryKey: str
+    commitOid: str
+    direction: Literal["callers", "callees"]
+    subject: CodeGraphLocator
+    edges: list[CodeDependencyEdge]
+    truncated: bool
+
+CodeDependencyQueryResult: TypeAlias = Union["CodeDependencyQueryOk", "CodeDependencyQueryAmbiguous", "CodeDependencyQueryNotFound"]
+
+class CodeDependencySite(TypedDict):
+    path: str
+    startLine: int
+    startColumn: int
+    endLine: int
+    endColumn: int
+
+class CodeGraphLocator(TypedDict):
+    artifactId: Union[str, None]
+    path: Union[str, None]
+    symbol: Union[str, None]
+    symbolKey: Union[str, None]
+
+class CodeIndexJob(TypedDict):
+    id: str
+    repositoryId: str
+    repositoryKey: str
+    commitOid: str
+    sourceRef: Union[str, None]
+    indexerRevision: str
+    status: Literal["pending", "processing", "succeeded", "dead", "cancelled"]
+    attemptCount: int
+    maximumAttempts: int
+    availableAt: str
+    completedAt: Union[str, None]
+    lastError: Union[str, None]
+    createdAt: str
+    updatedAt: str
+
+class ContextRetrievalPlan(TypedDict):
+    intent: Literal["blast-radius", "change", "current-code", "memory-recall", "rationale", "unknown"]
+    route: Literal["abstain", "both", "code-only", "memory-only"]
+    needsAnchorExpansion: bool
+    needsContextualImpact: bool
+    needsLocalAssessment: bool
+    reasons: list[str]
+
+class ContextRetrievalReceipt(TypedDict):
+    memoryCandidates: int
+    codeCandidates: int
+    anchorCandidates: int
+    requestedCommitOid: Union[str, None]
+    memoryQuery: Union[str, None]
+    codeQuery: Union[str, None]
+    contextualImpact: Union[ContextualImpactAssessment, None]
+
+class ContextualImpactAssessment(TypedDict):
+    state: Literal["affected", "possibly_affected", "unaffected", "unknown"]
+    changes: list[str]
 
 class CreateEvaluationSuiteInput(TypedDict):
     name: str
@@ -48,10 +171,16 @@ class CreateMemoryProposalCreateInput(TypedDict):
     metadata: NotRequired[dict[str, Any]]
     evidenceMemoryIds: NotRequired[list[str]]
     evidenceObservationIds: NotRequired[list[str]]
+    codeEvidence: NotRequired[list[ProposeMemoryCodeEvidenceInput]]
 
 CreateMemoryProposalInput: TypeAlias = Union["CreateMemoryProposalCreateInput", "CreateMemoryProposalUpdateInput"]
 
 CreateMemoryProposalUpdateInput: TypeAlias = Union["MemoryProposalUpdateContentInput", "MemoryProposalUpdateScopeInput", "MemoryProposalUpdateMetadataInput"]
+
+class EnqueueCodeIndexInput(TypedDict):
+    repositoryKey: str
+    commitOid: str
+    sourceRef: NotRequired[str]
 
 class Episode(TypedDict):
     id: str
@@ -165,6 +294,32 @@ class Memory(TypedDict):
     createdAt: str
     updatedAt: str
 
+class MemoryCodeEvidence(TypedDict):
+    id: str
+    memoryId: str
+    repositoryId: str
+    citedRevisionId: str
+    citedGenerationId: str
+    citedArtifactId: str
+    citedCommitOid: str
+    citedPath: str
+    citedSymbolKey: Union[str, None]
+    citedDeclarationKey: Union[str, None]
+    citedDeclarationChunkOrdinal: Union[int, None]
+    citedDeclarationContextSha256: Union[str, None]
+    citedContentSha256: str
+    relationship: Literal["supports", "contradicts", "implements", "rationale"]
+    validationState: Literal["current", "moved", "changed", "deleted", "ambiguous", "unverifiable"]
+    validatedRevisionId: Union[str, None]
+    validatedGenerationId: Union[str, None]
+    validatedArtifactId: Union[str, None]
+    validatedCommitOid: Union[str, None]
+    validatedPath: Union[str, None]
+    createdByUserId: str
+    createdByAgentId: Union[str, None]
+    createdAt: str
+    validatedAt: str
+
 class MemoryGraph(TypedDict):
     nodes: list[MemoryGraphNode]
     links: list[MemoryGraphLink]
@@ -198,11 +353,27 @@ class MemoryProposal(TypedDict):
     proposedMetadata: dict[str, Any]
     evidenceMemoryIds: list[str]
     evidenceObservationIds: list[str]
+    codeEvidence: list[MemoryProposalCodeEvidence]
     status: Literal["pending", "accepted", "rejected"]
     reviewedByUserId: Union[str, None]
     acceptedMemoryId: Union[str, None]
     createdAt: str
     reviewedAt: Union[str, None]
+
+class MemoryProposalCodeEvidence(TypedDict):
+    ordinal: int
+    repositoryId: str
+    citedRevisionId: str
+    citedGenerationId: str
+    citedArtifactId: str
+    citedCommitOid: str
+    citedPath: str
+    citedSymbolKey: Union[str, None]
+    citedDeclarationKey: Union[str, None]
+    citedDeclarationChunkOrdinal: Union[int, None]
+    citedDeclarationContextSha256: Union[str, None]
+    citedContentSha256: str
+    relationship: Literal["supports", "contradicts", "implements", "rationale"]
 
 class MemoryProposalReviewResult(TypedDict):
     proposal: MemoryProposal
@@ -217,6 +388,7 @@ class MemoryProposalUpdateContentInput(TypedDict):
     metadata: NotRequired[dict[str, Any]]
     evidenceMemoryIds: NotRequired[list[str]]
     evidenceObservationIds: NotRequired[list[str]]
+    codeEvidence: NotRequired[list[ProposeMemoryCodeEvidenceInput]]
 
 class MemoryProposalUpdateMetadataInput(TypedDict):
     kind: Literal["update"]
@@ -227,6 +399,7 @@ class MemoryProposalUpdateMetadataInput(TypedDict):
     metadata: dict[str, Any]
     evidenceMemoryIds: NotRequired[list[str]]
     evidenceObservationIds: NotRequired[list[str]]
+    codeEvidence: NotRequired[list[ProposeMemoryCodeEvidenceInput]]
 
 class MemoryProposalUpdateScopeInput(TypedDict):
     kind: Literal["update"]
@@ -237,6 +410,7 @@ class MemoryProposalUpdateScopeInput(TypedDict):
     metadata: NotRequired[dict[str, Any]]
     evidenceMemoryIds: NotRequired[list[str]]
     evidenceObservationIds: NotRequired[list[str]]
+    codeEvidence: NotRequired[list[ProposeMemoryCodeEvidenceInput]]
 
 class MemorySearchResult(TypedDict):
     memory: Memory
@@ -255,6 +429,10 @@ class Observation(TypedDict):
     content: str
     metadata: dict[str, Any]
     createdAt: str
+
+class ProposeMemoryCodeEvidenceInput(TypedDict):
+    artifactId: str
+    relationship: Literal["supports", "contradicts", "implements", "rationale"]
 
 class RankingMetrics(TypedDict):
     recallAtK: float
@@ -277,6 +455,63 @@ class RecordObservationInput(TypedDict):
     content: str
     metadata: NotRequired[dict[str, Any]]
     observedAt: NotRequired[str]
+
+class RetrieveContextInput(TypedDict):
+    query: str
+    memoryQuery: NotRequired[str]
+    codeQuery: NotRequired[str]
+    repositoryKey: NotRequired[str]
+    commitOid: NotRequired[str]
+    route: NotRequired[Literal["auto", "both", "code-only", "memory-only"]]
+    memoryLimit: NotRequired[int]
+    codeLimit: NotRequired[int]
+    scope: NotRequired[Literal["shared", "private"]]
+    metadata: NotRequired[dict[str, Any]]
+    pathPrefix: NotRequired[str]
+
+class RetrievedAnchorContext(TypedDict):
+    id: str
+    memoryId: str
+    relationship: Literal["supports", "contradicts", "implements", "rationale"]
+    localState: Literal["current", "moved", "changed", "deleted", "ambiguous", "unverifiable"]
+    citedCommitOid: str
+    citedPath: str
+    validatedCommitOid: Union[str, None]
+    validatedPath: Union[str, None]
+
+class RetrievedCodeContext(TypedDict):
+    artifactId: str
+    commitOid: str
+    path: str
+    symbol: Union[str, None]
+    startLine: int
+    endLine: int
+    score: float
+    matchedChannels: list[Literal["symbol", "literal", "lexical", "path"]]
+    content: str
+
+class RetrievedContext(TypedDict):
+    revision: Literal["joint-memory-code-v2"]
+    query: str
+    plan: ContextRetrievalPlan
+    deliveredRoute: Literal["abstain", "both", "code-only", "memory-only"]
+    memories: list[RetrievedMemoryContext]
+    code: list[RetrievedCodeContext]
+    anchors: list[RetrievedAnchorContext]
+    conflicts: list[str]
+    receipt: ContextRetrievalReceipt
+
+class RetrievedMemoryContext(TypedDict):
+    id: str
+    scope: Literal["shared", "private"]
+    updatedAt: str
+    score: float
+    rerankScore: NotRequired[float]
+    evidence: str
+
+class RevalidateMemoryCodeEvidenceInput(TypedDict):
+    repositoryKey: str
+    commitOid: str
 
 class UpdateAgentInput(TypedDict):
     name: NotRequired[str]

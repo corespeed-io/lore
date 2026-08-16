@@ -20,11 +20,23 @@ export type CreateMemoryInput = Schema<"CreateMemoryInput">;
 export type UpdateMemoryInput = Schema<"UpdateMemoryInput">;
 export type CreateMemoryProposalInput = Schema<"CreateMemoryProposalInput">;
 export type MemoryProposal = Schema<"MemoryProposal">;
+export type MemoryProposalCodeEvidence = Schema<"MemoryProposalCodeEvidence">;
+export type ProposeMemoryCodeEvidenceInput = Schema<"ProposeMemoryCodeEvidenceInput">;
 export type MemoryProposalStatus = MemoryProposal["status"];
 export type MemoryProposalReviewResult = Schema<"MemoryProposalReviewResult">;
 export type Workspace = Schema<"Workspace">;
 export type WorkspaceSummary = Schema<"WorkspaceSummary">;
 export type MemoryGraph = Schema<"MemoryGraph">;
+export type CodeArtifact = Schema<"CodeArtifact">;
+export type CodeDependencyEdge = Schema<"CodeDependencyEdge">;
+export type CodeDependencyQueryResult = Schema<"CodeDependencyQueryResult">;
+export type CodeDependencyDirection = CodeDependencyQueryResult["direction"];
+export type CodeIndexJob = Schema<"CodeIndexJob">;
+export type EnqueueCodeIndexInput = Schema<"EnqueueCodeIndexInput">;
+export type CiteMemoryCodeEvidenceInput = Schema<"CiteMemoryCodeEvidenceInput">;
+export type MemoryCodeEvidence = Schema<"MemoryCodeEvidence">;
+export type RevalidateMemoryCodeEvidenceInput = Schema<"RevalidateMemoryCodeEvidenceInput">;
+export type RetrievedContext = Schema<"RetrievedContext">;
 export type DeploymentCapabilities = Schema<"Capabilities">;
 export type ReadinessReport = Schema<"ReadinessReport">;
 export type LoreErrorCode = Schema<"Error">["code"];
@@ -76,6 +88,28 @@ export interface MemorySearchInput {
   updatedAfter?: string;
   updatedBefore?: string;
   signal?: AbortSignal;
+}
+
+export interface CodeSearchInput {
+  commitOid: string;
+  limit?: number;
+  pathPrefix?: string;
+  query: string;
+  repositoryKey: string;
+  signal?: AbortSignal;
+}
+
+export type ContextRetrievalRoute = NonNullable<Schema<"RetrieveContextInput">["route"]>;
+export type RetrieveContextInput = Schema<"RetrieveContextInput"> & { signal?: AbortSignal };
+
+export interface CodeDependencyQueryInput {
+  commitOid: string;
+  direction: CodeDependencyDirection;
+  limit?: number;
+  path?: string;
+  repositoryKey: string;
+  signal?: AbortSignal;
+  symbol?: string;
 }
 
 export interface MemoryPage {
@@ -147,10 +181,10 @@ function normalizedUuid(value: string, name: string): string {
   return normalized;
 }
 
-function normalizedLimit(value: number | undefined, fallback: number): number {
+function normalizedLimit(value: number | undefined, fallback: number, maximum = 100): number {
   if (value === undefined) return fallback;
-  if (!Number.isInteger(value) || value < 1 || value > 100) {
-    throw new TypeError("limit must be an integer from 1 to 100");
+  if (!Number.isInteger(value) || value < 1 || value > maximum) {
+    throw new TypeError(`limit must be an integer from 1 to ${maximum}`);
   }
   return value;
 }
@@ -532,6 +566,201 @@ export class LoreWorkspaceClient {
         workspaceId: this.workspaceId,
         signal: input.signal,
       })
+    ).data;
+  }
+
+  async searchCode(input: CodeSearchInput): Promise<readonly CodeArtifact[]> {
+    const repositoryKey = input.repositoryKey.trim();
+    const commitOid = input.commitOid.trim().toLowerCase();
+    const query = input.query.trim();
+    if (!repositoryKey || repositoryKey.length > 512) {
+      throw new TypeError("repositoryKey must contain 1 to 512 characters");
+    }
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commitOid)) {
+      throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
+    }
+    if (!query || query.length > 2_000) {
+      throw new TypeError("query must contain 1 to 2000 characters");
+    }
+    const params = new URLSearchParams({
+      repository_key: repositoryKey,
+      commit_oid: commitOid,
+      q: query,
+      limit: String(normalizedLimit(input.limit, 10)),
+    });
+    if (input.pathPrefix) params.set("path_prefix", input.pathPrefix);
+    return (
+      await this.transport.json<readonly CodeArtifact[]>(`api/v1/code/search?${params}`, {
+        workspaceId: this.workspaceId,
+        signal: input.signal,
+      })
+    ).data;
+  }
+
+  async retrieveContext(input: RetrieveContextInput): Promise<RetrievedContext> {
+    const query = input.query.trim();
+    if (!query || query.length > 10_000) {
+      throw new TypeError("query must contain 1 to 10000 characters");
+    }
+    const repositoryKey = input.repositoryKey?.trim();
+    const commitOid = input.commitOid?.trim().toLowerCase();
+    if ((repositoryKey === undefined) !== (commitOid === undefined)) {
+      throw new TypeError("repositoryKey and commitOid must be provided together");
+    }
+    if (repositoryKey !== undefined && (!repositoryKey || repositoryKey.length > 512)) {
+      throw new TypeError("repositoryKey must contain 1 to 512 characters");
+    }
+    if (commitOid !== undefined && !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commitOid)) {
+      throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
+    }
+    const route = input.route ?? "auto";
+    if (!(["auto", "both", "code-only", "memory-only"] as const).includes(route)) {
+      throw new TypeError("route is invalid");
+    }
+    if ((route === "both" || route === "code-only") && repositoryKey === undefined) {
+      throw new TypeError(`${route} requires repositoryKey and commitOid`);
+    }
+    if (input.pathPrefix !== undefined && repositoryKey === undefined) {
+      throw new TypeError("pathPrefix requires repositoryKey and commitOid");
+    }
+    if (input.codeQuery !== undefined && repositoryKey === undefined) {
+      throw new TypeError("codeQuery requires repositoryKey and commitOid");
+    }
+    const memoryQuery = input.memoryQuery?.trim();
+    if (memoryQuery !== undefined && (!memoryQuery || memoryQuery.length > 10_000)) {
+      throw new TypeError("memoryQuery must contain 1 to 10000 characters");
+    }
+    const codeQuery = input.codeQuery?.trim();
+    if (codeQuery !== undefined && (!codeQuery || codeQuery.length > 2_000)) {
+      throw new TypeError("codeQuery must contain 1 to 2000 characters");
+    }
+    const { signal, ...requestInput } = input;
+    return (
+      await this.transport.json<RetrievedContext>("api/v1/context/retrieve", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        body: {
+          ...requestInput,
+          query,
+          ...(memoryQuery === undefined ? {} : { memoryQuery }),
+          ...(codeQuery === undefined ? {} : { codeQuery }),
+          ...(repositoryKey === undefined ? {} : { repositoryKey, commitOid }),
+          route,
+          memoryLimit: normalizedLimit(input.memoryLimit, 5, 10),
+          codeLimit: normalizedLimit(input.codeLimit, 10, 20),
+        },
+        signal,
+      })
+    ).data;
+  }
+
+  async queryCodeDependencies(input: CodeDependencyQueryInput): Promise<CodeDependencyQueryResult> {
+    const repositoryKey = input.repositoryKey.trim();
+    const commitOid = input.commitOid.trim().toLowerCase();
+    if (!repositoryKey || repositoryKey.length > 512) {
+      throw new TypeError("repositoryKey must contain 1 to 512 characters");
+    }
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commitOid)) {
+      throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
+    }
+    if (input.direction !== "callers" && input.direction !== "callees") {
+      throw new TypeError("direction must be callers or callees");
+    }
+    if ((input.symbol === undefined) === (input.path === undefined)) {
+      throw new TypeError("Provide exactly one of symbol or path");
+    }
+    const params = new URLSearchParams({
+      repository_key: repositoryKey,
+      commit_oid: commitOid,
+      direction: input.direction,
+    });
+    if (input.symbol !== undefined) {
+      const symbol = input.symbol.trim();
+      if (!symbol || symbol.length > 1_600) {
+        throw new TypeError("symbol must contain 1 to 1600 characters");
+      }
+      params.set("symbol", symbol);
+    } else {
+      const path = input.path ?? "";
+      if (
+        !path ||
+        path !== path.trim() ||
+        path.length > 1_024 ||
+        path.startsWith("/") ||
+        path.includes("\\") ||
+        path.split("/").some((part) => !part || part === "." || part === "..")
+      ) {
+        throw new TypeError("path is invalid");
+      }
+      params.set("path", path);
+    }
+    params.set("limit", String(normalizedLimit(input.limit, 50, 200)));
+    return (
+      await this.transport.json<CodeDependencyQueryResult>(`api/v1/code/dependencies?${params}`, {
+        workspaceId: this.workspaceId,
+        signal: input.signal,
+      })
+    ).data;
+  }
+
+  async getCodeIndexJob(jobId: string, signal?: AbortSignal): Promise<CodeIndexJob> {
+    return (
+      await this.transport.json<CodeIndexJob>(
+        `api/v1/code/index-jobs/${normalizedUuid(jobId, "jobId")}`,
+        { workspaceId: this.workspaceId, signal },
+      )
+    ).data;
+  }
+
+  async enqueueCodeIndex(
+    input: EnqueueCodeIndexInput,
+    signal?: AbortSignal,
+  ): Promise<CodeIndexJob> {
+    return (
+      await this.transport.json<CodeIndexJob>("api/v1/code/index-jobs", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        body: input,
+        signal,
+      })
+    ).data;
+  }
+
+  async listMemoryCodeEvidence(
+    memoryId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly MemoryCodeEvidence[]> {
+    return (
+      await this.transport.json<readonly MemoryCodeEvidence[]>(
+        `api/v1/memories/${normalizedUuid(memoryId, "memoryId")}/code-evidence`,
+        { workspaceId: this.workspaceId, signal },
+      )
+    ).data;
+  }
+
+  async citeMemoryCodeEvidence(
+    memoryId: string,
+    input: CiteMemoryCodeEvidenceInput,
+    signal?: AbortSignal,
+  ): Promise<MemoryCodeEvidence> {
+    return (
+      await this.transport.json<MemoryCodeEvidence>(
+        `api/v1/memories/${normalizedUuid(memoryId, "memoryId")}/code-evidence`,
+        { method: "POST", workspaceId: this.workspaceId, body: input, signal },
+      )
+    ).data;
+  }
+
+  async revalidateMemoryCodeEvidence(
+    evidenceId: string,
+    input: RevalidateMemoryCodeEvidenceInput,
+    signal?: AbortSignal,
+  ): Promise<MemoryCodeEvidence> {
+    return (
+      await this.transport.json<MemoryCodeEvidence>(
+        `api/v1/code-evidence/${normalizedUuid(evidenceId, "evidenceId")}/revalidate`,
+        { method: "POST", workspaceId: this.workspaceId, body: input, signal },
+      )
     ).data;
   }
 
