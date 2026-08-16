@@ -36,6 +36,13 @@ export const RETRIEVAL_ENTITY_ALIAS_POLICY = {
   },
 } as const;
 
+export const RETRIEVAL_CJK_LEXICAL_POLICY = {
+  revision: "deterministic-cjk-substring-rrf-v1",
+  candidateGeneration: "independent-rls-filtered-substring-channel",
+  gramCodePoints: 3,
+  maximumQueryGrams: 24,
+} as const;
+
 export const RETRIEVAL_CONTEXT_GROUP_POLICY = {
   revision: "explicit-natural-boundary-append-v2",
   defaultBaseCandidateLimit: 20,
@@ -361,6 +368,44 @@ function relaxedEnglishTerms(query: string): string[] {
     unique.push(term);
   }
   return unique.slice(0, 32);
+}
+
+const cjkRunPattern = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+
+// Postgres 'simple'/'english' text search cannot segment CJK, so an entire
+// punctuation-bounded run indexes as one token and phrase queries never match.
+// This channel probes chunk content with fixed-width code-point grams from the
+// query's CJK runs; grams contain only CJK script letters, so they are LIKE-safe
+// without escaping.
+function cjkLexicalGrams(query: string): string[] {
+  const grams: string[] = [];
+  const seen = new Set<string>();
+  const filled = (gram: string) => {
+    if (!seen.has(gram)) {
+      seen.add(gram);
+      grams.push(gram);
+    }
+    return grams.length >= RETRIEVAL_CJK_LEXICAL_POLICY.maximumQueryGrams;
+  };
+  for (const [run] of query.matchAll(cjkRunPattern)) {
+    const codePoints = [...run];
+    if (codePoints.length < 2) continue;
+    if (codePoints.length < RETRIEVAL_CJK_LEXICAL_POLICY.gramCodePoints) {
+      if (filled(run)) return grams;
+      continue;
+    }
+    for (
+      let index = 0;
+      index + RETRIEVAL_CJK_LEXICAL_POLICY.gramCodePoints <= codePoints.length;
+      index += 1
+    ) {
+      const gram = codePoints
+        .slice(index, index + RETRIEVAL_CJK_LEXICAL_POLICY.gramCodePoints)
+        .join("");
+      if (filled(gram)) return grams;
+    }
+  }
+  return grams;
 }
 
 function evidenceTerms(text: string): Set<string> {
@@ -1034,12 +1079,52 @@ async function searchOneQuery(input: {
                 memory.updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT $4
      ),
+     cjk_lexical_matches AS MATERIALIZED (
+       SELECT
+         chunk.id AS chunk_id,
+         memory.id AS memory_id,
+         chunk.ordinal AS chunk_ordinal,
+         memory.updated_at AS memory_updated_at,
+         sum(char_length(gram.gram)) AS gram_specificity,
+         count(*) AS gram_match_count
+       FROM unnest($19::text[]) AS gram(gram)
+       JOIN memory_chunks chunk
+         ON chunk.content LIKE ('%' || gram.gram || '%')
+       JOIN memories memory
+         ON memory.id = chunk.memory_id
+        AND memory.workspace_id = chunk.workspace_id
+       WHERE chunk.workspace_id = $2
+         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
+         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
+         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
+         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
+         AND NOT (memory.id = ANY($16::uuid[]))
+       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
+       HAVING count(*) >= least(2, cardinality($19::text[]))
+       ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $4
+     ),
+     cjk_lexical_candidates AS (
+       SELECT
+         chunk_id,
+         memory_id,
+         chunk_ordinal,
+         memory_updated_at,
+         row_number() OVER (
+           ORDER BY gram_specificity DESC, gram_match_count DESC,
+                    memory_updated_at DESC, chunk_ordinal DESC, chunk_id
+         ) AS candidate_rank
+       FROM cjk_lexical_matches
+     ),
      lexical_candidates AS (
        SELECT * FROM simple_lexical_candidates
        UNION ALL
        SELECT * FROM english_lexical_candidates
        UNION ALL
        SELECT * FROM relaxed_english_lexical_candidates
+       UNION ALL
+       SELECT * FROM cjk_lexical_candidates
      ),
      active_semantic_chunks AS MATERIALIZED (
        SELECT
@@ -1195,6 +1280,7 @@ async function searchOneQuery(input: {
       input.excludedMemoryIds ?? [],
       input.evidenceTopChunks,
       input.entityAliasRecall,
+      cjkLexicalGrams(input.query),
     ],
   );
   return result.rows.map((row) => ({

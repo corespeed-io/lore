@@ -1,7 +1,7 @@
 {
   "name": "Lore retrieval paraphrase, abstention, and isolation",
-  "version": 1,
-  "description": "Deterministic multilingual retrieval fixture with paraphrases, close distractors, no-answer queries, and user-private tripwires.",
+  "version": 2,
+  "description": "Deterministic multilingual retrieval fixture with paraphrases, close distractors, no-answer queries, user-private tripwires, and CJK-substring cases whose Chinese and Japanese runs defeat Postgres 'simple' tokenization.",
   "thresholds": [0.35, 0.4, 0.45, 0.5],
   "memories": [
     {
@@ -77,6 +77,30 @@
       "content": "Accessibility review requires keyboard navigation, visible focus rings, and a minimum contrast ratio of 4.5 to 1."
     },
     {
+      "key": "recall-audit",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "生产环境的记忆召回质量在八月的专项审计中被评为需要重点改进，负责人是林晓。"
+    },
+    {
+      "key": "freeze-cn",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "每逢农历新年假期，生产部署冻结七天，期间的紧急修复必须由平台负责人审批。"
+    },
+    {
+      "key": "pipeline-cn",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Effect A 数据管道的对账报告每周五由杭州团队提交给财务系统。"
+    },
+    {
+      "key": "deploy-approval-ja",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "デプロイ承認は毎週月曜日にプラットフォームチームが行います。"
+    },
+    {
       "key": "distractor-release",
       "owner": "alice",
       "scope": "shared",
@@ -125,6 +149,24 @@
       "content": "The photography room is open Thursday mornings for employee portraits."
     },
     {
+      "key": "distractor-recall-audit",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "测试环境的日志采样质量在七月的例行审计中被评为基本达标，负责人是王强。"
+    },
+    {
+      "key": "distractor-freeze-cn",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "每逢十一长假，测试集群自动缩容三天，恢复扩容需要值班人员确认。"
+    },
+    {
+      "key": "distractor-pipeline-cn",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "Effect B 数据看板的访问权限由上海团队每月审核一次。"
+    },
+    {
       "key": "private-release-tripwire",
       "owner": "bob",
       "scope": "private",
@@ -141,114 +183,194 @@
       "owner": "bob",
       "scope": "private",
       "content": "Bob's confidential note says Kenji cannot eat shellfish."
+    },
+    {
+      "key": "private-audit-tripwire",
+      "owner": "bob",
+      "scope": "private",
+      "content": "鲍勃的私人记录：记忆召回质量审计的真实结论是完全达标，无需改进。"
     }
   ],
   "cases": [
     {
       "key": "release",
+      "category": "english",
       "query": "What time do deployments stop before the weekend?",
       "expectedKeys": ["release"],
       "limit": 5
     },
     {
       "key": "contact",
+      "category": "english",
       "query": "Which encrypted app should be used for an urgent after-hours message?",
       "expectedKeys": ["contact"],
       "limit": 5
     },
     {
       "key": "planning",
+      "category": "english",
       "query": "When and where does the team prepare the next quarterly roadmap?",
       "expectedKeys": ["planning"],
       "limit": 5
     },
     {
       "key": "backup",
+      "category": "english",
       "query": "How much restore history is available for the database?",
       "expectedKeys": ["backup"],
       "limit": 5
     },
     {
       "key": "milk",
+      "category": "english",
       "query": "Where can someone find a non-dairy option for coffee?",
       "expectedKeys": ["milk"],
       "limit": 5
     },
     {
       "key": "invoice",
+      "category": "english",
       "query": "Who authorized payment of the supplier bill after tax checks?",
       "expectedKeys": ["invoice"],
       "limit": 5
     },
     {
       "key": "polaris",
+      "category": "cross-lingual",
       "query": "When and where is the Polaris weekly sync?",
       "expectedKeys": ["polaris"],
       "limit": 5
     },
     {
       "key": "allergy",
+      "category": "cross-lingual",
       "query": "Kenji 不能吃哪些食物？",
       "expectedKeys": ["allergy"],
       "limit": 5
     },
     {
       "key": "incident",
+      "category": "english",
       "query": "What credentials must change before service is brought back after a breach?",
       "expectedKeys": ["incident"],
       "limit": 5
     },
     {
       "key": "studio",
+      "category": "english",
       "query": "When is the room booked for producing the company audio show?",
       "expectedKeys": ["studio"],
       "limit": 5
     },
     {
       "key": "travel",
+      "category": "english",
       "query": "How is the team getting from Munich to the Berlin retreat?",
       "expectedKeys": ["travel"],
       "limit": 5
     },
     {
       "key": "design",
+      "category": "english",
       "query": "What visual and interaction checks are required for an accessible interface?",
       "expectedKeys": ["design"],
       "limit": 5
     },
     {
+      "key": "recall-audit",
+      "category": "cjk",
+      "query": "记忆召回质量的审计结论是什么？",
+      "expectedKeys": ["recall-audit"],
+      "limit": 5
+    },
+    {
+      "key": "recall-audit-short",
+      "category": "cjk",
+      "query": "召回质量",
+      "expectedKeys": ["recall-audit"],
+      "limit": 5
+    },
+    {
+      "key": "freeze-cn",
+      "category": "cjk",
+      "query": "农历新年假期的生产部署冻结政策是怎样的？",
+      "expectedKeys": ["freeze-cn"],
+      "limit": 5
+    },
+    {
+      "key": "polaris-cn",
+      "category": "cjk",
+      "query": "北极星项目的同步会议在什么时间和地点举行？",
+      "expectedKeys": ["polaris"],
+      "limit": 5
+    },
+    {
+      "key": "deploy-approval-ja",
+      "category": "cjk",
+      "query": "デプロイ承認はいつ、どのチームが行いますか？",
+      "expectedKeys": ["deploy-approval-ja"],
+      "limit": 5
+    },
+    {
+      "key": "pipeline-cn",
+      "category": "cjk-mixed",
+      "query": "Effect A 的对账报告由哪个团队负责提交？",
+      "expectedKeys": ["pipeline-cn"],
+      "limit": 5
+    },
+    {
       "key": "no-wifi",
+      "category": "no-answer",
       "query": "What is the office Wi-Fi password?",
       "expectedKeys": [],
       "limit": 5
     },
     {
       "key": "no-hotel",
+      "category": "no-answer",
       "query": "Which hotel is booked for the Tokyo conference?",
       "expectedKeys": [],
       "limit": 5
     },
     {
       "key": "no-medication",
+      "category": "no-answer",
       "query": "What medication dosage should the patient take?",
       "expectedKeys": [],
       "limit": 5
     },
     {
       "key": "no-ceo",
+      "category": "no-answer",
       "query": "Who is the company's chief executive officer?",
       "expectedKeys": [],
       "limit": 5
     },
     {
       "key": "no-bonus",
+      "category": "no-answer",
       "query": "When will the annual employee bonus be paid?",
       "expectedKeys": [],
       "limit": 5
     },
     {
       "key": "no-recovery-key",
+      "category": "no-answer",
       "query": "Where are the disaster-recovery encryption keys stored?",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-door-code-cn",
+      "category": "cjk-no-answer",
+      "query": "数据中心的物理门禁密码是多少？",
+      "expectedKeys": [],
+      "limit": 5
+    },
+    {
+      "key": "no-salary-cn",
+      "category": "cjk-no-answer",
+      "query": "员工的年度调薪幅度是多少？",
       "expectedKeys": [],
       "limit": 5
     }
