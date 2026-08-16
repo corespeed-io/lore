@@ -1,0 +1,300 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "groundingPolicyRevision": "retrieval-grounding-v3",
+  "provider": "Anthropic via Claude Code CLI",
+  "model": "claude-sonnet-5",
+  "trialsPerCase": 3,
+  "records": [
+    {
+      "variant": "compound-auto",
+      "caseId": "abstain/insufficient-evidence",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 28045.669791
+      },
+      "outcome": "abstained",
+      "answer": "I couldn't find an answer in the authorized Lore memory. Every search (queries including \"Episode evidence retention window,\" \"Episode retention,\" and \"evidence retention policy\") returned only one shared memory record, and its content \u2014 \"Proposal review must remain human-only before canonical Memory changes\" \u2014 is unrelated to any retention-window figure or agreement for Episode evidence. No memory in the workspace records a decision about how long Episode evidence should be retained, so I don't have authorized evidence to state a retention window. If this was agreed somewhere outside what's indexed in Lore (e.g., a doc, ticket, or conversation not yet saved as a Memory), it would need to be added there before I can retrieve and cite it.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "retention window agreed for Episode evidence",
+            "memoryQuery": "retention window for Episode evidence",
+            "route": "memory-only"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Episode evidence retention window"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Episode retention"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "evidence retention policy"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 158149,
+      "outputTokens": 1860,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "abstain/insufficient-evidence",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 18486.13125
+      },
+      "outcome": "abstained",
+      "answer": "I searched Lore's shared and private memory for a retention-window decision on Episode evidence (via both lore_retrieve_context and lore_search) and found no record of one. The only relevant memory returned (\"Proposal review must remain human-only before canonical Memory changes\") is unrelated to retention periods and doesn't address this question. No authorized evidence supports a specific retention window (e.g., a number of days/months), so I can't state what was agreed. If this was decided somewhere outside what Lore has indexed (a doc, ticket, or conversation not yet stored as a memory), please point me to it or restate the agreed window so I can record it.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Episode evidence retention window agreement",
+            "route": "memory-only",
+            "memoryQuery": "retention window for Episode evidence"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Episode evidence retention window"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 124438,
+      "outputTokens": 1304,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "abstain/insufficient-evidence",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 27916.703208000006
+      },
+      "outcome": "abstained",
+      "answer": "I searched Lore (lore_search and lore_retrieve_context) across several phrasings \u2014 \"Episode evidence retention window,\" \"retention policy days,\" \"data retention agreement\" \u2014 and every query returned only one memory, unrelated to this topic: \"Proposal review must remain human-only before canonical Memory changes\" (scope: shared, fixture: retrieval-policy-v1). No memory or code evidence mentioning \"Episode evidence,\" a retention window, or any agreed-upon duration was found. I'm not able to confirm what retention window was agreed on, and I won't guess a number without authorized evidence. If this was decided somewhere not indexed in Lore (e.g., a doc, ticket, or chat thread), please point me to it and I can pull the specific figure from there.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "retention window agreed for Episode evidence",
+            "memoryQuery": "retention window Episode evidence agreed decision",
+            "route": "memory-only"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Episode evidence retention window"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Episode evidence retention policy days"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Episode evidence"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "data retention agreement"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 158973,
+      "outputTokens": 2055,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "abstain/insufficient-evidence",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 24122.018083
+      },
+      "outcome": "abstained",
+      "answer": "I can't confirm a retention window for Episode evidence from authorized memory. Both the initial grounding call and a follow-up specialist search (mcp__lore__lore_search) for \"retention window Episode evidence\" returned only one matching record, and its content is unrelated to retention: \"Proposal review must remain human-only before canonical Memory changes.\" No memory in scope actually states a retention period, duration, or expiry policy for Episode evidence.\n\nRather than guess a number, I'm abstaining. If a retention-window decision exists, it may be under different terminology (e.g., \"TTL,\" \"expiry,\" \"eviction policy\") or in a scope/actor context not currently visible to this search \u2014 let me know if you'd like me to retry with different query terms or a different scope.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What retention window did we agree on for Episode evidence?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "retention window Episode evidence",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 94188,
+      "outputTokens": 1852,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "abstain/insufficient-evidence",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25836.235417
+      },
+      "outcome": "abstained",
+      "answer": "I couldn't find any retrieved memory that states an agreed retention window for Episode evidence. Both the initial grounding call and a follow-up lore_search (shared and private scopes) surface only one relevant memory, which concerns a different topic: \"Proposal review must remain human-only before canonical Memory changes.\" Nothing in the authorized evidence specifies a duration, TTL, or expiration policy for Episode evidence, so I don't have grounds to state a retention window. If one was agreed, it isn't present in the indexed Memory store under this query \u2014 you may want to check whether it was ever recorded as a Memory, or provide more context (e.g., which discussion/thread it came from) so I can search more precisely.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What retention window did we agree on for Episode evidence?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "retention window for Episode evidence",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "retention window for Episode evidence",
+            "scope": "private",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 127455,
+      "outputTokens": 2040,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "abstain/insufficient-evidence",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 21060.273792000007
+      },
+      "outcome": "abstained",
+      "answer": "I couldn't find any authorized evidence specifying a retention window for Episode evidence. Both the initial grounding retrieval and a follow-up search of shared Memory only surfaced one record \u2014 \"Proposal review must remain human-only before canonical Memory changes\" \u2014 which is about proposal review process, not Episode evidence retention. No memory record addresses a retention period/window for Episode evidence, so I don't have grounds to state one. If this decision exists, it may not have been recorded in Memory yet, or it may use different terminology \u2014 could you point me to where it was discussed (a doc, PR, or channel) so I can verify?",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What retention window did we agree on for Episode evidence?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "retention window for Episode evidence",
+            "scope": "shared"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 94120,
+      "outputTokens": 1735,
+      "hostShortCircuit": false
+    }
+  ]
+}

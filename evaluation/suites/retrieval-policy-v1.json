@@ -1,6 +1,6 @@
 {
   "name": "Lore Retrieval Invocation Policy",
-  "version": 4,
+  "version": 5,
   "description": "Model-facing retrieval invocation, routing, clarification, and drill-down cases over deterministic authorized Memory and exact-revision Code evidence.",
   "cases": [
     {
@@ -10,7 +10,9 @@
         "invocation": "must-call",
         "route": "memory-only",
         "outcome": "answered",
-        "answerMustInclude": ["human-only"]
+        "answerMustInclude": [
+          "human-only"
+        ]
       }
     },
     {
@@ -22,7 +24,9 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": ["src/lib/memory.ts"]
+        "answerMustInclude": [
+          "src/lib/memory.ts"
+        ]
       }
     },
     {
@@ -34,7 +38,9 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": ["human-only"]
+        "answerMustInclude": [
+          "human-only"
+        ]
       }
     },
     {
@@ -72,7 +78,9 @@
         "invocation": "must-call",
         "route": "memory-only",
         "outcome": "answered",
-        "answerMustInclude": ["human-only"]
+        "answerMustInclude": [
+          "human-only"
+        ]
       }
     },
     {
@@ -96,7 +104,9 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": ["human-only"]
+        "answerMustInclude": [
+          "human-only"
+        ]
       }
     },
     {
@@ -108,7 +118,9 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": ["human-only"]
+        "answerMustInclude": [
+          "human-only"
+        ]
       }
     },
     {
@@ -129,7 +141,9 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": ["src/lib/memory.ts"]
+        "answerMustInclude": [
+          "src/lib/memory.ts"
+        ]
       }
     },
     {
@@ -139,6 +153,15 @@
         "invocation": "must-not-call",
         "route": "abstain",
         "outcome": "answered"
+      }
+    },
+    {
+      "id": "abstain/insufficient-evidence",
+      "prompt": "What retention window did we agree on for Episode evidence?",
+      "expectation": {
+        "invocation": "must-call",
+        "route": "memory-only",
+        "outcome": "abstained"
       }
     }
   ]
