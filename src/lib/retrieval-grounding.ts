@@ -6,7 +6,7 @@
  * required/auto/off policy Lore's benchmarks pin. Keep it free of imports.
  */
 
-export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v3";
+export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v4";
 
 export type RetrievalGroundingMode = "auto" | "off" | "required";
 
@@ -44,6 +44,12 @@ export const GENERAL_BRAINSTORM_PATTERN =
   /\b(brainstorm|ideate|generate\s+ideas?)\b|头脑风暴|起.{0,12}名字|想.{0,12}名字/i;
 export const REPOSITORY_TRUTH_PATTERN =
   /\b(exact\s+revision|revision|commit|current\s+(?:code|implementation)|implemented|symbol|path|callers?|callees?|dependency|dependencies|guards?|guarded\s+by)\b|代码|实现|提交|函数|符号|路径|调用方|被谁调用|依赖|当前实现/i;
+/**
+ * First-person-plural framing marks a question about the team's own knowledge.
+ * Code vocabulary inside such a question ("our commit message convention") is
+ * usually incidental, so Memory answers it instead of a canned clarification.
+ */
+export const TEAM_FRAMING_PATTERN = /\b(our|ours|we|us)\b|我们|咱们|团队/i;
 export const CURRENT_STATE_PATTERN = /\b(now|currently|today|still)\b/i;
 export const CODE_BEHAVIOR_PATTERN =
   /\b(write|writes|writing|written|read|reads|insert|inserts|enforce|enforces|guard|guards|allow|allows|reject|rejects|return|returns|call|calls)\b/i;
@@ -120,10 +126,11 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
     };
   }
 
-  // Deliberative-recall wording keeps Memory retrieval available even when the
-  // question also uses generic code vocabulary; clarification would strand a
-  // question that Memory evidence alone can answer.
-  if (REPOSITORY_TRUTH_PATTERN.test(query) && !hasExactRevision && !MEMORY_PATTERN.test(query)) {
+  // Deliberative-recall wording and team framing keep Memory retrieval
+  // available even when the question also uses generic code vocabulary;
+  // clarification would strand a question Memory evidence alone can answer.
+  const deliberative = MEMORY_PATTERN.test(query) || TEAM_FRAMING_PATTERN.test(query);
+  if (REPOSITORY_TRUTH_PATTERN.test(query) && !hasExactRevision && !deliberative) {
     return {
       mode: "off",
       shouldRetrieve: false,
@@ -143,7 +150,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
     };
   }
 
-  if (MEMORY_PATTERN.test(query)) {
+  if (deliberative) {
     return {
       mode: "required",
       shouldRetrieve: true,

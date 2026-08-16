@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Final, Literal
 
-RETRIEVAL_GROUNDING_POLICY_REVISION: Final[str] = "retrieval-grounding-v3"
+RETRIEVAL_GROUNDING_POLICY_REVISION: Final[str] = "retrieval-grounding-v4"
 
 RetrievalGroundingMode = Literal["auto", "off", "required"]
 RepositoryGroundingContext = Literal["configured", "exact", "none"]
@@ -41,6 +41,7 @@ _REPOSITORY_TRUTH_PATTERN = re.compile(
     r"|代码|实现|提交|函数|符号|路径|调用方|被谁调用|依赖|当前实现",
     _FLAGS,
 )
+_TEAM_FRAMING_PATTERN = re.compile(r"\b(our|ours|we|us)\b|我们|咱们|团队", _FLAGS)
 _CURRENT_STATE_PATTERN = re.compile(r"\b(now|currently|today|still)\b", _FLAGS)
 _CODE_BEHAVIOR_PATTERN = re.compile(
     r"\b(write|writes|writing|written|read|reads|insert|inserts|enforce|enforces"
@@ -143,11 +144,10 @@ def plan_retrieval_grounding(
     # Deliberative-recall wording keeps Memory retrieval available even when the
     # question also uses generic code vocabulary; clarification would strand a
     # question that Memory evidence alone can answer.
-    if (
-        _REPOSITORY_TRUTH_PATTERN.search(trimmed)
-        and not has_exact_revision
-        and not _MEMORY_PATTERN.search(trimmed)
-    ):
+    deliberative = bool(
+        _MEMORY_PATTERN.search(trimmed) or _TEAM_FRAMING_PATTERN.search(trimmed)
+    )
+    if _REPOSITORY_TRUTH_PATTERN.search(trimmed) and not has_exact_revision and not deliberative:
         return RetrievalGroundingPlan(
             mode="off",
             should_retrieve=False,
@@ -165,7 +165,7 @@ def plan_retrieval_grounding(
             reasons=("exact-revision Code truth requires authorized Code evidence",),
         )
 
-    if _MEMORY_PATTERN.search(trimmed):
+    if deliberative:
         return RetrievalGroundingPlan(
             mode="required",
             should_retrieve=True,

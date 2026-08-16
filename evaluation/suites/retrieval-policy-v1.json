@@ -1,6 +1,6 @@
 {
   "name": "Lore Retrieval Invocation Policy",
-  "version": 5,
+  "version": 6,
   "description": "Model-facing retrieval invocation, routing, clarification, and drill-down cases over deterministic authorized Memory and exact-revision Code evidence.",
   "cases": [
     {
@@ -148,6 +148,15 @@
         "invocation": "must-call",
         "route": "memory-only",
         "outcome": "abstained"
+      }
+    },
+    {
+      "id": "memory/team-framed-code-vocabulary",
+      "prompt": "What's our commit message convention?",
+      "expectation": {
+        "invocation": "must-call",
+        "route": "memory-only",
+        "outcome": "answered"
       }
     }
   ]

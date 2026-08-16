@@ -16,7 +16,7 @@ from corespeed_lore import (
 
 class GroundingGateParityTest(unittest.TestCase):
     def test_revision_matches_typescript(self) -> None:
-        self.assertEqual(RETRIEVAL_GROUNDING_POLICY_REVISION, "retrieval-grounding-v3")
+        self.assertEqual(RETRIEVAL_GROUNDING_POLICY_REVISION, "retrieval-grounding-v4")
 
     def test_stale_workspace_claim_requires_grounding(self) -> None:
         plan = plan_retrieval_grounding(
@@ -86,6 +86,18 @@ class GroundingGateParityTest(unittest.TestCase):
         plan = plan_retrieval_grounding("帮我 brainstorm 五个开源记忆产品的名字。", "none")
         self.assertEqual(plan.mode, "off")
         self.assertFalse(plan.should_clarify)
+
+    def test_team_framing_with_code_vocabulary_retrieves_memory(self) -> None:
+        for query in ("What's our commit message convention?", "我们当前实现了哪些功能？"):
+            plan = plan_retrieval_grounding(query, "none")
+            self.assertEqual(plan.mode, "required", query)
+            self.assertFalse(plan.should_clarify, query)
+
+    def test_impersonal_revision_question_still_clarifies(self) -> None:
+        plan = plan_retrieval_grounding(
+            "Where is submitMemoryProposal implemented right now?", "none"
+        )
+        self.assertTrue(plan.should_clarify)
 
     def test_chinese_prior_decision_requires_memory(self) -> None:
         plan = plan_retrieval_grounding(

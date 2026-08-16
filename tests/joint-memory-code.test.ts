@@ -269,3 +269,25 @@ test("contextual impact records unchanged unresolved dependencies as uncertainty
     changes: ["uncertain:calls:externalPolicyCheck"],
   });
 });
+
+test("team-framed questions using code vocabulary retrieve Memory instead of demanding a revision", () => {
+  for (const query of ["What's our commit message convention?", "我们当前实现了哪些功能？"]) {
+    expect(planRetrievalGrounding({ query, repositoryContext: "none" })).toMatchObject({
+      mode: "required",
+      shouldRetrieve: true,
+      shouldClarify: false,
+      clarification: null,
+    });
+  }
+});
+
+test("impersonal exact-revision questions still clarify without team framing", () => {
+  for (const [query, context] of [
+    ["At which exact revision is submitMemoryProposal guarded by reviewRequired?", "configured"],
+    ["Where is submitMemoryProposal implemented right now?", "none"],
+  ] as const) {
+    expect(planRetrievalGrounding({ query, repositoryContext: context })).toMatchObject({
+      shouldClarify: true,
+    });
+  }
+});
