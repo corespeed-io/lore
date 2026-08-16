@@ -1,5 +1,12 @@
 import { readFile } from "node:fs/promises";
 import manifest from "../../evaluation/external/longmemeval-v2.json";
+import { chunkMemoryContent } from "../../src/lib/memory-chunking";
+import {
+  MAX_EPISODE_CONTENT_CHARACTERS,
+  MAX_EPISODE_OBSERVATIONS,
+  MAX_OBSERVATION_CONTENT_CHARACTERS,
+  type RecordEpisode,
+} from "../../src/lib/observations";
 import { readJsonLines } from "./json-lines";
 
 export interface LongMemEvalV2Question {
@@ -51,6 +58,15 @@ export interface LongMemEvalV2ScreenshotDimensions {
   width: number;
   height: number;
 }
+
+export interface LongMemEvalV2EpisodePlan {
+  episodes: RecordEpisode[];
+  renderedContent: string;
+  observationCount: number;
+}
+
+export const LONGMEMEVAL_V2_EPISODE_PLAN_REVISION = "lore-longmemeval-v2-episode-plan-v1";
+const maximumObservationFragmentCodePoints = Math.floor(MAX_OBSERVATION_CONTENT_CHARACTERS / 2);
 
 const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10] as const;
 
@@ -132,7 +148,16 @@ export function parseLongMemEvalV2Trajectory(value: unknown): LongMemEvalV2Traje
   };
 }
 
-export function renderLongMemEvalV2Trajectory(trajectory: LongMemEvalV2Trajectory): string {
+function longMemEvalV2TrajectorySections(trajectory: LongMemEvalV2Trajectory): Array<{
+  content: string;
+  stateIndex: number | null;
+}> {
+  const header = [
+    `Trajectory ${trajectory.id}`,
+    `Environment: ${trajectory.environment}`,
+    `Goal: ${trajectory.goal}`,
+    `Outcome: ${trajectory.outcome}`,
+  ].join("\n\n");
   const states = trajectory.states.flatMap((state) => {
     const fields = [
       `State ${state.stateIndex}`,
@@ -141,15 +166,75 @@ export function renderLongMemEvalV2Trajectory(trajectory: LongMemEvalV2Trajector
       state.thought ? `Thought: ${state.thought}` : null,
       state.accessibilityTree ? `Observation:\n${state.accessibilityTree}` : null,
     ].filter((field): field is string => field !== null);
-    return fields.length > 1 ? [fields.join("\n")] : [];
+    return fields.length > 1 ? [{ content: fields.join("\n"), stateIndex: state.stateIndex }] : [];
   });
-  return [
-    `Trajectory ${trajectory.id}`,
-    `Environment: ${trajectory.environment}`,
-    `Goal: ${trajectory.goal}`,
-    `Outcome: ${trajectory.outcome}`,
-    ...states,
-  ].join("\n\n");
+  return [{ content: header, stateIndex: null }, ...states];
+}
+
+export function renderLongMemEvalV2Trajectory(trajectory: LongMemEvalV2Trajectory): string {
+  return longMemEvalV2TrajectorySections(trajectory)
+    .map((section) => section.content)
+    .join("\n\n");
+}
+
+export function planLongMemEvalV2TrajectoryEpisodes(
+  trajectory: LongMemEvalV2Trajectory,
+  metadata: Record<string, unknown>,
+): LongMemEvalV2EpisodePlan {
+  const sections = longMemEvalV2TrajectorySections(trajectory);
+  const renderedContent = sections.map((section) => section.content).join("\n\n");
+  let segmentOrdinal = 0;
+  const observations = sections.flatMap((section, sectionOrdinal) => {
+    const exactSection = sectionOrdinal === 0 ? section.content : `\n\n${section.content}`;
+    return chunkMemoryContent(exactSection, maximumObservationFragmentCodePoints).map(
+      (content, fragmentOrdinal) => ({
+        kind: "event" as const,
+        content,
+        metadata: {
+          ...metadata,
+          recordType: "trajectory-evidence",
+          trajectoryId: trajectory.id,
+          segmentOrdinal: segmentOrdinal++,
+          stateIndex: section.stateIndex,
+          fragmentOrdinal,
+        },
+      }),
+    );
+  });
+  const episodes: RecordEpisode[] = [];
+  let current: Array<RecordEpisode["observations"][number]> = [];
+  let currentCharacters = 0;
+  for (const observation of observations) {
+    if (
+      current.length >= MAX_EPISODE_OBSERVATIONS ||
+      currentCharacters + observation.content.length > MAX_EPISODE_CONTENT_CHARACTERS
+    ) {
+      episodes.push({
+        kind: "workflow",
+        scope: "private",
+        observations: current.map((item) => ({
+          ...item,
+          metadata: { ...item.metadata, trajectoryEpisodeOrdinal: episodes.length },
+        })),
+      });
+      current = [];
+      currentCharacters = 0;
+    }
+    current.push(observation);
+    currentCharacters += observation.content.length;
+  }
+  if (current.length) {
+    episodes.push({
+      kind: "workflow",
+      scope: "private",
+      observations: current.map((item) => ({
+        ...item,
+        metadata: { ...item.metadata, trajectoryEpisodeOrdinal: episodes.length },
+      })),
+    });
+  }
+  if (episodes.length === 0) throw new Error("LongMemEval-V2 trajectory produced no evidence");
+  return { episodes, renderedContent, observationCount: observations.length };
 }
 
 function normalizeLiteralAnchor(value: string): string {
