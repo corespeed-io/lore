@@ -286,7 +286,12 @@ export function planJointEvidenceRoute(input: JointEvidenceQuery): JointRoutePla
     CHANGE_PATTERN.test(query) ||
     (STALE_CONFIRMATION_PATTERN.test(query) &&
       CURRENT_STATE_PATTERN.test(query) &&
-      CODE_BEHAVIOR_PATTERN.test(query))
+      CODE_BEHAVIOR_PATTERN.test(query)) ||
+    // A past-agreement claim about current code behavior must verify both
+    // evidence families; deliberative wording alone must not skip the Code half.
+    (MEMORY_PATTERN.test(query) &&
+      CODE_BEHAVIOR_PATTERN.test(query) &&
+      REPOSITORY_TRUTH_PATTERN.test(query))
   ) {
     return {
       intent: "change",
