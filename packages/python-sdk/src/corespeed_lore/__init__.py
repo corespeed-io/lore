@@ -4,6 +4,7 @@ from .grounding import (
     RepositoryGroundingContext,
     RetrievalGroundingMode,
     RetrievalGroundingPlan,
+    RetrievalGroundingReasonCode,
     plan_retrieval_grounding,
 )
 from .generated_contract import (
@@ -64,6 +65,7 @@ __all__ = [
     "RepositoryGroundingContext",
     "RetrievalGroundingMode",
     "RetrievalGroundingPlan",
+    "RetrievalGroundingReasonCode",
     "RevalidateMemoryCodeEvidenceInput",
     "RetrieveContextInput",
     "RetrievedContext",

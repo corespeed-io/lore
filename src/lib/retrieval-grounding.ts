@@ -6,7 +6,7 @@
  * required/auto/off policy Lore's benchmarks pin. Keep it free of imports.
  */
 
-export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v4";
+export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v5";
 
 export type RetrievalGroundingMode = "auto" | "off" | "required";
 
@@ -18,6 +18,23 @@ export type RetrievalGroundingMode = "auto" | "off" | "required";
  */
 export type RepositoryGroundingContext = "configured" | "exact" | "none";
 
+/**
+ * Stable machine-readable reason for one grounding decision. Hosts switch on
+ * this to render their own user-facing copy — in the user's language — instead
+ * of matching on the English `reasons` strings, which are for logs and
+ * receipts. The two clarify codes are the ones a host must be able to present.
+ */
+export type RetrievalGroundingReasonCode =
+  | "empty_query"
+  | "supplied_content_sufficient"
+  | "general_brainstorming"
+  | "missing_commit_oid"
+  | "repository_unconfigured"
+  | "stale_recollection"
+  | "exact_revision_code_truth"
+  | "workspace_history"
+  | "retrieval_optional";
+
 export interface RetrievalGroundingQuery {
   query: string;
   repositoryContext: RepositoryGroundingContext;
@@ -27,6 +44,8 @@ export interface RetrievalGroundingPlan {
   mode: RetrievalGroundingMode;
   shouldRetrieve: boolean;
   shouldClarify: boolean;
+  /** Stable identifier for this decision; prefer it over `reasons` text. */
+  reasonCode: RetrievalGroundingReasonCode;
   /**
    * User-facing clarification a host returns verbatim, without a model turn,
    * whenever `shouldClarify` is true. Null otherwise.
@@ -65,6 +84,12 @@ function codeGroundingClarification(context: RepositoryGroundingContext): string
     : MISSING_REVISION_CLARIFICATION;
 }
 
+function codeGroundingReasonCode(
+  context: RepositoryGroundingContext,
+): RetrievalGroundingReasonCode {
+  return context === "none" ? "repository_unconfigured" : "missing_commit_oid";
+}
+
 export function planRetrievalGrounding(input: RetrievalGroundingQuery): RetrievalGroundingPlan {
   const query = input.query.trim();
   if (!query) {
@@ -73,6 +98,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: false,
       shouldClarify: false,
       clarification: null,
+      reasonCode: "empty_query",
       reasons: ["empty query"],
     };
   }
@@ -83,6 +109,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: false,
       shouldClarify: false,
       clarification: null,
+      reasonCode: "supplied_content_sufficient",
       reasons: ["supplied content is sufficient for the requested transformation"],
     };
   }
@@ -97,6 +124,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: false,
       shouldClarify: false,
       clarification: null,
+      reasonCode: "general_brainstorming",
       reasons: ["general brainstorming does not require stored evidence"],
     };
   }
@@ -112,6 +140,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: false,
       shouldClarify: true,
       clarification: codeGroundingClarification(input.repositoryContext),
+      reasonCode: codeGroundingReasonCode(input.repositoryContext),
       reasons: ["current Code verification requires repository and exact commit context"],
     };
   }
@@ -122,6 +151,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: true,
       shouldClarify: false,
       clarification: null,
+      reasonCode: "stale_recollection",
       reasons: ["possibly stale recollection requires authorized evidence"],
     };
   }
@@ -136,6 +166,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: false,
       shouldClarify: true,
       clarification: codeGroundingClarification(input.repositoryContext),
+      reasonCode: codeGroundingReasonCode(input.repositoryContext),
       reasons: ["exact-revision Code grounding requires repository and commit context"],
     };
   }
@@ -146,6 +177,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: true,
       shouldClarify: false,
       clarification: null,
+      reasonCode: "exact_revision_code_truth",
       reasons: ["exact-revision Code truth requires authorized Code evidence"],
     };
   }
@@ -156,6 +188,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
       shouldRetrieve: true,
       shouldClarify: false,
       clarification: null,
+      reasonCode: "workspace_history",
       reasons: ["Workspace or user-specific history requires authorized Memory evidence"],
     };
   }
@@ -165,6 +198,7 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
     shouldRetrieve: false,
     shouldClarify: false,
     clarification: null,
+    reasonCode: "retrieval_optional",
     reasons: ["retrieval may help but is not required"],
   };
 }

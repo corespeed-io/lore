@@ -12,10 +12,25 @@ import re
 from dataclasses import dataclass
 from typing import Final, Literal
 
-RETRIEVAL_GROUNDING_POLICY_REVISION: Final[str] = "retrieval-grounding-v4"
+RETRIEVAL_GROUNDING_POLICY_REVISION: Final[str] = "retrieval-grounding-v5"
 
 RetrievalGroundingMode = Literal["auto", "off", "required"]
 RepositoryGroundingContext = Literal["configured", "exact", "none"]
+
+#: Stable machine-readable reason for one grounding decision. Hosts switch on
+#: this to render their own user-facing copy in the user's language instead of
+#: matching the English ``reasons`` strings, which are for logs and receipts.
+RetrievalGroundingReasonCode = Literal[
+    "empty_query",
+    "supplied_content_sufficient",
+    "general_brainstorming",
+    "missing_commit_oid",
+    "repository_unconfigured",
+    "stale_recollection",
+    "exact_revision_code_truth",
+    "workspace_history",
+    "retrieval_optional",
+]
 
 _FLAGS = re.IGNORECASE | re.ASCII
 
@@ -69,6 +84,7 @@ class RetrievalGroundingPlan:
     mode: RetrievalGroundingMode
     should_retrieve: bool
     should_clarify: bool
+    reason_code: RetrievalGroundingReasonCode
     clarification: str | None
     reasons: tuple[str, ...]
 
@@ -77,6 +93,14 @@ def _code_grounding_clarification(context: RepositoryGroundingContext) -> str:
     if context == "none":
         return _UNCONFIGURED_REPOSITORY_CLARIFICATION
     return _MISSING_REVISION_CLARIFICATION
+
+
+def _code_grounding_reason_code(
+    context: RepositoryGroundingContext,
+) -> RetrievalGroundingReasonCode:
+    if context == "none":
+        return "repository_unconfigured"
+    return "missing_commit_oid"
 
 
 def plan_retrieval_grounding(
@@ -92,7 +116,8 @@ def plan_retrieval_grounding(
             should_retrieve=False,
             should_clarify=False,
             clarification=None,
-            reasons=("empty query",),
+            reason_code="empty_query",
+        reasons=("empty query",),
         )
 
     if _SUPPLIED_TRANSFORMATION_PATTERN.search(trimmed):
@@ -101,7 +126,8 @@ def plan_retrieval_grounding(
             should_retrieve=False,
             should_clarify=False,
             clarification=None,
-            reasons=("supplied content is sufficient for the requested transformation",),
+            reason_code="supplied_content_sufficient",
+        reasons=("supplied content is sufficient for the requested transformation",),
         )
 
     if (
@@ -114,7 +140,8 @@ def plan_retrieval_grounding(
             should_retrieve=False,
             should_clarify=False,
             clarification=None,
-            reasons=("general brainstorming does not require stored evidence",),
+            reason_code="general_brainstorming",
+        reasons=("general brainstorming does not require stored evidence",),
         )
 
     has_exact_revision = repository_context == "exact"
@@ -129,6 +156,7 @@ def plan_retrieval_grounding(
             should_retrieve=False,
             should_clarify=True,
             clarification=_code_grounding_clarification(repository_context),
+            reason_code=_code_grounding_reason_code(repository_context),
             reasons=("current Code verification requires repository and exact commit context",),
         )
 
@@ -138,7 +166,8 @@ def plan_retrieval_grounding(
             should_retrieve=True,
             should_clarify=False,
             clarification=None,
-            reasons=("possibly stale recollection requires authorized evidence",),
+            reason_code="stale_recollection",
+        reasons=("possibly stale recollection requires authorized evidence",),
         )
 
     # Deliberative-recall wording keeps Memory retrieval available even when the
@@ -153,6 +182,7 @@ def plan_retrieval_grounding(
             should_retrieve=False,
             should_clarify=True,
             clarification=_code_grounding_clarification(repository_context),
+            reason_code=_code_grounding_reason_code(repository_context),
             reasons=("exact-revision Code grounding requires repository and commit context",),
         )
 
@@ -162,7 +192,8 @@ def plan_retrieval_grounding(
             should_retrieve=True,
             should_clarify=False,
             clarification=None,
-            reasons=("exact-revision Code truth requires authorized Code evidence",),
+            reason_code="exact_revision_code_truth",
+        reasons=("exact-revision Code truth requires authorized Code evidence",),
         )
 
     if deliberative:
@@ -171,7 +202,8 @@ def plan_retrieval_grounding(
             should_retrieve=True,
             should_clarify=False,
             clarification=None,
-            reasons=("Workspace or user-specific history requires authorized Memory evidence",),
+            reason_code="workspace_history",
+        reasons=("Workspace or user-specific history requires authorized Memory evidence",),
         )
 
     return RetrievalGroundingPlan(
@@ -179,5 +211,6 @@ def plan_retrieval_grounding(
         should_retrieve=False,
         should_clarify=False,
         clarification=None,
+        reason_code="retrieval_optional",
         reasons=("retrieval may help but is not required",),
     )

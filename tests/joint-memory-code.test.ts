@@ -291,3 +291,20 @@ test("impersonal exact-revision questions still clarify without team framing", (
     });
   }
 });
+
+test("grounding reason codes let hosts render their own clarification copy", () => {
+  const locator = "Where is submitMemoryProposal implemented?";
+  expect(planRetrievalGrounding({ query: locator, repositoryContext: "configured" })).toMatchObject(
+    { reasonCode: "missing_commit_oid", shouldClarify: true },
+  );
+  expect(planRetrievalGrounding({ query: locator, repositoryContext: "none" })).toMatchObject({
+    reasonCode: "repository_unconfigured",
+    shouldClarify: true,
+  });
+  expect(
+    planRetrievalGrounding({ query: "What did we agree about review?", repositoryContext: "none" }),
+  ).toMatchObject({ reasonCode: "workspace_history", shouldClarify: false });
+  expect(
+    planRetrievalGrounding({ query: "Rewrite this supplied line.", repositoryContext: "none" }),
+  ).toMatchObject({ reasonCode: "supplied_content_sufficient", mode: "off" });
+});

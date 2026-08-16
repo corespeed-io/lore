@@ -33,11 +33,12 @@ tool selection; `@corespeed/lore-sdk` exports the versioned gate as
 facts, and current or exact-revision repository claims; it stays off for tasks fully
 supported by supplied text and unconstrained brainstorming. When Code truth is
 required but exact revision context is unavailable, the gate returns
-`shouldClarify` with a ready-made clarification — asking for the exact commit OID
-when a repository is configured, or pointing the operator at
-`LORE_CODE_REPOSITORIES` when none is — and hosts return it deterministically,
-without a model turn, instead of substituting Memory search or letting the model
-choose between clarifying and abstaining. After a required compound read, expose
+`shouldClarify` with a stable `reasonCode` — `missing_commit_oid` when a
+repository is configured, `repository_unconfigured` when none is — plus an
+English `clarification` default. Hosts switch on the code to render copy in the
+user's language and return it deterministically, without a model turn, instead
+of substituting Memory search or letting the model choose between clarifying
+and abstaining. After a required compound read, expose
 specialist Memory, Code search, or dependency tools only for bounded follow-up.
 
 Memory tools accept one coherent canonical record, with a hard limit of 32,000

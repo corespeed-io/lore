@@ -16,7 +16,7 @@ from corespeed_lore import (
 
 class GroundingGateParityTest(unittest.TestCase):
     def test_revision_matches_typescript(self) -> None:
-        self.assertEqual(RETRIEVAL_GROUNDING_POLICY_REVISION, "retrieval-grounding-v4")
+        self.assertEqual(RETRIEVAL_GROUNDING_POLICY_REVISION, "retrieval-grounding-v5")
 
     def test_stale_workspace_claim_requires_grounding(self) -> None:
         plan = plan_retrieval_grounding(
@@ -92,6 +92,18 @@ class GroundingGateParityTest(unittest.TestCase):
             plan = plan_retrieval_grounding(query, "none")
             self.assertEqual(plan.mode, "required", query)
             self.assertFalse(plan.should_clarify, query)
+
+    def test_reason_codes_distinguish_the_two_clarify_situations(self) -> None:
+        configured = plan_retrieval_grounding(
+            "Where is submitMemoryProposal implemented?", "configured"
+        )
+        none = plan_retrieval_grounding("Where is submitMemoryProposal implemented?", "none")
+        self.assertEqual(configured.reason_code, "missing_commit_oid")
+        self.assertEqual(none.reason_code, "repository_unconfigured")
+        self.assertEqual(
+            plan_retrieval_grounding("What did we agree about review?", "none").reason_code,
+            "workspace_history",
+        )
 
     def test_impersonal_revision_question_still_clarifies(self) -> None:
         plan = plan_retrieval_grounding(
