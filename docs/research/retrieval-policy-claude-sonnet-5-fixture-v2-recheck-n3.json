@@ -1,0 +1,1098 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "groundingPolicyRevision": "retrieval-grounding-v3",
+  "provider": "Anthropic via Claude Code CLI",
+  "model": "claude-sonnet-5",
+  "trialsPerCase": 3,
+  "fixture": "retrieval-policy-mcp fixture v2 (adds reviewRequired implementation artifact and resolved callee edge)",
+  "records": [
+    {
+      "variant": "compound-auto",
+      "caseId": "code/chinese-current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 45404.872334
+      },
+      "outcome": "answered",
+      "answer": "\u5728 `corespeed/lore` \u4ed3\u5e93\u3001\u63d0\u4ea4 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` \u4e0b\uff0cproposal \u63d0\u4ea4\u7684 guard \u903b\u8f91\u4f4d\u4e8e `src/lib/memory.ts`\uff1a\n\n- **\u5165\u53e3\u51fd\u6570** `submitMemoryProposal()`\uff08`src/lib/memory.ts:100-112`\uff09\uff1a\n  ```ts\n  export async function submitMemoryProposal() { return reviewRequired(); }\n  ```\n  \u8fd9\u662f proposal \u63d0\u4ea4\u7684\u5bf9\u5916\u5165\u53e3\uff0c\u5185\u90e8\u76f4\u63a5\u8c03\u7528 `reviewRequired()`\u3002\n\n- **guard \u5b9e\u73b0** `reviewRequired()`\uff08`src/lib/memory.ts:84-98`\uff09\uff1a\n  ```ts\n  export function reviewRequired(): ProposalSubmission {\n    // Proposals are queued for human-only review; they never write canonical Memory directly.\n    return queueProposalForHumanReview();\n  }\n  ```\n  \u8fd9\u4e2a\u51fd\u6570\u5c31\u662f\u5b9e\u9645\u7684 guard\uff1a\u5b83\u62e6\u622a\u6240\u6709 proposal \u63d0\u4ea4\uff0c\u5f3a\u5236\u8f6c\u5165\u4eba\u5de5\u5ba1\u6838\u961f\u5217\uff08\u8c03\u7528 `queueProposalForHumanReview()`\uff09\uff0c\u786e\u4fdd proposal \u4e0d\u4f1a\u7ed5\u8fc7\u5ba1\u6838\u76f4\u63a5\u5199\u5165 canonical Memory\u3002\n\n\u4f9d\u8d56\u5173\u7cfb\uff08callees\uff09\u68c0\u7d22\u786e\u8ba4\u4e86\u8c03\u7528\u94fe\uff1a`submitMemoryProposal`\uff08\u7b2c101\u884c\uff09\u2192 `reviewRequired`\u3002\n\n\u9700\u8981\u8bf4\u660e\u7684\u662f\uff1a`queueProposalForHumanReview()` \u672c\u8eab\u7684\u5177\u4f53\u5b9e\u73b0\uff08\u5b9a\u4e49\u4f4d\u7f6e\uff09\u672a\u51fa\u73b0\u5728\u672c\u6b21\u4ee3\u7801\u68c0\u7d22\u8fd4\u56de\u7684\u8bc1\u636e\u4e2d\uff0c\u53ea\u80fd\u786e\u8ba4\u5b83\u662f `reviewRequired()` \u7684\u8c03\u7528\u76ee\u6807\uff0c\u65e0\u6cd5\u7ed9\u51fa\u5176\u5b9a\u4e49\u6240\u5728\u7684\u6587\u4ef6/\u884c\u53f7\u2014\u2014\u5982\u9700\u8981\uff0c\u53ef\u5bf9\u8be5\u7b26\u53f7\u518d\u505a\u4e00\u6b21\u9488\u5bf9\u6027\u68c0\u7d22\u3002</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal submission guard"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "guard"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired",
+            "path": "src/lib/memory.ts"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "src/lib/memory.ts#function_declaration:reviewRequired"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 200608,
+      "outputTokens": 4221,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "code/chinese-current-implementation",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 36740.087667
+      },
+      "outcome": "answered",
+      "answer": "\u6839\u636e Lore \u4ee3\u7801\u68c0\u7d22\uff08\u4ed3\u5e93 `corespeed/lore`\uff0c\u7cbe\u786e commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\uff09\u8fd4\u56de\u7684\u8bc1\u636e\uff0cproposal \u63d0\u4ea4\u7684 guard \u5b9e\u73b0\u5728\uff1a\n\n**`src/lib/memory.ts`**\n\n1. `reviewRequired()`\uff08\u7b2c 84\u201398 \u884c\uff09\u2014\u2014\u8fd9\u5c31\u662f\u5b9e\u9645\u7684 guard \u903b\u8f91\uff1a\n   ```ts\n   export function reviewRequired(): ProposalSubmission {\n     // Proposals are queued for human-only review; they never write canonical Memory directly.\n     return queueProposalForHumanReview();\n   }\n   ```\n   \u5b83\u5f3a\u5236\u6240\u6709 proposal \u5fc5\u987b\u8fdb\u5165\u4eba\u5de5\u5ba1\u6838\u961f\u5217\uff08`queueProposalForHumanReview()`\uff09\uff0c\u4e0d\u5141\u8bb8\u76f4\u63a5\u5199\u5165 canonical Memory\u3002\n\n2. `submitMemoryProposal()`\uff08\u7b2c 100\u2013112 \u884c\uff09\u662f\u5bf9\u5916\u7684\u63d0\u4ea4\u5165\u53e3\uff0c\u5185\u90e8\u76f4\u63a5\u8c03\u7528 `reviewRequired()`\uff1a\n   ```ts\n   export async function submitMemoryProposal() { return reviewRequired(); }\n   ```\n   \u4ee3\u7801\u4f9d\u8d56\u68c0\u7d22\u786e\u8ba4\u4e86 `submitMemoryProposal` \u2192 `reviewRequired` \u7684\u8c03\u7528\u8fb9\uff08\u7b2c 101 \u884c\u7684\u8c03\u7528\u70b9\uff09\u3002\n\n\u4e5f\u5c31\u662f\u8bf4\uff0cguard \u7684\u6838\u5fc3\u5e76\u4e0d\u662f\u4e00\u4e2a\u72ec\u7acb\u6821\u9a8c\u51fd\u6570\uff0c\u800c\u662f `reviewRequired()` \u8fd9\u4e00\u6b65\u2014\u2014\u5b83\u628a\"\u63d0\u4ea4\"\u548c\"\u5199\u5165 canonical Memory\"\u5f3a\u5236\u89e3\u8026\uff0cproposal \u53ea\u80fd\u8fdb\u961f\u5217\u7b49\u4eba\u5de5\u5ba1\u6838\u3002\n\n\u6ce8\u610f\uff1a`queueProposalForHumanReview()` \u672c\u8eab\u7684\u51fd\u6570\u4f53\u672a\u88ab\u8be5 commit \u7684\u4ee3\u7801\u7d22\u5f15\u5355\u72ec\u6536\u5f55\uff08\u68c0\u7d22\u53ea\u8fd4\u56de\u4e86\u5b83\u7684\u8c03\u7528\u70b9\uff09\uff0c\u5982\u679c\u9700\u8981\u5b83\u7684\u5177\u4f53\u5b9e\u73b0\u7ec6\u8282\uff0c\u6211\u76ee\u524d\u6ca1\u6709\u53ef\u9a8c\u8bc1\u7684\u8bc1\u636e\u6765\u56de\u7b54\uff0c\u9700\u8981\u989d\u5916\u68c0\u7d22\u6216\u786e\u8ba4\u7d22\u5f15\u8303\u56f4\u3002</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal submission guard implementation"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "guard"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview canonical memory write guard"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 166486,
+      "outputTokens": 3219,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "code/chinese-current-implementation",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 51979.75095799999
+      },
+      "outcome": "answered",
+      "answer": "Guard \u7684\u5b9e\u73b0\u4f4d\u4e8e `src/lib/memory.ts`(repo `corespeed/lore`, commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`):\n\n- `reviewRequired()`(\u7b2c 84\u201398 \u884c)\u662f\u5b9e\u9645\u7684 guard \u51fd\u6570:\u5b83\u4e0d\u6267\u884c\u4efb\u4f55\u5199\u5165,\u800c\u662f\u76f4\u63a5\u8fd4\u56de `queueProposalForHumanReview()` \u7684\u7ed3\u679c\u3002\u51fd\u6570\u4e0a\u65b9\u6ce8\u91ca\u5199\u660e:\u300cProposals are queued for human-only review; they never write canonical Memory directly.\u300d\u2014\u2014\u4e5f\u5c31\u662f\u8bf4\u6240\u6709 proposal \u90fd\u88ab\u5f3a\u5236\u9001\u5165\u4eba\u5de5\u5ba1\u6838\u961f\u5217,\u7981\u6b62\u76f4\u63a5\u5199\u5165 canonical Memory\u3002\n- `submitMemoryProposal()`(\u7b2c 100\u2013112 \u884c)\u662f\u5bf9\u5916\u7684\u63d0\u4ea4\u5165\u53e3,\u51fd\u6570\u4f53\u5728\u7b2c 101 \u884c\u76f4\u63a5\u8c03\u7528 `reviewRequired()`,\u4ece\u800c\u628a guard \u63a5\u5165\u63d0\u4ea4\u8def\u5f84\u3002\n\n\u8c03\u7528\u94fe\u4e3a:`submitMemoryProposal` \u2192 `reviewRequired` \u2192 `queueProposalForHumanReview`\u3002\n\n\u5c40\u9650\u6027\u8bf4\u660e:\u901a\u8fc7 `lore_code_search`(\u591a\u6b21\u6309\u7b26\u53f7\u540d `queueProposalForHumanReview` \u53ca\u81ea\u7531\u6587\u672c\u67e5\u8be2)\u548c `lore_code_dependencies`(callees \u67e5\u8be2)\u53cd\u590d\u68c0\u7d22,\u5f53\u524d\u53ef\u7528\u7684 Code Evidence \u4e2d\u53ea\u8fd4\u56de\u4e86\u4e0a\u8ff0\u4e24\u4e2a artifact(`submitMemoryProposal`\u3001`reviewRequired`);`queueProposalForHumanReview` \u672c\u8eab\u7684\u51fd\u6570\u58f0\u660e/\u5b9e\u73b0\u4f4d\u7f6e\u6ca1\u6709\u88ab\u7d22\u5f15\u8fd4\u56de,\u4e14 callees \u67e5\u8be2\u7684 subject \u59cb\u7ec8\u88ab\u89e3\u6790\u56de `submitMemoryProposal`,\u672a\u80fd\u7ed9\u51fa `queueProposalForHumanReview` \u7684\u72ec\u7acb\u4f4d\u7f6e\u3002\u56e0\u6b64:guard \u7684\u5224\u5b9a/\u62e6\u622a\u903b\u8f91\u53ef\u786e\u8ba4\u5728 `reviewRequired()`(`src/lib/memory.ts:84-98`);\u4f46\u5176\u59d4\u6258\u7684\u6392\u961f/\u5ba1\u6838\u5b9e\u73b0(`queueProposalForHumanReview`)\u5177\u4f53\u4ee3\u7801\u4f4d\u7f6e,\u73b0\u6709\u8bc1\u636e\u4e0d\u652f\u6301\u8fdb\u4e00\u6b65\u786e\u8ba4\u3002</answer>\n",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal submission guard"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview implementation"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired",
+            "path": "src/lib/memory.ts"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "queueProposalForHumanReview"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "function queueProposalForHumanReview"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview",
+            "limit": 25
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 238555,
+      "outputTokens": 4616,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 29612.23
+      },
+      "outcome": "answered",
+      "answer": "In `corespeed/lore` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, the guard lives in `src/lib/memory.ts`:\n\n- `reviewRequired()` (src/lib/memory.ts:84-98) is the guard itself \u2014 its body returns `queueProposalForHumanReview()`, with an inline comment noting \"Proposals are queued for human-only review; they never write canonical Memory directly.\"\n- `submitMemoryProposal()` (src/lib/memory.ts:100-112) is the entry point that invokes the guard \u2014 its body is `return reviewRequired();`.\n\nSo any proposal submission is routed through `submitMemoryProposal \u2192 reviewRequired \u2192 queueProposalForHumanReview`, which enforces that proposals are queued for human review rather than committed straight to canonical Memory.",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal submission guard"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 96456,
+      "outputTokens": 2754,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "code/current-implementation",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 45969.326292
+      },
+      "outcome": "answered",
+      "answer": "The proposal submission guard is implemented in `src/lib/memory.ts` in `corespeed/lore` (commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`):\n\n- `reviewRequired()` (lines 84\u201398) is the guard: it returns `queueProposalForHumanReview()`, ensuring proposals are queued for human-only review and never write to canonical Memory directly (per an in-code comment to that effect).\n- `submitMemoryProposal()` (lines 100\u2013112) is the public entry point whose body is `return reviewRequired();` \u2014 every submission is routed through the guard.\n\nVerified via `lore_code_dependencies`: a resolved call edge from `submitMemoryProposal` to `reviewRequired` at `src/lib/memory.ts:101`. No callers of `submitMemoryProposal` were found in the indexed code, consistent with it being the outward-facing entry point invoked from outside the indexed source (e.g., an API/tool boundary).</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal submission guard"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "reviewRequired",
+            "direction": "callees"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callers"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 167314,
+      "outputTokens": 4260,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "code/current-implementation",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 34461.93933299999
+      },
+      "outcome": "answered",
+      "answer": "In `corespeed/lore` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, the submission guard lives in `src/lib/memory.ts`:\n\n- **`reviewRequired()`** (`src/lib/memory.ts:84-98`) is the guard itself \u2014 it enforces that proposals are queued for human-only review and never write canonical Memory directly:\n  ```ts\n  export function reviewRequired(): ProposalSubmission {\n    // Proposals are queued for human-only review; they never write canonical Memory directly.\n    return queueProposalForHumanReview();\n  }\n  ```\n- **`submitMemoryProposal()`** (`src/lib/memory.ts:100-112`) is the entry point that invokes it:\n  ```ts\n  export async function submitMemoryProposal() { return reviewRequired(); }\n  ```\n\nSo any proposal submission is routed through `reviewRequired()`, which delegates to `queueProposalForHumanReview()` rather than allowing a direct write \u2014 that's the current guard.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "codeQuery": "proposal submission guard",
+            "route": "code-only"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 96876,
+      "outputTokens": 3305,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 41313.006
+      },
+      "outcome": "answered",
+      "answer": "Yes \u2014 the historical human-only proposal review decision is still enforced in the current code.\n\n**Historical decision (Memory, shared, score 0.95):** \"Proposal review must remain human-only before canonical Memory changes.\"\n\n**Current code (repo `corespeed/lore` @ commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `src/lib/memory.ts`):**\n- `submitMemoryProposal()` (lines 100\u2013112) delegates directly to `reviewRequired()`.\n- `reviewRequired()` (lines 84\u201398) routes every proposal through `queueProposalForHumanReview()`, with an in-code note that proposals \"are queued for human-only review; they never write canonical Memory directly.\"\n\nA targeted search for auto-approve/bypass/skip-review code paths on this same commit returned no additional artifacts beyond these two \u2014 no alternate route that writes canonical Memory without going through human review was found. The retrieval reported no conflicts between the Memory and Code evidence.\n\nOne minor caveat: the dependency check found no indexed callers of `submitMemoryProposal` in this repository slice, so I can't confirm from this evidence alone which entry point(s) invoke it \u2014 but that doesn't change the finding that the function itself still funnels through human-only review with no bypass path in evidence.</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "human-only proposal review enforcement",
+            "memoryQuery": "historical decision: proposals must be reviewed by a human only, not auto-approved or reviewed by AI/bot",
+            "codeQuery": "proposal review approval human-only enforcement check",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "route": "both"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "auto-approve proposal bypass review skip human",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 131063,
+      "outputTokens": 3620,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "joint/decision-drift",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 60823.540834
+      },
+      "outcome": "answered",
+      "answer": "Yes. Retrieved evidence from corespeed/lore at commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa shows current code still matches the historical decision, with no conflicting or bypass path found.\n\n**Historical decision** (Memory, shared scope, score 0.95):\n\"Proposal review must remain human-only before canonical Memory changes.\"\n\n**Current code** (src/lib/memory.ts):\n- `submitMemoryProposal()` (lines 100\u2013112) delegates entirely to `reviewRequired()`.\n- `reviewRequired()` (lines 84\u201398) is documented inline \u2014 \"Proposals are queued for human-only review; they never write canonical Memory directly\" \u2014 and calls `queueProposalForHumanReview()`.\n\nI also searched specifically for auto-approve/bypass/admin-override/direct-write paths in the same repo+commit and found none beyond these two artifacts, and `lore_retrieve_context` reported no memory/code conflicts.\n\nCaveat: the code index returned no caller edges for either `submitMemoryProposal` or `queueProposalForHumanReview`, so this evidence can't confirm which production entry point (API route, etc.) actually invokes this path. The enforcement logic itself, however, is present and unchanged in intent from the historical human-only review decision.</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "human-only proposal review decision enforcement in current code",
+            "memoryQuery": "historical decision requiring proposals to be reviewed only by humans, not automated or AI review",
+            "codeQuery": "proposal review enforcement human reviewer required check",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "route": "both",
+            "memoryLimit": 10,
+            "codeLimit": 15
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "auto-approve proposal bypass skip review admin override direct write canonical memory",
+            "limit": 15
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "create proposal write canonical memory endpoint route handler mutation",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "queueProposalForHumanReview"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 168630,
+      "outputTokens": 5635,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "joint/decision-drift",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 44896.407999999996
+      },
+      "outcome": "answered",
+      "answer": "Yes \u2014 the historical \"human-only proposal review\" decision is still enforced in the current code, based on evidence from both Memory and the Code Index at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` in `corespeed/lore`.\n\n**Historical decision (Memory, shared scope):** \"Proposal review must remain human-only before canonical Memory changes.\"\n\n**Current code (Code Evidence):**\n- `src/lib/memory.ts:100-112` \u2014 `submitMemoryProposal()` delegates directly to `reviewRequired()`, with no alternate write path.\n- `src/lib/memory.ts:84-98` \u2014 `reviewRequired()` returns `queueProposalForHumanReview()`, with an in-code comment stating proposals \"are queued for human-only review; they never write canonical Memory directly.\"\n\n**Corroborating checks:** A targeted search for auto-approve/bypass logic (`auto-approve`, `bypass`, direct canonical writes) returned no matching code, and a callers lookup on `submitMemoryProposal` found no other call sites that route around `reviewRequired()`.\n\nMemory and code agree, and no conflicting evidence turned up. One caveat: this is based on a bounded Code Index search rather than an exhaustive audit of every path into canonical Memory, so a caller outside the indexed/matched set could theoretically exist \u2014 but nothing in the retrieved evidence suggests one does.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "memoryQuery": "human-only proposal review decision",
+            "codeQuery": "proposal review human approval enforcement",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "route": "both"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "auto-approve proposal bypass human review canonical memory write"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callers"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 131435,
+      "outputTokens": 4070,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "code/chinese-current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 28037.040959
+      },
+      "outcome": "answered",
+      "answer": "\u5728\u8be5\u63d0\u4ea4\uff08commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\uff09\u4e2d\uff0cproposal \u63d0\u4ea4\u7684 guard \u5177\u4f53\u5b9e\u73b0\u5728 `src/lib/memory.ts` \u7684 `reviewRequired()` \u51fd\u6570\uff08\u7b2c 84\u201398 \u884c\uff09\uff0c\u7531 `submitMemoryProposal()`\uff08\u7b2c 100\u2013112 \u884c\uff09\u76f4\u63a5\u8c03\u7528\u5e76\u539f\u6837\u8fd4\u56de\u5176\u7ed3\u679c\uff1a\n\n```ts\nexport async function submitMemoryProposal() { return reviewRequired(); }\n\nexport function reviewRequired(): ProposalSubmission {\n  // Proposals are queued for human-only review; they never write canonical Memory directly.\n  return queueProposalForHumanReview();\n}\n```\n\n\u4e5f\u5c31\u662f\u8bf4\uff0cguard \u903b\u8f91\u5c31\u662f `reviewRequired()` \u672c\u8eab\uff1a`submitMemoryProposal()` \u4e0d\u505a\u4efb\u4f55\u76f4\u63a5\u5199\u5165\uff0c\u800c\u662f\u65e0\u6761\u4ef6\u628a\u63a7\u5236\u6743\u4ea4\u7ed9 `reviewRequired()`\uff0c\u540e\u8005\u5f3a\u5236\u5c06\u8be5 proposal \u8f6c\u5165\u4eba\u5de5\u8bc4\u5ba1\u961f\u5217\uff08\u8c03\u7528 `queueProposalForHumanReview()`\uff09\uff0c\u4ece\u800c\u4fdd\u8bc1 proposal \u4e0d\u4f1a\u7ed5\u8fc7\u5ba1\u6838\u76f4\u63a5\u5199\u5165 canonical Memory\u3002\u8fd9\u5c31\u662f\u8fd9\u6b21\u63d0\u4ea4\u91cc guard \u7684\u843d\u5730\u4f4d\u7f6e\u2014\u2014`submitMemoryProposal` \u2192 `reviewRequired` \u8fd9\u4e00\u8c03\u7528\u94fe\uff0c\u6838\u5fc3\u7ea6\u675f\u4f53\u73b0\u5728 `reviewRequired()` \u5185\u90e8\u3002\n\n\uff08`queueProposalForHumanReview()` \u81ea\u8eab\u7684\u5b9e\u73b0\u672a\u5305\u542b\u5728\u5df2\u68c0\u7d22\u5230\u7684\u8bc1\u636e\u5305\u4e2d\uff0c\u5982\u9700\u67e5\u770b\u5176\u5185\u90e8\u7ec6\u8282\u9700\u8981\u518d\u7528\u4ee3\u7801\u68c0\u7d22\u5de5\u5177\u5355\u72ec\u53d6\u3002\uff09",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "\u8fd9\u4e2a\u63d0\u4ea4\u91cc proposal \u63d0\u4ea4\u7684 guard \u5177\u4f53\u5b9e\u73b0\u5728\u4ec0\u4e48\u5730\u65b9\uff1f",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 30837,
+      "outputTokens": 2605,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "code/chinese-current-implementation",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 38291.451791
+      },
+      "outcome": "answered",
+      "answer": "\u5728\u8be5\u63d0\u4ea4\uff08commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\uff09\u4e2d\uff0cproposal \u63d0\u4ea4\u7684 guard \u903b\u8f91\u4f4d\u4e8e `src/lib/memory.ts`\uff0c\u7531\u4e24\u4e2a\u51fd\u6570\u7ec4\u6210\uff1a\n\n1. **`submitMemoryProposal()`**\uff08`src/lib/memory.ts:100-112`\uff09\n   \u5bf9\u5916\u66b4\u9732\u7684 proposal \u63d0\u4ea4\u5165\u53e3\uff0c\u5185\u90e8\u76f4\u63a5\u8c03\u7528\u5e76\u8fd4\u56de `reviewRequired()` \u7684\u7ed3\u679c\uff0c\u672c\u8eab\u4e0d\u5305\u542b\u989d\u5916\u7684\u6821\u9a8c\u903b\u8f91\u3002\n\n2. **`reviewRequired()`**\uff08`src/lib/memory.ts:84-98`\uff09\u2014\u2014 \u8fd9\u91cc\u5c31\u662f guard \u7684\u5177\u4f53\u5b9e\u73b0\n   ```ts\n   export function reviewRequired(): ProposalSubmission {\n     // Proposals are queued for human-only review; they never write canonical Memory directly.\n     return queueProposalForHumanReview();\n   }\n   ```\n   \u6ce8\u91ca\u660e\u786e\u8bf4\u660e\u4e86\u8fd9\u4e2a guard \u7684\u8bed\u4e49\uff1a\u6240\u6709 proposal **\u65e0\u6761\u4ef6**\u8f6c\u5165\u4eba\u5de5\u590d\u6838\u961f\u5217\uff08`queueProposalForHumanReview()`\uff09\uff0c\u4e0d\u5141\u8bb8\u4efb\u4f55\u8def\u5f84\u76f4\u63a5\u5199\u5165 canonical Memory\u3002\u4e5f\u5c31\u662f\u8bf4\uff0cguard \u4e0d\u662f\u4e00\u4e2a\u5e26\u5206\u652f\u7684\u6761\u4ef6\u5224\u65ad\uff0c\u800c\u662f\u901a\u8fc7\u5f3a\u5236\u5355\u4e00\u51fa\u53e3\uff08`reviewRequired \u2192 queueProposalForHumanReview`\uff09\u6765\u4fdd\u8bc1\"proposal \u5fc5\u987b\u7ecf\u4eba\u5de5\u590d\u6838\"\u8fd9\u4e00\u4e0d\u53d8\u91cf\u3002\n\n\u7ed3\u8bba\uff1aguard \u7684\u843d\u70b9\u662f `reviewRequired()`\uff08`src/lib/memory.ts:84-98`\uff09\uff0c`submitMemoryProposal()` \u53ea\u662f\u8c03\u7528\u65b9\uff0c\u5b9e\u9645\u7ea6\u675f\u5728 `reviewRequired()` \u91cc\u901a\u8fc7\u5f3a\u5236\u8f6c\u53d1\u5230 `queueProposalForHumanReview()` \u5b9e\u73b0\u3002\u6b64\u6b21\u68c0\u7d22\u4e3a code-only \u8def\u5f84\uff0c\u672a\u6d89\u53ca\u5386\u53f2 Workspace \u51b3\u7b56\u8bb0\u5f55\uff0c\u4e24\u6761\u4ee3\u7801\u7247\u6bb5\u5747\u5b8c\u6574\u3001\u65e0\u622a\u65ad\uff0ccaller/callee \u5173\u7cfb\u5df2\u8986\u76d6\uff0c\u65e0\u9700\u8fdb\u4e00\u6b65\u8c03\u7528\u4e13\u9879 Lore \u5de5\u5177\u3002</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "\u8fd9\u4e2a\u63d0\u4ea4\u91cc proposal \u63d0\u4ea4\u7684 guard \u5177\u4f53\u5b9e\u73b0\u5728\u4ec0\u4e48\u5730\u65b9\uff1f",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 64565,
+      "outputTokens": 3602,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "code/chinese-current-implementation",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 63978.75879200001
+      },
+      "outcome": "answered",
+      "answer": "\u5728\u63d0\u4ea4 `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\uff08\u4ed3\u5e93 `corespeed/lore`\uff09\u4e2d\uff0cproposal \u63d0\u4ea4\u7684 guard \u5b9e\u73b0\u5982\u4e0b\uff1a\n\n1. **\u5165\u53e3** `submitMemoryProposal()` \u2014 `src/lib/memory.ts:100-112`\n   ```ts\n   export async function submitMemoryProposal() { return reviewRequired(); }\n   ```\n   \u8be5\u51fd\u6570\u672c\u8eab\u4e0d\u505a\u4efb\u4f55\u5199\u5165\u5224\u65ad\uff0c\u76f4\u63a5\u628a\u63a7\u5236\u6743\u4ea4\u7ed9 `reviewRequired()`\u3002\n\n2. **guard \u672c\u4f53** `reviewRequired()` \u2014 `src/lib/memory.ts:84-98`\n   ```ts\n   export function reviewRequired(): ProposalSubmission {\n     // Proposals are queued for human-only review; they never write canonical Memory directly.\n     return queueProposalForHumanReview();\n   }\n   ```\n   \u6ce8\u91ca\u660e\u786e\u8bf4\u660e\u4e86 guard \u7684\u8bed\u4e49\uff1aproposal \u6c38\u8fdc\u4e0d\u4f1a\u76f4\u63a5\u5199\u5165 canonical Memory\uff0c\u5fc5\u987b\u5148\u8fdb\u5165\u4eba\u5de5\u8bc4\u5ba1\u961f\u5217\u3002\u8fd9\u4e00\u5c42\u5c31\u662f\"\u62e6\u622a\"\u53d1\u751f\u7684\u5730\u65b9\u2014\u2014\u8c03\u7528\u94fe\u5728\u89e6\u8fbe\u4efb\u4f55 Memory \u5199\u5165\u8def\u5f84\u4e4b\u524d\uff0c\u88ab\u91cd\u5b9a\u5411\u5230 `queueProposalForHumanReview()`\u3002\n\n\u6211\u7528 `lore_code_dependencies`(callees) \u548c `lore_code_search` \u5c1d\u8bd5\u8fdb\u4e00\u6b65\u5b9a\u4f4d `queueProposalForHumanReview()` \u81ea\u8eab\u7684\u51fd\u6570\u4f53\uff0c\u4f46\u5728\u8be5\u7cbe\u786e commit \u5df2\u7d22\u5f15\u7684\u8bc1\u636e\u4e2d\u53ea\u80fd\u627e\u5230\u5bf9\u5b83\u7684\u8c03\u7528\u70b9\uff0c\u627e\u4e0d\u5230\u5176\u5b9a\u4e49\uff08\u53ef\u80fd\u4e0d\u5728\u7d22\u5f15\u8303\u56f4\u5185\uff0c\u6216\u5b9a\u4e49\u4e8e\u5176\u4ed6\u672a\u7d22\u5f15\u6587\u4ef6\uff09\u3002\u56e0\u6b64\u53ef\u4ee5\u786e\u8ba4 guard \u7684\u89e6\u53d1\u70b9/\u8bed\u4e49\u4f4d\u4e8e `reviewRequired()`\uff08`src/lib/memory.ts:84-98`\uff09\uff0c\u4f46 `queueProposalForHumanReview` \u5185\u90e8\u5177\u4f53\u5982\u4f55\u6267\u884c\u4eba\u5de5\u8bc4\u5ba1\u961f\u5217\u903b\u8f91\uff0c\u5728\u5f53\u524d\u53ef\u7528\u8bc1\u636e\u8303\u56f4\u5185\u65e0\u6cd5\u89e3\u6790\uff0c\u4e0d\u505a\u8fdb\u4e00\u6b65\u63a8\u6d4b\u3002",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "\u8fd9\u4e2a\u63d0\u4ea4\u91cc proposal \u63d0\u4ea4\u7684 guard \u5177\u4f53\u5b9e\u73b0\u5728\u4ec0\u4e48\u5730\u65b9\uff1f",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "reviewRequired",
+            "direction": "callees"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "src/lib/memory.ts#function_declaration:reviewRequired",
+            "direction": "callees"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 172175,
+      "outputTokens": 5651,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 54386.040333
+      },
+      "outcome": "answered",
+      "answer": "At commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa in corespeed/lore, the proposal submission guard lives in `src/lib/memory.ts`:\n\n- `submitMemoryProposal()` (src/lib/memory.ts:100-112) \u2014 the public entry point; it immediately delegates to `reviewRequired()` rather than writing anything itself.\n- `reviewRequired()` (src/lib/memory.ts:84-98) \u2014 this is the actual guard. Its comment states the invariant explicitly: \"Proposals are queued for human-only review; they never write canonical Memory directly.\" It enforces this by calling `queueProposalForHumanReview()` instead of any direct-write path.\n\nI checked callee edges for this chain via lore_code_dependencies and re-searched via lore_code_search: neither resolves a definition for `queueProposalForHumanReview()` within this repo/commit's indexed artifacts \u2014 only the two functions above are indexed. So the guard's dispatch point is confirmed at src/lib/memory.ts:84-98, but I can't give you a location for the queuing implementation itself; that would be a guess beyond the retrieved evidence.</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired",
+            "path": "src/lib/memory.ts"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "src/lib/memory.ts#function_declaration:reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 205336,
+      "outputTokens": 4898,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "code/current-implementation",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25527.824875
+      },
+      "outcome": "answered",
+      "answer": "The proposal submission guard is implemented in `src/lib/memory.ts` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (repo `corespeed/lore`):\n\n- **`submitMemoryProposal()`** (`src/lib/memory.ts:100-112`) \u2014 the entry point for submitting a memory proposal. It immediately delegates to the guard:\n  ```ts\n  export async function submitMemoryProposal() { return reviewRequired(); }\n  ```\n\n- **`reviewRequired()`** (`src/lib/memory.ts:84-98`) \u2014 this is the guard itself. Rather than writing to canonical Memory directly, it routes every proposal into a human-review queue:\n  ```ts\n  export function reviewRequired(): ProposalSubmission {\n    // Proposals are queued for human-only review; they never write canonical Memory directly.\n    return queueProposalForHumanReview();\n  }\n  ```\n\nSo the guard's effect is: any call to `submitMemoryProposal` is intercepted before it can touch canonical Memory and is instead queued via `queueProposalForHumanReview()` for human-only review.</parameter>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 63605,
+      "outputTokens": 2449,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "code/current-implementation",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 48932.437166
+      },
+      "outcome": "answered",
+      "answer": "The guard lives in `src/lib/memory.ts` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`:\n\n- **`reviewRequired()`** (`src/lib/memory.ts:84-98`) is the guard itself. Its inline comment states the invariant directly: proposals are queued for human-only review and never write to canonical Memory directly. It enforces this by delegating to `queueProposalForHumanReview()` rather than performing any write.\n- **`submitMemoryProposal()`** (`src/lib/memory.ts:100-112`) is the entry point that invokes the guard \u2014 its body is just `return reviewRequired();`, so every submission path is routed through the guard before anything reaches canonical Memory.\n\nSo: submissions come in through `submitMemoryProposal`, which unconditionally calls `reviewRequired`, the function that actually gates canonical writes behind human review.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 30800,
+      "outputTokens": 4889,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 118348.318167
+      },
+      "outcome": "answered",
+      "answer": "Yes \u2014 at the pinned commit (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) in corespeed/lore, the current code still enforces the historical human-only proposal review decision.\n\nEvidence:\n1. Memory (shared, score 0.95): \"Proposal review must remain human-only before canonical Memory changes.\"\n2. Code (src/lib/memory.ts):\n   - submitMemoryProposal() (lines 100\u2013112): `export async function submitMemoryProposal() { return reviewRequired(); }` \u2014 does nothing else, and lore_code_dependencies shows zero callers within the repo, so no other code path invokes it differently.\n   - reviewRequired() (lines 84\u201398): calls queueProposalForHumanReview() and carries the comment \"Proposals are queued for human-only review; they never write canonical Memory directly.\"\n\nVerification performed beyond the initial grounding packet: queried callees of this file (only one resolved edge exists: submitMemoryProposal \u2192 reviewRequired) and callers of submitMemoryProposal (none), then ran two differently-worded lore_code_search queries (one for queueProposalForHumanReview's definition, one for any \"bypass/direct write\" pattern) \u2014 both returned only the same two artifacts, with no conflicting or bypassing code surfaced, and the retrieval receipt reported zero conflicts.\n\nCaveat: queueProposalForHumanReview's own implementation is not itself an indexed artifact at this commit, so its internals couldn't be directly inspected \u2014 but every available caller/callee edge and every targeted search is consistent with the human-only review path still being enforced, with no evidence of a bypass.</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "path": "src/lib/memory.ts",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "path": "src/lib/memory.ts"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview definition"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "write canonical Memory bypass review direct write"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 228238,
+      "outputTokens": 11243,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "joint/decision-drift",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 82100.64566699999
+      },
+      "outcome": "answered",
+      "answer": "Yes, with one caveat. Retrieved evidence for corespeed/lore @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:\n\n- Memory (shared): \"Proposal review must remain human-only before canonical Memory changes.\"\n- Code (src/lib/memory.ts): submitMemoryProposal() \u2192 reviewRequired() \u2192 queueProposalForHumanReview(), with reviewRequired() commented \"Proposals are queued for human-only review; they never write canonical Memory directly.\" This matches the historical decision in name, comment, and call structure.\n\nGap: the original packet's code content stopped at the call to queueProposalForHumanReview() without showing its body \u2014 a missing callee edge. I followed up with lore_code_dependencies (callees of reviewRequired; callers/callees of queueProposalForHumanReview directly; callers of submitMemoryProposal) and a targeted lore_code_search under src/lib. All returned only the same two already-seen artifacts \u2014 queueProposalForHumanReview's implementation is not resolvable in the indexed evidence for this exact commit, and no caller of submitMemoryProposal() is indexed either.\n\nSo: the code still reflects the human-only review decision at the level retrievable evidence can confirm (naming/comments/call chain), but I cannot independently verify from Lore evidence that the queue function actually blocks non-human writes internally, or that this path is wired into a live caller. Treat this as \"consistent with the decision, unverified at the deepest layer\" rather than a fully confirmed guarantee.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "reviewRequired",
+            "direction": "callees"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "queueProposalForHumanReview implementation"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callers"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "queueProposalForHumanReview",
+            "direction": "callers"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "function queueProposalForHumanReview",
+            "pathPrefix": "src/lib"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 140281,
+      "outputTokens": 7651,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "joint/decision-drift",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "outcomeCorrect": true,
+        "answerEvidenceCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 62566.64016599997
+      },
+      "outcome": "answered",
+      "answer": "Yes \u2014 at commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa in corespeed/lore, the code still enforces the human-only proposal review decision.\n\n**Decision (shared memory, score 0.95):** \"Proposal review must remain human-only before canonical Memory changes.\"\n\n**Current code (src/lib/memory.ts):**\n- `submitMemoryProposal()` (lines 100\u2013112) calls `reviewRequired()` \u2014 confirmed as a single resolved callee edge (line 101), not an unresolved/ambiguous target.\n- `reviewRequired()` (lines 84\u201398) returns `queueProposalForHumanReview()`, with an inline comment stating: \"Proposals are queued for human-only review; they never write canonical Memory directly.\"\n\nSo the enforcement mechanism \u2014 queueing proposals for human review rather than writing to canonical Memory directly \u2014 is still in place and matches the historical decision.\n\n**Gap check:** I followed up on the two flags the retrieval plan raised (anchor/caller expansion, contextual impact) since the initial packet returned them empty. A callers query on `submitMemoryProposal` returned no edges (no indexed call site found), and a targeted search for bypass/auto-approve write paths under `src/lib` surfaced no additional function beyond these two. That means no alternate path was found that skips human review, but it also means I can't confirm from this evidence what invokes `submitMemoryProposal` (e.g., which API route or handler) \u2014 the caller side of the graph is empty rather than positively ruled out.</answer>\n</invoke>\n",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "write canonical memory bypass auto-approve proposal without review",
+            "pathPrefix": "src/lib"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 101914,
+      "outputTokens": 5994,
+      "hostShortCircuit": false
+    }
+  ]
+}

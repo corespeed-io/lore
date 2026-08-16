@@ -21,6 +21,7 @@ const REPOSITORY_ID = "40000000-0000-4000-8000-000000000001";
 const REVISION_ID = "50000000-0000-4000-8000-000000000001";
 const GENERATION_ID = "60000000-0000-4000-8000-000000000001";
 const ARTIFACT_ID = "70000000-0000-4000-8000-000000000001";
+const GUARD_ARTIFACT_ID = "71000000-0000-4000-8000-000000000001";
 const NOW = "2026-08-15T00:00:00.000Z";
 
 function unavailable(): never {
@@ -70,6 +71,36 @@ function fixtureArtifact(commitOid: string): CodeArtifact {
   };
 }
 
+// The guard implementation itself, so evidence-sufficiency questions about
+// where the guard lives (not just where it is invoked) have a true answer.
+function fixtureGuardArtifact(commitOid: string): CodeArtifact {
+  return {
+    id: GUARD_ARTIFACT_ID,
+    repositoryId: REPOSITORY_ID,
+    revisionId: REVISION_ID,
+    generationId: GENERATION_ID,
+    commitOid,
+    path: "src/lib/memory.ts",
+    language: "typescript",
+    parser: "tree_sitter",
+    parseStatus: "parsed",
+    kind: "function_declaration",
+    symbol: "reviewRequired",
+    symbolKey: "src/lib/memory.ts#function_declaration:reviewRequired",
+    declarationKey: "src/lib/memory.ts#function_declaration:reviewRequired",
+    declarationChunkOrdinal: 0,
+    symbols: [],
+    ordinal: 1,
+    startLine: 84,
+    endLine: 98,
+    content:
+      "export function reviewRequired(): ProposalSubmission {\n  // Proposals are queued for human-only review; they never write canonical Memory directly.\n  return queueProposalForHumanReview();\n}",
+    contentSha256: "c".repeat(64),
+    matchedChannels: ["symbol", "lexical"],
+    score: 0.9,
+  };
+}
+
 function fixtureMemories(): LoreMcpMemoryClient {
   const memory = fixtureMemory();
   return {
@@ -92,7 +123,10 @@ function fixtureMemories(): LoreMcpMemoryClient {
 
 function fixtureCode(): LoreMcpCodeClient {
   return {
-    searchCode: async (input) => [fixtureArtifact(input.commitOid)],
+    searchCode: async (input) => [
+      fixtureArtifact(input.commitOid),
+      fixtureGuardArtifact(input.commitOid),
+    ],
     queryCodeDependencies: async (input): Promise<CodeDependencyQueryResult> => ({
       status: "ok",
       repositoryKey: input.repositoryKey,
@@ -104,7 +138,36 @@ function fixtureCode(): LoreMcpCodeClient {
         symbol: "submitMemoryProposal",
         symbolKey: "src/lib/memory.ts#function_declaration:submitMemoryProposal",
       },
-      edges: [],
+      edges:
+        input.direction === "callees"
+          ? [
+              {
+                id: "90000000-0000-4000-8000-000000000001",
+                kind: "calls",
+                resolution: "resolved",
+                targetText: "reviewRequired",
+                from: {
+                  artifactId: ARTIFACT_ID,
+                  path: "src/lib/memory.ts",
+                  symbol: "submitMemoryProposal",
+                  symbolKey: "src/lib/memory.ts#function_declaration:submitMemoryProposal",
+                },
+                to: {
+                  artifactId: GUARD_ARTIFACT_ID,
+                  path: "src/lib/memory.ts",
+                  symbol: "reviewRequired",
+                  symbolKey: "src/lib/memory.ts#function_declaration:reviewRequired",
+                },
+                site: {
+                  path: "src/lib/memory.ts",
+                  startLine: 101,
+                  startColumn: 10,
+                  endLine: 101,
+                  endColumn: 26,
+                },
+              },
+            ]
+          : [],
       truncated: false,
     }),
     enqueueCodeIndex: async () => unavailable(),
@@ -125,7 +188,9 @@ function retrievedContext(input: RetrieveContextInput): RetrievedContext {
   const includeMemory = plan.route === "memory-only" || plan.route === "both";
   const includeCode = plan.route === "code-only" || plan.route === "both";
   const memory = fixtureMemory();
-  const artifact = input.commitOid ? fixtureArtifact(input.commitOid) : null;
+  const artifacts = input.commitOid
+    ? [fixtureArtifact(input.commitOid), fixtureGuardArtifact(input.commitOid)]
+    : [];
   return {
     revision: "joint-memory-code-v2",
     query: input.query,
@@ -142,27 +207,24 @@ function retrievedContext(input: RetrieveContextInput): RetrievedContext {
           },
         ]
       : [],
-    code:
-      includeCode && artifact
-        ? [
-            {
-              artifactId: artifact.id,
-              commitOid: artifact.commitOid,
-              path: artifact.path,
-              symbol: artifact.symbol,
-              startLine: artifact.startLine,
-              endLine: artifact.endLine,
-              content: artifact.content,
-              matchedChannels: artifact.matchedChannels,
-              score: artifact.score,
-            },
-          ]
-        : [],
+    code: includeCode
+      ? artifacts.map((artifact) => ({
+          artifactId: artifact.id,
+          commitOid: artifact.commitOid,
+          path: artifact.path,
+          symbol: artifact.symbol,
+          startLine: artifact.startLine,
+          endLine: artifact.endLine,
+          content: artifact.content,
+          matchedChannels: artifact.matchedChannels,
+          score: artifact.score,
+        }))
+      : [],
     anchors: [],
     conflicts: [],
     receipt: {
       memoryCandidates: includeMemory ? 1 : 0,
-      codeCandidates: includeCode && artifact ? 1 : 0,
+      codeCandidates: includeCode ? artifacts.length : 0,
       anchorCandidates: 0,
       requestedCommitOid: input.commitOid ?? null,
       memoryQuery: includeMemory ? (input.memoryQuery ?? input.query) : null,
