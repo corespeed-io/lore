@@ -81,6 +81,12 @@ An Actor-visible identifier used by inline `[[reference]]` navigation. A Memory 
 define a human-readable `metadata.reference`; imports may preserve their source
 reference in provenance metadata; otherwise its UUID is the reference. Ambiguous
 or unreadable references never resolve.
+A Memory deliberately has no unique name: a unique name needs a uniqueness scope,
+any scope spanning Users is an existence oracle across the privacy boundary
+("name already taken" reveals someone else's private Memory), and an owner-scoped
+name would make one shared Memory resolve differently per reader. Resolve
+references at write or read time within the Actor's own RLS visibility, and store
+durable edges by Memory id.
 _Avoid_: Global slug, authorization key, gbrain page slug
 
 **Episode**:
