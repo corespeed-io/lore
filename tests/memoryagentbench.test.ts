@@ -91,8 +91,8 @@ test("MemoryAgentBench preserves RULER document boundaries before length chunkin
       "Document 1:\nCatholic schools operate locally.\n\nDocument 2:\nThe Normans fought abroad.",
     ),
   ).toEqual([
-    "Document 1: Catholic schools operate locally.",
-    "Document 2: The Normans fought abroad.",
+    "Document 1:\nCatholic schools operate locally.",
+    "Document 2:\nThe Normans fought abroad.",
   ]);
 
   const chunks = chunkMemoryAgentBenchAccurateContext(

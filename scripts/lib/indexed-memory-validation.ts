@@ -1,9 +1,10 @@
 import type pg from "pg";
 import type { EmbeddingProvider } from "../../src/lib/memory";
-import { chunkMemoryContent } from "../../src/lib/memory-chunking";
+import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../../src/lib/memory-chunking";
 
 export interface IndexedMemoryChunk {
   content: string;
+  chunking_revision: string;
   embedded: boolean;
   embedding_dimensions: number | null;
   embedding_model: string | null;
@@ -35,7 +36,12 @@ export function validateExactIndexedMemory(input: {
         chunk.embedding_model !== input.embeddingProvider.model ||
         chunk.embedding_dimensions !== input.embeddingProvider.dimensions ||
         chunk.embedding_revision !== input.embeddingProvider.revision);
-    if (chunk.ordinal !== index || chunk.content !== expectedChunks[index] || invalidEmbedding) {
+    if (
+      chunk.ordinal !== index ||
+      chunk.content !== expectedChunks[index] ||
+      chunk.chunking_revision !== MEMORY_CHUNKING_REVISION ||
+      invalidEmbedding
+    ) {
       throw new Error(`Indexed ${input.label} chunk ${index} failed exact validation`);
     }
   }
@@ -58,6 +64,7 @@ export async function requireExactIndexedMemory(input: {
     `SELECT
        chunk.ordinal,
        chunk.content,
+       chunk.chunking_revision,
        embedded.chunk_id IS NOT NULL AS embedded,
        generation.embedding_provider,
        generation.embedding_model,

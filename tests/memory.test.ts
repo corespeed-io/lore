@@ -32,6 +32,10 @@ async function replaceMemoryChunks(
   });
 }
 
+function exactLineChunks(content: string): string[] {
+  return content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+}
+
 test("Memory owner can remember and retrieve a private Memory", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -48,6 +52,73 @@ test("Memory owner can remember and retrieve a private Memory", async () => {
     createdByAgentId: null,
     scope: "private",
     content: "The launch checklist lives in the operations workspace.",
+  });
+
+  await testContext.close();
+});
+
+test("Memory rejects document-sized content at the domain interface", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+
+  await expect(
+    memories.remember(testContext.alice, {
+      content: "x".repeat(32_001),
+    }),
+  ).rejects.toThrow("Memory content may contain at most 32000 Unicode characters");
+
+  await testContext.close();
+});
+
+test("Memory accepts exactly 32000 Unicode characters including astral text", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const content = "😀".repeat(32_000);
+
+  await expect(memories.remember(testContext.alice, { content })).resolves.toMatchObject({
+    content,
+  });
+
+  await testContext.close();
+});
+
+test("Memory chunking keeps pathological structured content within the derived chunk budget", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const fragmentedContent = Array.from({ length: 53 }, () => "😀".repeat(601)).join(" ");
+  expect(Array.from(fragmentedContent)).toHaveLength(31_905);
+
+  const memory = await memories.remember(testContext.alice, { content: fragmentedContent });
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    const chunks = await transaction.query<{ chunking_revision: string; content: string }>(
+      `SELECT content, chunking_revision
+       FROM memory_chunks
+       WHERE memory_id = $1
+       ORDER BY ordinal`,
+      [memory.id],
+    );
+    expect(chunks.rows).toHaveLength(53);
+    expect(chunks.rows.map((chunk) => chunk.content).join("")).toBe(fragmentedContent);
+    expect(new Set(chunks.rows.map((chunk) => chunk.chunking_revision))).toEqual(
+      new Set(["lore-memory-chunking-v2"]),
+    );
+  });
+
+  await testContext.close();
+});
+
+test("Rejected content update leaves the canonical Memory unchanged", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const created = await memories.remember(testContext.alice, { content: "Bounded fact." });
+
+  await expect(
+    memories.update(testContext.alice, created.id, { content: "x".repeat(32_001) }),
+  ).rejects.toThrow("Memory content may contain at most 32000 Unicode characters");
+  await expect(memories.retrieve(testContext.alice, created.id)).resolves.toMatchObject({
+    content: "Bounded fact.",
+    version: 1,
   });
 
   await testContext.close();
@@ -423,7 +494,7 @@ test("Search prefers the later chunk when relevance ties", async () => {
     content: "0. The capital is Paris.\n1. The capital is Rome.",
   });
   await replaceMemoryChunks(testContext, testContext.alice, expected.id, [
-    "0. The capital is Paris.",
+    "0. The capital is Paris.\n",
     "1. The capital is Rome.",
   ]);
 
@@ -445,8 +516,8 @@ test("Search can aggregate multiple top evidence chunks from one Memory", async 
     content: "0. The capital is Paris.\n1. The capital is Rome.\n2. The weather is sunny.",
   });
   await replaceMemoryChunks(testContext, testContext.alice, memory.id, [
-    "0. The capital is Paris.",
-    "1. The capital is Rome.",
+    "0. The capital is Paris.\n",
+    "1. The capital is Rome.\n",
     "2. The weather is sunny.",
   ]);
 
@@ -457,7 +528,7 @@ test("Search can aggregate multiple top evidence chunks from one Memory", async 
     limit: 1,
   });
 
-  expect(results[0]?.evidence).toBe("0. The capital is Paris.\n1. The capital is Rome.");
+  expect(results[0]?.evidence).toBe("0. The capital is Paris.\n1. The capital is Rome.\n");
   await testContext.close();
 });
 
@@ -533,7 +604,7 @@ test("Evidence expansion returns a whole small Memory when its bounded budget co
     "5. Atlas reviewer is Lin.",
   ].join("\n");
   const memory = await memories.remember(testContext.alice, { content });
-  await replaceMemoryChunks(testContext, testContext.alice, memory.id, content.split("\n"));
+  await replaceMemoryChunks(testContext, testContext.alice, memory.id, exactLineChunks(content));
 
   const results = await createMemoryModule(testContext.database, {
     evidenceNeighborChunks: 1,
@@ -544,6 +615,26 @@ test("Evidence expansion returns a whole small Memory when its bounded budget co
   });
 
   expect(results[0]?.evidence).toBe(content);
+  await testContext.close();
+});
+
+test("Evidence assembly does not add delimiters to reconstructable production chunks", async () => {
+  const testContext = await createMemoryTestContext();
+  const first = `# Background\n${"Stable context sentence. ".repeat(30)}`;
+  const second = `# Decision\n${"Zephyrquux ships on Friday. ".repeat(28)}`;
+  const content = `${first}\n\n${second}`;
+  const memory = await createMemoryModule(testContext.database).remember(testContext.alice, {
+    content,
+  });
+
+  const results = await createMemoryModule(testContext.database, {
+    evidenceNeighborChunks: 1,
+  }).search(testContext.alice, {
+    query: "When does Zephyrquux ship?",
+    limit: 1,
+  });
+
+  expect(results).toMatchObject([{ memory: { id: memory.id }, evidence: content }]);
   await testContext.close();
 });
 
@@ -596,8 +687,9 @@ test("Search can include adjacent chunks around the matching evidence", async ()
     evidenceNeighborChunks: 1,
   }).search(testContext.bob, { query: "uniqueanchor", limit: 1 });
 
-  expect(exactEvidence[0]?.evidence).toBe("uniqueanchor");
-  expect(contextualEvidence[0]?.evidence).toContain(`uniqueanchor\n${"y".repeat(1_200)}`);
+  expect(exactEvidence[0]?.evidence).toContain("uniqueanchor");
+  expect(Array.from(exactEvidence[0]?.evidence ?? "")).toHaveLength(1_200);
+  expect(contextualEvidence[0]?.evidence).toBe(content);
   await testContext.close();
 });
 
@@ -986,7 +1078,7 @@ test("Reranking scores compact anchor evidence while returning bounded expanded 
   const memory = await createMemoryModule(testContext.database).remember(testContext.alice, {
     content,
   });
-  await replaceMemoryChunks(testContext, testContext.alice, memory.id, content.split("\n"));
+  await replaceMemoryChunks(testContext, testContext.alice, memory.id, exactLineChunks(content));
   let rerankedEvidence: string | null = null;
   const memories = createMemoryModule(testContext.database, {
     evidenceNeighborChunks: 1,
@@ -1007,9 +1099,11 @@ test("Reranking scores compact anchor evidence while returning bounded expanded 
   });
 
   expect(rerankedEvidence).toBe(
-    ["2. Atlas region is west.", "3. Atlas status is green.", "4. Atlas deadline is Friday."].join(
-      "\n",
-    ),
+    `${[
+      "2. Atlas region is west.",
+      "3. Atlas status is green.",
+      "4. Atlas deadline is Friday.",
+    ].join("\n")}\n`,
   );
   expect(results).toMatchObject([{ memory: { id: memory.id }, evidence: content }]);
   expect(JSON.stringify(results)).not.toContain("rerankEvidence");
