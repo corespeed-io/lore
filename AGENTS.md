@@ -923,6 +923,17 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 - `bun run lint` silently checks nothing when the working tree sits under a path
   containing `/tmp`, because `biome.json` excludes `**/tmp`. "Checked 0 files" means
   the path excluded everything, not that the tree is clean.
+- Running `bun run build` while `next dev` is live can still break an individual
+  route in the dev server even though Next 16 keeps dev output under `.next/dev`.
+  Observed symptom: one API route starts returning the catch-all page — HTTP 200
+  with `content-type: text/html` — so the browser fails on
+  `Unexpected token '<', "<!DOCTYPE "… is not valid JSON` while every neighbouring
+  route still serves JSON. `bun run service:restart` clears it. Check
+  `tmp/local-service/app.log` for the dev server's own output; `service:logs` shows
+  the maintenance worker only.
+- `service:restart` kills the maintenance worker mid-job, leaving a leased Code
+  Index job stranded in `processing` until its lease expires. A `processing` row is
+  not proof of active work — check the worker's CPU before concluding it is indexing.
 
 ## Commit / PR conventions
 
