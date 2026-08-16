@@ -26,7 +26,8 @@ been removed. Lore now has a native implementation:
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, embedding generations, Agent
   lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
-  evidence with RLS;
+  evidence with RLS, plus revision-bound Code Repositories/Revisions/Index
+  Generations/Artifacts as rebuildable AST-aware evidence;
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
   transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
@@ -38,6 +39,109 @@ been removed. Lore now has a native implementation:
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
+- `src/lib/memory-content.ts` owns the canonical Memory content boundary. A Memory
+  is one coherent knowledge record, recommended at no more than 8,000 Unicode
+  characters and hard-limited to 32,000 characters and 64 derived chunks. Direct
+  writes, Proposals, and imports must share this validator. Route longer raw
+  documents to bounded `document_fragment` Observations in a document Episode;
+  never auto-split them into canonical Memories;
+- `src/lib/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
+  non-overlapping, maximum 1,200-code-point chunks that exactly reconstruct the
+  canonical Memory while preferring paragraph, Markdown, sentence, line, and
+  whitespace boundaries. Every `memory_chunks` row records the revision and
+  benchmark reuse must verify it. Keep overlap in the explicit bounded neighbor
+  evidence policy. A future chunking change requires a new revision, forward
+  re-chunk/re-embedding migration, and versioned evaluation;
+- `src/lib/code-index.ts` owns the revision-bound Code Index module. It accepts
+  complete 40- or 64-character Git OIDs. Its trusted local-Git path resolves the
+  exact commit and reads its object database rather than the working tree, binds
+  an independent tree digest, and persists one typed `code_revision_files`
+  manifest outcome for every tree entry. The prepared `indexRevision(files[])`
+  seam is not Git-authenticated and must never be the future MCP/job ingestion
+  surface or silently share one repository/OID identity with authenticated input.
+  Git ingestion reuses immutable parse/chunk/dependency outputs from any RLS-visible prior
+  Artifact in the same Workspace only when Git object OID, full content SHA-256,
+  and `CODE_INDEX_REVISION` all match. Reuse must revalidate exact source
+  reconstruction, remap path-qualified symbol/declaration identities on rename,
+  and report parsed/reused file counts. A parser/indexer revision mismatch must
+  parse again. Artifact text and its content-only FTS/trigram indexes are stored
+  once per Workspace, `CODE_INDEX_REVISION`, and SHA-256 in immutable
+  `code_artifact_payloads`; the database verifies each text digest and each
+  revision/path Artifact membership references the matching payload. Immutable
+  path-free ordered Symbol Sets and Dependency Sets are likewise stored once per
+  Workspace, `CODE_INDEX_REVISION`, and derivation SHA-256. Rename/current-path
+  identity is projected by the Artifact membership at read time. Dependency edge
+  rows retain only the source Artifact/set ordinal plus exact-generation
+  resolution overlay; a database trigger proves that ordinal belongs to the
+  source Artifact's Dependency Set. Artifact memberships and resolution overlays
+  remain generation-local because path and target resolution may change even when
+  source bytes do not. Call this content-addressed derived payload storage, not a
+  fully content-addressed Code Index.
+  The module rejects source/tree conflicts, extracts AST/symbol-aware Code
+  Artifacts for its built-in web languages, and preserves
+  bounded formatted-text fallback artifacts for unsupported or substantially
+  malformed sources. Code Repositories, Revisions, Index Generations, and
+  Artifacts/Artifact Symbols are Workspace/RLS-scoped, rebuildable evidence and
+  never canonical Memory. Structural chunks partition source without dropping
+  delimiters, keep logical `symbolKey`, declaration-level `declarationKey`, and
+  `declarationChunkOrdinal` distinct, and represent destructuring as one exact
+  Artifact with multiple Artifact Symbols. Its 6,000-unit bound is explicitly
+  UTF-16 code units and hard fallback splits must preserve Unicode code points.
+  Content-literal search preserves exact SQL wildcard semantics: queries with
+  word trigrams use `lower(content/path/symbol)` `pg_trgm` GIN indexes, while
+  punctuation-only queries retain the exact revision-scoped scan and must remain
+  an adversarial latency class. Search bounds symbol, literal, simple-FTS, and path
+  channels independently under the same active generation before weighted RRF.
+  Durable leased jobs are replay-safe and atomically activate a completed generation
+  while retaining the prior generation as `retiring`. The current maintenance path
+  still assembles a complete revision's source, Artifacts, and dependency arrays in
+  memory before one generation transaction; it does not yet checkpoint complete
+  files into `building`. Do not call jobs resumable until file-level checkpoints,
+  exact manifest-coverage validation, and bounded-memory resume are implemented.
+  `src/lib/code-graph.ts` owns bounded exact-revision
+  callers/callees reads over immutable `calls`/`imports`/`references` edges.
+  It keeps file-level imports separate from symbol-level dependencies and returns
+  explicit `resolved`/`ambiguous`/`unresolved` states instead of guessing between
+  same-name definitions. Its stable public read is
+  `GET /api/v1/code/dependencies`, surfaced through both SDKs, the CLI, and the
+  single read-only `lore_code_dependencies` MCP tool; it accepts exactly one
+  symbol or repository-relative path and caps both edges and ambiguity candidates
+  at 200 with explicit truncation. `src/lib/code-evidence.ts` owns immutable typed
+  Memory-to-Code anchors and explicit `current/moved/changed/deleted/ambiguous/
+  `unverifiable` assessment. `assess` is side-effect-free and is the only path joint
+  retrieval may use; explicit `revalidate` persists the same result and must prove
+  Memory write authority from the rows returned by its RLS-filtered update. Each
+  declaration anchor freezes a SHA-256 fingerprint
+  of the ordered declaration chunk sequence with the cited chunk masked out. A
+  changed chunk may follow its ordinal only when that surrounding sequence still
+  matches; equal-count reorder/replacement must abstain as `ambiguous`. Artifact
+  pruning must not delete citation anchors.
+  `src/lib/joint-memory-code.ts` owns the pure versioned route/packet policy and
+  `src/lib/context-retrieval.ts` owns its production read-only orchestration.
+  `POST /api/v1/context/retrieve`, both SDKs, and `lore_retrieve_context` expose one
+  bounded packet with separate Memory, exact-revision Code, anchor, conflict, and
+  receipt fields. The joint path may call only side-effect-free evidence `assess`,
+  never persisted `revalidate`; repository key and full commit OID are paired,
+  Workspace remains process/header context, and repository paths stay server-only.
+  The original question determines the route. Optional bounded `memoryQuery` and
+  `codeQuery` are agent-planned channel queries, must pass the same authorization
+  filters, and must be echoed in the receipt for reproducibility.
+  `joint-memory-code-v2` keeps local anchor freshness separate from contextual
+  impact. For change routes it compares at most five cited declarations across the
+  cited and requested exact revisions, follows at most 25 direct callee/import/
+  reference edges per declaration, and fingerprints the target's complete logical
+  declaration chunk sequence. Use path-qualified symbol keys so unrelated
+  same-name definitions cannot create false ambiguity. Truncation, unresolved
+  targets, or missing historical generations must remain explicit `unknown` or
+  `possibly_affected`; never infer `unaffected` from incomplete traversal.
+  Public Code HTTP/SDK/MCP surfaces are a separate family from Memory. Indexing may
+  accept only an operator-configured `repositoryKey` plus exact commit OID; never
+  accept a model-supplied local path, credential, or Workspace override. Configure
+  the self-host registry with `LORE_CODE_REPOSITORIES`; an empty registry disables
+  public enqueue. Keep native Git/AST parsing out of Cloudflare request bundles;
+  it runs only in the Node/self-host maintenance worker. Parser, symbol, or chunking
+  changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
+  as the same generation;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   native routes built through the pure handler seam in `src/lib/http.ts`;
 - `src/components/App.tsx` owns the native Memory workflow and client routing,
@@ -89,8 +193,12 @@ been removed. Lore now has a native implementation:
   surface;
 - Memory Proposals are the safe boundary for suggested create/update operations:
   an Actor with write authority may submit complete proposed content and up to 50
-  visible Memory/Observation evidence ids, but only the owner human may accept or
-  reject it.
+  total visible Memory/Observation evidence ids and typed Code Artifact anchors,
+  but only the owner human may accept or reject it. A Code anchor snapshots its
+  exact commit/path/symbol/declaration/chunk-ordinal/declaration-context/content
+  digests under submission-time RLS and acceptance copies
+  it transactionally to Memory Code Evidence without re-resolution; it must survive
+  rebuildable Artifact pruning.
   Pending proposals never enter Memory browse/search/Graph/export/outbox. Update
   acceptance is exact-version and never silently rebases; future opt-in AutoDream
   work must use this boundary instead of silently persisting generated content.
@@ -101,8 +209,10 @@ been removed. Lore now has a native implementation:
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
   Memory retrieval or Graph, and may be read as Proposal evidence only through
   current Actor/RLS visibility. An Agent records provenance; it is not a generic
-  Source. Any future automatic retention must be an explicit opt-in deployment
-  policy;
+  Source. `src/lib/episode-evidence.ts` owns their separate, rebuildable hybrid
+  retrieval index: exact Observation partitions and generation-scoped vectors stay
+  under Episode RLS, may be source-scoped before top-k, and never become canonical
+  Memory. Any future automatic retention must be an explicit opt-in deployment policy;
 - `packages/typescript-sdk` generates its public types from the canonical OpenAPI
   document and owns the deep integration client. `packages/cli` and the external
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
@@ -330,6 +440,11 @@ Agent ──< Memory Proposal.proposed_by_agent_id (provenance only)
 Workspace ──< Episode >── owner User
 Episode ──< Observation
 Agent ──< Episode.recorded_by_agent_id (provenance only)
+Workspace ──< Code Repository ──< Code Revision ──< Code Revision File
+                                       └──────────< Code Index Generation ──< Code Artifact ──< Code Artifact Symbol
+                                                                        └──< Code Dependency Edge
+                 └──────────────< Code Index Job
+Memory ──< Memory Code Evidence >── Code citation anchor
 ```
 
 Memory isolation rules:
@@ -349,6 +464,8 @@ Memory isolation rules:
 - A Memory Proposal is owner-private review state, not a draft Memory. Write-authorized
   Actors may submit it, but only its owner human may accept or reject it. Until
   acceptance it is absent from canonical retrieval, Graph, export, and outbox.
+  Its Memory, Observation, and typed Code evidence share one 50-record limit;
+  accepted Code anchors are copied atomically onto the canonical Memory.
 - An Observation is immutable evidence, not Memory. It inherits owner/scope
   visibility from its Episode, remains until explicit Episode forget, and never
   enters ordinary Memory retrieval or Graph.
@@ -357,6 +474,16 @@ Memory isolation rules:
   an authorized Agent acting for that User may mutate it.
 - Shared is the default scope. A caller must explicitly request private scope.
 - There is no cross-Workspace access and no cross-user private synthesis or batch.
+- Code Artifacts are derived from a versioned Code Index Generation of an exact
+  immutable Code Revision, remain Workspace-scoped, and never enter canonical
+  Memory. Retrieval must select the requested repository and full commit OID
+  before ranking. An index refresh may
+  update derived evidence but cannot silently change a Memory claim or rationale.
+- Memory Code Evidence preserves an immutable historical locator, content digest,
+  and masked declaration-sequence context digest even after rebuildable Artifact
+  rows are pruned. Side-effect-free assessment computes freshness for retrieval;
+  explicit revalidation updates only its typed state and selected target, never
+  canonical Memory.
 
 The relational model centers on:
 
@@ -365,6 +492,13 @@ The relational model centers on:
 - `memories`, `memory_chunks`, `memory_links`, Memory Proposals/evidence, and
   embedding/index state;
 - `episodes` and `observations` for durable non-canonical evidence;
+- `code_repositories`, `code_revisions`, `code_revision_files`,
+  `code_index_generations`, `code_artifact_payloads`, `code_symbol_sets`,
+  `code_symbol_payloads`, `code_dependency_sets`, `code_dependency_payloads`,
+  `code_artifacts`, and `code_dependency_edges` for rebuildable, revision-bound
+  code evidence;
+- `code_index_jobs` for leased resumable indexing and `memory_code_evidence` for
+  typed durable citation anchors;
 - `evaluation_suites`, `evaluation_cases`, `evaluation_runs`, and
   `evaluation_results`.
 
@@ -393,6 +527,14 @@ database invariant, not a UI convention.
   retrieval.
 - Graph results must authorize nodes and edges together. An allowed node must not
   reveal the id, title, existence, or degree of a private neighbor.
+- Code search must apply Workspace, repository, and exact commit-OID predicates
+  before top-k. A full Git OID may be indexed only once for one deterministic
+  source/tree digest identity; authenticated/unauthenticated disagreement is a
+  conflict, not an in-place rewrite. Every authenticated tree entry needs one
+  persisted indexed/excluded manifest outcome under the same RLS boundary.
+- Code dependency reads must select the same Workspace, repository, full commit OID,
+  and active generation before traversing callers or callees. Unresolved and
+  ambiguous targets remain explicit and never become guessed cross-file edges.
 - Deleting a Memory or changing its scope must invalidate its chunks, embeddings,
   cached search results, and derived graph data.
 - HTTP update/delete requires a strong Memory ETag through `If-Match`; retries may
@@ -460,6 +602,15 @@ surfaces:
 - **Observation module:** atomically record, list, retrieve, and explicitly forget
   bounded immutable Episodes while keeping their Observations outside canonical
   Memory retrieval and enforcing the same owner/scope/RLS rules.
+- **Code Index module:** atomically index an immutable repository revision and
+  search its RLS-visible Code Artifacts while hiding language detection, AST
+  traversal, structural splitting, symbol breadcrumbs, parser recovery, formatted
+  fallback, exact Git object reads, complete manifest accounting, hashing, and
+  revision-conflict handling. Native Git access and parsing are Node indexing
+  concerns, not Cloudflare request-path dependencies.
+- **Code Dependency Graph module:** return bounded callers/callees from one exact
+  active Code Index Generation while hiding edge storage, path-versus-symbol
+  subject resolution, ambiguity handling, and RLS-safe traversal.
 - **Graph module:** return visible Memory nodes, durable Memory Links, and derived
   affinities while guaranteeing that every relationship endpoint is present in the
   same authorized read model.
@@ -525,16 +676,18 @@ Benchmark is part of the product quality system even without AutoDream.
   as the official end-answer benchmark score.
 - `bun run benchmark:memoryagentbench:accurate` runs a pinned Accurate Retrieval
   diagnostic. RULER `Document N` boundaries are preserved before each document is
-  split into independent 1,200-character Lore Memories, preventing cross-document
-  false anchors; other sources use ordinary 1,200-character chunking. It chooses one
+  split into independent Lore Memories with the versioned, structure-aware
+  1,200-code-point chunker, preventing cross-document false anchors. It chooses one
   literal-answer anchor using query overlap, the most specific accepted reference,
   answer/query proximity, and conservative English subject normalization; it skips
   nonliteral questions and records anchor
   coverage. The default is one 20-question RULER row; do not present its retrieval
   metrics as the official generated-answer score.
 - External benchmark answer tripwires are Bob-private RLS canaries. Keep their exact
-  synchronous chunks and ownership validation, but do not enqueue document embeddings
-  for evidence the evaluating Alice Actor is forbidden to see.
+  chunks and ownership validation. Memory-based tripwires do not enqueue embeddings
+  that Alice cannot see. LongMemEval-V2 is the deliberate exception: its Bob-private
+  Episode tripwire uses the same vector path and is included in the candidate source
+  scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - Synthetic benchmark reruns may set `LORE_BENCHMARK_REUSE_INDEXED=1`; the runner
   validates exact content/owner/scope and active embedding-space completeness before
   reusing data. LongMemEval exposes the same behavior as `--reuse-indexed`.
@@ -565,7 +718,11 @@ Benchmark is part of the product quality system even without AutoDream.
   The built-in `lore-portable-deterministic-v2` reader profile uses a character
   budget and temperature 0, so reports must not label it as the paper's sampled,
   Qwen-token-budgeted official reader. Record prompt hashes, decoding, transport,
-  image routing, and context-budget units in every result.
+  image routing, and context-budget units in every result. The runner preserves
+  each rendered trajectory exactly across bounded workflow Episodes/Observations,
+  indexes them through the separate revisioned Episode-evidence module, groups
+  results back by trajectory identity, and includes Bob-private Episode tripwires
+  inside the pre-top-k source scope. It never stores a raw trajectory as Memory.
 - `evaluation/external/memoryagentbench.json` pins the MIT-licensed
   MemoryAgentBench Conflict Resolution split. The fetcher materializes only its
   verified 3.2 MB JSONL form. The local runner preserves fact order in incremental

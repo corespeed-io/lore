@@ -3,6 +3,11 @@
 > The local numeric ablations below predate Lore's generation-scoped benchmark
 > validator. They remain historical research observations, not current release
 > claims; rerun the pinned profiles before using their thresholds operationally.
+>
+> Update, 2026-08-14: Lore now ships the separately versioned,
+> reconstruction-safe `lore-memory-chunking-v2` under the greenfield baseline.
+> The experimental `lore-embedding-v3` measurements below remain historical and
+> must not be treated as measurements of the shipped chunker.
 
 **Decision (2026-08-07):** use a local, quantized
 [`Qwen/Qwen3-Reranker-0.6B`](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)

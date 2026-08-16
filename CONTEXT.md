@@ -39,8 +39,17 @@ Workspace grants.
 _Avoid_: User identity, Workspace token
 
 **Memory**:
-A durable record stored in exactly one Workspace and owned by exactly one User.
+A bounded canonical knowledge record representing one coherent fact, decision,
+constraint, procedure, or rationale, stored in exactly one Workspace and owned by
+exactly one User. Raw documents and interaction transcripts are Observation
+evidence, not Memory.
 _Avoid_: Page, document, gbrain page
+
+**Memory Chunk**:
+A rebuildable, revision-tagged, non-overlapping retrieval partition of one Memory.
+Ordered chunks reconstruct the canonical content exactly; they preserve formatting,
+prefer structural boundaries, and never become independent Memories.
+_Avoid_: Memory, document fragment, overlapping canonical content
 
 **Memory Owner**:
 The User with write authority over a Memory, including one created on that User's
@@ -89,15 +98,134 @@ _Avoid_: Source, raw Memory, automatic Memory
 **Memory Proposal**:
 A content-bearing suggestion to create or change a canonical Memory, submitted by
 an Actor for review by its owner User. It is owner-private, may cite only Memories
-and Observations visible to its submitting Actor, and binds an update to one exact
-Memory version. A proposal is not searchable Memory and cannot change canonical
-Memory until that User explicitly accepts it. Acceptance also requires every cited
-Observation to remain visible; a content-free cited id survives explicit forget so
-missing raw evidence cannot be silently ignored. Each owner has at most 100 pending
-proposals in one Workspace; reviewing one frees capacity for another submission.
+and Observations visible to its submitting Actor, may freeze typed Code Artifact
+anchors visible at submission, and binds an update to one exact Memory version. A
+proposal is not searchable Memory and cannot change canonical Memory until that User
+explicitly accepts it. Acceptance also requires every cited Observation to remain
+visible and atomically copies frozen Code anchors onto the accepted Memory without
+re-resolving them. A content-free Observation id and the immutable Code locator/digest
+survive deletion of their rebuildable source rows so missing evidence cannot be
+silently ignored. Memory, Observation, and Code evidence share one 50-item limit.
+Each owner has at most 100 pending proposals in one Workspace; reviewing one frees
+capacity for another submission.
 Pending and reviewed proposal content expires after 30 days. Forgetting a target or
 accepted Memory removes its associated proposal content immediately.
 _Avoid_: Draft Memory, automatic Memory, AutoDream result
+
+## Code-aware evidence
+
+**Code Repository**:
+A Workspace-scoped identity for one source repository whose index contains no
+repository credential. Its indexed content is shared derived evidence available
+only to active members and granted Agents in that Workspace.
+_Avoid_: Git credential, Memory owner, global repository
+
+**Code Revision**:
+One immutable, content-bound repository snapshot identified by a full Git
+commit OID. The trusted local-Git path resolves that exact commit, reads its
+object database rather than the working tree, and binds the revision to an
+exact Git tree OID plus an independent complete-tree digest. Repeating the same OID and source/tree digests
+is idempotent; the same OID with different or unauthenticated source evidence is a
+conflict. Retrieval always selects an exact Code Revision before ranking artifacts.
+_Avoid_: Branch head, mutable working tree, latest code
+
+**Code Revision File**:
+One immutable entry in an authenticated Code Revision's complete Git tree
+manifest. It records path, mode, Git object type/OID, byte size, optional content
+digest, and exactly one typed outcome: indexed or excluded for binary, empty,
+invalid UTF-8, oversized, submodule, symlink, or unsupported content. Every tree
+entry must be accounted for; it is manifest evidence, not a Code Artifact.
+_Avoid_: Untracked working-tree file, silent omission, generic document chunk
+
+**Code Index Generation**:
+A rebuildable parser, symbol-extraction, chunking, and dependency-edge output for one Code Revision,
+identified by an explicit indexer revision. Re-indexing with changed derivation
+logic creates a new generation without changing the immutable source snapshot.
+An unchanged Git blob may reuse a prior Workspace-visible generation's validated
+parse/chunk/dependency output only when object OID, content digest, and indexer revision all
+match. Rename reuse remaps path-qualified identities into the new revision; the new
+generation still owns its own immutable Artifact membership rows. Artifact source
+text and its content-only lexical indexes are immutable, Workspace-scoped payloads
+identified by indexer revision plus a database-verified SHA-256 digest, so unchanged
+and renamed chunks can share those bytes without sharing path identity. Ordered,
+path-free Symbol Sets and Dependency Sets are also immutable Workspace-scoped
+derivation payloads keyed by indexer revision and SHA-256. Artifact memberships
+project the current path, while dependency resolution stays generation-local.
+It moves through `building`, `ready`, `active`, `retiring`, or `failed`; search
+serves only active, exact-coverage generations.
+_Avoid_: Code Revision, embedding generation, mutable in-place refresh
+
+**Code Index Job**:
+A durable, bounded-attempt lease request to index one operator-configured local
+repository at one exact commit. Public clients provide only repository key, commit
+OID, and optional source ref. The local path is operational input and is never
+returned or accepted from a model.
+_Avoid_: Memory job, caller-supplied path, branch-head indexing
+
+**Code Artifact**:
+A rebuildable retrieval unit derived from one Code Index Generation. Supported
+languages use AST/symbol-aware units; unsupported or substantially malformed
+sources retain their formatting in bounded text fallbacks. A Code Artifact records
+one exact source span, path, range, parser state, content hash, payload reference,
+and its ordinal in the file. Structural chunks preserve every source character across their ordered
+spans. A large declaration may produce several Artifacts with one declaration key
+and distinct declaration-chunk ordinals; one Artifact may represent multiple Code
+Artifact Symbols.
+It is code evidence, never canonical Memory. A decision or rationale may cite a
+Code Artifact, but re-indexing code cannot silently rewrite that Memory.
+_Avoid_: Memory, Observation, generic document chunk
+
+**Code Artifact Symbol**:
+A language-derived definition represented by one Code Artifact. Its symbol key is
+the logical path-qualified symbol identity; its declaration key distinguishes one
+declaration or overload; the Artifact's declaration-chunk ordinal identifies a
+bounded segment of that declaration. Destructuring may attach several Symbols to
+one exact Artifact without duplicating source content. The immutable path-free
+ordered symbol derivation may be shared across revisions; the Artifact path is
+applied when the exact-revision symbol identity is read.
+_Avoid_: Code Artifact id, chunk suffix, text-search match
+
+**Code Dependency Edge**:
+Immutable rebuildable evidence that one exact Artifact or Artifact Symbol imports,
+calls, or references a target inside one Code Index Generation. The immutable
+path-free raw target/site derivation is an ordered member of the source Artifact's
+shared Dependency Set. The generation-local edge stores that member's ordinal and
+its exact-revision target resolution. Resolution is explicitly `resolved`,
+`ambiguous`, or `unresolved`; Lore never guesses between same-name definitions.
+File-level imports remain distinct from symbol-level dependencies. Callers/callees
+queries select one Workspace, repository, full commit OID, and active generation
+before applying a bounded result limit.
+_Avoid_: Memory Link, inferred canonical fact, cross-revision edge
+
+**Memory Code Evidence**:
+A typed citation from one canonical Memory to immutable historical code evidence.
+Its anchor records repository, exact cited commit, path, symbol/declaration locator,
+declaration-chunk ordinal, Artifact id, content digest, and a SHA-256 fingerprint of
+the ordered declaration chunk sequence with the cited chunk masked out, independently
+of rebuildable Artifact retention. This context fingerprint lets a changed chunk keep
+its ordinal only when every surrounding declaration partition remains unchanged;
+otherwise structural reorder/replacement is `ambiguous`.
+Its relationship is `supports`, `contradicts`, `implements`, or `rationale`;
+side-effect-free assessment may report `current`, `moved`, `changed`, `deleted`,
+`ambiguous`, or `unverifiable` for one target revision. Explicit revalidation may
+persist that same assessment when the Actor can write the Memory. Neither operation
+rewrites the Memory.
+_Avoid_: Memory content, automatic Memory update, live Artifact foreign key
+
+**Retrieved Context**:
+A bounded, Actor-visible read model that composes independently authorized Memory
+evidence, exact-revision Code Artifacts, and side-effect-free Memory Code Evidence
+assessment for one question. It records its route and receipt, keeps evidence
+families typed and separate, and may explicitly abstain. It is transient retrieval
+output: it owns no canonical content and persists no revalidation state. The
+original question determines routing; bounded channel-specific Memory or Code
+queries remain explicit in the receipt.
+For change questions, local freshness describes the cited Artifact itself while
+contextual impact describes its bounded direct dependencies. Contextual comparison
+is exact-revision, uses path-qualified symbols, and fingerprints every chunk in a
+logical declaration. It is `unknown` or `possibly_affected` when traversal is
+truncated or resolution is incomplete; it is never permission to mutate Memory.
+_Avoid_: Merged Memory/Code store, generated answer, implicit latest revision
 
 ## Graph
 
