@@ -5461,19 +5461,18 @@ a.ext {
   flex-wrap: wrap;
 }
 
-.code-evidence-state-ok {
-  color: var(--mute);
-}
-
+/* One accent, not a palette: the degraded tokens mark the anchors that need a
+   human, and every other state stays plain and is told apart by its word. */
 .code-evidence-state-alert {
-  border-color: var(--danger);
-  color: var(--danger);
+  border-color: var(--status-degraded-border);
+  background: var(--status-degraded-surface);
+  color: var(--status-degraded-ink);
 }
 
+.code-evidence-state-ok,
 .code-evidence-state-notice,
 .code-evidence-state-unknown {
-  border-color: var(--status-degraded-border);
-  color: var(--status-degraded-ink);
+  color: var(--mute);
 }
 
 .code-evidence-relationship {
@@ -5500,14 +5499,14 @@ a.ext {
 }
 
 .code-evidence-item .property-row {
-  padding: 2px 0;
+  padding: 4px 0;
 }
 
 .code-evidence-relationship-description,
 .code-evidence-footnote {
   margin: 0;
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -5547,20 +5546,21 @@ a.ext {
 }
 
 .code-job-head code {
-  color: var(--muted);
+  color: var(--mute);
   font-family: var(--font-mono);
   font-size: 10px;
 }
 
 .code-job-description {
   margin: 0;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--body);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .code-job-facts {
   display: flex;
-  gap: 2px 20px;
+  gap: 4px 20px;
   margin: 0;
   flex-wrap: wrap;
 }
@@ -5582,7 +5582,7 @@ a.ext {
 .code-job-facts dd {
   overflow-wrap: anywhere;
   margin: 0;
-  color: var(--muted);
+  color: var(--mute);
   font-family: var(--font-mono);
   font-size: 10px;
 }
