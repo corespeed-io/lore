@@ -63,7 +63,7 @@ test("a compound exact-revision Code retrieval satisfies a must-call policy case
 
 test("the versioned policy suite covers every invocation class with unique cases", () => {
   const suite = parseRetrievalPolicySuite(retrievalPolicySuite);
-  expect(suite.version).toBe(1);
+  expect(suite.version).toBe(2);
   expect(new Set(suite.cases.map((entry) => entry.id)).size).toBe(suite.cases.length);
   expect(new Set(suite.cases.map((entry) => entry.expectation.invocation))).toEqual(
     new Set(["must-call", "must-not-call", "must-clarify", "drill-down"]),

@@ -126,12 +126,14 @@ been removed. Lore now has a native implementation:
   The original question determines the route. Optional bounded `memoryQuery` and
   `codeQuery` are agent-planned channel queries, must pass the same authorization
   filters, and must be echoed in the receipt for reproducibility.
-  `planRetrievalGrounding` (`retrieval-grounding-v2`) is the pure host-side
-  required/auto/off gate over the original question plus exact repository-context
-  availability. When it returns `shouldClarify`, hosts must return its bundled
-  clarification deterministically without a model turn; Memory search is never a
-  substitute for missing exact-revision Code context, and a model must not choose
-  between clarifying and abstaining there.
+  `planRetrievalGrounding` (`retrieval-grounding-v3`) is the pure host-side
+  required/auto/off gate over the original question plus a three-state
+  `repositoryContext` (`exact`, `configured`, `none`). When it returns
+  `shouldClarify`, hosts must return its bundled clarification deterministically
+  without a model turn; the text distinguishes a missing exact commit from an
+  unconfigured repository. Memory search is never a substitute for missing
+  exact-revision Code context, but deliberative-recall wording keeps Memory
+  retrieval required even when the question also uses generic code vocabulary.
   `joint-memory-code-v2` keeps local anchor freshness separate from contextual
   impact. For change routes it compares at most five cited declarations across the
   cited and requested exact revisions, follows at most 25 direct callee/import/

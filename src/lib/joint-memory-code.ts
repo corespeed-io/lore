@@ -8,7 +8,7 @@
 import type { CodeEvidenceRelationship, CodeEvidenceValidationState } from "./code-evidence";
 
 export const JOINT_MEMORY_CODE_PROTOTYPE_REVISION = "joint-memory-code-prototype-v2";
-export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v2";
+export const RETRIEVAL_GROUNDING_POLICY_REVISION = "retrieval-grounding-v3";
 
 export type JointEvidenceRoute = "abstain" | "both" | "code-only" | "memory-only";
 export type RetrievalGroundingMode = "auto" | "off" | "required";
@@ -29,9 +29,17 @@ export interface JointEvidenceQuery {
   route?: JointEvidenceRoute | "auto";
 }
 
+/**
+ * Trusted host state about Code grounding availability:
+ * `exact` = repository key plus full commit OID selected;
+ * `configured` = a repository is registered but no exact commit is selected;
+ * `none` = the deployment has no code repository registered at all.
+ */
+export type RepositoryGroundingContext = "configured" | "exact" | "none";
+
 export interface RetrievalGroundingQuery {
   query: string;
-  hasRepositoryContext: boolean;
+  repositoryContext: RepositoryGroundingContext;
 }
 
 export interface RetrievalGroundingPlan {
@@ -137,7 +145,15 @@ const CODE_BEHAVIOR_PATTERN =
   /\b(write|writes|writing|written|read|reads|insert|inserts|enforce|enforces|guard|guards|allow|allows|reject|rejects|return|returns|call|calls)\b/i;
 
 const MISSING_REVISION_CLARIFICATION =
-  "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.";
+  "Verifying current Code requires the exact full commit OID (40- or 64-character Git object id) for the configured repository. Please provide that exact revision; Memory search is not a substitute for current Code truth.";
+const UNCONFIGURED_REPOSITORY_CLARIFICATION =
+  "This deployment has no code repository registered, so current Code cannot be verified. An operator must configure the repository in LORE_CODE_REPOSITORIES before exact-revision Code retrieval is possible; Memory search is not a substitute for current Code truth.";
+
+function codeGroundingClarification(context: RepositoryGroundingContext): string {
+  return context === "none"
+    ? UNCONFIGURED_REPOSITORY_CLARIFICATION
+    : MISSING_REVISION_CLARIFICATION;
+}
 
 export function planRetrievalGrounding(input: RetrievalGroundingQuery): RetrievalGroundingPlan {
   const query = input.query.trim();
@@ -175,16 +191,17 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
     };
   }
 
+  const hasExactRevision = input.repositoryContext === "exact";
   const staleCurrentCodeClaim =
     STALE_CONFIRMATION_PATTERN.test(query) &&
     CURRENT_STATE_PATTERN.test(query) &&
     CODE_BEHAVIOR_PATTERN.test(query);
-  if (staleCurrentCodeClaim && !input.hasRepositoryContext) {
+  if (staleCurrentCodeClaim && !hasExactRevision) {
     return {
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: true,
-      clarification: MISSING_REVISION_CLARIFICATION,
+      clarification: codeGroundingClarification(input.repositoryContext),
       reasons: ["current Code verification requires repository and exact commit context"],
     };
   }
@@ -199,17 +216,20 @@ export function planRetrievalGrounding(input: RetrievalGroundingQuery): Retrieva
     };
   }
 
-  if (REPOSITORY_TRUTH_PATTERN.test(query) && !input.hasRepositoryContext) {
+  // Deliberative-recall wording keeps Memory retrieval available even when the
+  // question also uses generic code vocabulary; clarification would strand a
+  // question that Memory evidence alone can answer.
+  if (REPOSITORY_TRUTH_PATTERN.test(query) && !hasExactRevision && !MEMORY_PATTERN.test(query)) {
     return {
       mode: "off",
       shouldRetrieve: false,
       shouldClarify: true,
-      clarification: MISSING_REVISION_CLARIFICATION,
+      clarification: codeGroundingClarification(input.repositoryContext),
       reasons: ["exact-revision Code grounding requires repository and commit context"],
     };
   }
 
-  if (REPOSITORY_TRUTH_PATTERN.test(query)) {
+  if (REPOSITORY_TRUTH_PATTERN.test(query) && hasExactRevision) {
     return {
       mode: "required",
       shouldRetrieve: true,

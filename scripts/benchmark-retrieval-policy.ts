@@ -131,11 +131,15 @@ function groundingPlanFor(
   evaluationCase: RetrievalPolicyCase,
 ): RetrievalGroundingPlan | null {
   if (variant.hostPolicy !== "production") return null;
+  const expectation = evaluationCase.expectation;
   return planRetrievalGrounding({
     query: evaluationCase.prompt,
-    hasRepositoryContext: Boolean(
-      evaluationCase.expectation.repositoryKey && evaluationCase.expectation.commitOid,
-    ),
+    repositoryContext:
+      expectation.repositoryKey && expectation.commitOid
+        ? "exact"
+        : expectation.repositoryKey
+          ? "configured"
+          : "none",
   });
 }
 

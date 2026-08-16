@@ -1,6 +1,6 @@
 {
   "name": "Lore Retrieval Invocation Policy",
-  "version": 1,
+  "version": 2,
   "description": "Model-facing retrieval invocation, routing, clarification, and drill-down cases over deterministic authorized Memory and exact-revision Code evidence.",
   "cases": [
     {
@@ -46,6 +46,22 @@
         "invocation": "must-clarify",
         "route": "abstain",
         "repositoryKey": "corespeed/lore"
+      }
+    },
+    {
+      "id": "clarify/no-repository",
+      "prompt": "Where is submitMemoryProposal implemented right now?",
+      "expectation": {
+        "invocation": "must-clarify",
+        "route": "abstain"
+      }
+    },
+    {
+      "id": "memory/deliberative-code-vocabulary",
+      "prompt": "What did we agree about the migration path?",
+      "expectation": {
+        "invocation": "must-call",
+        "route": "memory-only"
       }
     },
     {

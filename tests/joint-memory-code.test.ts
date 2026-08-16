@@ -10,7 +10,7 @@ test("grounding is required before confirming a possibly stale Workspace claim",
     planRetrievalGrounding({
       query:
         "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
-      hasRepositoryContext: true,
+      repositoryContext: "exact",
     }),
   ).toMatchObject({
     mode: "required",
@@ -24,7 +24,7 @@ test("grounding stays off for a transformation fully supported by supplied text"
     planRetrievalGrounding({
       query:
         "Rewrite this supplied sentence to be shorter: The endpoint returns a response very quickly.",
-      hasRepositoryContext: false,
+      repositoryContext: "none",
     }),
   ).toMatchObject({
     mode: "off",
@@ -37,7 +37,7 @@ test("grounding requests an exact revision before a revision-bound Code answer",
   expect(
     planRetrievalGrounding({
       query: "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
-      hasRepositoryContext: false,
+      repositoryContext: "configured",
     }),
   ).toMatchObject({
     mode: "off",
@@ -51,7 +51,7 @@ test("grounding is required for a prior Workspace decision", () => {
   expect(
     planRetrievalGrounding({
       query: "What review boundary did our team agree on for Memory Proposals?",
-      hasRepositoryContext: false,
+      repositoryContext: "none",
     }),
   ).toMatchObject({
     mode: "required",
@@ -65,7 +65,7 @@ test("grounding is required for current Code truth when exact revision context i
   expect(
     planRetrievalGrounding({
       query: "Where is the current proposal submission guard implemented?",
-      hasRepositoryContext: true,
+      repositoryContext: "exact",
     }),
   ).toMatchObject({
     mode: "required",
@@ -78,7 +78,7 @@ test("grounding stays off for general Chinese brainstorming", () => {
   expect(
     planRetrievalGrounding({
       query: "帮我 brainstorm 五个开源记忆产品的名字。",
-      hasRepositoryContext: false,
+      repositoryContext: "none",
     }),
   ).toMatchObject({
     mode: "off",
@@ -147,7 +147,7 @@ test("grounding is required when comparing historical decisions with current Cod
     planRetrievalGrounding({
       query:
         "Does the current code still enforce our historical human-only proposal review decision?",
-      hasRepositoryContext: true,
+      repositoryContext: "exact",
     }),
   ).toMatchObject({
     mode: "required",
@@ -161,11 +161,51 @@ test("grounding asks for exact revision before verifying a stale current-Code re
     planRetrievalGrounding({
       query:
         "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
-      hasRepositoryContext: false,
+      repositoryContext: "none",
     }),
   ).toMatchObject({
     mode: "off",
     shouldRetrieve: false,
+    shouldClarify: true,
+    clarification: expect.stringContaining("LORE_CODE_REPOSITORIES"),
+  });
+});
+
+test("a deliberative-recall question with generic code vocabulary retrieves Memory instead of clarifying", () => {
+  expect(
+    planRetrievalGrounding({
+      query: "What did we agree about the migration path?",
+      repositoryContext: "none",
+    }),
+  ).toMatchObject({
+    mode: "required",
+    shouldRetrieve: true,
+    shouldClarify: false,
+    clarification: null,
+  });
+});
+
+test("an unconfigured repository clarifies toward the operator, not toward a commit OID", () => {
+  expect(
+    planRetrievalGrounding({
+      query: "Where is submitMemoryProposal implemented?",
+      repositoryContext: "none",
+    }),
+  ).toMatchObject({
+    mode: "off",
+    shouldClarify: true,
+    clarification: expect.stringContaining("LORE_CODE_REPOSITORIES"),
+  });
+});
+
+test("a configured repository without a selected commit clarifies toward the exact revision", () => {
+  expect(
+    planRetrievalGrounding({
+      query: "Where is submitMemoryProposal implemented?",
+      repositoryContext: "configured",
+    }),
+  ).toMatchObject({
+    mode: "off",
     shouldClarify: true,
     clarification: expect.stringContaining("commit OID"),
   });
