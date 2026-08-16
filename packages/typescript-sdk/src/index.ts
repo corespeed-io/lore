@@ -1,6 +1,17 @@
 import type { components, operations, paths } from "./generated/openapi.js";
 import { LORE_ERROR_CODES } from "./generated/runtime.js";
 
+export type {
+  RepositoryGroundingContext,
+  RetrievalGroundingMode,
+  RetrievalGroundingPlan,
+  RetrievalGroundingQuery,
+} from "./generated/grounding.js";
+export {
+  planRetrievalGrounding,
+  RETRIEVAL_GROUNDING_POLICY_REVISION,
+} from "./generated/grounding.js";
+
 export type LoreOpenApiPaths = paths;
 export type LoreOpenApiOperations = operations;
 export type LoreOpenApiComponents = components;

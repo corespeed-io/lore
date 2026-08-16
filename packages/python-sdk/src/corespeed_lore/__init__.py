@@ -1,4 +1,11 @@
 from .client import EpisodePage, LoreApiError, LoreClient, LoreWorkspaceClient, MemoryPage
+from .grounding import (
+    RETRIEVAL_GROUNDING_POLICY_REVISION,
+    RepositoryGroundingContext,
+    RetrievalGroundingMode,
+    RetrievalGroundingPlan,
+    plan_retrieval_grounding,
+)
 from .generated_contract import (
     Capabilities,
     CiteMemoryCodeEvidenceInput,
@@ -53,6 +60,10 @@ __all__ = [
     "MemorySearchResult",
     "Observation",
     "ProposeMemoryCodeEvidenceInput",
+    "RETRIEVAL_GROUNDING_POLICY_REVISION",
+    "RepositoryGroundingContext",
+    "RetrievalGroundingMode",
+    "RetrievalGroundingPlan",
     "RevalidateMemoryCodeEvidenceInput",
     "RetrieveContextInput",
     "RetrievedContext",
@@ -60,4 +71,5 @@ __all__ = [
     "RecordEpisodeInput",
     "Workspace",
     "WorkspaceSummary",
+    "plan_retrieval_grounding",
 ]

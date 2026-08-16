@@ -134,6 +134,11 @@ been removed. Lore now has a native implementation:
   unconfigured repository. Memory search is never a substitute for missing
   exact-revision Code context, but deliberative-recall wording keeps Memory
   retrieval required even when the question also uses generic code vocabulary.
+  The gate's source of truth is the import-free `src/lib/retrieval-grounding.ts`;
+  `sdk:generate` copies it verbatim into the TypeScript SDK
+  (`@corespeed/lore-sdk` exports it for hosts) and the Python SDK carries a
+  hand-aligned `plan_retrieval_grounding` port with mirrored parity tests. Gate
+  changes must keep all three in lockstep and bump the policy revision.
   `joint-memory-code-v2` keeps local anchor freshness separate from contextual
   impact. For change routes it compares at most five cited declarations across the
   cited and requested exact revisions, follows at most 25 direct callee/import/

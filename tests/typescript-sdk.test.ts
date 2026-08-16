@@ -5,8 +5,23 @@ import {
   loreConfigurationFromEnvironment,
   type Memory,
   type MemoryProposal,
+  planRetrievalGrounding,
+  RETRIEVAL_GROUNDING_POLICY_REVISION,
 } from "@corespeed/lore-sdk";
 import { describe, expect, test, vi } from "vitest";
+import {
+  RETRIEVAL_GROUNDING_POLICY_REVISION as APP_GROUNDING_REVISION,
+  planRetrievalGrounding as appPlanRetrievalGrounding,
+} from "../src/lib/retrieval-grounding";
+
+test("the SDK exports the same grounding gate hosts and the app share", () => {
+  expect(RETRIEVAL_GROUNDING_POLICY_REVISION).toBe(APP_GROUNDING_REVISION);
+  const query = {
+    query: "Where is submitMemoryProposal implemented?",
+    repositoryContext: "configured",
+  } as const;
+  expect(planRetrievalGrounding(query)).toEqual(appPlanRetrievalGrounding(query));
+});
 
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000001";
 const MEMORY_ID = "20000000-0000-4000-8000-000000000001";

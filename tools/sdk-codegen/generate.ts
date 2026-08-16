@@ -5,6 +5,11 @@ import { loreOpenApiDocument } from "../../src/lib/openapi";
 const repositoryUrl = new URL("../../", import.meta.url);
 const openApiOutputUrl = new URL("packages/typescript-sdk/src/generated/openapi.ts", repositoryUrl);
 const runtimeOutputUrl = new URL("packages/typescript-sdk/src/generated/runtime.ts", repositoryUrl);
+const groundingSourceUrl = new URL("src/lib/retrieval-grounding.ts", repositoryUrl);
+const groundingOutputUrl = new URL(
+  "packages/typescript-sdk/src/generated/grounding.ts",
+  repositoryUrl,
+);
 const cliVersionOutputUrl = new URL("packages/cli/src/generated/version.ts", repositoryUrl);
 const mcpVersionOutputUrl = new URL("packages/mcp/src/generated/version.ts", repositoryUrl);
 const pythonContractOutputUrl = new URL(
@@ -182,13 +187,15 @@ export async function generatedSdkTypes(): Promise<string> {
 async function generatedArtifacts(): Promise<ReadonlyMap<URL, string>> {
   const document = loreOpenApiDocument() as unknown as OpenApiDocument;
   const errorCodes = openApiErrorCodes(document);
-  const [openapi, cliVersion, mcpVersion] = await Promise.all([
+  const [openapi, cliVersion, mcpVersion, groundingSource] = await Promise.all([
     generatedSdkTypes(),
     packageVersion("packages/cli/package.json"),
     packageVersion("packages/mcp/package.json"),
+    readFile(groundingSourceUrl, "utf8"),
   ]);
   return new Map([
     [openApiOutputUrl, openapi],
+    [groundingOutputUrl, `${generatedHeader("src/lib/retrieval-grounding.ts")}${groundingSource}`],
     [
       runtimeOutputUrl,
       `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n`,
