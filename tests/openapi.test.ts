@@ -13,6 +13,16 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
                 observationEvidence: { const: true };
               };
             };
+            memoryChunking: {
+              type: "object";
+              additionalProperties: false;
+              required: string[];
+              properties: {
+                revision: { const: string };
+                maximumCharacters: { const: number };
+                overlapCharacters: { const: number };
+              };
+            };
             limits: {
               properties: {
                 workspaceArchiveLinks: { const: number };
@@ -37,6 +47,17 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
         MemorySearchResult: {
           properties: { rerankScore: { type: string; minimum: number; maximum: number } };
         };
+        CreateMemoryProposalCreateInput: {
+          properties: { codeEvidence: { items: { $ref: string } } };
+        };
+        MemoryProposal: {
+          required: readonly string[];
+          properties: { codeEvidence: { items: { $ref: string } } };
+        };
+        MemoryProposalCodeEvidence: { required: readonly string[] };
+        MemoryCodeEvidence: { required: readonly string[] };
+        RetrieveContextInput: { required: readonly string[] };
+        RetrievedContext: { required: readonly string[] };
         MemoryProposalUpdateContentInput: { required: readonly string[] };
         MemoryProposalUpdateMetadataInput: { required: readonly string[] };
         MemoryProposalUpdateScopeInput: { required: readonly string[] };
@@ -56,6 +77,12 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/api/v1/agents/{agentId}/credentials",
       "/api/v1/agents/{agentId}/grant",
       "/api/v1/capabilities",
+      "/api/v1/code-evidence/{evidenceId}/revalidate",
+      "/api/v1/code/dependencies",
+      "/api/v1/code/index-jobs",
+      "/api/v1/code/index-jobs/{jobId}",
+      "/api/v1/code/search",
+      "/api/v1/context/retrieve",
       "/api/v1/evaluations/runs/{runId}",
       "/api/v1/evaluations/suites",
       "/api/v1/evaluations/suites/{suiteId}/runs",
@@ -64,6 +91,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/api/v1/graph",
       "/api/v1/memories",
       "/api/v1/memories/{memoryId}",
+      "/api/v1/memories/{memoryId}/code-evidence",
       "/api/v1/memory-proposals",
       "/api/v1/memory-proposals/{proposalId}/review",
       "/api/v1/observations",
@@ -85,7 +113,43 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     ]),
   );
   expect(document.paths["/api/v1/workspaces/export"].get.responses).toHaveProperty("409");
+  expect(document.paths["/api/v1/code/dependencies"].get).toMatchObject({
+    operationId: "queryCodeDependencies",
+    responses: {
+      "200": {
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/CodeDependencyQueryResult" },
+          },
+        },
+      },
+    },
+  });
+  expect(document.paths["/api/v1/context/retrieve"].post).toMatchObject({
+    operationId: "retrieveContext",
+    requestBody: {
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/RetrieveContextInput" },
+        },
+      },
+    },
+    responses: {
+      "200": {
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/RetrievedContext" },
+          },
+        },
+      },
+    },
+  });
   expect(document.components.schemas.Capabilities.properties.limits.properties).toEqual({
+    codeIndexArtifacts: { const: 100_000 },
+    codeIndexFiles: { const: 20_000 },
+    codeIndexSourceBytes: { const: 134_217_728 },
+    codeDependencyResults: { const: 200 },
+    codeSearchResults: { const: 100 },
     episodeContentCharacters: { const: 1_000_000 },
     episodeMetadataCharacters: { const: 1_000_000 },
     episodeObservations: { const: 100 },
@@ -93,10 +157,23 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     memoryProposalList: { const: 100 },
     memoryProposalPending: { const: 100 },
     memoryProposalRetentionSeconds: { const: 2_592_000 },
+    memoryContentRecommendedCharacters: { const: 8_000 },
+    memoryContentMaximumCharacters: { const: 32_000 },
+    memoryMaximumChunks: { const: 64 },
     observationContentCharacters: { const: 100_000 },
     observationBatchRead: { const: 50 },
     workspaceArchiveLinks: { const: 50_000 },
     workspaceArchiveMemories: { const: 10_000 },
+  });
+  expect(document.components.schemas.Capabilities.properties.memoryChunking).toEqual({
+    type: "object",
+    additionalProperties: false,
+    required: ["revision", "maximumCharacters", "overlapCharacters"],
+    properties: {
+      revision: { const: "lore-memory-chunking-v2" },
+      maximumCharacters: { const: 1_200 },
+      overlapCharacters: { const: 0 },
+    },
   });
   expect(document.components.schemas.Capabilities.properties.features.properties).toHaveProperty(
     "memoryProposals",
@@ -106,6 +183,11 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     "observationEvidence",
     { const: true },
   );
+  expect(document.components.schemas.Capabilities.properties.features.properties).toMatchObject({
+    codeDependencies: { const: true },
+    codeEvidence: { const: true },
+    codeIndex: { const: true },
+  });
   expect(document.components.schemas.CreateMemoryProposalUpdateInput.anyOf).toEqual([
     { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
@@ -117,6 +199,25 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.components.schemas.MemoryProposalUpdateScopeInput.required).toContain("scope");
   expect(document.components.schemas.MemoryProposalUpdateMetadataInput.required).toContain(
     "metadata",
+  );
+  expect(
+    document.components.schemas.CreateMemoryProposalCreateInput.properties.codeEvidence.items.$ref,
+  ).toBe("#/components/schemas/ProposeMemoryCodeEvidenceInput");
+  expect(document.components.schemas.MemoryProposal.required).toContain("codeEvidence");
+  expect(document.components.schemas.MemoryProposal.properties.codeEvidence.items.$ref).toBe(
+    "#/components/schemas/MemoryProposalCodeEvidence",
+  );
+  expect(document.components.schemas.MemoryProposalCodeEvidence.required).toContain(
+    "citedDeclarationChunkOrdinal",
+  );
+  expect(document.components.schemas.MemoryProposalCodeEvidence.required).toContain(
+    "citedDeclarationContextSha256",
+  );
+  expect(document.components.schemas.MemoryCodeEvidence.required).toContain(
+    "citedDeclarationChunkOrdinal",
+  );
+  expect(document.components.schemas.MemoryCodeEvidence.required).toContain(
+    "citedDeclarationContextSha256",
   );
   expect(document.paths["/api/v1/memory-proposals/{proposalId}/review"]).toMatchObject({
     post: { responses: { "200": { headers: { ETag: { schema: { type: "string" } } } } } },

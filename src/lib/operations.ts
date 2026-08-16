@@ -8,6 +8,11 @@ export interface DeploymentCapabilities {
   apiVersion: "v1";
   schemaRevision: number;
   deploymentId: string;
+  memoryChunking: {
+    revision: string;
+    maximumCharacters: number;
+    overlapCharacters: number;
+  };
   features: {
     idempotency: boolean;
     optimisticConcurrency: boolean;
@@ -17,8 +22,14 @@ export interface DeploymentCapabilities {
     cursorPagination: boolean;
     memoryProposals: boolean;
     observationEvidence: boolean;
+    codeIndex: boolean;
+    codeDependencies: boolean;
+    codeEvidence: boolean;
   };
   limits: {
+    memoryContentRecommendedCharacters: number;
+    memoryContentMaximumCharacters: number;
+    memoryMaximumChunks: number;
     workspaceArchiveMemories: number;
     workspaceArchiveLinks: number;
     memoryProposalEvidence: number;
@@ -30,6 +41,11 @@ export interface DeploymentCapabilities {
     episodeMetadataCharacters: number;
     observationContentCharacters: number;
     observationBatchRead: number;
+    codeIndexFiles: number;
+    codeIndexSourceBytes: number;
+    codeIndexArtifacts: number;
+    codeDependencyResults: number;
+    codeSearchResults: number;
   };
   activeEmbeddingGeneration: {
     provider: string;
@@ -110,7 +126,15 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                    ('workspace_imports'), ('memory_import_provenance'),
                    ('memory_proposals'), ('memory_proposal_evidence'),
                    ('episodes'), ('observations'),
-                   ('memory_proposal_observation_evidence')
+                   ('memory_proposal_observation_evidence'),
+                   ('memory_proposal_code_evidence'),
+                   ('code_repositories'), ('code_revisions'),
+                   ('code_revision_files'), ('code_index_generations'),
+                   ('code_index_jobs'), ('code_artifact_payloads'), ('code_artifacts'),
+                   ('code_symbol_sets'), ('code_symbol_payloads'),
+                   ('code_dependency_sets'), ('code_dependency_payloads'),
+                   ('code_dependency_edges'),
+                   ('memory_code_evidence')
                ), rls_state AS (
                  SELECT
                    count(relation.oid) = count(*)

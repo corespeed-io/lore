@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
+import { createCodeIndexModule } from "@/lib/code-index";
 import {
   createActorHandlers,
   createAgentByIdHandlers,
@@ -14,6 +15,7 @@ import {
   createGraphHandlers,
   createMemoryByIdHandlers,
   createMemoryHandlers,
+  createMemoryProposalHandlers,
   createPortabilityHandlers,
   createWorkspaceHandlers,
 } from "@/lib/http";
@@ -76,6 +78,106 @@ test("Human can create a Workspace then write and list native Memories over HTTP
   await expect(graphResponse.json()).resolves.toMatchObject({
     nodes: [expect.objectContaining({ id: created.id, scope: "private" })],
     links: [],
+  });
+  await testContext.close();
+});
+
+test("Memory HTTP rejects document-sized content as an invalid request", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-memory-limit-user";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const memories = createMemoryHandlers(testContext.database);
+  const workspaceResponse = await workspaces.POST(
+    new Request("http://lore.local/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "Bounded Memory" }),
+    }),
+  );
+  const workspace = (await workspaceResponse.json()) as { id: string };
+
+  const response = await memories.POST(
+    new Request("http://lore.local/api/memories", {
+      method: "POST",
+      headers: { "x-lore-workspace-id": workspace.id },
+      body: JSON.stringify({ content: "x".repeat(32_001) }),
+    }),
+  );
+
+  expect(response.status).toBe(400);
+  await expect(response.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "Memory content may contain at most 32000 Unicode characters",
+  });
+  await testContext.close();
+});
+
+test("Memory Proposal HTTP freezes typed Code Evidence from an active Artifact", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-proposal-code-user";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const actors = createActorHandlers(testContext.database);
+  const proposals = createMemoryProposalHandlers(testContext.database);
+  const code = createCodeIndexModule(testContext.database);
+  const workspaceResponse = await workspaces.POST(
+    new Request("http://lore.local/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "HTTP Code Evidence" }),
+    }),
+  );
+  const workspace = (await workspaceResponse.json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const actorResponse = await actors.GET(
+    new Request("http://lore.local/api/v1/actor", { headers }),
+  );
+  const actor = (await actorResponse.json()) as { userId: string };
+  const commitOid = "7".repeat(40);
+  await code.indexRevision(
+    { userId: actor.userId, workspaceId: workspace.id },
+    {
+      repositoryKey: "corespeed/http-code-evidence",
+      displayName: "HTTP Code Evidence",
+      commitOid,
+      files: [{ path: "src/http.ts", content: "export const httpGuard = true;\n" }],
+    },
+  );
+  const [artifact] = await code.search(
+    { userId: actor.userId, workspaceId: workspace.id },
+    {
+      repositoryKey: "corespeed/http-code-evidence",
+      commitOid,
+      query: "httpGuard",
+    },
+  );
+  if (!artifact) throw new Error("Expected HTTP Code Artifact");
+
+  const response = await proposals.POST(
+    new Request("http://lore.local/api/v1/memory-proposals", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        kind: "create",
+        content: "httpGuard protects the HTTP path.",
+        codeEvidence: [{ artifactId: artifact.id, relationship: "implements" }],
+      }),
+    }),
+  );
+
+  expect(response.status).toBe(201);
+  await expect(response.json()).resolves.toMatchObject({
+    status: "pending",
+    codeEvidence: [
+      {
+        citedArtifactId: artifact.id,
+        citedCommitOid: commitOid,
+        citedPath: "src/http.ts",
+        citedContentSha256: artifact.contentSha256,
+        relationship: "implements",
+      },
+    ],
   });
   await testContext.close();
 });
@@ -230,6 +332,44 @@ test("Workspace portability HTTP is RLS-scoped, dry-runnable, and human-only", a
     new Request("http://lore.local/api/memories", { headers: targetHeaders }),
   );
   await expect(afterImport.json()).resolves.toHaveLength(2);
+
+  await testContext.close();
+});
+
+test("Memory HTTP rejects content that would create whitespace-only evidence", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-memory-whitespace-user";
+  const testContext = await createMemoryTestContext();
+  const workspaces = createWorkspaceHandlers(testContext.database);
+  const memories = createMemoryHandlers(testContext.database);
+  const workspaceResponse = await workspaces.POST(
+    new Request("http://lore.local/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "Indexable Memory" }),
+    }),
+  );
+  const workspace = (await workspaceResponse.json()) as { id: string };
+
+  const response = await memories.POST(
+    new Request("http://lore.local/api/memories", {
+      method: "POST",
+      headers: { "x-lore-workspace-id": workspace.id },
+      body: JSON.stringify({ content: `a${" ".repeat(3_000)}b` }),
+    }),
+  );
+
+  expect(response.status).toBe(400);
+  await expect(response.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "Memory content would produce a whitespace-only chunk and cannot be indexed safely",
+  });
+  const listResponse = await memories.GET(
+    new Request("http://lore.local/api/memories", {
+      headers: { "x-lore-workspace-id": workspace.id },
+    }),
+  );
+  await expect(listResponse.json()).resolves.toEqual([]);
 
   await testContext.close();
 });
