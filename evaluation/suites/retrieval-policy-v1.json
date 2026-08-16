@@ -10,9 +10,7 @@
         "invocation": "must-call",
         "route": "memory-only",
         "outcome": "answered",
-        "answerMustInclude": [
-          "human-only"
-        ]
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -24,9 +22,7 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": [
-          "src/lib/memory.ts"
-        ]
+        "answerMustInclude": ["src/lib/memory.ts"]
       }
     },
     {
@@ -38,9 +34,7 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": [
-          "human-only"
-        ]
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -78,9 +72,7 @@
         "invocation": "must-call",
         "route": "memory-only",
         "outcome": "answered",
-        "answerMustInclude": [
-          "human-only"
-        ]
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -104,9 +96,7 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": [
-          "human-only"
-        ]
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -118,9 +108,7 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": [
-          "human-only"
-        ]
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -141,9 +129,7 @@
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "outcome": "answered",
-        "answerMustInclude": [
-          "src/lib/memory.ts"
-        ]
+        "answerMustInclude": ["src/lib/memory.ts"]
       }
     },
     {
