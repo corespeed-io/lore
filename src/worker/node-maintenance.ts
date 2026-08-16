@@ -1,3 +1,4 @@
+import { createCodeIndexMaintenanceModule } from "../lib/code-index";
 import { createPostgresDatabase } from "../lib/db/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../lib/embedding/provider-factory";
 import {
@@ -54,6 +55,15 @@ const maintenanceModules = embeddingProviders.map((embeddingProvider) =>
 );
 const maintenance =
   maintenanceModules.length > 0 ? createMemoryMaintenanceCoordinator(maintenanceModules) : null;
+const codeIndexMaintenance = createCodeIndexMaintenanceModule(database, {
+  logger: (entry) =>
+    console.log(
+      JSON.stringify({
+        component: "code-index-maintenance",
+        ...entry,
+      }),
+    ),
+});
 const pollIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_POLL_MS, 1_000);
 const sweepIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_SWEEP_MS, 300_000);
 const embeddingRollbackSeconds = positiveInteger(
@@ -108,18 +118,21 @@ try {
         nextSweepAt = Date.now() + sweepIntervalMs;
       }
 
-      if (!maintenance) {
-        infrastructureBackoffMs = pollIntervalMs;
-        await wait(pollIntervalMs);
-        continue;
-      }
-      const results = await Promise.all(
-        Array.from({ length: workerConcurrency }, () =>
-          observeOperation("maintenance.job", () => maintenance.run()),
-        ),
+      const codeIndexResult = await observeOperation("code-index-maintenance.job", () =>
+        codeIndexMaintenance.run(),
       );
+      const results = maintenance
+        ? await Promise.all(
+            Array.from({ length: workerConcurrency }, () =>
+              observeOperation("maintenance.job", () => maintenance.run()),
+            ),
+          )
+        : [];
       infrastructureBackoffMs = pollIntervalMs;
-      if (results.every((result) => result.status === "idle" || result.status === "retry")) {
+      if (
+        (codeIndexResult.status === "idle" || codeIndexResult.status === "retry") &&
+        results.every((result) => result.status === "idle" || result.status === "retry")
+      ) {
         await wait(pollIntervalMs);
       }
     } catch {

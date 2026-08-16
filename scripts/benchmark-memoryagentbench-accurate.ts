@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
+import { MEMORY_CHUNKING_REVISION } from "../src/lib/memory-chunking";
 import { createQueryPlanningProviderFromEnvironment } from "../src/lib/query-planning/provider-factory";
 import { createRerankingProviderFromEnvironment } from "../src/lib/reranking/provider-factory";
 import type { RetrievalBenchmarkPartition } from "../src/lib/retrieval-benchmark";
@@ -229,7 +230,7 @@ const report = await runRetrievalBenchmarkSuite({
       codeRevision: memoryAgentBenchManifest.codeRevision,
       file: file.path,
       sha256: file.sha256,
-      chunking: "memoryagentbench-document-aware-lore-chunking-v2-1200-characters",
+      chunking: `memoryagentbench-document-aware-v3+${MEMORY_CHUNKING_REVISION}`,
       selection,
     },
     partitions: (async function* () {

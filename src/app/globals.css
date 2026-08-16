@@ -4970,6 +4970,16 @@ a.ext {
   outline: none;
 }
 
+.memory-editor-guidance {
+  margin: -6px 0 0;
+  color: var(--mute);
+  font: 11px / 1.45 var(--font-mono);
+}
+
+.memory-editor-guidance-error {
+  color: var(--danger);
+}
+
 .memory-scope-control {
   display: flex;
   gap: 4px;

@@ -1,10 +1,12 @@
 import { type ActorContext, installActorContext } from "./actor-context";
+import type { CodeEvidenceRelationship } from "./code-evidence";
 import { isPostgresAccessDenied } from "./database-errors";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiteral } from "./embedding/vector";
 import type { EmbeddingDimensions } from "./embedding-config";
 import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
-import { chunkMemoryContent } from "./memory-chunking";
+import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
+import { prepareMemoryContent } from "./memory-content";
 import type { QueryPlanningProvider } from "./query-planning";
 import type { RerankingProvider } from "./reranking";
 
@@ -105,6 +107,27 @@ export interface UpdateMemory {
 export type MemoryProposalKind = "create" | "update";
 export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
 
+export interface MemoryProposalCodeEvidence {
+  ordinal: number;
+  repositoryId: string;
+  citedRevisionId: string;
+  citedGenerationId: string;
+  citedArtifactId: string;
+  citedCommitOid: string;
+  citedPath: string;
+  citedSymbolKey: string | null;
+  citedDeclarationKey: string | null;
+  citedDeclarationChunkOrdinal: number | null;
+  citedDeclarationContextSha256: string | null;
+  citedContentSha256: string;
+  relationship: CodeEvidenceRelationship;
+}
+
+export interface ProposeMemoryCodeEvidence {
+  artifactId: string;
+  relationship: CodeEvidenceRelationship;
+}
+
 export interface MemoryProposal {
   id: string;
   workspaceId: string;
@@ -119,6 +142,7 @@ export interface MemoryProposal {
   proposedMetadata: Record<string, unknown>;
   evidenceMemoryIds: string[];
   evidenceObservationIds: string[];
+  codeEvidence: MemoryProposalCodeEvidence[];
   status: MemoryProposalStatus;
   reviewedByUserId: string | null;
   acceptedMemoryId: string | null;
@@ -129,6 +153,7 @@ export interface MemoryProposal {
 interface ProposedMemoryBase {
   evidenceMemoryIds?: readonly string[];
   evidenceObservationIds?: readonly string[];
+  codeEvidence?: readonly ProposeMemoryCodeEvidence[];
 }
 
 export interface ProposeMemoryCreate extends ProposedMemoryBase {
@@ -284,6 +309,23 @@ interface MemoryProposalObservationEvidenceRow {
   proposal_id: string;
 }
 
+interface MemoryProposalCodeEvidenceRow {
+  proposal_id: string;
+  ordinal: number;
+  repository_id: string;
+  cited_revision_id: string;
+  cited_generation_id: string;
+  cited_artifact_id: string;
+  cited_commit_oid: string;
+  relationship: CodeEvidenceRelationship;
+  cited_path: string;
+  cited_symbol_key: string | null;
+  cited_declaration_key: string | null;
+  cited_declaration_chunk_ordinal: number | null;
+  cited_declaration_context_sha256: string | null;
+  cited_content_sha256: string;
+}
+
 interface SearchRow extends MemoryRow {
   score: number;
   evidence: string;
@@ -305,7 +347,7 @@ interface PreparedChunk {
 }
 
 function prepareChunks(content: string): PreparedChunk[] {
-  return chunkMemoryContent(content).map((chunk) => ({ content: chunk }));
+  return prepareMemoryContent(content).chunks.map((chunk) => ({ content: chunk }));
 }
 
 function relaxedEnglishTerms(query: string): string[] {
@@ -609,7 +651,7 @@ async function expandContextGroupResults(input: {
        evidence.content AS rerank_evidence
      FROM memories memory
      JOIN LATERAL (
-       SELECT string_agg(selected.content, E'\\n' ORDER BY selected.ordinal) AS content
+       SELECT string_agg(selected.content, '' ORDER BY selected.ordinal) AS content
        FROM (
          SELECT chunk.content, chunk.ordinal
          FROM memory_chunks chunk
@@ -1090,7 +1132,7 @@ async function searchOneQuery(input: {
        ON memory.id = ranked_memories.memory_id
       AND memory.workspace_id = $2
      JOIN LATERAL (
-       SELECT string_agg(selected.content, E'\n' ORDER BY selected.ordinal) AS content
+       SELECT string_agg(selected.content, '' ORDER BY selected.ordinal) AS content
        FROM memory_chunks selected
        WHERE selected.workspace_id = $2
          AND selected.memory_id = memory.id
@@ -1116,7 +1158,7 @@ async function searchOneQuery(input: {
          )
      ) evidence ON true
      JOIN LATERAL (
-       SELECT string_agg(selected.content, E'\n' ORDER BY selected.ordinal) AS content
+       SELECT string_agg(selected.content, '' ORDER BY selected.ordinal) AS content
        FROM memory_chunks selected
        WHERE selected.workspace_id = $2
          AND selected.memory_id = memory.id
@@ -1172,12 +1214,19 @@ async function insertChunks(
   for (const [ordinal, chunk] of chunks.entries()) {
     await transaction.query(
       `INSERT INTO memory_chunks (
-         id, workspace_id, memory_id, ordinal, content, embedding,
+         id, workspace_id, memory_id, ordinal, content, chunking_revision, embedding,
          embedding_provider, embedding_model, embedding_revision, embedded_at
        ) VALUES (
-         $1, $2, $3, $4, $5, NULL, NULL, NULL, NULL, NULL
+         $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, NULL, NULL
        )`,
-      [crypto.randomUUID(), workspaceId, memoryId, ordinal, chunk.content],
+      [
+        crypto.randomUUID(),
+        workspaceId,
+        memoryId,
+        ordinal,
+        chunk.content,
+        MEMORY_CHUNKING_REVISION,
+      ],
     );
   }
 }
@@ -1260,6 +1309,7 @@ function toMemoryProposal(
   row: MemoryProposalRow,
   evidenceMemoryIds: readonly string[] = [],
   evidenceObservationIds: readonly string[] = [],
+  codeEvidence: readonly MemoryProposalCodeEvidence[] = [],
 ): MemoryProposal {
   return {
     id: row.id,
@@ -1275,11 +1325,32 @@ function toMemoryProposal(
     proposedMetadata: row.proposed_metadata,
     evidenceMemoryIds: [...evidenceMemoryIds],
     evidenceObservationIds: [...evidenceObservationIds],
+    codeEvidence: [...codeEvidence],
     status: row.status,
     reviewedByUserId: row.reviewed_by_user_id,
     acceptedMemoryId: row.accepted_memory_id,
     createdAt: serializedTimestamp(row.created_at),
     reviewedAt: row.reviewed_at === null ? null : serializedTimestamp(row.reviewed_at),
+  };
+}
+
+function toMemoryProposalCodeEvidence(
+  row: MemoryProposalCodeEvidenceRow,
+): MemoryProposalCodeEvidence {
+  return {
+    ordinal: row.ordinal,
+    repositoryId: row.repository_id,
+    citedRevisionId: row.cited_revision_id,
+    citedGenerationId: row.cited_generation_id,
+    citedArtifactId: row.cited_artifact_id,
+    citedCommitOid: row.cited_commit_oid,
+    citedPath: row.cited_path,
+    citedSymbolKey: row.cited_symbol_key,
+    citedDeclarationKey: row.cited_declaration_key,
+    citedDeclarationChunkOrdinal: row.cited_declaration_chunk_ordinal,
+    citedDeclarationContextSha256: row.cited_declaration_context_sha256,
+    citedContentSha256: row.cited_content_sha256,
+    relationship: row.relationship,
   };
 }
 
@@ -1415,7 +1486,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
   async function proposalEvidenceIds(
     transaction: PostgresTransaction,
     proposalId: string,
-  ): Promise<{ memoryIds: string[]; observationIds: string[] }> {
+  ): Promise<{
+    memoryIds: string[];
+    observationIds: string[];
+    codeEvidence: MemoryProposalCodeEvidence[];
+  }> {
     const memoryEvidence = await transaction.query<MemoryProposalEvidenceRow>(
       `SELECT proposal_id, memory_id
        FROM memory_proposal_evidence
@@ -1430,9 +1505,21 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
        ORDER BY ordinal`,
       [proposalId],
     );
+    const codeEvidence = await transaction.query<MemoryProposalCodeEvidenceRow>(
+      `SELECT proposal_id, ordinal, repository_id, cited_revision_id,
+         cited_generation_id, cited_artifact_id, cited_commit_oid, relationship,
+         cited_path, cited_symbol_key, cited_declaration_key,
+         cited_declaration_chunk_ordinal, cited_declaration_context_sha256,
+         cited_content_sha256
+       FROM memory_proposal_code_evidence
+       WHERE proposal_id = $1
+       ORDER BY ordinal`,
+      [proposalId],
+    );
     return {
       memoryIds: memoryEvidence.rows.map((row) => row.memory_id),
       observationIds: observationEvidence.rows.map((row) => row.observation_id),
+      codeEvidence: codeEvidence.rows.map(toMemoryProposalCodeEvidence),
     };
   }
 
@@ -1441,7 +1528,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     row: MemoryProposalRow,
   ): Promise<MemoryProposal> {
     const evidence = await proposalEvidenceIds(transaction, row.id);
-    return toMemoryProposal(row, evidence.memoryIds, evidence.observationIds);
+    return toMemoryProposal(
+      row,
+      evidence.memoryIds,
+      evidence.observationIds,
+      evidence.codeEvidence,
+    );
   }
 
   async function proposalsFromRows(
@@ -1463,6 +1555,17 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
        ORDER BY proposal_id, ordinal`,
       [rows.map((row) => row.id)],
     );
+    const codeEvidence = await transaction.query<MemoryProposalCodeEvidenceRow>(
+      `SELECT proposal_id, ordinal, repository_id, cited_revision_id,
+         cited_generation_id, cited_artifact_id, cited_commit_oid, relationship,
+         cited_path, cited_symbol_key, cited_declaration_key,
+         cited_declaration_chunk_ordinal, cited_declaration_context_sha256,
+         cited_content_sha256
+       FROM memory_proposal_code_evidence
+       WHERE proposal_id = ANY($1::uuid[])
+       ORDER BY proposal_id, ordinal`,
+      [rows.map((row) => row.id)],
+    );
     const memoriesByProposal = new Map<string, string[]>();
     for (const row of memoryEvidence.rows) {
       const ids = memoriesByProposal.get(row.proposal_id) ?? [];
@@ -1475,11 +1578,18 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       ids.push(row.observation_id);
       observationsByProposal.set(row.proposal_id, ids);
     }
+    const codeByProposal = new Map<string, MemoryProposalCodeEvidence[]>();
+    for (const row of codeEvidence.rows) {
+      const evidence = codeByProposal.get(row.proposal_id) ?? [];
+      evidence.push(toMemoryProposalCodeEvidence(row));
+      codeByProposal.set(row.proposal_id, evidence);
+    }
     return rows.map((row) =>
       toMemoryProposal(
         row,
         memoriesByProposal.get(row.id) ?? [],
         observationsByProposal.get(row.id) ?? [],
+        codeByProposal.get(row.id) ?? [],
       ),
     );
   }
@@ -1548,7 +1658,23 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     ): Promise<MemoryProposal> {
       const evidenceMemoryIds = [...new Set(input.evidenceMemoryIds ?? [])];
       const evidenceObservationIds = [...new Set(input.evidenceObservationIds ?? [])];
-      if (evidenceMemoryIds.length + evidenceObservationIds.length > 50) {
+      const codeEvidence = [
+        ...new Map(
+          (input.codeEvidence ?? []).map((evidence) => [
+            `${evidence.artifactId}\0${evidence.relationship}`,
+            evidence,
+          ]),
+        ).values(),
+      ];
+      if (
+        codeEvidence.some(
+          (evidence) =>
+            !["supports", "contradicts", "implements", "rationale"].includes(evidence.relationship),
+        )
+      ) {
+        throw new TypeError("Proposal Code Evidence relationship is invalid");
+      }
+      if (evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length > 50) {
         throw new TypeError("A Memory Proposal may cite at most 50 evidence records");
       }
       if (
@@ -1628,6 +1754,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             changesMetadata = input.metadata !== undefined;
           }
 
+          if (changesContent) prepareMemoryContent(proposedContent);
+
           if (evidenceMemoryIds.length) {
             const visibleEvidence = await transaction.query<{ id: string }>(
               `SELECT id
@@ -1699,10 +1827,92 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               [actor.workspaceId, id, observationId, ordinal],
             );
           }
+          const storedCodeEvidence: MemoryProposalCodeEvidence[] = [];
+          for (const [ordinal, requestedEvidence] of codeEvidence.entries()) {
+            const visibleArtifact = await transaction.query<MemoryProposalCodeEvidenceRow>(
+              `SELECT $1::uuid AS proposal_id, $2::integer AS ordinal,
+                 artifact.repository_id, artifact.revision_id AS cited_revision_id,
+                 artifact.generation_id AS cited_generation_id,
+                 artifact.id AS cited_artifact_id, revision.commit_oid AS cited_commit_oid,
+                 $3::code_evidence_relationship AS relationship,
+                 artifact.path AS cited_path, artifact.symbol_key AS cited_symbol_key,
+                 artifact.declaration_key AS cited_declaration_key,
+                 artifact.declaration_chunk_ordinal AS cited_declaration_chunk_ordinal,
+                 CASE WHEN artifact.declaration_key IS NULL THEN NULL ELSE (
+                   SELECT encode(sha256(convert_to(string_agg(
+                     CASE WHEN sibling.id = artifact.id THEN '*' ELSE sibling.content_sha256 END,
+                     '' ORDER BY sibling.declaration_chunk_ordinal
+                   ), 'UTF8')), 'hex')
+                   FROM code_artifacts sibling
+                   WHERE sibling.workspace_id = artifact.workspace_id
+                     AND sibling.repository_id = artifact.repository_id
+                     AND sibling.revision_id = artifact.revision_id
+                     AND sibling.generation_id = artifact.generation_id
+                     AND sibling.declaration_key = artifact.declaration_key
+                 ) END AS cited_declaration_context_sha256,
+                 artifact.content_sha256 AS cited_content_sha256
+               FROM code_artifacts artifact
+               JOIN code_index_generations generation
+                 ON generation.workspace_id = artifact.workspace_id
+                AND generation.repository_id = artifact.repository_id
+                AND generation.revision_id = artifact.revision_id
+                AND generation.id = artifact.generation_id
+                AND generation.status = 'active'
+               JOIN code_revisions revision
+                 ON revision.workspace_id = artifact.workspace_id
+                AND revision.repository_id = artifact.repository_id
+                AND revision.id = artifact.revision_id
+               WHERE artifact.workspace_id = $4 AND artifact.id = $5`,
+              [
+                id,
+                ordinal,
+                requestedEvidence.relationship,
+                actor.workspaceId,
+                requestedEvidence.artifactId,
+              ],
+            );
+            const stored = visibleArtifact.rows[0];
+            if (!stored) {
+              throw new MemoryProposalAccessDeniedError(
+                "Proposal Code Evidence must be an active visible Code Artifact",
+              );
+            }
+            await transaction.query(
+              `INSERT INTO memory_proposal_code_evidence (
+                 workspace_id, proposal_id, ordinal, repository_id,
+                 cited_revision_id, cited_generation_id, cited_artifact_id,
+                 cited_commit_oid, relationship, cited_path, cited_symbol_key,
+                 cited_declaration_key, cited_declaration_chunk_ordinal,
+                 cited_declaration_context_sha256, cited_content_sha256
+               ) VALUES (
+                 $1, $2, $3, $4, $5, $6, $7, $8,
+                 $9, $10, $11, $12, $13, $14, $15
+               )`,
+              [
+                actor.workspaceId,
+                stored.proposal_id,
+                stored.ordinal,
+                stored.repository_id,
+                stored.cited_revision_id,
+                stored.cited_generation_id,
+                stored.cited_artifact_id,
+                stored.cited_commit_oid,
+                stored.relationship,
+                stored.cited_path,
+                stored.cited_symbol_key,
+                stored.cited_declaration_key,
+                stored.cited_declaration_chunk_ordinal,
+                stored.cited_declaration_context_sha256,
+                stored.cited_content_sha256,
+              ],
+            );
+            storedCodeEvidence.push(toMemoryProposalCodeEvidence(stored));
+          }
           const proposal = toMemoryProposal(
             inserted.rows[0],
             evidenceMemoryIds,
             evidenceObservationIds,
+            storedCodeEvidence,
           );
           await completeMutation(
             transaction,
@@ -1882,6 +2092,31 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
              WHERE id = $1 AND workspace_id = $2
              RETURNING *`,
             [id, actor.workspaceId, actor.userId, applied.memory.id],
+          );
+          await transaction.query(
+            `INSERT INTO memory_code_evidence (
+               id, workspace_id, memory_id, repository_id,
+               cited_revision_id, cited_generation_id, cited_artifact_id,
+               cited_commit_oid, relationship, cited_path, cited_symbol_key,
+               cited_declaration_key, cited_declaration_chunk_ordinal,
+               cited_declaration_context_sha256, cited_content_sha256, validation_state,
+               validated_revision_id, validated_generation_id, validated_artifact_id,
+               validated_commit_oid, validated_path, created_by_user_id, created_by_agent_id
+             )
+             SELECT gen_random_uuid(), evidence.workspace_id, $3, evidence.repository_id,
+               evidence.cited_revision_id, evidence.cited_generation_id,
+               evidence.cited_artifact_id, evidence.cited_commit_oid,
+               evidence.relationship, evidence.cited_path, evidence.cited_symbol_key,
+               evidence.cited_declaration_key, evidence.cited_declaration_chunk_ordinal,
+               evidence.cited_declaration_context_sha256,
+               evidence.cited_content_sha256, 'current',
+               evidence.cited_revision_id, evidence.cited_generation_id,
+               evidence.cited_artifact_id, evidence.cited_commit_oid,
+               evidence.cited_path, $4, NULL
+             FROM memory_proposal_code_evidence evidence
+             WHERE evidence.workspace_id = $1 AND evidence.proposal_id = $2
+             ON CONFLICT (memory_id, cited_artifact_id, relationship) DO NOTHING`,
+            [actor.workspaceId, id, applied.memory.id, actor.userId],
           );
           return {
             proposal: await proposalFromRow(transaction, accepted.rows[0]),

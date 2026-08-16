@@ -1,0 +1,1470 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "generatedAt": "2026-08-15T22:10:39.185Z",
+  "provider": "OpenAI via Codex exec",
+  "model": "gpt-5.6-sol",
+  "trialsPerCase": 1,
+  "suite": {
+    "name": "Lore Retrieval Invocation Policy",
+    "version": 1,
+    "caseCount": 6
+  },
+  "variants": {
+    "primitive-auto": {
+      "description": "Primitive Memory and Code tools; model chooses whether and what to call.",
+      "metrics": {
+        "caseCount": 6,
+        "passRate": 0.8333333333333334,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": 0,
+        "routeAccuracy": 1,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": 1,
+        "drillDownAccuracy": 1,
+        "averageLatencyMs": 14706.733833000004,
+        "p95LatencyMs": 26602.870499999997
+      },
+      "inputTokens": 435751,
+      "outputTokens": 2161,
+      "toolCalls": 20,
+      "averageToolCalls": 3.3333333333333335
+    },
+    "compound-auto": {
+      "description": "Compound context tool plus primitives; model receives no trigger contract.",
+      "metrics": {
+        "caseCount": 6,
+        "passRate": 0.8333333333333334,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": 0,
+        "routeAccuracy": 1,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": 1,
+        "drillDownAccuracy": 1,
+        "averageLatencyMs": 13744.664222166663,
+        "p95LatencyMs": 25962.088957999993
+      },
+      "inputTokens": 366795,
+      "outputTokens": 1875,
+      "toolCalls": 13,
+      "averageToolCalls": 2.1666666666666665
+    },
+    "compound-guided": {
+      "description": "Compound context tool plus primitives and explicit grounding triggers.",
+      "metrics": {
+        "caseCount": 6,
+        "passRate": 0.8333333333333334,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": 0,
+        "routeAccuracy": 1,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": 1,
+        "drillDownAccuracy": 1,
+        "averageLatencyMs": 14304.580229166662,
+        "p95LatencyMs": 20644.109124999988
+      },
+      "inputTokens": 412583,
+      "outputTokens": 2441,
+      "toolCalls": 12,
+      "averageToolCalls": 2
+    },
+    "host-forced-oracle": {
+      "description": "Evaluation upper bound: host invokes compound retrieval for labeled must-call/drill-down cases, then the model may use primitives.",
+      "metrics": {
+        "caseCount": 6,
+        "passRate": 0.6666666666666666,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": 0,
+        "routeAccuracy": 0.75,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": 1,
+        "drillDownAccuracy": 1,
+        "averageLatencyMs": 9596.091743000003,
+        "p95LatencyMs": 19600.08158300002
+      },
+      "inputTokens": 272029,
+      "outputTokens": 1446,
+      "toolCalls": 11,
+      "averageToolCalls": 1.8333333333333333
+    },
+    "always-on": {
+      "description": "Host invokes compound retrieval before every case, including transformations and brainstorming.",
+      "metrics": {
+        "caseCount": 6,
+        "passRate": 0.5,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": 1,
+        "routeAccuracy": 0.75,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": 1,
+        "drillDownAccuracy": 1,
+        "averageLatencyMs": 8928.274263999998,
+        "p95LatencyMs": 25402.936875000014
+      },
+      "inputTokens": 221556,
+      "outputTokens": 1094,
+      "toolCalls": 11,
+      "averageToolCalls": 1.8333333333333333
+    }
+  },
+  "records": [
+    {
+      "variant": "primitive-auto",
+      "caseId": "memory/prior-decision",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 14194.778792000001
+      },
+      "outcome": "answered",
+      "answer": "The agreed boundary was that Memory Proposal review remains human-only before any change is made to canonical Memory.",
+      "toolCalls": [
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Memory Proposals agreed review boundary team review scope",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "human-only proposal review canonical Memory changes approval automation boundary",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 75122,
+      "outputTokens": 283
+    },
+    {
+      "variant": "primitive-auto",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 21399.624416
+      },
+      "outcome": "answered",
+      "answer": "At commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, the proposal submission guard is in `src/lib/memory.ts`, inside `submitMemoryProposal` (lines 100–112). The function gates submission by returning `reviewRequired()`.",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal submission guard",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "submit proposal",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal guard",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "canSubmitProposal",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 102171,
+      "outputTokens": 562
+    },
+    {
+      "variant": "primitive-auto",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 26602.870499999997
+      },
+      "outcome": "answered",
+      "answer": "Yes. The historical decision says proposal review must remain human-only before canonical Memory changes. At commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `submitMemoryProposal()` in `src/lib/memory.ts` still returns `reviewRequired()`, so proposals cannot directly change canonical Memory without review. The retrieved code evidence does not show any automatic-approval path.",
+      "toolCalls": [
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "proposal review human reviewer bot automated AI approval",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "historical decision human-only proposal review automated bot AI proposals review approval",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "human-only proposal review",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "approveMemoryProposal reviewer human",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "auto approve proposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "canonical Memory changes reviewRequired",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 139136,
+      "outputTokens": 763
+    },
+    {
+      "variant": "primitive-auto",
+      "caseId": "general/supplied-rewrite",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 2975.327707999997
+      },
+      "outcome": "answered",
+      "answer": "The endpoint responds quickly.",
+      "toolCalls": [],
+      "inputTokens": 15674,
+      "outputTokens": 24
+    },
+    {
+      "variant": "primitive-auto",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": true,
+        "latencyMs": 12751.224291000006
+      },
+      "outcome": "clarified",
+      "answer": "Please provide the exact full commit OID to inspect. Lore’s authorized Memory only confirms that proposal review must remain human-only before canonical Memory changes; it does not identify the exact revision where `submitMemoryProposal` became guarded by `reviewRequired`.",
+      "toolCalls": [
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "corespeed/lore exact revision submitMemoryProposal guarded by reviewRequired",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 49088,
+      "outputTokens": 281
+    },
+    {
+      "variant": "primitive-auto",
+      "caseId": "drill-down/direct-callers",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 10316.577291000009
+      },
+      "outcome": "answered",
+      "answer": "No direct callers depend on `submitMemoryProposal` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`. Lore resolved the function in `src/lib/memory.ts` and returned zero caller edges; the result was not truncated.",
+      "toolCalls": [
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal",
+            "limit": 100
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 54560,
+      "outputTokens": 248
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "memory/prior-decision",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 15793.554916999987
+      },
+      "outcome": "answered",
+      "answer": "The team agreed that Memory Proposal review must remain human-only before any canonical Memory changes are made.",
+      "toolCalls": [
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "Memory Proposals review boundary agreed team",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "What can agents do with Memory Proposals and what requires human review before canonical Memory changes?",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 76886,
+      "outputTokens": 294
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 12937.909333000003
+      },
+      "outcome": "answered",
+      "answer": "The current proposal submission guard is implemented in `src/lib/memory.ts`, in `submitMemoryProposal` (lines 100–112). It delegates enforcement to `reviewRequired()`.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "code-only",
+            "codeQuery": "proposal submission guard",
+            "codeLimit": 10
+          },
+          "deliveredRoute": "code-only"
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 68031,
+      "outputTokens": 319
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25962.088957999993
+      },
+      "outcome": "answered",
+      "answer": "Yes. At commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `submitMemoryProposal` in `src/lib/memory.ts` delegates directly to `reviewRequired()`, consistent with the historical decision that proposals require human review before canonical Memory changes. The retrieved code does not expose `reviewRequired`’s implementation, so this confirms enforcement at the proposal-submission boundary, not its deeper mechanics.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "Does the current code still enforce the historical human-only proposal review decision?",
+            "memoryQuery": "human-only proposal review decision proposals must be reviewed by humans",
+            "codeQuery": "human-only proposal review enforcement reviewer approval automated agent proposal",
+            "route": "both",
+            "scope": "shared",
+            "memoryLimit": 10,
+            "codeLimit": 10
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "human-only proposal review",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "approve proposal reviewer",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "submitMemoryProposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 105770,
+      "outputTokens": 730
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "general/supplied-rewrite",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 5604.468666000001
+      },
+      "outcome": "answered",
+      "answer": "The endpoint responds quickly.",
+      "toolCalls": [],
+      "inputTokens": 15672,
+      "outputTokens": 24
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": true,
+        "latencyMs": 13255.440917
+      },
+      "outcome": "clarified",
+      "answer": "Please provide the exact full commit OID to verify this. The authorized Lore memory only states that proposal review must remain human-only; it does not identify the revision where `submitMemoryProposal` became guarded by `reviewRequired`.",
+      "toolCalls": [
+        {
+          "name": "lore_search",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "scope": "shared",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 50261,
+      "outputTokens": 271
+    },
+    {
+      "variant": "compound-auto",
+      "caseId": "drill-down/direct-callers",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 8914.522541999992
+      },
+      "outcome": "answered",
+      "answer": "No direct callers depend on `submitMemoryProposal` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`. Lore resolved the symbol to `src/lib/memory.ts` and returned zero caller edges; the result was not truncated.",
+      "toolCalls": [
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal",
+            "limit": 100
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 50175,
+      "outputTokens": 237
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "memory/prior-decision",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 9086.419541999989
+      },
+      "outcome": "answered",
+      "answer": "The team agreed that review of Memory Proposals must remain human-only before any changes are made to canonical Memory.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What review boundary did our team agree on for Memory Proposals?",
+            "memoryQuery": "Memory Proposals agreed review boundary",
+            "route": "memory-only",
+            "scope": "shared",
+            "memoryLimit": 10
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 50471,
+      "outputTokens": 227
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 12668.66750000001
+      },
+      "outcome": "answered",
+      "answer": "The guard is implemented in `src/lib/memory.ts`, in `submitMemoryProposal` (lines 100–112). It delegates directly to `reviewRequired()`.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "code-only",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "codeQuery": "proposal submission guard",
+            "codeLimit": 10
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 50593,
+      "outputTokens": 326
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 20644.109124999988
+      },
+      "outcome": "abstained",
+      "answer": "The historical decision says proposal review must remain human-only before canonical Memory changes. At commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, `submitMemoryProposal()` calls `reviewRequired()`, so a review requirement still exists. However, the retrieved code does not define `reviewRequired()` or establish that only humans can complete it; dependency lookup returned no callee edge. Therefore, the available authorized evidence cannot confirm that the current code still enforces the human-only part of the decision.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce the historical human-only proposal review decision?",
+            "route": "both",
+            "scope": "shared",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "memoryQuery": "historical human-only proposal review decision",
+            "codeQuery": "human-only proposal review enforcement proposal review",
+            "memoryLimit": 10,
+            "codeLimit": 10
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired human reviewer human-only proposal",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 105021,
+      "outputTokens": 701
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "general/supplied-rewrite",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 4769.524707999983
+      },
+      "outcome": "answered",
+      "answer": "The endpoint responds quickly.",
+      "toolCalls": [],
+      "inputTokens": 15747,
+      "outputTokens": 24
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": true,
+        "latencyMs": 18560.759374999994
+      },
+      "outcome": "clarified",
+      "answer": "Please provide the exact full commit OID for corespeed/lore. The available Memory confirms that proposal review must remain human-only, but it does not identify the exact revision where submitMemoryProposal is guarded by reviewRequired.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "memoryQuery": "submitMemoryProposal reviewRequired exact revision commit OID",
+            "repositoryKey": "corespeed/lore",
+            "route": "memory-only",
+            "scope": "shared",
+            "memoryLimit": 10
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "memoryQuery": "submitMemoryProposal reviewRequired exact revision commit OID",
+            "route": "memory-only",
+            "scope": "shared",
+            "memoryLimit": 10
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "memoryQuery": "submitMemoryProposal reviewRequired exact revision commit OID",
+            "route": "memory-only",
+            "scope": "shared",
+            "memoryLimit": 10
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 85985,
+      "outputTokens": 585
+    },
+    {
+      "variant": "compound-guided",
+      "caseId": "drill-down/direct-callers",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 20098.00112500001
+      },
+      "outcome": "answered",
+      "answer": "No direct callers depend on `submitMemoryProposal` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`. Lore returned a complete, non-truncated caller graph with zero edges.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Which functions or methods directly call submitMemoryProposal at this exact commit? Return caller symbols and paths with call-site evidence.",
+            "codeQuery": "submitMemoryProposal direct callers call sites",
+            "route": "code-only",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "codeLimit": 20
+          },
+          "deliveredRoute": "code-only"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal",
+            "path": "src/lib/memory.ts",
+            "limit": 50
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal",
+            "limit": 50
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 104766,
+      "outputTokens": 578
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "memory/prior-decision",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": true,
+        "routeCorrect": false,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 3759.213374999992
+      },
+      "outcome": "abstained",
+      "answer": "I can’t determine the agreed review boundary from the authorized evidence: the grounding call returned no relevant memories, code, anchors, or conflicts.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What review boundary did our team agree on for Memory Proposals?",
+            "route": "auto"
+          },
+          "deliveredRoute": "abstain"
+        }
+      ],
+      "inputTokens": 15900,
+      "outputTokens": 49
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 3879.6041249999835
+      },
+      "outcome": "answered",
+      "answer": "The guard is implemented in `submitMemoryProposal` at `src/lib/memory.ts:100–112`. The function currently delegates to `reviewRequired()`.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 16018,
+      "outputTokens": 51
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 16558.441749999998
+      },
+      "outcome": "abstained",
+      "answer": "The historical decision is clear: proposal review must remain human-only before canonical Memory changes. At commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, `submitMemoryProposal()` calls `reviewRequired()`, so review is still required. However, the authorized code evidence contains no resolvable callee edge or implementation for `reviewRequired()`. Therefore, it cannot establish that the required reviewer is specifically human, rather than automated.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired human reviewer approval proposal canonical Memory",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 87547,
+      "outputTokens": 524
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "general/supplied-rewrite",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 3737.3093750000116
+      },
+      "outcome": "answered",
+      "answer": "The endpoint responds quickly.",
+      "toolCalls": [],
+      "inputTokens": 15749,
+      "outputTokens": 24
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": true,
+        "latencyMs": 19600.08158300002
+      },
+      "outcome": "clarified",
+      "answer": "Please provide the exact full commit OID to inspect. The available Memory states that proposal review must remain human-only, but it does not identify the revision where `submitMemoryProposal` is guarded by `reviewRequired`; exact Code evidence requires a full commit OID.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "repositoryKey": "corespeed/lore",
+            "route": "both",
+            "memoryQuery": "submitMemoryProposal guarded by reviewRequired exact revision commit OID",
+            "codeQuery": "submitMemoryProposal reviewRequired"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "route": "memory-only",
+            "memoryQuery": "submitMemoryProposal guarded by reviewRequired exact revision commit OID"
+          },
+          "deliveredRoute": "memory-only"
+        },
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "route": "memory-only",
+            "memoryQuery": "submitMemoryProposal guarded by reviewRequired exact revision commit OID"
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 85909,
+      "outputTokens": 540
+    },
+    {
+      "variant": "host-forced-oracle",
+      "caseId": "drill-down/direct-callers",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 10041.900250000006
+      },
+      "outcome": "answered",
+      "answer": "No direct callers depend on `submitMemoryProposal` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`. The exact-revision dependency lookup resolved the function in `src/lib/memory.ts` and returned zero caller edges; the result was not truncated.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Which direct callers depend on submitMemoryProposal at this commit?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "abstain"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal",
+            "limit": 100
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 50906,
+      "outputTokens": 258
+    },
+    {
+      "variant": "always-on",
+      "caseId": "memory/prior-decision",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": true,
+        "routeCorrect": false,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 4361.31479199999
+      },
+      "outcome": "abstained",
+      "answer": "The available retrieval evidence contains no team decision or repository context establishing the review boundary for Memory Proposals, so I can’t answer accurately without guessing.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What review boundary did our team agree on for Memory Proposals?",
+            "route": "auto"
+          },
+          "deliveredRoute": "abstain"
+        }
+      ],
+      "inputTokens": 15896,
+      "outputTokens": 50
+    },
+    {
+      "variant": "always-on",
+      "caseId": "code/current-implementation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 4409.395332999993
+      },
+      "outcome": "answered",
+      "answer": "The guard is implemented in `submitMemoryProposal` at `src/lib/memory.ts:100–112`. At commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, it delegates directly to `reviewRequired()`.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Where is the current proposal submission guard implemented?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "code-only"
+        }
+      ],
+      "inputTokens": 16016,
+      "outputTokens": 59
+    },
+    {
+      "variant": "always-on",
+      "caseId": "joint/decision-drift",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25402.936875000014
+      },
+      "outcome": "abstained",
+      "answer": "The historical decision is confirmed: proposal review must remain human-only before canonical Memory changes. At commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `submitMemoryProposal()` delegates to `reviewRequired()`, but the retrieved code does not define that function or resolve a callee edge. Therefore, the authorized evidence cannot establish that the current review is specifically human-only.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Does the current code still enforce our historical human-only proposal review decision?",
+            "route": "both",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "memoryQuery": "historical human-only proposal review decision canonical Memory changes",
+            "codeQuery": "submitMemoryProposal reviewRequired human-only proposal review enforcement",
+            "memoryLimit": 5,
+            "codeLimit": 10
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "path": "src/lib/memory.ts",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees",
+            "limit": 20
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "reviewRequired human reviewer approval canonical Memory changes",
+            "limit": 10
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 106937,
+      "outputTokens": 651
+    },
+    {
+      "variant": "always-on",
+      "caseId": "general/supplied-rewrite",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": true,
+        "latencyMs": 3022.876500000013
+      },
+      "outcome": "answered",
+      "answer": "The endpoint responds quickly.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Rewrite this supplied sentence to be shorter: The endpoint returns a response very quickly.",
+            "route": "auto"
+          },
+          "deliveredRoute": "abstain"
+        }
+      ],
+      "inputTokens": 15903,
+      "outputTokens": 24
+    },
+    {
+      "variant": "always-on",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": true,
+        "latencyMs": 5738.160499999998
+      },
+      "outcome": "clarified",
+      "answer": "Please provide the exact commit OID or revision to inspect. No exact revision is configured, and the available retrieval evidence contains no code or memory records showing where `submitMemoryProposal` is guarded by `reviewRequired`.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "At which exact revision is submitMemoryProposal guarded by reviewRequired?",
+            "route": "auto"
+          },
+          "deliveredRoute": "abstain"
+        }
+      ],
+      "inputTokens": 15934,
+      "outputTokens": 64
+    },
+    {
+      "variant": "always-on",
+      "caseId": "drill-down/direct-callers",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": true,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 10634.961583999975
+      },
+      "outcome": "answered",
+      "answer": "No direct callers depend on `submitMemoryProposal` at commit `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`. Lore resolved the symbol in `src/lib/memory.ts` and returned zero caller edges; the result was not truncated.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Which direct callers depend on submitMemoryProposal at this commit?",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "abstain"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal",
+            "limit": 100
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 50870,
+      "outputTokens": 246
+    }
+  ]
+}

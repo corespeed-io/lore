@@ -12,10 +12,14 @@ from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_o
 
 from .generated_contract import (
     Capabilities,
+    CodeArtifact,
+    CodeDependencyQueryResult,
+    CodeIndexJob,
     CreateMemoryProposalInput,
     Episode,
     EpisodeSummary,
     Memory,
+    MemoryCodeEvidence,
     MemoryGraph,
     MemoryProposal,
     MemoryProposalReviewResult,
@@ -23,6 +27,7 @@ from .generated_contract import (
     Observation,
     ReadinessReport,
     RecordEpisodeInput,
+    RetrievedContext,
     Workspace,
     WorkspaceSummary,
     LORE_ERROR_CODES,
@@ -117,10 +122,10 @@ def _idempotency_key(value: Optional[str]) -> str:
     return value
 
 
-def _limit(value: Optional[int], fallback: int) -> int:
+def _limit(value: Optional[int], fallback: int, maximum: int = 100) -> int:
     selected = fallback if value is None else value
-    if not isinstance(selected, int) or isinstance(selected, bool) or selected < 1 or selected > 100:
-        raise TypeError("limit must be an integer from 1 to 100")
+    if not isinstance(selected, int) or isinstance(selected, bool) or selected < 1 or selected > maximum:
+        raise TypeError(f"limit must be an integer from 1 to {maximum}")
     return selected
 
 
@@ -128,6 +133,20 @@ def _scope(value: Optional[str]) -> Optional[str]:
     if value is not None and value not in {"shared", "private"}:
         raise TypeError("scope must be shared or private")
     return value
+
+
+def _code_text(value: str, name: str, maximum_length: int) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > maximum_length:
+        raise TypeError(f"{name} must contain 1 to {maximum_length} characters")
+    return normalized
+
+
+def _commit_oid(value: str) -> str:
+    normalized = value.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", normalized) is None:
+        raise TypeError("commit_oid must be a full 40- or 64-character Git OID")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -399,6 +418,204 @@ class LoreWorkspaceClient:
             ),
         )
 
+    def search_code(
+        self,
+        repository_key: str,
+        commit_oid: str,
+        query: str,
+        *,
+        limit: int = 10,
+        path_prefix: Optional[str] = None,
+    ) -> Sequence[CodeArtifact]:
+        params: MutableMapping[str, Union[str, int]] = {
+            "repository_key": _code_text(repository_key, "repository_key", 512),
+            "commit_oid": _commit_oid(commit_oid),
+            "q": _code_text(query, "query", 2_000),
+            "limit": _limit(limit, 10),
+        }
+        if path_prefix is not None:
+            params["path_prefix"] = _code_text(path_prefix, "path_prefix", 1_024)
+        return cast(
+            Sequence[CodeArtifact],
+            self.client._request(
+                f"api/v1/code/search?{urlencode(params)}", workspace_id=self.workspace_id
+            ),
+        )
+
+    def retrieve_context(
+        self,
+        query: str,
+        *,
+        memory_query: Optional[str] = None,
+        code_query: Optional[str] = None,
+        repository_key: Optional[str] = None,
+        commit_oid: Optional[str] = None,
+        route: str = "auto",
+        memory_limit: int = 5,
+        code_limit: int = 10,
+        scope: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        path_prefix: Optional[str] = None,
+    ) -> RetrievedContext:
+        normalized_query = query.strip()
+        if not normalized_query or len(normalized_query) > 10_000:
+            raise TypeError("query must contain 1 to 10000 characters")
+        if (repository_key is None) != (commit_oid is None):
+            raise TypeError("repository_key and commit_oid must be provided together")
+        if route not in {"auto", "both", "code-only", "memory-only"}:
+            raise TypeError("route is invalid")
+        if route in {"both", "code-only"} and repository_key is None:
+            raise TypeError(f"{route} requires repository_key and commit_oid")
+        if path_prefix is not None and repository_key is None:
+            raise TypeError("path_prefix requires repository_key and commit_oid")
+        if code_query is not None and repository_key is None:
+            raise TypeError("code_query requires repository_key and commit_oid")
+        body: MutableMapping[str, Any] = {
+            "query": normalized_query,
+            "route": route,
+            "memoryLimit": _limit(memory_limit, 5, 10),
+            "codeLimit": _limit(code_limit, 10, 20),
+        }
+        if memory_query is not None:
+            body["memoryQuery"] = _code_text(memory_query, "memory_query", 10_000)
+        if code_query is not None:
+            body["codeQuery"] = _code_text(code_query, "code_query", 2_000)
+        if repository_key is not None and commit_oid is not None:
+            body["repositoryKey"] = _code_text(repository_key, "repository_key", 512)
+            body["commitOid"] = _commit_oid(commit_oid)
+        if scope is not None:
+            body["scope"] = _scope(scope)
+        if metadata is not None:
+            body["metadata"] = dict(metadata)
+        if path_prefix is not None:
+            body["pathPrefix"] = _code_text(path_prefix, "path_prefix", 1_024)
+        return cast(
+            RetrievedContext,
+            self.client._request(
+                "api/v1/context/retrieve",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body=body,
+            ),
+        )
+
+    def query_code_dependencies(
+        self,
+        repository_key: str,
+        commit_oid: str,
+        direction: str,
+        *,
+        symbol: Optional[str] = None,
+        path: Optional[str] = None,
+        limit: int = 50,
+    ) -> CodeDependencyQueryResult:
+        if direction not in {"callers", "callees"}:
+            raise TypeError("direction must be callers or callees")
+        if (symbol is None) == (path is None):
+            raise TypeError("Provide exactly one of symbol or path")
+        params: MutableMapping[str, Union[str, int]] = {
+            "repository_key": _code_text(repository_key, "repository_key", 512),
+            "commit_oid": _commit_oid(commit_oid),
+            "direction": direction,
+        }
+        if symbol is not None:
+            params["symbol"] = _code_text(symbol, "symbol", 1_600)
+        else:
+            selected_path = path or ""
+            if (
+                not selected_path
+                or selected_path != selected_path.strip()
+                or len(selected_path) > 1_024
+                or selected_path.startswith("/")
+                or "\\" in selected_path
+                or any(part in {"", ".", ".."} for part in selected_path.split("/"))
+            ):
+                raise TypeError("path is invalid")
+            params["path"] = selected_path
+        params["limit"] = _limit(limit, 50, 200)
+        return cast(
+            CodeDependencyQueryResult,
+            self.client._request(
+                f"api/v1/code/dependencies?{urlencode(params)}",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
+    def enqueue_code_index(
+        self,
+        repository_key: str,
+        commit_oid: str,
+        *,
+        source_ref: Optional[str] = None,
+    ) -> CodeIndexJob:
+        body: MutableMapping[str, str] = {
+            "repositoryKey": _code_text(repository_key, "repository_key", 512),
+            "commitOid": _commit_oid(commit_oid),
+        }
+        if source_ref is not None:
+            body["sourceRef"] = _code_text(source_ref, "source_ref", 512)
+        return cast(
+            CodeIndexJob,
+            self.client._request(
+                "api/v1/code/index-jobs",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body=body,
+            ),
+        )
+
+    def get_code_index_job(self, job_id: str) -> CodeIndexJob:
+        return cast(
+            CodeIndexJob,
+            self.client._request(
+                f"api/v1/code/index-jobs/{_normalized_uuid(job_id, 'job_id')}",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
+    def list_memory_code_evidence(self, memory_id: str) -> Sequence[MemoryCodeEvidence]:
+        return cast(
+            Sequence[MemoryCodeEvidence],
+            self.client._request(
+                f"api/v1/memories/{_normalized_uuid(memory_id, 'memory_id')}/code-evidence",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
+    def cite_memory_code_evidence(
+        self, memory_id: str, artifact_id: str, relationship: str
+    ) -> MemoryCodeEvidence:
+        if relationship not in {"supports", "contradicts", "implements", "rationale"}:
+            raise TypeError("relationship must be supports, contradicts, implements, or rationale")
+        return cast(
+            MemoryCodeEvidence,
+            self.client._request(
+                f"api/v1/memories/{_normalized_uuid(memory_id, 'memory_id')}/code-evidence",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body={
+                    "artifactId": _normalized_uuid(artifact_id, "artifact_id"),
+                    "relationship": relationship,
+                },
+            ),
+        )
+
+    def revalidate_memory_code_evidence(
+        self, evidence_id: str, repository_key: str, commit_oid: str
+    ) -> MemoryCodeEvidence:
+        return cast(
+            MemoryCodeEvidence,
+            self.client._request(
+                f"api/v1/code-evidence/{_normalized_uuid(evidence_id, 'evidence_id')}/revalidate",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body={
+                    "repositoryKey": _code_text(repository_key, "repository_key", 512),
+                    "commitOid": _commit_oid(commit_oid),
+                },
+            ),
+        )
+
     def remember(
         self,
         content: str,
@@ -620,8 +837,10 @@ class LoreWorkspaceClient:
 
     @staticmethod
     def _content(content: str) -> None:
-        if not content or len(content) > 1_000_000:
-            raise TypeError("content must contain 1 to 1000000 characters")
+        if not isinstance(content, str) or not content.strip():
+            raise TypeError("Memory content is required")
+        if len(content) > 32_000:
+            raise TypeError("Memory content may contain at most 32000 Unicode characters")
 
     @staticmethod
     def _version(value: int) -> int:

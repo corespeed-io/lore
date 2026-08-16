@@ -1,0 +1,191 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "groundingPolicyRevision": "retrieval-grounding-v3",
+  "generatedAt": "2026-08-15T23:56:50.060Z",
+  "provider": "Anthropic via Claude Code CLI",
+  "model": "claude-sonnet-5",
+  "trialsPerCase": 5,
+  "suite": {
+    "name": "Lore Retrieval Invocation Policy",
+    "version": 2,
+    "caseCount": 1
+  },
+  "variants": {
+    "host-policy": {
+      "description": "Production grounding gate chooses required, auto, or off before the model sees Lore tools.",
+      "metrics": {
+        "caseCount": 5,
+        "passRate": 1,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 1,
+        "exactRevisionAccuracy": null,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 26086.0241584,
+        "p95LatencyMs": 43992.685542
+      },
+      "toolCalls": 5,
+      "averageToolCalls": 1,
+      "inputTokens": 151907,
+      "outputTokens": 10135
+    }
+  },
+  "records": [
+    {
+      "variant": "host-policy",
+      "caseId": "memory/deliberative-code-vocabulary",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 22983.585167
+      },
+      "outcome": "answered",
+      "answer": "According to the retrieved record, the agreement was: proposal review must remain human-only before any changes are made to canonical Memory — i.e., the migration path requires a human-reviewed proposal step prior to promoting changes into canonical Memory (no automated/direct writes). This is a shared-scope decision (confidence 0.95, last updated 2026-08-15).",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What did we agree about the migration path?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 30381,
+      "outputTokens": 1878,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "memory/deliberative-code-vocabulary",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 43992.685542
+      },
+      "outcome": "answered",
+      "answer": "Per the shared Workspace memory on record (high-confidence match, not truncated): **proposal review must remain human-only before any canonical Memory changes are made.** In other words, the agreed migration path requires a human review step in the loop before changes get promoted to canonical Memory — that step isn't something to automate away. I don't see additional detail (timeline, specific steps, owners) captured in the retrieved evidence, so I'm reporting only what's actually on record rather than filling in the rest.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What did we agree about the migration path?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 30386,
+      "outputTokens": 3447,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "memory/deliberative-code-vocabulary",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 10288.66575
+      },
+      "outcome": "answered",
+      "answer": "According to the shared memory record, what we agreed on the migration path is: **proposal review must remain human-only before canonical Memory changes.** In other words, migrations to canonical Memory require a human to review the proposal first — this step isn't something that gets automated or bypassed.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What did we agree about the migration path?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 30383,
+      "outputTokens": 192,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "memory/deliberative-code-vocabulary",
+      "trial": 4,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 27387.820999999996
+      },
+      "outcome": "answered",
+      "answer": "Per the recorded Workspace decision (shared memory, confidence 0.95, last updated 2026-08-15): **proposal review must remain human-only before any canonical Memory changes.** In other words, the agreed migration path requires that proposed changes go through human review and cannot be auto-promoted to canonical memory status.\n\nNo other migration-path details were returned by the grounding retrieval (0 code matches, 0 anchor matches), so this is the full extent of what's on record — I haven't supplemented it with anything else.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What did we agree about the migration path?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 30377,
+      "outputTokens": 2299,
+      "hostShortCircuit": false
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "memory/deliberative-code-vocabulary",
+      "trial": 5,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25777.363333
+      },
+      "outcome": "answered",
+      "answer": "Based on the retrieved shared memory (score 0.95, last updated 2026-08-15), the agreement on the migration path is:\n\n**Proposal review must remain human-only before canonical Memory changes are made.**\n\nIn other words, the agreed migration path does not allow automated or agent-driven approval of proposals — any change destined for canonical Memory has to pass through human review first. The retrieval plan marked this as a memory-only, personal/deliberative recall with no code-comparison needed, and returned a single unambiguous, non-truncated match with no conflicts, so no further Lore lookups were required.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "What did we agree about the migration path?",
+            "route": "auto"
+          },
+          "deliveredRoute": "memory-only"
+        }
+      ],
+      "inputTokens": 30380,
+      "outputTokens": 2319,
+      "hostShortCircuit": false
+    }
+  ]
+}

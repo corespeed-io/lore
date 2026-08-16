@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
 import {
@@ -11,7 +12,7 @@ import {
 const baselineUrl = new URL("../db/migrations/0001_v1_baseline.sql", import.meta.url);
 
 async function database() {
-  const postgres = new PGlite({ extensions: { vector } });
+  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
   await postgres.waitReady;
   onTestFinished(() => postgres.close());
   return postgres;

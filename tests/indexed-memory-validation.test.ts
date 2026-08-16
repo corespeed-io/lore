@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { EmbeddingProvider } from "@/lib/memory";
-import { chunkMemoryContent } from "@/lib/memory-chunking";
+import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@/lib/memory-chunking";
 import {
   type IndexedMemoryChunk,
   requireExactIndexedMemory,
@@ -22,6 +22,7 @@ function activeChunks(value = content): IndexedMemoryChunk[] {
   return chunkMemoryContent(value).map((chunk, ordinal) => ({
     ordinal,
     content: chunk,
+    chunking_revision: MEMORY_CHUNKING_REVISION,
     embedded: true,
     embedding_dimensions: provider.dimensions,
     embedding_provider: provider.provider,
@@ -40,6 +41,18 @@ test("exact indexed-memory validation accepts the complete active chunk sequence
       label: "fixture",
     }),
   ).not.toThrow();
+});
+
+test("exact indexed-memory validation rejects a stale chunking revision", () => {
+  expect(() =>
+    validateExactIndexedMemory({
+      actualContent: content,
+      chunks: activeChunks().map((chunk) => ({ ...chunk, chunking_revision: "legacy" })),
+      expectedContent: content,
+      embeddingProvider: provider,
+      label: "fixture",
+    }),
+  ).toThrow("failed exact validation");
 });
 
 test("exact indexed-memory lookup reads the active generation-scoped vector table", async () => {

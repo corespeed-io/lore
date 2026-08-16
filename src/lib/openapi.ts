@@ -1,3 +1,9 @@
+import {
+  MEMORY_CHUNK_MAXIMUM_CHARACTERS,
+  MEMORY_CHUNK_OVERLAP_CHARACTERS,
+  MEMORY_CHUNKING_REVISION,
+} from "./memory-chunking";
+import { MEMORY_CONTENT_LIMITS } from "./memory-content";
 import { LORE_API_VERSION } from "./operations";
 import { MAX_WORKSPACE_ARCHIVE_LINKS, MAX_WORKSPACE_ARCHIVE_MEMORIES } from "./portability";
 
@@ -32,6 +38,18 @@ const timestampProperties = {
   updatedAt: { type: "string", format: "date-time" },
 } as const;
 
+const codeEvidenceRelationshipSchema = {
+  type: "string",
+  enum: ["supports", "contradicts", "implements", "rationale"],
+} as const;
+
+const proposalCodeEvidenceProperty = {
+  type: "array",
+  maxItems: 50,
+  description: "Memory, Observation, and Code evidence have a combined limit of 50.",
+  items: { $ref: "#/components/schemas/ProposeMemoryCodeEvidenceInput" },
+} as const;
+
 const memorySchema = {
   type: "object",
   additionalProperties: false,
@@ -53,7 +71,7 @@ const memorySchema = {
     ownerUserId: { type: "string", format: "uuid" },
     createdByAgentId: { oneOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
     scope: { type: "string", enum: ["shared", "private"] },
-    content: { type: "string", maxLength: 1_000_000 },
+    content: { type: "string", maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters },
     metadata: { type: "object", additionalProperties: true },
     version: { type: "integer", minimum: 1 },
     ...timestampProperties,
@@ -64,21 +82,26 @@ const memoryProposalUpdateProperties = {
   kind: { const: "update" },
   targetMemoryId: { type: "string", format: "uuid" },
   expectedVersion: { type: "integer", minimum: 1 },
-  content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+  content: {
+    type: "string",
+    minLength: 1,
+    maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
+  },
   scope: { type: "string", enum: ["shared", "private"] },
   metadata: { type: "object", additionalProperties: true },
   evidenceMemoryIds: {
     type: "array",
     maxItems: 50,
-    description: "Memory and Observation evidence ids have a combined limit of 50.",
+    description: "Memory, Observation, and Code evidence have a combined limit of 50.",
     items: { type: "string", format: "uuid" },
   },
   evidenceObservationIds: {
     type: "array",
     maxItems: 50,
-    description: "Memory and Observation evidence ids have a combined limit of 50.",
+    description: "Memory, Observation, and Code evidence have a combined limit of 50.",
     items: { type: "string", format: "uuid" },
   },
+  codeEvidence: proposalCodeEvidenceProperty,
 } as const;
 
 const episodeSummaryProperties = {
@@ -185,7 +208,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
       title: "Lore Portable Core",
       version: LORE_API_VERSION,
       description:
-        "RLS-enforced Memory storage, retrieval, and portability. Human authentication is deployment-selected; Agent credentials use Lore bearer tokens.",
+        "RLS-enforced Memory storage, retrieval, portability, and revision-bound Code Evidence. Human authentication is deployment-selected; Agent credentials use Lore bearer tokens.",
     },
     servers: [{ url: "/" }],
     security: actorSecurity,
@@ -337,6 +360,189 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             "204": { description: "Deleted" },
             "412": { $ref: "#/components/responses/Error" },
             "428": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/code/search": {
+        get: {
+          operationId: "searchCode",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "repository_key",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1, maxLength: 512 },
+            },
+            {
+              name: "commit_oid",
+              in: "query",
+              required: true,
+              schema: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            },
+            {
+              name: "q",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1, maxLength: 2_000 },
+            },
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 100 },
+            },
+            {
+              name: "path_prefix",
+              in: "query",
+              schema: { type: "string", minLength: 1, maxLength: 1_024 },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("RLS-visible exact-revision Code Artifacts", {
+              type: "array",
+              items: { $ref: "#/components/schemas/CodeArtifact" },
+            }),
+          },
+        },
+      },
+      "/api/v1/context/retrieve": {
+        post: {
+          operationId: "retrieveContext",
+          description:
+            "Retrieve one bounded packet from Actor-visible Memory and an optional exact-revision Code Index. Code Evidence assessment is side-effect-free and does not update canonical Memory or citation state.",
+          parameters: [workspaceHeader],
+          requestBody: requestBody({ $ref: "#/components/schemas/RetrieveContextInput" }),
+          responses: {
+            "200": jsonResponse("Bounded, provenance-bearing Memory and Code context", {
+              $ref: "#/components/schemas/RetrievedContext",
+            }),
+            "400": { $ref: "#/components/responses/Error" },
+            "403": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/code/dependencies": {
+        get: {
+          operationId: "queryCodeDependencies",
+          description:
+            "Return bounded callers or callees from one Workspace-visible repository, exact full commit OID, and active Code Index Generation. Exactly one of symbol or path is required.",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "repository_key",
+              in: "query",
+              required: true,
+              schema: { type: "string", minLength: 1, maxLength: 512 },
+            },
+            {
+              name: "commit_oid",
+              in: "query",
+              required: true,
+              schema: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            },
+            {
+              name: "direction",
+              in: "query",
+              required: true,
+              schema: { type: "string", enum: ["callers", "callees"] },
+            },
+            {
+              name: "symbol",
+              in: "query",
+              schema: { type: "string", minLength: 1, maxLength: 1_600 },
+            },
+            {
+              name: "path",
+              in: "query",
+              schema: { type: "string", minLength: 1, maxLength: 1_024 },
+            },
+            {
+              name: "limit",
+              in: "query",
+              schema: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Bounded exact-revision Code Dependency result", {
+              $ref: "#/components/schemas/CodeDependencyQueryResult",
+            }),
+            "400": { $ref: "#/components/responses/Error" },
+            "403": { $ref: "#/components/responses/Error" },
+          },
+        },
+      },
+      "/api/v1/code/index-jobs/{jobId}": {
+        get: {
+          operationId: "getCodeIndexJob",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "jobId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          responses: {
+            "200": jsonResponse("Safe Code Index job status", {
+              $ref: "#/components/schemas/CodeIndexJob",
+            }),
+          },
+        },
+      },
+      "/api/v1/code/index-jobs": {
+        post: {
+          operationId: "enqueueCodeIndex",
+          parameters: [workspaceHeader],
+          requestBody: requestBody({ $ref: "#/components/schemas/EnqueueCodeIndexInput" }),
+          responses: {
+            "202": jsonResponse("Queued exact revision from an operator-configured repository", {
+              $ref: "#/components/schemas/CodeIndexJob",
+            }),
+          },
+        },
+      },
+      "/api/v1/memories/{memoryId}/code-evidence": {
+        get: {
+          operationId: "listMemoryCodeEvidence",
+          parameters: [workspaceHeader, memoryIdParameter],
+          responses: {
+            "200": jsonResponse("Typed Code Evidence visible with the Memory", {
+              type: "array",
+              items: { $ref: "#/components/schemas/MemoryCodeEvidence" },
+            }),
+          },
+        },
+        post: {
+          operationId: "citeMemoryCodeEvidence",
+          parameters: [workspaceHeader, memoryIdParameter],
+          requestBody: requestBody({ $ref: "#/components/schemas/CiteMemoryCodeEvidenceInput" }),
+          responses: {
+            "201": jsonResponse("Created immutable Code Evidence citation", {
+              $ref: "#/components/schemas/MemoryCodeEvidence",
+            }),
+          },
+        },
+      },
+      "/api/v1/code-evidence/{evidenceId}/revalidate": {
+        post: {
+          operationId: "revalidateMemoryCodeEvidence",
+          parameters: [
+            workspaceHeader,
+            {
+              name: "evidenceId",
+              in: "path",
+              required: true,
+              schema: { type: "string", format: "uuid" },
+            },
+          ],
+          requestBody: requestBody({
+            $ref: "#/components/schemas/RevalidateMemoryCodeEvidenceInput",
+          }),
+          responses: {
+            "200": jsonResponse("Revalidated Code Evidence without changing Memory", {
+              $ref: "#/components/schemas/MemoryCodeEvidence",
+            }),
           },
         },
       },
@@ -800,7 +1006,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           additionalProperties: false,
           required: ["content"],
           properties: {
-            content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            content: {
+              type: "string",
+              minLength: 1,
+              maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
+            },
             scope: { type: "string", enum: ["shared", "private"], default: "shared" },
             metadata: { type: "object", additionalProperties: true },
           },
@@ -810,7 +1020,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           additionalProperties: false,
           minProperties: 1,
           properties: {
-            content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            content: {
+              type: "string",
+              minLength: 1,
+              maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
+            },
             scope: { type: "string", enum: ["shared", "private"] },
             metadata: { type: "object", additionalProperties: true },
           },
@@ -910,21 +1124,26 @@ export function loreOpenApiDocument(): Record<string, unknown> {
           required: ["kind", "content"],
           properties: {
             kind: { const: "create" },
-            content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            content: {
+              type: "string",
+              minLength: 1,
+              maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
+            },
             scope: { type: "string", enum: ["shared", "private"], default: "shared" },
             metadata: { type: "object", additionalProperties: true },
             evidenceMemoryIds: {
               type: "array",
               maxItems: 50,
-              description: "Memory and Observation evidence ids have a combined limit of 50.",
+              description: "Memory, Observation, and Code evidence have a combined limit of 50.",
               items: { type: "string", format: "uuid" },
             },
             evidenceObservationIds: {
               type: "array",
               maxItems: 50,
-              description: "Memory and Observation evidence ids have a combined limit of 50.",
+              description: "Memory, Observation, and Code evidence have a combined limit of 50.",
               items: { type: "string", format: "uuid" },
             },
+            codeEvidence: proposalCodeEvidenceProperty,
           },
         },
         CreateMemoryProposalUpdateInput: {
@@ -937,6 +1156,53 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         MemoryProposalUpdateContentInput: memoryProposalUpdateVariant("content"),
         MemoryProposalUpdateScopeInput: memoryProposalUpdateVariant("scope"),
         MemoryProposalUpdateMetadataInput: memoryProposalUpdateVariant("metadata"),
+        ProposeMemoryCodeEvidenceInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["artifactId", "relationship"],
+          properties: {
+            artifactId: { type: "string", format: "uuid" },
+            relationship: codeEvidenceRelationshipSchema,
+          },
+        },
+        MemoryProposalCodeEvidence: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "ordinal",
+            "repositoryId",
+            "citedRevisionId",
+            "citedGenerationId",
+            "citedArtifactId",
+            "citedCommitOid",
+            "citedPath",
+            "citedSymbolKey",
+            "citedDeclarationKey",
+            "citedDeclarationChunkOrdinal",
+            "citedDeclarationContextSha256",
+            "citedContentSha256",
+            "relationship",
+          ],
+          properties: {
+            ordinal: { type: "integer", minimum: 0, maximum: 49 },
+            repositoryId: { type: "string", format: "uuid" },
+            citedRevisionId: { type: "string", format: "uuid" },
+            citedGenerationId: { type: "string", format: "uuid" },
+            citedArtifactId: { type: "string", format: "uuid" },
+            citedCommitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            citedPath: { type: "string", minLength: 1, maxLength: 1024 },
+            citedSymbolKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+            citedDeclarationKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+            citedDeclarationChunkOrdinal: {
+              oneOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+            },
+            citedDeclarationContextSha256: {
+              oneOf: [{ type: "string", pattern: "^[0-9a-f]{64}$" }, { type: "null" }],
+            },
+            citedContentSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            relationship: codeEvidenceRelationshipSchema,
+          },
+        },
         MemoryProposal: {
           type: "object",
           additionalProperties: false,
@@ -954,6 +1220,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             "proposedMetadata",
             "evidenceMemoryIds",
             "evidenceObservationIds",
+            "codeEvidence",
             "status",
             "reviewedByUserId",
             "acceptedMemoryId",
@@ -975,7 +1242,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             baseMemoryVersion: {
               oneOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
             },
-            proposedContent: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            proposedContent: {
+              type: "string",
+              minLength: 1,
+              maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
+            },
             proposedScope: { type: "string", enum: ["shared", "private"] },
             proposedMetadata: { type: "object", additionalProperties: true },
             evidenceMemoryIds: {
@@ -987,6 +1258,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
               type: "array",
               maxItems: 50,
               items: { type: "string", format: "uuid" },
+            },
+            codeEvidence: {
+              type: "array",
+              maxItems: 50,
+              items: { $ref: "#/components/schemas/MemoryProposalCodeEvidence" },
             },
             status: { type: "string", enum: ["pending", "accepted", "rejected"] },
             reviewedByUserId: {
@@ -1024,6 +1300,563 @@ export function loreOpenApiDocument(): Record<string, unknown> {
               description: "Present only after a successful calibrated reranker call.",
             },
             evidence: { type: "string" },
+          },
+        },
+        RetrieveContextInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["query"],
+          properties: {
+            query: { type: "string", minLength: 1, maxLength: 10_000 },
+            memoryQuery: { type: "string", minLength: 1, maxLength: 10_000 },
+            codeQuery: { type: "string", minLength: 1, maxLength: 2_000 },
+            repositoryKey: { type: "string", minLength: 1, maxLength: 512 },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            route: {
+              type: "string",
+              enum: ["auto", "both", "code-only", "memory-only"],
+              default: "auto",
+            },
+            memoryLimit: { type: "integer", minimum: 1, maximum: 10, default: 5 },
+            codeLimit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
+            scope: { type: "string", enum: ["shared", "private"] },
+            metadata: { type: "object", additionalProperties: true },
+            pathPrefix: { type: "string", minLength: 1, maxLength: 1_024 },
+          },
+        },
+        ContextRetrievalPlan: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "intent",
+            "route",
+            "needsAnchorExpansion",
+            "needsContextualImpact",
+            "needsLocalAssessment",
+            "reasons",
+          ],
+          properties: {
+            intent: {
+              type: "string",
+              enum: [
+                "blast-radius",
+                "change",
+                "current-code",
+                "memory-recall",
+                "rationale",
+                "unknown",
+              ],
+            },
+            route: {
+              type: "string",
+              enum: ["abstain", "both", "code-only", "memory-only"],
+            },
+            needsAnchorExpansion: { type: "boolean" },
+            needsContextualImpact: { type: "boolean" },
+            needsLocalAssessment: { type: "boolean" },
+            reasons: { type: "array", items: { type: "string" } },
+          },
+        },
+        RetrievedMemoryContext: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "scope", "updatedAt", "score", "evidence"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            scope: { type: "string", enum: ["shared", "private"] },
+            updatedAt: { type: "string", format: "date-time" },
+            score: { type: "number" },
+            rerankScore: { type: "number", minimum: 0, maximum: 1 },
+            evidence: { type: "string" },
+          },
+        },
+        RetrievedCodeContext: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "artifactId",
+            "commitOid",
+            "path",
+            "symbol",
+            "startLine",
+            "endLine",
+            "score",
+            "matchedChannels",
+            "content",
+          ],
+          properties: {
+            artifactId: { type: "string", format: "uuid" },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            path: { type: "string" },
+            symbol: { oneOf: [{ type: "string" }, { type: "null" }] },
+            startLine: { type: "integer", minimum: 1 },
+            endLine: { type: "integer", minimum: 1 },
+            score: { type: "number" },
+            matchedChannels: {
+              type: "array",
+              uniqueItems: true,
+              items: { type: "string", enum: ["symbol", "literal", "lexical", "path"] },
+            },
+            content: { type: "string", maxLength: 6_000 },
+          },
+        },
+        RetrievedAnchorContext: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "memoryId",
+            "relationship",
+            "localState",
+            "citedCommitOid",
+            "citedPath",
+            "validatedCommitOid",
+            "validatedPath",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            memoryId: { type: "string", format: "uuid" },
+            relationship: {
+              type: "string",
+              enum: ["supports", "contradicts", "implements", "rationale"],
+            },
+            localState: {
+              type: "string",
+              enum: ["current", "moved", "changed", "deleted", "ambiguous", "unverifiable"],
+            },
+            citedCommitOid: {
+              type: "string",
+              pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$",
+            },
+            citedPath: { type: "string" },
+            validatedCommitOid: {
+              oneOf: [
+                { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+                { type: "null" },
+              ],
+            },
+            validatedPath: { oneOf: [{ type: "string" }, { type: "null" }] },
+          },
+        },
+        ContextualImpactAssessment: {
+          type: "object",
+          additionalProperties: false,
+          required: ["state", "changes"],
+          properties: {
+            state: {
+              type: "string",
+              enum: ["affected", "possibly_affected", "unaffected", "unknown"],
+            },
+            changes: {
+              type: "array",
+              maxItems: 251,
+              items: { type: "string", maxLength: 2_500 },
+            },
+          },
+        },
+        ContextRetrievalReceipt: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "memoryCandidates",
+            "codeCandidates",
+            "anchorCandidates",
+            "requestedCommitOid",
+            "memoryQuery",
+            "codeQuery",
+            "contextualImpact",
+          ],
+          properties: {
+            memoryCandidates: { type: "integer", minimum: 0, maximum: 10 },
+            codeCandidates: { type: "integer", minimum: 0, maximum: 20 },
+            anchorCandidates: { type: "integer", minimum: 0, maximum: 25 },
+            requestedCommitOid: {
+              oneOf: [
+                { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+                { type: "null" },
+              ],
+            },
+            memoryQuery: { oneOf: [{ type: "string" }, { type: "null" }] },
+            codeQuery: { oneOf: [{ type: "string" }, { type: "null" }] },
+            contextualImpact: {
+              oneOf: [
+                { $ref: "#/components/schemas/ContextualImpactAssessment" },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+        RetrievedContext: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "revision",
+            "query",
+            "plan",
+            "deliveredRoute",
+            "memories",
+            "code",
+            "anchors",
+            "conflicts",
+            "receipt",
+          ],
+          properties: {
+            revision: { const: "joint-memory-code-v2" },
+            query: { type: "string" },
+            plan: { $ref: "#/components/schemas/ContextRetrievalPlan" },
+            deliveredRoute: {
+              type: "string",
+              enum: ["abstain", "both", "code-only", "memory-only"],
+            },
+            memories: {
+              type: "array",
+              maxItems: 10,
+              items: { $ref: "#/components/schemas/RetrievedMemoryContext" },
+            },
+            code: {
+              type: "array",
+              maxItems: 20,
+              items: { $ref: "#/components/schemas/RetrievedCodeContext" },
+            },
+            anchors: {
+              type: "array",
+              maxItems: 25,
+              items: { $ref: "#/components/schemas/RetrievedAnchorContext" },
+            },
+            conflicts: { type: "array", items: { type: "string" } },
+            receipt: { $ref: "#/components/schemas/ContextRetrievalReceipt" },
+          },
+        },
+        CodeArtifactSymbol: {
+          type: "object",
+          additionalProperties: false,
+          required: ["symbol", "symbolKey", "declarationKey"],
+          properties: {
+            symbol: { type: "string" },
+            symbolKey: { type: "string" },
+            declarationKey: { type: "string" },
+          },
+        },
+        CodeArtifact: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "repositoryId",
+            "revisionId",
+            "generationId",
+            "commitOid",
+            "path",
+            "language",
+            "parser",
+            "parseStatus",
+            "kind",
+            "symbol",
+            "symbolKey",
+            "declarationKey",
+            "declarationChunkOrdinal",
+            "symbols",
+            "ordinal",
+            "startLine",
+            "endLine",
+            "content",
+            "contentSha256",
+            "matchedChannels",
+            "score",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            repositoryId: { type: "string", format: "uuid" },
+            revisionId: { type: "string", format: "uuid" },
+            generationId: { type: "string", format: "uuid" },
+            commitOid: { type: "string" },
+            path: { type: "string" },
+            language: { type: "string" },
+            parser: { type: "string", enum: ["tree_sitter", "text"] },
+            parseStatus: { type: "string", enum: ["parsed", "recovered", "fallback"] },
+            kind: { type: "string" },
+            symbol: { oneOf: [{ type: "string" }, { type: "null" }] },
+            symbolKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+            declarationKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+            declarationChunkOrdinal: {
+              oneOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+            },
+            symbols: {
+              type: "array",
+              items: { $ref: "#/components/schemas/CodeArtifactSymbol" },
+            },
+            ordinal: { type: "integer", minimum: 0 },
+            startLine: { type: "integer", minimum: 1 },
+            endLine: { type: "integer", minimum: 1 },
+            content: { type: "string", maxLength: 6_000 },
+            contentSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            matchedChannels: {
+              type: "array",
+              uniqueItems: true,
+              items: { type: "string", enum: ["symbol", "literal", "lexical", "path"] },
+            },
+            score: { type: "number" },
+          },
+        },
+        CodeGraphLocator: {
+          type: "object",
+          additionalProperties: false,
+          required: ["artifactId", "path", "symbol", "symbolKey"],
+          properties: {
+            artifactId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            path: { oneOf: [{ type: "string" }, { type: "null" }] },
+            symbol: { oneOf: [{ type: "string" }, { type: "null" }] },
+            symbolKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+          },
+        },
+        CodeDependencySite: {
+          type: "object",
+          additionalProperties: false,
+          required: ["path", "startLine", "startColumn", "endLine", "endColumn"],
+          properties: {
+            path: { type: "string" },
+            startLine: { type: "integer", minimum: 1 },
+            startColumn: { type: "integer", minimum: 0 },
+            endLine: { type: "integer", minimum: 1 },
+            endColumn: { type: "integer", minimum: 0 },
+          },
+        },
+        CodeDependencyEdge: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "kind", "resolution", "targetText", "from", "to", "site"],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            kind: { type: "string", enum: ["calls", "imports", "references"] },
+            resolution: {
+              type: "string",
+              enum: ["resolved", "ambiguous", "unresolved"],
+            },
+            targetText: { type: "string", minLength: 1, maxLength: 1_600 },
+            from: { $ref: "#/components/schemas/CodeGraphLocator" },
+            to: { $ref: "#/components/schemas/CodeGraphLocator" },
+            site: { $ref: "#/components/schemas/CodeDependencySite" },
+          },
+        },
+        CodeDependencyQueryOk: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "repositoryKey",
+            "commitOid",
+            "direction",
+            "subject",
+            "edges",
+            "truncated",
+          ],
+          properties: {
+            status: { const: "ok" },
+            repositoryKey: { type: "string" },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            direction: { type: "string", enum: ["callers", "callees"] },
+            subject: { $ref: "#/components/schemas/CodeGraphLocator" },
+            edges: {
+              type: "array",
+              maxItems: 200,
+              items: { $ref: "#/components/schemas/CodeDependencyEdge" },
+            },
+            truncated: { type: "boolean" },
+          },
+        },
+        CodeDependencyQueryAmbiguous: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "status",
+            "repositoryKey",
+            "commitOid",
+            "direction",
+            "candidates",
+            "truncated",
+          ],
+          properties: {
+            status: { const: "ambiguous" },
+            repositoryKey: { type: "string" },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            direction: { type: "string", enum: ["callers", "callees"] },
+            candidates: {
+              type: "array",
+              minItems: 2,
+              maxItems: 200,
+              items: { $ref: "#/components/schemas/CodeGraphLocator" },
+            },
+            truncated: { type: "boolean" },
+          },
+        },
+        CodeDependencyQueryNotFound: {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "repositoryKey", "commitOid", "direction", "candidates"],
+          properties: {
+            status: { const: "not_found" },
+            repositoryKey: { type: "string" },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            direction: { type: "string", enum: ["callers", "callees"] },
+            candidates: {
+              type: "array",
+              maxItems: 0,
+              items: { $ref: "#/components/schemas/CodeGraphLocator" },
+            },
+          },
+        },
+        CodeDependencyQueryResult: {
+          oneOf: [
+            { $ref: "#/components/schemas/CodeDependencyQueryOk" },
+            { $ref: "#/components/schemas/CodeDependencyQueryAmbiguous" },
+            { $ref: "#/components/schemas/CodeDependencyQueryNotFound" },
+          ],
+        },
+        CodeIndexJob: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "repositoryId",
+            "repositoryKey",
+            "commitOid",
+            "sourceRef",
+            "indexerRevision",
+            "status",
+            "attemptCount",
+            "maximumAttempts",
+            "availableAt",
+            "completedAt",
+            "lastError",
+            "createdAt",
+            "updatedAt",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            repositoryId: { type: "string", format: "uuid" },
+            repositoryKey: { type: "string" },
+            commitOid: { type: "string" },
+            sourceRef: { oneOf: [{ type: "string" }, { type: "null" }] },
+            indexerRevision: { type: "string" },
+            status: {
+              type: "string",
+              enum: ["pending", "processing", "succeeded", "dead", "cancelled"],
+            },
+            attemptCount: { type: "integer", minimum: 0 },
+            maximumAttempts: { type: "integer", minimum: 1 },
+            availableAt: { type: "string", format: "date-time" },
+            completedAt: {
+              oneOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+            },
+            lastError: { oneOf: [{ type: "string" }, { type: "null" }] },
+            ...timestampProperties,
+          },
+        },
+        EnqueueCodeIndexInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["repositoryKey", "commitOid"],
+          properties: {
+            repositoryKey: { type: "string", minLength: 1, maxLength: 512 },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+            sourceRef: { type: "string", minLength: 1, maxLength: 512 },
+          },
+        },
+        CiteMemoryCodeEvidenceInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["artifactId", "relationship"],
+          properties: {
+            artifactId: { type: "string", format: "uuid" },
+            relationship: {
+              type: "string",
+              enum: ["supports", "contradicts", "implements", "rationale"],
+            },
+          },
+        },
+        RevalidateMemoryCodeEvidenceInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["repositoryKey", "commitOid"],
+          properties: {
+            repositoryKey: { type: "string", minLength: 1, maxLength: 512 },
+            commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+          },
+        },
+        MemoryCodeEvidence: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "memoryId",
+            "repositoryId",
+            "citedRevisionId",
+            "citedGenerationId",
+            "citedArtifactId",
+            "citedCommitOid",
+            "citedPath",
+            "citedSymbolKey",
+            "citedDeclarationKey",
+            "citedDeclarationChunkOrdinal",
+            "citedDeclarationContextSha256",
+            "citedContentSha256",
+            "relationship",
+            "validationState",
+            "validatedRevisionId",
+            "validatedGenerationId",
+            "validatedArtifactId",
+            "validatedCommitOid",
+            "validatedPath",
+            "createdByUserId",
+            "createdByAgentId",
+            "createdAt",
+            "validatedAt",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            memoryId: { type: "string", format: "uuid" },
+            repositoryId: { type: "string", format: "uuid" },
+            citedRevisionId: { type: "string", format: "uuid" },
+            citedGenerationId: { type: "string", format: "uuid" },
+            citedArtifactId: { type: "string", format: "uuid" },
+            citedCommitOid: { type: "string" },
+            citedPath: { type: "string" },
+            citedSymbolKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+            citedDeclarationKey: { oneOf: [{ type: "string" }, { type: "null" }] },
+            citedDeclarationChunkOrdinal: {
+              oneOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+            },
+            citedDeclarationContextSha256: {
+              oneOf: [{ type: "string", pattern: "^[0-9a-f]{64}$" }, { type: "null" }],
+            },
+            citedContentSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            relationship: {
+              type: "string",
+              enum: ["supports", "contradicts", "implements", "rationale"],
+            },
+            validationState: {
+              type: "string",
+              enum: ["current", "moved", "changed", "deleted", "ambiguous", "unverifiable"],
+            },
+            validatedRevisionId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            validatedGenerationId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            validatedArtifactId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            validatedCommitOid: { oneOf: [{ type: "string" }, { type: "null" }] },
+            validatedPath: { oneOf: [{ type: "string" }, { type: "null" }] },
+            createdByUserId: { type: "string", format: "uuid" },
+            createdByAgentId: {
+              oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
+            },
+            createdAt: { type: "string", format: "date-time" },
+            validatedAt: { type: "string", format: "date-time" },
           },
         },
         Workspace: {
@@ -1348,7 +2181,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             id: { type: "string", format: "uuid" },
             ownerUserId: { type: "string", format: "uuid" },
             scope: { type: "string", enum: ["shared", "private"] },
-            content: { type: "string", minLength: 1, maxLength: 1_000_000 },
+            content: {
+              type: "string",
+              minLength: 1,
+              maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
+            },
             metadata: { type: "object", additionalProperties: true },
             version: { type: "integer", minimum: 1 },
             ...timestampProperties,
@@ -1473,6 +2310,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             "apiVersion",
             "schemaRevision",
             "deploymentId",
+            "memoryChunking",
             "features",
             "limits",
             "activeEmbeddingGeneration",
@@ -1481,6 +2319,16 @@ export function loreOpenApiDocument(): Record<string, unknown> {
             apiVersion: { const: "v1" },
             schemaRevision: { type: "integer", minimum: 1 },
             deploymentId: { type: "string", format: "uuid" },
+            memoryChunking: {
+              type: "object",
+              additionalProperties: false,
+              required: ["revision", "maximumCharacters", "overlapCharacters"],
+              properties: {
+                revision: { const: MEMORY_CHUNKING_REVISION },
+                maximumCharacters: { const: MEMORY_CHUNK_MAXIMUM_CHARACTERS },
+                overlapCharacters: { const: MEMORY_CHUNK_OVERLAP_CHARACTERS },
+              },
+            },
             features: {
               type: "object",
               additionalProperties: false,
@@ -1493,6 +2341,9 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 "cursorPagination",
                 "memoryProposals",
                 "observationEvidence",
+                "codeIndex",
+                "codeDependencies",
+                "codeEvidence",
               ],
               properties: {
                 idempotency: { const: true },
@@ -1503,12 +2354,18 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 cursorPagination: { const: true },
                 memoryProposals: { const: true },
                 observationEvidence: { const: true },
+                codeIndex: { const: true },
+                codeDependencies: { const: true },
+                codeEvidence: { const: true },
               },
             },
             limits: {
               type: "object",
               additionalProperties: false,
               required: [
+                "memoryContentRecommendedCharacters",
+                "memoryContentMaximumCharacters",
+                "memoryMaximumChunks",
                 "workspaceArchiveMemories",
                 "workspaceArchiveLinks",
                 "memoryProposalEvidence",
@@ -1520,8 +2377,20 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 "episodeMetadataCharacters",
                 "observationContentCharacters",
                 "observationBatchRead",
+                "codeIndexFiles",
+                "codeIndexSourceBytes",
+                "codeIndexArtifacts",
+                "codeDependencyResults",
+                "codeSearchResults",
               ],
               properties: {
+                memoryContentRecommendedCharacters: {
+                  const: MEMORY_CONTENT_LIMITS.recommendedCharacters,
+                },
+                memoryContentMaximumCharacters: {
+                  const: MEMORY_CONTENT_LIMITS.maximumCharacters,
+                },
+                memoryMaximumChunks: { const: MEMORY_CONTENT_LIMITS.maximumChunks },
                 workspaceArchiveMemories: { const: MAX_WORKSPACE_ARCHIVE_MEMORIES },
                 workspaceArchiveLinks: { const: MAX_WORKSPACE_ARCHIVE_LINKS },
                 memoryProposalEvidence: { const: 50 },
@@ -1533,6 +2402,11 @@ export function loreOpenApiDocument(): Record<string, unknown> {
                 episodeMetadataCharacters: { const: 1_000_000 },
                 observationContentCharacters: { const: 100_000 },
                 observationBatchRead: { const: 50 },
+                codeIndexFiles: { const: 20_000 },
+                codeIndexSourceBytes: { const: 134_217_728 },
+                codeIndexArtifacts: { const: 100_000 },
+                codeDependencyResults: { const: 200 },
+                codeSearchResults: { const: 100 },
               },
             },
             activeEmbeddingGeneration: {

@@ -73,9 +73,83 @@ test("CLI remembers through the SDK without accepting secret flags", async () =>
   });
 });
 
+test("CLI queries bounded exact-revision Code Dependencies without accepting a local path", async () => {
+  const captured = captureIo();
+  const commitOid = "a".repeat(40);
+  const fetchMock = vi.fn().mockResolvedValue(
+    Response.json({
+      status: "ok",
+      repositoryKey: "corespeed/lore",
+      commitOid,
+      direction: "callers",
+      subject: {
+        artifactId: "80000000-0000-4000-8000-000000000001",
+        path: "src/guard.ts",
+        symbol: "guard",
+        symbolKey: "src/guard.ts#function_declaration:guard",
+      },
+      edges: [],
+      truncated: false,
+    }),
+  );
+
+  const exitCode = await runLoreCli(
+    [
+      "code",
+      "dependencies",
+      "callers",
+      "--repository",
+      "corespeed/lore",
+      "--commit",
+      commitOid,
+      "--symbol",
+      "guard",
+      "--limit",
+      "25",
+    ],
+    {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    },
+  );
+
+  expect(exitCode).toBe(0);
+  expect(captured.stderr).toEqual([]);
+  const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(url.pathname + url.search).toBe(
+    `/api/v1/code/dependencies?repository_key=corespeed%2Flore&commit_oid=${commitOid}&direction=callers&symbol=guard&limit=25`,
+  );
+  expect(JSON.parse(captured.stdout.join(""))).toMatchObject({
+    status: "ok",
+    direction: "callers",
+    subject: { symbol: "guard" },
+  });
+});
+
+test("CLI rejects document-sized Memory content before sending a request", async () => {
+  const captured = captureIo(`${"😀".repeat(32_001)}\n`);
+  const fetchMock = vi.fn();
+
+  const exitCode = await runLoreCli(["memory", "remember", "--stdin"], {
+    environment: { LORE_WORKSPACE_ID: WORKSPACE_ID },
+    fetch: fetchMock,
+    io: captured.io,
+  });
+
+  expect(exitCode).toBe(2);
+  expect(captured.stderr.join("")).toMatch(/at most 32000 Unicode characters/);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("CLI submits a non-canonical proposal with evidence and a stable retry key", async () => {
   const captured = captureIo("A safer suggested fact\n");
   const evidenceId = "20000000-0000-4000-8000-000000000002";
+  const artifactId = "80000000-0000-4000-8000-000000000001";
   const fetchMock = vi.fn().mockResolvedValue(
     Response.json({
       id: "50000000-0000-4000-8000-000000000001",
@@ -91,6 +165,23 @@ test("CLI submits a non-canonical proposal with evidence and a stable retry key"
       proposedMetadata: {},
       evidenceMemoryIds: [evidenceId],
       evidenceObservationIds: [],
+      codeEvidence: [
+        {
+          ordinal: 0,
+          repositoryId: "80000000-0000-4000-8000-000000000002",
+          citedRevisionId: "80000000-0000-4000-8000-000000000003",
+          citedGenerationId: "80000000-0000-4000-8000-000000000004",
+          citedArtifactId: artifactId,
+          citedCommitOid: "a".repeat(40),
+          citedPath: "src/guard.ts",
+          citedSymbolKey: "src/guard.ts#function_declaration:guard",
+          citedDeclarationKey: "src/guard.ts#function_declaration:guard",
+          citedDeclarationChunkOrdinal: 0,
+          citedDeclarationContextSha256: "c".repeat(64),
+          citedContentSha256: "b".repeat(64),
+          relationship: "implements",
+        },
+      ],
       status: "pending",
       reviewedByUserId: null,
       acceptedMemoryId: null,
@@ -109,6 +200,8 @@ test("CLI submits a non-canonical proposal with evidence and a stable retry key"
       "private",
       "--evidence",
       evidenceId,
+      "--code-evidence",
+      `${artifactId}:implements`,
       "--idempotency-key",
       "proposal-1",
     ],
@@ -132,6 +225,7 @@ test("CLI submits a non-canonical proposal with evidence and a stable retry key"
     content: "A safer suggested fact",
     scope: "private",
     evidenceMemoryIds: [evidenceId],
+    codeEvidence: [{ artifactId, relationship: "implements" }],
   });
   expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ status: "pending" });
 });

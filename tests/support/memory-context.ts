@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { onTestFinished } from "vitest";
 import type { PostgresDatabase } from "@/lib/db";
@@ -35,7 +36,7 @@ export interface MemoryTestContext {
 }
 
 export async function createMemoryTestContext(): Promise<MemoryTestContext> {
-  const postgres = new PGlite({ extensions: { vector } });
+  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
   await postgres.waitReady;
   await migrate(postgres);
   await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)", [

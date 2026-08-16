@@ -28,7 +28,9 @@ import {
   type MemoryProposalStatus,
   type MemoryScope,
   MemoryVersionConflictError,
+  type ProposeMemoryCodeEvidence,
 } from "./memory";
+import { MemoryContentValidationError, prepareMemoryContent } from "./memory-content";
 import {
   createObservationModule,
   type EpisodeKind,
@@ -73,7 +75,11 @@ function errorCode(error: unknown): string {
   if (error instanceof MemoryProposalReviewConflictError) return "proposal_review_conflict";
   if (error instanceof IdempotencyConflictError) return "idempotency_conflict";
   if (error instanceof WorkspaceExportLimitError) return error.code;
-  if (error instanceof BadRequestError || error instanceof RequestInputError)
+  if (
+    error instanceof BadRequestError ||
+    error instanceof RequestInputError ||
+    error instanceof MemoryContentValidationError
+  )
     return "invalid_request";
   if (error instanceof RequestAuthenticationError) return "authentication_required";
   if (
@@ -95,6 +101,7 @@ function errorResponse(error: unknown): Response {
   if (
     error instanceof BadRequestError ||
     error instanceof RequestInputError ||
+    error instanceof MemoryContentValidationError ||
     error instanceof RequestAuthenticationError ||
     error instanceof WorkspaceAccessError ||
     error instanceof PreconditionRequiredError ||
@@ -228,6 +235,15 @@ function requiredString(value: unknown, name: string, maximumLength: number): st
   return normalized;
 }
 
+function requiredMemoryContent(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new BadRequestError("content is required");
+  }
+  const normalized = value.trim();
+  prepareMemoryContent(normalized);
+  return normalized;
+}
+
 function requiredRawString(value: unknown, name: string, maximumLength: number): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new BadRequestError(`${name} is required`);
@@ -268,6 +284,34 @@ function memoryProposalStatus(value: string | null): MemoryProposalStatus | unde
   if (value === null || value.trim() === "") return undefined;
   if (value === "pending" || value === "accepted" || value === "rejected") return value;
   throw new BadRequestError("status must be pending, accepted, or rejected");
+}
+
+function proposalCodeEvidence(value: unknown): ProposeMemoryCodeEvidence[] {
+  if (!Array.isArray(value)) {
+    throw new BadRequestError("codeEvidence must be an array");
+  }
+  if (value.length > 50) throw new BadRequestError("codeEvidence exceeds 50 items");
+  return value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new BadRequestError(`codeEvidence[${index}] must be an object`);
+    }
+    const evidence = item as Record<string, unknown>;
+    const relationship = evidence.relationship;
+    if (
+      relationship !== "supports" &&
+      relationship !== "contradicts" &&
+      relationship !== "implements" &&
+      relationship !== "rationale"
+    ) {
+      throw new BadRequestError(
+        `codeEvidence[${index}].relationship must be supports, contradicts, implements, or rationale`,
+      );
+    }
+    return {
+      artifactId: uuidString(evidence.artifactId, `codeEvidence[${index}].artifactId`),
+      relationship,
+    };
+  });
 }
 
 function episodeKind(value: unknown, optional = false): EpisodeKind | undefined {
@@ -958,7 +1002,7 @@ export function createMemoryHandlers(
         const actor = await resolver.resolveActor(request);
         const body = await jsonObject(request);
         const input = {
-          content: requiredString(body.content, "content", 1_000_000),
+          content: requiredMemoryContent(body.content),
           scope: memoryScope(body.scope),
           metadata: metadata(body.metadata),
         };
@@ -1015,7 +1059,9 @@ export function createMemoryProposalHandlers(
           body.evidenceObservationIds === undefined
             ? []
             : uuidArray(body.evidenceObservationIds, "evidenceObservationIds", true);
-        if (evidenceMemoryIds.length + evidenceObservationIds.length > 50) {
+        const codeEvidence =
+          body.codeEvidence === undefined ? [] : proposalCodeEvidence(body.codeEvidence);
+        if (evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length > 50) {
           throw new BadRequestError("Proposal evidence exceeds 50 items");
         }
 
@@ -1023,11 +1069,12 @@ export function createMemoryProposalHandlers(
           body.kind === "create"
             ? {
                 kind: "create" as const,
-                content: requiredString(body.content, "content", 1_000_000),
+                content: requiredMemoryContent(body.content),
                 scope: memoryScope(body.scope),
                 metadata: metadata(body.metadata),
                 evidenceMemoryIds,
                 evidenceObservationIds,
+                codeEvidence,
               }
             : body.kind === "update"
               ? {
@@ -1035,13 +1082,12 @@ export function createMemoryProposalHandlers(
                   targetMemoryId: uuidString(body.targetMemoryId, "targetMemoryId"),
                   expectedVersion: positiveInteger(body.expectedVersion, "expectedVersion"),
                   content:
-                    body.content === undefined
-                      ? undefined
-                      : requiredString(body.content, "content", 1_000_000),
+                    body.content === undefined ? undefined : requiredMemoryContent(body.content),
                   scope: memoryScope(body.scope),
                   metadata: metadata(body.metadata),
                   evidenceMemoryIds,
                   evidenceObservationIds,
+                  codeEvidence,
                 }
               : null;
         if (!input) throw new BadRequestError("kind must be create or update");
@@ -1343,10 +1389,7 @@ export function createMemoryByIdHandlers(
         }
         const expectedVersion = expectedMemoryVersion(request);
         const input = {
-          content:
-            body.content === undefined
-              ? undefined
-              : requiredString(body.content, "content", 1_000_000),
+          content: body.content === undefined ? undefined : requiredMemoryContent(body.content),
           scope: memoryScope(body.scope),
           metadata: metadata(body.metadata),
         };

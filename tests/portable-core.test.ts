@@ -587,6 +587,29 @@ test("Workspace import rejects oversized metadata before queueing every child", 
   ).rejects.toThrow(/exceeds 10000 values/);
 });
 
+test("Workspace import dry-run rejects document-sized Memory content", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const portability = createPortabilityModule(testContext.database);
+  await memories.remember(testContext.carol, { content: "Bound imported Memory content." });
+  const archive = await portability.exportWorkspace(testContext.carol);
+  archive.memories[0].content = "x".repeat(32_001);
+  const { checksum: _checksum, ...manifest } = archive.manifest;
+  archive.manifest.checksum = await mutationRequestHash({
+    manifest,
+    memories: archive.memories,
+    links: archive.links,
+  });
+
+  await expect(
+    portability.importWorkspace(testContext.alice, {
+      archive,
+      dryRun: true,
+      ownerMap: { [testContext.carol.userId]: testContext.alice.userId },
+    }),
+  ).rejects.toThrow("Memory content may contain at most 32000 Unicode characters");
+});
+
 test("Portable Core readiness checks schema, vector, and the RLS request role", async () => {
   const testContext = await createMemoryTestContext();
   const operations = createOperationsModule(testContext.database, { embeddingConfigured: true });
@@ -594,11 +617,17 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
     schemaRevision: 1,
+    memoryChunking: {
+      revision: "lore-memory-chunking-v2",
+      maximumCharacters: 1_200,
+      overlapCharacters: 0,
+    },
     features: {
       idempotency: true,
       optimisticConcurrency: true,
       memoryProposals: true,
       observationEvidence: true,
+      codeDependencies: true,
       transactionalOutbox: true,
     },
     limits: {
@@ -608,11 +637,15 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
       memoryProposalList: 100,
       memoryProposalPending: 100,
       memoryProposalRetentionSeconds: 2_592_000,
+      memoryContentRecommendedCharacters: 8_000,
+      memoryContentMaximumCharacters: 32_000,
+      memoryMaximumChunks: 64,
       episodeObservations: 100,
       episodeContentCharacters: 1_000_000,
       episodeMetadataCharacters: 1_000_000,
       observationContentCharacters: 100_000,
       observationBatchRead: 50,
+      codeDependencyResults: 200,
     },
   });
   await expect(operations.readiness()).resolves.toMatchObject({

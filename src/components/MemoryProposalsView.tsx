@@ -457,8 +457,45 @@ export function MemoryProposalsView({
                     </p>
                   </div>
                 )}
+                {selected.codeEvidence.length > 0 && (
+                  <div>
+                    <p>Code Evidence</p>
+                    <ul>
+                      {selected.codeEvidence.map((evidence) => (
+                        <li key={`${evidence.citedArtifactId}:${evidence.relationship}`}>
+                          <article>
+                            <header>
+                              <strong>{evidence.relationship}</strong>
+                              <span>{evidence.citedPath}</span>
+                            </header>
+                            {(evidence.citedSymbolKey || evidence.citedDeclarationKey) && (
+                              <div>
+                                {evidence.citedDeclarationKey ?? evidence.citedSymbolKey}
+                                {evidence.citedDeclarationChunkOrdinal === null
+                                  ? ""
+                                  : ` · chunk ${evidence.citedDeclarationChunkOrdinal}`}
+                                {evidence.citedDeclarationContextSha256 === null
+                                  ? ""
+                                  : ` · context ${evidence.citedDeclarationContextSha256.slice(0, 12)}`}
+                              </div>
+                            )}
+                            <small>
+                              Commit {evidence.citedCommitOid.slice(0, 12)} · SHA-256{" "}
+                              {evidence.citedContentSha256} · Artifact {evidence.citedArtifactId}
+                            </small>
+                          </article>
+                        </li>
+                      ))}
+                    </ul>
+                    <p>
+                      Code anchors are frozen at submission and copied to the Memory only after
+                      acceptance.
+                    </p>
+                  </div>
+                )}
                 {selected.evidenceMemoryIds.length === 0 &&
-                  selected.evidenceObservationIds.length === 0 && (
+                  selected.evidenceObservationIds.length === 0 &&
+                  selected.codeEvidence.length === 0 && (
                     <p>No evidence was attached to this proposal.</p>
                   )}
               </section>

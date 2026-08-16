@@ -1,17 +1,28 @@
 import {
+  type CiteMemoryCodeEvidenceInput,
+  type CodeArtifact,
+  type CodeDependencyQueryInput,
+  type CodeDependencyQueryResult,
+  type CodeIndexJob,
+  type CodeSearchInput,
   type CreateMemoryInput,
   type CreateMemoryProposalInput,
+  type EnqueueCodeIndexInput,
   type Episode,
   LoreApiError,
   LoreClient,
   loreConfigurationFromEnvironment,
   type Memory,
+  type MemoryCodeEvidence,
   type MemoryPage,
   type MemoryProposal,
   type MemorySearchInput,
   type MemorySearchResult,
   type MutationOptions,
   type RecordEpisodeInput,
+  type RetrieveContextInput,
+  type RetrievedContext,
+  type RevalidateMemoryCodeEvidenceInput,
   type UpdateMemoryInput,
   type VersionedMutationOptions,
 } from "@corespeed/lore-sdk";
@@ -46,9 +57,40 @@ export interface LoreMcpMemoryClient {
 
 export interface LoreMcpServerOptions {
   memories: LoreMcpMemoryClient;
+  code: LoreMcpCodeClient;
+  context: LoreMcpContextClient;
+}
+
+export interface LoreMcpContextClient {
+  retrieveContext(input: RetrieveContextInput): Promise<RetrievedContext>;
+}
+
+export type LoreMcpRetrieveContextInput = RetrieveContextInput;
+export type LoreMcpRetrievedContext = RetrievedContext;
+
+export interface LoreMcpCodeClient {
+  searchCode(input: CodeSearchInput): Promise<readonly CodeArtifact[]>;
+  queryCodeDependencies(input: CodeDependencyQueryInput): Promise<CodeDependencyQueryResult>;
+  enqueueCodeIndex(input: EnqueueCodeIndexInput, signal?: AbortSignal): Promise<CodeIndexJob>;
+  getCodeIndexJob(jobId: string, signal?: AbortSignal): Promise<CodeIndexJob>;
+  listMemoryCodeEvidence(
+    memoryId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly MemoryCodeEvidence[]>;
+  citeMemoryCodeEvidence(
+    memoryId: string,
+    input: CiteMemoryCodeEvidenceInput,
+    signal?: AbortSignal,
+  ): Promise<MemoryCodeEvidence>;
+  revalidateMemoryCodeEvidence(
+    evidenceId: string,
+    input: RevalidateMemoryCodeEvidenceInput,
+    signal?: AbortSignal,
+  ): Promise<MemoryCodeEvidence>;
 }
 
 const scopeSchema = z.enum(["shared", "private"]);
+const MAX_MEMORY_CONTENT_CHARACTERS = 32_000;
 const MAX_METADATA_CHARACTERS = 100_000;
 const MAX_METADATA_DEPTH = 32;
 const MAX_METADATA_VALUES = 10_000;
@@ -58,6 +100,7 @@ const SEARCH_EVIDENCE_BUDGET = 2_800;
 const SUMMARY_METADATA_BUDGET = 900;
 const DETAIL_CONTENT_BUDGET = 96_000;
 const DETAIL_METADATA_BUDGET = 16_000;
+const CODE_ARTIFACT_CONTENT_BUDGET = 8_000;
 
 function metadataBoundaryError(value: Record<string, unknown>): string | undefined {
   let serialized: string;
@@ -100,6 +143,14 @@ const metadataSchema = z.record(z.string(), z.unknown()).superRefine((value, con
   const message = metadataBoundaryError(value);
   if (message) context.addIssue({ code: "custom", message });
 });
+const memoryContentSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_MEMORY_CONTENT_CHARACTERS * 2)
+  .refine((content) => Array.from(content).length <= MAX_MEMORY_CONTENT_CHARACTERS, {
+    message: `Memory content may contain at most ${MAX_MEMORY_CONTENT_CHARACTERS} Unicode characters`,
+  });
 const idempotencyKeySchema = z.string().min(1).max(128).optional();
 const memoryIdentitySchema = z.object({
   id: z.string().uuid(),
@@ -123,6 +174,34 @@ const searchResultSchema = z.object({
   evidence: z.string().max(SEARCH_EVIDENCE_BUDGET),
   evidenceTruncated: z.boolean(),
 });
+const codeEvidenceRelationshipSchema = z.enum([
+  "supports",
+  "contradicts",
+  "implements",
+  "rationale",
+]);
+const proposalCodeEvidenceInputSchema = z.object({
+  artifactId: z.string().uuid(),
+  relationship: codeEvidenceRelationshipSchema,
+});
+const proposalCodeEvidenceSchema = z.object({
+  ordinal: z.number().int().min(0).max(49),
+  repositoryId: z.string().uuid(),
+  citedRevisionId: z.string().uuid(),
+  citedGenerationId: z.string().uuid(),
+  citedArtifactId: z.string().uuid(),
+  citedCommitOid: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
+  citedPath: z.string().min(1).max(1024),
+  citedSymbolKey: z.string().nullable(),
+  citedDeclarationKey: z.string().nullable(),
+  citedDeclarationChunkOrdinal: z.number().int().min(0).nullable(),
+  citedDeclarationContextSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
+  citedContentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  relationship: codeEvidenceRelationshipSchema,
+});
 const proposalSubmissionSchema = z.object({
   id: z.string().uuid(),
   kind: z.enum(["create", "update"]),
@@ -131,6 +210,7 @@ const proposalSubmissionSchema = z.object({
   proposedScope: scopeSchema,
   evidenceMemoryIds: z.array(z.string().uuid()).max(50),
   evidenceObservationIds: z.array(z.string().uuid()).max(50),
+  codeEvidence: z.array(proposalCodeEvidenceSchema).max(50),
   status: z.enum(["pending", "accepted", "rejected"]),
   createdAt: z.string(),
 });
@@ -250,6 +330,7 @@ function proposalSubmission(proposal: MemoryProposal): z.infer<typeof proposalSu
     proposedScope: proposal.proposedScope,
     evidenceMemoryIds: [...proposal.evidenceMemoryIds],
     evidenceObservationIds: [...proposal.evidenceObservationIds],
+    codeEvidence: proposal.codeEvidence.map((evidence) => ({ ...evidence })),
     status: proposal.status,
     createdAt: proposal.createdAt,
   };
@@ -371,7 +452,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
       description:
         "Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. Reuse idempotencyKey when retrying an unknown outcome.",
       inputSchema: z.object({
-        content: z.string().trim().min(1).max(1_000_000),
+        content: memoryContentSchema,
         scope: scopeSchema.default("shared"),
         metadata: metadataSchema.optional(),
         idempotencyKey: idempotencyKeySchema,
@@ -475,18 +556,19 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         z
           .object({
             kind: z.literal("create"),
-            content: z.string().trim().min(1).max(1_000_000),
+            content: memoryContentSchema,
             scope: scopeSchema.default("shared"),
             metadata: metadataSchema.optional(),
             evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
             evidenceObservationIds: z.array(z.string().uuid()).max(50).optional(),
+            codeEvidence: z.array(proposalCodeEvidenceInputSchema).max(50).optional(),
             idempotencyKey: idempotencyKeySchema,
           })
           .refine(
             (input) =>
               (input.evidenceMemoryIds?.length ?? 0) +
                 (input.evidenceObservationIds?.length ?? 0) <=
-              50,
+              50 - (input.codeEvidence?.length ?? 0),
             { message: "proposal evidence exceeds 50 items" },
           ),
         z
@@ -494,11 +576,12 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             kind: z.literal("update"),
             targetMemoryId: z.string().uuid(),
             expectedVersion: z.number().int().positive(),
-            content: z.string().trim().min(1).max(1_000_000).optional(),
+            content: memoryContentSchema.optional(),
             scope: scopeSchema.optional(),
             metadata: metadataSchema.optional(),
             evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
             evidenceObservationIds: z.array(z.string().uuid()).max(50).optional(),
+            codeEvidence: z.array(proposalCodeEvidenceInputSchema).max(50).optional(),
             idempotencyKey: idempotencyKeySchema,
           })
           .refine(
@@ -512,7 +595,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             (input) =>
               (input.evidenceMemoryIds?.length ?? 0) +
                 (input.evidenceObservationIds?.length ?? 0) <=
-              50,
+              50 - (input.codeEvidence?.length ?? 0),
             { message: "proposal evidence exceeds 50 items" },
           ),
       ]),
@@ -555,7 +638,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         .object({
           memoryId: z.string().uuid(),
           version: z.number().int().positive(),
-          content: z.string().trim().min(1).max(1_000_000).optional(),
+          content: memoryContentSchema.optional(),
           scope: scopeSchema.optional(),
           metadata: metadataSchema.optional(),
           idempotencyKey: idempotencyKeySchema,
@@ -614,12 +697,502 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
   );
 }
 
+function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
+  const commitOidSchema = z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/);
+  const evidenceSchema = z.object({
+    id: z.string().uuid(),
+    memoryId: z.string().uuid(),
+    citedCommitOid: commitOidSchema,
+    citedPath: z.string(),
+    relationship: z.enum(["supports", "contradicts", "implements", "rationale"]),
+    validationState: z.enum([
+      "current",
+      "moved",
+      "changed",
+      "deleted",
+      "ambiguous",
+      "unverifiable",
+    ]),
+    validatedCommitOid: commitOidSchema.nullable(),
+    validatedPath: z.string().nullable(),
+  });
+  const codeLocatorSchema = z.object({
+    artifactId: z.string().uuid().nullable(),
+    path: z.string().nullable(),
+    symbol: z.string().nullable(),
+    symbolKey: z.string().nullable(),
+  });
+  const dependencyEdgeSchema = z.object({
+    id: z.string().uuid(),
+    kind: z.enum(["calls", "imports", "references"]),
+    resolution: z.enum(["resolved", "ambiguous", "unresolved"]),
+    targetText: z.string(),
+    from: codeLocatorSchema,
+    to: codeLocatorSchema,
+    site: z.object({
+      path: z.string(),
+      startLine: z.number().int().positive(),
+      startColumn: z.number().int().nonnegative(),
+      endLine: z.number().int().positive(),
+      endColumn: z.number().int().nonnegative(),
+    }),
+  });
+  server.registerTool(
+    "lore_code_search",
+    {
+      title: "Search Lore Code Index",
+      description:
+        "Search RLS-visible Code Artifacts from one configured repository and exact full commit OID. Code Evidence is separate from canonical Memory.",
+      inputSchema: z.object({
+        repositoryKey: z.string().trim().min(1).max(512),
+        commitOid: commitOidSchema,
+        query: z.string().trim().min(1).max(2_000),
+        limit: z.number().int().min(1).max(25).default(10),
+        pathPrefix: z.string().trim().min(1).max(1_024).optional(),
+      }),
+      outputSchema: z.object({
+        artifacts: z.array(
+          z.object({
+            id: z.string().uuid(),
+            commitOid: commitOidSchema,
+            path: z.string(),
+            language: z.string(),
+            kind: z.string(),
+            symbol: z.string().nullable(),
+            startLine: z.number().int(),
+            endLine: z.number().int(),
+            matchedChannels: z.array(z.enum(["symbol", "literal", "lexical", "path"])),
+            score: z.number(),
+            content: z.string(),
+            contentTruncated: z.boolean(),
+          }),
+        ),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const artifacts = await code.searchCode(input);
+        return success({
+          artifacts: artifacts.map((artifact) => {
+            const content = boundedString(artifact.content, CODE_ARTIFACT_CONTENT_BUDGET);
+            return {
+              id: artifact.id,
+              commitOid: artifact.commitOid,
+              path: artifact.path,
+              language: artifact.language,
+              kind: artifact.kind,
+              symbol: artifact.symbol,
+              startLine: artifact.startLine,
+              endLine: artifact.endLine,
+              matchedChannels: [...artifact.matchedChannels],
+              score: artifact.score,
+              content: content.value,
+              contentTruncated: content.truncated,
+            };
+          }),
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_code_dependencies",
+    {
+      title: "Query Lore Code Dependencies",
+      description:
+        "Return bounded callers or callees for exactly one symbol or path from an RLS-visible repository and exact full commit OID. Ambiguous and unresolved static-analysis targets remain explicit.",
+      inputSchema: z
+        .object({
+          repositoryKey: z.string().trim().min(1).max(512),
+          commitOid: commitOidSchema,
+          direction: z.enum(["callers", "callees"]),
+          symbol: z.string().trim().min(1).max(1_600).optional(),
+          path: z.string().trim().min(1).max(1_024).optional(),
+          limit: z.number().int().min(1).max(200).default(50),
+        })
+        .refine((input) => (input.symbol === undefined) !== (input.path === undefined), {
+          message: "Provide exactly one of symbol or path",
+        }),
+      outputSchema: z.object({
+        status: z.enum(["ok", "ambiguous", "not_found"]),
+        repositoryKey: z.string(),
+        commitOid: commitOidSchema,
+        direction: z.enum(["callers", "callees"]),
+        subject: codeLocatorSchema.optional(),
+        edges: z.array(dependencyEdgeSchema).max(200).optional(),
+        truncated: z.boolean().optional(),
+        candidates: z.array(codeLocatorSchema).optional(),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const result = await code.queryCodeDependencies(input);
+        return success({ ...result });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_code_index",
+    {
+      title: "Queue Lore Code Index",
+      description:
+        "Queue one exact commit from an operator-configured repository. The tool accepts a repository key, never a filesystem path or remote credential.",
+      inputSchema: z.object({
+        repositoryKey: z.string().trim().min(1).max(512),
+        commitOid: commitOidSchema,
+        sourceRef: z.string().trim().min(1).max(512).optional(),
+      }),
+      outputSchema: z.object({
+        job: z.object({
+          id: z.string().uuid(),
+          repositoryKey: z.string(),
+          commitOid: commitOidSchema,
+          status: z.enum(["pending", "processing", "succeeded", "dead", "cancelled"]),
+        }),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const job = await code.enqueueCodeIndex(input);
+        return success({
+          job: {
+            id: job.id,
+            repositoryKey: job.repositoryKey,
+            commitOid: job.commitOid,
+            status: job.status,
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_code_index_status",
+    {
+      title: "Get Lore Code Index Status",
+      description:
+        "Read safe status for one already-enqueued Code Index job. Local repository paths and credentials are never returned.",
+      inputSchema: z.object({ jobId: z.string().uuid() }),
+      outputSchema: z.object({
+        job: z.object({
+          id: z.string().uuid(),
+          repositoryKey: z.string(),
+          commitOid: commitOidSchema,
+          indexerRevision: z.string(),
+          status: z.enum(["pending", "processing", "succeeded", "dead", "cancelled"]),
+          attemptCount: z.number().int(),
+          maximumAttempts: z.number().int(),
+          lastError: z.string().nullable(),
+        }),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ jobId }) => {
+      try {
+        const job = await code.getCodeIndexJob(jobId);
+        return success({
+          job: {
+            id: job.id,
+            repositoryKey: job.repositoryKey,
+            commitOid: job.commitOid,
+            indexerRevision: job.indexerRevision,
+            status: job.status,
+            attemptCount: job.attemptCount,
+            maximumAttempts: job.maximumAttempts,
+            lastError: job.lastError,
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_code_evidence_list",
+    {
+      title: "List Memory Code Evidence",
+      description: "List typed, revision-bound Code Evidence visible with one Memory.",
+      inputSchema: z.object({ memoryId: z.string().uuid() }),
+      outputSchema: z.object({ evidence: z.array(evidenceSchema) }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ memoryId }) => {
+      try {
+        return success({
+          evidence: (await code.listMemoryCodeEvidence(memoryId)).map((item) => ({
+            id: item.id,
+            memoryId: item.memoryId,
+            citedCommitOid: item.citedCommitOid,
+            citedPath: item.citedPath,
+            relationship: item.relationship,
+            validationState: item.validationState,
+            validatedCommitOid: item.validatedCommitOid,
+            validatedPath: item.validatedPath,
+          })),
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_code_evidence_cite",
+    {
+      title: "Cite Code Evidence for a Memory",
+      description:
+        "Attach one visible active Code Artifact as immutable evidence for an owner-writable Memory. This never changes Memory content.",
+      inputSchema: z.object({
+        memoryId: z.string().uuid(),
+        artifactId: z.string().uuid(),
+        relationship: z.enum(["supports", "contradicts", "implements", "rationale"]),
+      }),
+      outputSchema: z.object({ evidence: evidenceSchema }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ memoryId, artifactId, relationship }) => {
+      try {
+        const item = await code.citeMemoryCodeEvidence(memoryId, { artifactId, relationship });
+        return success({
+          evidence: {
+            id: item.id,
+            memoryId: item.memoryId,
+            citedCommitOid: item.citedCommitOid,
+            citedPath: item.citedPath,
+            relationship: item.relationship,
+            validationState: item.validationState,
+            validatedCommitOid: item.validatedCommitOid,
+            validatedPath: item.validatedPath,
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_code_evidence_revalidate",
+    {
+      title: "Revalidate Memory Code Evidence",
+      description:
+        "Re-resolve one citation against an explicitly selected exact commit. Updates only evidence validity; never rewrites canonical Memory.",
+      inputSchema: z.object({
+        evidenceId: z.string().uuid(),
+        repositoryKey: z.string().trim().min(1).max(512),
+        commitOid: commitOidSchema,
+      }),
+      outputSchema: z.object({ evidence: evidenceSchema }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ evidenceId, repositoryKey, commitOid }) => {
+      try {
+        const item = await code.revalidateMemoryCodeEvidence(evidenceId, {
+          repositoryKey,
+          commitOid,
+        });
+        return success({
+          evidence: {
+            id: item.id,
+            memoryId: item.memoryId,
+            citedCommitOid: item.citedCommitOid,
+            citedPath: item.citedPath,
+            relationship: item.relationship,
+            validationState: item.validationState,
+            validatedCommitOid: item.validatedCommitOid,
+            validatedPath: item.validatedPath,
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+}
+
+function registerContextTools(server: McpServer, context: LoreMcpContextClient): void {
+  const commitOidSchema = z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/);
+  const routeSchema = z.enum(["auto", "both", "code-only", "memory-only"]);
+  const deliveredRouteSchema = z.enum(["abstain", "both", "code-only", "memory-only"]);
+  const validationStateSchema = z.enum([
+    "current",
+    "moved",
+    "changed",
+    "deleted",
+    "ambiguous",
+    "unverifiable",
+  ]);
+  server.registerTool(
+    "lore_retrieve_context",
+    {
+      title: "Retrieve Lore Context",
+      description:
+        "Use this tool before answering when correctness depends on prior Workspace decisions, user-specific facts, current repository behavior, or exact-revision Code Index evidence. For a historical-decision versus current-Code question, retrieve both evidence families. Code requires an operator-configured repository key plus a full commit OID; if that exact revision is unavailable, ask for it instead of guessing or searching Memory as a substitute. Do not use it for transformations fully supported by supplied text, general knowledge, or unconstrained brainstorming. Returns one bounded, provenance-bearing packet from independently authorized Memory and Code evidence; Code Evidence assessment is side-effect-free.",
+      inputSchema: z
+        .object({
+          query: z.string().trim().min(1).max(10_000),
+          memoryQuery: z.string().trim().min(1).max(10_000).optional(),
+          codeQuery: z.string().trim().min(1).max(2_000).optional(),
+          repositoryKey: z.string().trim().min(1).max(512).optional(),
+          commitOid: commitOidSchema.optional(),
+          route: routeSchema.optional(),
+          memoryLimit: z.number().int().min(1).max(10).optional(),
+          codeLimit: z.number().int().min(1).max(20).optional(),
+          scope: scopeSchema.optional(),
+          metadata: metadataSchema.optional(),
+          pathPrefix: z.string().trim().min(1).max(1_024).optional(),
+        })
+        .superRefine((input, refinement) => {
+          if ((input.repositoryKey === undefined) !== (input.commitOid === undefined)) {
+            refinement.addIssue({
+              code: "custom",
+              message: "repositoryKey and commitOid must be provided together",
+            });
+          }
+          if (
+            (input.route === "both" || input.route === "code-only") &&
+            input.repositoryKey === undefined
+          ) {
+            refinement.addIssue({
+              code: "custom",
+              message: `${input.route} requires repositoryKey and commitOid`,
+            });
+          }
+          if (input.pathPrefix !== undefined && input.repositoryKey === undefined) {
+            refinement.addIssue({
+              code: "custom",
+              message: "pathPrefix requires repositoryKey and commitOid",
+            });
+          }
+          if (input.codeQuery !== undefined && input.repositoryKey === undefined) {
+            refinement.addIssue({
+              code: "custom",
+              message: "codeQuery requires repositoryKey and commitOid",
+            });
+          }
+        }),
+      outputSchema: z.object({
+        revision: z.string(),
+        query: z.string(),
+        plan: z.object({
+          intent: z.enum([
+            "blast-radius",
+            "change",
+            "current-code",
+            "memory-recall",
+            "rationale",
+            "unknown",
+          ]),
+          route: deliveredRouteSchema,
+          needsAnchorExpansion: z.boolean(),
+          needsContextualImpact: z.boolean(),
+          needsLocalAssessment: z.boolean(),
+          reasons: z.array(z.string()),
+        }),
+        deliveredRoute: deliveredRouteSchema,
+        memories: z.array(
+          z.object({
+            id: z.string().uuid(),
+            scope: scopeSchema,
+            updatedAt: z.string(),
+            score: z.number(),
+            rerankScore: z.number().min(0).max(1).optional(),
+            evidence: z.string(),
+            evidenceTruncated: z.boolean(),
+          }),
+        ),
+        code: z.array(
+          z.object({
+            artifactId: z.string().uuid(),
+            commitOid: commitOidSchema,
+            path: z.string(),
+            symbol: z.string().nullable(),
+            startLine: z.number().int().positive(),
+            endLine: z.number().int().positive(),
+            score: z.number(),
+            matchedChannels: z.array(z.enum(["symbol", "literal", "lexical", "path"])),
+            content: z.string(),
+            contentTruncated: z.boolean(),
+          }),
+        ),
+        anchors: z.array(
+          z.object({
+            id: z.string().uuid(),
+            memoryId: z.string().uuid(),
+            relationship: codeEvidenceRelationshipSchema,
+            localState: validationStateSchema,
+            citedCommitOid: commitOidSchema,
+            citedPath: z.string(),
+            validatedCommitOid: commitOidSchema.nullable(),
+            validatedPath: z.string().nullable(),
+          }),
+        ),
+        conflicts: z.array(z.string()),
+        receipt: z.object({
+          memoryCandidates: z.number().int().nonnegative(),
+          codeCandidates: z.number().int().nonnegative(),
+          anchorCandidates: z.number().int().nonnegative(),
+          requestedCommitOid: commitOidSchema.nullable(),
+          memoryQuery: z.string().nullable(),
+          codeQuery: z.string().nullable(),
+          contextualImpact: z
+            .object({
+              state: z.enum(["affected", "possibly_affected", "unaffected", "unknown"]),
+              changes: z.array(z.string()),
+            })
+            .nullable(),
+        }),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const packet = await context.retrieveContext(input);
+        return success({
+          ...packet,
+          memories: packet.memories.map((memory) => {
+            const evidence = boundedString(memory.evidence, SEARCH_EVIDENCE_BUDGET);
+            return {
+              ...memory,
+              evidence: evidence.value,
+              evidenceTruncated: evidence.truncated,
+            };
+          }),
+          code: packet.code.map((artifact) => {
+            const content = boundedString(artifact.content, CODE_ARTIFACT_CONTENT_BUDGET);
+            return {
+              ...artifact,
+              content: content.value,
+              contentTruncated: content.truncated,
+            };
+          }),
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+}
+
 export function createLoreMcpServer(options: LoreMcpServerOptions): McpServer {
   const server = new McpServer(
     { name: "lore", version: LORE_MCP_VERSION },
     { capabilities: { tools: {} } },
   );
   registerTools(server, options.memories);
+  registerContextTools(server, options.context);
+  registerCodeTools(server, options.code);
   return server;
 }
 
@@ -633,5 +1206,5 @@ export function serveLoreMcpStdio(
   }
   const client = new LoreClient({ ...configuration.client, fetch: fetchImplementation });
   const memories = client.workspace(configuration.workspaceId);
-  return serveStdio(() => createLoreMcpServer({ memories }));
+  return serveStdio(() => createLoreMcpServer({ memories, code: memories, context: memories }));
 }

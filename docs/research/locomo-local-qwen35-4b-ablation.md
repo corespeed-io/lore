@@ -3,6 +3,11 @@
 Measured on 2026-08-07. This note records a small, reproducible local experiment;
 it is not a full LoCoMo score, a leaderboard result, or a SOTA claim.
 
+Update, 2026-08-14: Lore now ships the separately versioned,
+reconstruction-safe `lore-memory-chunking-v2` under the greenfield baseline. The
+experimental `lore-embedding-v3` profile below remains historical and is not a
+quality measurement of the shipped chunker.
+
 ## Primary provenance
 
 - Benchmark: [*Evaluating Very Long-Term Conversational Memory of LLM

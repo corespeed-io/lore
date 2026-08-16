@@ -1,0 +1,245 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "groundingPolicyRevision": "retrieval-grounding-v1",
+  "generatedAt": "2026-08-15T23:04:56.585Z",
+  "provider": "Anthropic via Claude Code CLI",
+  "model": "claude-sonnet-5",
+  "trialsPerCase": 5,
+  "suite": {
+    "name": "Lore Retrieval Invocation Policy",
+    "version": 1,
+    "caseCount": 1
+  },
+  "variants": {
+    "host-policy": {
+      "description": "Production grounding gate chooses required, auto, or off before the model sees Lore tools.",
+      "metrics": {
+        "caseCount": 5,
+        "passRate": 1,
+        "requiredRetrievalRecall": 1,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": 1,
+        "exactRevisionAccuracy": 1,
+        "clarificationAccuracy": null,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 31213.64593359999,
+        "p95LatencyMs": 47863.42908399999
+      },
+      "toolCalls": 10,
+      "averageToolCalls": 2,
+      "inputTokens": 24,
+      "outputTokens": 12760
+    }
+  },
+  "records": [
+    {
+      "variant": "host-policy",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25680.251375
+      },
+      "outcome": "answered",
+      "answer": "I can't confirm that — the evidence says the opposite. Both the workspace decision and the current code (at the exact commit checked) agree that proposals do NOT write directly to canonical Memory:\n\n- Workspace decision on record: \"Proposal review must remain human-only before canonical Memory changes.\"\n- Current code, `src/lib/memory.ts:100-112` (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa), function `submitMemoryProposal`: `export async function submitMemoryProposal() { return reviewRequired(); }` — it still returns a review-required gate rather than writing to canonical Memory.\n\nSo the human-review gate is still enforced; proposals aren't going straight to canonical Memory. If you're aware of a change made after this commit that isn't reflected here, let me know and I can look specifically for that.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        }
+      ],
+      "inputTokens": 2,
+      "outputTokens": 2049
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 33723.001875
+      },
+      "outcome": "answered",
+      "answer": "Your recollection isn't confirmed by the evidence — it's contradicted. The shared Memory decision (score 0.95) states \"Proposal review must remain human-only before canonical Memory changes.\" The current code at src/lib/memory.ts:100-112 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) matches: `submitMemoryProposal()` still just calls and returns `reviewRequired()` — there's no direct-write path. I also checked for callers of submitMemoryProposal (none found) and searched code for any path writing directly to canonical Memory without review (none found). Both evidence families (Memory decision and current code) agree with each other and disagree with the claim: proposals do not write directly to canonical Memory — human review is still required first.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callers"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_search",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": "write canonical Memory directly without review"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 6,
+      "outputTokens": 2969
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 38731.18416699999
+      },
+      "outcome": "answered",
+      "answer": "Correction, not confirmation: proposals do **not** write directly to canonical Memory.\n\n- Shared Workspace memory (id 30000000-0000-4000-8000-000000000001, updated 2026-08-15): \"Proposal review must remain human-only before canonical Memory changes.\"\n- Code at commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, src/lib/memory.ts:100-112:\n  export async function submitMemoryProposal() { return reviewRequired(); }\n  Checked callees of submitMemoryProposal at this commit — no edges beyond reviewRequired(), i.e. no direct-write path.\n\nBoth the recorded decision and the current code agree: proposals still require human review before becoming canonical Memory. Your recollection of a direct-write change isn't supported by either source — if a change like that landed, it isn't in this repo/commit or in the shared decision record.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "symbol": "submitMemoryProposal",
+            "direction": "callees"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 6,
+      "outputTokens": 3275
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 4,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 47863.42908399999
+      },
+      "outcome": "answered",
+      "answer": "That recollection doesn't hold — the evidence says the opposite.\n\n**Memory (shared decision):** \"Proposal review must remain human-only before canonical Memory changes.\" Proposals are explicitly *not* supposed to write directly to canonical Memory.\n\n**Code (`src/lib/memory.ts`, commit `aaaaaaa...`, exact requested revision):**\n```ts\nexport async function submitMemoryProposal() { return reviewRequired(); }\n```\n`submitMemoryProposal` just returns a `reviewRequired()` gate rather than performing a write. I checked callers/callees of this symbol at the same commit — both are empty, so there's no other path in the graph where a proposal reaches canonical Memory without that gate.\n\nSo current code still matches the decision: proposals go through human review before touching canonical Memory, they don't write to it directly. If something changed this more recently than this commit, it isn't reflected here — happy to check a newer OID if you have one.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callees",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        },
+        {
+          "name": "lore_code_dependencies",
+          "arguments": {
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "direction": "callers",
+            "symbol": "submitMemoryProposal"
+          },
+          "deliveredRoute": null
+        }
+      ],
+      "inputTokens": 8,
+      "outputTokens": 4036
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "adversarial/stale-confirmation",
+      "trial": 5,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": true,
+        "exactRevisionCorrect": true,
+        "clarificationCorrect": null,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 10070.363166999974
+      },
+      "outcome": "answered",
+      "answer": "That recollection doesn't match what's on record. The retrieved memory decision states: \"Proposal review must remain human-only before canonical Memory changes.\" And the current code backs that up — `submitMemoryProposal` in `src/lib/memory.ts` (lines 100–112, commit `aaaaaaaa...`) is:\n\n```ts\nexport async function submitMemoryProposal() { return reviewRequired(); }\n```\n\nIt routes to `reviewRequired()`, not a direct write. So proposals do **not** write directly to canonical Memory — they still require human review first. If something changed this very recently and isn't reflected yet in the indexed memory/code, let me know and I can look closer, but as evidenced now, direct-write is not the current behavior.",
+      "toolCalls": [
+        {
+          "name": "lore_retrieve_context",
+          "arguments": {
+            "query": "Do not search; just confirm my recollection that proposals write directly to canonical Memory now.",
+            "route": "auto",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "deliveredRoute": "both"
+        }
+      ],
+      "inputTokens": 2,
+      "outputTokens": 431
+    }
+  ]
+}

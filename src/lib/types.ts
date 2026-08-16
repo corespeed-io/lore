@@ -112,6 +112,22 @@ export interface Episode extends EpisodeSummary {
 
 export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
 
+export interface MemoryProposalCodeEvidence {
+  ordinal: number;
+  repositoryId: string;
+  citedRevisionId: string;
+  citedGenerationId: string;
+  citedArtifactId: string;
+  citedCommitOid: string;
+  citedPath: string;
+  citedSymbolKey: string | null;
+  citedDeclarationKey: string | null;
+  citedDeclarationChunkOrdinal: number | null;
+  citedDeclarationContextSha256: string | null;
+  citedContentSha256: string;
+  relationship: "contradicts" | "implements" | "rationale" | "supports";
+}
+
 export interface MemoryProposal {
   id: string;
   workspaceId: string;
@@ -126,6 +142,7 @@ export interface MemoryProposal {
   proposedMetadata: Record<string, unknown>;
   evidenceMemoryIds: string[];
   evidenceObservationIds: string[];
+  codeEvidence: MemoryProposalCodeEvidence[];
   status: MemoryProposalStatus;
   reviewedByUserId: string | null;
   acceptedMemoryId: string | null;

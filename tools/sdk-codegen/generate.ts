@@ -5,6 +5,11 @@ import { loreOpenApiDocument } from "../../src/lib/openapi";
 const repositoryUrl = new URL("../../", import.meta.url);
 const openApiOutputUrl = new URL("packages/typescript-sdk/src/generated/openapi.ts", repositoryUrl);
 const runtimeOutputUrl = new URL("packages/typescript-sdk/src/generated/runtime.ts", repositoryUrl);
+const groundingSourceUrl = new URL("src/lib/retrieval-grounding.ts", repositoryUrl);
+const groundingOutputUrl = new URL(
+  "packages/typescript-sdk/src/generated/grounding.ts",
+  repositoryUrl,
+);
 const cliVersionOutputUrl = new URL("packages/cli/src/generated/version.ts", repositoryUrl);
 const mcpVersionOutputUrl = new URL("packages/mcp/src/generated/version.ts", repositoryUrl);
 const pythonContractOutputUrl = new URL(
@@ -32,6 +37,48 @@ interface JsonSchema {
 interface OpenApiDocument {
   components: { schemas: Readonly<Record<string, JsonSchema>> };
   info: { version: string };
+}
+
+const PYTHON_KEYWORDS = new Set([
+  "False",
+  "None",
+  "True",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
+]);
+
+function isPythonIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && !PYTHON_KEYWORDS.has(value);
 }
 
 function generatedHeader(source: string): string {
@@ -100,6 +147,16 @@ function generatedPythonContract(document: OpenApiDocument, errorCodes: readonly
         return `${name}: TypeAlias = ${pythonType(schema, true)}`;
       }
       const required = new Set(schema.required ?? []);
+      const requiresFunctionalSyntax = Object.keys(schema.properties).some(
+        (field) => !isPythonIdentifier(field),
+      );
+      if (requiresFunctionalSyntax) {
+        const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {
+          const annotation = pythonType(fieldSchema, true);
+          return `    ${JSON.stringify(field)}: ${required.has(field) ? annotation : `NotRequired[${annotation}]`},`;
+        });
+        return `${name} = TypedDict(\n    ${JSON.stringify(name)},\n  {\n${fields.join("\n")}\n  },\n)`;
+      }
       const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {
         const annotation = pythonType(fieldSchema);
         return `    ${field}: ${required.has(field) ? annotation : `NotRequired[${annotation}]`}`;
@@ -130,13 +187,15 @@ export async function generatedSdkTypes(): Promise<string> {
 async function generatedArtifacts(): Promise<ReadonlyMap<URL, string>> {
   const document = loreOpenApiDocument() as unknown as OpenApiDocument;
   const errorCodes = openApiErrorCodes(document);
-  const [openapi, cliVersion, mcpVersion] = await Promise.all([
+  const [openapi, cliVersion, mcpVersion, groundingSource] = await Promise.all([
     generatedSdkTypes(),
     packageVersion("packages/cli/package.json"),
     packageVersion("packages/mcp/package.json"),
+    readFile(groundingSourceUrl, "utf8"),
   ]);
   return new Map([
     [openApiOutputUrl, openapi],
+    [groundingOutputUrl, `${generatedHeader("src/lib/retrieval-grounding.ts")}${groundingSource}`],
     [
       runtimeOutputUrl,
       `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n`,

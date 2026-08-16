@@ -1,0 +1,146 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "groundingPolicyRevision": "retrieval-grounding-v2",
+  "generatedAt": "2026-08-15T23:27:07.167Z",
+  "provider": "Anthropic via Claude Code CLI",
+  "model": "claude-sonnet-5",
+  "trialsPerCase": 5,
+  "suite": {
+    "name": "Lore Retrieval Invocation Policy",
+    "version": 1,
+    "caseCount": 1
+  },
+  "variants": {
+    "host-policy": {
+      "description": "Production grounding gate chooses required, auto, or off before the model sees Lore tools.",
+      "metrics": {
+        "caseCount": 5,
+        "passRate": 1,
+        "requiredRetrievalRecall": null,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": null,
+        "exactRevisionAccuracy": null,
+        "clarificationAccuracy": 1,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 0.05928319999999872,
+        "p95LatencyMs": 0.29016699999999673
+      },
+      "toolCalls": 0,
+      "averageToolCalls": 0,
+      "inputTokens": 0,
+      "outputTokens": 0
+    }
+  },
+  "records": [
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 0.29016699999999673
+      },
+      "outcome": "clarified",
+      "answer": "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.",
+      "toolCalls": [],
+      "inputTokens": null,
+      "outputTokens": null,
+      "hostShortCircuit": true
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 2,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 0.003541000000012673
+      },
+      "outcome": "clarified",
+      "answer": "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.",
+      "toolCalls": [],
+      "inputTokens": null,
+      "outputTokens": null,
+      "hostShortCircuit": true
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 3,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 0.001291000000009035
+      },
+      "outcome": "clarified",
+      "answer": "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.",
+      "toolCalls": [],
+      "inputTokens": null,
+      "outputTokens": null,
+      "hostShortCircuit": true
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 4,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 0.0007499999999822649
+      },
+      "outcome": "clarified",
+      "answer": "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.",
+      "toolCalls": [],
+      "inputTokens": null,
+      "outputTokens": null,
+      "hostShortCircuit": true
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 5,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 0.0006669999999928677
+      },
+      "outcome": "clarified",
+      "answer": "Verifying current Code requires an operator-configured repository key and the exact full commit OID (40- or 64-character Git object id). Please provide that exact revision; Memory search is not a substitute for current Code truth.",
+      "toolCalls": [],
+      "inputTokens": null,
+      "outputTokens": null,
+      "hostShortCircuit": true
+    }
+  ]
+}

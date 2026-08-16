@@ -1,10 +1,17 @@
 import { expect, test } from "vitest";
+import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@/lib/memory-content";
+import {
+  MAX_EPISODE_CONTENT_CHARACTERS,
+  MAX_EPISODE_OBSERVATIONS,
+  MAX_OBSERVATION_CONTENT_CHARACTERS,
+} from "@/lib/observations";
 import {
   longMemEvalV2ContainsLiteralAnswer,
   longMemEvalV2QuestionScreenshot,
   mapLongMemEvalV2TrajectoryQuestions,
   parseLongMemEvalV2Question,
   parseLongMemEvalV2Trajectory,
+  planLongMemEvalV2TrajectoryEpisodes,
   renderLongMemEvalV2Trajectory,
   selectLongMemEvalV2Questions,
   validateLongMemEvalV2QuestionScreenshot,
@@ -66,6 +73,97 @@ test("LongMemEval-V2 trajectories render textual state, action, and observation 
   expect(longMemEvalV2ContainsLiteralAnswer(renderLongMemEvalV2Trajectory(trajectory), "A")).toBe(
     false,
   );
+});
+
+test("LongMemEval-V2 trajectories cannot bypass the canonical Memory content boundary", () => {
+  const trajectory = parseLongMemEvalV2Trajectory({
+    id: "oversized-trajectory",
+    domain: "web",
+    environment: "shopping",
+    goal: "Exercise the benchmark ingestion boundary",
+    outcome: "success",
+    start_url: "https://shop.example/",
+    states: [
+      {
+        state_index: 0,
+        step: 1,
+        url: "https://shop.example/large-state",
+        action: "observe",
+        thought: null,
+        accessibility_tree: "x".repeat(MEMORY_CONTENT_LIMITS.maximumCharacters + 1),
+        screenshot: null,
+      },
+    ],
+  });
+  const content = renderLongMemEvalV2Trajectory(trajectory);
+
+  expect(Array.from(content).length).toBeGreaterThan(MEMORY_CONTENT_LIMITS.maximumCharacters);
+  expect(() => prepareMemoryContent(content)).toThrow(
+    `Memory content may contain at most ${MEMORY_CONTENT_LIMITS.maximumCharacters} Unicode characters`,
+  );
+});
+
+test("LongMemEval-V2 trajectories become bounded ordered Episode evidence with exact reconstruction", () => {
+  const trajectory = parseLongMemEvalV2Trajectory({
+    id: "large-trajectory",
+    domain: "enterprise",
+    environment: "workarena",
+    goal: "Preserve a large workflow",
+    outcome: "failure",
+    start_url: "https://enterprise.example/",
+    states: [
+      {
+        state_index: 7,
+        step: 8,
+        url: "https://enterprise.example/large-state",
+        action: "inspect",
+        thought: "Keep state identity while fragmenting evidence",
+        accessibility_tree: `start ${"large state node ".repeat(70_000)} ${"😀".repeat(60_000)} end`,
+        screenshot: null,
+      },
+    ],
+  });
+  const plan = planLongMemEvalV2TrajectoryEpisodes(trajectory, {
+    benchmark: "LongMemEval-V2",
+    corpusKey: "fixture",
+  });
+  const observations = plan.episodes.flatMap((episode) => episode.observations);
+
+  expect(plan.renderedContent).toBe(renderLongMemEvalV2Trajectory(trajectory));
+  expect(observations.map((observation) => observation.content).join("")).toBe(
+    plan.renderedContent,
+  );
+  expect(plan.episodes.length).toBeGreaterThan(1);
+  expect(plan.observationCount).toBe(observations.length);
+  expect(
+    plan.episodes.every(
+      (episode) =>
+        episode.observations.length <= MAX_EPISODE_OBSERVATIONS &&
+        episode.observations.reduce(
+          (total, observation) => total + observation.content.length,
+          0,
+        ) <= MAX_EPISODE_CONTENT_CHARACTERS,
+    ),
+  ).toBe(true);
+  expect(
+    observations.every(
+      (observation) => observation.content.length <= MAX_OBSERVATION_CONTENT_CHARACTERS,
+    ),
+  ).toBe(true);
+  expect(observations.map((observation) => observation.metadata?.segmentOrdinal)).toEqual(
+    observations.map((_, index) => index),
+  );
+  for (const [episodeOrdinal, episode] of plan.episodes.entries()) {
+    expect(
+      episode.observations.every(
+        (observation) => observation.metadata?.trajectoryEpisodeOrdinal === episodeOrdinal,
+      ),
+    ).toBe(true);
+  }
+  expect(observations.at(-1)?.metadata).toMatchObject({
+    trajectoryId: "large-trajectory",
+    stateIndex: 7,
+  });
 });
 
 test("LongMemEval-V2 parser rejects cross-schema domain values", () => {

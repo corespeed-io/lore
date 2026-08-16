@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
 import { installActorContext } from "@/lib/actor-context";
+import { createCodeEvidenceModule } from "@/lib/code-evidence";
+import { createCodeIndexModule } from "@/lib/code-index";
 import { createMemoryGraphModule } from "@/lib/graph";
 import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
 import {
@@ -88,6 +90,153 @@ test("Agent proposal remains private and non-canonical until its owner accepts i
   await expect(memories.list(testContext.bob)).resolves.toMatchObject([
     { id: accepted?.memory?.id },
   ]);
+
+  await testContext.close();
+});
+
+test("Agent proposal carries immutable typed Code Evidence into the accepted Memory", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const code = createCodeIndexModule(testContext.database);
+  const codeEvidence = createCodeEvidenceModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const commitOid = "9".repeat(40);
+  await code.indexRevision(testContext.alice, {
+    repositoryKey: "corespeed/proposal-code-evidence",
+    displayName: "Proposal Code Evidence",
+    commitOid,
+    files: [
+      {
+        path: "src/guard.ts",
+        content: "export function proposalGuard() { return 'safe'; }\n",
+      },
+    ],
+  });
+  const [artifact] = await code.search(agentActor, {
+    repositoryKey: "corespeed/proposal-code-evidence",
+    commitOid,
+    query: "proposalGuard",
+  });
+  if (!artifact) throw new Error("Expected proposalGuard Code Artifact");
+
+  const proposal = await memories.propose(agentActor, {
+    kind: "create",
+    content: "proposalGuard implements the deployment safety check.",
+    scope: "private",
+    codeEvidence: [{ artifactId: artifact.id, relationship: "implements" }],
+  });
+
+  expect(proposal.codeEvidence).toEqual([
+    expect.objectContaining({
+      citedArtifactId: artifact.id,
+      citedCommitOid: commitOid,
+      citedPath: "src/guard.ts",
+      citedSymbolKey: "src/guard.ts#function_declaration:proposalGuard",
+      citedDeclarationChunkOrdinal: artifact.declarationChunkOrdinal,
+      citedDeclarationContextSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      citedContentSha256: artifact.contentSha256,
+      relationship: "implements",
+    }),
+  ]);
+  await expect(memories.listProposals(testContext.alice)).resolves.toMatchObject([
+    { id: proposal.id, codeEvidence: proposal.codeEvidence },
+  ]);
+  await expect(memories.listProposals(testContext.bob)).resolves.toEqual([]);
+
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query("DELETE FROM code_index_generations WHERE id = $1", [
+      artifact.generationId,
+    ]);
+    await expect(
+      transaction.query("SELECT id FROM code_artifacts WHERE id = $1", [artifact.id]),
+    ).resolves.toMatchObject({ rows: [] });
+  });
+
+  const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
+  if (!accepted?.memory) throw new Error("Expected accepted proposal Memory");
+  await expect(
+    codeEvidence.list(testContext.alice, { memoryId: accepted.memory.id }),
+  ).resolves.toMatchObject([
+    {
+      citedArtifactId: artifact.id,
+      citedCommitOid: commitOid,
+      citedPath: "src/guard.ts",
+      citedDeclarationChunkOrdinal: artifact.declarationChunkOrdinal,
+      citedDeclarationContextSha256: proposal.codeEvidence[0]?.citedDeclarationContextSha256,
+      citedContentSha256: artifact.contentSha256,
+      relationship: "implements",
+      validationState: "current",
+      createdByUserId: testContext.alice.userId,
+      createdByAgentId: null,
+    },
+  ]);
+
+  await testContext.close();
+});
+
+test("Proposal Code Evidence rejects a Code Artifact from another Workspace", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const code = createCodeIndexModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const commitOid = "8".repeat(40);
+  await code.indexRevision(testContext.carol, {
+    repositoryKey: "corespeed/research-private-code",
+    displayName: "Research private code",
+    commitOid,
+    files: [{ path: "src/private.ts", content: "export const researchSecret = true;\n" }],
+  });
+  const [hiddenArtifact] = await code.search(testContext.carol, {
+    repositoryKey: "corespeed/research-private-code",
+    commitOid,
+    query: "researchSecret",
+  });
+  if (!hiddenArtifact) throw new Error("Expected Research Code Artifact");
+
+  await expect(
+    memories.propose(agentActor, {
+      kind: "create",
+      content: "Attempted cross-Workspace Code synthesis",
+      codeEvidence: [{ artifactId: hiddenArtifact.id, relationship: "supports" }],
+    }),
+  ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.close();
+});
+
+test("Memory, Observation, and Code Proposal evidence share one 50-item limit", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const visibleMemory = await memories.remember(testContext.alice, {
+    content: "One visible evidence Memory",
+  });
+  const codeEvidence = Array.from({ length: 50 }, (_, index) => ({
+    artifactId: `80000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    relationship: "supports" as const,
+  }));
+
+  await expect(
+    memories.propose(testContext.alice, {
+      kind: "create",
+      content: "Too much combined evidence",
+      evidenceMemoryIds: [visibleMemory.id],
+      codeEvidence,
+    }),
+  ).rejects.toThrow("at most 50 evidence records");
+  await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
+
+  await testContext.close();
+});
+
+test("Memory Proposal rejects content that cannot become a canonical Memory", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+
+  await expect(
+    memories.propose(testContext.alice, {
+      kind: "create",
+      content: "x".repeat(32_001),
+    }),
+  ).rejects.toThrow("Memory content may contain at most 32000 Unicode characters");
 
   await testContext.close();
 });

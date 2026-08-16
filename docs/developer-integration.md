@@ -88,16 +88,28 @@ await memories.proposeMemory(
     expectedVersion: created.version,
     content: "The rollout starts after human approval.",
     evidenceObservationIds: [episode.observations[0].id],
+    codeEvidence: [{ artifactId: "CODE_ARTIFACT_UUID", relationship: "implements" }],
   },
   { idempotencyKey: "rollout-proposal-1" },
 );
+
+const dependencies = await memories.queryCodeDependencies({
+  repositoryKey: "corespeed/lore",
+  commitOid: "0123456789abcdef0123456789abcdef01234567",
+  direction: "callers",
+  symbol: "createMemoryModule",
+  limit: 50,
+});
 ```
 
 The Workspace client also provides `listEpisodes`, `recordEpisode`, `getEpisode`,
 bounded `getObservations`, and `forgetEpisode`, plus `listMemoryProposals`,
 `proposeMemory`, and `reviewMemoryProposal` alongside the canonical Memory methods.
-An Observation is durable raw evidence, not searchable Memory. Proposal evidence is
-resolved again under the reviewing human's current RLS visibility.
+An Observation is durable raw evidence, not searchable Memory. Observation evidence is
+resolved again under the reviewing human's current RLS visibility. Proposal Code
+Evidence is instead frozen as an exact commit/path/symbol/digest anchor at submission
+and copied transactionally onto the accepted Memory without re-resolution. All three
+evidence categories share one 50-item limit.
 Episode recording, Proposal submission, and direct Memory mutation methods create
 a replay-safe idempotency key unless the caller supplies one. Direct update/forget and update
 proposals require the current positive Memory version. Proposal listing and review
@@ -152,6 +164,14 @@ memories.propose_memory(
     },
     idempotency_key="suggested-note-1",
 )
+
+dependencies = memories.query_code_dependencies(
+    "corespeed/lore",
+    "0123456789abcdef0123456789abcdef01234567",
+    "callers",
+    symbol="createMemoryModule",
+    limit=50,
+)
 ```
 
 The dependency-light synchronous client provides the same core Workspace/Memory,
@@ -171,10 +191,14 @@ node packages/cli/dist/bin.js memory get MEMORY_UUID
 printf %s "fact" | node packages/cli/dist/bin.js memory remember --stdin \
   --scope private --idempotency-key fact-1
 printf %s "suggested fact" | node packages/cli/dist/bin.js memory propose create \
-  --stdin --scope private --idempotency-key proposal-1
+  --stdin --scope private \
+  --code-evidence CODE_ARTIFACT_UUID:implements --idempotency-key proposal-1
 printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":"raw evidence"}]}' \
   | node packages/cli/dist/bin.js episode record --stdin --idempotency-key episode-1
 node packages/cli/dist/bin.js episode list --scope private
+node packages/cli/dist/bin.js code dependencies callers \
+  --repository corespeed/lore --commit FULL_COMMIT_OID \
+  --symbol createMemoryModule --limit 50
 node packages/cli/dist/bin.js memory propose update MEMORY_UUID --version 2 \
   --content "suggested replacement" --observation-evidence OBSERVATION_UUID \
   --idempotency-key proposal-update-1
@@ -210,12 +234,63 @@ It exposes:
 - `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, metadata, or visibility;
 - `lore_forget` as an explicitly destructive tool.
+- `lore_retrieve_context` as the read-only joint Memory/Code orchestration tool;
+- `lore_code_search`, `lore_code_dependencies`, and `lore_code_index_status` as
+  bounded exact-revision Code reads;
+- `lore_code_index` to queue one exact commit from an operator-configured source;
+- `lore_code_evidence_list`, `lore_code_evidence_cite`, and
+  `lore_code_evidence_revalidate` as the separate typed Memory/Code evidence family.
 
 The Workspace id is process configuration, not tool input, so a model cannot ask
 the adapter to cross a Workspace boundary. Returned Memory objects omit internal
 top-level Workspace, owner User, and creating Agent ids. Lore still applies the credential's
 read/write grant and RLS to every operation. The adapter neither stores nor logs
 the credential, Memory content, or query text.
+
+`lore_retrieve_context` accepts one question plus optional `repositoryKey` and
+full 40/64-character `commitOid`; those two Code selectors must be supplied
+together. `route=auto` applies Lore's versioned deterministic route policy, while
+an agent that already knows the question needs both stores may request
+`route=both`. Optional `memoryQuery` and `codeQuery` let the calling agent supply
+channel-specific search terms without changing the original routing question;
+the receipt records the exact queries used. The server performs authorized Memory
+retrieval, exact-revision Code retrieval, and side-effect-free citation assessment
+in one request. For a routed change question, `joint-memory-code-v2` also compares
+bounded direct dependencies for up to five resolved citations, with at most 25
+edges per citation. Dependency targets are fingerprinted across their complete
+logical declaration chunk sequence. `unknown` and `possibly_affected` are explicit
+outcomes when a historical generation, target resolution, or complete bounded
+traversal is unavailable; they do not mean unchanged. Its response
+keeps `memories`, `code`, `anchors`, `conflicts`, and the retrieval `receipt`
+separate. It does not write Memory or persisted Code Evidence state.
+
+One Memory is a bounded canonical knowledge record, not a document container. Keep
+it at or below the recommended 8,000 Unicode characters; Lore rejects content over
+32,000 characters or 64 derived chunks across direct writes, Proposals, and
+imports. Record longer source material as `document_fragment` Observations in a
+document Episode, then cite that evidence from a reviewed Proposal.
+
+Lore derives non-overlapping chunks of at most 1,200 Unicode code points. They
+preserve formatting and reconstruct the Memory exactly while preferring structural
+boundaries; `lore-memory-chunking-v2` is exposed by `/api/v1/capabilities`.
+Consumers should use returned evidence and the bounded neighbor policy rather than
+assuming whitespace-normalized chunks or adding hidden overlap.
+
+Self-host operators enable indexing by setting a server-side registry, for example:
+
+```bash
+export LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath":"/absolute/path/to/lore"}}'
+```
+
+The model supplies `repositoryKey` and a full 40/64-character commit OID. It cannot
+supply or discover `repositoryPath`; an empty registry disables enqueue. Native
+Git and AST work runs in the Node maintenance worker, never in the MCP or
+Cloudflare request bundle.
+
+`lore_code_dependencies` accepts exactly one `symbol` or `path` plus
+`direction=callers|callees`. Results are capped at 200 and report `truncated`.
+Static targets remain explicitly `resolved`, `ambiguous`, or `unresolved`; clients
+must not treat an unresolved target as proof that no runtime dependency exists.
 
 MCP output has an independent 128,000-character structured-output ceiling. List
 uses bounded content previews, search returns bounded evidence without duplicating

@@ -1,7 +1,8 @@
 import { type ActorContext, installActorContext } from "./actor-context";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { canonicalJson, mutationRequestHash } from "./idempotency";
-import { chunkMemoryContent } from "./memory-chunking";
+import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
+import { MemoryContentValidationError, prepareMemoryContent } from "./memory-content";
 import type { MemoryScope } from "./types";
 
 export const WORKSPACE_ARCHIVE_FORMAT = "lore-workspace-v1";
@@ -239,13 +240,15 @@ function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
     if (memory.scope !== "private" && memory.scope !== "shared") {
       throw new PortabilityValidationError(`memories[${index}].scope is invalid`);
     }
-    if (
-      typeof memory.content !== "string" ||
-      !memory.content.trim() ||
-      memory.content.includes("\0") ||
-      memory.content.length > 1_000_000
-    ) {
-      throw new PortabilityValidationError(`memories[${index}].content is invalid`);
+    try {
+      prepareMemoryContent(memory.content);
+    } catch (error) {
+      if (error instanceof MemoryContentValidationError) {
+        throw new PortabilityValidationError(`memories[${index}].content: ${error.message}`, {
+          cause: error,
+        });
+      }
+      throw error;
     }
     const normalizedMetadata = metadata(memory.metadata, `memories[${index}].metadata`);
     const createdAt = timestamp(memory.createdAt, `memories[${index}].createdAt`);
@@ -340,12 +343,13 @@ async function insertChunks(
   memoryId: string,
   content: string,
 ): Promise<void> {
-  const chunks = chunkMemoryContent(content);
+  const chunks = prepareMemoryContent(content).chunks;
   for (const [ordinal, chunk] of chunks.entries()) {
     await transaction.query(
-      `INSERT INTO memory_chunks (id, workspace_id, memory_id, ordinal, content)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [crypto.randomUUID(), workspaceId, memoryId, ordinal, chunk],
+      `INSERT INTO memory_chunks (
+         id, workspace_id, memory_id, ordinal, content, chunking_revision
+       ) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [crypto.randomUUID(), workspaceId, memoryId, ordinal, chunk, MEMORY_CHUNKING_REVISION],
     );
   }
 }

@@ -66,7 +66,7 @@ keeps documents unchanged and prefixes queries with Qwen's
 That preprocessing is part of `lore-embedding-v2`, not an operator-tunable prompt.
 The v2 revision is scoped to matching Qwen3/Ollama models. Google, OpenAI, and
 other Ollama models remain on v1; OpenAI uses the same text for both roles. Canonical
-document chunking is unchanged across these revisions. Every adapter
+Memory chunking is unchanged across these revisions. Every adapter
 must return exactly 1024 values. Changing a running
 deployment's provider or model creates a different embedding generation. Lore
 materializes one exact compatible generation before semantic top-k, so vectors from
@@ -80,6 +80,13 @@ hints and the scheduled sweep cover both lanes. Activation is one transaction an
 refuses missing, unfinished, or dead work. The old generation remains available for
 bounded rolling-deploy compatibility and rollback. Model changes do not rewrite
 canonical Memory chunks.
+
+Canonical chunks use `lore-memory-chunking-v2`: non-overlapping partitions of at
+most 1,200 Unicode code points that exactly reconstruct the Memory. The splitter
+prefers paragraph and Markdown structure, then sentence, line, and whitespace
+boundaries before a Unicode-safe hard split. The revision and zero-overlap policy
+are reported by `/api/v1/capabilities`; changing them requires a forward
+re-chunk/re-embedding rollout and a new evaluation profile.
 
 Dense candidate search uses a deployment-wide cosine-distance gate of `0.5` by
 default. `LORE_SEMANTIC_DISTANCE_THRESHOLD` accepts `0..2`; larger values favor
@@ -505,6 +512,13 @@ accepted only while both the credential and Workspace grant remain active.
 - `/livez` for process liveness and `/readyz` for database, role, schema, vector,
   and RLS readiness
 
+One Memory represents one coherent canonical fact, decision, constraint,
+procedure, or rationale. The recommended size is at most 8,000 Unicode characters;
+the hard limits are 32,000 characters and 64 derived chunks. Create, update,
+Proposal, and import enforce the same boundary. Longer raw documents belong in
+bounded `document_fragment` Observations inside a document Episode rather than
+being automatically split into canonical Memories.
+
 The native `/operations` surface turns the stable portability contract into a
 human-only workflow: download an actor-visible archive, inspect its manifest and
 owner set, run checksum/limit/owner/collision validation as a dry check, then
@@ -559,6 +573,14 @@ remember/update/forget, `lore_observe` for non-canonical Episode evidence, and
 `lore_propose` for owner-reviewed suggestions in exactly the configured Actor and
 Workspace. Supply the same `idempotencyKey` when retrying a mutation whose response
 was lost:
+
+For combined retrieval, use `lore_retrieve_context`. The matching SDK methods are
+`workspace.retrieveContext(...)` in TypeScript and
+`workspace.retrieve_context(...)` in Python. They call
+`POST /api/v1/context/retrieve` once, require repository key and exact commit OID
+together for Code, preserve typed anchor states, and never persist assessment.
+The original question controls routing; optional channel-specific Memory and Code
+queries are returned in the receipt rather than hidden as planner state.
 
 ```json
 {
@@ -758,6 +780,13 @@ browser/enterprise trajectories rather than exposing gold retrieval ids. Downloa
 and verify its questions, 29 question screenshots, and the 100-trajectory haystack
 (about 4.2 MB) without pulling the large trajectory corpus:
 
+The runner never turns a raw trajectory into canonical Memory. It preserves the
+rendered trajectory exactly across bounded workflow Episodes/Observations, indexes
+their immutable content through the separate revisioned Episode-evidence module,
+and groups retrieved evidence back by trajectory identity. Workspace/RLS,
+benchmark metadata, and the question's exact haystack source keys are all applied
+before lexical or semantic top-k.
+
 ```bash
 bun run benchmark:longmemeval-v2:fetch metadata
 ```
@@ -809,17 +838,18 @@ See the [Ollama chat API](https://docs.ollama.com/api/chat) and
 [`docs/research/ollama-benchmark-reader.md`](research/ollama-benchmark-reader.md).
 
 The runner stores each shared trajectory once across the selected questions, uses
-an indexed JSONB haystack filter before top-k, runs retrieval under RLS, plants one
-Bob-private answer tripwire per question, and records answer accuracy, category
-metrics, search/reader latency, and token usage. `--reuse-indexed` validates the
+exact trajectory source keys plus indexed metadata before top-k, runs retrieval
+under RLS, plants one Bob-private Episode-evidence tripwire per question, and records
+answer accuracy, category metrics, search/reader latency, and token usage.
+`--reuse-indexed` validates the
 exact corpus/embedding space before avoiding re-indexing. The default uses all 295
 deterministic phrase/ordered-phrase/multiple-choice cases, including
 the one screenshot question. The fixed reader transport must use a vision-capable
 model for that image case; screenshots are verified against the pinned manifest and
 sent inline as base64 rather than exposed through a public URL.
-Tripwires keep their exact synchronous chunks but deliberately skip embedding: RLS
-makes them invisible to the benchmark Actor, and vectorizing forbidden answers would
-waste indexing time without strengthening the isolation assertion.
+Tripwires use the same lexical/vector evidence path and are included in each
+question's candidate source scope, so both lexical and semantic RLS failures become
+hard isolation failures rather than being hidden by benchmark filtering.
 
 When a fixed reader cannot run locally, `--retrieval-only` skips reader and judge
 configuration and reports Recall@1, Recall@K, and MRR only for questions whose
@@ -838,7 +868,8 @@ settings, context-budget unit, transport, image routing, corrected prompt mode, 
 prompt SHA-256. See [`docs/research/longmemeval-v2-multimodal.md`](research/longmemeval-v2-multimodal.md)
 for the pinned official protocol and its upstream prompt-escape compatibility trap.
 
-Reports also pin the exact retrieval, planner, and reranker configuration and include
+Reports also pin the Memory chunking revision and bind it into the reusable corpus
+key, alongside the exact retrieval, planner, and reranker configuration. They include
 actual provider request/input character counts as cost drivers. Reader and judge token
 totals are included when returned by their APIs; character counts are never presented
 as estimated billing tokens.
@@ -936,8 +967,8 @@ turn a 35-question local result into a global default or a SOTA claim.
 
 Lore pins the official 22-row Accurate Retrieval split separately from Conflict
 Resolution. The fetch is about 38 MB of verified JSONL. Its local diagnostic preserves
-RULER `Document N` boundaries and chunks within each document into isolated
-1,200-character Lore Memories; other sources use ordinary length chunking. It selects the
+RULER `Document N` boundaries and chunks within each document into isolated Lore
+Memories using `lore-memory-chunking-v2`. It selects the
 literal answer passage with query overlap, accepted-reference specificity,
 answer/query proximity, and subject normalization, then installs
 Bob-private answer tripwires:

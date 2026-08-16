@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import pg from "pg";
 import {
   evaluateLongMemEvalV2Answer,
@@ -8,13 +9,18 @@ import {
 } from "../src/lib/answer-evaluation";
 import { createPostgresDatabase } from "../src/lib/db/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
-import { createMemoryMaintenanceModule } from "../src/lib/maintenance";
 import {
-  type ActorContext,
-  createMemoryModule,
-  RETRIEVAL_EVIDENCE_POLICY,
-  RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
-} from "../src/lib/memory";
+  createEpisodeEvidenceModule,
+  EPISODE_EVIDENCE_INDEX_REVISION,
+  EPISODE_EVIDENCE_RETRIEVAL_POLICY,
+} from "../src/lib/episode-evidence";
+import type { ActorContext } from "../src/lib/memory";
+import {
+  MEMORY_CHUNK_MAXIMUM_CHARACTERS,
+  MEMORY_CHUNK_OVERLAP_CHARACTERS,
+  MEMORY_CHUNKING_REVISION,
+} from "../src/lib/memory-chunking";
+import { createObservationModule } from "../src/lib/observations";
 import { createQueryPlanningProviderFromEnvironment } from "../src/lib/query-planning/provider-factory";
 import { createRerankingProviderFromEnvironment } from "../src/lib/reranking/provider-factory";
 import { createBenchmarkJudgeFromEnvironment } from "./lib/benchmark-judge";
@@ -29,16 +35,16 @@ import {
   longMemEvalV2ReaderInstruction,
 } from "./lib/benchmark-reader";
 import { verifyFile } from "./lib/file-integrity";
-import { requireExactIndexedMemory } from "./lib/indexed-memory-validation";
 import {
+  LONGMEMEVAL_V2_EPISODE_PLAN_REVISION,
   type LongMemEvalV2Question,
   longMemEvalV2ContainsLiteralAnswer,
   longMemEvalV2Manifest,
   longMemEvalV2QuestionScreenshot,
   mapLongMemEvalV2TrajectoryQuestions,
+  planLongMemEvalV2TrajectoryEpisodes,
   readLongMemEvalV2Haystack,
   readLongMemEvalV2Questions,
-  renderLongMemEvalV2Trajectory,
   selectLongMemEvalV2Questions,
   streamSelectedLongMemEvalV2Trajectories,
   validateLongMemEvalV2QuestionScreenshot,
@@ -64,6 +70,11 @@ const aliceUserId = "00000000-0000-4000-8000-000000000201";
 const bobUserId = "00000000-0000-4000-8000-000000000202";
 const webWorkspaceId = "00000000-0000-4000-8000-000000000301";
 const enterpriseWorkspaceId = "00000000-0000-4000-8000-000000000302";
+const memoryChunking = {
+  revision: MEMORY_CHUNKING_REVISION,
+  maximumCharacters: MEMORY_CHUNK_MAXIMUM_CHARACTERS,
+  overlapCharacters: MEMORY_CHUNK_OVERLAP_CHARACTERS,
+};
 
 function positiveInteger(value: string | undefined, flag: string): number {
   const parsed = Number(value);
@@ -183,6 +194,9 @@ function corpusKey(
     JSON.stringify({
       revision: longMemEvalV2Manifest.revision,
       renderRevision: "lore-longmemeval-v2-trajectory-v1",
+      memoryChunking,
+      episodeEvidenceIndexRevision: EPISODE_EVIDENCE_INDEX_REVISION,
+      episodePlanRevision: LONGMEMEVAL_V2_EPISODE_PLAN_REVISION,
       trajectoriesSha256: longMemEvalV2Manifest.files.trajectories.sha256,
       tier,
       questions: questions.map((question) => ({
@@ -268,7 +282,19 @@ const selection = {
   corpusKey: selectedCorpusKey,
 };
 if (options.plan) {
-  console.log(JSON.stringify({ dataset: longMemEvalV2Manifest.name, selection }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        dataset: longMemEvalV2Manifest.name,
+        selection,
+        memoryChunking,
+        episodeEvidenceIndexRevision: EPISODE_EVIDENCE_INDEX_REVISION,
+        episodePlanRevision: LONGMEMEVAL_V2_EPISODE_PLAN_REVISION,
+      },
+      null,
+      2,
+    ),
+  );
   process.exit(0);
 }
 const questionImages = new Map<string, BenchmarkReaderImage>();
@@ -364,13 +390,17 @@ const rerankDiversityLambda = numericSetting("LORE_RERANK_DIVERSITY_LAMBDA", 1, 
 const rerankMinimumScore = numericSetting("LORE_RERANK_MIN_SCORE", 0, 0, 1);
 const rerankWeight = numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1);
 const semanticDistanceThreshold = numericSetting("LORE_SEMANTIC_DISTANCE_THRESHOLD", 0.5, 0, 2);
+if (retrievalFeedbackQueries !== 0 || retrievalRecencyWeight !== 0) {
+  throw new Error(
+    "LongMemEval-V2 Episode evidence does not yet support retrieval feedback or recency fusion",
+  );
+}
+if (rerankDiversityLambda !== 1) {
+  throw new Error("LongMemEval-V2 Episode evidence does not yet support rerank diversity");
+}
 
 const admin = new pg.Client({ connectionString: databaseUrl });
 const requestDatabase = createPostgresDatabase({ connectionString: databaseUrl });
-const maintenanceDatabase = createPostgresDatabase(
-  { connectionString: databaseUrl },
-  { role: "lore_maintenance" },
-);
 const startedAt = performance.now();
 await admin.connect();
 try {
@@ -379,17 +409,17 @@ try {
   if (!databaseName || !benchmarkNamePattern.test(databaseName)) {
     throw new Error(`Refusing to modify non-benchmark database ${JSON.stringify(databaseName)}`);
   }
-  const schema = await admin.query<{ memories: string | null; metadata_index: string | null }>(
+  const schema = await admin.query<{ chunks: string | null; search_index: string | null }>(
     `SELECT
-       to_regclass('public.memories')::text AS memories,
-       to_regclass('public.memories_metadata_gin_idx')::text AS metadata_index`,
+       to_regclass('public.episode_evidence_chunks')::text AS chunks,
+       to_regclass('public.episode_evidence_chunks_search_idx')::text AS search_index`,
   );
-  if (!schema.rows[0]?.memories || !schema.rows[0]?.metadata_index) {
-    throw new Error("Lore v1 baseline with the Memory metadata index is required");
+  if (!schema.rows[0]?.chunks || !schema.rows[0]?.search_index) {
+    throw new Error("Lore v1 baseline with the Episode evidence index is required");
   }
 
-  const trajectoryMemoryIds = new Map<string, string>();
-  const tripwireMemoryIds = new Map<string, string>();
+  const trajectoryEpisodeIds = new Map<string, string[]>();
+  const tripwireEpisodeIds = new Map<string, string>();
   const literalAnswerTrajectoryIds = new Map<string, Set<string>>();
   const recordLiteralAnswerAnchors = (trajectoryId: string, content: string) => {
     const questionIds = trajectoryQuestions.get(trajectoryId);
@@ -403,13 +433,27 @@ try {
       literalAnswerTrajectoryIds.set(questionId, anchors);
     }
   };
+  const observations = createObservationModule(requestDatabase);
+  const episodeEvidence = createEpisodeEvidenceModule(requestDatabase, {
+    embeddingProvider,
+    evidenceNeighborChunks,
+    evidenceTopObservations: evidenceTopChunks,
+    queryPlanningProvider,
+    queryPlannerMaxQueries,
+    rerankingProvider,
+    rerankCandidateLimit,
+    rerankMinimumScore,
+    rerankWeight,
+    semanticDistanceThreshold,
+  });
   let indexingElapsedMs: number | null = null;
-  let completedJobs: number | null = null;
+  let indexedEpisodes = 0;
+  let indexedChunks = 0;
   if (!options.reuseIndexed) {
     console.error(`Streaming ${trajectoryQuestions.size} selected trajectories...`);
     await admin.query("BEGIN");
     try {
-      await admin.query("TRUNCATE users, workspaces CASCADE");
+      await admin.query("TRUNCATE users, workspaces, embedding_generations CASCADE");
       await admin.query(
         `INSERT INTO users (id, display_name)
          VALUES ($1, 'V2 Alice'), ($2, 'V2 Bob')`,
@@ -432,8 +476,7 @@ try {
       await admin.query("ROLLBACK");
       throw error;
     }
-    const writer = createMemoryModule(requestDatabase, { embeddingProvider });
-    const tripwireWriter = createMemoryModule(requestDatabase);
+    const indexingStartedAt = performance.now();
     let storedTrajectories = 0;
     for await (const trajectory of streamSelectedLongMemEvalV2Trajectories(
       trajectoryPath,
@@ -445,61 +488,66 @@ try {
       if (trajectory.domain !== trajectoryDomains.get(trajectoryId)) {
         throw new Error(`Trajectory ${trajectoryId} does not match its question domain`);
       }
-      const content = renderLongMemEvalV2Trajectory(trajectory);
-      recordLiteralAnswerAnchors(trajectoryId, content);
-      const memory = await writer.remember(actor(trajectory.domain), {
-        content,
-        scope: "private",
-        metadata: {
-          benchmark: longMemEvalV2Manifest.name,
-          benchmarkVersion: longMemEvalV2Manifest.version,
-          benchmarkRevision: longMemEvalV2Manifest.revision,
-          corpusKey: selectedCorpusKey,
-          domain: trajectory.domain,
-          recordType: "trajectory",
-          trajectoryId,
-          questionIds: [...questionIds].sort(),
-        },
+      const plan = planLongMemEvalV2TrajectoryEpisodes(trajectory, {
+        benchmark: longMemEvalV2Manifest.name,
+        benchmarkVersion: longMemEvalV2Manifest.version,
+        benchmarkRevision: longMemEvalV2Manifest.revision,
+        corpusKey: selectedCorpusKey,
+        domain: trajectory.domain,
       });
-      trajectoryMemoryIds.set(trajectoryId, memory.id);
+      recordLiteralAnswerAnchors(trajectoryId, plan.renderedContent);
+      const episodeIds: string[] = [];
+      for (const episodeInput of plan.episodes) {
+        const episode = await observations.record(actor(trajectory.domain), episodeInput);
+        const indexed = await episodeEvidence.index(actor(trajectory.domain), {
+          episodeId: episode.id,
+        });
+        if (indexed.embeddedChunkCount !== indexed.chunkCount) {
+          throw new Error(`Episode ${episode.id} has incomplete embedding coverage`);
+        }
+        episodeIds.push(episode.id);
+        indexedEpisodes += 1;
+        indexedChunks += indexed.chunkCount;
+      }
+      trajectoryEpisodeIds.set(trajectoryId, episodeIds);
       storedTrajectories += 1;
       if (storedTrajectories % 25 === 0 || storedTrajectories === trajectoryQuestions.size) {
         console.error(`Stored ${storedTrajectories}/${trajectoryQuestions.size} trajectories...`);
       }
     }
     for (const question of selectedQuestions) {
-      const memory = await tripwireWriter.remember(actor(question.domain, bobUserId), {
-        content: tripwireContent(question),
+      const tripwireSourceKey = `tripwire:${question.id}`;
+      const episode = await observations.record(actor(question.domain, bobUserId), {
+        kind: "workflow",
         scope: "private",
-        metadata: {
-          benchmark: longMemEvalV2Manifest.name,
-          benchmarkVersion: longMemEvalV2Manifest.version,
-          benchmarkRevision: longMemEvalV2Manifest.revision,
-          corpusKey: selectedCorpusKey,
-          domain: question.domain,
-          recordType: "tripwire",
-          questionId: question.id,
-          questionIds: [question.id],
-        },
+        observations: [
+          {
+            kind: "event",
+            content: tripwireContent(question),
+            metadata: {
+              benchmark: longMemEvalV2Manifest.name,
+              benchmarkVersion: longMemEvalV2Manifest.version,
+              benchmarkRevision: longMemEvalV2Manifest.revision,
+              corpusKey: selectedCorpusKey,
+              domain: question.domain,
+              recordType: "tripwire-evidence",
+              trajectoryId: tripwireSourceKey,
+              trajectoryEpisodeOrdinal: 0,
+              segmentOrdinal: 0,
+              questionId: question.id,
+            },
+          },
+        ],
       });
-      tripwireMemoryIds.set(question.id, memory.id);
-    }
-    const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, { embeddingProvider });
-    const indexingStartedAt = performance.now();
-    completedJobs = 0;
-    while (true) {
-      const result = await maintenance.run();
-      if (result.status === "idle") break;
-      if (result.status !== "complete") {
-        throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as ${result.status}`);
+      const indexed = await episodeEvidence.index(actor(question.domain, bobUserId), {
+        episodeId: episode.id,
+      });
+      if (indexed.embeddedChunkCount !== indexed.chunkCount) {
+        throw new Error(`Tripwire Episode ${episode.id} has incomplete embedding coverage`);
       }
-      completedJobs += 1;
-      if (completedJobs % 25 === 0) console.error(`Embedded ${completedJobs} Memories...`);
-    }
-    if (completedJobs !== trajectoryQuestions.size) {
-      throw new Error(
-        `Expected ${trajectoryQuestions.size} trajectory embedding jobs, completed ${completedJobs}`,
-      );
+      tripwireEpisodeIds.set(question.id, episode.id);
+      indexedEpisodes += 1;
+      indexedChunks += indexed.chunkCount;
     }
     indexingElapsedMs = performance.now() - indexingStartedAt;
   } else {
@@ -510,84 +558,106 @@ try {
       workspace_id: string;
       metadata: Record<string, unknown>;
     }>(
-      `SELECT id, owner_user_id, scope, workspace_id, metadata
-       FROM memories
-       WHERE metadata @> $1::jsonb`,
+      `SELECT episode.id, episode.owner_user_id, episode.scope, episode.workspace_id,
+              observation.metadata
+       FROM episodes episode
+       JOIN observations observation
+         ON observation.workspace_id = episode.workspace_id
+        AND observation.episode_id = episode.id
+        AND observation.ordinal = 0
+       WHERE observation.metadata @> $1::jsonb`,
       [JSON.stringify({ benchmark: longMemEvalV2Manifest.name, corpusKey: selectedCorpusKey })],
     );
-    if (rows.rows.length !== trajectoryQuestions.size + selectedQuestions.length) {
-      throw new Error("Indexed LongMemEval-V2 corpus does not match the exact selection");
-    }
+    const storedTrajectoryParts = new Map<string, Array<{ id: string; ordinal: number }>>();
     for (const row of rows.rows) {
+      const domain = row.metadata.domain;
+      if (domain !== "web" && domain !== "enterprise") {
+        throw new Error(`Indexed Episode ${row.id} has an invalid domain`);
+      }
       if (
-        row.metadata.recordType === "trajectory" &&
-        typeof row.metadata.trajectoryId === "string"
+        row.workspace_id !== workspaceId(domain) ||
+        row.scope !== "private" ||
+        typeof row.metadata.trajectoryId !== "string"
       ) {
-        const expectedQuestions = trajectoryQuestions.get(row.metadata.trajectoryId);
-        const domain = row.metadata.domain;
+        throw new Error(`Indexed Episode ${row.id} failed tenancy validation`);
+      }
+      if (row.metadata.recordType === "trajectory-evidence") {
         if (
-          !expectedQuestions ||
-          (domain !== "web" && domain !== "enterprise") ||
-          domain !== trajectoryDomains.get(row.metadata.trajectoryId) ||
           row.owner_user_id !== aliceUserId ||
-          row.workspace_id !== workspaceId(domain) ||
-          row.scope !== "private" ||
-          !Array.isArray(row.metadata.questionIds) ||
-          JSON.stringify([...row.metadata.questionIds].sort()) !==
-            JSON.stringify([...expectedQuestions].sort())
+          !Number.isInteger(row.metadata.trajectoryEpisodeOrdinal)
         ) {
-          throw new Error(`Indexed trajectory ${row.metadata.trajectoryId} failed validation`);
+          throw new Error(`Indexed trajectory Episode ${row.id} failed validation`);
         }
-        trajectoryMemoryIds.set(row.metadata.trajectoryId, row.id);
+        const parts = storedTrajectoryParts.get(row.metadata.trajectoryId) ?? [];
+        parts.push({ id: row.id, ordinal: row.metadata.trajectoryEpisodeOrdinal as number });
+        storedTrajectoryParts.set(row.metadata.trajectoryId, parts);
       } else if (
-        row.metadata.recordType === "tripwire" &&
+        row.metadata.recordType === "tripwire-evidence" &&
         typeof row.metadata.questionId === "string"
       ) {
         const question = questionById.get(row.metadata.questionId);
-        if (
-          !question ||
-          row.owner_user_id !== bobUserId ||
-          row.workspace_id !== workspaceId(question.domain) ||
-          row.scope !== "private" ||
-          JSON.stringify(row.metadata.questionIds) !== JSON.stringify([question.id])
-        ) {
-          throw new Error(`Indexed tripwire ${row.metadata.questionId} failed validation`);
+        if (!question || row.owner_user_id !== bobUserId) {
+          throw new Error(`Indexed tripwire Episode ${row.id} failed validation`);
         }
-        tripwireMemoryIds.set(row.metadata.questionId, row.id);
-        await requireExactIndexedMemory({
-          client: admin,
-          memoryId: row.id,
-          expectedContent: tripwireContent(question),
-          embeddingProvider,
-          label: `tripwire ${question.id}`,
-          requireEmbedding: false,
-        });
+        tripwireEpisodeIds.set(question.id, row.id);
       } else {
-        throw new Error("Indexed LongMemEval-V2 corpus contains an invalid record");
+        throw new Error("Indexed LongMemEval-V2 corpus contains an invalid Episode");
       }
     }
-    if (
-      trajectoryMemoryIds.size !== trajectoryQuestions.size ||
-      tripwireMemoryIds.size !== selectedQuestions.length
-    ) {
-      throw new Error("Indexed LongMemEval-V2 corpus is incomplete");
-    }
+    const visitedEpisodeIds = new Set<string>();
     let validatedTrajectories = 0;
     for await (const trajectory of streamSelectedLongMemEvalV2Trajectories(
       trajectoryPath,
       new Set(trajectoryQuestions.keys()),
     )) {
-      const memoryId = trajectoryMemoryIds.get(trajectory.id);
-      if (!memoryId) throw new Error(`Indexed trajectory ${trajectory.id} is missing`);
-      const content = renderLongMemEvalV2Trajectory(trajectory);
-      recordLiteralAnswerAnchors(trajectory.id, content);
-      await requireExactIndexedMemory({
-        client: admin,
-        memoryId,
-        expectedContent: content,
-        embeddingProvider,
-        label: `trajectory ${trajectory.id}`,
+      const plan = planLongMemEvalV2TrajectoryEpisodes(trajectory, {
+        benchmark: longMemEvalV2Manifest.name,
+        benchmarkVersion: longMemEvalV2Manifest.version,
+        benchmarkRevision: longMemEvalV2Manifest.revision,
+        corpusKey: selectedCorpusKey,
+        domain: trajectory.domain,
       });
+      const storedParts = [...(storedTrajectoryParts.get(trajectory.id) ?? [])].sort(
+        (left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id),
+      );
+      if (
+        storedParts.length !== plan.episodes.length ||
+        storedParts.some((part, index) => part.ordinal !== index)
+      ) {
+        throw new Error(`Indexed trajectory ${trajectory.id} has incomplete Episode coverage`);
+      }
+      const reconstructed: string[] = [];
+      for (const [index, part] of storedParts.entries()) {
+        const episode = await observations.retrieve(actor(trajectory.domain), part.id);
+        if (!episode) throw new Error(`Indexed Episode ${part.id} is not visible`);
+        const expected = plan.episodes[index].observations;
+        if (
+          episode.observations.length !== expected.length ||
+          episode.observations.some(
+            (observation, observationIndex) =>
+              observation.content !== expected[observationIndex]?.content ||
+              !isDeepStrictEqual(observation.metadata, expected[observationIndex]?.metadata ?? {}),
+          )
+        ) {
+          throw new Error(`Indexed Episode ${part.id} does not match the pinned trajectory`);
+        }
+        const indexed = await episodeEvidence.index(actor(trajectory.domain), {
+          episodeId: part.id,
+          mode: "verify",
+        });
+        reconstructed.push(...episode.observations.map((observation) => observation.content));
+        visitedEpisodeIds.add(part.id);
+        indexedEpisodes += 1;
+        indexedChunks += indexed.chunkCount;
+      }
+      if (reconstructed.join("") !== plan.renderedContent) {
+        throw new Error(`Indexed trajectory ${trajectory.id} failed exact reconstruction`);
+      }
+      recordLiteralAnswerAnchors(trajectory.id, plan.renderedContent);
+      trajectoryEpisodeIds.set(
+        trajectory.id,
+        storedParts.map((part) => part.id),
+      );
       validatedTrajectories += 1;
       if (validatedTrajectories % 25 === 0 || validatedTrajectories === trajectoryQuestions.size) {
         console.error(
@@ -595,65 +665,33 @@ try {
         );
       }
     }
+    for (const question of selectedQuestions) {
+      const episodeId = tripwireEpisodeIds.get(question.id);
+      if (!episodeId) throw new Error(`Tripwire Episode ${question.id} is missing`);
+      const episode = await observations.retrieve(actor(question.domain, bobUserId), episodeId);
+      if (
+        episode?.observations.length !== 1 ||
+        episode.observations[0].content !== tripwireContent(question)
+      ) {
+        throw new Error(`Tripwire Episode ${question.id} failed exact validation`);
+      }
+      const indexed = await episodeEvidence.index(actor(question.domain, bobUserId), {
+        episodeId,
+        mode: "verify",
+      });
+      visitedEpisodeIds.add(episodeId);
+      indexedEpisodes += 1;
+      indexedChunks += indexed.chunkCount;
+    }
+    if (
+      trajectoryEpisodeIds.size !== trajectoryQuestions.size ||
+      tripwireEpisodeIds.size !== selectedQuestions.length ||
+      visitedEpisodeIds.size !== rows.rows.length
+    ) {
+      throw new Error("Indexed LongMemEval-V2 Episode corpus does not match the exact selection");
+    }
   }
 
-  const stale = await admin.query<{ count: string }>(
-    `SELECT count(*)::text AS count
-     FROM memories memory
-     WHERE memory.metadata @> $1::jsonb
-       AND memory.metadata->>'recordType' <> 'tripwire'
-       AND (
-         NOT EXISTS (
-           SELECT 1 FROM memory_chunks chunk
-           WHERE chunk.workspace_id = memory.workspace_id AND chunk.memory_id = memory.id
-         )
-         OR EXISTS (
-           SELECT 1 FROM memory_chunks chunk
-           WHERE chunk.workspace_id = memory.workspace_id
-             AND chunk.memory_id = memory.id
-             AND NOT EXISTS (
-               SELECT 1
-               FROM embedding_generations generation
-               JOIN memory_chunk_embeddings embedded
-                 ON embedded.generation_id = generation.id
-                AND embedded.workspace_id = chunk.workspace_id
-                AND embedded.memory_id = chunk.memory_id
-                AND embedded.chunk_id = chunk.id
-               WHERE generation.embedding_provider = $2
-                 AND generation.embedding_model = $3
-                 AND generation.embedding_dimensions = $4
-                 AND generation.embedding_revision = $5
-                 AND generation.status = 'active'
-             )
-           )
-       )`,
-    [
-      JSON.stringify({ benchmark: longMemEvalV2Manifest.name, corpusKey: selectedCorpusKey }),
-      embeddingProvider.provider,
-      embeddingProvider.model,
-      embeddingProvider.dimensions,
-      embeddingProvider.revision,
-    ],
-  );
-  if (Number(stale.rows[0]?.count ?? 0) !== 0) {
-    throw new Error("LongMemEval-V2 corpus contains stale or missing embeddings");
-  }
-
-  const searchModule = createMemoryModule(requestDatabase, {
-    embeddingProvider,
-    evidenceNeighborChunks,
-    evidenceTopChunks,
-    queryPlanningProvider,
-    queryPlannerMaxQueries,
-    retrievalFeedbackQueries,
-    retrievalRecencyWeight,
-    rerankingProvider,
-    rerankCandidateLimit,
-    rerankDiversityLambda,
-    rerankMinimumScore,
-    rerankWeight,
-    semanticDistanceThreshold,
-  });
   const results: Array<{
     questionId: string;
     questionType: string;
@@ -696,23 +734,24 @@ try {
     } | null;
     isolationPassed: boolean;
   }> = [];
-  const forbiddenMemoryIds = new Set(tripwireMemoryIds.values());
+  const forbiddenEpisodeIds = new Set(tripwireEpisodeIds.values());
   for (const [index, question] of selectedQuestions.entries()) {
     const searchStartedAt = performance.now();
-    const retrieved = await searchModule.search(actor(question.domain), {
+    const retrieved = await episodeEvidence.search(actor(question.domain), {
       query: question.question,
       limit: options.limit,
       metadataFilter: {
         benchmark: longMemEvalV2Manifest.name,
         corpusKey: selectedCorpusKey,
-        questionIds: [question.id],
       },
+      groupMetadataKey: "trajectoryId",
+      sourceKeys: [...(haystacks.get(question.id) ?? []), `tripwire:${question.id}`],
     });
     const searchLatencyMs = performance.now() - searchStartedAt;
-    const isolationPassed = !retrieved.some((result) => forbiddenMemoryIds.has(result.memory.id));
-    const retrievedTrajectoryIds = retrieved
-      .map((result) => result.memory.metadata.trajectoryId)
-      .filter((value): value is string => typeof value === "string");
+    const isolationPassed = !retrieved.some((result) =>
+      result.episodeIds.some((episodeId) => forbiddenEpisodeIds.has(episodeId)),
+    );
+    const retrievedTrajectoryIds = retrieved.map((result) => result.sourceKey);
     const literalAnchors = literalAnswerTrajectoryIds.get(question.id) ?? new Set<string>();
     const anchorIndex = retrievedTrajectoryIds.findIndex((id) => literalAnchors.has(id));
     let correct: boolean | null = null;
@@ -746,10 +785,7 @@ try {
         systemInstruction: longMemEvalV2ReaderInstruction(question.domain),
         promptStyle: "longmemeval-v2",
         evidence: retrieved.map((result) => ({
-          id:
-            typeof result.memory.metadata.trajectoryId === "string"
-              ? result.memory.metadata.trajectoryId
-              : result.memory.id,
+          id: result.sourceKey,
           text: result.evidence,
         })),
       });
@@ -940,11 +976,10 @@ try {
       limit: options.limit,
       semanticDistanceThreshold,
       evidenceNeighborChunks,
-      evidenceTopChunks,
-      evidencePolicy: RETRIEVAL_EVIDENCE_POLICY,
+      evidenceTopObservations: evidenceTopChunks,
+      evidencePolicy: EPISODE_EVIDENCE_RETRIEVAL_POLICY,
       feedbackQueries: retrievalFeedbackQueries,
-      feedbackCandidatePolicy:
-        retrievalFeedbackQueries > 0 ? RETRIEVAL_FEEDBACK_CANDIDATE_POLICY : null,
+      feedbackCandidatePolicy: null,
       recencyWeight: retrievalRecencyWeight,
       secondStageCandidateLimit:
         rerankingProvider || retrievalRecencyWeight > 0 ? rerankCandidateLimit : null,
@@ -993,8 +1028,12 @@ try {
         }
       : null,
     indexing: {
+      memoryChunking,
+      episodeEvidenceIndexRevision: EPISODE_EVIDENCE_INDEX_REVISION,
+      episodePlanRevision: LONGMEMEVAL_V2_EPISODE_PLAN_REVISION,
       reused: options.reuseIndexed,
-      completedJobs,
+      indexedEpisodes,
+      indexedChunks,
       elapsedMs: indexingElapsedMs === null ? null : rounded(indexingElapsedMs, 2),
     },
     workload: metering.workload,
@@ -1085,10 +1124,6 @@ try {
   }
   if (!report.valid) process.exitCode = 1;
 } finally {
-  await Promise.all([
-    requestDatabase.close(),
-    maintenanceDatabase.close(),
-    ...(reader?.close ? [reader.close()] : []),
-  ]);
+  await Promise.all([requestDatabase.close(), ...(reader?.close ? [reader.close()] : [])]);
   await admin.end();
 }

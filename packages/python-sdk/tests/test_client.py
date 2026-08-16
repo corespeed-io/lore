@@ -8,6 +8,10 @@ from corespeed_lore import LoreApiError, LoreClient
 
 WORKSPACE_ID = "10000000-0000-4000-8000-000000000001"
 MEMORY_ID = "20000000-0000-4000-8000-000000000001"
+JOB_ID = "80000000-0000-4000-8000-000000000001"
+ARTIFACT_ID = "90000000-0000-4000-8000-000000000001"
+EVIDENCE_ID = "a0000000-0000-4000-8000-000000000001"
+COMMIT_OID = "e" * 40
 AGENT_TOKEN = f"lore_agent_{'a' * 64}"
 
 
@@ -51,6 +55,143 @@ class QueueTransport:
 
 
 class LorePythonSdkTests(unittest.TestCase):
+    def test_retrieve_context_uses_one_exact_revision_workspace_request(self):
+        packet = {
+            "revision": "joint-memory-code-v2",
+            "query": "tenantGuard",
+            "plan": {
+                "intent": "unknown",
+                "route": "both",
+                "needsAnchorExpansion": True,
+                "needsContextualImpact": False,
+                "needsLocalAssessment": True,
+                "reasons": ["explicit route"],
+            },
+            "deliveredRoute": "both",
+            "memories": [],
+            "code": [],
+            "anchors": [],
+            "conflicts": [],
+            "receipt": {
+                "memoryCandidates": 0,
+                "codeCandidates": 0,
+                "anchorCandidates": 0,
+                "requestedCommitOid": COMMIT_OID,
+                "memoryQuery": "guard decision",
+                "codeQuery": "tenantGuard",
+                "contextualImpact": None,
+            },
+        }
+        transport = QueueTransport(FakeResponse(packet))
+        workspace = LoreClient(
+            "http://127.0.0.1:3000", transport=transport
+        ).workspace(WORKSPACE_ID)
+
+        self.assertEqual(
+            workspace.retrieve_context(
+                "tenantGuard",
+                memory_query="guard decision",
+                code_query="tenantGuard",
+                repository_key="corespeed/lore",
+                commit_oid=COMMIT_OID.upper(),
+                route="both",
+                memory_limit=4,
+                code_limit=6,
+            ),
+            packet,
+        )
+        request = transport.requests[0][0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:3000/api/v1/context/retrieve")
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(
+            json.loads(request.data),
+            {
+                "query": "tenantGuard",
+                "memoryQuery": "guard decision",
+                "codeQuery": "tenantGuard",
+                "repositoryKey": "corespeed/lore",
+                "commitOid": COMMIT_OID,
+                "route": "both",
+                "memoryLimit": 4,
+                "codeLimit": 6,
+            },
+        )
+
+    def test_code_index_family_uses_exact_revision_and_never_accepts_a_repository_path(self):
+        job = {
+            "id": JOB_ID,
+            "repositoryId": "b0000000-0000-4000-8000-000000000001",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": COMMIT_OID,
+            "sourceRef": "refs/heads/main",
+            "indexerRevision": "test",
+            "status": "pending",
+            "attemptCount": 0,
+            "maximumAttempts": 5,
+            "availableAt": "2026-08-12T00:00:00.000Z",
+            "completedAt": None,
+            "lastError": None,
+            "createdAt": "2026-08-12T00:00:00.000Z",
+            "updatedAt": "2026-08-12T00:00:00.000Z",
+        }
+        dependencies = {
+            "status": "ok",
+            "repositoryKey": "corespeed/lore",
+            "commitOid": COMMIT_OID,
+            "direction": "callees",
+            "subject": {
+                "artifactId": ARTIFACT_ID,
+                "path": "src/index.ts",
+                "symbol": "run",
+                "symbolKey": "src/index.ts#function_declaration:run",
+            },
+            "edges": [],
+            "truncated": False,
+        }
+        transport = QueueTransport(
+            FakeResponse(job, status=202),
+            FakeResponse(job),
+            FakeResponse([]),
+            FakeResponse(dependencies),
+        )
+        workspace = LoreClient(
+            "http://127.0.0.1:3000", transport=transport
+        ).workspace(WORKSPACE_ID)
+
+        workspace.enqueue_code_index(
+            "corespeed/lore", COMMIT_OID, source_ref="refs/heads/main"
+        )
+        workspace.get_code_index_job(JOB_ID)
+        workspace.search_code("corespeed/lore", COMMIT_OID, "fetch<User>", path_prefix="src/")
+        self.assertEqual(
+            workspace.query_code_dependencies(
+                "corespeed/lore", COMMIT_OID.upper(), "callees", symbol="run", limit=25
+            ),
+            dependencies,
+        )
+
+        enqueue = transport.requests[0][0]
+        self.assertEqual(enqueue.full_url, "http://127.0.0.1:3000/api/v1/code/index-jobs")
+        self.assertEqual(
+            json.loads(enqueue.data),
+            {
+                "repositoryKey": "corespeed/lore",
+                "commitOid": COMMIT_OID,
+                "sourceRef": "refs/heads/main",
+            },
+        )
+        self.assertNotIn("repositoryPath", json.loads(enqueue.data))
+        self.assertEqual(
+            transport.requests[2][0].full_url,
+            "http://127.0.0.1:3000/api/v1/code/search?repository_key=corespeed%2Flore"
+            f"&commit_oid={COMMIT_OID}&q=fetch%3CUser%3E&limit=10&path_prefix=src%2F",
+        )
+        self.assertEqual(
+            transport.requests[3][0].full_url,
+            "http://127.0.0.1:3000/api/v1/code/dependencies?repository_key=corespeed%2Flore"
+            f"&commit_oid={COMMIT_OID}&direction=callees&symbol=run&limit=25",
+        )
+
     def test_workspace_list_uses_v1_actor_and_cursor_contract(self):
         transport = QueueTransport(
             FakeResponse([memory()], headers={"x-lore-next-cursor": "next-page"})
@@ -91,6 +232,26 @@ class LorePythonSdkTests(unittest.TestCase):
         self.assertEqual(request.get_header("If-match"), '"memory-v3"')
         self.assertEqual(request.get_header("Idempotency-key"), "update-1")
         self.assertEqual(json.loads(request.data), {"content": "Updated"})
+
+    def test_memory_content_uses_the_public_unicode_character_limit(self):
+        transport = QueueTransport(FakeResponse(memory()))
+        workspace = LoreClient(
+            "http://127.0.0.1:3000", transport=transport
+        ).workspace(WORKSPACE_ID)
+
+        workspace.update_memory(
+            MEMORY_ID,
+            expected_version=3,
+            content="😀" * 32_000,
+        )
+        with self.assertRaisesRegex(TypeError, "at most 32000 Unicode characters"):
+            workspace.update_memory(
+                MEMORY_ID,
+                expected_version=3,
+                content="😀" * 32_001,
+            )
+
+        self.assertEqual(len(transport.requests), 1)
 
     def test_proposal_methods_use_v1_routes_and_reusable_idempotency(self):
         proposal_id = "50000000-0000-4000-8000-000000000001"

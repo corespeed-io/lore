@@ -1,0 +1,141 @@
+{
+  "benchmark": "lore-retrieval-policy-v1",
+  "groundingPolicyRevision": "retrieval-grounding-v1",
+  "generatedAt": "2026-08-15T23:07:02.208Z",
+  "provider": "Anthropic via Claude Code CLI",
+  "model": "claude-sonnet-5",
+  "trialsPerCase": 5,
+  "suite": {
+    "name": "Lore Retrieval Invocation Policy",
+    "version": 1,
+    "caseCount": 1
+  },
+  "variants": {
+    "host-policy": {
+      "description": "Production grounding gate chooses required, auto, or off before the model sees Lore tools.",
+      "metrics": {
+        "caseCount": 5,
+        "passRate": 0.6,
+        "requiredRetrievalRecall": null,
+        "unnecessaryRetrievalRate": null,
+        "routeAccuracy": null,
+        "exactRevisionAccuracy": null,
+        "clarificationAccuracy": 0.6,
+        "drillDownAccuracy": null,
+        "averageLatencyMs": 25108.211333199997,
+        "p95LatencyMs": 28990.922125000005
+      },
+      "toolCalls": 0,
+      "averageToolCalls": 0,
+      "inputTokens": 16,
+      "outputTokens": 10209
+    }
+  },
+  "records": [
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 1,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 26671.659540999997
+      },
+      "outcome": "clarified",
+      "answer": "I cannot answer this. No `lore_retrieve_context` tool (or any repository-retrieval tool) is present in my available toolset, and this working directory is not a git repository, so I have no authorized evidence about `corespeed/lore`. No exact commit OID was provided, and per policy I must not invent one. To answer \"at which exact revision `submitMemoryProposal` is guarded by `reviewRequired`,\" I need either the exact commit SHA/revision to check, or the relevant source directly (e.g., pasted code/diff) so I can inspect it rather than guess.",
+      "toolCalls": [],
+      "inputTokens": 2,
+      "outputTokens": 2069
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 2,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": false,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 28990.922125000005
+      },
+      "outcome": "abstained",
+      "answer": "I can't determine this. My actual toolset for this session doesn't include a `lore_retrieve_context` tool or any other way to reach the `corespeed/lore` repository — I only have Artifact, ListAgents, ReportFindings, ScheduleWakeup, ShareOnboardingGuide, Skill, StructuredOutput, ToolSearch, and Workflow (plus a few deferred Claude Code tools like CronCreate/LSP/Monitor, none of which are repository or Lore retrieval tools). There's no filesystem or git access to this repo either — the working directory isn't even a git repository.\n\nSo I have no authorized evidence to check where `submitMemoryProposal` is guarded by `reviewRequired`, and I'm not going to guess a commit OID or line number for code I can't see.\n\nTo answer this for real, I'd need one of:\n- Direct access to the `corespeed/lore` repo (e.g., opened in this working directory, or a link/diff/file contents you paste in), or\n- The exact revision/commit you want checked, plus the relevant source.\n\nIf you can point me at the actual code (paste the file, or give me repo access), I'll check the `reviewRequired` guard directly rather than relying on any retrieval tool.",
+      "toolCalls": [],
+      "inputTokens": 2,
+      "outputTokens": 2520
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 3,
+      "score": {
+        "passed": false,
+        "invocationCorrect": false,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": false,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 26773.474749999994
+      },
+      "outcome": "abstained",
+      "answer": "I can't determine this. No `lore_retrieve_context` tool is actually available to me in this session (I verified via ToolSearch — it doesn't exist in my tool registry), and I have no shell/filesystem access to the `corespeed/lore` repository here to inspect `submitMemoryProposal` directly. There's also no commit OID given to anchor \"exact revision\" to.\n\nI won't fabricate a commit hash or guess at the guard condition from memory, since that would misrepresent a guess as a verified repository fact.\n\nTo answer accurately, please either: (1) provide read access to the repo (or paste the relevant file/diff showing `submitMemoryProposal`), or (2) give the exact commit SHA/branch you want checked so the guard logic at that revision can be confirmed rather than assumed.</answer>\n</invoke>\n",
+      "toolCalls": [],
+      "inputTokens": 4,
+      "outputTokens": 2040
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 4,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 17430.505791999996
+      },
+      "outcome": "clarified",
+      "answer": "I can't determine this without an exact revision. No commit OID for corespeed/lore was supplied, and I don't have a working retrieval tool in this session to look up the current state of `submitMemoryProposal` / `reviewRequired` myself (no `lore_retrieve_context` tool is available to me here).\n\nCould you provide the exact commit SHA (or branch+tag) you want checked? Once I have that, I can confirm whether — and at which point — `submitMemoryProposal` is guarded by `reviewRequired`.</answer>\n</invoke>\n",
+      "toolCalls": [],
+      "inputTokens": 4,
+      "outputTokens": 1420
+    },
+    {
+      "variant": "host-policy",
+      "caseId": "clarify/missing-commit",
+      "trial": 5,
+      "score": {
+        "passed": true,
+        "invocationCorrect": true,
+        "routeCorrect": null,
+        "exactRevisionCorrect": null,
+        "clarificationCorrect": true,
+        "drillDownCorrect": null,
+        "retrievalMiss": false,
+        "unnecessaryRetrieval": false,
+        "latencyMs": 25674.494458
+      },
+      "outcome": "clarified",
+      "answer": "I can't determine this. The task specifies using `lore_retrieve_context` to check prior Workspace decisions and current code against an exact repository revision for `corespeed/lore`, but no such tool is available in this session (I searched for it — no match), and this working directory isn't a git repository I can inspect locally either. There's no way for me to authenticate an \"exact revision\" claim without that retrieval path or a commit OID from you.\n\nTo answer \"at which exact revision is `submitMemoryProposal` guarded by `reviewRequired`\", I need one of:\n- the exact commit OID/tag in `corespeed/lore` you want checked, so I can look at that specific revision, or\n- confirmation that a `lore_retrieve_context` (or equivalent repo-lore) tool should be connected in this session, since it isn't currently reachable.\n\nPlease provide the exact revision, or point me to how to access the repository/lore tool, and I'll verify the guard directly rather than guessing.",
+      "toolCalls": [],
+      "inputTokens": 4,
+      "outputTokens": 2160
+    }
+  ]
+}
