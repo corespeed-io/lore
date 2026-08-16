@@ -1,6 +1,6 @@
 {
   "name": "Lore Retrieval Invocation Policy",
-  "version": 3,
+  "version": 4,
   "description": "Model-facing retrieval invocation, routing, clarification, and drill-down cases over deterministic authorized Memory and exact-revision Code evidence.",
   "cases": [
     {
@@ -8,7 +8,9 @@
       "prompt": "What review boundary did our team agree on for Memory Proposals?",
       "expectation": {
         "invocation": "must-call",
-        "route": "memory-only"
+        "route": "memory-only",
+        "outcome": "answered",
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -18,7 +20,9 @@
         "invocation": "must-call",
         "route": "code-only",
         "repositoryKey": "corespeed/lore",
-        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "answered",
+        "answerMustInclude": ["src/lib/memory.ts"]
       }
     },
     {
@@ -28,7 +32,9 @@
         "invocation": "must-call",
         "route": "both",
         "repositoryKey": "corespeed/lore",
-        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "answered",
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -36,7 +42,8 @@
       "prompt": "Rewrite this supplied sentence to be shorter: The endpoint returns a response very quickly.",
       "expectation": {
         "invocation": "must-not-call",
-        "route": "abstain"
+        "route": "abstain",
+        "outcome": "answered"
       }
     },
     {
@@ -45,7 +52,8 @@
       "expectation": {
         "invocation": "must-clarify",
         "route": "abstain",
-        "repositoryKey": "corespeed/lore"
+        "repositoryKey": "corespeed/lore",
+        "outcome": "clarified"
       }
     },
     {
@@ -53,7 +61,8 @@
       "prompt": "Where is submitMemoryProposal implemented right now?",
       "expectation": {
         "invocation": "must-clarify",
-        "route": "abstain"
+        "route": "abstain",
+        "outcome": "clarified"
       }
     },
     {
@@ -61,7 +70,9 @@
       "prompt": "What did we agree about the migration path?",
       "expectation": {
         "invocation": "must-call",
-        "route": "memory-only"
+        "route": "memory-only",
+        "outcome": "answered",
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -72,7 +83,8 @@
         "route": "code-only",
         "repositoryKey": "corespeed/lore",
         "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "followupTool": "lore_code_dependencies"
+        "followupTool": "lore_code_dependencies",
+        "outcome": "answered"
       }
     },
     {
@@ -82,7 +94,9 @@
         "invocation": "must-call",
         "route": "both",
         "repositoryKey": "corespeed/lore",
-        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "answered",
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -92,7 +106,9 @@
         "invocation": "must-call",
         "route": "both",
         "repositoryKey": "corespeed/lore",
-        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "answered",
+        "answerMustInclude": ["human-only"]
       }
     },
     {
@@ -100,7 +116,8 @@
       "prompt": "我们之前对 Memory Proposal 的人工审核边界是怎么定的？",
       "expectation": {
         "invocation": "must-call",
-        "route": "memory-only"
+        "route": "memory-only",
+        "outcome": "answered"
       }
     },
     {
@@ -110,7 +127,9 @@
         "invocation": "must-call",
         "route": "code-only",
         "repositoryKey": "corespeed/lore",
-        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "commitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "outcome": "answered",
+        "answerMustInclude": ["src/lib/memory.ts"]
       }
     },
     {
@@ -118,7 +137,8 @@
       "prompt": "帮我 brainstorm 五个开源记忆产品的名字。",
       "expectation": {
         "invocation": "must-not-call",
-        "route": "abstain"
+        "route": "abstain",
+        "outcome": "answered"
       }
     }
   ]

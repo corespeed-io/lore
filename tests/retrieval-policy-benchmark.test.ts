@@ -55,6 +55,8 @@ test("a compound exact-revision Code retrieval satisfies a must-call policy case
     exactRevisionCorrect: true,
     clarificationCorrect: null,
     drillDownCorrect: null,
+    outcomeCorrect: null,
+    answerEvidenceCorrect: null,
     retrievalMiss: false,
     unnecessaryRetrieval: false,
     latencyMs: 120,
@@ -63,7 +65,7 @@ test("a compound exact-revision Code retrieval satisfies a must-call policy case
 
 test("the versioned policy suite covers every invocation class with unique cases", () => {
   const suite = parseRetrievalPolicySuite(retrievalPolicySuite);
-  expect(suite.version).toBe(3);
+  expect(suite.version).toBe(4);
   expect(new Set(suite.cases.map((entry) => entry.id)).size).toBe(suite.cases.length);
   expect(new Set(suite.cases.map((entry) => entry.expectation.invocation))).toEqual(
     new Set(["must-call", "must-not-call", "must-clarify", "drill-down"]),
@@ -235,9 +237,67 @@ test("aggregate metrics expose required retrieval misses separately from unneces
     exactRevisionAccuracy: null,
     clarificationAccuracy: null,
     drillDownAccuracy: null,
+    outcomeAccuracy: null,
+    answerEvidenceAccuracy: null,
     averageLatencyMs: 40,
     p95LatencyMs: 60,
   });
+});
+
+test("answer-quality expectations fail abstentions and unsupported answers", () => {
+  const evidenceCase = {
+    id: "joint/decision-drift",
+    prompt: "Does the current code still enforce our decision?",
+    expectation: {
+      invocation: "must-call" as const,
+      route: "both" as const,
+      repositoryKey: "corespeed/lore",
+      commitOid: COMMIT_OID,
+      outcome: "answered" as const,
+      answerMustInclude: ["human-only"],
+    },
+  };
+  const groundedCall = {
+    name: "lore_retrieve_context",
+    arguments: { query: "decision", repositoryKey: "corespeed/lore", commitOid: COMMIT_OID },
+    result: { deliveredRoute: "both" },
+  };
+
+  expect(
+    scoreRetrievalPolicyTrial({
+      case: evidenceCase,
+      trace: {
+        assistantOutcome: "answered",
+        answer: "Review remains HUMAN-ONLY before canonical Memory changes.",
+        latencyMs: 20,
+        toolCalls: [groundedCall],
+      },
+    }),
+  ).toMatchObject({ passed: true, outcomeCorrect: true, answerEvidenceCorrect: true });
+
+  expect(
+    scoreRetrievalPolicyTrial({
+      case: evidenceCase,
+      trace: {
+        assistantOutcome: "abstained",
+        answer: "The evidence does not define reviewRequired.",
+        latencyMs: 20,
+        toolCalls: [groundedCall],
+      },
+    }),
+  ).toMatchObject({ passed: false, outcomeCorrect: false, answerEvidenceCorrect: false });
+
+  expect(
+    scoreRetrievalPolicyTrial({
+      case: evidenceCase,
+      trace: {
+        assistantOutcome: "answered",
+        answer: "Yes, everything is fine.",
+        latencyMs: 20,
+        toolCalls: [groundedCall],
+      },
+    }),
+  ).toMatchObject({ passed: false, outcomeCorrect: true, answerEvidenceCorrect: false });
 });
 
 test("a missing exact revision requires clarification and rejects speculative Code retrieval", () => {

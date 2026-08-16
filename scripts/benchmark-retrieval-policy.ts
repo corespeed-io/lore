@@ -292,13 +292,13 @@ function markdownReport(report: {
     "",
     "## Variant metrics",
     "",
-    "| Variant | Pass | Required-call recall | Unnecessary-call rate | Route | Exact revision | Clarify | Drill-down | Calls | p95 ms | Input tokens |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Variant | Pass | Required-call recall | Unnecessary-call rate | Route | Exact revision | Clarify | Drill-down | Outcome | Answer evidence | Calls | p95 ms | Input tokens |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const [id, result] of Object.entries(report.variants)) {
     const metrics = result.metrics;
     lines.push(
-      `| ${id} | ${percent(metrics.passRate)} | ${percent(metrics.requiredRetrievalRecall)} | ${percent(metrics.unnecessaryRetrievalRate)} | ${percent(metrics.routeAccuracy)} | ${percent(metrics.exactRevisionAccuracy)} | ${percent(metrics.clarificationAccuracy)} | ${percent(metrics.drillDownAccuracy)} | ${result.toolCalls} (${result.averageToolCalls.toFixed(2)}/case) | ${metrics.p95LatencyMs.toFixed(0)} | ${result.inputTokens} |`,
+      `| ${id} | ${percent(metrics.passRate)} | ${percent(metrics.requiredRetrievalRecall)} | ${percent(metrics.unnecessaryRetrievalRate)} | ${percent(metrics.routeAccuracy)} | ${percent(metrics.exactRevisionAccuracy)} | ${percent(metrics.clarificationAccuracy)} | ${percent(metrics.drillDownAccuracy)} | ${percent(metrics.outcomeAccuracy)} | ${percent(metrics.answerEvidenceAccuracy)} | ${result.toolCalls} (${result.averageToolCalls.toFixed(2)}/case) | ${metrics.p95LatencyMs.toFixed(0)} | ${result.inputTokens} |`,
     );
   }
   lines.push(
@@ -362,6 +362,7 @@ for (const variant of variants) {
         // without a model turn, when the exact revision is missing.
         const trace: RetrievalPolicyTrace = {
           assistantOutcome: "clarified",
+          answer: groundingPlan.clarification ?? "",
           latencyMs: performance.now() - startedAt,
           toolCalls: [],
         };

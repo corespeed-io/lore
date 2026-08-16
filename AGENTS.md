@@ -657,6 +657,17 @@ Benchmark is part of the product quality system even without AutoDream.
   disposable migrated database whose name contains `bench` or `benchmark`; the
   runner resets tenant data, writes through the native Memory module, embeds through
   leased maintenance, and searches under RLS.
+- `evaluation/suites/retrieval-policy-v1.json` is the versioned model-facing
+  retrieval invocation suite: must-call/must-not-call/must-clarify/drill-down
+  cases with expected route, exact-revision binding, assistant outcome, and
+  answer-evidence substrings. `bun run benchmark:retrieval-policy` runs live
+  model trials against deterministic fixture evidence through Lore's real MCP
+  schemas via Codex exec or `--runner claude` (Claude Code CLI). The
+  `host-policy` variant applies the production grounding gate, including the
+  deterministic clarification short-circuit; reports pin the grounding policy
+  revision and score invocation behavior separately from outcome and
+  answer-evidence checks. It never measures retrieval quality below the
+  orchestration layer — that remains `benchmark:retrieval`.
 - The retrieval runner reports Recall@1, Recall@K, MRR, nDCG, no-answer accuracy,
   false-result count, warm mean/p50/p95 latency, misses, and threshold sweeps for
   the active deployment embedding space. Bob-owned private fixture Memories are

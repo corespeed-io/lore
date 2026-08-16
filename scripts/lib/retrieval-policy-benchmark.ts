@@ -6,6 +6,8 @@ export type RetrievalPolicyInvocation =
 
 export type RetrievalPolicyRoute = "memory-only" | "code-only" | "both" | "abstain";
 
+export type RetrievalPolicyOutcome = "answered" | "clarified" | "abstained";
+
 export interface RetrievalPolicyCase {
   id: string;
   prompt: string;
@@ -15,6 +17,10 @@ export interface RetrievalPolicyCase {
     repositoryKey?: string;
     commitOid?: string;
     followupTool?: "lore_search" | "lore_code_search" | "lore_code_dependencies";
+    /** Expected assistant outcome when fixture evidence makes one correct. */
+    outcome?: RetrievalPolicyOutcome;
+    /** Case-insensitive substrings the final answer must contain. */
+    answerMustInclude?: readonly string[];
   };
 }
 
@@ -33,6 +39,7 @@ export interface RetrievalPolicyToolCall {
 
 export interface RetrievalPolicyTrace {
   assistantOutcome: "answered" | "clarified" | "abstained" | "error";
+  answer?: string;
   latencyMs: number;
   toolCalls: readonly RetrievalPolicyToolCall[];
   inputTokens?: number | null;
@@ -46,6 +53,8 @@ export interface RetrievalPolicyTrialScore {
   exactRevisionCorrect: boolean | null;
   clarificationCorrect: boolean | null;
   drillDownCorrect: boolean | null;
+  outcomeCorrect: boolean | null;
+  answerEvidenceCorrect: boolean | null;
   retrievalMiss: boolean;
   unnecessaryRetrieval: boolean;
   latencyMs: number;
@@ -60,6 +69,8 @@ export interface RetrievalPolicyAggregate {
   exactRevisionAccuracy: number | null;
   clarificationAccuracy: number | null;
   drillDownAccuracy: number | null;
+  outcomeAccuracy: number | null;
+  answerEvidenceAccuracy: number | null;
   averageLatencyMs: number;
   p95LatencyMs: number;
 }
@@ -135,6 +146,24 @@ export function parseRetrievalPolicySuite(value: unknown): RetrievalPolicySuite 
     if (followupTool !== undefined && !FOLLOWUP_TOOLS.has(followupTool as never)) {
       throw new Error(`cases[${index}].expectation.followupTool is invalid`);
     }
+    const outcome = expected.outcome;
+    if (
+      outcome !== undefined &&
+      outcome !== "answered" &&
+      outcome !== "clarified" &&
+      outcome !== "abstained"
+    ) {
+      throw new Error(`cases[${index}].expectation.outcome is invalid`);
+    }
+    const answerMustInclude = expected.answerMustInclude;
+    if (answerMustInclude !== undefined) {
+      if (!Array.isArray(answerMustInclude) || answerMustInclude.length === 0) {
+        throw new Error(`cases[${index}].expectation.answerMustInclude must be a non-empty array`);
+      }
+      for (const [position, needle] of answerMustInclude.entries()) {
+        text(needle, `cases[${index}].expectation.answerMustInclude[${position}]`);
+      }
+    }
     if (invocation === "drill-down" && followupTool === undefined) {
       throw new Error(`cases[${index}] drill-down requires followupTool`);
     }
@@ -157,6 +186,10 @@ export function parseRetrievalPolicySuite(value: unknown): RetrievalPolicySuite 
                 RetrievalPolicyCase["expectation"]["followupTool"]
               >,
             }
+          : {}),
+        ...(outcome ? { outcome: outcome as RetrievalPolicyOutcome } : {}),
+        ...(answerMustInclude
+          ? { answerMustInclude: answerMustInclude.map((needle) => String(needle)) }
           : {}),
       },
     };
@@ -245,12 +278,23 @@ export function scoreRetrievalPolicyTrial(input: {
     input.case.expectation.invocation === "drill-down"
       ? retrievalCalls.some((call) => call.name === input.case.expectation.followupTool)
       : null;
+  const outcomeCorrect = input.case.expectation.outcome
+    ? input.trace.assistantOutcome === input.case.expectation.outcome
+    : null;
+  const answer = (input.trace.answer ?? "").toLowerCase();
+  const answerEvidenceCorrect = input.case.expectation.answerMustInclude
+    ? input.case.expectation.answerMustInclude.every((needle) =>
+        answer.includes(needle.toLowerCase()),
+      )
+    : null;
   const checks = [
     invocationCorrect,
     routeCorrect,
     exactRevisionCorrect,
     clarificationCorrect,
     drillDownCorrect,
+    outcomeCorrect,
+    answerEvidenceCorrect,
   ].filter((value): value is boolean => value !== null);
 
   return {
@@ -260,6 +304,8 @@ export function scoreRetrievalPolicyTrial(input: {
     exactRevisionCorrect,
     clarificationCorrect,
     drillDownCorrect,
+    outcomeCorrect,
+    answerEvidenceCorrect,
     retrievalMiss,
     unnecessaryRetrieval,
     latencyMs: input.trace.latencyMs,
@@ -296,6 +342,8 @@ export function aggregateRetrievalPolicyTrials(
     exactRevisionAccuracy: rate(present(scores.map((score) => score.exactRevisionCorrect))),
     clarificationAccuracy: rate(present(scores.map((score) => score.clarificationCorrect))),
     drillDownAccuracy: rate(present(scores.map((score) => score.drillDownCorrect))),
+    outcomeAccuracy: rate(present(scores.map((score) => score.outcomeCorrect))),
+    answerEvidenceAccuracy: rate(present(scores.map((score) => score.answerEvidenceCorrect))),
     averageLatencyMs:
       scores.length === 0
         ? 0
