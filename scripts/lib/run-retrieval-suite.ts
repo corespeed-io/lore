@@ -373,16 +373,23 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     }
 
     const schemaResult = await admin.query<{
-      entity_alias_index: string | null;
+      entity_alias_column: boolean;
       memories: string | null;
       jobs: string | null;
       metadata_index: string | null;
     }>(
+      // The alias channel's sentinel is the generated column it scans, not an
+      // index: migration 0003 dropped the request-path-dead entity-aliases GIN.
       `SELECT
          to_regclass('public.memories')::text AS memories,
          to_regclass('public.memory_embedding_jobs')::text AS jobs,
          to_regclass('public.memories_metadata_gin_idx')::text AS metadata_index,
-         to_regclass('public.memory_chunks_entity_aliases_idx')::text AS entity_alias_index`,
+         EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'memory_chunks'
+             AND column_name = 'entity_aliases'
+         ) AS entity_alias_column`,
     );
     if (
       !schemaResult.rows[0]?.memories ||
@@ -393,8 +400,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         "Lore migrations are missing; run DATABASE_URL=$BENCHMARK_DATABASE_URL bun run db:migrate first",
       );
     }
-    if (!schemaResult.rows[0]?.entity_alias_index) {
-      throw new Error("Lore v1 baseline with the entity-alias index is required");
+    if (!schemaResult.rows[0]?.entity_alias_column) {
+      throw new Error("Lore v1 baseline with the entity-alias column is required");
     }
 
     if (!input.reuseIndexed) {

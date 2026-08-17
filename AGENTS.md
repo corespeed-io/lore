@@ -29,7 +29,10 @@ been removed. Lore now has a native implementation:
   evidence with RLS, plus revision-bound Code Repositories/Revisions/Index
   Generations/Artifacts as rebuildable AST-aware evidence;
   `0002_drop_memory_chunks_search_indexes.sql` removes the two `memory_chunks`
-  FTS GIN indexes that the RLS request path can never use. Every new migration
+  FTS GIN indexes that the RLS request path can never use, and
+  `0003_drop_memory_chunks_entity_aliases_index.sql` removes the entity-aliases
+  GIN on the same proof (`arraycontains` is equally non-leakproof; the
+  generated column stays for the scan predicate). Every new migration
   must update `lore_system_state.schema_revision` to its own version number —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/lib/migration-preflight.mjs`) and
@@ -963,8 +966,11 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   read is modelled. `useEffect` never runs, so anything painted from an effect (the
   Markdown body, the Graph canvas) is absent from the markup.
 - `bun run lint` silently checks nothing when the working tree sits under a path
-  containing `/tmp`, because `biome.json` excludes `**/tmp`. "Checked 0 files" means
-  the path excluded everything, not that the tree is clean.
+  containing `/tmp`, because `biome.json` excludes `**/tmp`. The same happens in
+  every agent worktree under `.claude/worktrees/` — `biome.json` also excludes
+  `**/.claude` and `**/.worktrees` — so lint from such a checkout must run from a
+  worktree added at a neutral path. "Checked 0 files" means the path excluded
+  everything, not that the tree is clean.
 - Running `bun run build` while `next dev` is live can still break an individual
   route in the dev server even though Next 16 keeps dev output under `.next/dev`.
   Observed symptom: one API route starts returning the catch-all page — HTTP 200

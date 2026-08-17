@@ -1046,11 +1046,14 @@ test("preserves hard limits, reconstruction, and determinism for an adversarial 
       const unit = value.charCodeAt(index);
       if (unit >= 0xd800 && unit <= 0xdbff) {
         const next = value.charCodeAt(index + 1);
-        return next < 0xdc00 || next > 0xdfff;
+        // Integer guards: charCodeAt out of range is NaN, whose comparisons are
+        // all false — without them a chunk ENDING in a high surrogate (or
+        // starting with a low one) would pass as paired.
+        return !Number.isInteger(next) || next < 0xdc00 || next > 0xdfff;
       }
       if (unit >= 0xdc00 && unit <= 0xdfff) {
         const previous = value.charCodeAt(index - 1);
-        return previous < 0xd800 || previous > 0xdbff;
+        return !Number.isInteger(previous) || previous < 0xd800 || previous > 0xdbff;
       }
       return false;
     });
@@ -1238,11 +1241,14 @@ test("never splits a Unicode code point at a hard fallback boundary", async () =
       const unit = value.charCodeAt(index);
       if (unit >= 0xd800 && unit <= 0xdbff) {
         const next = value.charCodeAt(index + 1);
-        return next < 0xdc00 || next > 0xdfff;
+        // Integer guards: charCodeAt out of range is NaN, whose comparisons are
+        // all false — without them a chunk ENDING in a high surrogate (or
+        // starting with a low one) would pass as paired.
+        return !Number.isInteger(next) || next < 0xdc00 || next > 0xdfff;
       }
       if (unit >= 0xdc00 && unit <= 0xdfff) {
         const previous = value.charCodeAt(index - 1);
-        return previous < 0xd800 || previous > 0xdbff;
+        return !Number.isInteger(previous) || previous < 0xd800 || previous > 0xdbff;
       }
       return false;
     });
