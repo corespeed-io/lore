@@ -29,7 +29,10 @@ been removed. Lore now has a native implementation:
   evidence with RLS, plus revision-bound Code Repositories/Revisions/Index
   Generations/Artifacts as rebuildable AST-aware evidence;
   `0002_drop_memory_chunks_search_indexes.sql` removes the two `memory_chunks`
-  FTS GIN indexes that the RLS request path can never use. Every new migration
+  FTS GIN indexes that the RLS request path can never use, and
+  `0003_drop_memory_chunks_entity_aliases_index.sql` removes the entity-aliases
+  GIN on the same proof (`arraycontains` is equally non-leakproof; the
+  generated column stays for the scan predicate). Every new migration
   must update `lore_system_state.schema_revision` to its own version number —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/lib/migration-preflight.mjs`) and

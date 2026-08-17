@@ -250,7 +250,7 @@ test("Operations browser client scopes Actor, capabilities, export, and dry-run 
     .mockResolvedValueOnce(
       Response.json({
         apiVersion: "v1",
-        schemaRevision: 2,
+        schemaRevision: 3,
         deploymentId: "20000000-0000-4000-8000-000000000001",
         memoryChunking: {
           revision: "lore-memory-chunking-v2",
