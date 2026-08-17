@@ -19,6 +19,7 @@ import {
   createReadinessHandlers,
   createWorkspaceHandlers,
 } from "../src/lib/http";
+import { LORE_SCHEMA_REVISION } from "../src/lib/operations";
 import type {
   Episode,
   GraphData,
@@ -259,7 +260,7 @@ try {
     200,
     "read capabilities",
   );
-  assert.equal(deployment.schemaRevision, 1);
+  assert.equal(deployment.schemaRevision, LORE_SCHEMA_REVISION);
   assert.equal(deployment.features.observationEvidence, true);
   assert.equal(
     deployment.activeEmbeddingGeneration === null,

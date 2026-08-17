@@ -21,20 +21,32 @@ and may own many Agents.
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
 been removed. Lore now has a native implementation:
 
-- the single `0001_v1_baseline.sql` migration defines identity, tenancy,
+- the `0001_v1_baseline.sql` migration defines identity, tenancy,
   user-private Agents, Memory/chunks/links, pgvector
   state, versioned Evaluation tables, leased embedding jobs, replay-safe mutations,
   a content-free event outbox, Workspace portability, embedding generations, Agent
   lifecycle, owner-private Memory Proposals, and immutable Episode/Observation
   evidence with RLS, plus revision-bound Code Repositories/Revisions/Index
   Generations/Artifacts as rebuildable AST-aware evidence;
+  `0002_drop_memory_chunks_search_indexes.sql` removes the two `memory_chunks`
+  FTS GIN indexes that the RLS request path can never use. Every new migration
+  must update `lore_system_state.schema_revision` to its own version number —
+  the wrapper's postflight fails on the mismatch otherwise — and must bump both
+  `LATEST_SCHEMA_REVISION` (`scripts/lib/migration-preflight.mjs`) and
+  `LORE_SCHEMA_REVISION` (`src/lib/operations.ts`) in the same change: the
+  wrapper tolerates an older application constant, but readiness requires exact
+  equality and reports the schema incompatible. `tests/portable-core.test.ts`,
+  `tests/http.test.ts`, and `scripts/smoke-memory-core.ts` pin the current
+  revision;
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
   transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
-  versions in `lore_schema_migrations`. The pre-launch schema is greenfield-only:
-  older ledgers are deliberately unsupported. Keep migration `down` sections empty:
-  production recovery is forward-only;
+  versions in `lore_schema_migrations`. The schema is live in production
+  (CoreSpeed HaaS), so the recorded baseline is frozen: never edit an applied
+  migration file — its stored SHA-256 makes every existing deployment fail
+  closed — and ship schema changes as new forward-only migrations instead. Keep
+  migration `down` sections empty: production recovery is forward-only;
 - `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
   `evaluation.ts` are the
   domain modules; `request-context.ts` installs verified User/Workspace/Agent
@@ -88,9 +100,13 @@ been removed. Lore now has a native implementation:
   Artifact with multiple Artifact Symbols. Its 6,000-unit bound is explicitly
   UTF-16 code units and hard fallback splits must preserve Unicode code points.
   Content-literal search preserves exact SQL wildcard semantics: queries with
-  word trigrams use `lower(content/path/symbol)` `pg_trgm` GIN indexes, while
-  punctuation-only queries retain the exact revision-scoped scan and must remain
-  an adversarial latency class. Search bounds symbol, literal, simple-FTS, and path
+  word trigrams target the `lower(content/path/symbol)` `pg_trgm` GIN indexes,
+  while punctuation-only queries retain the exact revision-scoped scan and must
+  remain an adversarial latency class. Caveat under audit: these tables are
+  RLS-protected, and the same non-leakproof restriction proven on
+  `memory_chunks` (`LIKE`/`@@` cannot be index conditions under `lore_app`)
+  likely keeps these GINs off the request path too — verify before citing them
+  in any latency claim. Search bounds symbol, literal, simple-FTS, and path
   channels independently under the same active generation before weighted RRF.
   Durable leased jobs are replay-safe and atomically activate a completed generation
   while retaining the prior generation as `retiring`. The current maintenance path
@@ -263,9 +279,28 @@ been removed. Lore now has a native implementation:
   v2, Memos MemReranker, and Voyage v1 adapters. Search fuses exact simple/English
   FTS, a two-term relaxed
   English recall channel with query-side proper-name/identifier specificity
-  weighting, and dense candidates before reranking only authorized evidence
-  passages. Do not replace that bounded query heuristic with per-request corpus
-  frequency scans; under RLS the measured scan doubled hybrid latency;
+  weighting, a deterministic CJK substring channel
+  (`deterministic-cjk-substring-rrf-v1`), and dense candidates before reranking
+  only authorized evidence passages. Do not replace those bounded query heuristics
+  with per-request corpus frequency scans; under RLS the measured scan doubled
+  hybrid latency. The CJK channel exists because Postgres `simple`/`english` FTS
+  cannot segment CJK — an entire punctuation-bounded run indexes as one token — so
+  query-side Han/Hiragana/Katakana/Hangul runs become at most 24 three-code-point
+  grams probed with `LIKE` against chunk content under the same pre-top-k
+  Actor/RLS/scope/time/metadata filters, requiring two matched grams whenever the
+  query yields two or more. Grams are CJK-script letters by construction, so they
+  need no `LIKE` escaping. `memory_chunks` deliberately carries no content GIN
+  indexes — migration 0002 dropped the baseline `search_vector`/
+  `search_vector_english` GINs, and a proposed trigram index was rejected, once
+  `enable_seqscan=off` under `SET ROLE lore_app` proved RLS keeps non-leakproof
+  operators (`@@`, `LIKE`) out of index conditions, making every lexical channel
+  an RLS-bounded workspace scan regardless. Measured at 20k chunks: a selective
+  12-gram probe ~150ms beside ~95ms for one FTS channel, but cost tracks gram
+  selectivity, not the LIMIT — 14 common-connective grams materialized 200k
+  intermediate rows and ~590ms, the same shape as the relaxed-English channel.
+  The tsvector columns remain — they power the scan predicates. Do not add
+  content GIN indexes here without first fixing that request-path restriction
+  and proving the win under `SET ROLE lore_app`;
 - `src/lib/query-planning.ts` defines optional deployment-level multi-query planning.
   Its OpenAI/vLLM and Google adapters see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,
@@ -301,6 +336,11 @@ The self-host worker defaults to one leased embedding job at a time; optional
 database pool and provider capacity. Keep local Ollama at one unless measured.
 Invalid embedding configuration and provider request failures must warn server-side
 and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
+Lexical degradation quality is language-dependent: FTS carries English, while CJK
+content is carried by the substring channel — before that channel existed, an
+embedding outage left CJK Memories near-unsearchable while readiness still
+reported merely degraded. Keep the versioned CJK suite categories green when
+changing any lexical channel.
 Optional reranking is configured once per deployment. The llama.cpp, vLLM,
 vLLM-Metal score, Cohere, Memos, and Voyage adapters consume their concrete official
 rerank contracts; the Memory module must finish RLS-filtered candidate
@@ -651,8 +691,8 @@ surfaces:
 - **Operations module:** expose bounded capabilities/readiness state. Liveness is
   process-only; readiness validates DB/role/schema/vector/RLS, while embedding
   failure or the absence of an active/retiring generation matching the configured
-  provider/model/dimensions/revision is degraded because lexical retrieval remains
-  available.
+  provider/model/dimensions/revision is degraded because lexical retrieval —
+  English FTS plus the CJK substring channel — remains available.
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
@@ -667,7 +707,9 @@ Benchmark is part of the product quality system even without AutoDream.
 
 - Keep a deterministic synthetic suite in the repository for CI and version
   comparisons.
-- `evaluation/suites/retrieval-v1.json` is the end-to-end retrieval fixture. Run
+- `evaluation/suites/retrieval-v1.json` is the end-to-end retrieval fixture
+  (suite version 2 adds `cjk`, `cjk-mixed`, and `cjk-no-answer` categories plus a
+  Bob-private Chinese tripwire aimed at the CJK substring channel). Run
   `bun run benchmark:retrieval` only with `BENCHMARK_DATABASE_URL` pointing to a
   disposable migrated database whose name contains `bench` or `benchmark`; the
   runner resets tenant data, writes through the native Memory module, embeds through

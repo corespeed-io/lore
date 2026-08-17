@@ -458,6 +458,129 @@ test("Lexical search recalls evidence for separate concepts in a multi-part ques
   await testContext.close();
 });
 
+test("CJK substring search recalls Chinese phrases that FTS cannot segment", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const expected = await memories.remember(testContext.alice, {
+    content: "生产环境的记忆召回质量在八月的专项审计中被评为需要重点改进。",
+  });
+  await memories.remember(testContext.alice, {
+    content: "测试环境的日志采样质量在七月的例行审计中被评为基本达标。",
+  });
+
+  const phrase = await memories.search(testContext.bob, {
+    query: "记忆召回质量的审计结论是什么？",
+    limit: 1,
+  });
+  expect(phrase.map((result) => result.memory.id)).toEqual([expected.id]);
+
+  const keyword = await memories.search(testContext.bob, {
+    query: "召回质量",
+    limit: 1,
+  });
+  expect(keyword.map((result) => result.memory.id)).toEqual([expected.id]);
+  await testContext.close();
+});
+
+test("CJK substring search keeps katakana runs whole across the prolonged sound mark", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const expected = await memories.remember(testContext.alice, {
+    content: "ユーザーデータベースの週次バックアップは日曜深夜に実行されます。",
+  });
+  const restart = await memories.remember(testContext.alice, {
+    content: "サーバーの再起動手順は社内ウィキの運用ページに記載されています。",
+  });
+  await memories.remember(testContext.alice, {
+    content: "テスト環境のログは十四日間だけ保存されます。",
+  });
+
+  const results = await memories.search(testContext.bob, {
+    query: "データベースのバックアップはいつ実行されますか？",
+    limit: 1,
+  });
+  expect(results.map((result) => result.memory.id)).toEqual([expected.id]);
+
+  // The discriminating guard: without ー in the run class this query yields
+  // zero grams (サ and バ are one-code-point runs) and no channel matches.
+  const shortForm = await memories.search(testContext.bob, {
+    query: "サーバー",
+    limit: 1,
+  });
+  expect(shortForm.map((result) => result.memory.id)).toEqual([restart.id]);
+
+  const decomposed = await memories.search(testContext.bob, {
+    query: "データベースのバックアップ".normalize("NFD"),
+    limit: 1,
+  });
+  expect(decomposed.map((result) => result.memory.id)).toEqual([expected.id]);
+  await testContext.close();
+});
+
+test("CJK substring search ranks the exact mixed-language Memory first", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const expected = await memories.remember(testContext.alice, {
+    content: "Effect A 数据管道的对账报告每周五由杭州团队提交给财务系统。",
+  });
+  await memories.remember(testContext.alice, {
+    content: "Effect B 数据看板的访问权限由上海团队每月审核一次。",
+  });
+
+  const results = await memories.search(testContext.bob, {
+    query: "Effect A 的对账报告由哪个团队负责提交？",
+    limit: 1,
+  });
+
+  expect(results.map((result) => result.memory.id)).toEqual([expected.id]);
+  await testContext.close();
+});
+
+test("CJK substring search never reveals another User's private Memory", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const tripwire = await memories.remember(testContext.bob, {
+    content: "鲍勃的私人记录：记忆召回质量审计的真实结论是完全达标。",
+    scope: "private",
+  });
+
+  const aliceResults = await memories.search(testContext.alice, {
+    query: "记忆召回质量审计的结论",
+    limit: 5,
+  });
+  expect(aliceResults).toEqual([]);
+
+  const bobResults = await memories.search(testContext.bob, {
+    query: "记忆召回质量审计的结论",
+    limit: 5,
+  });
+  expect(bobResults.map((result) => result.memory.id)).toEqual([tripwire.id]);
+  await testContext.close();
+});
+
+test("CJK substring search applies the scope filter before candidates fuse", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const privateMemory = await memories.remember(testContext.alice, {
+    content: "内部审计的最终结论只在私有记录里保存。",
+    scope: "private",
+  });
+
+  const sharedOnly = await memories.search(testContext.alice, {
+    query: "内部审计的最终结论",
+    limit: 5,
+    scope: "shared",
+  });
+  expect(sharedOnly).toEqual([]);
+
+  const unfiltered = await memories.search(testContext.alice, {
+    query: "内部审计的最终结论",
+    limit: 5,
+  });
+  expect(unfiltered.map((result) => result.memory.id)).toEqual([privateMemory.id]);
+  await testContext.close();
+});
+
 test("Search breaks equal relevance scores by Memory recency", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);

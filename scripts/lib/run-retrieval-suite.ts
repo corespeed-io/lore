@@ -9,6 +9,7 @@ import {
   type ContextGroupExpansionOptions,
   createMemoryModule,
   type EmbeddingProvider,
+  RETRIEVAL_CJK_LEXICAL_POLICY,
   RETRIEVAL_CONTEXT_GROUP_POLICY,
   RETRIEVAL_ENTITY_ALIAS_POLICY,
   RETRIEVAL_EVIDENCE_POLICY,
@@ -1098,6 +1099,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       evidenceNeighborChunks: configuredEvidenceNeighborChunks,
       evidenceTopChunks: configuredEvidenceTopChunks,
       evidencePolicy: RETRIEVAL_EVIDENCE_POLICY,
+      cjkLexicalPolicy: RETRIEVAL_CJK_LEXICAL_POLICY,
       entityAliasRecall: configuredEntityAliasRecall,
       entityAliasPolicy: configuredEntityAliasRecall ? RETRIEVAL_ENTITY_ALIAS_POLICY : null,
       contextGroupExpansion: input.contextGroupExpansion

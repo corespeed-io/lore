@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 export const MINIMUM_POSTGRES_VERSION = 150000;
-export const LATEST_SCHEMA_REVISION = 1;
+export const LATEST_SCHEMA_REVISION = 2;
 export const MIGRATION_LOCK_ID = 1_280_263_749;
 export const DBMATE_MIGRATIONS_TABLE = "lore_schema_migrations";
 
