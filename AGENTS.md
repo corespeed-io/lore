@@ -30,11 +30,14 @@ been removed. Lore now has a native implementation:
   Generations/Artifacts as rebuildable AST-aware evidence;
   `0002_drop_memory_chunks_search_indexes.sql` removes the two `memory_chunks`
   FTS GIN indexes that the RLS request path can never use. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number and
-  bump both `LATEST_SCHEMA_REVISION` (`scripts/lib/migration-preflight.mjs`) and
-  `LORE_SCHEMA_REVISION` (`src/lib/operations.ts`) in the same change, or the
-  migration wrapper's postflight and readiness fail; `tests/portable-core.test.ts`
-  and `tests/http.test.ts` pin the current revision;
+  must update `lore_system_state.schema_revision` to its own version number —
+  the wrapper's postflight fails on the mismatch otherwise — and must bump both
+  `LATEST_SCHEMA_REVISION` (`scripts/lib/migration-preflight.mjs`) and
+  `LORE_SCHEMA_REVISION` (`src/lib/operations.ts`) in the same change: the
+  wrapper tolerates an older application constant, but readiness requires exact
+  equality and reports the schema incompatible. `tests/portable-core.test.ts`,
+  `tests/http.test.ts`, and `scripts/smoke-memory-core.ts` pin the current
+  revision;
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
   transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
@@ -97,9 +100,13 @@ been removed. Lore now has a native implementation:
   Artifact with multiple Artifact Symbols. Its 6,000-unit bound is explicitly
   UTF-16 code units and hard fallback splits must preserve Unicode code points.
   Content-literal search preserves exact SQL wildcard semantics: queries with
-  word trigrams use `lower(content/path/symbol)` `pg_trgm` GIN indexes, while
-  punctuation-only queries retain the exact revision-scoped scan and must remain
-  an adversarial latency class. Search bounds symbol, literal, simple-FTS, and path
+  word trigrams target the `lower(content/path/symbol)` `pg_trgm` GIN indexes,
+  while punctuation-only queries retain the exact revision-scoped scan and must
+  remain an adversarial latency class. Caveat under audit: these tables are
+  RLS-protected, and the same non-leakproof restriction proven on
+  `memory_chunks` (`LIKE`/`@@` cannot be index conditions under `lore_app`)
+  likely keeps these GINs off the request path too — verify before citing them
+  in any latency claim. Search bounds symbol, literal, simple-FTS, and path
   channels independently under the same active generation before weighted RRF.
   Durable leased jobs are replay-safe and atomically activate a completed generation
   while retaining the prior generation as `retiring`. The current maintenance path
@@ -287,11 +294,13 @@ been removed. Lore now has a native implementation:
   `search_vector_english` GINs, and a proposed trigram index was rejected, once
   `enable_seqscan=off` under `SET ROLE lore_app` proved RLS keeps non-leakproof
   operators (`@@`, `LIKE`) out of index conditions, making every lexical channel
-  an RLS-bounded workspace scan regardless (measured at 20k chunks: 12-gram probe
-  ~150ms beside ~95ms for one FTS channel). The tsvector columns remain — they
-  power the scan predicates. Do not add content GIN indexes here without first
-  fixing that request-path restriction and proving the win under
-  `SET ROLE lore_app`;
+  an RLS-bounded workspace scan regardless. Measured at 20k chunks: a selective
+  12-gram probe ~150ms beside ~95ms for one FTS channel, but cost tracks gram
+  selectivity, not the LIMIT — 14 common-connective grams materialized 200k
+  intermediate rows and ~590ms, the same shape as the relaxed-English channel.
+  The tsvector columns remain — they power the scan predicates. Do not add
+  content GIN indexes here without first fixing that request-path restriction
+  and proving the win under `SET ROLE lore_app`;
 - `src/lib/query-planning.ts` defines optional deployment-level multi-query planning.
   Its OpenAI/vLLM and Google adapters see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,

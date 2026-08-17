@@ -370,14 +370,22 @@ function relaxedEnglishTerms(query: string): string[] {
   return unique.slice(0, 32);
 }
 
-const cjkRunPattern = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+// Script=Common/Inherited marks that belong inside Japanese words: U+30FC
+// prolonged sound mark (サーバー), U+3005 ideographic iteration (人々), and the
+// kana iteration marks. U+30FB middle dot stays excluded on purpose — it
+// separates words, so a run must end there.
+const cjkRunPattern =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー々ゝゞヽヾ]+/gu;
 
 // Postgres 'simple'/'english' text search cannot segment CJK, so an entire
 // punctuation-bounded run indexes as one token and phrase queries never match.
 // This channel probes chunk content with fixed-width code-point grams from the
 // query's CJK runs; grams contain only CJK script letters, so they are LIKE-safe
 // without escaping.
-function cjkLexicalGrams(query: string): string[] {
+function cjkLexicalGrams(rawQuery: string): string[] {
+  // NFC first: decomposed kana carries Script=Inherited voicing marks that
+  // would otherwise split runs and emit grams NFC-stored content cannot match.
+  const query = rawQuery.normalize("NFC");
   const grams: string[] = [];
   const seen = new Set<string>();
   const filled = (gram: string) => {

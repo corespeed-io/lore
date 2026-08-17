@@ -482,6 +482,30 @@ test("CJK substring search recalls Chinese phrases that FTS cannot segment", asy
   await testContext.close();
 });
 
+test("CJK substring search keeps katakana runs whole across the prolonged sound mark", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const expected = await memories.remember(testContext.alice, {
+    content: "ユーザーデータベースの週次バックアップは日曜深夜に実行されます。",
+  });
+  await memories.remember(testContext.alice, {
+    content: "テスト環境のログは十四日間だけ保存されます。",
+  });
+
+  const results = await memories.search(testContext.bob, {
+    query: "データベースのバックアップはいつ実行されますか？",
+    limit: 1,
+  });
+  expect(results.map((result) => result.memory.id)).toEqual([expected.id]);
+
+  const decomposed = await memories.search(testContext.bob, {
+    query: "データベースのバックアップ".normalize("NFD"),
+    limit: 1,
+  });
+  expect(decomposed.map((result) => result.memory.id)).toEqual([expected.id]);
+  await testContext.close();
+});
+
 test("CJK substring search ranks the exact mixed-language Memory first", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);

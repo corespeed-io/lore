@@ -101,6 +101,12 @@
       "content": "デプロイ承認は毎週月曜日にプラットフォームチームが行います。"
     },
     {
+      "key": "db-backup-ja",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "ユーザーデータベースの週次バックアップは日曜深夜に実行されます。"
+    },
+    {
       "key": "distractor-release",
       "owner": "alice",
       "scope": "shared",
@@ -309,6 +315,13 @@
       "category": "cjk",
       "query": "デプロイ承認はいつ、どのチームが行いますか？",
       "expectedKeys": ["deploy-approval-ja"],
+      "limit": 5
+    },
+    {
+      "key": "db-backup-ja",
+      "category": "cjk",
+      "query": "データベースのバックアップはいつ実行されますか？",
+      "expectedKeys": ["db-backup-ja"],
       "limit": 5
     },
     {
