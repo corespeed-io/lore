@@ -979,6 +979,18 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 - `service:restart` kills the maintenance worker mid-job, leaving a leased Code
   Index job stranded in `processing` until its lease expires. A `processing` row is
   not proof of active work — check the worker's CPU before concluding it is indexing.
+- `tsconfig.json` sets `incremental: true`, so `bun run typecheck` can report success
+  purely from a stale `tsconfig.tsbuildinfo`. Any bisect over dependency, generated-type,
+  or `tsconfig` changes must `rm -f tsconfig.tsbuildinfo .next/cache/.tsbuildinfo` between
+  runs, or it measures the cache instead of the change. `skipLibCheck: true` compounds
+  this: a conflict between two `.d.ts` files is silent at the declaration site and only
+  surfaces as errors at unrelated call sites.
+- Wrangler is held at 4.119.0. From 4.123.0 its bundled workerd (`1.20260811.1`)
+  emits nodejs_compat globals — including `declare const Buffer: any` — into
+  `cf:typegen`'s `cloudflare-env.d.ts`. That collides with `@types/node`'s global
+  `Buffer`, and every `Buffer.toString(encoding)` call in the repo then fails as
+  `TS2554: Expected 0 arguments, but got 1`. Regenerating `cloudflare-env.d.ts` with a
+  newer wrangler reintroduces it, so resolve the collision before bumping wrangler.
 
 ## Commit / PR conventions
 
