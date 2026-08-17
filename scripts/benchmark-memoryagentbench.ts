@@ -389,20 +389,27 @@ try {
     throw new Error(`Refusing to modify non-benchmark database ${JSON.stringify(databaseName)}`);
   }
   const schema = await admin.query<{
-    entity_alias_index: string | null;
+    entity_alias_column: boolean;
     memories: string | null;
     metadata_index: string | null;
   }>(
+    // The alias channel's sentinel is the generated column it scans, not an
+    // index: migration 0003 dropped the request-path-dead entity-aliases GIN.
     `SELECT
        to_regclass('public.memories')::text AS memories,
        to_regclass('public.memories_metadata_gin_idx')::text AS metadata_index,
-       to_regclass('public.memory_chunks_entity_aliases_idx')::text AS entity_alias_index`,
+       EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'memory_chunks'
+           AND column_name = 'entity_aliases'
+       ) AS entity_alias_column`,
   );
   if (!schema.rows[0]?.memories || !schema.rows[0]?.metadata_index) {
     throw new Error("Lore v1 baseline with the Memory metadata index is required");
   }
-  if (!schema.rows[0]?.entity_alias_index) {
-    throw new Error("Lore v1 baseline with the entity-alias index is required");
+  if (!schema.rows[0]?.entity_alias_column) {
+    throw new Error("Lore v1 baseline with the entity-alias column is required");
   }
 
   const expectedFactMemoryCount = selection.memoryCount;

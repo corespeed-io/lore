@@ -966,8 +966,11 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   read is modelled. `useEffect` never runs, so anything painted from an effect (the
   Markdown body, the Graph canvas) is absent from the markup.
 - `bun run lint` silently checks nothing when the working tree sits under a path
-  containing `/tmp`, because `biome.json` excludes `**/tmp`. "Checked 0 files" means
-  the path excluded everything, not that the tree is clean.
+  containing `/tmp`, because `biome.json` excludes `**/tmp`. The same happens in
+  every agent worktree under `.claude/worktrees/` — `biome.json` also excludes
+  `**/.claude` and `**/.worktrees` — so lint from such a checkout must run from a
+  worktree added at a neutral path. "Checked 0 files" means the path excluded
+  everything, not that the tree is clean.
 - Running `bun run build` while `next dev` is live can still break an individual
   route in the dev server even though Next 16 keeps dev output under `.next/dev`.
   Observed symptom: one API route starts returning the catch-all page — HTTP 200
