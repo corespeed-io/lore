@@ -488,6 +488,9 @@ test("CJK substring search keeps katakana runs whole across the prolonged sound 
   const expected = await memories.remember(testContext.alice, {
     content: "ユーザーデータベースの週次バックアップは日曜深夜に実行されます。",
   });
+  const restart = await memories.remember(testContext.alice, {
+    content: "サーバーの再起動手順は社内ウィキの運用ページに記載されています。",
+  });
   await memories.remember(testContext.alice, {
     content: "テスト環境のログは十四日間だけ保存されます。",
   });
@@ -497,6 +500,14 @@ test("CJK substring search keeps katakana runs whole across the prolonged sound 
     limit: 1,
   });
   expect(results.map((result) => result.memory.id)).toEqual([expected.id]);
+
+  // The discriminating guard: without ー in the run class this query yields
+  // zero grams (サ and バ are one-code-point runs) and no channel matches.
+  const shortForm = await memories.search(testContext.bob, {
+    query: "サーバー",
+    limit: 1,
+  });
+  expect(shortForm.map((result) => result.memory.id)).toEqual([restart.id]);
 
   const decomposed = await memories.search(testContext.bob, {
     query: "データベースのバックアップ".normalize("NFD"),

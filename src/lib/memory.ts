@@ -380,8 +380,8 @@ const cjkRunPattern =
 // Postgres 'simple'/'english' text search cannot segment CJK, so an entire
 // punctuation-bounded run indexes as one token and phrase queries never match.
 // This channel probes chunk content with fixed-width code-point grams from the
-// query's CJK runs; grams contain only CJK script letters, so they are LIKE-safe
-// without escaping.
+// query's CJK runs; grams contain only CJK script letters and the word-internal
+// marks above — none are LIKE metacharacters, so no escaping is needed.
 function cjkLexicalGrams(rawQuery: string): string[] {
   // NFC first: decomposed kana carries Script=Inherited voicing marks that
   // would otherwise split runs and emit grams NFC-stored content cannot match.

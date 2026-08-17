@@ -107,6 +107,12 @@
       "content": "ユーザーデータベースの週次バックアップは日曜深夜に実行されます。"
     },
     {
+      "key": "restart-ja",
+      "owner": "alice",
+      "scope": "shared",
+      "content": "サーバーの再起動手順は社内ウィキの運用ページに記載されています。"
+    },
+    {
       "key": "distractor-release",
       "owner": "alice",
       "scope": "shared",
@@ -322,6 +328,13 @@
       "category": "cjk",
       "query": "データベースのバックアップはいつ実行されますか？",
       "expectedKeys": ["db-backup-ja"],
+      "limit": 5
+    },
+    {
+      "key": "restart-ja-short",
+      "category": "cjk",
+      "query": "サーバー",
+      "expectedKeys": ["restart-ja"],
       "limit": 5
     },
     {
