@@ -597,21 +597,55 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, {
         embeddingProvider,
       });
+      // Provider throttling (429 bursts) exhausts the HTTP adapter's inline
+      // retries and parks jobs with a durable backoff; a backed-off job also
+      // makes run() report idle until its run_at arrives. Waiting is safe —
+      // only sustained zero progress or a dead job aborts the run.
+      let stalledRounds = 0;
+      const sleep = (seconds: number) =>
+        new Promise((resolve) => setTimeout(resolve, seconds * 1_000));
       while (true) {
         const results = await Promise.all(
           Array.from({ length: indexingConcurrency }, () => maintenance.run()),
         );
-        if (results.every((result) => result.status === "idle")) break;
+        let roundCompleted = 0;
+        let retryAfterSeconds = 0;
         for (const result of results) {
           if (result.status === "idle") continue;
-          if (result.status !== "complete") {
-            throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as ${result.status}`);
+          if (result.status === "dead") {
+            throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as dead`);
+          }
+          if (result.status === "retry") {
+            retryAfterSeconds = Math.max(
+              retryAfterSeconds,
+              Math.min(result.retryAfterSeconds ?? 30, 60),
+            );
+            continue;
           }
           completedJobs += 1;
+          roundCompleted += 1;
         }
-        if (completedJobs % 1_000 === 0) {
-          console.error(`Embedded ${completedJobs.toLocaleString()} benchmark Memories...`);
+        if (roundCompleted > 0) {
+          stalledRounds = 0;
+          if (completedJobs % 1_000 < roundCompleted) {
+            console.error(`Embedded ${completedJobs.toLocaleString()} benchmark Memories...`);
+          }
+          continue;
         }
+        if (results.every((result) => result.status === "idle")) {
+          const backlog = await admin.query<{ count: string }>(
+            "SELECT count(*)::text AS count FROM memory_embedding_jobs WHERE status = 'pending'",
+          );
+          if (Number(backlog.rows[0]?.count ?? 0) === 0) break;
+          retryAfterSeconds = Math.max(retryAfterSeconds, 15);
+        }
+        stalledRounds += 1;
+        if (stalledRounds > 40) {
+          throw new Error(
+            "Embedding maintenance made no progress across 40 throttled rounds; giving up",
+          );
+        }
+        await sleep(Math.max(retryAfterSeconds, 15));
       }
     }
     const selectedPartitionKeys = [...partitionKeys];
