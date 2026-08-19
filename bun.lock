@@ -57,9 +57,18 @@
         "pg": "^8.23.0",
       },
       "devDependencies": {
+        "@electric-sql/pglite": "^0.5.5",
+        "@electric-sql/pglite-pgvector": "^0.0.6",
         "@types/pg": "^8.23.1",
         "typescript": "^7.0.2",
+        "vitest": "^4.1.10",
       },
+      "peerDependencies": {
+        "vitest": ">=2",
+      },
+      "optionalPeers": [
+        "vitest",
+      ],
     },
     "packages/mcp": {
       "name": "@corespeed/lore-mcp",

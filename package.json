@@ -84,7 +84,7 @@
     "sdk:check": "bun tools/sdk-codegen/generate.ts --check",
     "sdk:generate": "bun tools/sdk-codegen/generate.ts",
     "format": "biome check --write .",
-    "test": "vitest run && bun run test:python",
+    "test": "vitest run && bun run --cwd packages/lore-core check && bun run test:python",
     "test:python": "node scripts/test-python.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },

@@ -270,7 +270,7 @@ export function createMemoryMaintenanceModule(
         const job = result.rows[0];
         return job ? { ...job, chunks: claimedChunks(job.chunks) } : null;
       });
-      if (!claimed) return { status: "idle", jobId };
+      if (!claimed) return { status: "idle", ...(jobId ? { jobId } : {}) };
 
       const chunks = claimed.chunks;
       let vectors: string[];
@@ -392,18 +392,20 @@ export function createMemoryMaintenanceCoordinator(maintenances: MemoryMaintenan
     },
 
     async run(jobId?: string): Promise<MemoryMaintenanceResult> {
-      if (lanes.length === 0) return { status: "idle", jobId };
+      if (lanes.length === 0) return { status: "idle", ...(jobId ? { jobId } : {}) };
       const startLane = jobId ? 0 : nextRunLane;
       for (let offset = 0; offset < lanes.length; offset += 1) {
         const laneIndex = (startLane + offset) % lanes.length;
-        const result = await lanes[laneIndex].run(jobId);
+        const lane = lanes[laneIndex];
+        if (!lane) continue;
+        const result = await lane.run(jobId);
         if (result.status !== "idle") {
           nextRunLane = (laneIndex + 1) % lanes.length;
           return result;
         }
       }
       nextRunLane = (startLane + 1) % lanes.length;
-      return { status: "idle", jobId };
+      return { status: "idle", ...(jobId ? { jobId } : {}) };
     },
   };
 }

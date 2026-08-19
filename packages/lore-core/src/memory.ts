@@ -329,7 +329,8 @@ function feedbackEvidenceExcerpt(original: string, evidence: string): string {
     evidence.match(/[^.!?。！？]+(?:[.!?。！？]+|$)/gu)?.map((passage) => passage.trim()) ?? [];
   if (!passages.length || !queryTerms.length) return evidence.slice(0, 1_000);
 
-  let bestPassage = passages[0];
+  // passages is non-empty here, so the fallback is inert.
+  let bestPassage = passages[0] ?? "";
   let bestScore = Number.NEGATIVE_INFINITY;
   for (const [index, passage] of passages.entries()) {
     const terms = evidenceTerms(passage);
@@ -379,13 +380,16 @@ function diversifyRerankedResults(
       const objective = lambda * relevance - (1 - lambda) * maximumSimilarity;
       if (
         objective > bestObjective ||
-        (objective === bestObjective && candidate.index < remaining[bestIndex].index)
+        // bestIndex always addresses a live entry in remaining; the fallback is inert.
+        (objective === bestObjective &&
+          candidate.index < (remaining[bestIndex]?.index ?? Number.POSITIVE_INFINITY))
       ) {
         bestObjective = objective;
         bestIndex = index;
       }
     }
-    selected.push(remaining.splice(bestIndex, 1)[0]);
+    const best = remaining.splice(bestIndex, 1)[0];
+    if (best) selected.push(best);
   }
   return selected.map((item) => item.result);
 }
@@ -417,7 +421,7 @@ function fuseRerankedResults(
 }
 
 function fuseQueryResults(resultSets: MemorySearchResult[][], limit: number): MemorySearchResult[] {
-  if (resultSets.length === 1) return resultSets[0].slice(0, limit);
+  if (resultSets.length === 1) return (resultSets[0] ?? []).slice(0, limit);
   const fused = new Map<
     string,
     { result: MemorySearchResult; score: number; bestRank: number; firstQuery: number }
@@ -813,7 +817,7 @@ async function searchOneQuery(input: {
   updatedBefore: string | null;
   metadataFilter: Record<string, unknown> | null;
   excludedMemoryIds?: string[];
-  embeddingProvider?: EmbeddingProvider;
+  embeddingProvider?: EmbeddingProvider | undefined;
 }): Promise<MemorySearchResult[]> {
   const result = await input.transaction.query<SearchRow>(
     `WITH simple_lexical_candidates AS (
@@ -1330,6 +1334,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       ],
     );
     const memory = result.rows[0];
+    if (!memory) throw new Error("Memory insert returned no row");
     await insertChunks(transaction, actor.workspaceId, id, chunks);
     const jobId = embeddingProvider
       ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)

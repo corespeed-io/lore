@@ -68,7 +68,9 @@ async function rerankMemosBatches(
       while (nextIndex < batches.length) {
         const index = nextIndex;
         nextIndex += 1;
-        output[index] = await rerank(batches[index]);
+        const batch = batches[index];
+        if (!batch) continue;
+        output[index] = await rerank(batch);
       }
     }),
   );
@@ -108,7 +110,9 @@ function parseResults(
       throw new Error(`${provider} returned an invalid reranking result`);
     }
     seen.add(index as number);
-    return { documentId: documents[index as number].id, score };
+    const document = documents[index as number];
+    if (!document) throw new Error(`${provider} returned an invalid reranking result`);
+    return { documentId: document.id, score };
   });
 }
 
@@ -162,7 +166,7 @@ export function createHostedRerankingProvider(options: HostedRerankingOptions): 
     provider: options.provider,
     model,
     revision: `lore-${options.provider}-reranking-v1`,
-    instruction,
+    ...(instruction !== undefined ? { instruction } : {}),
     async rerank({ query, documents, limit }): Promise<RerankResult[]> {
       if (!documents.length || limit < 1) return [];
       const top = Math.min(limit, documents.length);

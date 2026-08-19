@@ -315,7 +315,9 @@ export function createObservationModule(database: PostgresDatabase) {
               JSON.stringify(normalized.observations),
             ],
           );
-          const episode = await episodeFromId(transaction, actor.workspaceId, result.rows[0].id);
+          const recorded = result.rows[0];
+          if (!recorded) throw new Error("Episode record returned no row");
+          const episode = await episodeFromId(transaction, actor.workspaceId, recorded.id);
           if (!episode) throw new Error("Recorded Episode was not readable in its transaction");
           await completeMutation(
             transaction,

@@ -13,22 +13,36 @@
     ".": "./src/index.ts",
     "./postgres": "./src/postgres.ts",
     "./episodes": "./src/episodes/index.ts",
-    "./providers": "./src/providers.ts"
+    "./providers": "./src/providers.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "bun run typecheck && bun run test"
   },
   "dependencies": {
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "@electric-sql/pglite": "^0.5.5",
+    "@electric-sql/pglite-pgvector": "^0.0.6",
+    "vitest": "^4.1.10"
   },
   "engines": {
     "node": ">=20"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "vitest": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   }
 }

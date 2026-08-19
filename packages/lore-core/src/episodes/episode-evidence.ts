@@ -194,6 +194,7 @@ function validatePersistedChunks(
   for (const [index, expectedChunk] of expected.entries()) {
     const actual = persisted[index];
     if (
+      !actual ||
       actual.observation_id !== expectedChunk.observationId ||
       actual.observation_ordinal !== expectedChunk.observationOrdinal ||
       actual.chunk_ordinal !== expectedChunk.chunkOrdinal ||
@@ -323,9 +324,9 @@ async function searchOneQuery(input: {
   evidenceNeighborChunks: number;
   evidenceTopObservations: number;
   metadataFilter: Record<string, unknown> | null;
-  groupMetadataKey?: string;
+  groupMetadataKey?: string | undefined;
   sourceKeys: readonly string[];
-  embeddingProvider?: EmbeddingProvider;
+  embeddingProvider?: EmbeddingProvider | undefined;
   embeddingDimensions: number;
 }): Promise<EpisodeEvidenceSearchResult[]> {
   const result = await input.transaction.query<SearchRow>(
