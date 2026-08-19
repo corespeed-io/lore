@@ -420,6 +420,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     }
 
     const writeModule = createMemoryModule(requestDatabase, {
+      embeddingDimensions: input.embeddingProvider.dimensions,
       embeddingProvider,
     });
     const tripwireWriteModule = createMemoryModule(requestDatabase);
@@ -718,6 +719,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         contextGroupExpansion: variant.useContextGroupExpansion
           ? input.contextGroupExpansion
           : undefined,
+        // Keep SQL vector casts aligned with the benchmark schema even for
+        // lexical variants whose provider is withheld.
+        embeddingDimensions: input.embeddingProvider.dimensions,
         embeddingProvider: variant.useEmbeddings ? embeddingProvider : undefined,
         entityAliasRecall: variant.useEntityAliases ?? false,
         evidenceNeighborChunks: configuredEvidenceNeighborChunks,

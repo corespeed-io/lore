@@ -799,6 +799,13 @@ Benchmark is part of the product quality system even without AutoDream.
   that Alice cannot see. LongMemEval-V2 is the deliberate exception: its Bob-private
   Episode tripwire uses the same vector path and is included in the candidate source
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
+- `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
+  disposable database whose schema was generated at a non-lore width through
+  `scripts/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
+  the baseline; the four `length(path) <= 1024` checks stay). It exercises the
+  engine's host-baked `embeddingDimensions` option the way a non-lore host's
+  own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
+  keep the 1024 protocol invariant and still reject `LORE_EMBEDDING_DIMENSIONS`.
 - Synthetic benchmark reruns may set `LORE_BENCHMARK_REUSE_INDEXED=1`; the runner
   validates exact content/owner/scope and active embedding-space completeness before
   reusing data. LongMemEval exposes the same behavior as `--reuse-indexed`.

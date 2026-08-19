@@ -91,11 +91,29 @@ if (options.split === "oracle") {
   );
 }
 
+// Optional benchmark-only embedding-space width for disposable databases whose
+// schema was generated at a non-lore width (the production-shaped 1536 track).
+// Deployments keep lore's 1024 protocol invariant.
+function benchmarkEmbeddingDimensions(): number | undefined {
+  const configured = process.env.LORE_BENCHMARK_EMBEDDING_DIMENSIONS;
+  if (!configured?.trim()) return undefined;
+  const parsed = Number(configured);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 16_000) {
+    throw new Error("LORE_BENCHMARK_EMBEDDING_DIMENSIONS must be an integer from 1 to 16000");
+  }
+  return parsed;
+}
+
 const providerWarnings: string[] = [];
-const embeddingProvider = createEmbeddingProviderFromEnvironment(process.env, (message) => {
-  providerWarnings.push(message);
-  console.error(message);
-});
+const overriddenDimensions = benchmarkEmbeddingDimensions();
+const embeddingProvider = createEmbeddingProviderFromEnvironment(
+  process.env,
+  (message) => {
+    providerWarnings.push(message);
+    console.error(message);
+  },
+  overriddenDimensions === undefined ? {} : { dimensions: overriddenDimensions },
+);
 if (!embeddingProvider) {
   throw new Error("The LongMemEval benchmark requires a valid Lore embedding provider");
 }
