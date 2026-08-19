@@ -1,10 +1,9 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
-import type { ActorContext } from "../src/lib/actor-context";
-import type { PostgresDatabase } from "../src/lib/db";
 import { runCodeAwareMemoryDependencyStressEvaluation } from "./lib/code-aware-memory-dependency-stress-evaluation";
 import { runCodeAwareMemoryFoundationEvaluation } from "./lib/code-aware-memory-foundation-evaluation";
 

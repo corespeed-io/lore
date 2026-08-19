@@ -1,18 +1,19 @@
 // OpenNext generates this module before Wrangler bundles the custom worker.
-import openNextWorker from "./.open-next/worker.js";
-import { createRequestPostgresDatabase } from "./src/lib/db/postgres";
-import {
-  createEmbeddingProviderFromEnvironment,
-  createMaintenanceEmbeddingProvidersFromEnvironment,
-} from "./src/lib/embedding/provider-factory";
+
+import type { MemoryEmbeddingJobMessage } from "@corespeed/lore-core";
 import {
   createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
   purgeExpiredPortableCoreRecords,
-} from "./src/lib/maintenance";
-import type { MemoryEmbeddingJobMessage } from "./src/lib/memory";
+} from "@corespeed/lore-core";
+import { createRequestPostgresDatabase } from "@corespeed/lore-core/postgres";
+import openNextWorker from "./.open-next/worker.js";
+import {
+  createEmbeddingProviderFromEnvironment,
+  createMaintenanceEmbeddingProvidersFromEnvironment,
+} from "./src/lib/embedding/provider-factory";
 import { createOperationsModule, livenessReport } from "./src/lib/operations";
 
 // Preserve any OpenNext Durable Object exports if a cache adapter enables them.

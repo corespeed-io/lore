@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import pg from "pg";
-import { createPostgresDatabase } from "../../src/lib/db/postgres";
-import { createMemoryMaintenanceModule } from "../../src/lib/maintenance";
+import type { QueryPlanningProvider, RerankingProvider } from "@corespeed/lore-core";
 import {
   type ActorContext,
   type ContextGroupExpansionOptions,
+  createMemoryMaintenanceModule,
   createMemoryModule,
   type EmbeddingProvider,
   RETRIEVAL_CJK_LEXICAL_POLICY,
@@ -14,9 +13,9 @@ import {
   RETRIEVAL_ENTITY_ALIAS_POLICY,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
-} from "../../src/lib/memory";
-import type { QueryPlanningProvider } from "../../src/lib/query-planning";
-import type { RerankingProvider } from "../../src/lib/reranking";
+} from "@corespeed/lore-core";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
+import pg from "pg";
 import {
   aggregateRetrievalBenchmark,
   evaluateRetrievalBenchmarkCase,

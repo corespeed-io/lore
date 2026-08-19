@@ -1,4 +1,3 @@
-import { expect, test } from "vitest";
 import {
   DEFAULT_EMBEDDING_CONFIGURATION,
   EMBEDDING_DIMENSIONS,
@@ -7,7 +6,8 @@ import {
   embeddingConfiguration,
   embeddingConfigurationFromEnvironment,
   QWEN3_EMBEDDING_PROTOCOL_REVISION,
-} from "@/lib/embedding-config";
+} from "@corespeed/lore-core";
+import { expect, test } from "vitest";
 
 test("local deployments default to Qwen inside the fixed Lore v1 embedding protocol", () => {
   expect(DEFAULT_EMBEDDING_CONFIGURATION).toEqual({

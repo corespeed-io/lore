@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import pg from "pg";
-import { createPostgresDatabase } from "../src/lib/db/postgres";
-import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
 import {
   type ActorContext,
   type ContextGroupExpansionOptions,
@@ -11,7 +8,10 @@ import {
   RETRIEVAL_CONTEXT_GROUP_POLICY,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
-} from "../src/lib/memory";
+} from "@corespeed/lore-core";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
+import pg from "pg";
+import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
 import { createQueryPlanningProviderFromEnvironment } from "../src/lib/query-planning/provider-factory";
 import { createRerankingProviderFromEnvironment } from "../src/lib/reranking/provider-factory";
 import { createBenchmarkMetering } from "./lib/benchmark-metering";

@@ -1,9 +1,9 @@
-import { expect, test } from "vitest";
 import {
   createLlamaCppRerankingProvider,
   createVllmRerankingProvider,
   createVllmScoreRerankingProvider,
-} from "@/lib/reranking/vllm";
+} from "@corespeed/lore-core/providers";
+import { expect, test } from "vitest";
 
 test("vLLM adapter sends the official rerank request and restores document ids", async () => {
   let requestBody: Record<string, unknown> | undefined;

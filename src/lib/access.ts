@@ -1,11 +1,11 @@
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import {
   type ActorContext,
   installActorContext,
   installUserContext,
+  isPostgresAccessDenied,
   type UserContext,
-} from "./actor-context";
-import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase } from "./db";
+} from "@corespeed/lore-core";
 
 export type AgentStatus = "active" | "disabled";
 export type AgentGrantPermission = "read" | "write";

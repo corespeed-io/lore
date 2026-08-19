@@ -1,20 +1,23 @@
-import { type ActorContext, installActorContext } from "./actor-context";
-import type { CodeEvidenceRelationship } from "./code-evidence";
-import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
-import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
+import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
 import {
+  type ActorContext,
+  beginMutation,
+  completeMutation,
   createMemoryMutationPrimitives,
+  type IdempotencyRequest,
+  installActorContext,
+  isPostgresAccessDenied,
   type Memory,
   type MemoryMutationPrimitivesOptions,
   type MemoryRow,
   type MemoryScope,
   MemoryVersionConflictError,
   memoryFromRow,
+  prepareMemoryContent,
   serializedTimestamp,
   type UpdateMemory,
-} from "./memory";
-import { prepareMemoryContent } from "./memory-content";
+} from "@corespeed/lore-core";
+import type { CodeEvidenceRelationship } from "./code-evidence";
 
 /**
  * Memory Proposals: owner-private review state for suggested create/update

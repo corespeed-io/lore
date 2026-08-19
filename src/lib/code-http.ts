@@ -1,3 +1,4 @@
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import {
   CodeEvidenceAccessDeniedError,
   type CodeEvidenceRelationship,
@@ -8,7 +9,6 @@ import { type CodeDependencyDirection, createCodeDependencyGraphModule } from ".
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./code-index-errors";
 import { type ConfiguredCodeRepositories, createCodeIndexQueueModule } from "./code-index-queue";
 import { createCodeIndexReadModule, MAXIMUM_CODE_INDEX_JOB_LIST } from "./code-index-read";
-import type { PostgresDatabase } from "./db";
 import {
   createRequestContextResolver,
   RequestAuthenticationError,

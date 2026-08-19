@@ -1,7 +1,9 @@
-import type { QueryPlanningProvider } from "../query-planning";
-import { createGoogleQueryPlanningProvider } from "./google";
-import { createOllamaQueryPlanningProvider } from "./ollama";
-import { createOpenAICompatibleQueryPlanningProvider } from "./openai-compatible";
+import type { QueryPlanningProvider } from "@corespeed/lore-core";
+import {
+  createGoogleQueryPlanningProvider,
+  createOllamaQueryPlanningProvider,
+  createOpenAICompatibleQueryPlanningProvider,
+} from "@corespeed/lore-core/providers";
 
 export type QueryPlanningConfigurationWarning = (message: string) => void;
 

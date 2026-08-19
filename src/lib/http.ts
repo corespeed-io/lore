@@ -1,39 +1,17 @@
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
 import {
-  AccessDeniedError,
-  type AgentGrantPermission,
-  type AgentStatus,
-  createAccessModule,
-} from "./access";
-import type { ActorContext } from "./actor-context";
-import type { PostgresDatabase } from "./db";
-import {
-  createEvaluationModule,
-  type EvaluationCaseInput,
-  type EvaluationModuleOptions,
-  EvaluationSuiteNotFoundError,
-} from "./evaluation";
-import { createMemoryGraphModule } from "./graph";
-import {
+  createMemoryGraphModule,
+  createMemoryModule,
   IdempotencyConflictError,
   type IdempotencyRequest,
-  mutationRequestHash,
-} from "./idempotency";
-import {
-  createMemoryModule,
   MemoryAccessDeniedError,
+  MemoryContentValidationError,
   type MemoryModuleOptions,
   type MemoryScope,
   MemoryVersionConflictError,
-} from "./memory";
-import { MemoryContentValidationError, prepareMemoryContent } from "./memory-content";
-import {
-  createMemoryProposalsModule,
-  MemoryProposalAccessDeniedError,
-  MemoryProposalCapacityError,
-  MemoryProposalReviewConflictError,
-  type MemoryProposalStatus,
-  type ProposeMemoryCodeEvidence,
-} from "./memory-proposals";
+  mutationRequestHash,
+  prepareMemoryContent,
+} from "@corespeed/lore-core";
 import {
   createObservationModule,
   type EpisodeKind,
@@ -45,7 +23,27 @@ import {
   ObservationAccessDeniedError,
   type ObservationKind,
   type RecordObservation,
-} from "./observations";
+} from "@corespeed/lore-core/episodes";
+import {
+  AccessDeniedError,
+  type AgentGrantPermission,
+  type AgentStatus,
+  createAccessModule,
+} from "./access";
+import {
+  createEvaluationModule,
+  type EvaluationCaseInput,
+  type EvaluationModuleOptions,
+  EvaluationSuiteNotFoundError,
+} from "./evaluation";
+import {
+  createMemoryProposalsModule,
+  MemoryProposalAccessDeniedError,
+  MemoryProposalCapacityError,
+  MemoryProposalReviewConflictError,
+  type MemoryProposalStatus,
+  type ProposeMemoryCodeEvidence,
+} from "./memory-proposals";
 import { createOperationsModule, type OperationsOptions } from "./operations";
 import {
   createPortabilityModule,

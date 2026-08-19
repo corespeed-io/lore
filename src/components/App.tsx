@@ -1,5 +1,6 @@
 "use client";
 
+import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@corespeed/lore-core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "@/components/AgentsView";
 import { GraphView } from "@/components/GraphView";
@@ -22,7 +23,6 @@ import {
   useLoreSearch,
   useLoreWorkspaces,
 } from "@/lib/lore-swr";
-import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@/lib/memory-content";
 import { parseRoute, type RouteState, routeUrl, type Tab } from "@/lib/route";
 import type { GraphData, Memory, MemoryProposalReviewResult, MemoryScope } from "@/lib/types";
 

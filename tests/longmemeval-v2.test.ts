@@ -1,10 +1,10 @@
-import { expect, test } from "vitest";
-import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@/lib/memory-content";
+import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@corespeed/lore-core";
 import {
   MAX_EPISODE_CONTENT_CHARACTERS,
   MAX_EPISODE_OBSERVATIONS,
   MAX_OBSERVATION_CONTENT_CHARACTERS,
-} from "@/lib/observations";
+} from "@corespeed/lore-core/episodes";
+import { expect, test } from "vitest";
 import {
   longMemEvalV2ContainsLiteralAnswer,
   longMemEvalV2QuestionScreenshot,

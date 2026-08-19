@@ -2,25 +2,25 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { ActorContext } from "@corespeed/lore-core";
+import {
+  MEMORY_CHUNK_MAXIMUM_CHARACTERS,
+  MEMORY_CHUNK_OVERLAP_CHARACTERS,
+  MEMORY_CHUNKING_REVISION,
+} from "@corespeed/lore-core";
+import {
+  createEpisodeEvidenceModule,
+  createObservationModule,
+  EPISODE_EVIDENCE_INDEX_REVISION,
+  EPISODE_EVIDENCE_RETRIEVAL_POLICY,
+} from "@corespeed/lore-core/episodes";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import pg from "pg";
 import {
   evaluateLongMemEvalV2Answer,
   isUnknownLongMemEvalV2Answer,
 } from "../src/lib/answer-evaluation";
-import { createPostgresDatabase } from "../src/lib/db/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
-import {
-  createEpisodeEvidenceModule,
-  EPISODE_EVIDENCE_INDEX_REVISION,
-  EPISODE_EVIDENCE_RETRIEVAL_POLICY,
-} from "../src/lib/episode-evidence";
-import type { ActorContext } from "../src/lib/memory";
-import {
-  MEMORY_CHUNK_MAXIMUM_CHARACTERS,
-  MEMORY_CHUNK_OVERLAP_CHARACTERS,
-  MEMORY_CHUNKING_REVISION,
-} from "../src/lib/memory-chunking";
-import { createObservationModule } from "../src/lib/observations";
 import { createQueryPlanningProviderFromEnvironment } from "../src/lib/query-planning/provider-factory";
 import { createRerankingProviderFromEnvironment } from "../src/lib/reranking/provider-factory";
 import { createBenchmarkJudgeFromEnvironment } from "./lib/benchmark-judge";

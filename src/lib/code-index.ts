@@ -4,7 +4,12 @@ import { realpath } from "node:fs/promises";
 import { extname, posix } from "node:path";
 import { promisify } from "node:util";
 import { Lang, parseAsync, type SgNode } from "@ast-grep/napi";
-import { type ActorContext, installActorContext } from "./actor-context";
+import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
+import {
+  type ActorContext,
+  installActorContext,
+  isPostgresAccessDenied,
+} from "@corespeed/lore-core";
 import {
   CodeIndexAccessDeniedError,
   CodeIndexValidationError,
@@ -12,8 +17,6 @@ import {
 } from "./code-index-errors";
 import { CODE_INDEX_REVISION } from "./code-index-protocol";
 import { createCodeIndexReadModule } from "./code-index-read";
-import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
 
 export {
   CodeIndexAccessDeniedError,

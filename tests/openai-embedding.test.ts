@@ -1,5 +1,5 @@
+import { createOpenAIEmbeddingProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createOpenAIEmbeddingProvider } from "@/lib/embedding/openai";
 
 const vector = (dimensions = 1024, first = 0.5) => [
   first,

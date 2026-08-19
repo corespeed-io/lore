@@ -1,5 +1,5 @@
 import "server-only";
-import type { RerankingProvider } from "../reranking";
+import type { RerankingProvider } from "@corespeed/lore-core";
 import { createRerankingProviderFromEnvironment } from "../reranking/provider-factory";
 
 let runtimeRerankingProvider: RerankingProvider | undefined;

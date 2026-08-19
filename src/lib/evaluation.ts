@@ -1,6 +1,10 @@
-import { type ActorContext, installActorContext } from "./actor-context";
-import type { PostgresDatabase } from "./db";
-import { createMemoryModule, type MemoryModuleOptions } from "./memory";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import {
+  type ActorContext,
+  createMemoryModule,
+  installActorContext,
+  type MemoryModuleOptions,
+} from "@corespeed/lore-core";
 
 export type EvaluationRunStatus = "running" | "completed" | "failed";
 

@@ -1,5 +1,5 @@
+import { createHostedRerankingProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createHostedRerankingProvider } from "@/lib/reranking/hosted";
 
 test("Cohere v2 adapter preserves authorized document ids", async () => {
   let requestBody: Record<string, unknown> | undefined;

@@ -1,5 +1,5 @@
 import "server-only";
-import type { QueryPlanningProvider } from "../query-planning";
+import type { QueryPlanningProvider } from "@corespeed/lore-core";
 import { createQueryPlanningProviderFromEnvironment } from "../query-planning/provider-factory";
 
 let runtimeQueryPlanningProvider: QueryPlanningProvider | undefined;

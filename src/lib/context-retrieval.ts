@@ -1,4 +1,9 @@
-import type { ActorContext } from "./actor-context";
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
+import {
+  createMemoryModule,
+  type MemoryModuleOptions,
+  type MemoryScope,
+} from "@corespeed/lore-core";
 import {
   type CodeEvidenceRelationship,
   type CodeEvidenceValidationState,
@@ -7,7 +12,6 @@ import {
 } from "./code-evidence";
 import { createCodeDependencyGraphModule } from "./code-graph";
 import { createCodeIndexReadModule } from "./code-index-read";
-import type { PostgresDatabase } from "./db";
 import {
   assessContextualImpact,
   type ContextualImpactAssessment,
@@ -16,7 +20,6 @@ import {
   type JointEvidenceRoute,
   planJointEvidenceRoute,
 } from "./joint-memory-code";
-import { createMemoryModule, type MemoryModuleOptions, type MemoryScope } from "./memory";
 
 export const CONTEXT_RETRIEVAL_REVISION = "joint-memory-code-v2";
 

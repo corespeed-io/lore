@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import { Client } from "pg";
-import { createPostgresDatabase } from "../src/lib/db/postgres";
 import {
   createActorHandlers,
   createAgentCredentialHandlers,

@@ -1,5 +1,5 @@
+import { createOllamaQueryPlanningProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createOllamaQueryPlanningProvider } from "@/lib/query-planning/ollama";
 
 test("Ollama query planning uses native bounded deterministic structured output", async () => {
   let requestBody: Record<string, unknown> | undefined;

@@ -1,9 +1,9 @@
+import { createMemoryModule } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import { createCodeEvidenceModule } from "@/lib/code-evidence";
 import { createCodeIndexModule } from "@/lib/code-index";
 import { createCodeIndexReadModule } from "@/lib/code-index-read";
 import { createContextRetrievalHandlers } from "@/lib/context-http";
-import { createMemoryModule } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
 const BASE_COMMIT = "b".repeat(40);

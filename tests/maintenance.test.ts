@@ -1,11 +1,12 @@
-import { expect, test } from "vitest";
-import { installActorContext } from "@/lib/actor-context";
 import {
   createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
+  createMemoryModule,
+  type EmbeddingTask,
+  installActorContext,
   pruneRetiringEmbeddingGenerations,
-} from "@/lib/maintenance";
-import { createMemoryModule, type EmbeddingTask } from "@/lib/memory";
+} from "@corespeed/lore-core";
+import { expect, test } from "vitest";
 import { createMemoryTestContext } from "./support/memory-context";
 
 function fixtureVector(index: number): number[] {

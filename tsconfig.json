@@ -17,6 +17,10 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
+      "@corespeed/lore-core": ["./packages/lore-core/src/index.ts"],
+      "@corespeed/lore-core/postgres": ["./packages/lore-core/src/postgres.ts"],
+      "@corespeed/lore-core/episodes": ["./packages/lore-core/src/episodes/index.ts"],
+      "@corespeed/lore-core/providers": ["./packages/lore-core/src/providers.ts"],
       "@corespeed/lore-sdk": ["./packages/typescript-sdk/src/index.ts"],
       "@corespeed/lore-cli": ["./packages/cli/src/index.ts"],
       "@corespeed/lore-mcp": ["./packages/mcp/src/index.ts"]

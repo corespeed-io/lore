@@ -1,7 +1,6 @@
+import type { ActorContext, PostgresDatabase, UserContext } from "@corespeed/lore-core";
 import { createAccessModule } from "./access";
-import type { ActorContext, UserContext } from "./actor-context";
 import { checkAuth } from "./auth";
-import type { PostgresDatabase } from "./db";
 import { createIdentityModule } from "./identity";
 
 export class RequestAuthenticationError extends Error {

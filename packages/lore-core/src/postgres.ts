@@ -1,5 +1,5 @@
 import { Client, type ClientConfig, Pool, type PoolClient, type PoolConfig } from "pg";
-import type { PostgresDatabase, PostgresQueryResult, PostgresTransaction } from "../db";
+import type { PostgresDatabase, PostgresQueryResult, PostgresTransaction } from "./db";
 
 export interface RuntimePostgresDatabase extends PostgresDatabase {
   close(): Promise<void>;

@@ -1,8 +1,7 @@
+import { createMemoryModule, installActorContext } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { AccessDeniedError, createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
 import { createIdentityModule } from "@/lib/identity";
-import { createMemoryModule } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
 test("Verified provider identity resolves to one stable internal User", async () => {

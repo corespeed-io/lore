@@ -1,8 +1,8 @@
-import { expect, test } from "vitest";
 import {
   createOllamaListwiseRerankingProvider,
   OLLAMA_LISTWISE_INSTRUCTION_SHA256,
-} from "@/lib/reranking/ollama-listwise";
+} from "@corespeed/lore-core/providers";
+import { expect, test } from "vitest";
 
 test("Ollama listwise adapter scores every opaque candidate with deterministic controls", async () => {
   let requestBody: Record<string, unknown> | undefined;

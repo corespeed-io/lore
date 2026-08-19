@@ -1,5 +1,5 @@
+import { providerHttpError, readBoundedResponseJson } from "@corespeed/lore-core";
 import { extractBoxedAnswer } from "../../src/lib/answer-evaluation";
-import { providerHttpError, readBoundedResponseJson } from "../../src/lib/provider-response";
 
 export type BenchmarkJudgeKind = "abstention" | "gotchas";
 

@@ -1,6 +1,10 @@
 import "server-only";
+import type {
+  EmbeddingProvider,
+  MemoryMaintenanceNotifier,
+  MemoryModuleOptions,
+} from "@corespeed/lore-core";
 import { createEmbeddingProviderFromEnvironment } from "../embedding/provider-factory";
-import type { EmbeddingProvider, MemoryMaintenanceNotifier, MemoryModuleOptions } from "../memory";
 import {
   getRuntimeQueryPlanningProvider,
   queryPlannerMaxQueriesFromEnvironment,

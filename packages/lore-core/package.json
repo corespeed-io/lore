@@ -1,0 +1,34 @@
+{
+  "name": "@corespeed/lore-core",
+  "version": "0.1.0",
+  "description": "Lore's reusable memory engine: multi-tenant Memory storage, chunking, hybrid retrieval, links, and leased embedding maintenance over PostgreSQL RLS.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./postgres": "./src/postgres.ts",
+    "./episodes": "./src/episodes/index.ts",
+    "./providers": "./src/providers.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

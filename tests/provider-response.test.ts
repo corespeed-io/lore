@@ -1,9 +1,9 @@
-import { expect, test } from "vitest";
 import {
   providerHttpError,
   readBoundedResponseJson,
   readBoundedResponseText,
-} from "@/lib/provider-response";
+} from "@corespeed/lore-core";
+import { expect, test } from "vitest";
 
 test("provider responses reject a declared body above the byte limit", async () => {
   const response = new Response("small", { headers: { "content-length": "100" } });

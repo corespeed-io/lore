@@ -1,5 +1,5 @@
+import { chunkMemoryContent } from "@corespeed/lore-core";
 import manifest from "../../evaluation/external/memoryagentbench.json";
-import { chunkMemoryContent } from "../../src/lib/memory-chunking";
 import { readJsonLines } from "./json-lines";
 
 export const memoryAgentBenchManifest = manifest;

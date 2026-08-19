@@ -1,18 +1,21 @@
+import {
+  createMemoryGraphModule,
+  createMemoryModule,
+  installActorContext,
+  MemoryVersionConflictError,
+  purgeExpiredPortableCoreRecords,
+} from "@corespeed/lore-core";
+import { createObservationModule } from "@corespeed/lore-core/episodes";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
 import { createCodeEvidenceModule } from "@/lib/code-evidence";
 import { createCodeIndexModule } from "@/lib/code-index";
-import { createMemoryGraphModule } from "@/lib/graph";
-import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
-import { createMemoryModule, MemoryVersionConflictError } from "@/lib/memory";
 import {
   createMemoryProposalsModule,
   MemoryProposalAccessDeniedError,
   MemoryProposalCapacityError,
   MemoryProposalReviewConflictError,
 } from "@/lib/memory-proposals";
-import { createObservationModule } from "@/lib/observations";
 import { createPortabilityModule } from "@/lib/portability";
 import { createMemoryTestContext } from "./support/memory-context";
 

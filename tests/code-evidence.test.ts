@@ -1,8 +1,7 @@
+import { createMemoryModule, installActorContext } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { installActorContext } from "@/lib/actor-context";
 import { CodeEvidenceAccessDeniedError, createCodeEvidenceModule } from "@/lib/code-evidence";
 import { createCodeIndexModule } from "@/lib/code-index";
-import { createMemoryModule } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
 const COMMIT_A = "a".repeat(40);

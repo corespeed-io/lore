@@ -1,7 +1,7 @@
-import { type ActorContext, installActorContext } from "./actor-context";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type ActorContext, installActorContext } from "@corespeed/lore-core";
 import type { CodeDependencyKind } from "./code-index";
 import { CodeIndexValidationError } from "./code-index-errors";
-import type { PostgresDatabase } from "./db";
 
 export type CodeDependencyDirection = "callers" | "callees";
 export type CodeDependencyResolution = "resolved" | "ambiguous" | "unresolved";

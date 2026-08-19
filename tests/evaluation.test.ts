@@ -1,11 +1,10 @@
+import { createMemoryModule, installActorContext } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { installActorContext } from "@/lib/actor-context";
 import {
   createEvaluationModule,
   type EvaluationSearchProvider,
   evaluateRanking,
 } from "@/lib/evaluation";
-import { createMemoryModule } from "@/lib/memory";
 import syntheticSuite from "../evaluation/suites/synthetic-v1.json";
 import { createMemoryTestContext } from "./support/memory-context";
 

@@ -1,8 +1,13 @@
-import { type ActorContext, installActorContext } from "./actor-context";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
-import { canonicalJson, mutationRequestHash } from "./idempotency";
-import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
-import { MemoryContentValidationError, prepareMemoryContent } from "./memory-content";
+import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
+import {
+  type ActorContext,
+  canonicalJson,
+  installActorContext,
+  MEMORY_CHUNKING_REVISION,
+  MemoryContentValidationError,
+  mutationRequestHash,
+  prepareMemoryContent,
+} from "@corespeed/lore-core";
 import type { MemoryScope } from "./types";
 
 export const WORKSPACE_ARCHIVE_FORMAT = "lore-workspace-v1";

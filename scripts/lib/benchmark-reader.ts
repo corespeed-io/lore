@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { providerHttpError, readBoundedResponseJson } from "../../src/lib/provider-response";
+import { providerHttpError, readBoundedResponseJson } from "@corespeed/lore-core";
 
 export interface BenchmarkReaderEvidence {
   id: string;
