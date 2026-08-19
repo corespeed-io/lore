@@ -612,6 +612,12 @@ export function createEpisodeEvidenceModule(
   const embeddingDimensions = validatedEmbeddingDimensions(
     options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
   );
+  if (embeddingProvider && embeddingProvider.dimensions !== embeddingDimensions) {
+    throw new Error(
+      "embeddingDimensions must match embeddingProvider.dimensions: " +
+        `the module is configured for ${embeddingDimensions} but the provider embeds at ${embeddingProvider.dimensions}`,
+    );
+  }
 
   return {
     async index(

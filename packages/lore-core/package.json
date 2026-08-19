@@ -1,5 +1,6 @@
 {
   "name": "@corespeed/lore-core",
+  "private": true,
   "version": "0.1.0",
   "description": "Lore's reusable memory engine: multi-tenant Memory storage, chunking, hybrid retrieval, links, and leased embedding maintenance over PostgreSQL RLS.",
   "license": "MIT",

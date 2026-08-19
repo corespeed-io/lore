@@ -783,6 +783,7 @@ function feedbackRetrievalQueries(
 async function embedRetrievalQueries(
   embeddingProvider: EmbeddingProvider | undefined,
   queries: string[],
+  embeddingDimensions: number,
 ): Promise<Array<string | null>> {
   const embeddings: Array<string | null> = queries.map(() => null);
   if (!embeddingProvider || queries.length === 0) return embeddings;
@@ -792,7 +793,9 @@ async function embedRetrievalQueries(
       throw new Error("Embedding provider returned the wrong number of query vectors");
     }
     for (const [index, vector] of vectors.entries()) {
-      embeddings[index] = embeddingVectorLiteral(vector, embeddingProvider.dimensions);
+      // The validated module width: the SQL ::vector casts require it, and the
+      // constructor guarantees the provider agrees.
+      embeddings[index] = embeddingVectorLiteral(vector, embeddingDimensions);
     }
   } catch {
     embeddings.fill(null);
@@ -1412,6 +1415,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
   const embeddingDimensions = validatedEmbeddingDimensions(
     options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
   );
+  if (embeddingProvider && embeddingProvider.dimensions !== embeddingDimensions) {
+    throw new Error(
+      "embeddingDimensions must match embeddingProvider.dimensions: " +
+        `the module is configured for ${embeddingDimensions} but the provider embeds at ${embeddingProvider.dimensions}`,
+    );
+  }
   const entityAliasRecall = options.entityAliasRecall ?? false;
   const evidenceNeighborChunks = Math.max(
     0,
@@ -1672,7 +1681,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         }
       }
       const queries = retrievalQueries(query, plannedQueries, queryPlannerMaxQueries);
-      const queryEmbeddings = await embedRetrievalQueries(embeddingProvider, queries);
+      const queryEmbeddings = await embedRetrievalQueries(
+        embeddingProvider,
+        queries,
+        embeddingDimensions,
+      );
       let fusionResults: MemorySearchResult[] = await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const resultSets: MemorySearchResult[][] = [];
@@ -1721,9 +1734,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         const feedback = feedbackRetrievalQueries(feedbackSeedQuery, feedbackSources, 1)[0];
         if (!feedback) break;
         feedbackSourceIds.add(feedback.excludedMemoryId);
-        const [feedbackEmbedding] = await embedRetrievalQueries(embeddingProvider, [
-          feedback.query,
-        ]);
+        const [feedbackEmbedding] = await embedRetrievalQueries(
+          embeddingProvider,
+          [feedback.query],
+          embeddingDimensions,
+        );
         const feedbackRead = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const stillVisible = await transaction.query<{ id: string }>(
