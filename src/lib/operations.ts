@@ -1,4 +1,4 @@
-import type { PostgresDatabase } from "./db";
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "./telemetry";
 
 export const LORE_API_VERSION = "v1";

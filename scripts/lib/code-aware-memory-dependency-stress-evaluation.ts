@@ -1,4 +1,4 @@
-import type { ActorContext } from "../../src/lib/actor-context";
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
 import {
   type CodeAwareMemoryEvaluationCaseResult,
   type CodeAwareMemoryEvaluationCategory,
@@ -12,7 +12,6 @@ import {
   createCodeDependencyGraphModule,
 } from "../../src/lib/code-graph";
 import { createCodeIndexModule } from "../../src/lib/code-index";
-import type { PostgresDatabase } from "../../src/lib/db";
 
 const COMMIT = "7".repeat(40);
 const REVISION = "code-aware-memory-dependency-stress-v1";

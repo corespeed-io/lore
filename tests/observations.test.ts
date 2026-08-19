@@ -1,8 +1,10 @@
+import { installActorContext, purgeExpiredPortableCoreRecords } from "@corespeed/lore-core";
+import {
+  createObservationModule,
+  ObservationAccessDeniedError,
+} from "@corespeed/lore-core/episodes";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
-import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
-import { createObservationModule, ObservationAccessDeniedError } from "@/lib/observations";
 import { createMemoryTestContext } from "./support/memory-context";
 
 test("An Episode records immutable ordered Observation evidence with private defaults", async () => {

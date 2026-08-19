@@ -84,12 +84,13 @@
     "sdk:check": "bun tools/sdk-codegen/generate.ts --check",
     "sdk:generate": "bun tools/sdk-codegen/generate.ts",
     "format": "biome check --write .",
-    "test": "vitest run && bun run test:python",
+    "test": "vitest run && bun run --cwd packages/lore-core check && bun run test:python",
     "test:python": "node scripts/test-python.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
     "@ast-grep/napi": "0.45.1",
+    "@corespeed/lore-core": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.221.0",
     "@opentelemetry/instrumentation": "^0.221.0",

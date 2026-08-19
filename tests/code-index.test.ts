@@ -3,9 +3,10 @@ import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import { installActorContext } from "@corespeed/lore-core";
 import { expect, onTestFinished, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
 import { createCodeDependencyGraphModule } from "@/lib/code-graph";
 import {
   CODE_INDEX_LIMITS,
@@ -16,7 +17,6 @@ import {
   createCodeIndexMaintenanceModule,
   createCodeIndexModule,
 } from "@/lib/code-index";
-import type { PostgresDatabase } from "@/lib/db";
 import { createMemoryTestContext } from "./support/memory-context";
 
 const COMMIT_A = "a".repeat(40);

@@ -1,8 +1,10 @@
+import type { EmbeddingTask } from "@corespeed/lore-core";
+import {
+  createEpisodeEvidenceModule,
+  createObservationModule,
+} from "@corespeed/lore-core/episodes";
 import { expect, test } from "vitest";
 import { evaluateLongMemEvalV2Answer } from "@/lib/answer-evaluation";
-import { createEpisodeEvidenceModule } from "@/lib/episode-evidence";
-import type { EmbeddingTask } from "@/lib/memory";
-import { createObservationModule } from "@/lib/observations";
 import type { BenchmarkReaderProvider } from "../scripts/lib/benchmark-reader";
 import { createMemoryTestContext } from "./support/memory-context";
 

@@ -87,8 +87,10 @@ function parseResults(
       throw new Error(`${provider} returned an invalid reranking result`);
     }
     seen.add(index as number);
+    const document = documents[index as number];
+    if (!document) throw new Error(`${provider} returned an invalid reranking result`);
     return {
-      documentId: documents[index as number].id,
+      documentId: document.id,
       score,
     };
   });
@@ -124,7 +126,9 @@ function parseScoreResults(
       throw new Error("vllm-score returned an invalid reranking result");
     }
     seen.add(index as number);
-    return { documentId: documents[index as number].id, score };
+    const document = documents[index as number];
+    if (!document) throw new Error("vllm-score returned an invalid reranking result");
+    return { documentId: document.id, score };
   });
 }
 

@@ -1,36 +1,17 @@
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
 import {
-  AccessDeniedError,
-  type AgentGrantPermission,
-  type AgentStatus,
-  createAccessModule,
-} from "./access";
-import type { ActorContext } from "./actor-context";
-import type { PostgresDatabase } from "./db";
-import {
-  createEvaluationModule,
-  type EvaluationCaseInput,
-  type EvaluationModuleOptions,
-  EvaluationSuiteNotFoundError,
-} from "./evaluation";
-import { createMemoryGraphModule } from "./graph";
-import {
+  createMemoryGraphModule,
+  createMemoryModule,
   IdempotencyConflictError,
   type IdempotencyRequest,
-  mutationRequestHash,
-} from "./idempotency";
-import {
-  createMemoryModule,
   MemoryAccessDeniedError,
+  MemoryContentValidationError,
   type MemoryModuleOptions,
-  MemoryProposalAccessDeniedError,
-  MemoryProposalCapacityError,
-  MemoryProposalReviewConflictError,
-  type MemoryProposalStatus,
   type MemoryScope,
   MemoryVersionConflictError,
-  type ProposeMemoryCodeEvidence,
-} from "./memory";
-import { MemoryContentValidationError, prepareMemoryContent } from "./memory-content";
+  mutationRequestHash,
+  prepareMemoryContent,
+} from "@corespeed/lore-core";
 import {
   createObservationModule,
   type EpisodeKind,
@@ -42,7 +23,27 @@ import {
   ObservationAccessDeniedError,
   type ObservationKind,
   type RecordObservation,
-} from "./observations";
+} from "@corespeed/lore-core/episodes";
+import {
+  AccessDeniedError,
+  type AgentGrantPermission,
+  type AgentStatus,
+  createAccessModule,
+} from "./access";
+import {
+  createEvaluationModule,
+  type EvaluationCaseInput,
+  type EvaluationModuleOptions,
+  EvaluationSuiteNotFoundError,
+} from "./evaluation";
+import {
+  createMemoryProposalsModule,
+  MemoryProposalAccessDeniedError,
+  MemoryProposalCapacityError,
+  MemoryProposalReviewConflictError,
+  type MemoryProposalStatus,
+  type ProposeMemoryCodeEvidence,
+} from "./memory-proposals";
 import { createOperationsModule, type OperationsOptions } from "./operations";
 import {
   createPortabilityModule,
@@ -1026,20 +1027,20 @@ export function createMemoryProposalHandlers(
   database: PostgresDatabase,
   options: MemoryModuleOptions = {},
 ) {
-  const memories = createMemoryModule(database, options);
+  const proposals = createMemoryProposalsModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async GET(request: Request): Promise<Response> {
       try {
         const actor = requireHumanActor(await resolver.resolveActor(request));
         const url = new URL(request.url);
-        const proposals = await observeOperation("memory-proposal.list", () =>
-          memories.listProposals(actor, {
+        const proposalList = await observeOperation("memory-proposal.list", () =>
+          proposals.listProposals(actor, {
             limit: queryInteger(url, "limit", 50, 1, 100),
             status: memoryProposalStatus(url.searchParams.get("status")),
           }),
         );
-        return Response.json(proposals, {
+        return Response.json(proposalList, {
           headers: { "cache-control": "private, no-store" },
         });
       } catch (error) {
@@ -1100,7 +1101,7 @@ export function createMemoryProposalHandlers(
           throw new BadRequestError("An update proposal must change content, scope, or metadata");
         }
         const proposal = await observeOperation("memory-proposal.create", async () =>
-          memories.propose(actor, input, {
+          proposals.propose(actor, input, {
             idempotency: await idempotencyRequest(request, "memory-proposal.create", input),
           }),
         );
@@ -1245,7 +1246,7 @@ export function createMemoryProposalReviewHandlers(
   database: PostgresDatabase,
   options: MemoryModuleOptions = {},
 ) {
-  const memories = createMemoryModule(database, options);
+  const proposals = createMemoryProposalsModule(database, options);
   const resolver = createRequestContextResolver(database);
   return {
     async POST(request: Request, id: string): Promise<Response> {
@@ -1258,7 +1259,7 @@ export function createMemoryProposalReviewHandlers(
         }
         const decision = body.decision;
         const reviewed = await observeOperation("memory-proposal.review", () =>
-          memories.reviewProposal(actor, proposalId, decision),
+          proposals.reviewProposal(actor, proposalId, decision),
         );
         return reviewed
           ? Response.json(reviewed, {

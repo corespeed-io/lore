@@ -19,7 +19,39 @@ and may own many Agents.
 ## Implementation status — read before changing code
 
 The earlier read-only gbrain proxy, admin proxy, and their product surfaces have
-been removed. Lore now has a native implementation:
+been removed. Lore now has a native implementation, split into two concepts
+(Linear HAAS-71):
+
+- **lore core** — `packages/lore-core` (`@corespeed/lore-core`) is the
+  reusable memory engine: Memory CRUD + hybrid retrieval, content bounds,
+  chunking v2, Memory Links/graph reads, leased embedding maintenance,
+  idempotency, the `PostgresDatabase` seam and its `pg` adapter
+  (`./postgres`), the optional Episode/Observation capability group
+  (`./episodes`), the embedding/reranking/query-planning adapters
+  (`./providers`), and a host-pluggable schema-contract test kit
+  (`./testing`). Every method takes a host-authenticated `ActorContext`;
+  Postgres RLS enforces the boundary. Host-baked invariants are module
+  options: `embeddingDimensions` (lore oss pins 1024) and
+  `defaultMemoryScope` (lore oss keeps "shared"). The package is written at
+  the union strictness of its hosts (`noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes`) and is consumed in-repo as workspace
+  TypeScript source (root tsconfig paths, vitest aliases, Next
+  `transpilePackages`). **Distribution is a shared-component convention, not
+  a mechanism** (Yunpeng, 2026-08-19; npm publishing, submodules, mirrors,
+  and sync scripts were all rejected): CoreSpeed HaaS carries its own
+  verbatim copy of this package. Engine changes land here first, then the
+  same change is mirrored into the HaaS copy as part of the same task; the
+  copies must stay semantically identical, and each repo's CI runs the
+  `./testing` contract suite against its own migration chain as the drift
+  backstop.
+- **lore oss** — everything else in this repository: identity/tenancy,
+  request context, HTTP/OpenAPI, SDKs/CLI/MCP, web UI, Memory Proposals
+  (`src/lib/memory-proposals.ts`, layered on the engine's exported
+  `createMemoryMutationPrimitives`), code-aware memory, portability,
+  evaluation, deployment profiles, and the env-reading provider factories
+  (`src/lib/{embedding,reranking,query-planning}/provider-factory.ts` plus
+  `src/lib/embedding-config.ts`, which own `LORE_*` env parsing and the
+  telemetry edge — they stay out of the engine on purpose).
 
 - the `0001_v1_baseline.sql` migration defines identity, tenancy,
   user-private Agents, Memory/chunks/links, pgvector
@@ -43,24 +75,25 @@ been removed. Lore now has a native implementation:
   revision;
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
-  transaction interface in `src/lib/db.ts`. The deployment wrapper serializes
+  transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
   versions in `lore_schema_migrations`. The schema is live in production
   (CoreSpeed HaaS), so the recorded baseline is frozen: never edit an applied
   migration file — its stored SHA-256 makes every existing deployment fail
   closed — and ship schema changes as new forward-only migrations instead. Keep
   migration `down` sections empty: production recovery is forward-only;
-- `src/lib/identity.ts`, `access.ts`, `memory.ts`, `observations.ts`, and
-  `evaluation.ts` are the
-  domain modules; `request-context.ts` installs verified User/Workspace/Agent
+- `src/lib/identity.ts`, `access.ts`, and `evaluation.ts` are lore oss domain
+  modules; the Memory and Observation modules live in the engine
+  (`packages/lore-core/src/memory.ts`, `packages/lore-core/src/episodes/`);
+  `request-context.ts` installs verified User/Workspace/Agent
   context for every request transaction;
-- `src/lib/memory-content.ts` owns the canonical Memory content boundary. A Memory
+- `packages/lore-core/src/memory-content.ts` owns the canonical Memory content boundary. A Memory
   is one coherent knowledge record, recommended at no more than 8,000 Unicode
   characters and hard-limited to 32,000 characters and 64 derived chunks. Direct
   writes, Proposals, and imports must share this validator. Route longer raw
   documents to bounded `document_fragment` Observations in a document Episode;
   never auto-split them into canonical Memories;
-- `src/lib/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
+- `packages/lore-core/src/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
   non-overlapping, maximum 1,200-code-point chunks that exactly reconstruct the
   canonical Memory while preferring paragraph, Markdown, sentence, line, and
   whitespace boundaries. Every `memory_chunks` row records the revision and
@@ -204,7 +237,7 @@ been removed. Lore now has a native implementation:
 - `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
   `/memories`, and Memory detail deep links so browser refresh never loses the
   client route;
-- `src/lib/graph.ts` returns RLS-filtered, durable Memory Links and derives
+- `packages/lore-core/src/graph.ts` returns RLS-filtered, durable Memory Links and derives
   affinity only among otherwise isolated visible Memories; `/api/graph` exposes
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
@@ -222,7 +255,7 @@ been removed. Lore now has a native implementation:
   while centrality is expressed through node size and physics rather than persistent
   degree annotations. `src/lib/viz/graph.ts` retains the shared Graph instance contract,
   label helpers, and the legacy SVG benchmark control;
-- `src/lib/maintenance.ts` owns leased, idempotent document embedding and
+- `packages/lore-core/src/maintenance.ts` owns leased, idempotent document embedding and
   deployment-wide re-index discovery. A provider/model/revision change builds
   generation-scoped vectors beside the active generation without rewriting
   canonical chunks. Activation requires exact coverage and atomically moves the
@@ -232,7 +265,7 @@ been removed. Lore now has a native implementation:
   jobs until cutover. The self-host Node worker polls both sequentially by default,
   while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
   database sweep as the delivery backstop;
-- `src/lib/idempotency.ts`, `portability.ts`, `operations.ts`, and `telemetry.ts`
+- `packages/lore-core/src/idempotency.ts` plus lore oss’s `src/lib/{portability,operations,telemetry}.ts`
   own the Portable Core seams. Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
@@ -256,7 +289,7 @@ been removed. Lore now has a native implementation:
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
   Memory retrieval or Graph, and may be read as Proposal evidence only through
   current Actor/RLS visibility. An Agent records provenance; it is not a generic
-  Source. `src/lib/episode-evidence.ts` owns their separate, rebuildable hybrid
+  Source. `packages/lore-core/src/episodes/episode-evidence.ts` owns their separate, rebuildable hybrid
   retrieval index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical
   Memory. Any future automatic retention must be an explicit opt-in deployment policy;
@@ -276,9 +309,9 @@ been removed. Lore now has a native implementation:
   `LORE_QUERY_PLANNER_NUM_CTX` to any benchmark reader sharing the same model server
   so Ollama does not reload between calls. Do not route local Qwen planners through
   the less controllable OpenAI-compatible surface;
-- `src/lib/reranking.ts` defines the deployment-level second-stage contract;
-  `src/lib/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
-  plus vLLM-Metal `/score`, while `src/lib/reranking/hosted.ts` has concrete Cohere
+- `packages/lore-core/src/reranking.ts` defines the deployment-level second-stage contract;
+  `packages/lore-core/src/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
+  plus vLLM-Metal `/score`, while `packages/lore-core/src/reranking/hosted.ts` has concrete Cohere
   v2, Memos MemReranker, and Voyage v1 adapters. Search fuses exact simple/English
   FTS, a two-term relaxed
   English recall channel with query-side proper-name/identifier specificity
@@ -304,7 +337,7 @@ been removed. Lore now has a native implementation:
   The tsvector columns remain — they power the scan predicates. Do not add
   content GIN indexes here without first fixing that request-path restriction
   and proving the win under `SET ROLE lore_app`;
-- `src/lib/query-planning.ts` defines optional deployment-level multi-query planning.
+- `packages/lore-core/src/query-planning.ts` defines optional deployment-level multi-query planning.
   Its OpenAI/vLLM and Google adapters see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,
   fuses only visible results, and then optionally reranks them;
@@ -772,6 +805,13 @@ Benchmark is part of the product quality system even without AutoDream.
   that Alice cannot see. LongMemEval-V2 is the deliberate exception: its Bob-private
   Episode tripwire uses the same vector path and is included in the candidate source
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
+- `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
+  disposable database whose schema was generated at a non-lore width through
+  `scripts/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
+  the baseline; the four `length(path) <= 1024` checks stay). It exercises the
+  engine's host-baked `embeddingDimensions` option the way a non-lore host's
+  own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
+  keep the 1024 protocol invariant and still reject `LORE_EMBEDDING_DIMENSIONS`.
 - Synthetic benchmark reruns may set `LORE_BENCHMARK_REUSE_INDEXED=1`; the runner
   validates exact content/owner/scope and active embedding-space completeness before
   reusing data. LongMemEval exposes the same behavior as `--reuse-indexed`.
@@ -780,7 +820,12 @@ Benchmark is part of the product quality system even without AutoDream.
   upstream revision, byte length, SHA-256, license, and session granularity;
   downloaded data stays ignored under `evaluation/datasets/`. Every question is a
   separate Workspace, every conversation session is an Alice-owned private Memory,
-  and a Bob-owned private answer tripwire preserves the RLS hard gate. The oracle
+  and a Bob-owned private answer tripwire preserves the RLS hard gate. A session
+  larger than the canonical 32k-character content bound (five exist in the S
+  split) splits greedily at turn boundaries into part Memories; the first part
+  keeps the session key and later parts carry `anchorKey` back to it, which the
+  runner resolves at scoring time so any-part retrieval counts as the session at
+  that rank without inflating the expected-id denominator. The oracle
   split is only a low-cost smoke test; comparable retrieval scores use the `s` or
   `m` cleaned haystack split. `--reuse-indexed` verifies the exact selected corpus
   before rerunning retrieval-only ablations. Official retrieval comparison skips 30 abstention
@@ -965,6 +1010,12 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   and a fresh `provider`, which is also how an Actor's empty or denied RLS-filtered
   read is modelled. `useEffect` never runs, so anything painted from an effect (the
   Markdown body, the Graph canvas) is absent from the markup.
+- `tests/code-index.test.ts` builds real Git fixtures with `git add`, so a
+  user-level global gitignore (`~/.config/git/ignore` or `core.excludesfile`)
+  that excludes fixture paths like `dist/` silently drops files from the
+  committed tree and fails the manifest test. GitHub runners have no such
+  file; a dev box or agent VM might. Neutralize with
+  `XDG_CONFIG_HOME=/tmp/empty` when the failure reproduces on `main`.
 - `bun run lint` silently checks nothing when the working tree sits under a path
   containing `/tmp`, because `biome.json` excludes `**/tmp`. The same happens in
   every agent worktree under `.claude/worktrees/` — `biome.json` also excludes

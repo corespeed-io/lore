@@ -1,6 +1,9 @@
-import { type ActorContext, installActorContext } from "./actor-context";
-import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
+import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
+import {
+  type ActorContext,
+  installActorContext,
+  isPostgresAccessDenied,
+} from "@corespeed/lore-core";
 
 export type CodeEvidenceRelationship = "contradicts" | "implements" | "rationale" | "supports";
 export type CodeEvidenceValidationState =

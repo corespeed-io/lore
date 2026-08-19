@@ -1,11 +1,11 @@
-import type { RerankingProvider } from "../reranking";
-import { createHostedRerankingProvider } from "./hosted";
-import { createOllamaListwiseRerankingProvider } from "./ollama-listwise";
+import type { RerankingProvider } from "@corespeed/lore-core";
 import {
+  createHostedRerankingProvider,
   createLlamaCppRerankingProvider,
+  createOllamaListwiseRerankingProvider,
   createVllmRerankingProvider,
   createVllmScoreRerankingProvider,
-} from "./vllm";
+} from "@corespeed/lore-core/providers";
 
 export type RerankingConfigurationWarning = (message: string) => void;
 

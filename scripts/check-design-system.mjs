@@ -13,7 +13,7 @@ const REQUIRED_PATHS = [
   "src/lib/lore-api.ts",
   "src/app/[...path]/page.tsx",
   "src/app/api/graph/route.ts",
-  "src/lib/graph.ts",
+  "packages/lore-core/src/graph.ts",
 ];
 
 const REQUIRED_TOKENS = [

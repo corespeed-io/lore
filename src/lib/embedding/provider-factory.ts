@@ -1,12 +1,14 @@
+import { type EmbeddingProvider, validatedEmbeddingDimensions } from "@corespeed/lore-core";
+import {
+  createGoogleEmbeddingProvider,
+  createOllamaEmbeddingProvider,
+  createOpenAIEmbeddingProvider,
+} from "@corespeed/lore-core/providers";
 import {
   embeddingBuildEnvironment,
   embeddingConfigurationFromEnvironment,
 } from "../embedding-config";
-import type { EmbeddingProvider } from "../memory";
 import { markDependencyFailure, markDependencySuccess } from "../telemetry";
-import { createGoogleEmbeddingProvider } from "./google";
-import { createOllamaEmbeddingProvider } from "./ollama";
-import { createOpenAIEmbeddingProvider } from "./openai";
 
 export type EmbeddingConfigurationWarning = (message: string) => void;
 
@@ -43,12 +45,30 @@ function keepAlive(value: string | undefined): string | number {
   return Number.isFinite(numeric) ? numeric : value;
 }
 
+export interface EmbeddingProviderFactoryOptions {
+  /**
+   * Explicit embedding-space width override for disposable benchmark
+   * databases whose schema was generated at a non-lore width (for example the
+   * production-shaped 1536 track). Deployments never set this: the request
+   * path keeps lore's 1024 protocol invariant and still rejects
+   * LORE_EMBEDDING_DIMENSIONS from the environment.
+   */
+  dimensions?: number;
+}
+
 export function createEmbeddingProviderFromEnvironment(
   env: Record<string, string | undefined>,
   warn: EmbeddingConfigurationWarning = () => undefined,
+  options: EmbeddingProviderFactoryOptions = {},
 ): EmbeddingProvider | undefined {
   try {
-    const configuration = embeddingConfigurationFromEnvironment(env);
+    const configuration =
+      options.dimensions === undefined
+        ? embeddingConfigurationFromEnvironment(env)
+        : {
+            ...embeddingConfigurationFromEnvironment(env),
+            dimensions: validatedEmbeddingDimensions(options.dimensions),
+          };
     const timeoutMs = positiveInteger(env.LORE_EMBEDDING_TIMEOUT_MS, 120_000);
     switch (configuration.provider) {
       case "google":

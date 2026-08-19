@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
+import { MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import { createEmbeddingProviderFromEnvironment } from "../src/lib/embedding/provider-factory";
-import { MEMORY_CHUNKING_REVISION } from "../src/lib/memory-chunking";
 import { createQueryPlanningProviderFromEnvironment } from "../src/lib/query-planning/provider-factory";
 import { createRerankingProviderFromEnvironment } from "../src/lib/reranking/provider-factory";
 import type { RetrievalBenchmarkPartition } from "../src/lib/retrieval-benchmark";

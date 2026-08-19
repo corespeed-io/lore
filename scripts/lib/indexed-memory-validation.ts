@@ -1,6 +1,6 @@
+import type { EmbeddingProvider } from "@corespeed/lore-core";
+import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import type pg from "pg";
-import type { EmbeddingProvider } from "../../src/lib/memory";
-import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../../src/lib/memory-chunking";
 
 export interface IndexedMemoryChunk {
   content: string;

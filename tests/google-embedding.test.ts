@@ -1,5 +1,5 @@
+import { createGoogleEmbeddingProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createGoogleEmbeddingProvider } from "@/lib/embedding/google";
 
 const vector = (dimensions = 1024) => Array.from({ length: dimensions }, () => 0.5);
 

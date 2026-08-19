@@ -1,13 +1,13 @@
-import { createCodeIndexMaintenanceModule } from "../lib/code-index";
-import { createPostgresDatabase } from "../lib/db/postgres";
-import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../lib/embedding/provider-factory";
 import {
   createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
   purgeExpiredPortableCoreRecords,
-} from "../lib/maintenance";
+} from "@corespeed/lore-core";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
+import { createCodeIndexMaintenanceModule } from "../lib/code-index";
+import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../lib/embedding/provider-factory";
 import { registerLoreTelemetry } from "../lib/register-telemetry";
 import { observeOperation } from "../lib/telemetry";
 

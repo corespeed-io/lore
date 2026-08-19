@@ -1,5 +1,5 @@
+import { createGoogleQueryPlanningProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createGoogleQueryPlanningProvider } from "@/lib/query-planning/google";
 
 test("Google query planning uses a non-stored structured interaction", async () => {
   const provider = createGoogleQueryPlanningProvider({

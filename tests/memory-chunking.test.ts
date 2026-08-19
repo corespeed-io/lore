@@ -1,5 +1,5 @@
+import { chunkMemoryContent } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { chunkMemoryContent } from "@/lib/memory-chunking";
 
 function expectValidPartition(content: string, chunks: readonly string[], maximumLength: number) {
   expect(chunks.join("")).toBe(content);

@@ -1,5 +1,6 @@
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiterals } from "./embedding/vector";
+import { validatedEmbeddingDimensions } from "./embedding-config";
 import type { EmbeddingProvider } from "./memory";
 
 export type MemoryMaintenanceStatus = "complete" | "retry" | "dead" | "idle";
@@ -117,6 +118,7 @@ export function createMemoryMaintenanceModule(
   options: MemoryMaintenanceOptions,
 ) {
   const provider = options.embeddingProvider;
+  const providerDimensions = validatedEmbeddingDimensions(provider.dimensions);
   const leaseSeconds = Math.max(
     30,
     Math.min(options.leaseSeconds ?? embeddingMaintenanceLeaseSeconds(), 3_600),
@@ -268,7 +270,7 @@ export function createMemoryMaintenanceModule(
         const job = result.rows[0];
         return job ? { ...job, chunks: claimedChunks(job.chunks) } : null;
       });
-      if (!claimed) return { status: "idle", jobId };
+      if (!claimed) return { status: "idle", ...(jobId ? { jobId } : {}) };
 
       const chunks = claimed.chunks;
       let vectors: string[];
@@ -279,6 +281,7 @@ export function createMemoryMaintenanceModule(
             "document",
           ),
           chunks.length,
+          providerDimensions,
         );
       } catch {
         return finishFailure(
@@ -315,7 +318,7 @@ export function createMemoryMaintenanceModule(
                $1,
                $2,
                replacement.chunk_id::uuid,
-               replacement.embedding::vector(1024),
+               replacement.embedding::vector(${providerDimensions}),
                now()
              FROM jsonb_to_recordset($3::jsonb) AS replacement(
                chunk_id text,
@@ -389,18 +392,20 @@ export function createMemoryMaintenanceCoordinator(maintenances: MemoryMaintenan
     },
 
     async run(jobId?: string): Promise<MemoryMaintenanceResult> {
-      if (lanes.length === 0) return { status: "idle", jobId };
+      if (lanes.length === 0) return { status: "idle", ...(jobId ? { jobId } : {}) };
       const startLane = jobId ? 0 : nextRunLane;
       for (let offset = 0; offset < lanes.length; offset += 1) {
         const laneIndex = (startLane + offset) % lanes.length;
-        const result = await lanes[laneIndex].run(jobId);
+        const lane = lanes[laneIndex];
+        if (!lane) continue;
+        const result = await lane.run(jobId);
         if (result.status !== "idle") {
           nextRunLane = (laneIndex + 1) % lanes.length;
           return result;
         }
       }
       nextRunLane = (startLane + 1) % lanes.length;
-      return { status: "idle", jobId };
+      return { status: "idle", ...(jobId ? { jobId } : {}) };
     },
   };
 }

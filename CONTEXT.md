@@ -3,6 +3,17 @@
 Lore stores and retrieves memories for people and the agents that act for them,
 while preserving tenant and user-private isolation.
 
+Lore is two concepts in one repository. **Lore Core**
+(`packages/lore-core`, published as `@corespeed/lore-core`) is the reusable
+memory engine: given a host-authenticated Actor and a PostgreSQL schema that
+satisfies its RLS contract, it owns Memory storage, chunking, hybrid
+retrieval, Memory Links, Episode/Observation evidence, and embedding
+maintenance. **Lore OSS** is the self-hostable product built on that engine in
+this repository: identity and tenancy, the HTTP API and SDKs, the web UI,
+Memory Proposals, code-aware memory, portability, evaluation, and deployment
+profiles. Other hosts (CoreSpeed HaaS) consume Lore Core as a versioned
+dependency with their own identity planes and schema chains.
+
 ## Tenancy and identity
 
 **Workspace**:

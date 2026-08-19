@@ -1,4 +1,4 @@
-import type { PostgresDatabase } from "./db";
+import type { PostgresDatabase } from "@corespeed/lore-core";
 
 export interface User {
   id: string;

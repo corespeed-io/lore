@@ -119,13 +119,59 @@ export function parseLongMemEvalRecord(value: unknown): LongMemEvalRecord {
   return record;
 }
 
-function renderSession(date: string, turns: LongMemEvalTurn[]): string {
-  return [
-    `Conversation session at ${date}`,
-    ...turns.filter((turn) => turn.content.trim()).map((turn) => `${turn.role}: ${turn.content}`),
-  ]
-    .join("\n\n")
-    .trim();
+// The engine's canonical Memory bound (MEMORY_CONTENT_LIMITS.maximumCharacters),
+// kept as a literal so this harness applies identically to checkouts where the
+// constant lives at a different path.
+const MAX_MEMORY_CONTENT_CHARACTERS = 32_000;
+
+function contentCharacters(text: string): number {
+  return Array.from(text).length;
+}
+
+/**
+ * Render one haystack session as one or more Memory contents, each within the
+ * engine's canonical content bound. A handful of LongMemEval-S sessions exceed
+ * 32k characters; they split greedily at turn boundaries (a single oversized
+ * turn hard-splits at code points). Every part repeats the session header so
+ * each Memory stays self-describing.
+ */
+function renderSessionParts(date: string, turns: LongMemEvalTurn[]): string[] {
+  const header = `Conversation session at ${date}`;
+  const separatorCharacters = 2;
+  const turnBudget =
+    MAX_MEMORY_CONTENT_CHARACTERS - contentCharacters(header) - separatorCharacters;
+  const parts: string[] = [];
+  let current: string[] = [];
+  let currentCharacters = contentCharacters(header);
+  const flush = () => {
+    if (current.length) {
+      parts.push([header, ...current].join("\n\n").trim());
+      current = [];
+      currentCharacters = contentCharacters(header);
+    }
+  };
+  for (const turn of turns.filter((item) => item.content.trim())) {
+    const rendered = `${turn.role}: ${turn.content}`;
+    const renderedCharacters = contentCharacters(rendered);
+    if (renderedCharacters > turnBudget) {
+      flush();
+      const points = Array.from(rendered);
+      for (let start = 0; start < points.length; start += turnBudget) {
+        parts.push([header, points.slice(start, start + turnBudget).join("")].join("\n\n").trim());
+      }
+      continue;
+    }
+    if (
+      currentCharacters + separatorCharacters + renderedCharacters >
+      MAX_MEMORY_CONTENT_CHARACTERS
+    ) {
+      flush();
+    }
+    current.push(rendered);
+    currentCharacters += separatorCharacters + renderedCharacters;
+  }
+  flush();
+  return parts.length ? parts : [header];
 }
 
 export function toLongMemEvalPartition(
@@ -148,20 +194,28 @@ export function toLongMemEvalPartition(
     key: record.question_id,
     name: `LongMemEval ${record.question_id}`,
     memories: [
-      ...record.haystack_sessions.map((session, index) => ({
-        key: sessionKeys[index],
-        owner: "alice" as const,
-        scope: "private" as const,
-        content: renderSession(record.haystack_dates[index], session),
-        metadata: {
-          benchmark: manifest.name,
-          benchmarkVersion: manifest.version,
-          questionId: record.question_id,
-          sessionId: record.haystack_session_ids[index],
-          sessionOccurrence: sessionOccurrenceByIndex[index],
-          sessionDate: record.haystack_dates[index],
-        },
-      })),
+      ...record.haystack_sessions.flatMap((session, index) => {
+        const sessionKey = sessionKeys[index];
+        const parts = renderSessionParts(record.haystack_dates[index], session);
+        return parts.map((content, part) => ({
+          // The first part keeps the session's key so answer anchoring is
+          // unchanged; later parts alias back to it for scoring.
+          key: part === 0 ? sessionKey : `${sessionKey}::part:${part + 1}`,
+          ...(part === 0 ? {} : { anchorKey: sessionKey }),
+          owner: "alice" as const,
+          scope: "private" as const,
+          content,
+          metadata: {
+            benchmark: manifest.name,
+            benchmarkVersion: manifest.version,
+            questionId: record.question_id,
+            sessionId: record.haystack_session_ids[index],
+            sessionOccurrence: sessionOccurrenceByIndex[index],
+            sessionDate: record.haystack_dates[index],
+            ...(parts.length > 1 ? { sessionPart: part + 1, sessionPartCount: parts.length } : {}),
+          },
+        }));
+      }),
       {
         key: tripwireKey,
         owner: "bob",

@@ -1,4 +1,5 @@
-import type { ActorContext } from "../../src/lib/actor-context";
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
+import { createMemoryModule } from "@corespeed/lore-core";
 import {
   type CodeAwareMemoryEvaluationCaseResult,
   type CodeAwareMemoryEvaluationCategory,
@@ -12,8 +13,7 @@ import {
 } from "../../src/lib/code-evidence";
 import { createCodeDependencyGraphModule } from "../../src/lib/code-graph";
 import { createCodeIndexModule } from "../../src/lib/code-index";
-import type { PostgresDatabase } from "../../src/lib/db";
-import { createMemoryModule } from "../../src/lib/memory";
+import { createMemoryProposalsModule } from "../../src/lib/memory-proposals";
 
 const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
@@ -81,7 +81,10 @@ export async function runCodeAwareMemoryFoundationEvaluation(
   const code = createCodeIndexModule(fixture.database);
   const dependencies = createCodeDependencyGraphModule(fixture.database);
   const evidence = createCodeEvidenceModule(fixture.database);
-  const memories = createMemoryModule(fixture.database);
+  const memories = {
+    ...createMemoryModule(fixture.database),
+    ...createMemoryProposalsModule(fixture.database),
+  };
   const results: CodeAwareMemoryEvaluationCaseResult[] = [];
   const mainRepositoryKey = "evaluation/code-aware-foundation";
 

@@ -2,7 +2,7 @@ import {
   chunkMemoryContent,
   MEMORY_CHUNK_MAXIMUM_CHARACTERS,
   MEMORY_CHUNKING_REVISION,
-} from "../src/lib/memory-chunking";
+} from "@corespeed/lore-core";
 
 const ITERATIONS = 250;
 const WARMUP_ITERATIONS = 25;

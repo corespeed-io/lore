@@ -1,3 +1,9 @@
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import {
+  MemoryAccessDeniedError,
+  type MemoryModuleOptions,
+  type MemoryScope,
+} from "@corespeed/lore-core";
 import { CodeEvidenceAccessDeniedError, CodeEvidenceValidationError } from "./code-evidence";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./code-index-errors";
 import {
@@ -5,8 +11,6 @@ import {
   ContextRetrievalValidationError,
   createContextRetrievalModule,
 } from "./context-retrieval";
-import type { PostgresDatabase } from "./db";
-import { MemoryAccessDeniedError, type MemoryModuleOptions, type MemoryScope } from "./memory";
 import {
   createRequestContextResolver,
   RequestAuthenticationError,

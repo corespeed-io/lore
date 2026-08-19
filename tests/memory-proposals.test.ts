@@ -1,20 +1,28 @@
+import {
+  createMemoryGraphModule,
+  createMemoryModule,
+  installActorContext,
+  MemoryVersionConflictError,
+  purgeExpiredPortableCoreRecords,
+} from "@corespeed/lore-core";
+import { createObservationModule } from "@corespeed/lore-core/episodes";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
 import { createCodeEvidenceModule } from "@/lib/code-evidence";
 import { createCodeIndexModule } from "@/lib/code-index";
-import { createMemoryGraphModule } from "@/lib/graph";
-import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
 import {
-  createMemoryModule,
+  createMemoryProposalsModule,
   MemoryProposalAccessDeniedError,
   MemoryProposalCapacityError,
   MemoryProposalReviewConflictError,
-  MemoryVersionConflictError,
-} from "@/lib/memory";
-import { createObservationModule } from "@/lib/observations";
+} from "@/lib/memory-proposals";
 import { createPortabilityModule } from "@/lib/portability";
 import { createMemoryTestContext } from "./support/memory-context";
+
+/** The Memory kernel plus the oss Proposals module, as one test harness. */
+function createProposalsHarness(database: Parameters<typeof createMemoryModule>[0]) {
+  return { ...createMemoryModule(database), ...createMemoryProposalsModule(database) };
+}
 
 async function createWritingAgent() {
   const testContext = await createMemoryTestContext();
@@ -31,7 +39,7 @@ async function createWritingAgent() {
 
 test("Agent proposal remains private and non-canonical until its owner accepts it", async () => {
   const { agent, agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const graph = createMemoryGraphModule(testContext.database);
   const portability = createPortabilityModule(testContext.database);
   const evidence = await memories.remember(testContext.alice, {
@@ -98,7 +106,7 @@ test("Agent proposal carries immutable typed Code Evidence into the accepted Mem
   const { agentActor, testContext } = await createWritingAgent();
   const code = createCodeIndexModule(testContext.database);
   const codeEvidence = createCodeEvidenceModule(testContext.database);
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const commitOid = "9".repeat(40);
   await code.indexRevision(testContext.alice, {
     repositoryKey: "corespeed/proposal-code-evidence",
@@ -176,7 +184,7 @@ test("Agent proposal carries immutable typed Code Evidence into the accepted Mem
 test("Proposal Code Evidence rejects a Code Artifact from another Workspace", async () => {
   const { agentActor, testContext } = await createWritingAgent();
   const code = createCodeIndexModule(testContext.database);
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const commitOid = "8".repeat(40);
   await code.indexRevision(testContext.carol, {
     repositoryKey: "corespeed/research-private-code",
@@ -205,7 +213,7 @@ test("Proposal Code Evidence rejects a Code Artifact from another Workspace", as
 
 test("Memory, Observation, and Code Proposal evidence share one 50-item limit", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const visibleMemory = await memories.remember(testContext.alice, {
     content: "One visible evidence Memory",
   });
@@ -229,7 +237,7 @@ test("Memory, Observation, and Code Proposal evidence share one 50-item limit", 
 
 test("Memory Proposal rejects content that cannot become a canonical Memory", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
 
   await expect(
     memories.propose(testContext.alice, {
@@ -243,7 +251,7 @@ test("Memory Proposal rejects content that cannot become a canonical Memory", as
 
 test("Proposal acceptance and rejection are replay-safe without duplicate Memories", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const acceptedProposal = await memories.propose(testContext.alice, {
     kind: "create",
     content: "Accepted once",
@@ -291,7 +299,7 @@ test("Proposal acceptance and rejection are replay-safe without duplicate Memori
 
 test("Database review transition rejects a forged accepted receipt", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const proposal = await memories.propose(testContext.alice, {
     kind: "create",
     content: "Receipt must match the canonical Memory",
@@ -346,7 +354,7 @@ test("Database review transition rejects a forged accepted receipt", async () =>
 
 test("Pending proposal capacity keeps every proposal manageable in the native inbox", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   await testContext.adminDatabase.transaction(async (transaction) => {
     await transaction.query(
       `INSERT INTO memory_proposals (
@@ -380,7 +388,7 @@ test("Pending proposal capacity keeps every proposal manageable in the native in
 
 test("Only the owner human can list or review an Agent proposal", async () => {
   const { agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const proposal = await memories.propose(agentActor, {
     kind: "create",
     content: "Owner-private proposal",
@@ -415,7 +423,7 @@ test("Only the owner human can list or review an Agent proposal", async () => {
 
 test("Deleting the submitting Agent preserves proposal content and actor kind", async () => {
   const { agent, agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const proposal = await memories.propose(agentActor, {
     kind: "create",
     content: "Keep this suggestion after its Agent is removed",
@@ -449,7 +457,7 @@ test("Deleting the submitting Agent preserves proposal content and actor kind", 
 
 test("Update proposal applies only to the exact reviewed Memory version", async () => {
   const { agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const original = await memories.remember(testContext.alice, {
     content: "Launch Monday",
     scope: "private",
@@ -485,7 +493,7 @@ test("Update proposal applies only to the exact reviewed Memory version", async 
 
 test("Deleting a target removes proposal content and prevents later acceptance", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const target = await memories.remember(testContext.alice, {
     content: "A canonical fact that may be deleted",
     scope: "private",
@@ -528,7 +536,7 @@ test("Expired proposal content is purged with Portable Core retention", async ()
       [proposalId, testContext.alice.workspaceId, testContext.alice.userId],
     );
   });
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   await expect(memories.listProposals(testContext.alice)).resolves.toEqual([]);
   await purgeExpiredPortableCoreRecords(testContext.maintenanceDatabase);
   await testContext.adminDatabase.transaction(async (transaction) => {
@@ -542,7 +550,7 @@ test("Expired proposal content is purged with Portable Core retention", async ()
 
 test("Database target validation rejects a cross-owner update proposal", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const bobPrivate = await memories.remember(testContext.bob, {
     content: "Bob-owned target",
     scope: "private",
@@ -577,7 +585,7 @@ test("Database target validation rejects a cross-owner update proposal", async (
 
 test("Accepted update changes canonical content, chunks, and outbox in one transaction", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const original = await memories.remember(testContext.alice, {
     content: "Old operational fact",
     scope: "private",
@@ -628,7 +636,7 @@ test("Accepted update changes canonical content, chunks, and outbox in one trans
 
 test("Accepting a metadata-only proposal preserves canonical chunks", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const original = await memories.remember(testContext.alice, {
     content: "Content whose chunks should remain stable",
     scope: "private",
@@ -670,7 +678,7 @@ test("Accepting a metadata-only proposal preserves canonical chunks", async () =
 
 test("Proposal evidence cannot include a private Memory hidden from the Actor", async () => {
   const { agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const bobPrivate = await memories.remember(testContext.bob, {
     content: "Bob private evidence",
     scope: "private",
@@ -690,7 +698,7 @@ test("Proposal evidence cannot include a private Memory hidden from the Actor", 
 
 test("A Proposal cites only RLS-visible Observation evidence without making it Memory", async () => {
   const { agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const observations = createObservationModule(testContext.database);
   const visibleEpisode = await observations.record(agentActor, {
     kind: "conversation",
@@ -736,7 +744,7 @@ test("A Proposal cites only RLS-visible Observation evidence without making it M
 
 test("A human accepts a Proposal while its cited Observation remains visible", async () => {
   const { agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const observations = createObservationModule(testContext.database);
   const episode = await observations.record(agentActor, {
     kind: "conversation",
@@ -764,7 +772,7 @@ test("A human accepts a Proposal while its cited Observation remains visible", a
 
 test("Revoked write grant immediately blocks Agent proposals", async () => {
   const { access, agent, agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   await access.revokeAgentGrant(testContext.alice, agent.id);
 
   await expect(
@@ -776,7 +784,7 @@ test("Revoked write grant immediately blocks Agent proposals", async () => {
 
 test("A read-only sibling Agent cannot submit or inspect another Agent proposal", async () => {
   const { access, agent, agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const readAgent = await access.createAgent(testContext.alice, { name: "Read assistant" });
   await access.grantAgent(testContext.alice, readAgent.id, { permission: "read" });
   const readActor = { ...testContext.alice, agentId: readAgent.id };
@@ -801,7 +809,7 @@ test("A read-only sibling Agent cannot submit or inspect another Agent proposal"
 
 test("Suspending the owner Membership blocks Agent submission and human review", async () => {
   const { agentActor, testContext } = await createWritingAgent();
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   const proposal = await memories.propose(agentActor, {
     kind: "create",
     content: "Pending before Membership suspension",
@@ -822,7 +830,7 @@ test("Suspending the owner Membership blocks Agent submission and human review",
 test("Proposal lists stay scoped when one owner belongs to two Workspaces", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);
-  const memories = createMemoryModule(testContext.database);
+  const memories = createProposalsHarness(testContext.database);
   await access.addMember(testContext.carol, testContext.alice.userId, { role: "member" });
   const researchAlice = {
     userId: testContext.alice.userId,

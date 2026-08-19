@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
-import manifest from "../../evaluation/external/longmemeval-v2.json";
-import { chunkMemoryContent } from "../../src/lib/memory-chunking";
+import { chunkMemoryContent } from "@corespeed/lore-core";
 import {
   MAX_EPISODE_CONTENT_CHARACTERS,
   MAX_EPISODE_OBSERVATIONS,
   MAX_OBSERVATION_CONTENT_CHARACTERS,
   type RecordEpisode,
-} from "../../src/lib/observations";
+} from "@corespeed/lore-core/episodes";
+import manifest from "../../evaluation/external/longmemeval-v2.json";
 import { readJsonLines } from "./json-lines";
 
 export interface LongMemEvalV2Question {

@@ -33,6 +33,9 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 export default {
   output: "standalone",
+  // The engine package is consumed as TypeScript source inside this repo;
+  // publishing builds happen in the package itself.
+  transpilePackages: ["@corespeed/lore-core"],
   outputFileTracingRoot: fileURLToPath(new URL(".", import.meta.url)),
   // Next traces pg-cloudflare's Node fallback by default. OpenNext bundles under
   // the `workerd` condition, so include the actual Worker socket implementation.

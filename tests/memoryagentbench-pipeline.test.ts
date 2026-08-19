@@ -1,6 +1,9 @@
+import {
+  createMemoryMaintenanceModule,
+  createMemoryModule,
+  type EmbeddingTask,
+} from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { createMemoryMaintenanceModule } from "@/lib/maintenance";
-import { createMemoryModule, type EmbeddingTask } from "@/lib/memory";
 import type { BenchmarkReaderProvider } from "../scripts/lib/benchmark-reader";
 import { memoryAgentBenchSubstringExactMatch } from "../scripts/lib/memoryagentbench";
 import { createMemoryTestContext } from "./support/memory-context";

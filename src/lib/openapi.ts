@@ -2,8 +2,8 @@ import {
   MEMORY_CHUNK_MAXIMUM_CHARACTERS,
   MEMORY_CHUNK_OVERLAP_CHARACTERS,
   MEMORY_CHUNKING_REVISION,
-} from "./memory-chunking";
-import { MEMORY_CONTENT_LIMITS } from "./memory-content";
+  MEMORY_CONTENT_LIMITS,
+} from "@corespeed/lore-core";
 import { LORE_API_VERSION } from "./operations";
 import { MAX_WORKSPACE_ARCHIVE_LINKS, MAX_WORKSPACE_ARCHIVE_MEMORIES } from "./portability";
 

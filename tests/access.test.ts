@@ -1,7 +1,6 @@
+import { createMemoryModule, installActorContext } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { AccessDeniedError, createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
-import { createMemoryModule } from "@/lib/memory";
 import { createMemoryTestContext } from "./support/memory-context";
 
 test("User can create an Agent and grant it write access to their Workspace", async () => {

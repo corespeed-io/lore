@@ -1,5 +1,5 @@
+import { createOllamaEmbeddingProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createOllamaEmbeddingProvider } from "@/lib/embedding/ollama";
 
 test("Ollama adapter sends the deployment model, dimensions, and unload policy", async () => {
   let requestBody: Record<string, unknown> | undefined;

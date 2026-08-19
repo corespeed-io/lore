@@ -1,5 +1,5 @@
+import { createOpenAICompatibleQueryPlanningProvider } from "@corespeed/lore-core/providers";
 import { expect, test } from "vitest";
-import { createOpenAICompatibleQueryPlanningProvider } from "@/lib/query-planning/openai-compatible";
 
 test("OpenAI-compatible query planning requests JSON and returns bounded queries", async () => {
   const provider = createOpenAICompatibleQueryPlanningProvider({

@@ -1,5 +1,5 @@
+import { MemoryContentValidationError, prepareMemoryContent } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { MemoryContentValidationError, prepareMemoryContent } from "@/lib/memory-content";
 
 test("Memory content rejects a lone surrogate anywhere, including at the end", () => {
   // Trailing high surrogate: charCodeAt past the end returns NaN, whose

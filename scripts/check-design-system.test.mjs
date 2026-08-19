@@ -42,7 +42,7 @@ function fixture() {
   write(root, "src/lib/lore-api.ts");
   write(root, "src/app/[...path]/page.tsx");
   write(root, "src/app/api/graph/route.ts");
-  write(root, "src/lib/graph.ts");
+  write(root, "packages/lore-core/src/graph.ts");
   return root;
 }
 

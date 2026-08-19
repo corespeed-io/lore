@@ -139,7 +139,8 @@ function memoryLabel(memory: Memory): string {
   if (typeof configured === "string" && configured.trim()) {
     return memoryPreview(configured, 96);
   }
-  const firstLine = memory.content.split(/\r?\n/, 1)[0];
+  // split with a limit of 1 always yields one element; the fallback is inert.
+  const firstLine = memory.content.split(/\r?\n/, 1)[0] ?? "";
   const firstSentence = firstLine.split(/(?<=[.!?。！？])\s/u, 1)[0];
   return memoryPreview(firstSentence || memory.content, 72);
 }
@@ -224,12 +225,14 @@ function affinityLinks(memories: Memory[], input: ReadMemoryGraph): MemoryGraphL
     for (let rightIndex = leftIndex + 1; rightIndex < memories.length; rightIndex += 1) {
       const left = memories[leftIndex];
       const right = memories[rightIndex];
+      if (!left || !right) continue;
       const weight = affinity(
         termSets.get(left.id) ?? new Set(),
         termSets.get(right.id) ?? new Set(),
       );
       if (weight < minimumAffinity) continue;
       const [source, target] = [left.id, right.id].sort();
+      if (!source || !target) continue;
       candidates.push({ source, target, kind: "affinity", weight: Number(weight.toFixed(4)) });
     }
   }
@@ -318,7 +321,9 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
             JSON.stringify(input.metadata ?? {}),
           ],
         );
-        return toMemoryLink(result.rows[0]);
+        const row = result.rows[0];
+        if (!row) throw new Error("Memory link insert returned no row");
+        return toMemoryLink(row);
       });
     },
 

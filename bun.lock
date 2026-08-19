@@ -6,6 +6,7 @@
       "name": "lore",
       "dependencies": {
         "@ast-grep/napi": "0.45.1",
+        "@corespeed/lore-core": "workspace:*",
         "@opentelemetry/api": "^1.9.1",
         "@opentelemetry/api-logs": "^0.221.0",
         "@opentelemetry/instrumentation": "^0.221.0",
@@ -48,6 +49,26 @@
       "dependencies": {
         "@corespeed/lore-sdk": "^0.1.0",
       },
+    },
+    "packages/lore-core": {
+      "name": "@corespeed/lore-core",
+      "version": "0.1.0",
+      "dependencies": {
+        "pg": "^8.23.0",
+      },
+      "devDependencies": {
+        "@electric-sql/pglite": "^0.5.5",
+        "@electric-sql/pglite-pgvector": "^0.0.6",
+        "@types/pg": "^8.23.1",
+        "typescript": "^7.0.2",
+        "vitest": "^4.1.10",
+      },
+      "peerDependencies": {
+        "vitest": ">=2",
+      },
+      "optionalPeers": [
+        "vitest",
+      ],
     },
     "packages/mcp": {
       "name": "@corespeed/lore-mcp",
@@ -228,6 +249,8 @@
     "@cloudflare/workerd-windows-64": ["@cloudflare/workerd-windows-64@1.20260801.1", "", { "os": "win32", "cpu": "x64" }, "sha512-2oQz+Ksu4ji6e/+ZoYX+tWQEcxAii2p7l+iR8kx48W1llMalaufAsmVxTlk+3/vrM7D3/2c0iK448e0UQTcIMg=="],
 
     "@corespeed/lore-cli": ["@corespeed/lore-cli@workspace:packages/cli"],
+
+    "@corespeed/lore-core": ["@corespeed/lore-core@workspace:packages/lore-core"],
 
     "@corespeed/lore-mcp": ["@corespeed/lore-mcp@workspace:packages/mcp"],
 

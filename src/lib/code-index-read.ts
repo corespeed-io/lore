@@ -1,4 +1,5 @@
-import { type ActorContext, installActorContext } from "./actor-context";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type ActorContext, installActorContext } from "@corespeed/lore-core";
 import type {
   CodeArtifact,
   CodeArtifactSymbol,
@@ -15,7 +16,6 @@ import type {
   SearchCodeIndexInput,
 } from "./code-index";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./code-index-errors";
-import type { PostgresDatabase } from "./db";
 
 export interface CodeIndexReadModule {
   getIndexJob(actor: ActorContext, input: CodeIndexJobSelector): Promise<CodeIndexJob>;

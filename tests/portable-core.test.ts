@@ -1,10 +1,14 @@
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import {
+  createMemoryGraphModule,
+  createMemoryModule,
+  IdempotencyConflictError,
+  installActorContext,
+  MemoryVersionConflictError,
+  mutationRequestHash,
+  purgeExpiredPortableCoreRecords,
+} from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { installActorContext } from "@/lib/actor-context";
-import type { PostgresDatabase } from "@/lib/db";
-import { createMemoryGraphModule } from "@/lib/graph";
-import { IdempotencyConflictError, mutationRequestHash } from "@/lib/idempotency";
-import { purgeExpiredPortableCoreRecords } from "@/lib/maintenance";
-import { createMemoryModule, MemoryVersionConflictError } from "@/lib/memory";
 import { createOperationsModule } from "@/lib/operations";
 import {
   createPortabilityModule,

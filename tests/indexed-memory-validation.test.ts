@@ -1,6 +1,6 @@
+import type { EmbeddingProvider } from "@corespeed/lore-core";
+import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import type { EmbeddingProvider } from "@/lib/memory";
-import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@/lib/memory-chunking";
 import {
   type IndexedMemoryChunk,
   requireExactIndexedMemory,

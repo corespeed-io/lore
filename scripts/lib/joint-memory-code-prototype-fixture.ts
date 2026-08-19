@@ -1,10 +1,11 @@
 /** PROTOTYPE — scratch-PGlite fixture for joint Memory + Code evaluation. */
 
 import { readdir, readFile } from "node:fs/promises";
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
+import { createMemoryModule, type Memory } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
-import type { ActorContext } from "../../src/lib/actor-context";
 import {
   type CodeEvidenceAssessment,
   createCodeEvidenceModule,
@@ -12,7 +13,6 @@ import {
 } from "../../src/lib/code-evidence";
 import { createCodeDependencyGraphModule } from "../../src/lib/code-graph";
 import { type CodeArtifact, createCodeIndexModule } from "../../src/lib/code-index";
-import type { PostgresDatabase } from "../../src/lib/db";
 import {
   assembleGroupedJointEvidence,
   assessContextualImpact,
@@ -25,7 +25,6 @@ import {
   planJointEvidenceRoute,
   prioritizeAnchoredMemories,
 } from "../../src/lib/joint-memory-code-prototype";
-import { createMemoryModule, type Memory } from "../../src/lib/memory";
 
 const OWNER_USER_ID = "10000000-0000-4000-8000-000000000081";
 const OTHER_USER_ID = "10000000-0000-4000-8000-000000000082";

@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import pg from "pg";
-import { createPostgresDatabase } from "../../src/lib/db/postgres";
-import { createMemoryMaintenanceModule } from "../../src/lib/maintenance";
+import type { QueryPlanningProvider, RerankingProvider } from "@corespeed/lore-core";
 import {
   type ActorContext,
   type ContextGroupExpansionOptions,
+  createMemoryMaintenanceModule,
   createMemoryModule,
   type EmbeddingProvider,
   RETRIEVAL_CJK_LEXICAL_POLICY,
@@ -14,9 +13,9 @@ import {
   RETRIEVAL_ENTITY_ALIAS_POLICY,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
-} from "../../src/lib/memory";
-import type { QueryPlanningProvider } from "../../src/lib/query-planning";
-import type { RerankingProvider } from "../../src/lib/reranking";
+} from "@corespeed/lore-core";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
+import pg from "pg";
 import {
   aggregateRetrievalBenchmark,
   evaluateRetrievalBenchmarkCase,
@@ -421,11 +420,15 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     }
 
     const writeModule = createMemoryModule(requestDatabase, {
+      embeddingDimensions: input.embeddingProvider.dimensions,
       embeddingProvider,
     });
     const tripwireWriteModule = createMemoryModule(requestDatabase);
     const memoryIds = new Map<string, string>();
     const memoryLabelsById = new Map<string, string>();
+    // Scoring aliases for split fixtures: retrieving a part Memory counts as
+    // retrieving its anchor fixture at the part's rank (see anchorKey).
+    const anchorMemoryIdByMemoryId = new Map<string, string>();
     const loadedCases: LoadedCase[] = [];
     const partitionKeys = new Set<string>();
     const categoryCounts = new Map<string, number>();
@@ -487,6 +490,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       } satisfies Record<string, ActorContext>;
       const partitionMemoryKeys = new Set<string>();
       const automaticForbiddenKeys: string[] = [];
+      const pendingAnchorAliases: Array<{ memoryId: string; anchorKey: string }> = [];
 
       for (const fixture of partition.memories) {
         if (partitionMemoryKeys.has(fixture.key)) {
@@ -535,6 +539,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         const qualifiedKey = `${partition.key}\u0000${fixture.key}`;
         memoryIds.set(qualifiedKey, memory.id);
         memoryLabelsById.set(memory.id, `${partition.key}/${fixture.key}`);
+        if (fixture.anchorKey !== undefined && fixture.anchorKey !== fixture.key) {
+          pendingAnchorAliases.push({ memoryId: memory.id, anchorKey: fixture.anchorKey });
+        }
         memoryCount += 1;
         if (fixture.owner === "bob" && fixture.scope === "private") {
           automaticForbiddenKeys.push(fixture.key);
@@ -543,6 +550,13 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         if (memoryCount % 1_000 === 0) {
           console.error(`Loaded ${memoryCount.toLocaleString()} benchmark Memories...`);
         }
+      }
+
+      for (const alias of pendingAnchorAliases) {
+        anchorMemoryIdByMemoryId.set(
+          alias.memoryId,
+          memoryId(memoryIds, partition.key, alias.anchorKey),
+        );
       }
 
       const partitionCaseKeys = new Set<string>();
@@ -583,21 +597,55 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, {
         embeddingProvider,
       });
+      // Provider throttling (429 bursts) exhausts the HTTP adapter's inline
+      // retries and parks jobs with a durable backoff; a backed-off job also
+      // makes run() report idle until its run_at arrives. Waiting is safe —
+      // only sustained zero progress or a dead job aborts the run.
+      let stalledRounds = 0;
+      const sleep = (seconds: number) =>
+        new Promise((resolve) => setTimeout(resolve, seconds * 1_000));
       while (true) {
         const results = await Promise.all(
           Array.from({ length: indexingConcurrency }, () => maintenance.run()),
         );
-        if (results.every((result) => result.status === "idle")) break;
+        let roundCompleted = 0;
+        let retryAfterSeconds = 0;
         for (const result of results) {
           if (result.status === "idle") continue;
-          if (result.status !== "complete") {
-            throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as ${result.status}`);
+          if (result.status === "dead") {
+            throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as dead`);
+          }
+          if (result.status === "retry") {
+            retryAfterSeconds = Math.max(
+              retryAfterSeconds,
+              Math.min(result.retryAfterSeconds ?? 30, 60),
+            );
+            continue;
           }
           completedJobs += 1;
+          roundCompleted += 1;
         }
-        if (completedJobs % 1_000 === 0) {
-          console.error(`Embedded ${completedJobs.toLocaleString()} benchmark Memories...`);
+        if (roundCompleted > 0) {
+          stalledRounds = 0;
+          if (completedJobs % 1_000 < roundCompleted) {
+            console.error(`Embedded ${completedJobs.toLocaleString()} benchmark Memories...`);
+          }
+          continue;
         }
+        if (results.every((result) => result.status === "idle")) {
+          const backlog = await admin.query<{ count: string }>(
+            "SELECT count(*)::text AS count FROM memory_embedding_jobs WHERE status = 'pending'",
+          );
+          if (Number(backlog.rows[0]?.count ?? 0) === 0) break;
+          retryAfterSeconds = Math.max(retryAfterSeconds, 15);
+        }
+        stalledRounds += 1;
+        if (stalledRounds > 40) {
+          throw new Error(
+            "Embedding maintenance made no progress across 40 throttled rounds; giving up",
+          );
+        }
+        await sleep(Math.max(retryAfterSeconds, 15));
       }
     }
     const selectedPartitionKeys = [...partitionKeys];
@@ -705,6 +753,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         contextGroupExpansion: variant.useContextGroupExpansion
           ? input.contextGroupExpansion
           : undefined,
+        // Keep SQL vector casts aligned with the benchmark schema even for
+        // lexical variants whose provider is withheld.
+        embeddingDimensions: input.embeddingProvider.dimensions,
         embeddingProvider: variant.useEmbeddings ? embeddingProvider : undefined,
         entityAliasRecall: variant.useEntityAliases ?? false,
         evidenceNeighborChunks: configuredEvidenceNeighborChunks,
@@ -738,7 +789,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
           limit: variant.retrievalLimit ?? benchmarkCase.limit,
           metadataFilter: benchmarkCase.metadataFilter,
         });
-        const retrievedMemoryIds = retrieved.map((result) => result.memory.id);
+        const retrievedMemoryIds = retrieved.map(
+          (result) => anchorMemoryIdByMemoryId.get(result.memory.id) ?? result.memory.id,
+        );
         results.push({
           key: benchmarkCase.key,
           category: benchmarkCase.category,

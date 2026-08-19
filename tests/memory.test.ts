@@ -1,13 +1,13 @@
-import { expect, test } from "vitest";
-import { createAccessModule } from "@/lib/access";
-import { installActorContext } from "@/lib/actor-context";
-import { createMemoryMaintenanceModule } from "@/lib/maintenance";
 import {
   type ActorContext,
+  createMemoryMaintenanceModule,
   createMemoryModule,
   type EmbeddingTask,
+  installActorContext,
   MemoryAccessDeniedError,
-} from "@/lib/memory";
+} from "@corespeed/lore-core";
+import { expect, test } from "vitest";
+import { createAccessModule } from "@/lib/access";
 import { createMemoryTestContext, type MemoryTestContext } from "./support/memory-context";
 
 async function replaceMemoryChunks(

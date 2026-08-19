@@ -1,8 +1,8 @@
-import { type ActorContext, installActorContext } from "./actor-context";
-import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
-import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
-import type { MemoryScope } from "./memory";
+import { type ActorContext, installActorContext } from "../actor-context";
+import { isPostgresAccessDenied } from "../database-errors";
+import type { PostgresDatabase, PostgresTransaction } from "../db";
+import { beginMutation, completeMutation, type IdempotencyRequest } from "../idempotency";
+import type { MemoryScope } from "../memory";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
@@ -315,7 +315,9 @@ export function createObservationModule(database: PostgresDatabase) {
               JSON.stringify(normalized.observations),
             ],
           );
-          const episode = await episodeFromId(transaction, actor.workspaceId, result.rows[0].id);
+          const recorded = result.rows[0];
+          if (!recorded) throw new Error("Episode record returned no row");
+          const episode = await episodeFromId(transaction, actor.workspaceId, recorded.id);
           if (!episode) throw new Error("Recorded Episode was not readable in its transaction");
           await completeMutation(
             transaction,

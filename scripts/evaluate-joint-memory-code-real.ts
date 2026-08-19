@@ -10,10 +10,11 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
+import { createMemoryModule, type Memory } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
-import type { ActorContext } from "../src/lib/actor-context";
 import {
   type CodeEvidenceAssessment,
   createCodeEvidenceModule,
@@ -21,7 +22,6 @@ import {
 } from "../src/lib/code-evidence";
 import { type CodeArtifact, createCodeIndexModule } from "../src/lib/code-index";
 import { createContextRetrievalModule } from "../src/lib/context-retrieval";
-import type { PostgresDatabase } from "../src/lib/db";
 import {
   assembleGroupedJointEvidence,
   type GroupedJointEvidencePacket,
@@ -39,7 +39,6 @@ import {
   type JointReaderScore,
   scoreJointReaderOutput,
 } from "../src/lib/joint-memory-code-reader-prototype";
-import { createMemoryModule, type Memory } from "../src/lib/memory";
 
 const USER_ID = "10000000-0000-4000-8000-000000000091";
 const WORKSPACE_ID = "20000000-0000-4000-8000-000000000091";
