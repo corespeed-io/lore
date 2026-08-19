@@ -167,3 +167,44 @@ test("LongMemEval can select a deterministic number of cases per question type",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("sessions beyond the canonical content bound split into anchored parts", () => {
+  const longTurn = (marker: string) => `${marker} ${"memory benchmark filler ".repeat(700)}`;
+  const oversized: LongMemEvalRecord = {
+    ...fixture,
+    haystack_sessions: [
+      fixture.haystack_sessions[0],
+      [
+        { role: "user", content: longTurn("alpha"), has_answer: false },
+        { role: "assistant", content: longTurn("beta"), has_answer: true },
+        { role: "user", content: longTurn("gamma"), has_answer: false },
+      ],
+    ],
+  };
+
+  const partition = toLongMemEvalPartition(oversized);
+  const parts = partition.memories.filter((memory) => memory.metadata?.sessionId === "session-2");
+
+  expect(parts.length).toBeGreaterThan(1);
+  expect(parts[0]).toMatchObject({ key: "session-2" });
+  expect(parts[0]?.anchorKey).toBeUndefined();
+  for (const [index, part] of parts.entries()) {
+    expect(Array.from(part.content).length).toBeLessThanOrEqual(32_000);
+    expect(part.content.startsWith("Conversation session at 2026/08/06 (Thu) 16:00")).toBe(true);
+    if (index > 0) {
+      expect(part.key).toBe(`session-2::part:${index + 1}`);
+      expect(part.anchorKey).toBe("session-2");
+    }
+    expect(part.metadata).toMatchObject({
+      sessionPart: index + 1,
+      sessionPartCount: parts.length,
+    });
+  }
+  // Anchoring is unchanged: the case still expects the bare session key.
+  expect(partition.cases[0]?.expectedKeys).toEqual(["session-2"]);
+  // Every turn's text survives across the parts.
+  const joined = parts.map((part) => part.content).join("\n\n");
+  for (const marker of ["alpha", "beta", "gamma"]) {
+    expect(joined).toContain(marker);
+  }
+});

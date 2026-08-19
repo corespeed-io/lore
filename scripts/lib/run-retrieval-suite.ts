@@ -425,6 +425,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     const tripwireWriteModule = createMemoryModule(requestDatabase);
     const memoryIds = new Map<string, string>();
     const memoryLabelsById = new Map<string, string>();
+    // Scoring aliases for split fixtures: retrieving a part Memory counts as
+    // retrieving its anchor fixture at the part's rank (see anchorKey).
+    const anchorMemoryIdByMemoryId = new Map<string, string>();
     const loadedCases: LoadedCase[] = [];
     const partitionKeys = new Set<string>();
     const categoryCounts = new Map<string, number>();
@@ -486,6 +489,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       } satisfies Record<string, ActorContext>;
       const partitionMemoryKeys = new Set<string>();
       const automaticForbiddenKeys: string[] = [];
+      const pendingAnchorAliases: Array<{ memoryId: string; anchorKey: string }> = [];
 
       for (const fixture of partition.memories) {
         if (partitionMemoryKeys.has(fixture.key)) {
@@ -534,6 +538,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         const qualifiedKey = `${partition.key}\u0000${fixture.key}`;
         memoryIds.set(qualifiedKey, memory.id);
         memoryLabelsById.set(memory.id, `${partition.key}/${fixture.key}`);
+        if (fixture.anchorKey !== undefined && fixture.anchorKey !== fixture.key) {
+          pendingAnchorAliases.push({ memoryId: memory.id, anchorKey: fixture.anchorKey });
+        }
         memoryCount += 1;
         if (fixture.owner === "bob" && fixture.scope === "private") {
           automaticForbiddenKeys.push(fixture.key);
@@ -542,6 +549,13 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         if (memoryCount % 1_000 === 0) {
           console.error(`Loaded ${memoryCount.toLocaleString()} benchmark Memories...`);
         }
+      }
+
+      for (const alias of pendingAnchorAliases) {
+        anchorMemoryIdByMemoryId.set(
+          alias.memoryId,
+          memoryId(memoryIds, partition.key, alias.anchorKey),
+        );
       }
 
       const partitionCaseKeys = new Set<string>();
@@ -737,7 +751,9 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
           limit: variant.retrievalLimit ?? benchmarkCase.limit,
           metadataFilter: benchmarkCase.metadataFilter,
         });
-        const retrievedMemoryIds = retrieved.map((result) => result.memory.id);
+        const retrievedMemoryIds = retrieved.map(
+          (result) => anchorMemoryIdByMemoryId.get(result.memory.id) ?? result.memory.id,
+        );
         results.push({
           key: benchmarkCase.key,
           category: benchmarkCase.category,

@@ -8,6 +8,15 @@ export interface RetrievalBenchmarkMemoryFixture {
   scope: "shared" | "private";
   content: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Scoring alias: retrieving this Memory counts as retrieving the fixture
+   * named here, at this Memory's rank. Adapters that must split one source
+   * document into several Memories (for example a LongMemEval session larger
+   * than the canonical 32k-character content bound) point every later part at
+   * the first part's key, so answer anchoring stays at source granularity
+   * without inflating the expected-id denominator.
+   */
+  anchorKey?: string;
 }
 
 export interface RetrievalBenchmarkCaseFixture {

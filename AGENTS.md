@@ -807,7 +807,12 @@ Benchmark is part of the product quality system even without AutoDream.
   upstream revision, byte length, SHA-256, license, and session granularity;
   downloaded data stays ignored under `evaluation/datasets/`. Every question is a
   separate Workspace, every conversation session is an Alice-owned private Memory,
-  and a Bob-owned private answer tripwire preserves the RLS hard gate. The oracle
+  and a Bob-owned private answer tripwire preserves the RLS hard gate. A session
+  larger than the canonical 32k-character content bound (five exist in the S
+  split) splits greedily at turn boundaries into part Memories; the first part
+  keeps the session key and later parts carry `anchorKey` back to it, which the
+  runner resolves at scoring time so any-part retrieval counts as the session at
+  that rank without inflating the expected-id denominator. The oracle
   split is only a low-cost smoke test; comparable retrieval scores use the `s` or
   `m` cleaned haystack split. `--reuse-indexed` verifies the exact selected corpus
   before rerunning retrieval-only ablations. Official retrieval comparison skips 30 abstention
