@@ -36,8 +36,14 @@ been removed. Lore now has a native implementation, split into two concepts
   the union strictness of its hosts (`noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`) and is consumed in-repo as workspace
   TypeScript source (root tsconfig paths, vitest aliases, Next
-  `transpilePackages`); CoreSpeed HaaS consumes it from npm once the publish
-  workflow lands.
+  `transpilePackages`). **Distribution is a shared-component convention, not
+  a mechanism** (Yunpeng, 2026-08-19; npm publishing, submodules, mirrors,
+  and sync scripts were all rejected): CoreSpeed HaaS carries its own
+  verbatim copy of this package. Engine changes land here first, then the
+  same change is mirrored into the HaaS copy as part of the same task; the
+  copies must stay semantically identical, and each repo's CI runs the
+  `./testing` contract suite against its own migration chain as the drift
+  backstop.
 - **lore oss** — everything else in this repository: identity/tenancy,
   request context, HTTP/OpenAPI, SDKs/CLI/MCP, web UI, Memory Proposals
   (`src/lib/memory-proposals.ts`, layered on the engine's exported

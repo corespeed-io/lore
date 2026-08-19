@@ -5,10 +5,6 @@
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
-  "files": [
-    "src",
-    "README.md"
-  ],
   "exports": {
     ".": "./src/index.ts",
     "./postgres": "./src/postgres.ts",
@@ -33,9 +29,6 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "peerDependencies": {
     "vitest": ">=2"

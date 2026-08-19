@@ -52,9 +52,16 @@ embedding-job semantics — lore oss's Memory Proposals review is the canonical
 consumer. `memoryFromRow`, `MemoryRow`, and `serializedTimestamp` support host
 modules that map their own row selections.
 
-## Consuming from this repository
+## How hosts consume this package
 
-The lore app consumes this package as TypeScript source through the Bun
-workspace (`workspace:*`), root `tsconfig.json` paths, the vitest aliases, and
-Next `transpilePackages`. Publishing (built `dist` + `d.ts`) is wired
-separately; see HAAS-71 for the release plan.
+The lore app consumes it as TypeScript source through the Bun workspace
+(`workspace:*`), root `tsconfig.json` paths, the vitest aliases, and Next
+`transpilePackages`.
+
+There is deliberately no distribution mechanism — no npm publishing, no
+submodule, no mirror, no sync script (HAAS-71 verdict). Other hosts
+(CoreSpeed HaaS) carry their own verbatim copy of this package as a shared
+component. The convention that keeps that honest: engine changes land in this
+repository first and are mirrored into the host copy as part of the same
+task; the copies stay semantically identical; every host's CI runs the
+`./testing` contract suite against its own migration chain.
