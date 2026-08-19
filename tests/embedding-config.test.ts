@@ -1,13 +1,20 @@
 import {
-  DEFAULT_EMBEDDING_CONFIGURATION,
-  EMBEDDING_DIMENSIONS,
+  embeddingConfiguration as coreEmbeddingConfiguration,
   EMBEDDING_PROTOCOL_REVISION,
-  embeddingBuildEnvironment,
-  embeddingConfiguration,
-  embeddingConfigurationFromEnvironment,
   QWEN3_EMBEDDING_PROTOCOL_REVISION,
 } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
+import {
+  DEFAULT_EMBEDDING_CONFIGURATION,
+  EMBEDDING_DIMENSIONS,
+  embeddingBuildEnvironment,
+  embeddingConfigurationFromEnvironment,
+} from "@/lib/embedding-config";
+
+/** lore oss's policy pins the engine's dimension parameter to 1024. */
+function embeddingConfiguration(input: { provider: string; model: string }) {
+  return coreEmbeddingConfiguration({ ...input, dimensions: EMBEDDING_DIMENSIONS });
+}
 
 test("local deployments default to Qwen inside the fixed Lore v1 embedding protocol", () => {
   expect(DEFAULT_EMBEDDING_CONFIGURATION).toEqual({

@@ -1,9 +1,9 @@
+import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import {
-  createMemoryMaintenanceModule,
   embeddingBuildEnvironment,
   embeddingConfigurationFromEnvironment,
-} from "@corespeed/lore-core";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
+} from "../src/lib/embedding-config";
 
 const connectionString = process.env.LORE_MAINTENANCE_DATABASE_URL;
 if (!connectionString) throw new Error("LORE_MAINTENANCE_DATABASE_URL is required");

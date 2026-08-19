@@ -2,7 +2,7 @@ import { type ActorContext, installActorContext } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiteral } from "./embedding/vector";
-import type { EmbeddingDimensions } from "./embedding-config";
+import { validatedEmbeddingDimensions } from "./embedding-config";
 import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
 import { prepareMemoryContent } from "./memory-content";
@@ -129,7 +129,7 @@ export interface MemorySearchResult {
 export interface EmbeddingProvider {
   provider: string;
   model: string;
-  dimensions: EmbeddingDimensions;
+  dimensions: number;
   revision: string;
   embed(texts: string[], task: EmbeddingTask): Promise<number[][]>;
 }
@@ -138,6 +138,19 @@ export type EmbeddingTask = "document" | "query";
 
 export interface MemoryModuleOptions {
   contextGroupExpansion?: ContextGroupExpansionOptions;
+  /**
+   * New Memories default to this scope when the caller does not request one.
+   * "shared" is lore's product default; hosts with a fail-closed posture may
+   * choose "private".
+   */
+  defaultMemoryScope?: MemoryScope;
+  /**
+   * The deployment's embedding-space width. A host-baked schema invariant
+   * (vector columns, CHECKs, HNSW indexes), not a runtime knob: it must match
+   * the host schema exactly. Defaults to the embedding provider's dimensions,
+   * then to lore's 1024.
+   */
+  embeddingDimensions?: number;
   embeddingProvider?: EmbeddingProvider;
   entityAliasRecall?: boolean;
   evidenceNeighborChunks?: number;
@@ -775,7 +788,7 @@ async function embedRetrievalQueries(
       throw new Error("Embedding provider returned the wrong number of query vectors");
     }
     for (const [index, vector] of vectors.entries()) {
-      embeddings[index] = embeddingVectorLiteral(vector);
+      embeddings[index] = embeddingVectorLiteral(vector, embeddingProvider.dimensions);
     }
   } catch {
     embeddings.fill(null);
@@ -788,6 +801,7 @@ async function searchOneQuery(input: {
   actor: ActorContext;
   query: string;
   queryEmbedding: string | null;
+  embeddingDimensions: number;
   entityAliasRecall: boolean;
   candidateLimit: number;
   resultLimit: number;
@@ -1020,7 +1034,7 @@ async function searchOneQuery(input: {
          AND generation.embedding_provider = $7
          AND generation.embedding_model = $8
          AND generation.embedding_revision = $9
-         AND generation.embedding_dimensions = 1024
+         AND generation.embedding_dimensions = ${input.embeddingDimensions}
          AND generation.status IN ('active', 'retiring')
          AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
          AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
@@ -1035,12 +1049,12 @@ async function searchOneQuery(input: {
          chunk.ordinal AS chunk_ordinal,
          chunk.memory_updated_at,
          row_number() OVER (
-           ORDER BY chunk.embedding <=> $3::vector(1024),
+           ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}),
                     chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
          ) AS candidate_rank
        FROM active_semantic_chunks chunk
-       WHERE (chunk.embedding <=> $3::vector(1024)) <= $5
-       ORDER BY chunk.embedding <=> $3::vector(1024),
+       WHERE (chunk.embedding <=> $3::vector(${input.embeddingDimensions})) <= $5
+       ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}),
                 chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT $4
      ),
@@ -1265,6 +1279,7 @@ export function memoryFromRow(row: MemoryRow): Memory {
 }
 
 export interface MemoryMutationPrimitivesOptions {
+  defaultMemoryScope?: MemoryScope;
   embeddingProvider?: EmbeddingProvider;
   maintenanceNotifier?: MemoryMaintenanceNotifier;
 }
@@ -1277,6 +1292,7 @@ export interface MemoryMutationPrimitivesOptions {
  * authorization checks, and idempotency bookkeeping.
  */
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
+  const defaultMemoryScope = options.defaultMemoryScope ?? "shared";
   const embeddingProvider = options.embeddingProvider;
   const maintenanceNotifier = options.maintenanceNotifier;
 
@@ -1308,7 +1324,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         actor.workspaceId,
         actor.userId,
         createdByAgentId,
-        input.scope ?? "shared",
+        input.scope ?? defaultMemoryScope,
         input.content,
         JSON.stringify(input.metadata ?? {}),
       ],
@@ -1388,6 +1404,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
   const contextGroupExpansion = normalizeContextGroupExpansion(options.contextGroupExpansion);
   const embeddingProvider = options.embeddingProvider;
+  const embeddingDimensions = validatedEmbeddingDimensions(
+    options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
+  );
   const entityAliasRecall = options.entityAliasRecall ?? false;
   const evidenceNeighborChunks = Math.max(
     0,
@@ -1659,6 +1678,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               actor,
               query: plannedQuery,
               queryEmbedding: queryEmbeddings[index] ?? null,
+              embeddingDimensions,
               entityAliasRecall,
               candidateLimit,
               resultLimit,
@@ -1724,6 +1744,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             actor,
             query: feedback.query,
             queryEmbedding: feedbackEmbedding ?? null,
+            embeddingDimensions,
             entityAliasRecall,
             candidateLimit,
             resultLimit,

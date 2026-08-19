@@ -1,13 +1,13 @@
 import type { EmbeddingProvider } from "@corespeed/lore-core";
 import {
-  embeddingBuildEnvironment,
-  embeddingConfigurationFromEnvironment,
-} from "@corespeed/lore-core";
-import {
   createGoogleEmbeddingProvider,
   createOllamaEmbeddingProvider,
   createOpenAIEmbeddingProvider,
 } from "@corespeed/lore-core/providers";
+import {
+  embeddingBuildEnvironment,
+  embeddingConfigurationFromEnvironment,
+} from "../embedding-config";
 import { markDependencyFailure, markDependencySuccess } from "../telemetry";
 
 export type EmbeddingConfigurationWarning = (message: string) => void;

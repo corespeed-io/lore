@@ -4,6 +4,7 @@ import type {
   MemoryMaintenanceNotifier,
   MemoryModuleOptions,
 } from "@corespeed/lore-core";
+import { EMBEDDING_DIMENSIONS } from "@/lib/embedding-config";
 import { createEmbeddingProviderFromEnvironment } from "../embedding/provider-factory";
 import {
   getRuntimeQueryPlanningProvider,
@@ -132,6 +133,8 @@ export async function getRuntimeMemoryModuleOptions(
   options: { maintenanceNotifications?: boolean } = {},
 ): Promise<MemoryModuleOptions> {
   return {
+    // Lore v1 protocol invariant: the baseline schema is built for 1024.
+    embeddingDimensions: EMBEDDING_DIMENSIONS,
     embeddingProvider: getRuntimeEmbeddingProvider(),
     entityAliasRecall: entityAliasRecallFromEnvironment(),
     evidenceNeighborChunks: evidenceNeighborChunksFromEnvironment(),

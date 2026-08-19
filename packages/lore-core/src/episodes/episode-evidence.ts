@@ -1,6 +1,7 @@
 import { type ActorContext, installActorContext } from "../actor-context";
 import type { PostgresDatabase, PostgresTransaction } from "../db";
 import { embeddingVectorLiteral, embeddingVectorLiterals } from "../embedding/vector";
+import { validatedEmbeddingDimensions } from "../embedding-config";
 import type { EmbeddingProvider } from "../memory";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
 import type { QueryPlanningProvider } from "../query-planning";
@@ -55,6 +56,11 @@ export interface EpisodeEvidenceSearchResult {
 }
 
 export interface EpisodeEvidenceModuleOptions {
+  /**
+   * The deployment's embedding-space width — a host-baked schema invariant.
+   * Defaults to the embedding provider's dimensions, then to lore's 1024.
+   */
+  embeddingDimensions?: number;
   embeddingProvider?: EmbeddingProvider;
   evidenceNeighborChunks?: number;
   evidenceTopObservations?: number;
@@ -320,6 +326,7 @@ async function searchOneQuery(input: {
   groupMetadataKey?: string;
   sourceKeys: readonly string[];
   embeddingProvider?: EmbeddingProvider;
+  embeddingDimensions: number;
 }): Promise<EpisodeEvidenceSearchResult[]> {
   const result = await input.transaction.query<SearchRow>(
     `WITH simple_lexical_candidates AS (
@@ -410,7 +417,7 @@ async function searchOneQuery(input: {
          AND generation.embedding_provider = $6
          AND generation.embedding_model = $7
          AND generation.embedding_revision = $8
-         AND generation.embedding_dimensions = 1024
+         AND generation.embedding_dimensions = ${input.embeddingDimensions}
          AND generation.status IN ('active', 'retiring')
          AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
          AND (
@@ -425,12 +432,12 @@ async function searchOneQuery(input: {
          chunk.episode_id,
          chunk.observation_id,
          row_number() OVER (
-           ORDER BY chunk.embedding <=> $3::vector(1024), chunk.observed_at DESC,
+           ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}), chunk.observed_at DESC,
                     chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
          ) AS candidate_rank
        FROM active_semantic_chunks chunk
-       WHERE (chunk.embedding <=> $3::vector(1024)) <= $5
-       ORDER BY chunk.embedding <=> $3::vector(1024), chunk.observed_at DESC,
+       WHERE (chunk.embedding <=> $3::vector(${input.embeddingDimensions})) <= $5
+       ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}), chunk.observed_at DESC,
                 chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
        LIMIT $4
      ),
@@ -601,6 +608,9 @@ export function createEpisodeEvidenceModule(
   const rerankWeight = boundedNumber(options.rerankWeight, 1, 0, 1);
   const semanticDistanceThreshold = boundedNumber(options.semanticDistanceThreshold, 0.5, 0, 2);
   const embeddingProvider = options.embeddingProvider;
+  const embeddingDimensions = validatedEmbeddingDimensions(
+    options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
+  );
 
   return {
     async index(
@@ -700,6 +710,7 @@ export function createEpisodeEvidenceModule(
                 "document",
               ),
               batch.length,
+              embeddingDimensions,
             );
           } catch {
             break;
@@ -711,7 +722,7 @@ export function createEpisodeEvidenceModule(
                  generation_id, workspace_id, episode_id, observation_id, chunk_id, embedding
                )
                SELECT $1, $2, input.episode_id, input.observation_id,
-                      input.chunk_id, input.embedding::vector(1024)
+                      input.chunk_id, input.embedding::vector(${embeddingDimensions})
                FROM jsonb_to_recordset($3::jsonb) AS input(
                  episode_id uuid,
                  observation_id uuid,
@@ -792,7 +803,9 @@ export function createEpisodeEvidenceModule(
         }
         try {
           const vectors = await embeddingProvider.embed([plannedQuery], "query");
-          queryEmbeddings.push(vectors[0] ? embeddingVectorLiteral(vectors[0]) : null);
+          queryEmbeddings.push(
+            vectors[0] ? embeddingVectorLiteral(vectors[0], embeddingDimensions) : null,
+          );
         } catch {
           queryEmbeddings.push(null);
         }
@@ -816,6 +829,7 @@ export function createEpisodeEvidenceModule(
               groupMetadataKey: input.groupMetadataKey,
               sourceKeys,
               embeddingProvider,
+              embeddingDimensions,
             }),
           );
         }

@@ -1,5 +1,6 @@
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiterals } from "./embedding/vector";
+import { validatedEmbeddingDimensions } from "./embedding-config";
 import type { EmbeddingProvider } from "./memory";
 
 export type MemoryMaintenanceStatus = "complete" | "retry" | "dead" | "idle";
@@ -117,6 +118,7 @@ export function createMemoryMaintenanceModule(
   options: MemoryMaintenanceOptions,
 ) {
   const provider = options.embeddingProvider;
+  const providerDimensions = validatedEmbeddingDimensions(provider.dimensions);
   const leaseSeconds = Math.max(
     30,
     Math.min(options.leaseSeconds ?? embeddingMaintenanceLeaseSeconds(), 3_600),
@@ -279,6 +281,7 @@ export function createMemoryMaintenanceModule(
             "document",
           ),
           chunks.length,
+          providerDimensions,
         );
       } catch {
         return finishFailure(
@@ -315,7 +318,7 @@ export function createMemoryMaintenanceModule(
                $1,
                $2,
                replacement.chunk_id::uuid,
-               replacement.embedding::vector(1024),
+               replacement.embedding::vector(${providerDimensions}),
                now()
              FROM jsonb_to_recordset($3::jsonb) AS replacement(
                chunk_id text,
