@@ -108,7 +108,7 @@
     "swr": "^2.5.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.8",
+    "@biomejs/biome": "^2.5.9",
     "@electric-sql/pglite": "^0.5.5",
     "@electric-sql/pglite-pgvector": "^0.0.6",
     "@modelcontextprotocol/client": "^2.0.0",
@@ -120,8 +120,8 @@
     "@types/react-dom": "^19.2.4",
     "dbmate": "2.35.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.119.0"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
   },
   "overrides": {
     "js-yaml": "^4.3.1",
