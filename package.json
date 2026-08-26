@@ -58,6 +58,8 @@
     "benchmark:longmemeval:fetch": "bun scripts/fetch-longmemeval.ts",
     "benchmark:longmemeval": "bun scripts/benchmark-longmemeval.ts",
     "benchmark:longmemeval:smoke": "bun scripts/benchmark-longmemeval.ts --split oracle --max-cases 10",
+    "benchmark:longmemeval:e2e": "bun scripts/benchmark-longmemeval-e2e.ts",
+    "benchmark:longmemeval:extract-facts": "bun scripts/benchmark-longmemeval-extract-facts.ts",
     "benchmark:longmemeval-v2:fetch": "bun scripts/fetch-longmemeval-v2.ts",
     "benchmark:longmemeval-v2": "bun scripts/benchmark-longmemeval-v2.ts",
     "benchmark:locomo:fetch": "bun scripts/fetch-locomo.ts",
