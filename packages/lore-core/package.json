@@ -24,9 +24,9 @@
   "devDependencies": {
     "@types/pg": "^8.23.1",
     "typescript": "^7.0.2",
-    "@electric-sql/pglite": "^0.5.5",
-    "@electric-sql/pglite-pgvector": "^0.0.6",
-    "vitest": "^4.1.10"
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-pgvector": "^0.0.9",
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"
