@@ -119,6 +119,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "dbmate": "2.35.0",
+    "happy-dom": "20.10.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "wrangler": "^4.119.0"

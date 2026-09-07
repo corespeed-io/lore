@@ -137,7 +137,16 @@ export function Sidebar({
   const localRef = useRef<HTMLInputElement>(null);
   const inputRef = searchRef ?? localRef;
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const composing = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Workspace changes invalidate pending searches.
+  useEffect(() => {
+    // Never carry a pending query into another Workspace or past unmount.
+    return () => {
+      if (debounce.current !== null) clearTimeout(debounce.current);
+    };
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -158,17 +167,39 @@ export function Sidebar({
     setMenuOpen(false);
   }
 
-  // Search-as-you-type: debounce keystrokes; Enter fires immediately.
+  function cancelSearch() {
+    if (debounce.current !== null) clearTimeout(debounce.current);
+    debounce.current = null;
+  }
+
+  function scheduleSearch(value: string) {
+    cancelSearch();
+    debounce.current = setTimeout(() => {
+      debounce.current = null;
+      onSearch(value);
+    }, 220);
+  }
+
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const v = e.currentTarget.value;
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => onSearch(v), 220);
+    if (!composing.current) scheduleSearch(e.currentTarget.value);
+  }
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (composing.current) return;
+    cancelSearch();
+    onSearch(inputRef.current?.value ?? "");
+    setMenuOpen(false);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
-      if (debounce.current) clearTimeout(debounce.current);
-      onSearch(inputRef.current?.value ?? "");
+      e.preventDefault();
+      // Safari may finish composition before keydown and report only keyCode 229.
+      if (composing.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+        return;
+      }
+      e.currentTarget.form?.requestSubmit();
     }
   }
 
@@ -259,16 +290,38 @@ export function Sidebar({
           </button>
         </div>
 
-        <div className="sidebar-search-wrap">
-          <input
-            ref={inputRef}
-            className="sidebar-search"
-            placeholder="Search memories…"
-            autoComplete="off"
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
+        <search aria-label="Search memories">
+          <form className="sidebar-search-wrap" onSubmit={handleSubmit}>
+            <label className="sidebar-search-label" htmlFor="memory-search">
+              Search memories
+            </label>
+            <input
+              id="memory-search"
+              ref={inputRef}
+              className="sidebar-search"
+              placeholder="What do you remember?"
+              aria-describedby="memory-search-hint"
+              enterKeyHint="search"
+              autoComplete="off"
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              onCompositionStart={() => {
+                composing.current = true;
+                cancelSearch();
+              }}
+              onCompositionEnd={(e) => {
+                composing.current = false;
+                scheduleSearch(e.currentTarget.value);
+              }}
+            />
+            <p id="memory-search-hint" className="sidebar-search-hint">
+              Describe a memory or ask a question.
+            </p>
+            <button type="submit" className="sidebar-search-submit">
+              Semantic search
+            </button>
+          </form>
+        </search>
 
         <nav className="nav-group" aria-label="Primary">
           {items.map((n) => (

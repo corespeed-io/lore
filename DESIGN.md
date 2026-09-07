@@ -174,7 +174,13 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 - Entry: Memories navigation or Workspace search.
 - Default: newest visible Memories with scope and UTC update date.
-- Search: 220ms debounce; results retain server ranking and show evidence.
+- Search: a labelled sidebar field invites natural-language descriptions or questions
+  and exposes a `Semantic search` submit button. It uses the existing Workspace-scoped
+  hybrid retrieval; results retain server ranking and show evidence.
+- Typing searches after 220ms; Enter and the button submit immediately, cancel the
+  pending debounce, and close the mobile drawer. IME composition pauses search;
+  Enter confirming a candidate never submits. Pending searches are cancelled on
+  Workspace change and unmount.
 - Empty states distinguish an empty Workspace from an empty query.
 - Selecting a row opens a full detail workspace and preserves the list/query state.
 
