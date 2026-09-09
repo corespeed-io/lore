@@ -179,8 +179,10 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   hybrid retrieval; results retain server ranking and show evidence.
 - Typing searches after 220ms; Enter and the button submit immediately, cancel the
   pending debounce, and close the mobile drawer. IME composition pauses search;
-  Enter confirming a candidate never submits. Pending searches are cancelled on
-  Workspace change and unmount.
+  Enter confirming a candidate never submits, while a deliberate Enter always
+  searches. Pending searches are cancelled whenever the query context resets —
+  Workspace change, tab change, type drill-down, route navigation, opening a
+  Memory — and on unmount.
 - Empty states distinguish an empty Workspace from an empty query.
 - Selecting a row opens a full detail workspace and preserves the list/query state.
 

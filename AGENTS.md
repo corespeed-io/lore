@@ -216,11 +216,13 @@ been removed. Lore now has a native implementation, split into two concepts
 - `src/components/App.tsx` owns the native Memory workflow and client routing,
   `src/components/Sidebar.tsx` owns the Lore shell, and
   `src/lib/lore-api.ts` is the typed browser transport for native routes;
-  Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search.
-  Keep the 220ms typing debounce, immediate Enter/button submission with timer
-  cancellation, IME composition guards (including Safari keyCode 229), and explicit
-  submission closing the mobile drawer. Cancel pending queries on Workspace change
-  and unmount; preserve server relevance order and Memory-detail navigation;
+  Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search
+  through the shared cancelable debounce hook (`src/lib/use-debounced-callback.ts`);
+  App drops the pending query via `searchCancelRef` on every query-context reset
+  (Workspace, tab, type drill, route navigation, opening a Memory). Behavioral
+  contract (normative copy in DESIGN.md): typing debounces, explicit submission is
+  immediate and closes the mobile drawer, an Enter consumed by IME composition
+  never submits, and a deliberate Enter always searches;
 - `src/lib/lore-swr.ts` owns Workspace-scoped SWR keys and hooks for Workspaces,
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or

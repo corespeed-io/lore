@@ -10,7 +10,10 @@ let root: Root;
 let input: HTMLInputElement;
 const onSearch = vi.fn();
 
-function render(workspaceId = "workspace-a") {
+function render(
+  workspaceId = "workspace-a",
+  searchCancelRef?: React.RefObject<(() => void) | null>,
+) {
   act(() => {
     root.render(
       <Sidebar
@@ -22,6 +25,7 @@ function render(workspaceId = "workspace-a") {
         onNewMemory={() => {}}
         onTabChange={() => {}}
         onSearch={onSearch}
+        searchCancelRef={searchCancelRef}
       />,
     );
   });
@@ -159,6 +163,62 @@ test("guards Safari's compositionend-before-Enter sequence then permits delibera
   expect(onSearch).toHaveBeenCalledExactlyOnceWith("发布决定");
   advance(1000);
   expect(onSearch).toHaveBeenCalledTimes(1);
+});
+
+test("submits an Enter reported as keyCode 229 with no recent composition", () => {
+  // Some Android soft keyboards report keyCode 229 for a deliberate Enter
+  // outside any composition; that Enter must still search.
+  type("deployment failure");
+  advance(100);
+  expect(keydown({ keyCode: 229 }).defaultPrevented).toBe(true);
+  expect(onSearch).toHaveBeenCalledExactlyOnceWith("deployment failure");
+});
+
+test("expires the post-composition keyCode 229 guard and skips unchanged compositions", () => {
+  type("deploy failure");
+  advance();
+  expect(onSearch).toHaveBeenCalledExactlyOnceWith("deploy failure");
+  compose("compositionstart");
+  compose("compositionend");
+  advance(600);
+  // A composition that changed nothing schedules nothing.
+  expect(onSearch).toHaveBeenCalledTimes(1);
+  keydown({ keyCode: 229 });
+  expect(onSearch).toHaveBeenCalledTimes(2);
+  expect(onSearch).toHaveBeenLastCalledWith("deploy failure");
+});
+
+test("blur ends the composition guard so explicit submission recovers", () => {
+  compose("compositionstart");
+  type("发布决定");
+  act(() => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  submit();
+  expect(onSearch).toHaveBeenCalledExactlyOnceWith("发布决定");
+});
+
+test("typing recovers a composition aborted without compositionend", () => {
+  compose("compositionstart");
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      input,
+      "recovered query",
+    );
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: false }));
+  });
+  advance();
+  expect(onSearch).toHaveBeenCalledExactlyOnceWith("recovered query");
+});
+
+test("exposes a cancel handle for App's query-context resets", () => {
+  const cancelRef: React.RefObject<(() => void) | null> = { current: null };
+  render("workspace-a", cancelRef);
+  type("stale query");
+  act(() => cancelRef.current?.());
+  advance(1000);
+  expect(onSearch).not.toHaveBeenCalled();
+  type("fresh query");
+  advance();
+  expect(onSearch).toHaveBeenCalledExactlyOnceWith("fresh query");
 });
 
 test("cancels pending search on Workspace change", () => {

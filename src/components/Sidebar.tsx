@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import type { Tab } from "@/lib/route";
 import type { WorkspaceSummary } from "@/lib/types";
+import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 
 interface SidebarProps {
   activeTab: Tab;
@@ -15,6 +16,9 @@ interface SidebarProps {
   onTabChange: (tab: Tab) => void;
   onSearch: (q: string) => void;
   searchRef?: React.RefObject<HTMLInputElement | null>;
+  /** App resets query context (tab change, drill, route, Workspace); it must be
+   * able to drop a pending debounced search from every one of those paths. */
+  searchCancelRef?: React.RefObject<(() => void) | null>;
 }
 
 // Product brand — the app is Lore; APP_TITLE names the deployment.
@@ -133,20 +137,29 @@ export function Sidebar({
   onTabChange,
   onSearch,
   searchRef,
+  searchCancelRef,
 }: SidebarProps) {
   const localRef = useRef<HTMLInputElement>(null);
   const inputRef = searchRef ?? localRef;
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const search = useDebouncedCallback(onSearch, 220);
   const composing = useRef(false);
+  const compositionStartValue = useRef("");
+  const compositionEndedAt = useRef(0);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!searchCancelRef) return;
+    searchCancelRef.current = search.cancel;
+    return () => {
+      searchCancelRef.current = null;
+    };
+  }, [searchCancelRef, search.cancel]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: Workspace changes invalidate pending searches.
   useEffect(() => {
     // Never carry a pending query into another Workspace or past unmount.
-    return () => {
-      if (debounce.current !== null) clearTimeout(debounce.current);
-    };
-  }, [activeWorkspaceId]);
+    return search.cancel;
+  }, [activeWorkspaceId, search.cancel]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -167,40 +180,39 @@ export function Sidebar({
     setMenuOpen(false);
   }
 
-  function cancelSearch() {
-    if (debounce.current !== null) clearTimeout(debounce.current);
-    debounce.current = null;
-  }
-
-  function scheduleSearch(value: string) {
-    cancelSearch();
-    debounce.current = setTimeout(() => {
-      debounce.current = null;
-      onSearch(value);
-    }, 220);
-  }
-
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (!composing.current) scheduleSearch(e.currentTarget.value);
+    // Input events carry the live composition flag; syncing the ref from it lets
+    // typing recover a composition that was aborted without a compositionend
+    // (programmatic value writes can do that).
+    const native = e.nativeEvent as { isComposing?: boolean };
+    composing.current = native.isComposing ?? composing.current;
+    if (!composing.current) search.schedule(e.currentTarget.value);
   }
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (composing.current) return;
-    cancelSearch();
+    search.cancel();
     onSearch(inputRef.current?.value ?? "");
     setMenuOpen(false);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      // Safari may finish composition before keydown and report only keyCode 229.
-      if (composing.current || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
-        return;
-      }
-      e.currentTarget.form?.requestSubmit();
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    // An Enter the IME consumed to confirm a candidate must never submit. Safari
+    // can end composition before this keydown and report only keyCode 229, so a
+    // bare 229 counts as composition only just after a compositionend — soft
+    // keyboards that report 229 for a deliberate Enter outside composition
+    // still submit.
+    if (
+      composing.current ||
+      e.nativeEvent.isComposing ||
+      (e.nativeEvent.keyCode === 229 && Date.now() - compositionEndedAt.current < 500)
+    ) {
+      return;
     }
+    e.currentTarget.form?.requestSubmit();
   }
 
   const items = NAV;
@@ -305,13 +317,24 @@ export function Sidebar({
               autoComplete="off"
               onChange={handleChange}
               onKeyDown={handleKeyDown}
-              onCompositionStart={() => {
+              onCompositionStart={(e) => {
                 composing.current = true;
-                cancelSearch();
+                compositionStartValue.current = e.currentTarget.value;
+                search.cancel();
               }}
               onCompositionEnd={(e) => {
                 composing.current = false;
-                scheduleSearch(e.currentTarget.value);
+                compositionEndedAt.current = Date.now();
+                // A cancelled composition restores the pre-composition text;
+                // nothing new to search then.
+                if (e.currentTarget.value !== compositionStartValue.current) {
+                  search.schedule(e.currentTarget.value);
+                }
+              }}
+              onBlur={() => {
+                // Engines commit or abort composition on blur; the guard must
+                // never outlive focus.
+                composing.current = false;
               }}
             />
             <p id="memory-search-hint" className="sidebar-search-hint">
