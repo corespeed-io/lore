@@ -216,6 +216,13 @@ been removed. Lore now has a native implementation, split into two concepts
 - `src/components/App.tsx` owns the native Memory workflow and client routing,
   `src/components/Sidebar.tsx` owns the Lore shell, and
   `src/lib/lore-api.ts` is the typed browser transport for native routes;
+  Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search
+  through the shared cancelable debounce hook (`src/lib/use-debounced-callback.ts`);
+  App drops the pending query via `searchCancelRef` on every query-context reset
+  (Workspace, tab, type drill, route navigation, opening a Memory). Behavioral
+  contract (normative copy in DESIGN.md): typing debounces, explicit submission is
+  immediate and closes the mobile drawer, an Enter consumed by IME composition
+  never submits, and a deliberate Enter always searches;
 - `src/lib/lore-swr.ts` owns Workspace-scoped SWR keys and hooks for Workspaces,
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
@@ -1004,7 +1011,9 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's
   `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
-- Component tests are `tests/**/*.test.tsx` and run in Vitest's default `node`
+- Sidebar search interaction tests opt into `happy-dom` and use React `act` plus
+  native input/composition/form events to exercise debounce, IME, and drawer behavior.
+  Other component tests are `tests/**/*.test.tsx` and run in Vitest's default `node`
   environment through `renderToStaticMarkup`. There is no DOM testing library. Seed
   server data with an `SWRConfig` `fallback` keyed by `unstable_serialize(loreKeys…)`
   and a fresh `provider`, which is also how an Actor's empty or denied RLS-filtered

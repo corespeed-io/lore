@@ -74,6 +74,8 @@ body {
   position: sticky;
   top: 0;
   height: 100vh;
+  /* Content can exceed a short viewport; keep the bottom controls reachable. */
+  overflow-y: auto;
   background: var(--canvas);
   border-right: 1px solid var(--hairline);
   padding: 20px 14px;
@@ -2230,7 +2232,8 @@ a.ext {
 }
 .agent-manage,
 .agent-lifecycle-secondary,
-.agent-lifecycle-close {
+.agent-lifecycle-close,
+.sidebar-search-submit {
   min-height: 38px;
   border: 1px solid var(--hairline);
   border-radius: 6px;
@@ -4751,6 +4754,7 @@ a.ext {
 }
 
 .sidebar-workspace label,
+.sidebar-search-label,
 .memory-editor-kicker,
 .memory-editor label,
 .workspace-dialog label,
@@ -4801,6 +4805,27 @@ a.ext {
 
 .sidebar-search-wrap {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-search-hint {
+  margin: 0;
+  color: var(--body);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* The button itself shares the secondary-control recipe with .agent-manage. */
+.sidebar-search-submit:hover {
+  background: var(--hairline-soft);
+  border-color: var(--mute);
+}
+
+.sidebar-search-submit:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
 }
 
 .sidebar-new-memory {

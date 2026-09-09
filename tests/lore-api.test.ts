@@ -14,6 +14,7 @@ import {
   listMemoryProposals,
   listWorkspaces,
   reviewMemoryProposal,
+  searchMemories,
   setAgentGrant,
   updateAgent,
 } from "@/lib/lore-api";
@@ -63,6 +64,23 @@ function proposal(): MemoryProposal {
 afterEach(() => {
   vi.unstubAllGlobals();
   clearRequestLog();
+});
+
+test("natural-language search keeps Workspace context and server relevance order", async () => {
+  const results = [
+    { memory: memory(2), score: 0.9, evidence: "Launch decision" },
+    { memory: memory(1), score: 0.5, evidence: "Earlier discussion" },
+  ];
+  const fetcher = vi.fn().mockResolvedValue(Response.json(results));
+  vi.stubGlobal("fetch", fetcher);
+  const workspaceId = "10000000-0000-4000-8000-000000000001";
+  const query = "我们为什么推迟发布？ What changed?";
+  expect(await searchMemories(workspaceId, query)).toEqual(results);
+  const [path, options] = fetcher.mock.calls[0] as [string, RequestInit];
+  const url = new URL(path, "https://lore.test");
+  expect(url.pathname).toBe("/api/memories");
+  expect(url.searchParams.get("q")).toBe(query);
+  expect(new Headers(options.headers).get("x-lore-workspace-id")).toBe(workspaceId);
 });
 
 test("native browser client reads a Memory page with Workspace context", async () => {

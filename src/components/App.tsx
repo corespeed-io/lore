@@ -136,6 +136,9 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const [dismissedWorkspaceError, setDismissedWorkspaceError] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  // Sidebar's pending debounced search; every path that resets query context
+  // must drop it or the stale query fires ~220ms later and undoes the reset.
+  const searchCancelRef = useRef<(() => void) | null>(null);
   const graphEverVisible = useRef(false);
   const applyingRouteRef = useRef(false);
 
@@ -203,6 +206,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     if (activeWorkspaceId) {
       window.localStorage.setItem("lore.workspace", activeWorkspaceId);
     }
+    searchCancelRef.current?.();
     setSelectedMemoryId(null);
     setLocalGraphId(null);
     setGraphFocus(undefined);
@@ -236,6 +240,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const openMemory = useCallback(
     (id: string) => {
       if (!id) return;
+      searchCancelRef.current?.();
       writeRoute({ ...currentBaseRoute(), memoryId: id });
       setSelectedMemoryId(id);
       setMutationError(null);
@@ -246,6 +251,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
 
   const applyRoute = useCallback((route: RouteState) => {
     applyingRouteRef.current = true;
+    searchCancelRef.current?.();
     setSelectedMemoryId(route.memoryId ?? null);
     setLocalGraphId(null);
     setTab(route.tab);
@@ -294,6 +300,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   }
 
   function handleTabChange(nextTab: Tab) {
+    searchCancelRef.current?.();
     setSelectedMemoryId(null);
     setLocalGraphId(null);
     setGraphFocus(undefined);
@@ -307,6 +314,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   }
 
   function drillType(type: string) {
+    searchCancelRef.current?.();
     setSelectedMemoryId(null);
     setLocalGraphId(null);
     setSearchQuery("");
@@ -430,6 +438,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         onTabChange={handleTabChange}
         onSearch={handleSearch}
         searchRef={searchRef}
+        searchCancelRef={searchCancelRef}
       />
 
       <main className="app-main">
