@@ -837,6 +837,41 @@ Benchmark is part of the product quality system even without AutoDream.
   `m` cleaned haystack split. `--reuse-indexed` verifies the exact selected corpus
   before rerunning retrieval-only ablations. Official retrieval comparison skips 30 abstention
   questions; Lore reports positive retrieval and no-answer accuracy separately.
+- `bun run benchmark:longmemeval:e2e` grades end-to-end answers over an
+  already-indexed LongMemEval corpus: hybrid retrieval under RLS, a configured
+  reader over the retrieved evidence, then the official upstream QA judge
+  prompts reproduced verbatim (pinned to xiaowu0162/LongMemEval commit
+  `d6dc8b50…`, temperature 0, `'yes' in lower()` labeling, `_abs` abstention
+  template). It never re-embeds documents; corpus identity is validated by
+  workspace/key/owner/scope counts plus active-embedding-space completeness.
+  Readers use `LORE_BENCHMARK_READER_*` (google/openai/vllm/ollama, plus a
+  benchmark-only `claude-cli` transport that drives the logged-in Claude Code
+  CLI in print mode); the judge uses `LORE_BENCHMARK_JUDGE_*` and falls back to
+  thinking mode when a model rejects `thinkingBudget: 0` or returns an empty
+  grade. `--type-instructions` enables question-type-aware reader system
+  prompts (the official reading pipeline and published harnesses are
+  type-aware; the judge stays official), `--evidence-order chronological`
+  sorts evidence by session date, `--evidence-source passage` swaps full
+  Memory content for bounded evidence passages, `--corpus-suffix` selects an
+  alternative corpus partition family, and `--resume` retries provider-failed
+  cases without freezing them into the score. Reports carry reader/judge
+  decoding, prompt hashes, per-case JSONL, isolation results, and token
+  workload. Measured caveats: Gemini interactions-API thinking exhausts small
+  output budgets (readers need `LORE_BENCHMARK_READER_MAX_OUTPUT_TOKENS=8192`),
+  and pro-tier Gemini models reject thinking-disabled judging outright.
+- `bun run benchmark:longmemeval:extract-facts` builds the benchmark-only
+  `{questionId}#facts` corpus: an extractor model distills every indexed
+  session Memory into one compact fact-sheet Memory (same Workspace, same
+  `benchmarkKey`, tripwires replicated, embeddings drained through leased
+  maintenance), with original-content passthrough tagged `extractorFallback`
+  when a provider content-policy block rejects a session. This is an
+  evaluator-side corpus profile in the MemoryAgentBench structured-assembly
+  tradition, not product consolidation: Lore v1 still excludes automatic
+  summarization/merging, and nothing here touches the Memory interface.
+  Measured on LongMemEval-S with the same flash-class reader: facts corpus
+  87.8 overall at ~2.8k reader tokens per question versus 94.2 at ~28k for
+  full sessions at top-10 — retrieval holds (R@10 0.9869 vs 0.9898) and the
+  loss concentrates in assistant-side detail and cross-session enumeration.
 - `evaluation/external/longmemeval-v2.json` pins the newer V2 questions, haystacks,
   and 1.2 GB textual trajectory file. `benchmark:longmemeval-v2:fetch` defaults to
   metadata-only and requires an explicit `small`/`medium` argument before fetching
@@ -959,6 +994,8 @@ bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
 bun run benchmark:longmemeval:fetch # download and verify the pinned cleaned S split
 bun run benchmark:longmemeval # run LongMemEval-S locally against Lore
+bun run benchmark:longmemeval:e2e # grade end-to-end answers with the official LongMemEval judge
+bun run benchmark:longmemeval:extract-facts # build the benchmark-only write-time facts corpus
 bun run benchmark:longmemeval-v2:fetch # fetch pinned V2 metadata or an explicit trajectory tier
 bun run benchmark:longmemeval-v2 # run the fixed-reader V2 profile locally
 bun run benchmark:locomo:fetch # fetch the pinned CC BY-NC ACL 2024 dataset
