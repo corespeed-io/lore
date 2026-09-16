@@ -1098,6 +1098,10 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 
 - Conventional commits: `feat(scope): …`, `fix: …`, `chore: …`, `docs: …`.
 - `main` is protected; changes land through PRs.
+- Automatic Ensemble review and the `/ship` workflow are disabled for this
+  repository. Use the repository checks and ordinary PR workflow for commit,
+  PR, and release requests. Run Ensemble review only when the user explicitly
+  requests it.
 - Preserve unrelated user changes and untracked files.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
   same PR. Update [`CONTEXT.md`](CONTEXT.md) whenever canonical domain language
