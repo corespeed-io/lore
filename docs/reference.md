@@ -349,8 +349,11 @@ User, Workspace, or Agent preferences.
 The Ollama adapter uses native `/api/chat`, structured output, `think: false`, fixed
 deterministic decoding, and bounded context/output. The Google adapter uses Gemini's
 current structured-output Interactions API with `store: false`; OpenAI and vLLM use
-`/v1/chat/completions` with bounded JSON output. Provider responses are always parsed
-and bounded again by Lore rather than trusted directly.
+`/v1/chat/completions` with bounded JSON output. Lore validates returned query strings and enforces the query count/length limits
+before retrieval. These calls use official SDKs with default transport and native
+timeout/retry settings; SDK response bodies have no Lore-specific byte cap. The
+Ollama SDK has no non-streaming request deadline, so timeout environment settings
+apply to the other providers.
 
 Search and browse also accept deterministic pre-ranking filters:
 `scope=shared|private`, `updated_after=<ISO-8601>`,

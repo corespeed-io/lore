@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import useSWRInfinite from "swr/infinite";
 import { loreKeys } from "@/shared/browser/cache-keys";
+import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume";
 import { getMemory, listMemories, searchMemories } from "./client";
-import type { Memory } from "./schemas";
+import type { Memory } from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
 
@@ -20,6 +21,7 @@ export function upsertMemoryPages(pages: Memory[][] | undefined, saved: Memory):
 }
 
 interface MemoryPageAdvanceState {
+  enabled: boolean;
   hasData: boolean;
   hasError: boolean;
   isValidating: boolean;
@@ -31,7 +33,8 @@ interface MemoryPageAdvanceState {
 
 export function shouldLoadNextMemoryPage(state: MemoryPageAdvanceState): boolean {
   return Boolean(
-    state.workspaceId &&
+    state.enabled &&
+      state.workspaceId &&
       state.hasData &&
       !state.hasError &&
       !state.isValidating &&
@@ -52,7 +55,19 @@ export function removeMemoryFromPages(
   );
 }
 
-export function useLoreMemories(workspaceId: string) {
+class MemoryBrowseCancelled extends Error {
+  override name = "AbortError";
+}
+
+export function useLoreMemories(workspaceId: string, enabled = true) {
+  const demand = useRef({ workspaceId, enabled });
+  useLayoutEffect(() => {
+    demand.current = { workspaceId, enabled };
+    return () => {
+      demand.current = { workspaceId, enabled: false };
+    };
+  }, [enabled, workspaceId]);
+
   const swr = useSWRInfinite(
     (pageIndex, previousPage: Memory[] | null) => {
       if (
@@ -64,26 +79,54 @@ export function useLoreMemories(workspaceId: string) {
       }
       return loreKeys.memories(workspaceId, pageIndex);
     },
-    ([, , scopedWorkspaceId, pageIndex]) =>
-      listMemories(scopedWorkspaceId, {
+    ([, , scopedWorkspaceId, pageIndex]) => {
+      // An in-flight SWR Infinite refresh can continue across route changes.
+      // Let its current request finish, but stop before issuing another page.
+      if (!demand.current.enabled || demand.current.workspaceId !== scopedWorkspaceId) {
+        throw new MemoryBrowseCancelled("Memory browse is no longer active");
+      }
+      return listMemories(scopedWorkspaceId, {
         limit: MEMORY_PAGE_SIZE,
         offset: pageIndex * MEMORY_PAGE_SIZE,
-      }),
-    { revalidateFirstPage: false },
+      });
+    },
+    {
+      revalidateFirstPage: false,
+      isPaused: () => !enabled,
+      shouldRetryOnError: (error) => !(error instanceof MemoryBrowseCancelled),
+    },
   );
+  const resuming = useRevalidateOnResume(workspaceId, enabled, swr.isValidating, swr.mutate);
+  const mutate = useCallback<typeof swr.mutate>(
+    (...args) => {
+      if (demand.current.enabled) return swr.mutate(...args);
+      // Paused revalidation would discard SWR's in-flight request without
+      // replacing it. Cache patches are still safe with revalidation disabled.
+      if (!args.length) return Promise.resolve(swr.data);
+      const [data, options] = args;
+      return swr.mutate(data, {
+        ...(typeof options === "object" ? options : {}),
+        revalidate: false,
+      });
+    },
+    [swr.data, swr.mutate],
+  );
+
+  const error = enabled && !(swr.error instanceof MemoryBrowseCancelled) ? swr.error : undefined;
 
   const pageCount = swr.data?.length ?? 0;
   const lastPageLength = swr.data?.at(-1)?.length ?? 0;
 
-  // Keep fetching API-sized pages until the Workspace is exhausted. The cache
-  // remains page-addressable and the 5k client budget matches the Graph read
-  // model; ranked search still reaches Memories outside the browse window.
+  // Fill the existing 5k browse window only while a view needs it. Cached pages
+  // remain available while paused; ranked search has its own request and budget.
   useEffect(() => {
+    if (resuming) return;
     if (
       !shouldLoadNextMemoryPage({
+        enabled,
         workspaceId,
         hasData: Boolean(swr.data),
-        hasError: Boolean(swr.error),
+        hasError: Boolean(error),
         isValidating: swr.isValidating,
         requestedSize: swr.size,
         pageCount,
@@ -93,10 +136,12 @@ export function useLoreMemories(workspaceId: string) {
       return;
     void swr.setSize(pageCount + 1);
   }, [
+    enabled,
+    error,
     lastPageLength,
     pageCount,
+    resuming,
     swr.data,
-    swr.error,
     swr.isValidating,
     swr.setSize,
     swr.size,
@@ -114,9 +159,13 @@ export function useLoreMemories(workspaceId: string) {
 
   return {
     ...swr,
+    mutate,
+    error,
     memories,
-    isLoading: Boolean(workspaceId) && !swr.data && !swr.error,
+    isLoading: enabled && Boolean(workspaceId) && !swr.data && !error,
+    isValidating: enabled && swr.isValidating,
     isLoadingMore:
+      enabled &&
       Boolean(workspaceId) &&
       Boolean(swr.data) &&
       pageCount < MAX_MEMORY_PAGES &&

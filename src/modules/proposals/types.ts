@@ -1,4 +1,4 @@
-import type { Memory, MemoryScope } from "@/modules/memories/schemas";
+import type { Memory, MemoryScope } from "@/modules/memories/types";
 
 export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
 

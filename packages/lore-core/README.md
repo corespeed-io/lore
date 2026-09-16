@@ -43,6 +43,14 @@ the second host.
 | `./episodes` | Optional capability group: bounded immutable Episode/Observation evidence plus its separate rebuildable hybrid index (adds the episode tables to the schema contract) |
 | `./providers` | Embedding (Google/Ollama/OpenAI), reranking (Cohere/Memos/Voyage/vLLM/llama.cpp/Ollama-listwise), and query-planning adapters. Env parsing and provider selection stay host-side |
 
+Provider adapters use official SDKs with their default transport. OpenAI and Google
+embedding use SDK retries (two by default); query planners and hosted rerankers
+explicitly disable them. Lore still validates embedding dimensions/counts and
+reranker scores. SDK response bodies have no Lore-specific byte cap, and the
+Ollama SDK has no non-streaming request deadline. Timeout options on the other
+providers use the SDK's native policy. MemOS and vLLM/llama.cpp reranking retain
+bounded HTTP adapters for their provider-specific contracts.
+
 ## Host extension seams
 
 `createMemoryMutationPrimitives` exposes the transaction-scoped insert/update
@@ -58,10 +66,10 @@ The lore app consumes it as TypeScript source through the Bun workspace
 (`workspace:*`), root `tsconfig.json` paths, the vitest aliases, and Next
 `transpilePackages`.
 
-There is deliberately no distribution mechanism — no npm publishing, no
-submodule, no mirror, no sync script (HAAS-71 verdict). Other hosts
-(CoreSpeed HaaS) carry their own verbatim copy of this package as a shared
-component. The convention that keeps that honest: engine changes land in this
-repository first and are mirrored into the host copy as part of the same
-task; the copies stay semantically identical; every host's CI runs the
-`./testing` contract suite against its own migration chain.
+There is deliberately no npm publishing, submodule, mirror, or sync script.
+CoreSpeed HaaS retains its existing vendored `packages/memory-core` fork. The
+planned cutover to a verbatim copy of this package was cancelled on 2026-09-15.
+Lore remains upstream; HaaS ports selected changes manually and records their
+provenance. The packages are not assumed to be semantically identical, and Lore
+tasks do not require automatic changes to the HaaS fork. Hosts adopting this
+package can run `./testing` against their own migration chain.

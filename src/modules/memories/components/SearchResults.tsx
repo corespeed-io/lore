@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { memoryTitle, memoryType } from "@/modules/memories/display";
 import { plain } from "@/modules/memories/markdown";
 import { typeLabel, typeSort } from "@/modules/memories/presentation";
-import type { Memory } from "@/modules/memories/schemas";
-import type { MemorySearchResult } from "@/modules/memories/types";
+import type { Memory, MemorySearchResult } from "@/modules/memories/types";
 
 interface SearchResultsProps {
   results: MemorySearchResult[];

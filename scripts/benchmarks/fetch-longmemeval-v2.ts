@@ -1,8 +1,5 @@
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { access, mkdir, open, rename, unlink } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { verifyFile } from "./lib/file-integrity";
+import { resolve } from "node:path";
+import { datasetIsVerified, downloadDataset } from "./lib/dataset-download";
 import { longMemEvalV2Manifest } from "./lib/longmemeval-v2";
 
 type DatasetTier = "metadata" | "small" | "medium";
@@ -21,49 +18,19 @@ function tierFrom(value: string | undefined): DatasetTier {
 
 async function fetchFile(file: DatasetFile, dataDirectory: string): Promise<void> {
   const outputPath = resolve(dataDirectory, file.path);
-  const temporaryPath = `${outputPath}.${process.pid}.partial`;
-  await mkdir(dirname(outputPath), { recursive: true });
-  try {
-    await access(outputPath, constants.F_OK);
-    await verifyFile(outputPath, file);
+  if (await datasetIsVerified(outputPath, file)) {
     console.log(`LongMemEval-V2 ${file.path} is already verified`);
     return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-
   const sourceUrl = `${longMemEvalV2Manifest.source}/resolve/${longMemEvalV2Manifest.revision}/${file.path}`;
   console.error(`Downloading ${file.path} (${file.bytes.toLocaleString()} bytes)...`);
-  const response = await fetch(sourceUrl);
-  if (!response.ok || !response.body) {
-    throw new Error(`LongMemEval-V2 download failed with HTTP ${response.status}`);
-  }
-  const output = await open(temporaryPath, "wx");
-  const hash = createHash("sha256");
-  let downloadedBytes = 0;
-  try {
-    const reader = response.body.getReader();
-    while (true) {
-      const { done, value: chunk } = await reader.read();
-      if (done) break;
-      hash.update(chunk);
-      downloadedBytes += chunk.byteLength;
-      await output.write(chunk);
-    }
-    await output.close();
-    const digest = hash.digest("hex");
-    if (downloadedBytes !== file.bytes || digest !== file.sha256) {
-      throw new Error(
-        `LongMemEval-V2 ${file.path} failed verification: ${downloadedBytes} bytes / ${digest}`,
-      );
-    }
-    await rename(temporaryPath, outputPath);
-    console.log(`Verified LongMemEval-V2 ${file.path}`);
-  } catch (error) {
-    await output.close().catch(() => undefined);
-    await unlink(temporaryPath).catch(() => undefined);
-    throw error;
-  }
+  await downloadDataset({
+    url: sourceUrl,
+    outputPath,
+    expected: file,
+    label: `LongMemEval-V2 ${file.path}`,
+  });
+  console.log(`Verified LongMemEval-V2 ${file.path}`);
 }
 
 const tier = tierFrom(process.argv[2]);

@@ -80,7 +80,6 @@ export function createQueryPlanningProviderFromEnvironment(
           instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
           keepAlive: keepAlive(env.LORE_QUERY_PLANNER_KEEP_ALIVE ?? env.OLLAMA_KEEP_ALIVE),
           contextWindowTokens: positiveInteger(env.LORE_QUERY_PLANNER_NUM_CTX, 4096),
-          timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
         }),
         warn,
       );

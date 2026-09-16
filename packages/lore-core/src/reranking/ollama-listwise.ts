@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { providerHttpError, readBoundedResponseJson } from "../provider-response";
+import { Ollama } from "ollama/browser";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
@@ -16,7 +16,6 @@ export const OLLAMA_LISTWISE_INSTRUCTION_SHA256 = createHash("sha256")
 export interface OllamaListwiseRerankingOptions {
   model: string;
   baseUrl?: string;
-  timeoutMs?: number;
   contextWindowTokens?: number;
   maximumOutputTokens?: number;
   maximumDocumentCharacters?: number;
@@ -41,10 +40,13 @@ function boundedInteger(
     : fallback;
 }
 
-function endpoint(baseUrl: string): string {
+function providerHost(baseUrl: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("ollama-listwise reranking base URL must use http or https");
+  }
+  if (url.hostname === "ollama.com") {
+    throw new Error("Ollama reranking requires a self-hosted server; ollama.com is not supported");
   }
   if (
     url.protocol !== "https:" &&
@@ -55,7 +57,7 @@ function endpoint(baseUrl: string): string {
   ) {
     throw new Error("ollama-listwise reranking base URL must use https outside localhost");
   }
-  return new URL("api/chat", `${url.toString().replace(/\/$/, "")}/`).toString();
+  return url.toString().replace(/\/$/, "");
 }
 
 function scoreSchema(expectedCount: number): Record<string, unknown> {
@@ -159,7 +161,6 @@ export function createOllamaListwiseRerankingProvider(
   if (!model) {
     throw new Error("LORE_RERANK_MODEL is required for the ollama-listwise reranking provider");
   }
-  const timeoutMs = boundedInteger(options.timeoutMs, 120_000, 1, 900_000);
   const contextWindowTokens = boundedInteger(options.contextWindowTokens, 8_192, 1_024, 131_072);
   const maximumOutputTokens = boundedInteger(options.maximumOutputTokens, 2_048, 128, 8_192);
   const maximumDocumentCharacters = boundedInteger(
@@ -169,8 +170,10 @@ export function createOllamaListwiseRerankingProvider(
     4_000,
   );
   const keepAlive = options.keepAlive ?? 0;
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
-  const url = endpoint(options.baseUrl ?? DEFAULT_BASE_URL);
+  const client = new Ollama({
+    host: providerHost(options.baseUrl ?? DEFAULT_BASE_URL),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+  });
 
   return {
     provider: "ollama-listwise",
@@ -197,10 +200,9 @@ export function createOllamaListwiseRerankingProvider(
         documents,
         maximumDocumentCharacters,
       );
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      let payload: OllamaListwiseResponse;
+      try {
+        payload = await client.chat({
           model,
           stream: false,
           think: false,
@@ -218,16 +220,16 @@ export function createOllamaListwiseRerankingProvider(
             { role: "system", content: OLLAMA_LISTWISE_INSTRUCTION },
             { role: "user", content: prompt },
           ],
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `ollama-listwise reranking request failed with HTTP ${response.status}`,
+        });
+      } catch (error) {
+        const status =
+          typeof error === "object" && error !== null && "status_code" in error
+            ? error.status_code
+            : undefined;
+        throw new Error(
+          `ollama-listwise reranking request failed${typeof status === "number" ? ` with HTTP ${status}` : ""}`,
         );
       }
-      const payload = await readBoundedResponseJson<OllamaListwiseResponse>(response);
       if (
         (typeof payload.remote_model === "string" && payload.remote_model.trim()) ||
         (typeof payload.remote_host === "string" && payload.remote_host.trim())

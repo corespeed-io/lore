@@ -1,28 +1,36 @@
+import OpenAI from "openai";
 import type { EmbeddingConfiguration } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
-import { readBoundedResponseJson } from "../provider-response";
-import { postEmbeddingJson, type RemoteEmbeddingRequestOptions } from "./http";
 
 const OPENAI_BASE_URL = "https://api.openai.com";
 const OPENAI_REQUEST_BATCH_SIZE = 100;
 
-export interface OpenAIEmbeddingOptions extends RemoteEmbeddingRequestOptions {
+export interface OpenAIEmbeddingOptions {
   apiKey: string;
   baseUrl?: string;
   batchSize?: number;
+  fetch?: typeof fetch;
+  maxRetries?: number;
+  timeoutMs?: number;
 }
 
 interface OpenAIEmbeddingResponse {
   data?: unknown;
 }
 
-function endpoint(baseUrl: string): string {
+function apiBaseUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("OpenAI embedding base URL must use http or https");
   }
   const base = `${url.toString().replace(/\/$/, "")}/`;
-  return new URL("v1/embeddings", base).toString();
+  return new URL("v1", base).toString();
+}
+
+function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
+  return value !== undefined && Number.isInteger(value) && value >= 0
+    ? Math.min(value, maximum)
+    : fallback;
 }
 
 function boundedBatchSize(value: number | undefined): number {
@@ -78,7 +86,17 @@ export function createOpenAIEmbeddingProvider(
   }
   const apiKey = options.apiKey.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is required for the OpenAI embedding provider");
-  const url = endpoint(options.baseUrl ?? OPENAI_BASE_URL);
+  const timeoutMs = Math.max(1_000, boundedInteger(options.timeoutMs, 120_000, 600_000));
+  const client = new OpenAI({
+    apiKey,
+    adminAPIKey: null,
+    organization: null,
+    project: null,
+    baseURL: apiBaseUrl(options.baseUrl ?? OPENAI_BASE_URL),
+    timeout: timeoutMs,
+    maxRetries: boundedInteger(options.maxRetries, 2, 5),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+  });
   const batchSize = boundedBatchSize(options.batchSize);
 
   return {
@@ -91,25 +109,20 @@ export function createOpenAIEmbeddingProvider(
       const embeddings: number[][] = [];
       for (let offset = 0; offset < texts.length; offset += batchSize) {
         const batch = texts.slice(offset, offset + batchSize);
-        const response = await postEmbeddingJson({
-          url,
-          service: "OpenAI",
-          headers: { authorization: `Bearer ${apiKey}` },
-          body: {
+        const response = await client.embeddings
+          .create({
             input: batch,
             model: configuration.model,
             dimensions: configuration.dimensions,
             encoding_format: "float",
-          },
-          options,
-        });
-        embeddings.push(
-          ...embeddingsFrom(
-            await readBoundedResponseJson<OpenAIEmbeddingResponse>(response),
-            batch.length,
-            configuration.dimensions,
-          ),
-        );
+          })
+          .catch((error: unknown) => {
+            if (error instanceof OpenAI.APIError && error.status !== undefined) {
+              throw new Error(`OpenAI embedding request failed (${error.status})`);
+            }
+            throw new Error("OpenAI embedding request failed");
+          });
+        embeddings.push(...embeddingsFrom(response, batch.length, configuration.dimensions));
       }
       return embeddings;
     },

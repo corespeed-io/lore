@@ -91,6 +91,7 @@
   "dependencies": {
     "@ast-grep/napi": "0.45.1",
     "@corespeed/lore-core": "workspace:*",
+    "@corespeed/lore-sdk": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.221.0",
     "@opentelemetry/instrumentation": "^0.221.0",
@@ -112,6 +113,7 @@
     "@biomejs/biome": "^2.5.8",
     "@electric-sql/pglite": "^0.5.5",
     "@electric-sql/pglite-pgvector": "^0.0.6",
+    "@google/genai": "^2.22.0",
     "@modelcontextprotocol/client": "^2.0.0",
     "@opennextjs/cloudflare": "^1.20.2",
     "@types/d3": "^7.4.3",
@@ -121,6 +123,8 @@
     "@types/react-dom": "^19.2.4",
     "dbmate": "2.35.0",
     "happy-dom": "20.10.6",
+    "ollama": "^0.6.3",
+    "openai": "^6.49.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "wrangler": "^4.119.0"

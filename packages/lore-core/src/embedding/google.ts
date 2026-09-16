@@ -1,16 +1,17 @@
+import { ApiError, GoogleGenAI } from "@google/genai/web";
 import type { EmbeddingConfiguration } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
-import { readBoundedResponseJson } from "../provider-response";
-import { postEmbeddingJson, type RemoteEmbeddingRequestOptions } from "./http";
 
 const GOOGLE_EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com";
 const GOOGLE_REQUEST_BATCH_SIZE = 100;
 const GOOGLE_SUPPORTED_MODELS = ["gemini-embedding-2", "gemini-embedding-001"] as const;
 
-export interface GoogleEmbeddingOptions extends RemoteEmbeddingRequestOptions {
+export interface GoogleEmbeddingOptions {
   apiKey: string;
   baseUrl?: string;
   batchSize?: number;
+  maxRetries?: number;
+  timeoutMs?: number;
 }
 
 interface GoogleEmbeddingResponse {
@@ -23,13 +24,18 @@ function modelResource(model: string): string {
   return `models/${name}`;
 }
 
-function endpoint(baseUrl: string, model: string): string {
+function apiBaseUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Google embedding base URL must use http or https");
   }
-  const base = `${url.toString().replace(/\/$/, "")}/`;
-  return new URL(`v1beta/${modelResource(model)}:batchEmbedContents`, base).toString();
+  return url.toString().replace(/\/$/, "");
+}
+
+function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
+  return value !== undefined && Number.isInteger(value) && value >= 0
+    ? Math.min(value, maximum)
+    : fallback;
 }
 
 function taskType(task: EmbeddingTask): "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" {
@@ -95,7 +101,15 @@ export function createGoogleEmbeddingProvider(
   if (!apiKey) throw new Error("GEMINI_API_KEY is required for the Google embedding provider");
   const canonicalModel = supportedModel(configuration.model);
   const model = modelResource(canonicalModel);
-  const url = endpoint(options.baseUrl ?? GOOGLE_EMBEDDING_BASE_URL, canonicalModel);
+  const client = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      baseUrl: apiBaseUrl(options.baseUrl ?? GOOGLE_EMBEDDING_BASE_URL),
+      apiVersion: "v1beta",
+      timeout: Math.max(1_000, boundedInteger(options.timeoutMs, 120_000, 600_000)),
+      retryOptions: { attempts: boundedInteger(options.maxRetries, 2, 5) + 1 },
+    },
+  });
   const batchSize = boundedBatchSize(options.batchSize);
 
   return {
@@ -108,29 +122,24 @@ export function createGoogleEmbeddingProvider(
       const embeddings: number[][] = [];
       for (let offset = 0; offset < texts.length; offset += batchSize) {
         const batch = texts.slice(offset, offset + batchSize);
-        const response = await postEmbeddingJson({
-          url,
-          service: "Google",
-          headers: { "x-goog-api-key": apiKey },
-          body: {
-            requests: batch.map((text) => ({
-              model,
-              content: { parts: [{ text: retrievalText(text, task, canonicalModel) }] },
-              embedContentConfig: {
-                outputDimensionality: configuration.dimensions,
-                ...(canonicalModel === "gemini-embedding-001" ? { taskType: taskType(task) } : {}),
-              },
+        const response = await client.models
+          .embedContent({
+            model,
+            contents: batch.map((text) => ({
+              parts: [{ text: retrievalText(text, task, canonicalModel) }],
             })),
-          },
-          options,
-        });
-        embeddings.push(
-          ...embeddingsFrom(
-            await readBoundedResponseJson<GoogleEmbeddingResponse>(response),
-            batch.length,
-            configuration.dimensions,
-          ),
-        );
+            config: {
+              outputDimensionality: configuration.dimensions,
+              ...(canonicalModel === "gemini-embedding-001" ? { taskType: taskType(task) } : {}),
+            },
+          })
+          .catch((error: unknown) => {
+            if (error instanceof ApiError) {
+              throw new Error(`Google embedding request failed (${error.status})`);
+            }
+            throw new Error("Google embedding request failed");
+          });
+        embeddings.push(...embeddingsFrom(response, batch.length, configuration.dimensions));
       }
       return embeddings;
     },

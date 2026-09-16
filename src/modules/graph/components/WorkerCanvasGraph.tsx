@@ -1,15 +1,12 @@
 "use client";
 
 import * as d3 from "d3";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { graphNodeCentrality } from "@/modules/graph/rendering/centrality";
 import type { GraphInstance } from "@/modules/graph/rendering/graph";
-import { graphLabelText, mountGraph } from "@/modules/graph/rendering/graph";
+import { graphLabelText } from "@/modules/graph/rendering/graph";
 import type { GraphData, GraphNode } from "@/modules/graph/types";
 import { typeColor } from "@/shared/ui/colors";
-
-export type PrototypeVariant = "canvas" | "worker" | "svg";
 
 interface PositionedNode extends GraphNode {
   degree: number;
@@ -57,24 +54,6 @@ const LAYOUT_REVEAL_TRANSITION_MS = 220;
 const WORKER_READY_TIMEOUT_MS = 30_000;
 const INITIAL_REVEAL_FIT_RATIO = 0.02;
 const INITIAL_REVEAL_FIT_MIN_NODES = 64;
-const VARIANTS: { id: PrototypeVariant; label: string; description: string }[] = [
-  {
-    id: "canvas",
-    label: "Canvas static",
-    description: "One canvas, deterministic positions, no force calculation.",
-  },
-  {
-    id: "worker",
-    label: "Canvas + Worker",
-    description: "D3 runs in Worker; every scale uses a compact field with adaptive interaction.",
-  },
-  {
-    id: "svg",
-    label: "Current SVG",
-    description: "The existing production renderer, mounted unchanged as the control.",
-  },
-];
-
 function staticPositions(data: GraphData): PositionedNode[] {
   const goldenAngle = Math.PI * (3 - Math.sqrt(5));
   const centrality = graphNodeCentrality(data.nodes, data.links);
@@ -665,7 +644,7 @@ function CanvasRenderer({
   );
 }
 
-function StaticCanvasVariant({ data }: { data: GraphData }) {
+export function StaticCanvasVariant({ data }: { data: GraphData }) {
   const nodes = useMemo(() => staticPositions(data), [data]);
   const [metrics, setMetrics] = useState<RenderMetrics>({
     drawMs: 0,
@@ -995,148 +974,5 @@ export function WorkerCanvasGraph({
         </div>
       ) : null}
     </div>
-  );
-}
-
-function SvgVariant({ data }: { data: GraphData }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [mountMs, setMountMs] = useState<number | null>(null);
-
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-    const startedAt = performance.now();
-    const graph = mountGraph(element, data, { onSelect: () => undefined });
-    setMountMs(performance.now() - startedAt);
-    return () => graph.destroy();
-  }, [data]);
-
-  return (
-    <div className="graph-scale-stage">
-      <div ref={containerRef} className="graph-scale-svg" />
-      <div className="graph-scale-render-state graph-scale-render-state-warn">
-        <span>current SVG control</span>
-        <span>{mountMs === null ? "mounting…" : `${mountMs.toFixed(0)}ms mount`}</span>
-        <span>30,000 SVG elements</span>
-      </div>
-    </div>
-  );
-}
-
-function PrototypeSwitcher({
-  variant,
-  onChange,
-}: {
-  variant: PrototypeVariant;
-  onChange: (variant: PrototypeVariant) => void;
-}) {
-  const index = VARIANTS.findIndex((item) => item.id === variant);
-  const cycle = useCallback(
-    (direction: -1 | 1) => {
-      const next = VARIANTS[(index + direction + VARIANTS.length) % VARIANTS.length];
-      if (next) onChange(next.id);
-    },
-    [index, onChange],
-  );
-
-  useEffect(() => {
-    const keyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, [contenteditable]")) return;
-      if (event.key === "ArrowLeft") cycle(-1);
-      if (event.key === "ArrowRight") cycle(1);
-    };
-    window.addEventListener("keydown", keyDown);
-    return () => window.removeEventListener("keydown", keyDown);
-  }, [cycle]);
-
-  return (
-    <fieldset className="graph-scale-switcher" aria-label="Prototype renderer variants">
-      <button type="button" onClick={() => cycle(-1)} aria-label="Previous renderer">
-        ←
-      </button>
-      <div>
-        <strong>{VARIANTS[index]?.label}</strong>
-        <span>{VARIANTS[index]?.description}</span>
-      </div>
-      <button type="button" onClick={() => cycle(1)} aria-label="Next renderer">
-        →
-      </button>
-    </fieldset>
-  );
-}
-
-export function GraphScalePrototype({ initialVariant }: { initialVariant: PrototypeVariant }) {
-  const router = useRouter();
-  const [variant, setVariant] = useState(initialVariant);
-  const [data, setData] = useState<GraphData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [fetchState, setFetchState] = useState({ milliseconds: 0, bytes: 0 });
-
-  useEffect(() => setVariant(initialVariant), [initialVariant]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const startedAt = performance.now();
-    fetch("/api/prototype/graph-scale", { signal: controller.signal })
-      .then(async (response) => {
-        const body = await response.text();
-        if (!response.ok) throw new Error(JSON.parse(body).error ?? `HTTP ${response.status}`);
-        const graph = JSON.parse(body) as GraphData;
-        setFetchState({ milliseconds: performance.now() - startedAt, bytes: body.length });
-        setData(graph);
-      })
-      .catch((reason) => {
-        if (reason instanceof DOMException && reason.name === "AbortError") return;
-        setError(reason instanceof Error ? reason.message : "Benchmark load failed");
-      });
-    return () => controller.abort();
-  }, []);
-
-  const changeVariant = useCallback(
-    (next: PrototypeVariant) => {
-      setVariant(next);
-      router.replace(`/prototype/graph-scale?variant=${next}`, { scroll: false });
-    },
-    [router],
-  );
-
-  return (
-    <main className="graph-scale-prototype">
-      <header className="graph-scale-header">
-        <div>
-          <div className="graph-scale-kicker">Throwaway renderer prototype</div>
-          <h1>
-            {data
-              ? `${data.nodes.length.toLocaleString()} Memories · ${data.links.length.toLocaleString()} Links`
-              : "Graph scale benchmark"}
-          </h1>
-        </div>
-        <div className="graph-scale-metrics" aria-live="polite">
-          <span>{data ? data.nodes.length.toLocaleString() : "—"} nodes</span>
-          <span>{data ? data.links.length.toLocaleString() : "—"} links</span>
-          <span>
-            {fetchState.milliseconds ? `${fetchState.milliseconds.toFixed(0)}ms fetch` : "loading"}
-          </span>
-          <span>{fetchState.bytes ? `${(fetchState.bytes / 1_048_576).toFixed(1)} MB` : "—"}</span>
-        </div>
-      </header>
-
-      {error ? (
-        <div className="graph-scale-message">Could not load benchmark: {error}</div>
-      ) : !data ? (
-        <div className="graph-scale-message">Reading benchmark PostgreSQL data…</div>
-      ) : variant === "canvas" ? (
-        <StaticCanvasVariant data={data} />
-      ) : variant === "worker" ? (
-        <WorkerCanvasGraph data={data} />
-      ) : (
-        <SvgVariant data={data} />
-      )}
-
-      {process.env.NODE_ENV !== "production" && (
-        <PrototypeSwitcher variant={variant} onChange={changeVariant} />
-      )}
-    </main>
   );
 }

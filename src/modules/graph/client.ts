@@ -1,10 +1,7 @@
-import { requestJson } from "@/shared/browser/http";
+import { getBrowserClient } from "@/shared/browser/sdk";
 import type { GraphData } from "./types";
 
-export function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
-  return requestJson("/api/graph?limit=5000", {
-    workspaceId,
-    operation: "GET /api/graph",
-    signal,
-  });
+export async function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
+  const graph = await getBrowserClient().workspace(workspaceId).graph(5_000, signal);
+  return { nodes: [...graph.nodes], links: [...graph.links] };
 }

@@ -17,7 +17,7 @@ import {
   useLoreMemory,
   useLoreSearch,
 } from "@/modules/memories/hooks";
-import type { Memory, MemoryScope } from "@/modules/memories/schemas";
+import type { Memory, MemoryScope } from "@/modules/memories/types";
 import { WorkspaceOperationsView } from "@/modules/operations/components/WorkspaceOperationsView";
 import { Overview } from "@/modules/overview/components/Overview";
 import { MemoryProposalsView } from "@/modules/proposals/components/MemoryProposalsView";
@@ -127,6 +127,7 @@ function errorMessage(cause: unknown): string {
 
 export function App({ appTitle, appSubtitle }: AppProps) {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [routeWorkspaceId, setRouteWorkspaceId] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
   const [graphFocus, setGraphFocus] = useState<string | undefined>();
   const [localGraphId, setLocalGraphId] = useState<string | null>(null);
@@ -145,6 +146,18 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const graphEverVisible = useRef(false);
   const applyingRouteRef = useRef(false);
 
+  // Restore the URL before choosing this Workspace's reads. A deep link must not
+  // start the default Dashboard requests, or reuse the prior Workspace's Memory id.
+  const routeReady = Boolean(activeWorkspaceId) && routeWorkspaceId === activeWorkspaceId;
+  const needsMemories =
+    routeReady &&
+    !selectedMemoryId &&
+    (tab === "overview" || (tab === "search" && !searchQuery.trim()));
+  const needsGraph =
+    routeReady &&
+    (tab === "overview" || tab === "graph" || Boolean(selectedMemoryId) || Boolean(localGraphId));
+  const needsSearch = routeReady && tab === "search" && !selectedMemoryId;
+
   const {
     data: workspaces = [],
     error: workspacesRequestError,
@@ -157,21 +170,21 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     isCapped: memoriesCapped,
     isLoading: memoriesLoading,
     mutate: mutateMemories,
-  } = useLoreMemories(activeWorkspaceId);
+  } = useLoreMemories(activeWorkspaceId, needsMemories);
   const {
     data: graphData = EMPTY_GRAPH,
     error: graphRequestError,
     isLoading: graphLoading,
     mutate: mutateGraph,
-  } = useLoreGraph(activeWorkspaceId);
+  } = useLoreGraph(activeWorkspaceId, needsGraph);
   const {
     data: searchResults = [],
     error: searchRequestError,
     isLoading: searchLoading,
     mutate: mutateSearch,
-  } = useLoreSearch(activeWorkspaceId, searchQuery, 25);
+  } = useLoreSearch(needsSearch ? activeWorkspaceId : "", searchQuery, 25);
   const { data: selectedMemoryData, error: selectedMemoryRequestError } = useLoreMemory(
-    activeWorkspaceId,
+    routeReady ? activeWorkspaceId : "",
     selectedMemoryId,
   );
   const mutations = useLoreMutations(activeWorkspaceId);
@@ -183,7 +196,8 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   );
   const graphError = graphRequestError ? errorMessage(graphRequestError) : null;
   const graphLoaded = !activeWorkspaceId || !graphLoading;
-  const workspaceRequestError = workspacesRequestError ?? memoriesRequestError;
+  const workspaceRequestError =
+    workspacesRequestError ?? (needsMemories ? memoriesRequestError : null);
   const workspaceErrorMessage = workspaceRequestError ? errorMessage(workspaceRequestError) : null;
   const workspaceError =
     workspaceErrorMessage === dismissedWorkspaceError ? null : workspaceErrorMessage;
@@ -277,6 +291,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     const initial = parseRoute(window.location.pathname, window.location.search);
     window.history.replaceState(initial, "", routeUrl(initial));
     applyRoute(initial);
+    setRouteWorkspaceId(activeWorkspaceId);
     const onPopState = () =>
       applyRoute(parseRoute(window.location.pathname, window.location.search));
     window.addEventListener("popstate", onPopState);
@@ -400,7 +415,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     }
   }
 
-  if (workspacesLoading || (workspaces.length > 0 && !activeWorkspaceId)) {
+  if (workspacesLoading || (workspaces.length > 0 && !routeReady)) {
     return <main className="app-loading">Opening Lore…</main>;
   }
 
@@ -440,6 +455,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         }}
         onTabChange={handleTabChange}
         onSearch={handleSearch}
+        initialSearchQuery={searchQuery}
         searchRef={searchRef}
         searchCancelRef={searchCancelRef}
       />
@@ -458,6 +474,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
             <GraphView
               key={activeWorkspaceId}
               workspaceId={activeWorkspaceId}
+              active={graphVisible}
               data={graphData}
               focusId={graphFocus}
               onOpen={openMemory}

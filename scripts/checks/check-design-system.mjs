@@ -10,7 +10,7 @@ const REQUIRED_PATHS = [
   "src/modules/graph/components/GraphView.tsx",
   "src/modules/memories/components/SearchResults.tsx",
   "src/modules/memories/components/MemoryView.tsx",
-  "src/shared/browser/http.ts",
+  "src/shared/browser/sdk.ts",
   "src/app/[...path]/page.tsx",
   "src/app/api/graph/route.ts",
   "packages/lore-core/src/graph.ts",

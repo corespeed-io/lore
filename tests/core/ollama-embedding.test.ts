@@ -1,5 +1,32 @@
 import { createOllamaEmbeddingProvider } from "@corespeed/lore-core/providers";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+afterEach(() => vi.unstubAllEnvs());
+
+test("Ollama embeddings reject cloud hosts before the SDK can inherit cloud credentials", async () => {
+  vi.stubEnv("OLLAMA_API_KEY", "unrelated-cloud-key");
+  const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+    return Response.json({ embeddings: [[0.5]] });
+  });
+  const configuration = {
+    provider: "ollama",
+    model: "qwen3-embedding:0.6b",
+    dimensions: 1,
+    revision: "lore-embedding-v2",
+  } as const;
+
+  expect(() =>
+    createOllamaEmbeddingProvider(configuration, { baseUrl: "https://ollama.com", fetch }),
+  ).toThrow("ollama.com is not supported");
+  expect(fetch).not.toHaveBeenCalled();
+
+  const provider = createOllamaEmbeddingProvider(configuration, {
+    baseUrl: "https://private-ollama.example.com",
+    fetch,
+  });
+  await expect(provider.embed(["memory"], "document")).resolves.toEqual([[0.5]]);
+});
 
 test("Ollama adapter sends the deployment model, dimensions, and unload policy", async () => {
   let requestBody: Record<string, unknown> | undefined;
@@ -149,4 +176,43 @@ test.each([
   );
 
   await expect(provider.embed(["query"], "query")).rejects.toThrow("invalid embedding");
+});
+
+test("Ollama SDK does not retry failures and the adapter omits provider error bodies", async () => {
+  let requests = 0;
+  const provider = createOllamaEmbeddingProvider(
+    {
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      revision: "lore-embedding-v2",
+    },
+    {
+      fetch: async () => {
+        requests += 1;
+        return Response.json({ error: "private provider details" }, { status: 503 });
+      },
+    },
+  );
+
+  await expect(provider.embed(["memory"], "document")).rejects.toThrow(
+    /^Ollama embedding request failed \(503\)$/,
+  );
+  expect(requests).toBe(1);
+});
+
+test("Ollama embeddings omit invalid JSON content from SDK parsing errors", async () => {
+  const provider = createOllamaEmbeddingProvider(
+    {
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      revision: "lore-embedding-v2",
+    },
+    { fetch: async () => new Response("private provider text, invalid JSON") },
+  );
+
+  await expect(provider.embed(["memory"], "document")).rejects.toThrow(
+    /^Ollama embedding request failed$/,
+  );
 });

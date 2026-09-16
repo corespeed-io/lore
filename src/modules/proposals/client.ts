@@ -1,28 +1,34 @@
-import { requestJson } from "@/shared/browser/http";
+import type { MemoryProposal as SdkMemoryProposal } from "@corespeed/lore-sdk";
+import { getBrowserClient } from "@/shared/browser/sdk";
 import type { MemoryProposal, MemoryProposalReviewResult, MemoryProposalStatus } from "./types";
 
-export function listMemoryProposals(
+function mutableProposal(proposal: SdkMemoryProposal): MemoryProposal {
+  return {
+    ...proposal,
+    evidenceMemoryIds: [...proposal.evidenceMemoryIds],
+    evidenceObservationIds: [...proposal.evidenceObservationIds],
+    codeEvidence: [...proposal.codeEvidence],
+  };
+}
+
+export async function listMemoryProposals(
   workspaceId: string,
   status: MemoryProposalStatus,
   signal?: AbortSignal,
 ): Promise<MemoryProposal[]> {
-  const params = new URLSearchParams({ status, limit: "100" });
-  return requestJson(`/api/v1/memory-proposals?${params}`, {
-    workspaceId,
-    operation: "GET /api/v1/memory-proposals",
-    signal,
-  });
+  const proposals = await getBrowserClient()
+    .workspace(workspaceId)
+    .listMemoryProposals({ status, limit: 100, signal });
+  return proposals.map(mutableProposal);
 }
 
-export function reviewMemoryProposal(
+export async function reviewMemoryProposal(
   workspaceId: string,
   proposalId: string,
   decision: "accept" | "reject",
 ): Promise<MemoryProposalReviewResult> {
-  return requestJson(`/api/v1/memory-proposals/${encodeURIComponent(proposalId)}/review`, {
-    method: "POST",
-    body: JSON.stringify({ decision }),
-    workspaceId,
-    operation: "POST /api/v1/memory-proposals/:id/review",
-  });
+  const result = await getBrowserClient()
+    .workspace(workspaceId)
+    .reviewMemoryProposal(proposalId, decision);
+  return { ...result, proposal: mutableProposal(result.proposal) };
 }

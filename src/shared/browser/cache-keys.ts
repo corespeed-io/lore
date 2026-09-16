@@ -9,6 +9,7 @@ export const loreKeys = {
   search: (workspaceId: string, query: string, limit: number) =>
     ["lore", "search", workspaceId, query, limit] as const,
   graph: (workspaceId: string) => ["lore", "graph", workspaceId] as const,
+  graphScalePrototype: ["lore", "prototype", "graph-scale"] as const,
   agents: (workspaceId: string) => ["lore", "agents", workspaceId] as const,
   memoryProposals: (workspaceId: string, status: MemoryProposalStatus) =>
     ["lore", "memory-proposals", workspaceId, status] as const,

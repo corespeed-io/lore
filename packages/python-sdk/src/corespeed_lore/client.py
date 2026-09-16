@@ -5,12 +5,25 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, MutableMapping, Optional, Protocol, Sequence, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Literal,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Union,
+    cast,
+)
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
 
 from .generated_contract import (
+    AgentCredential,
+    AgentWorkspaceGrant,
     Capabilities,
     CodeArtifact,
     CodeDependencyQueryResult,
@@ -18,6 +31,9 @@ from .generated_contract import (
     CreateMemoryProposalInput,
     Episode,
     EpisodeSummary,
+    HumanActor,
+    ImportWorkspaceInput,
+    IssuedAgentCredential,
     Memory,
     MemoryCodeEvidence,
     MemoryGraph,
@@ -28,7 +44,11 @@ from .generated_contract import (
     ReadinessReport,
     RecordEpisodeInput,
     RetrievedContext,
+    UpdateAgentInput,
     Workspace,
+    WorkspaceAgent,
+    WorkspaceArchive,
+    WorkspaceImportResult,
     WorkspaceSummary,
     LORE_ERROR_CODES,
 )
@@ -258,6 +278,7 @@ class LoreClient:
         headers: Optional[Mapping[str, str]] = None,
         accepted_statuses: Sequence[int] = (),
         return_response_headers: bool = False,
+        maximum_response_bytes: Optional[int] = MAX_SUCCESS_RESPONSE_BYTES,
     ) -> Any:
         request_headers = dict(self.headers)
         request_headers["accept"] = "application/json"
@@ -285,9 +306,9 @@ class LoreClient:
             if status == 204:
                 return None
             accepted = 200 <= status < 300 or status in accepted_statuses
-            maximum = MAX_SUCCESS_RESPONSE_BYTES if accepted else MAX_ERROR_RESPONSE_BYTES
+            maximum = maximum_response_bytes if accepted else MAX_ERROR_RESPONSE_BYTES
             declared = response.headers.get("content-length")
-            if declared is not None:
+            if declared is not None and maximum is not None:
                 try:
                     if int(declared) > maximum:
                         raise LoreApiError(
@@ -297,8 +318,8 @@ class LoreClient:
                         )
                 except ValueError:
                     pass
-            payload = response.read(maximum + 1)
-            if len(payload) > maximum:
+            payload = response.read(-1 if maximum is None else maximum + 1)
+            if maximum is not None and len(payload) > maximum:
                 raise LoreApiError(
                     f"Lore response exceeds {maximum} bytes", status, "invalid_response"
                 )
@@ -346,6 +367,122 @@ class LoreWorkspaceClient:
     def __init__(self, client: LoreClient, workspace_id: str) -> None:
         self.client = client
         self.workspace_id = workspace_id
+
+    def get_current_human_actor(self) -> HumanActor:
+        return cast(
+            HumanActor,
+            self.client._request("api/v1/actor", workspace_id=self.workspace_id),
+        )
+
+    def list_agents(self) -> Sequence[WorkspaceAgent]:
+        return cast(
+            Sequence[WorkspaceAgent],
+            self.client._request("api/v1/agents", workspace_id=self.workspace_id),
+        )
+
+    def create_agent(
+        self, name: str, *, permission: Literal["read", "write"] = "read"
+    ) -> WorkspaceAgent:
+        return cast(
+            WorkspaceAgent,
+            self.client._request(
+                "api/v1/agents",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body={"name": name, "permission": permission},
+            ),
+        )
+
+    def update_agent(self, agent_id: str, update: UpdateAgentInput) -> WorkspaceAgent:
+        identifier = _normalized_uuid(agent_id, "agent_id")
+        return cast(
+            WorkspaceAgent,
+            self.client._request(
+                f"api/v1/agents/{identifier}",
+                method="PATCH",
+                workspace_id=self.workspace_id,
+                body=update,
+            ),
+        )
+
+    def delete_agent(self, agent_id: str) -> None:
+        identifier = _normalized_uuid(agent_id, "agent_id")
+        self.client._request(
+            f"api/v1/agents/{identifier}",
+            method="DELETE",
+            workspace_id=self.workspace_id,
+        )
+
+    def list_agent_credentials(self, agent_id: str) -> Sequence[AgentCredential]:
+        identifier = _normalized_uuid(agent_id, "agent_id")
+        return cast(
+            Sequence[AgentCredential],
+            self.client._request(
+                f"api/v1/agents/{identifier}/credentials", workspace_id=self.workspace_id
+            ),
+        )
+
+    def issue_agent_credential(self, agent_id: str) -> IssuedAgentCredential:
+        identifier = _normalized_uuid(agent_id, "agent_id")
+        return cast(
+            IssuedAgentCredential,
+            self.client._request(
+                f"api/v1/agents/{identifier}/credentials",
+                method="POST",
+                workspace_id=self.workspace_id,
+            ),
+        )
+
+    def revoke_agent_credential(self, credential_id: str) -> None:
+        identifier = _normalized_uuid(credential_id, "credential_id")
+        self.client._request(
+            f"api/v1/agent-credentials/{identifier}",
+            method="DELETE",
+            workspace_id=self.workspace_id,
+        )
+
+    def set_agent_grant(
+        self, agent_id: str, permission: Literal["read", "write"]
+    ) -> AgentWorkspaceGrant:
+        identifier = _normalized_uuid(agent_id, "agent_id")
+        return cast(
+            AgentWorkspaceGrant,
+            self.client._request(
+                f"api/v1/agents/{identifier}/grant",
+                method="PUT",
+                workspace_id=self.workspace_id,
+                body={"permission": permission},
+            ),
+        )
+
+    def revoke_agent_grant(self, agent_id: str) -> None:
+        identifier = _normalized_uuid(agent_id, "agent_id")
+        self.client._request(
+            f"api/v1/agents/{identifier}/grant",
+            method="DELETE",
+            workspace_id=self.workspace_id,
+        )
+
+    def export_workspace(self) -> WorkspaceArchive:
+        return cast(
+            WorkspaceArchive,
+            self.client._request(
+                "api/v1/workspaces/export",
+                workspace_id=self.workspace_id,
+                maximum_response_bytes=None,
+            ),
+        )
+
+    def import_workspace(self, workspace_import: ImportWorkspaceInput) -> WorkspaceImportResult:
+        return cast(
+            WorkspaceImportResult,
+            self.client._request(
+                "api/v1/workspaces/import",
+                method="POST",
+                workspace_id=self.workspace_id,
+                body=workspace_import,
+            ),
+        )
 
     def capabilities(self) -> Capabilities:
         return cast(

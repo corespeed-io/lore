@@ -67,7 +67,6 @@ export function createRerankingProviderFromEnvironment(
         ? createOllamaListwiseRerankingProvider({
             model: env.LORE_RERANK_MODEL ?? "",
             baseUrl: optionalString(env.LORE_RERANK_BASE_URL),
-            timeoutMs: positiveInteger(env.LORE_RERANK_TIMEOUT_MS, 120_000),
             contextWindowTokens: positiveInteger(env.LORE_RERANK_NUM_CTX, 8_192),
             maximumOutputTokens: positiveInteger(env.LORE_RERANK_MAX_OUTPUT_TOKENS, 2_048),
             maximumDocumentCharacters: positiveInteger(env.LORE_RERANK_MAX_DOCUMENT_CHARS, 600),

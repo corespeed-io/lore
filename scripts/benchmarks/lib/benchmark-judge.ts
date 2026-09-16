@@ -1,4 +1,5 @@
-import { providerHttpError, readBoundedResponseJson } from "@corespeed/lore-core";
+import { GoogleGenAI } from "@google/genai/web";
+import OpenAI from "openai";
 import { extractBoxedAnswer } from "./answer-evaluation";
 
 export type BenchmarkJudgeKind = "abstention" | "gotchas";
@@ -35,7 +36,6 @@ interface JudgeOptions {
   reasoningEffort?: "low" | "medium" | "high";
   timeoutMs?: number;
   maximumOutputTokens?: number;
-  fetch?: typeof globalThis.fetch;
 }
 
 // Prompts are pinned to evaluation/qa_eval_metrics.py at this upstream commit.
@@ -189,10 +189,18 @@ function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvi
   const baseUrl =
     options.baseUrl ??
     (options.provider === "openai" ? "https://api.openai.com/v1" : "http://127.0.0.1:8002/v1");
-  const url = endpoint(baseUrl, "chat/completions");
   const timeoutMs = positiveInteger(options.timeoutMs, 43_200_000, 1, 43_200_000);
   const maximumOutputTokens = positiveInteger(options.maximumOutputTokens, 4_096, 32, 8_192);
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
+  const client = new OpenAI({
+    apiKey: apiKey ?? "unused",
+    adminAPIKey: null,
+    organization: null,
+    project: null,
+    defaultHeaders: { Authorization: apiKey ? `Bearer ${apiKey}` : null },
+    baseURL: endpoint(baseUrl, ""),
+    maxRetries: 0,
+    timeout: timeoutMs,
+  });
   return {
     provider: options.provider,
     model,
@@ -203,31 +211,22 @@ function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvi
         ...input,
         modelFinalAnswer: input.modelFinalAnswer ?? extractBoxedAnswer(input.modelFullResponse),
       });
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify({
+      const payload = await client.chat.completions
+        .create({
           model,
           messages,
           max_completion_tokens: maximumOutputTokens,
           reasoning_effort: options.reasoningEffort ?? "medium",
           ...(options.provider === "openai" ? { store: false } : {}),
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `benchmark judge request failed with HTTP ${response.status}`,
-        );
-      }
-      const payload = await readBoundedResponseJson<{
-        choices?: unknown;
-        usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
-      }>(response);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof OpenAI.APIError) {
+            throw new Error(
+              `benchmark judge request failed${error.status ? ` with HTTP ${error.status}` : ""}`,
+            );
+          }
+          throw new Error("benchmark judge request failed");
+        });
       const first = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
       const message =
         typeof first === "object" && first !== null && "message" in first
@@ -258,13 +257,16 @@ function createGoogleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
   if (!apiKey) {
     throw new Error("LORE_BENCHMARK_JUDGE_API_KEY or GEMINI_API_KEY is required for Google");
   }
-  const url = endpoint(
-    options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta",
-    "interactions",
-  );
+  const client = new GoogleGenAI({
+    apiKey,
+    vertexai: false,
+    httpOptions: {
+      baseUrl: endpoint(options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta", ""),
+      apiVersion: "",
+    },
+  });
   const timeoutMs = positiveInteger(options.timeoutMs, 43_200_000, 1, 43_200_000);
   const maximumOutputTokens = positiveInteger(options.maximumOutputTokens, 4_096, 32, 8_192);
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
   return {
     provider: "google",
     model,
@@ -275,34 +277,24 @@ function createGoogleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
         ...input,
         modelFinalAnswer: input.modelFinalAnswer ?? extractBoxedAnswer(input.modelFullResponse),
       });
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          model,
-          input: messages[1].content,
-          system_instruction: messages[0].content,
-          store: false,
-          stream: false,
-          generation_config: { max_output_tokens: maximumOutputTokens },
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `Google benchmark judge request failed with HTTP ${response.status}`,
-        );
-      }
-      const payload = await readBoundedResponseJson<{
-        status?: unknown;
-        steps?: unknown;
-        usage?: {
-          total_input_tokens?: unknown;
-          total_output_tokens?: unknown;
-          total_tokens?: unknown;
-        };
-      }>(response);
+      const payload = await client.interactions
+        .create(
+          {
+            model,
+            input: messages[1].content,
+            system_instruction: messages[0].content,
+            store: false,
+            stream: false,
+            generation_config: { max_output_tokens: maximumOutputTokens },
+          },
+          { timeout: timeoutMs, maxRetries: 0 },
+        )
+        .catch((error: unknown) => {
+          const status = error instanceof Error && "status" in error ? error.status : undefined;
+          throw new Error(
+            `Google benchmark judge request failed${typeof status === "number" ? ` with HTTP ${status}` : ""}`,
+          );
+        });
       if (payload.status !== "completed" || !Array.isArray(payload.steps)) {
         throw new Error("Google benchmark judge returned an incomplete interaction");
       }

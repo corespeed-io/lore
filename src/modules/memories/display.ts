@@ -1,4 +1,4 @@
-import type { Memory } from "./schemas";
+import type { Memory } from "./types";
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();

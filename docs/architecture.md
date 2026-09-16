@@ -17,7 +17,7 @@ product workflows, and UI. Product terminology is defined in [CONTEXT.md](../CON
 | `src/server/http/` | Shared input handling, idempotency headers, and error responses |
 | `src/server/openapi/` | Shared contract helpers and assembly of the public OpenAPI document |
 | `src/server/telemetry/` | Server instrumentation and privacy filtering |
-| `src/shared/browser/` | Browser HTTP transport, SWR cache keys, request logs, and common hooks |
+| `src/shared/browser/` | Browser SDK configuration, SWR cache keys, request logs, and common hooks |
 | `src/shared/ui/` | Shared visual helpers |
 | `src/worker/` | Node maintenance entrypoint |
 | `packages/` | Memory engine, TypeScript/Python SDKs, CLI, and external MCP adapter |
@@ -37,11 +37,11 @@ A module contains the files its implementation needs. For example:
 
 ```text
 src/modules/memories/
-  schemas.ts       # Zod wire schemas and inferred types
-  types.ts         # Additional browser-facing result types
+  schemas.ts       # Server Zod validation and OpenAPI schema source
+  types.ts         # SDK-generated Memory aliases and browser presentation types
   input.ts         # Memory-specific HTTP input handling
   http.ts          # Testable request handlers
-  client.ts        # Typed browser requests
+  client.ts        # Domain adapter for the TypeScript SDK
   hooks.ts         # Memory reads and cache behavior
   display.ts       # Memory title/type presentation
   markdown.ts      # Memory content rendering
@@ -53,10 +53,85 @@ Modules with their own application persistence use `service.ts`. Canonical Memor
 persistence stays in `packages/lore-core`. A feature does not need a service file,
 client file, or new package unless it has behavior to own.
 
-Callers import the specific interface they use. There is no aggregate barrel that
-re-exports server code alongside browser code. Domain hooks share the central
+Callers import the specific interface they use. Do not recreate aggregate `lib`,
+`types`, HTTP-handler, browser-client, or hook files spanning unrelated domains,
+or barrels that re-export server code alongside browser code. Domain hooks share the central
 cache-key vocabulary so mutations can invalidate related views consistently.
 Cross-domain UI composition belongs in `src/shell`.
+
+HTTP handlers and the canonical OpenAPI document define the API contract consumed
+by the TypeScript and Python SDKs. The CLI and external MCP adapter delegate to the
+TypeScript SDK. The frontend follows `SWR hook → domain client → TypeScript SDK`:
+SWR owns remote state and cache invalidation, while domain clients preserve UI
+defaults and adapt results to their views.
+
+The shell restores its URL for the selected Workspace before enabling domain
+reads. Dashboard and unqueried Memory browse enable the paged Memory window;
+Dashboard, Graph, and Memory detail enable Graph reads. Management pages and
+ranked search do not load that browse window. Inactive Memory and Graph hooks
+retain their Workspace-scoped SWR cache but pause requests, focus/reconnect
+refreshes, and background page advancement. Returning to a consuming view
+revalidates its cache after any in-flight batch finishes. Already-issued requests
+may finish; further pages from an old or inactive view are not requested. The hidden Graph renderer stays mounted
+to retain its viewport, while its search requests pause.
+
+The active Dashboard and browse views still fill at most 50 × 100 Memories:
+their current statistics and type counts use that complete browse window.
+Scroll-driven network pagination requires separate summary/statistics reads;
+this page-demand policy does not change the existing counts or browse limit.
+
+`src/shared/browser/sdk.ts` constructs the same-origin SDK client with browser
+credentials and connects its `onRequest` observer to the request log. The SDK owns
+API paths, Workspace headers, serialization, response parsing, cancellation, and
+errors. There is no separate shared browser HTTP transport or custom SDK fetch
+wrapper. Components do not call `fetch` directly. Browser Memory types are aliases
+of the SDK's generated contract; server Zod schemas remain the validation and
+OpenAPI source. Human-only SDK methods for Agent administration and Workspace
+portability do not add CLI commands or MCP tools.
+
+The development Graph benchmark is a separate measurement endpoint, outside the
+public SDK/OpenAPI contract, and returns 404 in production. Its isolated
+`prototype-client.ts` reads response text directly to measure the original decoded
+UTF-8 payload, including whitespace. `GraphScalePrototype.tsx` owns prototype
+routing and the SVG control separately from `WorkerCanvasGraph.tsx`.
+`prototype-hooks.ts` still keeps its remote state in SWR with a separate benchmark
+cache key and disables focus/reconnect refresh and error retries so a renderer
+comparison keeps its dataset stable. SDKs and Node scripts do not import SWR.
+
+Provider adapters and benchmark readers/judges use the official OpenAI, Google
+Gen AI, Ollama, Cohere, and Voyage SDKs with their default transport. Use native
+SDK timeout and retry options; do not add a custom fetch wrapper around an SDK.
+Optional fetch injection on adapters that support it is a test seam, not a
+production transport layer. Embedding allows two SDK retries by default for
+OpenAI/Google; planners, readers, judges, and hosted rerankers disable retries.
+Ollama adapters support self-hosted servers and reject the SDK cloud host so that
+ambient `OLLAMA_API_KEY` cannot silently authenticate a cloud request. Ollama
+performs one attempt and its SDK has no non-streaming request timeout.
+Provider/benchmark timeout settings therefore apply only to the other providers; the local
+Ollama model probe also uses the SDK without a deadline. SDK responses have no
+Lore-enforced byte cap. These differences were explicitly accepted on 2026-09-15
+to keep SDK transport behavior native. Result counts, embedding dimensions,
+finite values, and normalized reranking scores are still validated by Lore.
+
+MemOS and the vLLM/llama.cpp reranking contracts (including `/score`) retain their
+specific HTTP adapters because the selected SDKs do not cover those exact
+contracts. Their small `packages/lore-core/src/provider-http.ts` boundary checks
+status and consumes bounded JSON; it does not implement a generic HTTP client.
+Dataset streaming, checksum verification, and temporary-file promotion belong to
+`scripts/benchmarks/lib/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
+protocol stays in its own download adapter. Native development health probes live
+in `scripts/dev/lib/local-http.mjs`. These downloads, generic health probes, Lore's
+own SDK transport, and the isolated development Graph benchmark remain direct HTTP
+boundaries.
+
+Voyage is pinned to the official remote-only SDK 0.1.0. Newer releases pull optional
+local-inference modules into their public entrypoint and fail the Cloudflare build
+without unused native dependencies. The pinned release supports the full rerank
+contract used here; upgrade only after both Node and Cloudflare builds pass.
+
+CoreSpeed HaaS retains a separate vendored `packages/memory-core` fork. The planned
+verbatim-copy cutover was cancelled on 2026-09-15; selected Lore changes are ported
+manually with provenance, rather than mirrored automatically in every task.
 
 ### Code indexing
 
@@ -85,8 +160,9 @@ does not change the code-index revision or stored artifact format.
 3. Server implementation depends on the reusable engine and host runtime through
    the existing interfaces. Keep environment reads out of `packages/lore-core`.
 4. Each domain owns its OpenAPI paths and components; `src/server/openapi/document.ts`
-   assembles them. SDK generation reads that assembled document. Zod owns the Memory
-   input schema; other existing contracts retain their behavior during this refactor.
+   assembles them. SDK generation reads that assembled document. Zod owns Memory
+   validation and its OpenAPI schemas; browser Memory types come from the generated
+   SDK contract, without a second handwritten wire model.
 5. Do not add compatibility re-export files at the retired `src/lib` paths. Update
    callers when moving an interface.
 

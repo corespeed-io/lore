@@ -11,6 +11,7 @@ import { typeColor } from "@/shared/ui/colors";
 
 interface GraphViewProps {
   workspaceId: string;
+  active?: boolean;
   data: GraphData;
   focusId?: string;
   onOpen: (memoryId: string) => void;
@@ -101,6 +102,7 @@ function selectedNodeSummary(data: GraphData, selectedNode: GraphNode) {
 
 export function GraphView({
   workspaceId,
+  active = true,
   data,
   focusId,
   onOpen,
@@ -131,7 +133,11 @@ export function GraphView({
     [data, selectedNode],
   );
   const normalizedQuery = q.trim();
-  const { data: contentResults = [] } = useLoreSearch(workspaceId, debouncedQuery, 12);
+  const { data: contentResults = [] } = useLoreSearch(
+    active && normalizedQuery === debouncedQuery ? workspaceId : "",
+    debouncedQuery,
+    12,
+  );
   const contentIds = useMemo(() => {
     if (!normalizedQuery || normalizedQuery !== debouncedQuery) return new Set<string>();
     const nodeIds = new Set(data.nodes.map((node) => node.id));
@@ -181,13 +187,14 @@ export function GraphView({
   // key, so overlapping searches are deduplicated and stale responses cannot
   // write into the next query's state.
   useEffect(() => {
+    if (!active) return;
     if (!normalizedQuery) {
       setDebouncedQuery("");
       return;
     }
     const timeout = window.setTimeout(() => setDebouncedQuery(normalizedQuery), 250);
     return () => window.clearTimeout(timeout);
-  }, [normalizedQuery]);
+  }, [active, normalizedQuery]);
 
   // Highlight set = (title ∪ content search, or focus) ∩ the legend type filter.
   // null means "everything lit". Search/focus/type-filter all feed one highlight.

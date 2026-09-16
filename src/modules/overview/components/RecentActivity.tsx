@@ -1,7 +1,7 @@
 "use client";
 
 import { memoryTitle, memoryType } from "@/modules/memories/display";
-import type { Memory } from "@/modules/memories/schemas";
+import type { Memory } from "@/modules/memories/types";
 
 interface RecentActivityProps {
   items: Memory[];

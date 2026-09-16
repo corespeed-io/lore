@@ -88,13 +88,16 @@ test("vLLM fixed reader sends multimodal deterministic chat input and records us
 test("Google fixed reader disables storage and reads the final model-output step", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_input, init) => {
-    const body = JSON.parse(String(init?.body));
+    const request = _input instanceof Request ? _input : new Request(_input, init);
+    expect(request.url).toBe("https://generativelanguage.googleapis.com/v1beta/interactions");
+    const body = (await request.json()) as { input: unknown };
     expect(body).toMatchObject({ model: "gemini-reader", store: false, stream: false });
     expect(body.input).toEqual([
       { type: "text", text: expect.stringContaining("Option G") },
       { type: "image", mime_type: "image/png", data: "iVBORw==" },
     ]);
     return Response.json({
+      id: "test-interaction",
       status: "completed",
       steps: [
         { type: "user_input", content: [] },

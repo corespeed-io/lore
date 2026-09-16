@@ -1,11 +1,10 @@
 /**
  * Concrete provider adapters. Deployment-level provider selection and env
- * parsing stay host-side (see lore's src/lib/*provider-factory.ts); these are
- * the transport implementations plus the shared bounded-response helpers.
+ * parsing stay host-side (see lore's src/server/providers); these use official
+ * SDKs by default, with bounded HTTP reads for unsupported provider contracts.
  */
 
 export * from "./embedding/google";
-export * from "./embedding/http";
 export * from "./embedding/ollama";
 export * from "./embedding/openai";
 export * from "./embedding/vector";

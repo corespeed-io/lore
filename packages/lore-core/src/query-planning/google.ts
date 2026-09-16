@@ -1,4 +1,4 @@
-import { providerHttpError, readBoundedResponseJson } from "../provider-response";
+import { GoogleGenAI } from "@google/genai/web";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
@@ -13,7 +13,6 @@ export interface GoogleQueryPlanningOptions {
   baseUrl?: string;
   instruction?: string;
   timeoutMs?: number;
-  fetch?: typeof globalThis.fetch;
 }
 
 interface GoogleInteractionResponse {
@@ -21,12 +20,14 @@ interface GoogleInteractionResponse {
   steps?: unknown;
 }
 
-function endpoint(baseUrl: string): string {
+function apiBaseUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
     throw new Error("Google query planner base URL must use https");
   }
-  return new URL("interactions", `${url.toString().replace(/\/$/, "")}/`).toString();
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -66,8 +67,13 @@ export function createGoogleQueryPlanningProvider(
   if (!apiKey) throw new Error("GEMINI_API_KEY or LORE_QUERY_PLANNER_API_KEY is required");
   const instruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
-  const url = endpoint(options.baseUrl ?? DEFAULT_BASE_URL);
+  const client = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      baseUrl: apiBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL),
+      apiVersion: "",
+    },
+  });
 
   return {
     provider: "google",
@@ -78,48 +84,45 @@ export function createGoogleQueryPlanningProvider(
     decoding: { temperature: 0, maximumOutputTokens: 256 },
     async plan({ query, maxQueries }) {
       if (!query.trim() || maxQueries < 1) return [];
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          model,
-          input: `Question: ${query}\nMaximum retrieval queries: ${maxQueries}`,
-          system_instruction: instruction,
-          store: false,
-          stream: false,
-          generation_config: { temperature: 0, max_output_tokens: 256 },
-          response_format: {
-            type: "text",
-            mime_type: "application/json",
-            schema: {
-              type: "object",
-              properties: {
-                queries: {
-                  type: "array",
-                  items: { type: "string" },
-                  maxItems: maxQueries,
+      const payload = await client.interactions
+        .create(
+          {
+            model,
+            input: `Question: ${query}\nMaximum retrieval queries: ${maxQueries}`,
+            system_instruction: instruction,
+            store: false,
+            stream: false,
+            response_format: {
+              type: "text",
+              mime_type: "application/json",
+              schema: {
+                type: "object",
+                properties: {
+                  queries: {
+                    type: "array",
+                    items: { type: "string" },
+                    maxItems: maxQueries,
+                  },
                 },
+                required: ["queries"],
+                additionalProperties: false,
               },
-              required: ["queries"],
-              additionalProperties: false,
             },
           },
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `Google query planner request failed with HTTP ${response.status}`,
-        );
-      }
-      return parsePlannedQueries(
-        responseText(await readBoundedResponseJson<GoogleInteractionResponse>(response)),
-        maxQueries,
-      );
+          {
+            timeout: timeoutMs,
+            maxRetries: 0,
+            // The Interactions API supports temperature; the SDK type currently omits it.
+            body: { generation_config: { temperature: 0, max_output_tokens: 256 } },
+          },
+        )
+        .catch((error: unknown) => {
+          if (error instanceof Error && "status" in error && typeof error.status === "number") {
+            throw new Error(`Google query planner request failed with HTTP ${error.status}`);
+          }
+          throw new Error("Google query planner request failed");
+        });
+      return parsePlannedQueries(responseText(payload), maxQueries);
     },
   };
 }
