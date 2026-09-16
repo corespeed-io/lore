@@ -3,26 +3,25 @@
  *
  * The kernel owns Memory storage, canonical content bounds, deterministic
  * chunking, hybrid retrieval, Memory Links/graph reads, leased embedding
- * maintenance, and replay-safe idempotency over a PostgreSQL schema whose
- * authorization is Postgres RLS. A host hands every call an already
- * authenticated {@link ActorContext}; the engine installs it as
- * transaction-local GUCs and lets the database enforce the boundary.
+ * maintenance over a PostgreSQL store. Hosts supply a bound
+ * {@link MemoryStorageContext}; its transactions establish their own access
+ * policy before the engine reads or writes. Identity, tenant authorization,
+ * request replay and database role selection belong to the host.
  *
  * Subpath entries: `./postgres` (pg-backed database factories), `./episodes`
- * (optional Episode/Observation evidence capability), `./providers`
- * (embedding/reranking/query-planning provider adapters).
+ * (optional Episode/Observation evidence capability), and `./testing`
+ * (host-pluggable schema-contract tests). Hosts supply model adapters through
+ * the embedding, reranking, and query-planning capability interfaces.
  */
 
-export * from "./actor-context";
 export * from "./database-errors";
 export * from "./db";
-export * from "./embedding-config";
+export * from "./embedding";
 export * from "./graph";
-export * from "./idempotency";
 export * from "./maintenance";
 export * from "./memory";
 export * from "./memory-chunking";
 export * from "./memory-content";
-export * from "./provider-response";
+export * from "./memory-storage";
 export * from "./query-planning";
 export * from "./reranking";

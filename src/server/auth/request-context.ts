@@ -1,4 +1,5 @@
-import type { ActorContext, PostgresDatabase, UserContext } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { createAccessModule } from "./access";
 import { checkAuth } from "./auth";
 import { createIdentityModule } from "./identity";

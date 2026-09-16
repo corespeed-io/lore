@@ -1,5 +1,9 @@
+import type {
+  ImportWorkspaceInput,
+  WorkspaceArchive,
+  WorkspaceImportResult,
+} from "@corespeed/lore-sdk";
 import { getBrowserClient } from "@/shared/browser/sdk";
-import type { ImportWorkspaceArchive, WorkspaceArchive, WorkspaceImportResult } from "./service";
 
 export async function exportWorkspaceArchive(
   workspaceId: string,
@@ -11,7 +15,7 @@ export async function exportWorkspaceArchive(
 
 export function importWorkspaceArchive(
   workspaceId: string,
-  input: ImportWorkspaceArchive,
+  input: ImportWorkspaceInput,
 ): Promise<WorkspaceImportResult> {
   return getBrowserClient().workspace(workspaceId).importWorkspace(input);
 }

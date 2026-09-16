@@ -1,9 +1,7 @@
-import type { QueryPlanningProvider } from "@corespeed/lore-core";
-import {
-  createGoogleQueryPlanningProvider,
-  createOllamaQueryPlanningProvider,
-  createOpenAICompatibleQueryPlanningProvider,
-} from "@corespeed/lore-core/providers";
+import { createGoogleQueryPlanningProvider } from "./google";
+import { createOllamaQueryPlanningProvider } from "./ollama";
+import { createOpenAICompatibleQueryPlanningProvider } from "./openai-compatible";
+import type { ConfiguredQueryPlanningProvider } from "./types";
 
 export type QueryPlanningConfigurationWarning = (message: string) => void;
 
@@ -24,9 +22,9 @@ function keepAlive(value: string | undefined): string | number {
 }
 
 function warnOnPlanningFailure(
-  provider: QueryPlanningProvider,
+  provider: ConfiguredQueryPlanningProvider,
   warn: QueryPlanningConfigurationWarning,
-): QueryPlanningProvider {
+): ConfiguredQueryPlanningProvider {
   return {
     ...provider,
     async plan(input) {
@@ -45,7 +43,7 @@ function warnOnPlanningFailure(
 export function createQueryPlanningProviderFromEnvironment(
   env: Record<string, string | undefined>,
   warn: QueryPlanningConfigurationWarning = () => undefined,
-): QueryPlanningProvider | undefined {
+): ConfiguredQueryPlanningProvider | undefined {
   const provider = env.LORE_QUERY_PLANNER_PROVIDER?.trim().toLowerCase();
   if (!provider) return undefined;
   try {

@@ -1,12 +1,10 @@
 import type { EmbeddingProvider } from "@corespeed/lore-core";
 import { validatedEmbeddingDimensions } from "@corespeed/lore-core";
-import {
-  createGoogleEmbeddingProvider,
-  createOllamaEmbeddingProvider,
-  createOpenAIEmbeddingProvider,
-} from "@corespeed/lore-core/providers";
 import { markDependencyFailure, markDependencySuccess } from "@/server/telemetry/telemetry";
 import { embeddingBuildEnvironment, embeddingConfigurationFromEnvironment } from "./config";
+import { createGoogleEmbeddingProvider } from "./google";
+import { createOllamaEmbeddingProvider } from "./ollama";
+import { createOpenAIEmbeddingProvider } from "./openai";
 
 export type EmbeddingConfigurationWarning = (message: string) => void;
 

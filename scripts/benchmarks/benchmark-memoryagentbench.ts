@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { ActorContext } from "@corespeed/lore-core";
 import {
   chunkMemoryContent,
   createMemoryMaintenanceModule,
-  createMemoryModule,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
 } from "@corespeed/lore-core";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import pg from "pg";
+import { createMemoryModule } from "../../src/modules/memories/service";
+import type { ActorContext } from "../../src/server/auth/actor-context";
+import { createPostgresDatabase } from "../../src/server/database/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../src/server/providers/reranking/factory";

@@ -12,6 +12,7 @@ import {
   LoreApiError,
   LoreClient,
   loreConfigurationFromEnvironment,
+  MEMORY_CONTENT_LIMITS,
   type Memory,
   type MemoryCodeEvidence,
   type MemoryPage,
@@ -90,10 +91,7 @@ export interface LoreMcpCodeClient {
 }
 
 const scopeSchema = z.enum(["shared", "private"]);
-const MAX_MEMORY_CONTENT_CHARACTERS = 32_000;
 const MAX_METADATA_CHARACTERS = 100_000;
-const MAX_METADATA_DEPTH = 32;
-const MAX_METADATA_VALUES = 10_000;
 const MAX_MCP_OUTPUT_CHARACTERS = 128_000;
 const LIST_CONTENT_BUDGET = 2_800;
 const SEARCH_EVIDENCE_BUDGET = 2_800;
@@ -102,54 +100,18 @@ const DETAIL_CONTENT_BUDGET = 96_000;
 const DETAIL_METADATA_BUDGET = 16_000;
 const CODE_ARTIFACT_CONTENT_BUDGET = 8_000;
 
-function metadataBoundaryError(value: Record<string, unknown>): string | undefined {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    return "metadata must be JSON serializable";
-  }
-  if (serialized.length > MAX_METADATA_CHARACTERS) {
-    return `metadata exceeds ${MAX_METADATA_CHARACTERS} characters`;
-  }
-  const pending: Array<{ depth: number; value: unknown }> = [{ depth: 0, value }];
-  let visited = 0;
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) break;
-    visited += 1;
-    if (visited > MAX_METADATA_VALUES) return `metadata exceeds ${MAX_METADATA_VALUES} values`;
-    if (current.depth > MAX_METADATA_DEPTH) {
-      return `metadata exceeds ${MAX_METADATA_DEPTH} levels`;
-    }
-    if (typeof current.value === "string" && current.value.includes("\0")) {
-      return "metadata contains an invalid null character";
-    }
-    if (Array.isArray(current.value)) {
-      for (const item of current.value) {
-        pending.push({ depth: current.depth + 1, value: item });
-      }
-    } else if (current.value && typeof current.value === "object") {
-      for (const [key, item] of Object.entries(current.value)) {
-        if (key.includes("\0")) return "metadata contains an invalid null character";
-        pending.push({ depth: current.depth + 1, value: item });
-      }
-    }
-  }
-  return undefined;
-}
-
-const metadataSchema = z.record(z.string(), z.unknown()).superRefine((value, context) => {
-  const message = metadataBoundaryError(value);
-  if (message) context.addIssue({ code: "custom", message });
-});
+const metadataSchema = z
+  .record(z.string(), z.json())
+  .refine((value) => JSON.stringify(value).length <= MAX_METADATA_CHARACTERS, {
+    message: `metadata exceeds ${MAX_METADATA_CHARACTERS} characters`,
+  });
 const memoryContentSchema = z
   .string()
   .trim()
   .min(1)
-  .max(MAX_MEMORY_CONTENT_CHARACTERS * 2)
-  .refine((content) => Array.from(content).length <= MAX_MEMORY_CONTENT_CHARACTERS, {
-    message: `Memory content may contain at most ${MAX_MEMORY_CONTENT_CHARACTERS} Unicode characters`,
+  .max(MEMORY_CONTENT_LIMITS.maximumCharacters * 2)
+  .refine((content) => Array.from(content).length <= MEMORY_CONTENT_LIMITS.maximumCharacters, {
+    message: `Memory content may contain at most ${MEMORY_CONTENT_LIMITS.maximumCharacters} Unicode characters`,
   });
 const idempotencyKeySchema = z.string().min(1).max(128).optional();
 const memoryIdentitySchema = z.object({
@@ -253,10 +215,10 @@ function boundedString(
 function boundedMetadata(
   metadata: Record<string, unknown>,
   jsonCharacterBudget: number,
-): { metadata: Record<string, unknown>; metadataTruncated: boolean } {
+): Pick<McpMemorySummary, "metadata" | "metadataTruncated"> {
   const serialized = JSON.stringify(metadata);
   if (serialized.length <= jsonCharacterBudget) {
-    return { metadata: { ...metadata }, metadataTruncated: false };
+    return { metadata: metadataSchema.parse(metadata), metadataTruncated: false };
   }
   return { metadata: {}, metadataTruncated: true };
 }

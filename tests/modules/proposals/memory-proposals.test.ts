@@ -1,14 +1,8 @@
-import {
-  createMemoryGraphModule,
-  createMemoryModule,
-  installActorContext,
-  MemoryVersionConflictError,
-  purgeExpiredPortableCoreRecords,
-} from "@corespeed/lore-core";
-import { createObservationModule } from "@corespeed/lore-core/episodes";
+import { MemoryVersionConflictError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createPortabilityModule } from "@/modules/portability/service";
 import {
   createMemoryProposalsModule,
@@ -17,6 +11,10 @@ import {
   MemoryProposalReviewConflictError,
 } from "@/modules/proposals/service";
 import { createAccessModule } from "@/server/auth/access";
+import { createObservationModule } from "../../../src/modules/episodes/service";
+import { createMemoryGraphModule } from "../../../src/modules/graph/service";
+import { createMemoryModule } from "../../../src/modules/memories/service";
+import { installActorContext } from "../../../src/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
 /** The Memory kernel plus the oss Proposals module, as one test harness. */

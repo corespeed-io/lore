@@ -1,6 +1,5 @@
-import { type ActorContext, installActorContext } from "./actor-context";
-import type { PostgresDatabase } from "./db";
 import type { Memory, MemoryScope } from "./memory";
+import type { MemoryStorageContext } from "./memory-storage";
 
 export interface MemoryGraphNode {
   id: string;
@@ -26,7 +25,7 @@ export interface MemoryGraph {
 
 export interface MemoryLink {
   id: string;
-  workspaceId: string;
+  partitionId: string;
   sourceMemoryId: string;
   targetMemoryId: string;
   kind: string;
@@ -53,8 +52,6 @@ export interface ReadMemoryGraph {
 interface MemoryRow {
   id: string;
   workspace_id: string;
-  owner_user_id: string;
-  created_by_agent_id: string | null;
   scope: MemoryScope;
   content: string;
   metadata: Record<string, unknown>;
@@ -74,6 +71,8 @@ interface MemoryLinkRow {
   created_at: string;
   updated_at: string;
 }
+
+type GraphMemory = Pick<Memory, "id" | "scope" | "content" | "metadata" | "updatedAt">;
 
 const STOP_WORDS = new Set([
   "about",
@@ -134,7 +133,7 @@ function memoryPreview(content: string, limit: number): string {
   return compact.length > limit ? `${compact.slice(0, limit - 1).trimEnd()}…` : compact;
 }
 
-function memoryLabel(memory: Memory): string {
+function memoryLabel(memory: GraphMemory): string {
   const configured = memory.metadata.title;
   if (typeof configured === "string" && configured.trim()) {
     return memoryPreview(configured, 96);
@@ -145,7 +144,7 @@ function memoryLabel(memory: Memory): string {
   return memoryPreview(firstSentence || memory.content, 72);
 }
 
-function memoryReference(memory: Memory): string {
+function memoryReference(memory: GraphMemory): string {
   const configured = memory.metadata.reference;
   if (typeof configured === "string" && configured.trim()) return configured.trim();
   const legacy = memory.metadata.legacy;
@@ -184,17 +183,12 @@ function affinity(left: Set<string>, right: Set<string>) {
   return intersection / Math.sqrt(left.size * right.size);
 }
 
-function toMemory(row: MemoryRow): Memory {
+function toMemory(row: MemoryRow): GraphMemory {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    ownerUserId: row.owner_user_id,
-    createdByAgentId: row.created_by_agent_id,
     scope: row.scope,
     content: row.content,
     metadata: row.metadata,
-    version: row.version,
-    createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
@@ -202,7 +196,7 @@ function toMemory(row: MemoryRow): Memory {
 function toMemoryLink(row: MemoryLinkRow): MemoryLink {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    partitionId: row.workspace_id,
     sourceMemoryId: row.source_memory_id,
     targetMemoryId: row.target_memory_id,
     kind: row.kind,
@@ -213,7 +207,7 @@ function toMemoryLink(row: MemoryLinkRow): MemoryLink {
   };
 }
 
-function affinityLinks(memories: Memory[], input: ReadMemoryGraph): MemoryGraphLink[] {
+function affinityLinks(memories: GraphMemory[], input: ReadMemoryGraph): MemoryGraphLink[] {
   const termSets = new Map(memories.map((memory) => [memory.id, termsFor(memory.content)]));
   const requestedAffinity = input.minimumAffinity ?? 0.16;
   const minimumAffinity = Number.isFinite(requestedAffinity)
@@ -259,7 +253,7 @@ function affinityLinks(memories: Memory[], input: ReadMemoryGraph): MemoryGraphL
 }
 
 function buildGraph(
-  memories: Memory[],
+  memories: GraphMemory[],
   storedLinks: MemoryLinkRow[],
   input: ReadMemoryGraph,
 ): MemoryGraph {
@@ -292,20 +286,19 @@ function buildGraph(
 }
 
 /**
- * Native Memory Graph and durable Memory Link module. Every operation installs
- * Actor context before Postgres RLS selects nodes and links. Link policies require
- * both endpoints to be visible, so hidden-neighbor ids and degree never leak.
+ * Memory Graph and durable Memory Links over a host-scoped database.
+ * The host owns visibility and write authorization for both link endpoints.
  */
-export function createMemoryGraphModule(database: PostgresDatabase) {
+export function createMemoryGraphModule(storage: MemoryStorageContext) {
+  const { database } = storage;
   return {
-    async connect(actor: ActorContext, input: ConnectMemories): Promise<MemoryLink> {
+    async connect(input: ConnectMemories): Promise<MemoryLink> {
       const kind = input.kind?.trim() || "related";
       const requestedWeight = input.weight ?? 1;
       const weight = Number.isFinite(requestedWeight)
         ? Math.max(0, Math.min(requestedWeight, 1))
         : 1;
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryLinkRow>(
           `INSERT INTO memory_links (
              id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
@@ -313,7 +306,7 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
            RETURNING *`,
           [
             crypto.randomUUID(),
-            actor.workspaceId,
+            storage.partitionId,
             input.sourceMemoryId,
             input.targetMemoryId,
             kind,
@@ -327,17 +320,16 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
       });
     },
 
-    async read(actor: ActorContext, input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
+    async read(input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
       const limit = boundedInteger(input.limit, 5_000, 1, 5_000);
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const memoryResult = await transaction.query<MemoryRow>(
           `SELECT *
            FROM memories
            WHERE workspace_id = $1
            ORDER BY updated_at DESC, id
            LIMIT $2`,
-          [actor.workspaceId, limit],
+          [storage.partitionId, limit],
         );
         if (memoryResult.rows.length === 0) return { nodes: [], links: [] };
         const memoryIds = memoryResult.rows.map((memory) => memory.id);
@@ -348,7 +340,7 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
              AND source_memory_id = ANY($2::uuid[])
              AND target_memory_id = ANY($2::uuid[])
            ORDER BY created_at, id`,
-          [actor.workspaceId, memoryIds],
+          [storage.partitionId, memoryIds],
         );
         return buildGraph(memoryResult.rows.map(toMemory), linkResult.rows, input);
       });

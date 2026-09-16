@@ -3,10 +3,10 @@ import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
-  purgeExpiredPortableCoreRecords,
 } from "@corespeed/lore-core";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
+import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
+import { createPostgresDatabase } from "@/server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
 import { registerLoreTelemetry } from "@/server/telemetry/register";
 import { observeOperation } from "@/server/telemetry/telemetry";

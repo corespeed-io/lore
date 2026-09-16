@@ -27,12 +27,12 @@ been removed. Lore now has a native implementation, split into two concepts
 - **lore core** — `packages/lore-core` (`@corespeed/lore-core`) is the
   reusable memory engine: Memory CRUD + hybrid retrieval, content bounds,
   chunking v2, Memory Links/graph reads, leased embedding maintenance,
-  idempotency, the `PostgresDatabase` seam and its `pg` adapter
+  the `PostgresDatabase` seam and its `pg` adapter
   (`./postgres`), the optional Episode/Observation capability group
-  (`./episodes`), the embedding/reranking/query-planning adapters
-  (`./providers`), and a host-pluggable schema-contract test kit
-  (`./testing`). Every method takes a host-authenticated `ActorContext`;
-  Postgres RLS enforces the boundary. Host-baked invariants are module
+  (`./episodes`), embedding/reranking/query-planning capability interfaces,
+  and a host-pluggable schema-contract test kit (`./testing`). Factories bind a
+  `MemoryStorageContext`; methods take no Actor. The host initializes and
+  authorizes every storage transaction. Host-baked invariants are module
   options: `embeddingDimensions` (lore oss pins 1024) and
   `defaultMemoryScope` (lore oss keeps "shared"). The package is written at
   the union strictness of its hosts (`noUncheckedIndexedAccess`,
@@ -45,13 +45,15 @@ been removed. Lore now has a native implementation, split into two concepts
   provenance. Do not require an automatic same-task mirror or assume semantic
   identity between the packages. npm publishing remains out of scope.
 - **lore oss** — everything else in this repository: identity/tenancy,
-  request context, HTTP/OpenAPI, SDKs/CLI/MCP, web UI, Memory Proposals
+  request context and authorization, request idempotency, HTTP/OpenAPI,
+  SDKs/CLI/MCP, web UI, Memory Proposals
   (`src/modules/proposals/service.ts`, layered on the engine's exported
   `createMemoryMutationPrimitives`), code-aware memory, portability,
-  evaluation, deployment profiles, and the env-reading provider factories
-  (`src/server/providers/{embedding,reranking,query-planning}/factory.ts` plus
-  `src/server/providers/embedding/config.ts`, which own `LORE_*` env parsing and the
-  telemetry edge — they stay out of the engine on purpose).
+  evaluation, deployment profiles, and concrete model adapters under
+  `src/server/providers`. The adapters, model SDK dependencies, model-specific
+  protocols, defaults, environment parsing, and provider factories belong to OSS;
+  the engine accepts injected capabilities. See `docs/architecture.md` for this
+  dependency contract.
 
 - the `0001_v1_baseline.sql` migration defines identity, tenancy,
   user-private Agents, Memory/chunks/links, pgvector
@@ -82,11 +84,12 @@ been removed. Lore now has a native implementation, split into two concepts
   migration file — its stored SHA-256 makes every existing deployment fail
   closed — and ship schema changes as new forward-only migrations instead. Keep
   migration `down` sections empty: production recovery is forward-only;
-- `src/server/auth/identity.ts`, `access.ts`, and `evaluation.ts` are lore oss domain
-  modules; the Memory and Observation modules live in the engine
-  (`packages/lore-core/src/memory.ts`, `packages/lore-core/src/episodes/`);
-  `request-context.ts` installs verified User/Workspace/Agent
-  context for every request transaction;
+- `src/server/auth/actor-context.ts` owns OSS Actor identity;
+  `src/server/database/memory-storage.ts` binds it inside every engine transaction,
+  and `src/server/database/postgres.ts` selects OSS roles. The Memory, Graph, and
+  Episode modules under `src/modules` enforce product policy and map engine storage
+  keys to the unchanged Workspace/User/Agent wire fields. Core storage and retrieval
+  remain in `packages/lore-core`; see `docs/architecture.md` for the split;
 - `packages/lore-core/src/memory-content.ts` owns the canonical Memory content boundary. A Memory
   is one coherent knowledge record, recommended at no more than 8,000 Unicode
   characters and hard-limited to 32,000 characters and 64 derived chunks. Direct
@@ -217,6 +220,10 @@ been removed. Lore now has a native implementation, split into two concepts
   `src/shell/Sidebar.tsx` owns the Lore shell, and
   `src/shared/browser/sdk.ts` configures the same-origin TypeScript SDK client,
   browser credentials, and `onRequest` request logging without a custom fetch wrapper.
+  UI remains a distinct module within Next.js; it does not need a separate package
+  or service. UI, CLI, and MCP depend on the TypeScript SDK, which calls the OSS API;
+  the API supplies authorization and tenancy before composing Core and PostgreSQL.
+  `bun run architecture:check` guards these dependency boundaries in CI.
   Frontend reads and mutations follow SWR hooks → domain `src/modules/*/client.ts`
   adapters → the SDK; API paths, Workspace headers, serialization, parsing,
   cancellation, and errors belong to the SDK. Components must not call `fetch`
@@ -257,7 +264,8 @@ been removed. Lore now has a native implementation, split into two concepts
 - `src/app/[...path]/page.tsx` serves the same shell for `/graph`,
   `/memories`, and Memory detail deep links so browser refresh never loses the
   client route;
-- `packages/lore-core/src/graph.ts` returns RLS-filtered, durable Memory Links and derives
+- `packages/lore-core/src/graph.ts` reads through the host-bound store, returning
+  durable Memory Links and deriving
   affinity only among otherwise isolated visible Memories; `/api/graph` exposes
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
@@ -285,8 +293,10 @@ been removed. Lore now has a native implementation, split into two concepts
   jobs until cutover. The self-host Node worker polls both sequentially by default,
   while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
   database sweep as the delivery backstop;
-- `packages/lore-core/src/idempotency.ts` plus lore oss’s `src/modules/{portability,operations}/service.ts` and `src/server/telemetry/telemetry.ts`
-  own the Portable Core seams. Memory mutation events are database triggers in the
+- `src/server/http/idempotency.ts`, `src/modules/operations/maintenance.ts`,
+  `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
+  own OSS replay, expired replay/event cleanup, and operational integration.
+  Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
   `/readyz`, `/api/v1/actor`, and `/api/v1/capabilities` are the stable operational
@@ -309,7 +319,9 @@ been removed. Lore now has a native implementation, split into two concepts
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
   Memory retrieval or Graph, and may be read as Proposal evidence only through
   current Actor/RLS visibility. An Agent records provenance; it is not a generic
-  Source. `packages/lore-core/src/episodes/episode-evidence.ts` owns their separate, rebuildable hybrid
+  Source. `src/modules/episodes/service.ts` owns authorized recording through
+  `lore.record_episode` and request replay; Core owns normalized Episode validation,
+  storage reads/deletion, and the separate, rebuildable hybrid
   retrieval index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical
   Memory. Any future automatic retention must be an explicit opt-in deployment policy;
@@ -327,13 +339,17 @@ been removed. Lore now has a native implementation, split into two concepts
   HTTP Memory writes validate with these schemas, and OpenAPI generates its
   Memory/create/update components from them. Browser Memory types in
   `src/modules/memories/types.ts` alias the generated TypeScript SDK contract.
-  Keep the code-point/chunk validator in lore core. Metadata uses `z.record(z.string(),
+  Browser wire types and public content limits come only from the SDK; browser
+  modules must not import server/Core modules or run canonical chunk previews.
+  Keep canonical content validation and chunking in server/Core code.
+  Metadata uses `z.record(z.string(),
   z.json())` with a serialized-size refinement; do not restore a handwritten JSON
   walker or separate depth/node-count policies. The shared HTTP input boundary maps
   Zod/parser stack exhaustion to 400 for excessively nested JSON. PostgreSQL enforces
   its Unicode restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register
   recursive JSON with Zod when generating OpenAPI so references target `#/components/schemas`.
-  The reusable engine retains its host-independent types and authorization rules;
+  The reusable engine retains storage types and content invariants; OSS owns
+  authorization policy and the public wire mapping;
 - Node/self-host exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
@@ -343,9 +359,9 @@ been removed. Lore now has a native implementation, split into two concepts
   `LORE_QUERY_PLANNER_NUM_CTX` to any benchmark reader sharing the same model server
   so Ollama does not reload between calls. Do not route local Qwen planners through
   the less controllable OpenAI-compatible surface;
-- `packages/lore-core/src/reranking.ts` defines the deployment-level second-stage contract;
-  `packages/lore-core/src/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
-  plus vLLM-Metal `/score`, while `packages/lore-core/src/reranking/hosted.ts` has concrete Cohere
+- `packages/lore-core/src/reranking.ts` defines the second-stage capability contract;
+  `src/server/providers/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
+  plus vLLM-Metal `/score`, while `src/server/providers/reranking/hosted.ts` has concrete Cohere
   v2, Memos MemReranker, and Voyage v1 adapters. Search fuses exact simple/English
   FTS, a two-term relaxed
   English recall channel with query-side proper-name/identifier specificity
@@ -382,12 +398,12 @@ been removed. Lore now has a native implementation, split into two concepts
   describe a lease as a provider deadline. Ollama adapters reject the SDK cloud host to prevent implicit
   environment credential use. Keep application-level embedding/result/score validation. MemOS and
   vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
-  `packages/lore-core/src/provider-http.ts` with status handling and bounded reads.
+  `src/server/providers/provider-http.ts` with status handling and bounded reads.
   `scripts/benchmarks/lib/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
   `memoryagentbench-download.ts`. Node service probes live in `scripts/dev/lib/local-http.mjs`;
-- `packages/lore-core/src/query-planning.ts` defines optional deployment-level multi-query planning.
-  Its OpenAI/vLLM and Google adapters see only the original question; search keeps
+- `packages/lore-core/src/query-planning.ts` defines the optional multi-query planning capability.
+  OSS adapters in `src/server/providers/query-planning` see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,
   fuses only visible results, and then optionally reranks them;
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
@@ -781,7 +797,8 @@ surfaces:
 - **Evaluation module:** run a versioned suite and return quality, isolation,
   latency, and cost results without mutating production Memories.
 
-Keep RLS policy SQL and the query that relies on it local to the Memory/data module.
+Keep OSS RLS policy SQL and storage-context installation with the host schema and
+database modules; Core queries use the host-constrained store.
 Do not expose storage-provider details at the product interface. Introduce an
 adapter only where behavior actually varies (for example, a production embedding
 provider and a deterministic test adapter).
@@ -1016,6 +1033,7 @@ bun run benchmark:memoryagentbench # run the local conflict/multi-hop profile
 bun run typecheck  # generate Next types, then tsc --noEmit
 bun run lint       # biome check .
 bun run format     # biome check --write .
+bun run architecture:check # enforce UI/SDK/API/Core dependency boundaries
 bun run design:check # enforce and self-test the Lore UI contract
 bun run sdk:generate # regenerate TypeScript/Python contracts and package versions
 bun run sdk:check  # fail when generated developer contracts drift

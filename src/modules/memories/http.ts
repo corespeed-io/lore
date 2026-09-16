@@ -1,5 +1,5 @@
 import type { MemoryModuleOptions, PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryModule } from "@corespeed/lore-core";
+import { createMemoryModule } from "@/modules/memories/service";
 import { createRequestContextResolver } from "@/server/auth/request-context";
 import { errorResponse } from "@/server/http/errors";
 import {

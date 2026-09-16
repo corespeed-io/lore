@@ -1,4 +1,5 @@
-import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import type { ActorContext } from "@/server/auth/actor-context";
 import { CODE_INDEX_REVISION } from "./protocol";
 import { createCodeIndexModule } from "./service";
 import type { CodeIndexJobStatus } from "./types";

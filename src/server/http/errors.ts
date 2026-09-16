@@ -1,10 +1,9 @@
 import {
-  IdempotencyConflictError,
   MemoryAccessDeniedError,
   MemoryContentValidationError,
   MemoryVersionConflictError,
 } from "@corespeed/lore-core";
-import { ObservationAccessDeniedError } from "@corespeed/lore-core/episodes";
+import { ObservationAccessDeniedError } from "@/modules/episodes/service";
 import { EvaluationSuiteNotFoundError } from "@/modules/evaluations/service";
 import {
   PortabilityAccessDeniedError,
@@ -22,6 +21,7 @@ import {
   RequestInputError,
   WorkspaceAccessError,
 } from "@/server/auth/request-context";
+import { IdempotencyConflictError } from "@/server/http/idempotency";
 import { BadRequestError, PreconditionRequiredError } from "./input";
 
 function errorCode(error: unknown): string {

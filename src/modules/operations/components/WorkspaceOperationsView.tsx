@@ -1,12 +1,12 @@
 "use client";
 
+import type { ReadinessReport, WorkspaceArchive, WorkspaceImportResult } from "@corespeed/lore-sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreCodeIndexJobs } from "@/modules/code/hooks";
 import type { CodeIndexJobSummary } from "@/modules/code/job-presentation";
 import { summarizeCodeIndexJobs } from "@/modules/code/job-presentation";
 import { useLoreCurrentHumanActor } from "@/modules/identity/hooks";
 import { useLoreDeploymentCapabilities, useLoreReadiness } from "@/modules/operations/hooks";
-import type { ReadinessReport } from "@/modules/operations/service";
 import { useLoreWorkspaceOperationMutations } from "@/modules/portability/hooks";
 import type { WorkspaceImportConflictPolicy } from "@/modules/portability/presentation";
 import {
@@ -18,7 +18,6 @@ import {
   workspaceImportFingerprint,
   workspaceOwnerMap,
 } from "@/modules/portability/presentation";
-import type { WorkspaceArchive, WorkspaceImportResult } from "@/modules/portability/service";
 
 const FEATURE_LABELS = {
   idempotency: "Replay-safe mutations",

@@ -1,5 +1,5 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryGraphModule } from "@corespeed/lore-core";
+import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createRequestContextResolver } from "@/server/auth/request-context";
 import { errorResponse } from "@/server/http/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";

@@ -38,6 +38,7 @@ let root: Root;
 let requests: RecordedRequest[];
 let unexpectedRequests: string[];
 let browseResponse: (request: RecordedRequest) => Response | Promise<Response>;
+let saveResponse: (request: Request) => Response | Promise<Response>;
 
 function memory(index = 1): Memory {
   return {
@@ -122,6 +123,7 @@ beforeEach(() => {
   requests = [];
   unexpectedRequests = [];
   browseResponse = () => json([]);
+  saveResponse = () => json(memory());
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -186,6 +188,7 @@ beforeEach(() => {
             links: [],
           });
         case "/api/v1/memories":
+          if (request.method === "POST") return saveResponse(request);
           return entry.url.searchParams.has("q") ? json([]) : browseResponse(entry);
         case `/api/v1/memories/${MEMORY_ID}`:
           return json(memory());
@@ -202,6 +205,54 @@ afterEach(async () => {
   container.remove();
   vi.unstubAllGlobals();
   expect(unexpectedRequests).toEqual([]);
+});
+
+test("Memory editor counts Unicode characters and displays server validation failures", async () => {
+  await render("/memories");
+  const createButton = container.querySelector<HTMLButtonElement>(".sidebar-new-memory");
+  expect(createButton).not.toBeNull();
+  await act(async () => createButton?.click());
+  const textarea = container.querySelector<HTMLTextAreaElement>("#memory-editor-content");
+  const submit = container.querySelector<HTMLButtonElement>(".memory-editor [type=submit]");
+  if (!textarea || !submit) throw new Error("Memory editor not mounted");
+
+  async function enter(content: string) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(
+        textarea,
+        content,
+      );
+      textarea?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  await enter("😀".repeat(32_000));
+  expect(submit.disabled).toBe(false);
+  expect(textarea.getAttribute("aria-invalid")).toBe("false");
+  await enter(`${"😀".repeat(32_000)}x`);
+  expect(submit.disabled).toBe(true);
+  expect(textarea.getAttribute("aria-invalid")).toBe("true");
+
+  const content = "invalid\0content";
+  const writes: unknown[] = [];
+  saveResponse = async (request) => {
+    writes.push(await request.json());
+    expect(request.headers.get("x-lore-workspace-id")).toBe(WORKSPACE_A);
+    return Response.json(
+      { code: "invalid_request", error: "Memory content contains an invalid null character" },
+      { status: 400 },
+    );
+  };
+  await enter(content);
+  await act(async () => submit.click());
+  await eventually(() =>
+    expect(container.querySelector(".memory-editor-error")?.textContent).toContain(
+      "Memory content contains an invalid null character",
+    ),
+  );
+  expect(writes).toEqual([{ content, scope: "shared" }]);
+  expect(textarea.value).toBe(content);
+  expect(submit.disabled).toBe(false);
 });
 
 test.each([

@@ -4,16 +4,20 @@ Lore stores and retrieves memories for people and the agents that act for them,
 while preserving tenant and user-private isolation.
 
 Lore is two concepts in one repository. **Lore Core**
-(`packages/lore-core`, published as `@corespeed/lore-core`) is the reusable
-memory engine: given a host-authenticated Actor and a PostgreSQL schema that
-satisfies its RLS contract, it owns Memory storage, chunking, hybrid
-retrieval, Memory Links, Episode/Observation evidence, and embedding
-maintenance. **Lore OSS** is the self-hostable product built on that engine in
-this repository: identity and tenancy, the HTTP API and SDKs, the web UI,
-Memory Proposals, code-aware memory, portability, evaluation, and deployment
-profiles. CoreSpeed HaaS retains a separate vendored `packages/memory-core`
-fork with its own identity plane and schema chain, and manually ports selected
-changes from Lore. It does not consume a verbatim Lore Core copy.
+(`packages/lore-core`, named `@corespeed/lore-core`) is the reusable
+memory engine: it owns Memory storage, chunking, retrieval algorithms, Memory
+Links, Episode/Observation validation and evidence reads, and embedding maintenance
+over PostgreSQL. Its factories bind a host-constrained `MemoryStorageContext`;
+`partitionId`, `ownerId`, and `sourceId` are storage and attribution keys, not an
+identity or tenant model. It defines the model capabilities that hosts supply.
+**Lore OSS** is the self-hostable product built on that engine in this repository:
+identity, tenancy and sharing policy, request authorization and idempotency, the
+HTTP API and SDKs, the web UI, Memory Proposals, code-aware memory, portability,
+evaluation, and deployment profiles, including concrete model adapters and their
+configuration. Its Workspace/User/Agent model and public fields remain unchanged.
+CoreSpeed HaaS retains a separate vendored `packages/memory-core` fork with its own identity
+plane and schema chain, and manually ports selected changes from Lore. It does
+not consume a verbatim Lore Core copy.
 
 ## Tenancy and identity
 

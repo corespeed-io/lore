@@ -10,8 +10,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ActorContext, Memory, PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryModule } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -21,6 +20,9 @@ import { createCodeEvidenceModule } from "../../src/modules/code/evidence";
 import { createCodeIndexModule } from "../../src/modules/code/indexing/service";
 import type { CodeArtifact } from "../../src/modules/code/indexing/types";
 import { createContextRetrievalModule } from "../../src/modules/context/retrieval";
+import type { Memory } from "../../src/modules/memories/service";
+import { createMemoryModule } from "../../src/modules/memories/service";
+import type { ActorContext } from "../../src/server/auth/actor-context";
 import type {
   GroupedJointEvidencePacket,
   JointAnchorEvidence,

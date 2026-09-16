@@ -1,11 +1,11 @@
-import type { RerankingProvider } from "@corespeed/lore-core";
+import { createHostedRerankingProvider } from "./hosted";
+import { createOllamaListwiseRerankingProvider } from "./ollama-listwise";
+import type { ConfiguredRerankingProvider } from "./types";
 import {
-  createHostedRerankingProvider,
   createLlamaCppRerankingProvider,
-  createOllamaListwiseRerankingProvider,
   createVllmRerankingProvider,
   createVllmScoreRerankingProvider,
-} from "@corespeed/lore-core/providers";
+} from "./vllm";
 
 export type RerankingConfigurationWarning = (message: string) => void;
 
@@ -26,9 +26,9 @@ function keepAlive(value: string | undefined): string | number {
 }
 
 function warnOnRerankingFailure(
-  provider: RerankingProvider,
+  provider: ConfiguredRerankingProvider,
   warn: RerankingConfigurationWarning,
-): RerankingProvider {
+): ConfiguredRerankingProvider {
   return {
     ...provider,
     async rerank(input) {
@@ -47,7 +47,7 @@ function warnOnRerankingFailure(
 export function createRerankingProviderFromEnvironment(
   env: Record<string, string | undefined>,
   warn: RerankingConfigurationWarning = () => undefined,
-): RerankingProvider | undefined {
+): ConfiguredRerankingProvider | undefined {
   const provider = env.LORE_RERANK_PROVIDER?.trim().toLowerCase();
   if (!provider) return undefined;
   try {

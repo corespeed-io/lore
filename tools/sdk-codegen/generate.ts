@@ -104,6 +104,23 @@ function openApiErrorCodes(document: OpenApiDocument): readonly string[] {
   return codes.map((code) => String(code));
 }
 
+function memoryContentLimits(document: OpenApiDocument) {
+  const limits = document.components.schemas.Capabilities?.properties?.limits?.properties;
+  const recommendedCharacters = limits?.memoryContentRecommendedCharacters?.const;
+  const maximumCharacters = limits?.memoryContentMaximumCharacters?.const;
+  if (
+    typeof recommendedCharacters !== "number" ||
+    typeof maximumCharacters !== "number" ||
+    !Number.isSafeInteger(recommendedCharacters) ||
+    !Number.isSafeInteger(maximumCharacters) ||
+    recommendedCharacters <= 0 ||
+    maximumCharacters < recommendedCharacters
+  ) {
+    throw new TypeError("OpenAPI Capabilities must define valid Memory content limits");
+  }
+  return { recommendedCharacters, maximumCharacters };
+}
+
 function pythonType(schema: JsonSchema, forwardReferences = false): string {
   if (schema.$ref) {
     const name = schema.$ref.split("/").at(-1) ?? "Any";
@@ -201,7 +218,7 @@ async function generatedArtifacts(): Promise<ReadonlyMap<URL, string>> {
     ],
     [
       runtimeOutputUrl,
-      `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n`,
+      `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n\nexport const MEMORY_CONTENT_LIMITS = ${JSON.stringify(memoryContentLimits(document), null, 2)} as const;\n`,
     ],
     [
       cliVersionOutputUrl,

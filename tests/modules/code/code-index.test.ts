@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { PostgresDatabase } from "@corespeed/lore-core";
-import { installActorContext } from "@corespeed/lore-core";
 import { expect, onTestFinished, test } from "vitest";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import {
@@ -17,6 +16,7 @@ import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/mainte
 import { CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createAccessModule } from "@/server/auth/access";
+import { installActorContext } from "../../../src/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
 const COMMIT_A = "a".repeat(40);

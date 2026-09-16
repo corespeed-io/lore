@@ -5,13 +5,13 @@ import type {
   RecordObservation,
 } from "@corespeed/lore-core/episodes";
 import {
-  createObservationModule,
   MAX_EPISODE_CONTENT_CHARACTERS,
   MAX_EPISODE_METADATA_CHARACTERS,
   MAX_EPISODE_OBSERVATIONS,
   MAX_OBSERVATION_BATCH_READ,
   MAX_OBSERVATION_CONTENT_CHARACTERS,
 } from "@corespeed/lore-core/episodes";
+import { createObservationModule } from "@/modules/episodes/service";
 import { decodeCursor, encodeCursor } from "@/modules/memories/http";
 import { memoryScope, metadata } from "@/modules/memories/input";
 import { createRequestContextResolver } from "@/server/auth/request-context";

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import { Client } from "pg";
 import { createAgentCredentialHandlers, createAgentHandlers } from "../../src/modules/agents/http";
 import type { IssuedAgentCredential, WorkspaceAgent } from "../../src/modules/agents/types";
@@ -31,6 +30,7 @@ import {
 import type { MemoryProposal, MemoryProposalReviewResult } from "../../src/modules/proposals/types";
 import { createWorkspaceHandlers } from "../../src/modules/workspaces/http";
 import type { WorkspaceSummary } from "../../src/modules/workspaces/types";
+import { createPostgresDatabase } from "../../src/server/database/postgres";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const smokeDatabaseUrl = process.env.LORE_SMOKE_DATABASE_URL;

@@ -8,8 +8,9 @@ export interface PostgresTransaction {
 
 /**
  * The narrow Postgres transaction seam used by domain modules and PGlite tests.
- * Lore does not support interchangeable storage engines: SQL, transactions, and
- * database-enforced RLS are part of this contract.
+ * Lore does not support interchangeable storage engines: SQL and transactional
+ * consistency are part of this contract. Hosts establish database access policy
+ * before engine operations; Lore OSS uses RLS for that policy.
  */
 export interface PostgresDatabase {
   transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>): Promise<Result>;

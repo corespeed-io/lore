@@ -1,7 +1,4 @@
 import type {
-  ActorContext,
-  IdempotencyRequest,
-  Memory,
   MemoryMutationPrimitivesOptions,
   MemoryRow,
   MemoryScope,
@@ -10,17 +7,18 @@ import type {
   UpdateMemory,
 } from "@corespeed/lore-core";
 import {
-  beginMutation,
-  completeMutation,
-  createMemoryMutationPrimitives,
-  installActorContext,
   isPostgresAccessDenied,
   MemoryVersionConflictError,
-  memoryFromRow,
   prepareMemoryContent,
   serializedTimestamp,
 } from "@corespeed/lore-core";
 import type { CodeEvidenceRelationship } from "@/modules/code/evidence";
+import type { Memory } from "@/modules/memories/service";
+import { createMemoryMutationPrimitives, memoryFromRow } from "@/modules/memories/service";
+import type { ActorContext } from "@/server/auth/actor-context";
+import { installActorContext } from "@/server/auth/actor-context";
+import type { IdempotencyRequest } from "@/server/http/idempotency";
+import { beginMutation, completeMutation } from "@/server/http/idempotency";
 
 /**
  * Memory Proposals: owner-private review state for suggested create/update

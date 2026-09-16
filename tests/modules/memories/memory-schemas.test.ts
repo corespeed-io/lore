@@ -1,4 +1,3 @@
-import type { Memory as CoreMemory } from "@corespeed/lore-core";
 import type { Memory as SdkMemory } from "@corespeed/lore-sdk";
 import { expect, expectTypeOf, test } from "vitest";
 import type { Memory } from "@/modules/memories/schemas";
@@ -9,6 +8,7 @@ import {
   memoryOpenApiSchemas,
   UpdateMemoryInputSchema,
 } from "@/modules/memories/schemas";
+import type { Memory as CoreMemory } from "../../../src/modules/memories/service";
 
 test("the inferred wire model stays aligned with the engine and generated SDK", () => {
   expectTypeOf<Memory>().toMatchTypeOf<CoreMemory>();

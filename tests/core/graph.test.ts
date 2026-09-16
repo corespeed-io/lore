@@ -1,6 +1,7 @@
-import { createMemoryGraphModule, createMemoryModule } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/server/auth/access";
+import { createMemoryGraphModule } from "../../src/modules/graph/service";
+import { createMemoryModule } from "../../src/modules/memories/service";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("Memory Graph derives affinity only between visible Memories", async () => {

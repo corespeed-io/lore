@@ -1,14 +1,7 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
-import {
-  createMemoryGraphModule,
-  createMemoryModule,
-  IdempotencyConflictError,
-  installActorContext,
-  MemoryVersionConflictError,
-  mutationRequestHash,
-  purgeExpiredPortableCoreRecords,
-} from "@corespeed/lore-core";
+import { MemoryVersionConflictError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
+import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createOperationsModule } from "@/modules/operations/service";
 import {
   createPortabilityModule,
@@ -18,6 +11,10 @@ import {
   WorkspaceExportLimitError,
 } from "@/modules/portability/service";
 import { markDependencyFailure, markDependencySuccess } from "@/server/telemetry/telemetry";
+import { createMemoryGraphModule } from "../../src/modules/graph/service";
+import { createMemoryModule } from "../../src/modules/memories/service";
+import { installActorContext } from "../../src/server/auth/actor-context";
+import { IdempotencyConflictError, mutationRequestHash } from "../../src/server/http/idempotency";
 import { createMemoryTestContext } from "../support/memory-context";
 
 const EXPORT_TEST_DEPLOYMENT_ID = "30000000-0000-4000-8000-000000000001";

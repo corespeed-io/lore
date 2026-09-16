@@ -8,14 +8,8 @@ export interface RerankResult {
   score: number;
 }
 
+/** Score only the authorized evidence passages selected by the engine. */
 export interface RerankingProvider {
-  provider: string;
-  model: string;
-  revision?: string;
-  instruction?: string;
-  transport?: string;
-  decoding?: Record<string, unknown>;
-  keepAlive?: number | string;
   rerank(input: {
     query: string;
     documents: RerankDocument[];

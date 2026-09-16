@@ -1,4 +1,4 @@
-import type { MemoryScope } from "@/modules/memories/schemas";
+import type { MemoryScope } from "@corespeed/lore-sdk";
 
 export type EpisodeKind = "conversation" | "workflow" | "document" | "event";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { MEMORY_CONTENT_LIMITS, prepareMemoryContent } from "@corespeed/lore-core";
+import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "@/modules/agents/components/AgentsView";
 import { GraphView } from "@/modules/graph/components/GraphView";
@@ -690,17 +690,6 @@ function MemoryEditor({
   const contentTooLong = contentCharacterCount > MEMORY_CONTENT_LIMITS.maximumCharacters;
   const contentBeyondRecommendation =
     contentCharacterCount > MEMORY_CONTENT_LIMITS.recommendedCharacters;
-  const contentIndexing = useMemo(() => {
-    if (!content.trim()) return { chunkCount: 0, error: null };
-    try {
-      return { chunkCount: prepareMemoryContent(content.trim()).chunks.length, error: null };
-    } catch (error) {
-      return {
-        chunkCount: null,
-        error: error instanceof Error ? error.message : "Memory content cannot be indexed safely",
-      };
-    }
-  }, [content]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -728,7 +717,7 @@ function MemoryEditor({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (content.trim() && !contentTooLong && contentIndexing.error === null) {
+            if (content.trim() && !contentTooLong) {
               void onSave(content.trim(), scope);
             }
           }}
@@ -755,28 +744,22 @@ function MemoryEditor({
             rows={12}
             maxLength={MEMORY_CONTENT_LIMITS.maximumCharacters * 2}
             aria-describedby="memory-editor-content-guidance"
-            aria-invalid={contentTooLong || contentIndexing.error !== null}
+            aria-invalid={contentTooLong}
             placeholder="Write a durable fact, decision, preference, or piece of context…"
             onChange={(event) => setContent(event.target.value)}
           />
           <p
             id="memory-editor-content-guidance"
             className={`memory-editor-guidance${
-              contentTooLong || contentIndexing.error !== null
-                ? " memory-editor-guidance-error"
-                : ""
+              contentTooLong ? " memory-editor-guidance-error" : ""
             }`}
           >
             {contentCharacterCount.toLocaleString()} /
             {MEMORY_CONTENT_LIMITS.maximumCharacters.toLocaleString()} characters · recommended ≤
             {MEMORY_CONTENT_LIMITS.recommendedCharacters.toLocaleString()}
-            {contentIndexing.chunkCount !== null
-              ? ` · ${contentIndexing.chunkCount} / ${MEMORY_CONTENT_LIMITS.maximumChunks} chunks`
-              : ""}
             {contentBeyondRecommendation && !contentTooLong
               ? " · Store long source material as document evidence."
               : ""}
-            {contentIndexing.error && !contentTooLong ? ` · ${contentIndexing.error}` : ""}
           </p>
           <fieldset className="memory-scope-control">
             <legend>Visibility</legend>
@@ -799,9 +782,7 @@ function MemoryEditor({
             <button
               type="submit"
               className="memory-editor-primary"
-              disabled={
-                saving || !content.trim() || contentTooLong || contentIndexing.error !== null
-              }
+              disabled={saving || !content.trim() || contentTooLong}
             >
               {saving ? "Saving…" : memory ? "Save changes" : "Remember"}
             </button>

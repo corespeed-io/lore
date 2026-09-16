@@ -1,7 +1,14 @@
 import { expect, test } from "vitest";
 import { createBenchmarkMetering } from "../../scripts/benchmarks/lib/benchmark-metering";
 
-test("benchmark metering records actual provider workload", async () => {
+test("benchmark metering records actual provider workload and preserves model metadata", async () => {
+  const modelMetadata = {
+    revision: "fixture-v2",
+    instruction: "Use only supplied evidence.",
+    transport: "fixture-native",
+    decoding: { temperature: 0, maxTokens: 256 },
+    keepAlive: 0,
+  };
   const metering = createBenchmarkMetering({
     embeddingProvider: {
       provider: "test",
@@ -11,11 +18,13 @@ test("benchmark metering records actual provider workload", async () => {
       embed: async (texts) => texts.map(() => Array.from({ length: 1024 }, () => 0)),
     },
     queryPlanningProvider: {
+      ...modelMetadata,
       provider: "test",
       model: "planner",
       plan: async () => ["rewrite"],
     },
     rerankingProvider: {
+      ...modelMetadata,
       provider: "test",
       model: "reranker",
       rerank: async ({ documents }) =>
@@ -35,6 +44,16 @@ test("benchmark metering records actual provider workload", async () => {
     limit: 1,
   });
 
+  expect(metering.queryPlanningProvider).toMatchObject({
+    ...modelMetadata,
+    provider: "test",
+    model: "planner",
+  });
+  expect(metering.rerankingProvider).toMatchObject({
+    ...modelMetadata,
+    provider: "test",
+    model: "reranker",
+  });
   expect(metering.workload).toEqual({
     accounting: "request-and-character-counts",
     embedding: {

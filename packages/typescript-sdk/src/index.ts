@@ -11,6 +11,8 @@ export {
   planRetrievalGrounding,
   RETRIEVAL_GROUNDING_POLICY_REVISION,
 } from "./generated/grounding.ts";
+/** Public input guidance; the API performs canonical content validation and chunking. */
+export { MEMORY_CONTENT_LIMITS } from "./generated/runtime.ts";
 
 export type LoreOpenApiPaths = paths;
 export type LoreOpenApiOperations = operations;

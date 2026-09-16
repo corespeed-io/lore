@@ -1,8 +1,9 @@
-import { createMemoryModule, installActorContext } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import type { EvaluationSearchProvider } from "@/modules/evaluations/service";
 import { createEvaluationModule, evaluateRanking } from "@/modules/evaluations/service";
 import syntheticSuite from "../../../evaluation/suites/synthetic-v1.json";
+import { createMemoryModule } from "../../../src/modules/memories/service";
+import { installActorContext } from "../../../src/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
 test("Ranking metrics calculate Recall@K, MRR, and nDCG deterministically", () => {

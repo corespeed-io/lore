@@ -1,9 +1,6 @@
 import "server-only";
-import type { RuntimePostgresDatabase } from "@corespeed/lore-core/postgres";
-import {
-  createPostgresDatabase,
-  createRequestPostgresDatabase,
-} from "@corespeed/lore-core/postgres";
+import type { RuntimePostgresDatabase } from "@/server/database/postgres";
+import { createPostgresDatabase, createRequestPostgresDatabase } from "@/server/database/postgres";
 
 interface HyperdriveBinding {
   connectionString: string;

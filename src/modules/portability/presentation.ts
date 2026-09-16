@@ -1,10 +1,10 @@
-import type { ImportWorkspaceArchive, WorkspaceArchive } from "./service";
+import type { ImportWorkspaceInput, WorkspaceArchive } from "@corespeed/lore-sdk";
 
 export const MAX_WORKSPACE_ARCHIVE_FILE_BYTES = 50_000_000;
 export const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export type WorkspaceImportConflictPolicy = NonNullable<ImportWorkspaceArchive["conflictPolicy"]>;
+export type WorkspaceImportConflictPolicy = NonNullable<ImportWorkspaceInput["conflictPolicy"]>;
 
 export class WorkspaceArchiveParseError extends Error {
   override name = "WorkspaceArchiveParseError";

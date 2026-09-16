@@ -1,9 +1,9 @@
-import { type ActorContext, installActorContext } from "../actor-context";
-import type { PostgresDatabase, PostgresTransaction } from "../db";
+import type { PostgresTransaction } from "../db";
+import type { EmbeddingProvider } from "../embedding";
+import { validatedEmbeddingDimensions } from "../embedding";
 import { embeddingVectorLiteral, embeddingVectorLiterals } from "../embedding/vector";
-import { validatedEmbeddingDimensions } from "../embedding-config";
-import type { EmbeddingProvider } from "../memory";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
+import type { MemoryStorageContext, MemoryStorageScope } from "../memory-storage";
 import type { QueryPlanningProvider } from "../query-planning";
 import type { RerankingProvider } from "../reranking";
 
@@ -15,11 +15,6 @@ export const EPISODE_EVIDENCE_RETRIEVAL_POLICY = {
   fusion: "weighted-rrf-with-optional-planning-and-reranking",
   grouping: "episode-or-explicit-metadata-source-key",
 } as const;
-
-export class EpisodeEvidenceAccessDeniedError extends Error {
-  override name = "EpisodeEvidenceAccessDeniedError";
-  readonly status = 403;
-}
 
 export interface IndexEpisodeEvidence {
   episodeId: string;
@@ -146,28 +141,27 @@ function sourceKeyFor(row: SearchRow, groupMetadataKey: string | undefined): str
   return value;
 }
 
-async function readWritableEpisode(
+async function readEpisodeSource(
   transaction: PostgresTransaction,
-  actor: ActorContext,
+  storage: MemoryStorageScope,
   episodeId: string,
 ): Promise<{ episode: EpisodeRow; observations: ObservationRow[] }> {
   const episode = await transaction.query<EpisodeRow>(
     `SELECT id
      FROM episodes
      WHERE workspace_id = $1
-       AND id = $2
-       AND lore.can_write_memory(workspace_id, owner_user_id)`,
-    [actor.workspaceId, episodeId],
+       AND id = $2`,
+    [storage.partitionId, episodeId],
   );
   if (!episode.rows[0]) {
-    throw new EpisodeEvidenceAccessDeniedError("Actor cannot index this Episode");
+    throw new Error("Episode is unavailable for indexing");
   }
   const observations = await transaction.query<ObservationRow>(
     `SELECT id, episode_id, ordinal, content, metadata
      FROM observations
      WHERE workspace_id = $1 AND episode_id = $2
      ORDER BY ordinal, id`,
-    [actor.workspaceId, episodeId],
+    [storage.partitionId, episodeId],
   );
   if (!observations.rows.length) throw new Error("Episode contains no visible Observations");
   return { episode: episode.rows[0], observations: observations.rows };
@@ -243,7 +237,7 @@ async function matchingGeneration(
 
 async function persistedChunks(
   transaction: PostgresTransaction,
-  actor: ActorContext,
+  storage: MemoryStorageScope,
   episodeId: string,
 ): Promise<PersistedEvidenceChunk[]> {
   const result = await transaction.query<PersistedEvidenceChunk>(
@@ -253,14 +247,14 @@ async function persistedChunks(
        AND episode_id = $2
        AND index_revision = $3
      ORDER BY observation_ordinal, observation_id, chunk_ordinal, id`,
-    [actor.workspaceId, episodeId, EPISODE_EVIDENCE_INDEX_REVISION],
+    [storage.partitionId, episodeId, EPISODE_EVIDENCE_INDEX_REVISION],
   );
   return result.rows;
 }
 
 async function embeddedChunkCount(
   transaction: PostgresTransaction,
-  actor: ActorContext,
+  storage: MemoryStorageScope,
   episodeId: string,
   generationId: string,
 ): Promise<number> {
@@ -274,7 +268,7 @@ async function embeddedChunkCount(
        AND embedded.episode_id = $2
        AND embedded.generation_id = $3
        AND chunk.index_revision = $4`,
-    [actor.workspaceId, episodeId, generationId, EPISODE_EVIDENCE_INDEX_REVISION],
+    [storage.partitionId, episodeId, generationId, EPISODE_EVIDENCE_INDEX_REVISION],
   );
   return Number(result.rows[0]?.count ?? 0);
 }
@@ -315,7 +309,7 @@ function groupRows(
 
 async function searchOneQuery(input: {
   transaction: PostgresTransaction;
-  actor: ActorContext;
+  storage: MemoryStorageScope;
   query: string;
   queryEmbedding: string | null;
   candidateLimit: number;
@@ -494,7 +488,7 @@ async function searchOneQuery(input: {
      ORDER BY ranked.score DESC, ranked.observation_id`,
     [
       input.query,
-      input.actor.workspaceId,
+      input.storage.partitionId,
       input.queryEmbedding,
       input.candidateLimit,
       input.semanticDistanceThreshold,
@@ -598,9 +592,10 @@ async function rerankResults(input: {
 }
 
 export function createEpisodeEvidenceModule(
-  database: PostgresDatabase,
+  storage: MemoryStorageContext,
   options: EpisodeEvidenceModuleOptions = {},
 ) {
+  const { database } = storage;
   const evidenceNeighborChunks = boundedInteger(options.evidenceNeighborChunks, 0, 0, 2);
   const evidenceTopObservations = boundedInteger(options.evidenceTopObservations, 1, 1, 5);
   const queryPlannerMaxQueries = boundedInteger(options.queryPlannerMaxQueries, 3, 1, 5);
@@ -620,13 +615,9 @@ export function createEpisodeEvidenceModule(
   }
 
   return {
-    async index(
-      actor: ActorContext,
-      input: IndexEpisodeEvidence,
-    ): Promise<EpisodeEvidenceIndexResult> {
+    async index(input: IndexEpisodeEvidence): Promise<EpisodeEvidenceIndexResult> {
       const source = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
-        return readWritableEpisode(transaction, actor, input.episodeId);
+        return readEpisodeSource(transaction, storage, input.episodeId);
       });
       const expectedChunks = prepareChunks(source.observations);
       const sourceCharacters = source.observations.reduce(
@@ -636,8 +627,7 @@ export function createEpisodeEvidenceModule(
 
       if (input.mode !== "verify") {
         await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          await readWritableEpisode(transaction, actor, input.episodeId);
+          await readEpisodeSource(transaction, storage, input.episodeId);
           await transaction.query(
             `INSERT INTO episode_evidence_chunks (
                workspace_id, episode_id, observation_id, observation_ordinal,
@@ -654,7 +644,7 @@ export function createEpisodeEvidenceModule(
              ON CONFLICT (workspace_id, observation_id, index_revision, chunk_ordinal)
              DO NOTHING`,
             [
-              actor.workspaceId,
+              storage.partitionId,
               input.episodeId,
               EPISODE_EVIDENCE_INDEX_REVISION,
               JSON.stringify(
@@ -671,15 +661,13 @@ export function createEpisodeEvidenceModule(
       }
 
       const persisted = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
-        return persistedChunks(transaction, actor, input.episodeId);
+        return persistedChunks(transaction, storage, input.episodeId);
       });
       validatePersistedChunks(expectedChunks, persisted);
 
       let generation: { id: string; status: "active" | "retiring" } | null = null;
       if (embeddingProvider) {
         generation = await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
           return matchingGeneration(transaction, embeddingProvider, input.mode !== "verify");
         });
         if (input.mode === "verify" && !generation) {
@@ -689,7 +677,6 @@ export function createEpisodeEvidenceModule(
 
       if (embeddingProvider && generation && input.mode !== "verify") {
         const missing = await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
           const result = await transaction.query<PersistedEvidenceChunk>(
             `SELECT chunk.id, chunk.episode_id, chunk.observation_id,
                     chunk.observation_ordinal, chunk.chunk_ordinal, chunk.content
@@ -703,7 +690,7 @@ export function createEpisodeEvidenceModule(
                  WHERE embedded.generation_id = $4 AND embedded.chunk_id = chunk.id
                )
              ORDER BY chunk.observation_ordinal, chunk.observation_id, chunk.chunk_ordinal, chunk.id`,
-            [actor.workspaceId, input.episodeId, EPISODE_EVIDENCE_INDEX_REVISION, generation.id],
+            [storage.partitionId, input.episodeId, EPISODE_EVIDENCE_INDEX_REVISION, generation.id],
           );
           return result.rows;
         });
@@ -723,7 +710,6 @@ export function createEpisodeEvidenceModule(
             break;
           }
           await database.transaction(async (transaction) => {
-            await installActorContext(transaction, actor);
             await transaction.query(
               `INSERT INTO episode_evidence_chunk_embeddings (
                  generation_id, workspace_id, episode_id, observation_id, chunk_id, embedding
@@ -739,7 +725,7 @@ export function createEpisodeEvidenceModule(
                ON CONFLICT (generation_id, chunk_id) DO NOTHING`,
               [
                 generation?.id,
-                actor.workspaceId,
+                storage.partitionId,
                 JSON.stringify(
                   batch.map((chunk, index) => ({
                     episode_id: chunk.episode_id,
@@ -756,8 +742,7 @@ export function createEpisodeEvidenceModule(
 
       const embedded = generation
         ? await database.transaction(async (transaction) => {
-            await installActorContext(transaction, actor);
-            return embeddedChunkCount(transaction, actor, input.episodeId, generation.id);
+            return embeddedChunkCount(transaction, storage, input.episodeId, generation.id);
           })
         : 0;
       if (input.mode === "verify" && embeddingProvider && embedded !== expectedChunks.length) {
@@ -775,10 +760,7 @@ export function createEpisodeEvidenceModule(
       };
     },
 
-    async search(
-      actor: ActorContext,
-      input: SearchEpisodeEvidence,
-    ): Promise<EpisodeEvidenceSearchResult[]> {
+    async search(input: SearchEpisodeEvidence): Promise<EpisodeEvidenceSearchResult[]> {
       const query = input.query.trim();
       if (!query) return [];
       const limit = boundedInteger(input.limit, 10, 1, 100);
@@ -818,13 +800,12 @@ export function createEpisodeEvidenceModule(
         }
       }
       const resultSets = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const sets: EpisodeEvidenceSearchResult[][] = [];
         for (const [index, plannedQuery] of queries.entries()) {
           sets.push(
             await searchOneQuery({
               transaction,
-              actor,
+              storage,
               query: plannedQuery,
               queryEmbedding: queryEmbeddings[index] ?? null,
               candidateLimit,
