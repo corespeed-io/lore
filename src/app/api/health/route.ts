@@ -1,4 +1,4 @@
-import { livenessReport } from "@/lib/operations";
+import { livenessReport } from "@/modules/operations/service";
 
 export function GET() {
   return Response.json(

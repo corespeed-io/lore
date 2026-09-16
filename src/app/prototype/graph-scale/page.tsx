@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { GraphScalePrototype, type PrototypeVariant } from "@/components/WorkerCanvasGraph";
+import type { PrototypeVariant } from "@/modules/graph/components/WorkerCanvasGraph";
+import { GraphScalePrototype } from "@/modules/graph/components/WorkerCanvasGraph";
 
 // PROTOTYPE — three rendering architectures for a 5,000-node / 20,000-link graph,
 // switchable via ?variant=canvas|worker|svg on /prototype/graph-scale.

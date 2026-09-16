@@ -25,6 +25,9 @@ assembly.
 The same Portable Core and Postgres schema run in OSS self-hosting and CoreSpeed
 Cloud. Model integrations are optional; Postgres remains the canonical store.
 
+See [the architecture guide](docs/architecture.md) for domain modules, runtime seams,
+and the organization of scripts and tests.
+
 ```mermaid
 flowchart LR
     Users["Users"] --> Interfaces["Web · API · SDKs · CLI · MCP"]
@@ -104,6 +107,8 @@ The OSS profile runs on Node, Docker, and Postgres. CoreSpeed Cloud uses the sam
 domain modules and schema on Cloudflare Workers with cache-disabled Hyperdrive.
 See the documentation before deploying beyond localhost:
 
+- [Documentation index](docs/README.md) — current guides, architecture decisions, and research
+- [Developer integration](docs/developer-integration.md) — API, SDK, CLI, MCP, and host retrieval setup
 - [Technical reference](docs/reference.md) — embedding, reranking, planning, APIs,
   SDKs, Cloudflare, development, and benchmarks
 - [Operations and portability](docs/operations.md) — backup and restore, Workspace

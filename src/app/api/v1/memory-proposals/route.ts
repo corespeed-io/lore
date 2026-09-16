@@ -1,5 +1,5 @@
-import { createMemoryProposalHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createMemoryProposalHandlers } from "@/modules/proposals/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function GET(request: Request) {
   return createMemoryProposalHandlers(await getRuntimeDatabase()).GET(request);

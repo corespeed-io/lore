@@ -957,12 +957,6 @@ multimodal dialog generation lack fixed official evaluators and are not claimed 
 this QA runner. See the [original ACL paper](https://aclanthology.org/2024.acl-long.747/)
 and the pinned [runner audit](research/locomo-runner-audit.md).
 
-The first local 4B planner/reranker ablation, including fixed model digests,
-latency, two conversation slices, and original-paper provenance, is recorded in
-the [local LoCoMo ablation](research/locomo-local-qwen35-4b-ablation.md).
-It recommends the Qwen3 0.6B reranker only as a named quality profile; it does not
-turn a 35-question local result into a global default or a SOTA claim.
-
 ### MemoryAgentBench accurate retrieval
 
 Lore pins the official 22-row Accurate Retrieval split separately from Conflict

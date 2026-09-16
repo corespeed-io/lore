@@ -1,4 +1,4 @@
-// Generated from src/lib/retrieval-grounding.ts. Do not edit by hand.
+// Generated from src/modules/context/grounding.ts. Do not edit by hand.
 /**
  * Pure host-side retrieval grounding gate.
  *

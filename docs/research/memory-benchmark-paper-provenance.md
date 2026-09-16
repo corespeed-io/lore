@@ -35,10 +35,10 @@ image routing, retrieval configuration, and latency boundary.
 | Recall@1/K, MRR, binary nDCG@K, no-answer accuracy, false-result count, latency, provider accounting, and RLS tripwires | BEIR/MTEB motivate retrieval metrics; memory benchmarks motivate answer/no-answer tests | Retrieval formulas are **paper-backed/adapted**. Binary Memory-id qrels, tenancy hard failures, cost accounting, and latency gates are **Lore-specific**. A parent Memory hit does not prove that the answer-bearing chunk was retrieved. |
 
 The mapped implementation is primarily in
-[`src/lib/memory.ts`](../../src/lib/memory.ts),
-[`src/lib/reranking.ts`](../../src/lib/reranking.ts),
-[`src/lib/query-planning.ts`](../../src/lib/query-planning.ts), and
-[`src/lib/retrieval-benchmark.ts`](../../src/lib/retrieval-benchmark.ts).
+[`packages/lore-core/src/memory.ts`](../../packages/lore-core/src/memory.ts),
+[`packages/lore-core/src/reranking.ts`](../../packages/lore-core/src/reranking.ts),
+[`packages/lore-core/src/query-planning.ts`](../../packages/lore-core/src/query-planning.ts), and
+[`scripts/benchmarks/lib/retrieval-benchmark.ts`](../../scripts/benchmarks/lib/retrieval-benchmark.ts).
 
 ## Benchmark provenance
 
@@ -64,8 +64,8 @@ The mapped implementation is primarily in
   [retrieval evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/retrieval/eval_utils.py)).
 - **Lore mapping:**
   [`evaluation/external/longmemeval.json`](../../evaluation/external/longmemeval.json),
-  [`scripts/benchmark-longmemeval.ts`](../../scripts/benchmark-longmemeval.ts), and
-  [`scripts/lib/longmemeval.ts`](../../scripts/lib/longmemeval.ts) pin the cleaned
+  [`scripts/benchmarks/benchmark-longmemeval.ts`](../../scripts/benchmarks/benchmark-longmemeval.ts), and
+  [`scripts/benchmarks/lib/longmemeval.ts`](../../scripts/benchmarks/lib/longmemeval.ts) pin the cleaned
   release, isolate every question in its own Workspace, store sessions as private
   Memories, and add a Bob-private answer tripwire.
 - **Deviations and limits:** Lore's Recall@1/K, MRR, and binary Memory-id nDCG are
@@ -109,9 +109,9 @@ The mapped implementation is primarily in
   ([harness](https://github.com/xiaowu0162/LongMemEval-V2/blob/ef67f10aacd9080c75aeb2dd527a0af25dc26f1b/evaluation/harness.py)).
 - **Lore mapping:**
   [`evaluation/external/longmemeval-v2.json`](../../evaluation/external/longmemeval-v2.json),
-  [`scripts/benchmark-longmemeval-v2.ts`](../../scripts/benchmark-longmemeval-v2.ts),
-  [`scripts/lib/benchmark-reader.ts`](../../scripts/lib/benchmark-reader.ts), and
-  [`scripts/lib/benchmark-judge.ts`](../../scripts/lib/benchmark-judge.ts) pin the
+  [`scripts/benchmarks/benchmark-longmemeval-v2.ts`](../../scripts/benchmarks/benchmark-longmemeval-v2.ts),
+  [`scripts/benchmarks/lib/benchmark-reader.ts`](../../scripts/benchmarks/lib/benchmark-reader.ts), and
+  [`scripts/benchmarks/lib/benchmark-judge.ts`](../../scripts/benchmarks/lib/benchmark-judge.ts) pin the
   data, reader/judge prompts, images, RLS tripwires, timing, and usage metadata.
 - **Deviations and limits:** `lore-portable-deterministic-v2` uses a character
   budget and temperature zero; it is not the paper's sampled Qwen-token-budgeted
@@ -146,8 +146,8 @@ The mapped implementation is primarily in
   it does not establish a universal recency-ranking policy.
 - **Lore mapping:**
   [`evaluation/external/memoryagentbench.json`](../../evaluation/external/memoryagentbench.json),
-  [`scripts/benchmark-memoryagentbench.ts`](../../scripts/benchmark-memoryagentbench.ts),
-  and [`scripts/benchmark-memoryagentbench-accurate.ts`](../../scripts/benchmark-memoryagentbench-accurate.ts)
+  [`scripts/benchmarks/benchmark-memoryagentbench.ts`](../../scripts/benchmarks/benchmark-memoryagentbench.ts),
+  and [`scripts/benchmarks/benchmark-memoryagentbench-accurate.ts`](../../scripts/benchmarks/benchmark-memoryagentbench-accurate.ts)
   preserve incremental order, use the official normalized substring metric for
   the conflict answer, and plant Bob-private tripwires.
 - **Deviations and limits:** the conflict runner's latest-literal-answer Memory

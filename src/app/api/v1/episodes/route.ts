@@ -1,5 +1,5 @@
-import { createEpisodeHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createEpisodeHandlers } from "@/modules/episodes/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function GET(request: Request) {
   return createEpisodeHandlers(await getRuntimeDatabase()).GET(request);

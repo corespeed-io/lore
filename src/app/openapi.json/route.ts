@@ -1,4 +1,4 @@
-import { loreOpenApiDocument } from "@/lib/openapi";
+import { loreOpenApiDocument } from "@/server/openapi/document";
 
 export const dynamic = "force-static";
 

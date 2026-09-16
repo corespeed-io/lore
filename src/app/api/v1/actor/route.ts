@@ -1,5 +1,5 @@
-import { createActorHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createActorHandlers } from "@/modules/identity/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function GET(request: Request) {
   return createActorHandlers(await getRuntimeDatabase()).GET(request);

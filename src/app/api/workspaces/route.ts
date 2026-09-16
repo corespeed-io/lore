@@ -1,5 +1,5 @@
-import { createWorkspaceHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createWorkspaceHandlers } from "@/modules/workspaces/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function GET(request: Request) {
   return createWorkspaceHandlers(await getRuntimeDatabase()).GET(request);

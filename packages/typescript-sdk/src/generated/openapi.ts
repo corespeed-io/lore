@@ -750,7 +750,7 @@ export interface components {
         readonly CreateMemoryInput: {
             readonly content: string;
             readonly metadata?: {
-                readonly [key: string]: unknown;
+                readonly [key: string]: components["schemas"]["JsonValue"];
             };
             /**
              * @default shared
@@ -926,6 +926,7 @@ export interface components {
             readonly prefix: string;
             readonly token: string;
         };
+        readonly JsonValue: unknown;
         readonly Memory: {
             readonly content: string;
             /** Format: date-time */
@@ -934,7 +935,7 @@ export interface components {
             /** Format: uuid */
             readonly id: string;
             readonly metadata: {
-                readonly [key: string]: unknown;
+                readonly [key: string]: components["schemas"]["JsonValue"];
             };
             /** Format: uuid */
             readonly ownerUserId: string;
@@ -1279,7 +1280,7 @@ export interface components {
         readonly UpdateMemoryInput: {
             readonly content?: string;
             readonly metadata?: {
-                readonly [key: string]: unknown;
+                readonly [key: string]: components["schemas"]["JsonValue"];
             };
             /** @enum {string} */
             readonly scope?: "shared" | "private";

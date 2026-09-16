@@ -1,6 +1,6 @@
-import { createMemoryHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
-import { getRuntimeMemoryModuleOptions } from "@/lib/runtime/embedding";
+import { createMemoryHandlers } from "@/modules/memories/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
+import { getRuntimeMemoryModuleOptions } from "@/server/providers/embedding/runtime";
 
 export async function GET(request: Request) {
   return createMemoryHandlers(

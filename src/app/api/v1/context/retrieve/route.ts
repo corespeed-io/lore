@@ -1,6 +1,6 @@
-import { createContextRetrievalHandlers } from "@/lib/context-http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
-import { getRuntimeMemoryModuleOptions } from "@/lib/runtime/embedding";
+import { createContextRetrievalHandlers } from "@/modules/context/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
+import { getRuntimeMemoryModuleOptions } from "@/server/providers/embedding/runtime";
 
 export async function POST(request: Request) {
   return createContextRetrievalHandlers(

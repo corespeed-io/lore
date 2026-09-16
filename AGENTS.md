@@ -5,6 +5,28 @@ working in this repo. **This file is the single source of truth for agent-facing
 project instructions.** `CLAUDE.md` is a symlink to it and
 `.github/copilot-instructions.md` points to it — only ever edit this file, not a
 copy. The canonical product vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
+The directory map and import conventions live in [`docs/architecture.md`](docs/architecture.md).
+Start at [`docs/README.md`](docs/README.md) for current guides and retained research.
+
+## Project organization
+
+- `src/app` owns Next.js routes and framework entrypoints; `src/shell` composes the product UI.
+- `src/modules/<domain>` owns domain HTTP handlers, schemas/types, client calls, hooks,
+  presentation, UI, and OpenAPI fragments. Import the specific file needed; keep browser
+  imports separate from server implementations and native code-index parsing.
+- `src/server` owns shared authentication, request context, database/provider runtime,
+  telemetry, HTTP input/error handling, and OpenAPI document assembly.
+- `src/shared/browser` owns browser transport, cache keys, request logs, and common hooks;
+  `src/shared/ui` owns shared visual helpers. Do not recreate aggregate `lib`, `types`,
+  HTTP-handler, browser-client, or hook files spanning unrelated domains.
+- `src/modules/code/indexing` separates Git ingestion, parsing, storage, read queries,
+  orchestration, and maintenance. The request path must never import the Node/native parser.
+- `tests` groups domain, core-engine, server, UI, SDK, benchmark, and integration tests;
+  `scripts` groups database, development, build, checks, benchmarks, and evaluation commands.
+- `packages/lore-core` and the SDK/CLI/MCP packages keep their existing independent seams.
+  Applied SQL migrations are immutable. Keep current guides and research that explains
+  a decision or reproducible result; remove superseded reports and completed handoffs.
+  Write new benchmark run artifacts under `evaluation/results`, not `docs/research`.
 
 ## What Lore is
 
@@ -46,11 +68,11 @@ been removed. Lore now has a native implementation, split into two concepts
   backstop.
 - **lore oss** — everything else in this repository: identity/tenancy,
   request context, HTTP/OpenAPI, SDKs/CLI/MCP, web UI, Memory Proposals
-  (`src/lib/memory-proposals.ts`, layered on the engine's exported
+  (`src/modules/proposals/service.ts`, layered on the engine's exported
   `createMemoryMutationPrimitives`), code-aware memory, portability,
   evaluation, deployment profiles, and the env-reading provider factories
-  (`src/lib/{embedding,reranking,query-planning}/provider-factory.ts` plus
-  `src/lib/embedding-config.ts`, which own `LORE_*` env parsing and the
+  (`src/server/providers/{embedding,reranking,query-planning}/factory.ts` plus
+  `src/server/providers/embedding/config.ts`, which own `LORE_*` env parsing and the
   telemetry edge — they stay out of the engine on purpose).
 
 - the `0001_v1_baseline.sql` migration defines identity, tenancy,
@@ -67,11 +89,11 @@ been removed. Lore now has a native implementation, split into two concepts
   generated column stays for the scan predicate). Every new migration
   must update `lore_system_state.schema_revision` to its own version number —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
-  `LATEST_SCHEMA_REVISION` (`scripts/lib/migration-preflight.mjs`) and
-  `LORE_SCHEMA_REVISION` (`src/lib/operations.ts`) in the same change: the
+  `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.mjs`) and
+  `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
-  equality and reports the schema incompatible. `tests/portable-core.test.ts`,
-  `tests/http.test.ts`, and `scripts/smoke-memory-core.ts` pin the current
+  equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
+  `tests/integration/http.test.ts`, and `scripts/checks/smoke-memory-core.ts` pin the current
   revision;
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
@@ -82,7 +104,7 @@ been removed. Lore now has a native implementation, split into two concepts
   migration file — its stored SHA-256 makes every existing deployment fail
   closed — and ship schema changes as new forward-only migrations instead. Keep
   migration `down` sections empty: production recovery is forward-only;
-- `src/lib/identity.ts`, `access.ts`, and `evaluation.ts` are lore oss domain
+- `src/server/auth/identity.ts`, `access.ts`, and `evaluation.ts` are lore oss domain
   modules; the Memory and Observation modules live in the engine
   (`packages/lore-core/src/memory.ts`, `packages/lore-core/src/episodes/`);
   `request-context.ts` installs verified User/Workspace/Agent
@@ -100,7 +122,7 @@ been removed. Lore now has a native implementation, split into two concepts
   benchmark reuse must verify it. Keep overlap in the explicit bounded neighbor
   evidence policy. A future chunking change requires a new revision, forward
   re-chunk/re-embedding migration, and versioned evaluation;
-- `src/lib/code-index.ts` owns the revision-bound Code Index module. It accepts
+- `src/modules/code/indexing/service.ts` owns the revision-bound Code Index module. It accepts
   complete 40- or 64-character Git OIDs. Its trusted local-Git path resolves the
   exact commit and reads its object database rather than the working tree, binds
   an independent tree digest, and persists one typed `code_revision_files`
@@ -150,7 +172,7 @@ been removed. Lore now has a native implementation, split into two concepts
   memory before one generation transaction; it does not yet checkpoint complete
   files into `building`. Do not call jobs resumable until file-level checkpoints,
   exact manifest-coverage validation, and bounded-memory resume are implemented.
-  `src/lib/code-graph.ts` owns bounded exact-revision
+  `src/modules/code/graph.ts` owns bounded exact-revision
   callers/callees reads over immutable `calls`/`imports`/`references` edges.
   It keeps file-level imports separate from symbol-level dependencies and returns
   explicit `resolved`/`ambiguous`/`unresolved` states instead of guessing between
@@ -158,7 +180,7 @@ been removed. Lore now has a native implementation, split into two concepts
   `GET /api/v1/code/dependencies`, surfaced through both SDKs, the CLI, and the
   single read-only `lore_code_dependencies` MCP tool; it accepts exactly one
   symbol or repository-relative path and caps both edges and ambiguity candidates
-  at 200 with explicit truncation. `src/lib/code-evidence.ts` owns immutable typed
+  at 200 with explicit truncation. `src/modules/code/evidence.ts` owns immutable typed
   Memory-to-Code anchors and explicit `current/moved/changed/deleted/ambiguous/
   `unverifiable` assessment. `assess` is side-effect-free and is the only path joint
   retrieval may use; explicit `revalidate` persists the same result and must prove
@@ -168,8 +190,8 @@ been removed. Lore now has a native implementation, split into two concepts
   changed chunk may follow its ordinal only when that surrounding sequence still
   matches; equal-count reorder/replacement must abstain as `ambiguous`. Artifact
   pruning must not delete citation anchors.
-  `src/lib/joint-memory-code.ts` owns the pure versioned route/packet policy and
-  `src/lib/context-retrieval.ts` owns its production read-only orchestration.
+  `src/modules/context/policy.ts` owns the pure versioned route/packet policy and
+  `src/modules/context/retrieval.ts` owns its production read-only orchestration.
   `POST /api/v1/context/retrieve`, both SDKs, and `lore_retrieve_context` expose one
   bounded packet with separate Memory, exact-revision Code, anchor, conflict, and
   receipt fields. The joint path may call only side-effect-free evidence `assess`,
@@ -190,7 +212,7 @@ been removed. Lore now has a native implementation, split into two concepts
   exact-revision Code context, but deliberative-recall wording or first-person-
   plural team framing keeps Memory retrieval required even when the question
   also uses generic code vocabulary ("what is our commit message convention?").
-  The gate's source of truth is the import-free `src/lib/retrieval-grounding.ts`;
+  The gate's source of truth is the import-free `src/modules/context/grounding.ts`;
   `sdk:generate` copies it verbatim into the TypeScript SDK
   (`@corespeed/lore-sdk` exports it for hosts) and the Python SDK carries a
   hand-aligned `plan_retrieval_grounding` port with mirrored parity tests. Gate
@@ -212,18 +234,20 @@ been removed. Lore now has a native implementation, split into two concepts
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
-  native routes built through the pure handler seam in `src/lib/http.ts`;
-- `src/components/App.tsx` owns the native Memory workflow and client routing,
-  `src/components/Sidebar.tsx` owns the Lore shell, and
-  `src/lib/lore-api.ts` is the typed browser transport for native routes;
+  native routes built through the pure handler seams in `src/modules/*/http.ts`;
+- `src/shell/App.tsx` owns the native Memory workflow and client routing,
+  `src/shell/Sidebar.tsx` owns the Lore shell, and
+  `src/shared/browser/http.ts` is the shared browser transport; domain
+  `src/modules/*/client.ts` files own typed calls for native routes;
   Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search
-  through the shared cancelable debounce hook (`src/lib/use-debounced-callback.ts`);
+  through the shared cancelable debounce hook (`src/shared/browser/use-debounced-callback.ts`);
   App drops the pending query via `searchCancelRef` on every query-context reset
   (Workspace, tab, type drill, route navigation, opening a Memory). Behavioral
   contract (normative copy in DESIGN.md): typing debounces, explicit submission is
   immediate and closes the mobile drawer, an Enter consumed by IME composition
   never submits, and a deliberate Enter always searches;
-- `src/lib/lore-swr.ts` owns Workspace-scoped SWR keys and hooks for Workspaces,
+- `src/shared/browser/cache-keys.ts` owns Workspace-scoped SWR keys; domain
+  `src/modules/*/hooks.ts` own hooks for Workspaces,
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
@@ -233,8 +257,8 @@ been removed. Lore now has a native implementation, split into two concepts
 - code-aware Memory has exactly two human surfaces, both read-only. `MemoryView.tsx`
   renders a Memory's Code citations from `GET /api/v1/memories/{id}/code-evidence`
   and `WorkspaceOperationsView.tsx` renders this Workspace's Code Index queue from
-  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/lib/code-evidence-view.ts`
-  and `src/lib/code-index-job-view.ts` own their pure presentation models: the six
+  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/modules/code/evidence-presentation.ts`
+  and `src/modules/code/job-presentation.ts` own their pure presentation models: the six
   validation states rank `changed`/`deleted`/`ambiguous` first, job tones rank `dead`
   first, and each state is stated in words as well as tone. Repository identity in the
   browser is a `repositoryKey` plus a commit OID; the operator-configured
@@ -249,18 +273,18 @@ been removed. Lore now has a native implementation, split into two concepts
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
   the Memory UUID) for native wikilink navigation;
-- `src/lib/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
+- `src/modules/memories/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
   references remain inert, and raw HTML stays escaped;
-- `src/components/WorkerCanvasGraph.tsx` and its colocated Worker own the production
+- `src/modules/graph/components/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
   one Canvas, cold layout reveals progressively, and interaction frames transfer
   coordinate deltas. Preserve viewport culling, the 40,000-link paint cap, label
   collision, elastic drag, user zoom/pan across hide/show and resize, and fit behavior.
   Labels are intentionally interaction-driven (hover, selection, or filtering),
   while centrality is expressed through node size and physics rather than persistent
-  degree annotations. `src/lib/viz/graph.ts` retains the shared Graph instance contract,
+  degree annotations. `src/modules/graph/rendering/graph.ts` retains the shared Graph instance contract,
   label helpers, and the legacy SVG benchmark control;
 - `packages/lore-core/src/maintenance.ts` owns leased, idempotent document embedding and
   deployment-wide re-index discovery. A provider/model/revision change builds
@@ -272,7 +296,7 @@ been removed. Lore now has a native implementation, split into two concepts
   jobs until cutover. The self-host Node worker polls both sequentially by default,
   while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
   database sweep as the delivery backstop;
-- `packages/lore-core/src/idempotency.ts` plus lore oss’s `src/lib/{portability,operations,telemetry}.ts`
+- `packages/lore-core/src/idempotency.ts` plus lore oss’s `src/modules/{portability,operations}/service.ts` and `src/server/telemetry/telemetry.ts`
   own the Portable Core seams. Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
@@ -307,6 +331,15 @@ been removed. Lore now has a native implementation, split into two concepts
   MCP outside Portable Core and never accept a model-supplied Workspace override.
   `packages/python-sdk` provides the equivalent dependency-light Python seam from
   the same generated OpenAPI contract; keep both SDKs behaviorally aligned;
+- `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4.
+  HTTP Memory writes and the browser's inferred Memory types use these schemas;
+  OpenAPI generates its Memory/create/update components from them. Keep the
+  code-point/chunk validator in lore core. Metadata uses `z.record(z.string(),
+  z.json())` with a serialized-size refinement; do not restore a handwritten JSON
+  walker or separate depth/node-count policies. PostgreSQL enforces its Unicode
+  restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register recursive JSON
+  with Zod when generating OpenAPI so references target `#/components/schemas`.
+  The reusable engine retains its host-independent types and authorization rules;
 - Node/self-host exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
@@ -350,7 +383,7 @@ been removed. Lore now has a native implementation, split into two concepts
   fuses only visible results, and then optionally reranks them;
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers;
-- `scripts/local-service.mjs` owns the native Apple Silicon development loop exposed
+- `scripts/dev/local-service.mjs` owns the native Apple Silicon development loop exposed
   by `bun run service:{up,down,restart,status,logs}`; keep its tests in
   `bun run service:test` and CI. It may idempotently extend an existing `.env` only
   when the complete native database block is absent, provisions distinct request and
@@ -814,7 +847,7 @@ Benchmark is part of the product quality system even without AutoDream.
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
   disposable database whose schema was generated at a non-lore width through
-  `scripts/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
+  `scripts/benchmarks/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
   the baseline; the four `length(path) <= 1024` checks stay). It exercises the
   engine's host-baked `embeddingDimensions` option the way a non-lore host's
   own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
@@ -943,6 +976,12 @@ scripts; Next.js self-hosting and migration scripts execute on Node 24, and the
 Cloudflare bundle executes on Workerd. Do not add an npm/pnpm/Yarn lockfile or claim
 that Cloudflare runs Bun/Node as a process.
 
+TypeScript 7.0.2 is the workspace compiler. `tools/sdk-codegen` deliberately keeps
+TypeScript 5.9.3 isolated as a library dependency: `openapi-typescript` 7.13 uses
+the legacy compiler API (`factory`/`createPrinter`), which the TypeScript 7 package
+does not expose. Do not replace that dependency with the workspace compiler until
+the generator supports its API.
+
 These commands remain the current verification loop:
 
 ```bash
@@ -1019,7 +1058,7 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   and a fresh `provider`, which is also how an Actor's empty or denied RLS-filtered
   read is modelled. `useEffect` never runs, so anything painted from an effect (the
   Markdown body, the Graph canvas) is absent from the markup.
-- `tests/code-index.test.ts` builds real Git fixtures with `git add`, so a
+- `tests/modules/code/code-index.test.ts` builds real Git fixtures with `git add`, so a
   user-level global gitignore (`~/.config/git/ignore` or `core.excludesfile`)
   that excludes fixture paths like `dist/` silently drops files from the
   committed tree and fails the manifest test. GitHub runners have no such

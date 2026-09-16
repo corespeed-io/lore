@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import openapiTS, { astToString } from "openapi-typescript";
-import { loreOpenApiDocument } from "../../src/lib/openapi";
+import { loreOpenApiDocument } from "../../src/server/openapi/document";
 
 const repositoryUrl = new URL("../../", import.meta.url);
 const openApiOutputUrl = new URL("packages/typescript-sdk/src/generated/openapi.ts", repositoryUrl);
 const runtimeOutputUrl = new URL("packages/typescript-sdk/src/generated/runtime.ts", repositoryUrl);
-const groundingSourceUrl = new URL("src/lib/retrieval-grounding.ts", repositoryUrl);
+const groundingSourceUrl = new URL("src/modules/context/grounding.ts", repositoryUrl);
 const groundingOutputUrl = new URL(
   "packages/typescript-sdk/src/generated/grounding.ts",
   repositoryUrl,
@@ -195,7 +195,10 @@ async function generatedArtifacts(): Promise<ReadonlyMap<URL, string>> {
   ]);
   return new Map([
     [openApiOutputUrl, openapi],
-    [groundingOutputUrl, `${generatedHeader("src/lib/retrieval-grounding.ts")}${groundingSource}`],
+    [
+      groundingOutputUrl,
+      `${generatedHeader("src/modules/context/grounding.ts")}${groundingSource}`,
+    ],
     [
       runtimeOutputUrl,
       `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n`,

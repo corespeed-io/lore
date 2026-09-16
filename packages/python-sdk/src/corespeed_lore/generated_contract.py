@@ -162,7 +162,7 @@ class CreateEvaluationSuiteInput(TypedDict):
 class CreateMemoryInput(TypedDict):
     content: str
     scope: NotRequired[Literal["shared", "private"]]
-    metadata: NotRequired[dict[str, Any]]
+    metadata: NotRequired[dict[str, JsonValue]]
 
 class CreateMemoryProposalCreateInput(TypedDict):
     kind: Literal["create"]
@@ -282,6 +282,8 @@ class IssuedAgentCredential(TypedDict):
     prefix: str
     token: str
 
+JsonValue: TypeAlias = Any
+
 class Memory(TypedDict):
     id: str
     workspaceId: str
@@ -289,7 +291,7 @@ class Memory(TypedDict):
     createdByAgentId: Union[str, None]
     scope: Literal["shared", "private"]
     content: str
-    metadata: dict[str, Any]
+    metadata: dict[str, JsonValue]
     version: int
     createdAt: str
     updatedAt: str
@@ -520,7 +522,7 @@ class UpdateAgentInput(TypedDict):
 class UpdateMemoryInput(TypedDict):
     content: NotRequired[str]
     scope: NotRequired[Literal["shared", "private"]]
-    metadata: NotRequired[dict[str, Any]]
+    metadata: NotRequired[dict[str, JsonValue]]
 
 class Workspace(TypedDict):
     id: str

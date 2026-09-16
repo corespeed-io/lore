@@ -1,5 +1,5 @@
-import { createCodeEvidenceByIdHandlers } from "@/lib/code-http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createCodeEvidenceByIdHandlers } from "@/modules/code/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function POST(
   request: Request,

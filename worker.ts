@@ -10,11 +10,11 @@ import {
 } from "@corespeed/lore-core";
 import { createRequestPostgresDatabase } from "@corespeed/lore-core/postgres";
 import openNextWorker from "./.open-next/worker.js";
+import { createOperationsModule, livenessReport } from "./src/modules/operations/service";
 import {
   createEmbeddingProviderFromEnvironment,
   createMaintenanceEmbeddingProvidersFromEnvironment,
-} from "./src/lib/embedding/provider-factory";
-import { createOperationsModule, livenessReport } from "./src/lib/operations";
+} from "./src/server/providers/embedding/factory";
 
 // Preserve any OpenNext Durable Object exports if a cache adapter enables them.
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache } from "./.open-next/worker.js";
