@@ -14,7 +14,6 @@
       "!**/evaluation/datasets",
       "!**/evaluation/results",
       "!**/packages/*/dist",
-      "!**/packages/*/src/generated",
       "!**/node_modules",
       "!**/.venv",
       "!**/tmp",
@@ -23,6 +22,135 @@
       "!**/lore-*.json"
     ]
   },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "linter": { "enabled": true, "rules": { "preset": "recommended" } }
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/*/src/generated/**"],
+      "formatter": {
+        "enabled": false
+      },
+      "assist": {
+        "enabled": false
+      },
+      "linter": {
+        "rules": {
+          "preset": "none"
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/shell/**",
+        "src/shared/browser/**",
+        "src/shared/ui/**",
+        "src/modules/*/components/**",
+        "src/modules/*/rendering/**",
+        "src/modules/*/client.ts",
+        "src/modules/*/hooks.ts",
+        "src/modules/*/types.ts",
+        "src/modules/*/*presentation.ts",
+        "src/modules/*/display.ts",
+        "src/modules/*/markdown.ts",
+        "src/modules/*/prototype-client.ts",
+        "src/modules/*/prototype-hooks.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@corespeed/lore-core",
+                      "@corespeed/lore-core/**",
+                      "@corespeed/lore-cli",
+                      "@corespeed/lore-cli/**",
+                      "@corespeed/lore-mcp",
+                      "@corespeed/lore-mcp/**",
+                      "**/packages/lore-core/**",
+                      "**/packages/cli/**",
+                      "**/packages/mcp/**",
+                      "@/server/**",
+                      "**/server/**",
+                      "@/app/**",
+                      "**/app/**",
+                      "**/service",
+                      "**/service.*",
+                      "**/http",
+                      "**/http.*",
+                      "**/schemas",
+                      "**/schemas.*",
+                      "**/openapi",
+                      "**/openapi.*",
+                      "**/input",
+                      "**/input.*",
+                      "**/maintenance",
+                      "**/maintenance.*",
+                      "**/evidence",
+                      "**/evidence.*",
+                      "**/retrieval",
+                      "**/retrieval.*",
+                      "**/indexing/**",
+                      "**/code/graph",
+                      "**/code/graph.*",
+                      "**/context/policy",
+                      "**/context/policy.*"
+                    ],
+                    "message": "Browser modules use the Lore SDK and browser contracts; do not import Core, server implementations, CLI, or MCP, including types."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/typescript-sdk/src/**", "packages/cli/src/**", "packages/mcp/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/**",
+                      "@corespeed/lore-core",
+                      "@corespeed/lore-core/**",
+                      "@corespeed/lore-cli",
+                      "@corespeed/lore-cli/**",
+                      "@corespeed/lore-mcp",
+                      "@corespeed/lore-mcp/**",
+                      "**/src/**",
+                      "**/packages/**",
+                      "**/lore-core/**",
+                      "**/typescript-sdk/**",
+                      "**/cli/**",
+                      "**/mcp/**"
+                    ],
+                    "message": "Client packages must stay independent of OSS/Core and each other; CLI and MCP access Lore only through @corespeed/lore-sdk, including types."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

@@ -1,11 +1,11 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
+import { EPISODE_EVIDENCE_INDEX_REVISION } from "@corespeed/lore-core/episodes";
+import { expect, test } from "vitest";
 import {
   createEpisodeEvidenceModule,
-  createObservationModule,
-  EPISODE_EVIDENCE_INDEX_REVISION,
   EpisodeEvidenceAccessDeniedError,
-} from "@corespeed/lore-core/episodes";
-import { expect, test } from "vitest";
+} from "../../src/modules/episodes/evidence";
+import { createObservationModule } from "../../src/modules/episodes/service";
 import { createMemoryTestContext } from "../support/memory-context";
 
 function fixtureVector(index: number): number[] {

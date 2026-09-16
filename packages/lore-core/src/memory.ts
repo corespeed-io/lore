@@ -1,58 +1,46 @@
-import { type ActorContext, installActorContext } from "./actor-context";
 import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
+import type { PostgresTransaction } from "./db";
+import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./embedding";
 import { embeddingVectorLiteral } from "./embedding/vector";
-import { validatedEmbeddingDimensions } from "./embedding-config";
-import { beginMutation, completeMutation, type IdempotencyRequest } from "./idempotency";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
 import { prepareMemoryContent } from "./memory-content";
-import type { QueryPlanningProvider } from "./query-planning";
-import type { RerankingProvider } from "./reranking";
+import type { MemoryStorageContext, MemoryStorageScope } from "./memory-storage";
 
-export type { ActorContext } from "./actor-context";
+import type {
+  ContextGroupExpansionOptions,
+  ListMemory,
+  Memory,
+  MemoryMaintenanceNotifier,
+  MemoryModuleOptions,
+  MemoryMutationOptions,
+  MemoryRow,
+  MemoryScope,
+  MemorySearchResult,
+  RememberMemory,
+  SearchMemory,
+  UpdateMemory,
+} from "./memory-types";
+import { RETRIEVAL_CONTEXT_GROUP_POLICY } from "./retrieval/policy";
+import {
+  cjkLexicalGrams,
+  feedbackRetrievalQueries,
+  relaxedEnglishTerms,
+  retrievalQueries,
+} from "./retrieval/query";
+import {
+  appendFeedbackResults,
+  compactRerankEvidence,
+  diversifyRerankedResults,
+  fuseQueryResults,
+  fuseRecencyResults,
+  fuseRerankedResults,
+  type InternalMemorySearchResult,
+  rerankEvidence,
+  timestampMilliseconds,
+} from "./retrieval/ranking";
 
-export type MemoryScope = "shared" | "private";
-
-export const RETRIEVAL_FEEDBACK_CANDIDATE_POLICY = {
-  revision: "iterative-tail-reserve-v2",
-  targetShare: 0.2,
-  minimumSlots: 1,
-} as const;
-
-export const RETRIEVAL_EVIDENCE_POLICY = {
-  revision: "compact-rerank-expanded-answer-v1",
-  rerankPassage: "best-chunk-with-configured-neighbors",
-  answerEvidence: "bounded-top-chunks-with-whole-small-memory",
-} as const;
-
-export const RETRIEVAL_ENTITY_ALIAS_POLICY = {
-  revision: "deterministic-exact-alias-rrf-v1",
-  candidateGeneration: "independent-rls-filtered-chunk-channel",
-  maximumQueryAliases: 8,
-  reference: {
-    title: "Multi-step Entity-centric Information Retrieval for Multi-Hop Question Answering",
-    doi: "https://doi.org/10.18653/v1/D19-5816",
-  },
-} as const;
-
-export const RETRIEVAL_CJK_LEXICAL_POLICY = {
-  revision: "deterministic-cjk-substring-rrf-v1",
-  candidateGeneration: "independent-rls-filtered-substring-channel",
-  gramCodePoints: 3,
-  maximumQueryGrams: 24,
-} as const;
-
-export const RETRIEVAL_CONTEXT_GROUP_POLICY = {
-  revision: "explicit-natural-boundary-append-v2",
-  defaultBaseCandidateLimit: 20,
-  defaultMaximumGroups: 3,
-  maximumFetchedMemories: 800,
-  provenance: {
-    relationship: "Lore adaptation using only caller-supplied source structure",
-    title: "HiGMem: Hierarchical Memory for Long-Term Conversational Agents",
-    paper: "https://aclanthology.org/2026.findings-acl.1690/",
-  },
-} as const;
+export type * from "./memory-types";
+export * from "./retrieval/policy";
 
 export class MemoryAccessDeniedError extends Error {
   override name = "MemoryAccessDeniedError";
@@ -70,155 +58,10 @@ export class MemoryVersionConflictError extends Error {
   }
 }
 
-export interface Memory {
-  id: string;
-  workspaceId: string;
-  ownerUserId: string;
-  createdByAgentId: string | null;
-  scope: MemoryScope;
-  content: string;
-  metadata: Record<string, unknown>;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface RememberMemory {
-  content: string;
-  scope?: MemoryScope;
-  metadata?: Record<string, unknown>;
-}
-
-export interface UpdateMemory {
-  content?: string;
-  scope?: MemoryScope;
-  metadata?: Record<string, unknown>;
-}
-
-export interface MemoryMutationOptions {
-  expectedVersion?: number;
-  idempotency?: IdempotencyRequest;
-}
-
-export interface SearchMemory {
-  query: string;
-  limit?: number;
-  metadataFilter?: Record<string, unknown>;
-  scope?: MemoryScope;
-  updatedAfter?: string;
-  updatedBefore?: string;
-}
-
-export interface ListMemory {
-  cursor?: { id: string; updatedAt: string };
-  limit?: number;
-  offset?: number;
-  metadataFilter?: Record<string, unknown>;
-  scope?: MemoryScope;
-  updatedAfter?: string;
-  updatedBefore?: string;
-}
-
-export interface MemorySearchResult {
-  memory: Memory;
-  score: number;
-  rerankScore?: number;
-  evidence: string;
-}
-
-export interface EmbeddingProvider {
-  provider: string;
-  model: string;
-  dimensions: number;
-  revision: string;
-  embed(texts: string[], task: EmbeddingTask): Promise<number[][]>;
-}
-
-export type EmbeddingTask = "document" | "query";
-
-export interface MemoryModuleOptions {
-  contextGroupExpansion?: ContextGroupExpansionOptions;
-  /**
-   * New Memories default to this scope when the caller does not request one.
-   * "shared" is lore's product default; hosts with a fail-closed posture may
-   * choose "private".
-   */
-  defaultMemoryScope?: MemoryScope;
-  /**
-   * The deployment's embedding-space width. A host-baked schema invariant
-   * (vector columns, CHECKs, HNSW indexes), not a runtime knob: it must match
-   * the host schema exactly. Defaults to the embedding provider's dimensions,
-   * then to lore's 1024.
-   */
-  embeddingDimensions?: number;
-  embeddingProvider?: EmbeddingProvider;
-  entityAliasRecall?: boolean;
-  evidenceNeighborChunks?: number;
-  evidenceTopChunks?: number;
-  maintenanceNotifier?: MemoryMaintenanceNotifier;
-  queryPlanningProvider?: QueryPlanningProvider;
-  queryPlannerMaxQueries?: number;
-  retrievalFeedbackQueries?: number;
-  retrievalRecencyWeight?: number;
-  rerankingProvider?: RerankingProvider;
-  rerankCandidateLimit?: number;
-  rerankDiversityLambda?: number;
-  rerankMinimumScore?: number;
-  rerankWeight?: number;
-  semanticDistanceThreshold?: number;
-}
-
-export interface ContextGroupExpansionOptions {
-  /** Metadata scalar that identifies an explicit source session/topic/thread. */
-  groupMetadataKey: string;
-  /** Optional numeric metadata scalar used to prefer nearby members within a group. */
-  ordinalMetadataKey?: string;
-  /** Ordinary ranked candidates preserved before structural candidates are appended. */
-  baseCandidateLimit?: number;
-  /** Maximum distinct groups seeded from the preserved ranked candidates. */
-  maximumGroups?: number;
-}
-
-export interface MemoryEmbeddingJobMessage {
-  jobId: string;
-}
-
-export interface MemoryMaintenanceNotifier {
-  notify(message: MemoryEmbeddingJobMessage): void;
-}
-
-/**
- * Raw `memories` row shape, exported with {@link memoryFromRow} for host
- * extensions (for example lore's Memory Proposals module) that select Memory
- * rows inside their own transactions.
- */
-export interface MemoryRow {
-  id: string;
-  workspace_id: string;
-  owner_user_id: string;
-  created_by_agent_id: string | null;
-  scope: MemoryScope;
-  content: string;
-  metadata: Record<string, unknown>;
-  version: number;
-  created_at: string;
-  updated_at: string;
-}
-
 interface SearchRow extends MemoryRow {
   score: number;
   evidence: string;
   rerank_evidence: string;
-}
-
-const rerankEvidence = Symbol("lore.rerankEvidence");
-
-type InternalMemorySearchResult = MemorySearchResult & {
-  [rerankEvidence]: string;
-};
-
-function compactRerankEvidence(result: MemorySearchResult): string {
-  return (result as Partial<InternalMemorySearchResult>)[rerankEvidence] ?? result.evidence;
 }
 
 interface PreparedChunk {
@@ -227,237 +70,6 @@ interface PreparedChunk {
 
 function prepareChunks(content: string): PreparedChunk[] {
   return prepareMemoryContent(content).chunks.map((chunk) => ({ content: chunk }));
-}
-
-function relaxedEnglishTerms(query: string): string[] {
-  const terms = query.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu) ?? [];
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const term of terms) {
-    const key = term.toLocaleLowerCase("en-US");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(term);
-  }
-  return unique.slice(0, 32);
-}
-
-// Script=Common/Inherited marks that belong inside Japanese words: U+30FC
-// prolonged sound mark (サーバー), U+3005 ideographic iteration (人々), and the
-// kana iteration marks. U+30FB middle dot stays excluded on purpose — it
-// separates words, so a run must end there.
-const cjkRunPattern =
-  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー々ゝゞヽヾ]+/gu;
-
-// Postgres 'simple'/'english' text search cannot segment CJK, so an entire
-// punctuation-bounded run indexes as one token and phrase queries never match.
-// This channel probes chunk content with fixed-width code-point grams from the
-// query's CJK runs; grams contain only CJK script letters and the word-internal
-// marks above — none are LIKE metacharacters, so no escaping is needed.
-function cjkLexicalGrams(rawQuery: string): string[] {
-  // NFC first: decomposed kana carries Script=Inherited voicing marks that
-  // would otherwise split runs and emit grams NFC-stored content cannot match.
-  const query = rawQuery.normalize("NFC");
-  const grams: string[] = [];
-  const seen = new Set<string>();
-  const filled = (gram: string) => {
-    if (!seen.has(gram)) {
-      seen.add(gram);
-      grams.push(gram);
-    }
-    return grams.length >= RETRIEVAL_CJK_LEXICAL_POLICY.maximumQueryGrams;
-  };
-  for (const [run] of query.matchAll(cjkRunPattern)) {
-    const codePoints = [...run];
-    if (codePoints.length < 2) continue;
-    if (codePoints.length < RETRIEVAL_CJK_LEXICAL_POLICY.gramCodePoints) {
-      if (filled(run)) return grams;
-      continue;
-    }
-    for (
-      let index = 0;
-      index + RETRIEVAL_CJK_LEXICAL_POLICY.gramCodePoints <= codePoints.length;
-      index += 1
-    ) {
-      const gram = codePoints
-        .slice(index, index + RETRIEVAL_CJK_LEXICAL_POLICY.gramCodePoints)
-        .join("");
-      if (filled(gram)) return grams;
-    }
-  }
-  return grams;
-}
-
-function evidenceTerms(text: string): Set<string> {
-  return new Set(
-    (text.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu) ?? [])
-      .map((term) => term.toLocaleLowerCase())
-      .filter((term) => term.length > 1),
-  );
-}
-
-const feedbackStopWords = new Set([
-  "about",
-  "after",
-  "also",
-  "before",
-  "does",
-  "from",
-  "have",
-  "into",
-  "that",
-  "their",
-  "there",
-  "these",
-  "they",
-  "this",
-  "those",
-  "what",
-  "when",
-  "where",
-  "which",
-  "while",
-  "with",
-  "would",
-]);
-
-function feedbackEvidenceExcerpt(original: string, evidence: string): string {
-  const queryTerms = [...evidenceTerms(original)].filter(
-    (term) => term.length > 2 && !feedbackStopWords.has(term),
-  );
-  const passages =
-    evidence.match(/[^.!?。！？]+(?:[.!?。！？]+|$)/gu)?.map((passage) => passage.trim()) ?? [];
-  if (!passages.length || !queryTerms.length) return evidence.slice(0, 1_000);
-
-  // passages is non-empty here, so the fallback is inert.
-  let bestPassage = passages[0] ?? "";
-  let bestScore = Number.NEGATIVE_INFINITY;
-  for (const [index, passage] of passages.entries()) {
-    const terms = evidenceTerms(passage);
-    const score = queryTerms.reduce(
-      (total, term) => total + (terms.has(term) ? Math.min(term.length, 12) : 0),
-      0,
-    );
-    const normalizedLength = Math.max(1, Math.min(passage.length, 500));
-    const objective = score / Math.sqrt(normalizedLength) - index / 1_000_000;
-    if (objective > bestScore) {
-      bestPassage = passage;
-      bestScore = objective;
-    }
-  }
-  return (bestScore > 0 ? bestPassage : evidence).slice(0, 1_000);
-}
-
-function jaccard(left: Set<string>, right: Set<string>): number {
-  if (left.size === 0 && right.size === 0) return 1;
-  let intersection = 0;
-  for (const term of left) {
-    if (right.has(term)) intersection += 1;
-  }
-  return intersection / (left.size + right.size - intersection);
-}
-
-function diversifyRerankedResults(
-  results: MemorySearchResult[],
-  limit: number,
-  lambda: number,
-): MemorySearchResult[] {
-  if (lambda >= 1 || results.length <= 1) return results.slice(0, limit);
-  const remaining = results.map((result, index) => ({
-    result,
-    index,
-    terms: evidenceTerms(result.evidence),
-  }));
-  const selected: typeof remaining = [];
-  while (selected.length < limit && remaining.length) {
-    let bestIndex = 0;
-    let bestObjective = Number.NEGATIVE_INFINITY;
-    for (const [index, candidate] of remaining.entries()) {
-      const maximumSimilarity = selected.length
-        ? Math.max(...selected.map((item) => jaccard(candidate.terms, item.terms)))
-        : 0;
-      const relevance = (results.length - candidate.index) / results.length;
-      const objective = lambda * relevance - (1 - lambda) * maximumSimilarity;
-      if (
-        objective > bestObjective ||
-        // bestIndex always addresses a live entry in remaining; the fallback is inert.
-        (objective === bestObjective &&
-          candidate.index < (remaining[bestIndex]?.index ?? Number.POSITIVE_INFINITY))
-      ) {
-        bestObjective = objective;
-        bestIndex = index;
-      }
-    }
-    const best = remaining.splice(bestIndex, 1)[0];
-    if (best) selected.push(best);
-  }
-  return selected.map((item) => item.result);
-}
-
-function fuseRerankedResults(
-  fusionResults: MemorySearchResult[],
-  rerankedResults: MemorySearchResult[],
-  weight: number,
-): MemorySearchResult[] {
-  if (weight >= 1) return rerankedResults;
-  const fusionRankById = new Map(
-    fusionResults.map((result, index) => [result.memory.id, index + 1] as const),
-  );
-  return rerankedResults
-    .map((result, index) => {
-      const rerankRank = index + 1;
-      const fusionRank = fusionRankById.get(result.memory.id);
-      if (fusionRank === undefined) throw new Error("Reranking result escaped the candidate pool");
-      return {
-        ...result,
-        score: weight / (60 + rerankRank) + (1 - weight) / (60 + fusionRank),
-      };
-    })
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        (fusionRankById.get(left.memory.id) ?? 0) - (fusionRankById.get(right.memory.id) ?? 0),
-    );
-}
-
-function fuseQueryResults(resultSets: MemorySearchResult[][], limit: number): MemorySearchResult[] {
-  if (resultSets.length === 1) return (resultSets[0] ?? []).slice(0, limit);
-  const fused = new Map<
-    string,
-    { result: MemorySearchResult; score: number; bestRank: number; firstQuery: number }
-  >();
-  for (const [queryIndex, results] of resultSets.entries()) {
-    for (const [resultIndex, result] of results.entries()) {
-      const rank = resultIndex + 1;
-      const existing = fused.get(result.memory.id);
-      const score = 1 / (60 + rank);
-      if (!existing) {
-        fused.set(result.memory.id, {
-          result,
-          score,
-          bestRank: rank,
-          firstQuery: queryIndex,
-        });
-        continue;
-      }
-      existing.score += score;
-      if (rank < existing.bestRank) {
-        existing.result = result;
-        existing.bestRank = rank;
-        existing.firstQuery = queryIndex;
-      }
-    }
-  }
-  return [...fused.values()]
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        left.bestRank - right.bestRank ||
-        left.firstQuery - right.firstQuery ||
-        left.result.memory.id.localeCompare(right.result.memory.id),
-    )
-    .slice(0, limit)
-    .map(({ result, score }) => ({ ...result, score }));
 }
 
 interface NormalizedContextGroupExpansion {
@@ -518,7 +130,7 @@ function normalizeContextGroupExpansion(
 
 async function expandContextGroupResults(input: {
   transaction: PostgresTransaction;
-  actor: ActorContext;
+  storageScope: MemoryStorageScope;
   results: InternalMemorySearchResult[];
   targetLimit: number;
   expansion: NormalizedContextGroupExpansion;
@@ -603,7 +215,7 @@ async function expandContextGroupResults(input: {
        memory.id
      LIMIT $9`,
     [
-      input.actor.workspaceId,
+      input.storageScope.partitionId,
       input.scope,
       input.updatedAfter,
       input.updatedBefore,
@@ -667,36 +279,6 @@ async function expandContextGroupResults(input: {
   return selected;
 }
 
-function appendFeedbackResults(
-  initialResults: MemorySearchResult[],
-  feedbackResults: MemorySearchResult[],
-  limit: number,
-): MemorySearchResult[] {
-  const initial = initialResults.slice(0, limit);
-  if (limit <= 1) return initial;
-  const initialIds = new Set(initial.map((result) => result.memory.id));
-  const novelFeedback = feedbackResults.filter((result) => !initialIds.has(result.memory.id));
-  if (!novelFeedback.length) return initial;
-
-  const reservedFeedbackSlots = Math.min(
-    novelFeedback.length,
-    Math.max(
-      RETRIEVAL_FEEDBACK_CANDIDATE_POLICY.minimumSlots,
-      Math.floor(limit * RETRIEVAL_FEEDBACK_CANDIDATE_POLICY.targetShare),
-    ),
-  );
-  const feedbackSlots = Math.min(
-    novelFeedback.length,
-    Math.max(limit - initial.length, reservedFeedbackSlots),
-  );
-  return [...initial.slice(0, limit - feedbackSlots), ...novelFeedback.slice(0, feedbackSlots)];
-}
-
-function timestampMilliseconds(value: unknown): number {
-  if (value instanceof Date) return value.getTime();
-  return Date.parse(String(value));
-}
-
 /**
  * Normalize a driver-returned timestamp (Date, ISO string, or Postgres text)
  * to a UTC ISO-8601 string. Exported for host extensions that map their own
@@ -705,79 +287,6 @@ function timestampMilliseconds(value: unknown): number {
 export function serializedTimestamp(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
-}
-
-function fuseRecencyResults(results: MemorySearchResult[], weight: number): MemorySearchResult[] {
-  if (weight <= 0 || results.length <= 1) return results;
-  const relevanceRankById = new Map(
-    results.map((result, index) => [result.memory.id, index + 1] as const),
-  );
-  const recencyRankById = new Map(
-    [...results]
-      .sort(
-        (left, right) =>
-          timestampMilliseconds(right.memory.updatedAt) -
-            timestampMilliseconds(left.memory.updatedAt) ||
-          left.memory.id.localeCompare(right.memory.id),
-      )
-      .map((result, index) => [result.memory.id, index + 1] as const),
-  );
-  return results
-    .map((result) => {
-      const relevanceRank = relevanceRankById.get(result.memory.id) ?? results.length;
-      const recencyRank = recencyRankById.get(result.memory.id) ?? results.length;
-      return {
-        ...result,
-        score: (1 - weight) / (60 + relevanceRank) + weight / (60 + recencyRank),
-      };
-    })
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        (relevanceRankById.get(left.memory.id) ?? 0) -
-          (relevanceRankById.get(right.memory.id) ?? 0),
-    );
-}
-
-function retrievalQueries(original: string, planned: string[], maximum: number): string[] {
-  const queries: string[] = [];
-  const seen = new Set<string>();
-  for (const query of [original, ...planned]) {
-    const normalized = query.trim().replace(/\s+/g, " ").slice(0, 2_000);
-    const key = normalized.toLocaleLowerCase();
-    if (!normalized || seen.has(key)) continue;
-    seen.add(key);
-    queries.push(normalized);
-    if (queries.length >= maximum) break;
-  }
-  return queries;
-}
-
-function feedbackRetrievalQueries(
-  original: string,
-  results: MemorySearchResult[],
-  maximum: number,
-): Array<{ query: string; excludedMemoryId: string }> {
-  if (maximum <= 0) return [];
-  const originalTerms = evidenceTerms(original);
-  const queries: Array<{ query: string; excludedMemoryId: string }> = [];
-  const seen = new Set<string>();
-  for (const result of results) {
-    const evidence = result.evidence.trim();
-    if (!evidence) continue;
-    const excerpt = feedbackEvidenceExcerpt(original, evidence);
-    const hasNovelTerm = [...evidenceTerms(excerpt)].some(
-      (term) => term.length > 2 && !feedbackStopWords.has(term) && !originalTerms.has(term),
-    );
-    if (!hasNovelTerm) continue;
-    const query = `${original.slice(0, 1_000)}\n${excerpt}`.trim().replace(/\s+/g, " ");
-    const key = query.toLocaleLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    queries.push({ query, excludedMemoryId: result.memory.id });
-    if (queries.length >= maximum) break;
-  }
-  return queries;
 }
 
 async function embedRetrievalQueries(
@@ -805,7 +314,7 @@ async function embedRetrievalQueries(
 
 async function searchOneQuery(input: {
   transaction: PostgresTransaction;
-  actor: ActorContext;
+  storageScope: MemoryStorageScope;
   query: string;
   queryEmbedding: string | null;
   embeddingDimensions: number;
@@ -1156,7 +665,7 @@ async function searchOneQuery(input: {
      ORDER BY ranked_memories.score DESC, memory.updated_at DESC, memory.id`,
     [
       input.query,
-      input.actor.workspaceId,
+      input.storageScope.partitionId,
       input.queryEmbedding,
       input.candidateLimit,
       input.semanticDistanceThreshold,
@@ -1273,9 +782,9 @@ async function enqueueEmbeddingJob(
 export function memoryFromRow(row: MemoryRow): Memory {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    ownerUserId: row.owner_user_id,
-    createdByAgentId: row.created_by_agent_id,
+    partitionId: row.workspace_id,
+    ownerId: row.owner_user_id,
+    sourceId: row.created_by_agent_id,
     scope: row.scope,
     content: row.content,
     metadata: row.metadata,
@@ -1295,7 +804,7 @@ export interface MemoryMutationPrimitivesOptions {
  * Transaction-scoped Memory write primitives shared by the Memory module and
  * host extensions that create or update canonical Memories inside their own
  * transactions (lore's Memory Proposals review is the canonical example).
- * Callers own the surrounding transaction, actor-context installation,
+ * Callers own the surrounding transaction, storage access policy,
  * authorization checks, and idempotency bookkeeping.
  */
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
@@ -1315,9 +824,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
 
   async function insertMemoryInTransaction(
     transaction: PostgresTransaction,
-    actor: ActorContext,
+    storageScope: MemoryStorageScope,
     input: RememberMemory,
-    createdByAgentId: string | null = actor.agentId ?? null,
+    createdByAgentId: string | null = storageScope.sourceId ?? null,
   ): Promise<{ jobId: string | null; memory: Memory }> {
     const chunks = prepareChunks(input.content);
     const id = crypto.randomUUID();
@@ -1328,8 +837,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
        RETURNING *`,
       [
         id,
-        actor.workspaceId,
-        actor.userId,
+        storageScope.partitionId,
+        storageScope.ownerId,
         createdByAgentId,
         input.scope ?? defaultMemoryScope,
         input.content,
@@ -1338,7 +847,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     );
     const memory = result.rows[0];
     if (!memory) throw new Error("Memory insert returned no row");
-    await insertChunks(transaction, actor.workspaceId, id, chunks);
+    await insertChunks(transaction, storageScope.partitionId, id, chunks);
     const jobId = embeddingProvider
       ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)
       : null;
@@ -1347,7 +856,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
 
   async function updateMemoryInTransaction(
     transaction: PostgresTransaction,
-    actor: ActorContext,
+    storageScope: MemoryStorageScope,
     id: string,
     input: UpdateMemory,
     expectedVersion?: number,
@@ -1357,9 +866,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
        FROM memories
        WHERE id = $1
          AND workspace_id = $2
-         AND lore.can_write_memory(workspace_id, owner_user_id)
        FOR UPDATE`,
-      [id, actor.workspaceId],
+      [id, storageScope.partitionId],
     );
     const currentMemory = current.rows[0];
     if (!currentMemory) return null;
@@ -1382,7 +890,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
        RETURNING *`,
       [
         id,
-        actor.workspaceId,
+        storageScope.partitionId,
         input.content ?? null,
         input.scope ?? null,
         input.metadata === undefined ? null : JSON.stringify(input.metadata),
@@ -1391,14 +899,14 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     );
     const updated = result.rows[0];
     if (!updated) {
-      throw new MemoryVersionConflictError(currentMemory.version, currentMemory.version + 1);
+      return null;
     }
     if (chunks) {
       await transaction.query(
         "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
-        [actor.workspaceId, id],
+        [storageScope.partitionId, id],
       );
-      await insertChunks(transaction, actor.workspaceId, id, chunks);
+      await insertChunks(transaction, storageScope.partitionId, id, chunks);
     }
     const jobId = embeddingProvider
       ? await enqueueEmbeddingJob(transaction, updated, embeddingProvider, chunks === null)
@@ -1409,7 +917,12 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
   return { insertMemoryInTransaction, notifyMaintenance, updateMemoryInTransaction };
 }
 
-export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
+export function createMemoryModule(
+  storage: MemoryStorageContext,
+  options: MemoryModuleOptions = {},
+) {
+  const { database } = storage;
+  const storageScope: MemoryStorageScope = storage;
   const contextGroupExpansion = normalizeContextGroupExpansion(options.contextGroupExpansion);
   const embeddingProvider = options.embeddingProvider;
   const embeddingDimensions = validatedEmbeddingDimensions(
@@ -1447,44 +960,16 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     createMemoryMutationPrimitives(options);
 
   return {
-    async remember(
-      actor: ActorContext,
-      input: RememberMemory,
-      options: MemoryMutationOptions = {},
-    ): Promise<Memory> {
+    async remember(input: RememberMemory): Promise<Memory> {
       try {
-        const created = await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          const claim = await beginMutation<{ memory: Memory }>(
-            transaction,
-            actor,
-            options.idempotency,
-          );
-          if (claim.replay) {
-            return { memory: claim.replay.body.memory, jobId: null, replayed: true };
-          }
-          const access = await transaction.query<{ allowed: boolean }>(
-            "SELECT lore.can_write_memory($1, $2) AS allowed",
-            [actor.workspaceId, actor.userId],
-          );
-          if (access.rows[0]?.allowed !== true) {
-            throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
-          }
-          const inserted = await insertMemoryInTransaction(transaction, actor, input);
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            201,
-            { memory: inserted.memory },
-            Boolean(options.idempotency),
-          );
-          return { ...inserted, replayed: false };
-        });
-        if (!created.replayed) notifyMaintenance(created.jobId);
+        const created = await database.transaction((transaction) =>
+          insertMemoryInTransaction(transaction, storageScope, input),
+        );
+        notifyMaintenance(created.jobId);
         return created.memory;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
-          throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace", {
+          throw new MemoryAccessDeniedError("Memory creation denied by the store", {
             cause: error,
           });
         }
@@ -1492,19 +977,17 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       }
     },
 
-    async retrieve(actor: ActorContext, id: string): Promise<Memory | null> {
+    async retrieve(id: string): Promise<Memory | null> {
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
           "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
-          [id, actor.workspaceId],
+          [id, storageScope.partitionId],
         );
         return result.rows[0] ? memoryFromRow(result.rows[0]) : null;
       });
     },
 
     async update(
-      actor: ActorContext,
       id: string,
       input: UpdateMemory,
       options: MemoryMutationOptions = {},
@@ -1514,109 +997,40 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         input.scope === undefined &&
         input.metadata === undefined
       ) {
-        return this.retrieve(actor, id);
+        return this.retrieve(id);
       }
-      const updatedResult = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
-        const claim = await beginMutation<{ memory: Memory | null }>(
-          transaction,
-          actor,
-          options.idempotency,
-        );
-        if (claim.replay) {
-          return { memory: claim.replay.body.memory, jobId: null, chunksChanged: false };
-        }
-        const updated = await updateMemoryInTransaction(
-          transaction,
-          actor,
-          id,
-          input,
-          options.expectedVersion,
-        );
-        if (!updated) {
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            404,
-            { memory: null },
-            Boolean(options.idempotency),
-          );
-          return { memory: null, jobId: null, chunksChanged: false };
-        }
-        await completeMutation(
-          transaction,
-          claim.requestId,
-          200,
-          { memory: updated.memory },
-          Boolean(options.idempotency),
-        );
-        return updated;
-      });
-      // Metadata-only updates can leave an existing stale job for the scheduled
-      // sweep without billing a Queue message for an already-embedded Memory.
-      notifyMaintenance(updatedResult.chunksChanged ? updatedResult.jobId : null);
-      return updatedResult.memory;
+      const updated = await database.transaction((transaction) =>
+        updateMemoryInTransaction(transaction, storageScope, id, input, options.expectedVersion),
+      );
+      notifyMaintenance(updated?.chunksChanged ? updated.jobId : null);
+      return updated?.memory ?? null;
     },
 
-    async forget(
-      actor: ActorContext,
-      id: string,
-      options: MemoryMutationOptions = {},
-    ): Promise<boolean> {
+    async forget(id: string, options: MemoryMutationOptions = {}): Promise<boolean> {
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
-        const claim = await beginMutation<{ deleted: boolean }>(
-          transaction,
-          actor,
-          options.idempotency,
-        );
-        if (claim.replay) return claim.replay.body.deleted;
         const current = await transaction.query<{ version: number }>(
-          `SELECT version
-           FROM memories
-           WHERE id = $1
-             AND workspace_id = $2
-             AND lore.can_write_memory(workspace_id, owner_user_id)
+          `SELECT version FROM memories
+           WHERE id = $1 AND workspace_id = $2
            FOR UPDATE`,
-          [id, actor.workspaceId],
+          [id, storageScope.partitionId],
         );
-        const currentVersion = current.rows[0]?.version;
-        if (currentVersion === undefined) {
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            404,
-            { deleted: false },
-            Boolean(options.idempotency),
-          );
-          return false;
-        }
-        if (options.expectedVersion !== undefined && currentVersion !== options.expectedVersion) {
-          throw new MemoryVersionConflictError(options.expectedVersion, currentVersion);
+        const version = current.rows[0]?.version;
+        if (version === undefined) return false;
+        if (options.expectedVersion !== undefined && version !== options.expectedVersion) {
+          throw new MemoryVersionConflictError(options.expectedVersion, version);
         }
         const result = await transaction.query<{ id: string }>(
-          `DELETE FROM memories
-           WHERE id = $1 AND workspace_id = $2 AND version = $3
-           RETURNING id`,
-          [id, actor.workspaceId, currentVersion],
+          `DELETE FROM memories WHERE id = $1 AND workspace_id = $2 AND version = $3 RETURNING id`,
+          [id, storageScope.partitionId, version],
         );
-        const deleted = result.rows.length === 1;
-        await completeMutation(
-          transaction,
-          claim.requestId,
-          deleted ? 204 : 404,
-          { deleted },
-          Boolean(options.idempotency),
-        );
-        return deleted;
+        return result.rows.length === 1;
       });
     },
 
-    async list(actor: ActorContext, input: ListMemory = {}): Promise<Memory[]> {
+    async list(input: ListMemory = {}): Promise<Memory[]> {
       const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
       const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryRow>(
           `SELECT id, workspace_id, owner_user_id, created_by_agent_id, scope,
                   content, metadata, version, created_at,
@@ -1642,7 +1056,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
            LIMIT $2
            OFFSET $3`,
           [
-            actor.workspaceId,
+            storageScope.partitionId,
             limit,
             offset,
             input.scope ?? null,
@@ -1657,7 +1071,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       });
     },
 
-    async search(actor: ActorContext, input: SearchMemory): Promise<MemorySearchResult[]> {
+    async search(input: SearchMemory): Promise<MemorySearchResult[]> {
       const query = input.query.trim();
       if (!query) return [];
       const limit = Math.max(1, Math.min(input.limit ?? 10, 100));
@@ -1687,13 +1101,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         embeddingDimensions,
       );
       let fusionResults: MemorySearchResult[] = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const resultSets: MemorySearchResult[][] = [];
         for (const [index, plannedQuery] of queries.entries()) {
           resultSets.push(
             await searchOneQuery({
               transaction,
-              actor,
+              storageScope,
               query: plannedQuery,
               queryEmbedding: queryEmbeddings[index] ?? null,
               embeddingDimensions,
@@ -1715,7 +1128,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         return contextGroupExpansion
           ? expandContextGroupResults({
               transaction,
-              actor,
+              storageScope,
               results: fused,
               targetLimit: resultLimit,
               expansion: contextGroupExpansion,
@@ -1740,7 +1153,6 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           embeddingDimensions,
         );
         const feedbackRead = await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
           const stillVisible = await transaction.query<{ id: string }>(
             `SELECT id
              FROM memories
@@ -1751,7 +1163,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
                AND ($5::timestamptz IS NULL OR updated_at < $5::timestamptz)
                AND ($6::jsonb IS NULL OR metadata @> $6::jsonb)`,
             [
-              actor.workspaceId,
+              storageScope.partitionId,
               fusionResults.map((result) => result.memory.id),
               scope,
               updatedAfter,
@@ -1761,7 +1173,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           );
           const results = await searchOneQuery({
             transaction,
-            actor,
+            storageScope,
             query: feedback.query,
             queryEmbedding: feedbackEmbedding ?? null,
             embeddingDimensions,

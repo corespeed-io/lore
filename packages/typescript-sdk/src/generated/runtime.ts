@@ -13,3 +13,8 @@ export const LORE_ERROR_CODES = [
   "version_conflict",
   "workspace_export_limit_exceeded"
 ] as const;
+
+export const MEMORY_CONTENT_LIMITS = {
+  "recommendedCharacters": 8000,
+  "maximumCharacters": 32000
+} as const;

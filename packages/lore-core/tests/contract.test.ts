@@ -2,10 +2,19 @@ import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
+import { expect, test } from "vitest";
 import {
+  createMemoryModule,
+  type EmbeddingProvider,
+  type MemoryStorageContext,
+  type QueryPlanningProvider,
+  type RerankingProvider,
+} from "../src/index";
+import {
+  createDeterministicTestEmbeddingProvider,
   type MemoryCoreContractFixture,
   runMemoryCoreContractSuite,
-  testDatabaseForRole,
+  testDatabase,
 } from "../src/testing";
 
 /**
@@ -56,13 +65,32 @@ async function createLoreFixture(): Promise<MemoryCoreContractFixture> {
     "INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1, $2, 'owner')",
     [RESEARCH, CAROL],
   );
+  function storageContext(partitionId: string, ownerId: string): MemoryStorageContext {
+    return {
+      partitionId,
+      ownerId,
+      database: testDatabase(postgres, async (transaction) => {
+        await transaction.query("SET LOCAL ROLE lore_app");
+        await transaction.query(
+          `SELECT set_config('lore.workspace_id', $1, true),
+                  set_config('lore.user_id', $2, true),
+                  set_config('lore.agent_id', '', true)`,
+          [partitionId, ownerId],
+        );
+      }),
+    };
+  }
   let closePromise: Promise<void> | undefined;
   return {
-    database: testDatabaseForRole(postgres, "lore_app"),
-    maintenanceDatabase: testDatabaseForRole(postgres, "lore_maintenance"),
-    alice: { workspaceId: OPERATIONS, userId: ALICE },
-    bob: { workspaceId: OPERATIONS, userId: BOB },
-    carol: { workspaceId: RESEARCH, userId: CAROL },
+    database: testDatabase(postgres, async (transaction) => {
+      await transaction.query("SET LOCAL ROLE lore_app");
+    }),
+    maintenanceDatabase: testDatabase(postgres, async (transaction) => {
+      await transaction.query("SET LOCAL ROLE lore_maintenance");
+    }),
+    alice: storageContext(OPERATIONS, ALICE),
+    bob: storageContext(OPERATIONS, BOB),
+    carol: storageContext(RESEARCH, CAROL),
     close: () => {
       closePromise ??= postgres.close();
       return closePromise;
@@ -73,4 +101,64 @@ async function createLoreFixture(): Promise<MemoryCoreContractFixture> {
 runMemoryCoreContractSuite(createLoreFixture, {
   embeddingDimensions: 1024,
   defaultMemoryScope: "shared",
+});
+
+test("host-defined embedding and method-only planning/reranking drive real retrieval", async () => {
+  const fixture = await createLoreFixture();
+  try {
+    const embeddingCalls: Parameters<EmbeddingProvider["embed"]>[] = [];
+    const planningCalls: Parameters<QueryPlanningProvider["plan"]>[0][] = [];
+    const rerankingCalls: Parameters<RerankingProvider["rerank"]>[0][] = [];
+    const customEmbedding = createDeterministicTestEmbeddingProvider(1024, {
+      provider: "host-vector-service",
+      model: "models/private-index-7",
+      revision: "host-protocol-2",
+    });
+    const embeddingProvider: EmbeddingProvider = {
+      ...customEmbedding,
+      async embed(texts, task) {
+        embeddingCalls.push([texts, task]);
+        return customEmbedding.embed(texts, task);
+      },
+    };
+    const queryPlanningProvider: QueryPlanningProvider = {
+      async plan(input) {
+        planningCalls.push(input);
+        return ["harbor"];
+      },
+    };
+    const rerankingProvider: RerankingProvider = {
+      async rerank(input) {
+        rerankingCalls.push(input);
+        return input.documents
+          .map(({ id, text }) => ({
+            documentId: id,
+            score: text.includes("observatory") ? 0.9 : 0.1,
+          }))
+          .sort((left, right) => right.score - left.score);
+      },
+    };
+    const memories = createMemoryModule(fixture.alice, {
+      embeddingProvider,
+      queryPlanningProvider,
+      rerankingProvider,
+    });
+    const observatory = await memories.remember({
+      content: "The harbor observatory opens in the morning.",
+    });
+    await memories.remember({
+      content: "The harbor station opens in the evening.",
+    });
+
+    const results = await memories.search({ query: "stargazing", limit: 1 });
+
+    expect(planningCalls).toEqual([{ query: "stargazing", maxQueries: 2 }]);
+    expect(embeddingCalls).toEqual([[["stargazing", "harbor"], "query"]]);
+    expect(rerankingCalls).toHaveLength(1);
+    expect(rerankingCalls[0]?.documents).toHaveLength(2);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ memory: { id: observatory.id }, rerankScore: 0.9 });
+  } finally {
+    await fixture.close();
+  }
 });

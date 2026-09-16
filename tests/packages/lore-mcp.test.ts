@@ -648,8 +648,9 @@ describe("Lore external MCP adapter", () => {
     expect(JSON.stringify(searched.content)).not.toContain("authorized-evidence-");
   });
 
-  test("rejects metadata beyond the Portable Core depth boundary", async () => {
-    const client = await connect(fakeMemories());
+  test("passes deeply nested JSON metadata to the SDK", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
     let metadata: Record<string, unknown> = { leaf: true };
     for (let depth = 0; depth < 34; depth += 1) metadata = { child: metadata };
 
@@ -658,7 +659,24 @@ describe("Lore external MCP adapter", () => {
       arguments: { content: "bounded", metadata },
     });
 
+    expect(result.isError).not.toBe(true);
+    expect(memories.remember).toHaveBeenCalledWith(
+      { content: "bounded", scope: "shared", metadata },
+      {},
+    );
+  });
+
+  test("rejects Memory metadata beyond the serialized size boundary", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+
+    const result = await client.callTool({
+      name: "lore_remember",
+      arguments: { content: "bounded", metadata: { payload: "m".repeat(100_000) } },
+    });
+
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toContain("metadata exceeds 32 levels");
+    expect(JSON.stringify(result.content)).toContain("metadata exceeds 100000 characters");
+    expect(memories.remember).not.toHaveBeenCalled();
   });
 });

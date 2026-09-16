@@ -1,9 +1,6 @@
-import type {
-  EmbeddingProvider,
-  EmbeddingTask,
-  QueryPlanningProvider,
-  RerankingProvider,
-} from "@corespeed/lore-core";
+import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
+import type { ConfiguredQueryPlanningProvider } from "../../../src/server/providers/query-planning/types";
+import type { ConfiguredRerankingProvider } from "../../../src/server/providers/reranking/types";
 
 interface EmbeddingWorkload {
   calls: number;
@@ -41,12 +38,12 @@ export interface BenchmarkWorkload {
 
 export function createBenchmarkMetering(input: {
   embeddingProvider: EmbeddingProvider;
-  queryPlanningProvider?: QueryPlanningProvider;
-  rerankingProvider?: RerankingProvider;
+  queryPlanningProvider?: ConfiguredQueryPlanningProvider;
+  rerankingProvider?: ConfiguredRerankingProvider;
 }): {
   embeddingProvider: EmbeddingProvider;
-  queryPlanningProvider?: QueryPlanningProvider;
-  rerankingProvider?: RerankingProvider;
+  queryPlanningProvider?: ConfiguredQueryPlanningProvider;
+  rerankingProvider?: ConfiguredRerankingProvider;
   workload: BenchmarkWorkload;
 } {
   const embedding: EmbeddingWorkload = {
@@ -110,7 +107,7 @@ export function createBenchmarkMetering(input: {
     input.rerankingProvider && reranking
       ? {
           ...input.rerankingProvider,
-          async rerank(rerankInput: Parameters<RerankingProvider["rerank"]>[0]) {
+          async rerank(rerankInput: Parameters<ConfiguredRerankingProvider["rerank"]>[0]) {
             reranking.calls += 1;
             reranking.queryCharacters += rerankInput.query.length;
             reranking.documents += rerankInput.documents.length;

@@ -1,5 +1,6 @@
-import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
-import { installActorContext } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import type { ActorContext } from "@/server/auth/actor-context";
+import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
 import type {
   CodeArtifact,

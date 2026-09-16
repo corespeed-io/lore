@@ -1,18 +1,17 @@
 import { expect, test } from "vitest";
-import { type ActorContext, installActorContext } from "./actor-context";
-import type { PostgresDatabase } from "./db";
+import type { PostgresDatabase, PostgresTransaction } from "./db";
+import type { EmbeddingProvider } from "./embedding";
 import { createMemoryMaintenanceModule } from "./maintenance";
-import { createMemoryModule, type EmbeddingProvider, type MemoryScope } from "./memory";
+import { createMemoryModule, type MemoryScope } from "./memory";
+import type { MemoryStorageContext } from "./memory-storage";
 
 /**
- * Host-pluggable schema contract kit. A host points the suite at a database
- * migrated by ITS OWN chain (lore oss's db/migrations, HaaS's
- * packages/memory-core/migrations, …) and the suite asserts the engine's
- * behavioral invariants hold there: tenant isolation, private/shared
- * visibility, owner-only writes, exact chunk reconstruction, fail-closed
- * actor GUCs, and the leased embedding lane. Structural details (column
- * types, policy bodies, identity tables) are deliberately not asserted —
- * they are host-owned.
+ * Host-pluggable schema contract kit. A host supplies storage contexts whose
+ * transaction wrappers enforce its own authorization policy. The suite checks
+ * partition isolation, private/shared visibility, owner-only writes, chunk
+ * reconstruction, unscoped read denial, and leased embedding maintenance.
+ * Identity tables, roles, policy functions, and transaction initialization are
+ * host-owned; the engine does not install or authenticate them.
  */
 
 /** Minimal structural view of a PGlite instance (or compatible driver). */
@@ -24,25 +23,16 @@ export interface TestDatabaseTransaction {
   query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }>;
 }
 
-/**
- * Wrap a transactional test database (PGlite in practice) as the engine's
- * PostgresDatabase seam, entering every transaction as the given NOLOGIN
- * runtime role exactly like production `SET LOCAL ROLE` does.
- */
-export function testDatabaseForRole(
+/** Adapt a test database with optional host-owned transaction initialization. */
+export function testDatabase(
   postgres: TransactionalTestDatabase,
-  role: "lore_app" | "lore_maintenance" | "NONE",
+  initializeTransaction?: (transaction: PostgresTransaction) => Promise<void>,
 ): PostgresDatabase {
-  if (role !== "lore_app" && role !== "lore_maintenance" && role !== "NONE") {
-    throw new Error("Unsupported test database role");
-  }
   return {
     transaction: (use) =>
       postgres.transaction(async (transaction) => {
-        await transaction.query(`SET LOCAL ROLE ${role}`);
-        return use({
-          query: (sql, params) => transaction.query(sql, params),
-        });
+        await initializeTransaction?.(transaction);
+        return use({ query: (sql, params) => transaction.query(sql, params) });
       }),
   };
 }
@@ -71,15 +61,15 @@ export function createDeterministicTestEmbeddingProvider(
 }
 
 export interface MemoryCoreContractFixture {
-  /** Request-path database entering transactions as lore_app. */
+  /** Unscoped request database, with the host request role but no caller context. */
   database: PostgresDatabase;
-  /** Maintenance database entering transactions as lore_maintenance. */
+  /** Database with the host-authorized maintenance policy. */
   maintenanceDatabase: PostgresDatabase;
-  /** Two write-authorized actors sharing one workspace. */
-  alice: ActorContext;
-  bob: ActorContext;
-  /** A write-authorized actor in a different workspace. */
-  carol: ActorContext;
+  /** Two owner contexts in the same storage partition. */
+  alice: MemoryStorageContext;
+  bob: MemoryStorageContext;
+  /** An owner context in a different storage partition. */
+  carol: MemoryStorageContext;
   close(): Promise<void>;
 }
 
@@ -107,40 +97,50 @@ export function runMemoryCoreContractSuite(
     ...(options.defaultMemoryScope ? { defaultMemoryScope: options.defaultMemoryScope } : {}),
   };
 
-  test("contract: tenant isolation holds across workspaces", async () => {
+  test("contract: isolation holds across storage partitions", async () => {
     const fixture = await createFixture();
     try {
-      const memories = createMemoryModule(fixture.database, moduleOptions);
-      const secret = await memories.remember(fixture.alice, {
+      const memories = createMemoryModule(fixture.alice, moduleOptions);
+      const secret = await memories.remember({
         content: "The operations workspace launch code is aurora-42.",
         scope: "shared",
       });
-      await expect(memories.retrieve(fixture.carol, secret.id)).resolves.toBeNull();
-      await expect(memories.list(fixture.carol)).resolves.toEqual([]);
-      const found = await memories.search(fixture.carol, { query: "aurora-42" });
+      await expect(
+        createMemoryModule(fixture.carol, moduleOptions).retrieve(secret.id),
+      ).resolves.toBeNull();
+      await expect(createMemoryModule(fixture.carol, moduleOptions).list()).resolves.toEqual([]);
+      const found = await createMemoryModule(fixture.carol, moduleOptions).search({
+        query: "aurora-42",
+      });
       expect(found).toEqual([]);
     } finally {
       await fixture.close();
     }
   });
 
-  test("contract: private Memory is owner-only; shared is workspace-visible", async () => {
+  test("contract: private Memory is owner-only; shared is partition-visible", async () => {
     const fixture = await createFixture();
     try {
-      const memories = createMemoryModule(fixture.database, moduleOptions);
-      const privateMemory = await memories.remember(fixture.alice, {
+      const memories = createMemoryModule(fixture.alice, moduleOptions);
+      const privateMemory = await memories.remember({
         content: "Alice's private planning note about the hidden venue.",
         scope: "private",
       });
-      const sharedMemory = await memories.remember(fixture.alice, {
+      const sharedMemory = await memories.remember({
         content: "The team offsite is confirmed for the harbor office.",
         scope: "shared",
       });
-      await expect(memories.retrieve(fixture.bob, privateMemory.id)).resolves.toBeNull();
-      await expect(memories.retrieve(fixture.bob, sharedMemory.id)).resolves.toMatchObject({
+      await expect(
+        createMemoryModule(fixture.bob, moduleOptions).retrieve(privateMemory.id),
+      ).resolves.toBeNull();
+      await expect(
+        createMemoryModule(fixture.bob, moduleOptions).retrieve(sharedMemory.id),
+      ).resolves.toMatchObject({
         id: sharedMemory.id,
       });
-      const bobSearch = await memories.search(fixture.bob, { query: "hidden venue" });
+      const bobSearch = await createMemoryModule(fixture.bob, moduleOptions).search({
+        query: "hidden venue",
+      });
       expect(bobSearch).toEqual([]);
     } finally {
       await fixture.close();
@@ -150,16 +150,18 @@ export function runMemoryCoreContractSuite(
   test("contract: sharing a Memory does not grant co-members write authority", async () => {
     const fixture = await createFixture();
     try {
-      const memories = createMemoryModule(fixture.database, moduleOptions);
-      const shared = await memories.remember(fixture.alice, {
+      const memories = createMemoryModule(fixture.alice, moduleOptions);
+      const shared = await memories.remember({
         content: "Shared decision: adopt the new deployment checklist.",
         scope: "shared",
       });
       await expect(
-        memories.update(fixture.bob, shared.id, { content: "Tampered." }),
+        createMemoryModule(fixture.bob, moduleOptions).update(shared.id, { content: "Tampered." }),
       ).resolves.toBeNull();
-      await expect(memories.forget(fixture.bob, shared.id)).resolves.toBe(false);
-      await expect(memories.retrieve(fixture.alice, shared.id)).resolves.toMatchObject({
+      await expect(createMemoryModule(fixture.bob, moduleOptions).forget(shared.id)).resolves.toBe(
+        false,
+      );
+      await expect(memories.retrieve(shared.id)).resolves.toMatchObject({
         content: "Shared decision: adopt the new deployment checklist.",
         version: 1,
       });
@@ -171,8 +173,8 @@ export function runMemoryCoreContractSuite(
   test("contract: new Memories default to the host's configured scope", async () => {
     const fixture = await createFixture();
     try {
-      const memories = createMemoryModule(fixture.database, moduleOptions);
-      const memory = await memories.remember(fixture.alice, {
+      const memories = createMemoryModule(fixture.alice, moduleOptions);
+      const memory = await memories.remember({
         content: "A memory written without an explicit scope.",
       });
       expect(memory.scope).toBe(defaultScope);
@@ -184,17 +186,16 @@ export function runMemoryCoreContractSuite(
   test("contract: chunks reconstruct canonical content exactly", async () => {
     const fixture = await createFixture();
     try {
-      const memories = createMemoryModule(fixture.database, moduleOptions);
+      const memories = createMemoryModule(fixture.alice, moduleOptions);
       const paragraph = "Deterministic chunking must reconstruct content exactly. ";
       const content = `# Contract\n\n${paragraph.repeat(60)}\n\n- item one\n- item two\n\n${"结尾段落包含中日韩文字与 emoji 🧭。".repeat(20)}`;
-      const memory = await memories.remember(fixture.alice, { content });
-      const reconstructed = await fixture.database.transaction(async (transaction) => {
-        await installActorContext(transaction, fixture.alice);
+      const memory = await memories.remember({ content });
+      const reconstructed = await fixture.alice.database.transaction(async (transaction) => {
         const chunks = await transaction.query<{ content: string }>(
           `SELECT content FROM memory_chunks
              WHERE workspace_id = $1 AND memory_id = $2
              ORDER BY ordinal`,
-          [fixture.alice.workspaceId, memory.id],
+          [fixture.alice.partitionId, memory.id],
         );
         return chunks.rows.map((row) => row.content).join("");
       });
@@ -204,12 +205,12 @@ export function runMemoryCoreContractSuite(
     }
   });
 
-  test("contract: a transaction without actor context sees nothing", async () => {
+  test("contract: an unscoped host transaction sees nothing", async () => {
     const fixture = await createFixture();
     try {
-      const memories = createMemoryModule(fixture.database, moduleOptions);
-      await memories.remember(fixture.alice, {
-        content: "Visible only through an installed actor context.",
+      const memories = createMemoryModule(fixture.alice, moduleOptions);
+      await memories.remember({
+        content: "Visible only through an initialized host storage context.",
         scope: "shared",
       });
       const bare = await fixture.database.transaction(async (transaction) => {
@@ -226,11 +227,11 @@ export function runMemoryCoreContractSuite(
     const fixture = await createFixture();
     try {
       const provider = createDeterministicTestEmbeddingProvider(dimensions);
-      const memories = createMemoryModule(fixture.database, {
+      const memories = createMemoryModule(fixture.alice, {
         ...moduleOptions,
         embeddingProvider: provider,
       });
-      const memory = await memories.remember(fixture.alice, {
+      const memory = await memories.remember({
         content: "Semantic contract memory about tidal navigation charts.",
         scope: "shared",
       });
@@ -245,17 +246,16 @@ export function runMemoryCoreContractSuite(
         guard += 1;
         if (guard > 10) throw new Error("Embedding lane did not drain");
       }
-      const embedded = await fixture.database.transaction(async (transaction) => {
-        await installActorContext(transaction, fixture.alice);
+      const embedded = await fixture.alice.database.transaction(async (transaction) => {
         const rows = await transaction.query<{ count: string | number }>(
           `SELECT count(*) AS count FROM memory_chunk_embeddings
              WHERE workspace_id = $1 AND memory_id = $2`,
-          [fixture.alice.workspaceId, memory.id],
+          [fixture.alice.partitionId, memory.id],
         );
         return Number(rows.rows[0]?.count ?? 0);
       });
       expect(embedded).toBeGreaterThan(0);
-      const found = await memories.search(fixture.alice, { query: "tidal navigation" });
+      const found = await memories.search({ query: "tidal navigation" });
       expect(found.map((result) => result.memory.id)).toContain(memory.id);
     } finally {
       await fixture.close();

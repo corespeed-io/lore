@@ -1,10 +1,4 @@
-import type {
-  ActorContext,
-  MemoryModuleOptions,
-  MemoryScope,
-  PostgresDatabase,
-} from "@corespeed/lore-core";
-import { createMemoryModule } from "@corespeed/lore-core";
+import type { MemoryModuleOptions, MemoryScope, PostgresDatabase } from "@corespeed/lore-core";
 import type {
   CodeEvidenceRelationship,
   CodeEvidenceValidationState,
@@ -13,6 +7,8 @@ import type {
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
+import { createMemoryModule } from "@/modules/memories/service";
+import type { ActorContext } from "@/server/auth/actor-context";
 import type {
   ContextualImpactAssessment,
   DependencyFingerprint,

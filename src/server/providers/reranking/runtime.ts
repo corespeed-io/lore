@@ -1,13 +1,13 @@
 import "server-only";
-import type { RerankingProvider } from "@corespeed/lore-core";
 import { createRerankingProviderFromEnvironment } from "./factory";
+import type { ConfiguredRerankingProvider } from "./types";
 
-let runtimeRerankingProvider: RerankingProvider | undefined;
+let runtimeRerankingProvider: ConfiguredRerankingProvider | undefined;
 let runtimeRerankingProviderInitialized = false;
 
 export function getRuntimeRerankingProvider(
   env: Record<string, string | undefined> = process.env,
-): RerankingProvider | undefined {
+): ConfiguredRerankingProvider | undefined {
   if (env !== process.env) {
     return createRerankingProviderFromEnvironment(env, (message) => console.warn(message));
   }

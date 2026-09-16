@@ -36,8 +36,8 @@ image routing, retrieval configuration, and latency boundary.
 
 The mapped implementation is primarily in
 [`packages/lore-core/src/memory.ts`](../../packages/lore-core/src/memory.ts),
-[`packages/lore-core/src/reranking.ts`](../../packages/lore-core/src/reranking.ts),
-[`packages/lore-core/src/query-planning.ts`](../../packages/lore-core/src/query-planning.ts), and
+[`src/server/providers/reranking`](../../src/server/providers/reranking),
+[`src/server/providers/query-planning`](../../src/server/providers/query-planning), and
 [`scripts/benchmarks/lib/retrieval-benchmark.ts`](../../scripts/benchmarks/lib/retrieval-benchmark.ts).
 
 ## Benchmark provenance
@@ -228,7 +228,7 @@ The mapped implementation is primarily in
   [`QwenLM/Qwen3-Embedding@44548aa`](https://github.com/QwenLM/Qwen3-Embedding/tree/44548aa5f0a0aed1c76d64e19afe47727a325b8f).
   Its official reranker formats instruction, query, and document jointly and scores
   relevance from yes/no logits.
-- **Lore mapping:** `src/lib/reranking.ts` and its vLLM/llama.cpp/hosted adapters
+- **Lore mapping:** Core retrieval and the `src/server/providers/reranking` adapters
   pass only RLS-authorized compact evidence passages to an optional second stage.
 - **Deviations and limits:** a reranker cannot restore a missing candidate. Lore's
   candidate cap, neighboring-chunk policy, exactly-one-finite-`[0,1]` validation,

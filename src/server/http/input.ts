@@ -1,8 +1,9 @@
-import type { ActorContext, IdempotencyRequest } from "@corespeed/lore-core";
-import { mutationRequestHash } from "@corespeed/lore-core";
 import type { z } from "zod/v4";
 import { AccessDeniedError } from "@/server/auth/access";
+import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
+import type { IdempotencyRequest } from "@/server/http/idempotency";
+import { mutationRequestHash } from "@/server/http/idempotency";
 
 export class BadRequestError extends Error {
   readonly status = 400;

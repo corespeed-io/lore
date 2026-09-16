@@ -1,24 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type {
-  ActorContext,
-  ContextGroupExpansionOptions,
-  EmbeddingProvider,
-  QueryPlanningProvider,
-  RerankingProvider,
-} from "@corespeed/lore-core";
+import type { ContextGroupExpansionOptions, EmbeddingProvider } from "@corespeed/lore-core";
 import {
   createMemoryMaintenanceModule,
-  createMemoryModule,
   RETRIEVAL_CJK_LEXICAL_POLICY,
   RETRIEVAL_CONTEXT_GROUP_POLICY,
   RETRIEVAL_ENTITY_ALIAS_POLICY,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
 } from "@corespeed/lore-core";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import pg from "pg";
+import { createMemoryModule } from "../../../src/modules/memories/service";
+import type { ActorContext } from "../../../src/server/auth/actor-context";
+import { createPostgresDatabase } from "../../../src/server/database/postgres";
+import type { ConfiguredQueryPlanningProvider } from "../../../src/server/providers/query-planning/types";
+import type { ConfiguredRerankingProvider } from "../../../src/server/providers/reranking/types";
 import { createBenchmarkMetering } from "./benchmark-metering";
 import { requireExactIndexedMemory } from "./indexed-memory-validation";
 import type {
@@ -181,11 +178,11 @@ function evictOldest<Key, Value>(cache: Map<Key, Value>, maximumEntries: number)
   }
 }
 
-function memoizeRerankingProvider(provider: RerankingProvider): {
-  provider: RerankingProvider;
+function memoizeRerankingProvider(provider: ConfiguredRerankingProvider): {
+  provider: ConfiguredRerankingProvider;
   stats: { hits: number; misses: number };
 } {
-  const cache = new Map<string, ReturnType<RerankingProvider["rerank"]>>();
+  const cache = new Map<string, ReturnType<ConfiguredRerankingProvider["rerank"]>>();
   const maximumEntries = benchmarkCacheEntries();
   const stats = { hits: 0, misses: 0 };
   return {
@@ -215,11 +212,11 @@ function memoizeRerankingProvider(provider: RerankingProvider): {
   };
 }
 
-function memoizeQueryPlanningProvider(provider: QueryPlanningProvider): {
-  provider: QueryPlanningProvider;
+function memoizeQueryPlanningProvider(provider: ConfiguredQueryPlanningProvider): {
+  provider: ConfiguredQueryPlanningProvider;
   stats: { hits: number; misses: number; generatedQueries: number };
 } {
-  const cache = new Map<string, ReturnType<QueryPlanningProvider["plan"]>>();
+  const cache = new Map<string, ReturnType<ConfiguredQueryPlanningProvider["plan"]>>();
   const maximumEntries = benchmarkCacheEntries();
   const stats = { hits: 0, misses: 0, generatedQueries: 0 };
   return {
@@ -265,11 +262,11 @@ export interface RunRetrievalBenchmarkInput {
   embeddingProvider: EmbeddingProvider;
   evidenceNeighborChunks?: number;
   evidenceTopChunks?: number;
-  queryPlanningProvider?: QueryPlanningProvider;
+  queryPlanningProvider?: ConfiguredQueryPlanningProvider;
   queryPlannerMaxQueries?: number;
   retrievalFeedbackQueries?: number;
   retrievalRecencyWeight?: number;
-  rerankingProvider?: RerankingProvider;
+  rerankingProvider?: ConfiguredRerankingProvider;
   rerankCandidateLimit?: number;
   rerankDiversityLambda?: number;
   rerankMinimumScore?: number;

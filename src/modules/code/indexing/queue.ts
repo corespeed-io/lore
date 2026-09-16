@@ -1,5 +1,7 @@
-import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
-import { installActorContext, isPostgresAccessDenied } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
+import { isPostgresAccessDenied } from "@corespeed/lore-core";
+import type { ActorContext } from "@/server/auth/actor-context";
+import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
 import type { CodeIndexJob, CodeIndexJobStatus } from "./types";

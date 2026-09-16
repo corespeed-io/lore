@@ -22,32 +22,37 @@ assembly.
 
 ## Architecture
 
-The same Portable Core and Postgres schema run in OSS self-hosting and CoreSpeed
-Cloud. Model integrations are optional; Postgres remains the canonical store.
+Lore Core owns memory storage, retrieval algorithms, and PostgreSQL mechanics.
+Lore OSS supplies Workspace and identity management, authorization, request replay,
+product workflows, deployment, and concrete model adapters. It gives the engine a
+store whose transactions already enforce access policy. The same application and Postgres
+schema run in OSS self-hosting and CoreSpeed Cloud. Model integrations are optional;
+Postgres remains the canonical store.
 
 See [the architecture guide](docs/architecture.md) for domain modules, runtime seams,
 and the organization of scripts and tests.
 
 ```mermaid
 flowchart LR
-    Users["Users"] --> Interfaces["Web · API · SDKs · CLI · MCP"]
-    Agents["Agents"] --> Interfaces
-    Interfaces --> Core["Lore Portable Core"]
-    Core <--> Database[("Postgres + pgvector")]
-    Core -.-> Embed["Embedding"]
-    Core -.-> Plan["Query planner"]
-    Core -.-> Rerank["Reranker"]
+    UI["Web UI"] --> SDK["TypeScript SDK"]
+    CLI["CLI"] --> SDK
+    MCP["MCP"] --> SDK
+    SDK --> API["OSS API<br/>Auth · tenancy"]
+    Python["Python SDK"] --> API
+    API --> Core["Lore Core"]
+    Core --> Database[("Postgres + pgvector")]
+    Providers["Model providers · OSS"] -. inject .-> Core
 
-    classDef actor fill:#e8f1ff,stroke:#2563eb,color:#102a43,stroke-width:2px
     classDef interface fill:#f3e8ff,stroke:#7c3aed,color:#2e1065,stroke-width:2px
+    classDef api fill:#e8f1ff,stroke:#2563eb,color:#102a43,stroke-width:2px
     classDef core fill:#e6f6ec,stroke:#24864b,color:#123b24,stroke-width:3px
     classDef data fill:#e3f6f5,stroke:#0f766e,color:#123b3a,stroke-width:2px
     classDef model fill:#fff4cc,stroke:#b7791f,color:#422006,stroke-width:2px
-    class Users,Agents actor
-    class Interfaces interface
+    class UI,CLI,MCP,SDK,Python interface
+    class API api
     class Core core
     class Database data
-    class Embed,Plan,Rerank model
+    class Providers model
 ```
 
 ## Quick start
@@ -124,6 +129,7 @@ Full source verification requires Bun 1.3.14+, Node 24 LTS, and Python 3.12+.
 bun install --frozen-lockfile
 bun run typecheck
 bun run lint
+bun run architecture:check
 bun run test
 ```
 

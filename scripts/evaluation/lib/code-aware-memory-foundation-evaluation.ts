@@ -1,12 +1,13 @@
-import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryModule } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import {
   CodeEvidenceAccessDeniedError,
   createCodeEvidenceModule,
 } from "../../../src/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "../../../src/modules/code/graph";
 import { createCodeIndexModule } from "../../../src/modules/code/indexing/service";
+import { createMemoryModule } from "../../../src/modules/memories/service";
 import { createMemoryProposalsModule } from "../../../src/modules/proposals/service";
+import type { ActorContext } from "../../../src/server/auth/actor-context";
 import type {
   CodeAwareMemoryEvaluationCaseResult,
   CodeAwareMemoryEvaluationCategory,

@@ -1,10 +1,11 @@
-import type { ActorContext, PostgresDatabase } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import type {
   CodeDependencyEdge,
   CodeDependencyQueryResult,
 } from "../../../src/modules/code/graph";
 import { createCodeDependencyGraphModule } from "../../../src/modules/code/graph";
 import { createCodeIndexModule } from "../../../src/modules/code/indexing/service";
+import type { ActorContext } from "../../../src/server/auth/actor-context";
 import type {
   CodeAwareMemoryEvaluationCaseResult,
   CodeAwareMemoryEvaluationCategory,

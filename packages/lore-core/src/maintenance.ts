@@ -1,7 +1,7 @@
 import type { PostgresDatabase, PostgresTransaction } from "./db";
+import type { EmbeddingProvider } from "./embedding";
+import { validatedEmbeddingDimensions } from "./embedding";
 import { embeddingVectorLiterals } from "./embedding/vector";
-import { validatedEmbeddingDimensions } from "./embedding-config";
-import type { EmbeddingProvider } from "./memory";
 
 export type MemoryMaintenanceStatus = "complete" | "retry" | "dead" | "idle";
 
@@ -80,21 +80,6 @@ async function installMaintenanceContext(
        set_config('lore.maintenance_lease_token', $2, true)`,
     [jobId, leaseToken],
   );
-}
-
-export async function purgeExpiredPortableCoreRecords(
-  database: PostgresDatabase,
-): Promise<{ idempotencyRecords: number; memoryEvents: number }> {
-  return database.transaction(async (transaction) => {
-    const result = await transaction.query<{
-      idempotency_records: string | number;
-      memory_event_records: string | number;
-    }>("SELECT * FROM lore.purge_expired_portable_core_records()");
-    return {
-      idempotencyRecords: Number(result.rows[0]?.idempotency_records ?? 0),
-      memoryEvents: Number(result.rows[0]?.memory_event_records ?? 0),
-    };
-  });
 }
 
 export async function pruneRetiringEmbeddingGenerations(
@@ -220,10 +205,6 @@ export function createMemoryMaintenanceModule(
         if (!id) throw new Error("Embedding generation activation failed");
         return id;
       });
-    },
-
-    async purgeExpired(): Promise<{ idempotencyRecords: number; memoryEvents: number }> {
-      return purgeExpiredPortableCoreRecords(database);
     },
 
     async pruneRetiringGenerations(retentionSeconds = 604_800): Promise<number> {

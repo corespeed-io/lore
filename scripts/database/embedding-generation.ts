@@ -1,5 +1,5 @@
 import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
+import { createPostgresDatabase } from "../../src/server/database/postgres";
 import {
   embeddingBuildEnvironment,
   embeddingConfigurationFromEnvironment,

@@ -6,11 +6,11 @@ import {
   createMemoryMaintenanceModule,
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
-  purgeExpiredPortableCoreRecords,
 } from "@corespeed/lore-core";
-import { createRequestPostgresDatabase } from "@corespeed/lore-core/postgres";
 import openNextWorker from "./.open-next/worker.js";
+import { purgeExpiredPortableCoreRecords } from "./src/modules/operations/maintenance";
 import { createOperationsModule, livenessReport } from "./src/modules/operations/service";
+import { createRequestPostgresDatabase } from "./src/server/database/postgres";
 import {
   createEmbeddingProviderFromEnvironment,
   createMaintenanceEmbeddingProvidersFromEnvironment,

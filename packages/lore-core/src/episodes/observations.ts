@@ -1,8 +1,6 @@
-import { type ActorContext, installActorContext } from "../actor-context";
-import { isPostgresAccessDenied } from "../database-errors";
-import type { PostgresDatabase, PostgresTransaction } from "../db";
-import { beginMutation, completeMutation, type IdempotencyRequest } from "../idempotency";
+import type { PostgresTransaction } from "../db";
 import type { MemoryScope } from "../memory";
+import type { MemoryStorageContext } from "../memory-storage";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
@@ -18,14 +16,9 @@ export type ObservationKind =
   | "document_fragment"
   | "event";
 
-export class ObservationAccessDeniedError extends Error {
-  override name = "ObservationAccessDeniedError";
-  readonly status = 403;
-}
-
 export interface Observation {
   id: string;
-  workspaceId: string;
+  partitionId: string;
   episodeId: string;
   ordinal: number;
   kind: ObservationKind;
@@ -38,10 +31,10 @@ export interface Observation {
 
 export interface EpisodeSummary {
   id: string;
-  workspaceId: string;
-  ownerUserId: string;
+  partitionId: string;
+  ownerId: string;
   recordedByActorKind: "human" | "agent";
-  recordedByAgentId: string | null;
+  sourceId: string | null;
   kind: EpisodeKind;
   scope: MemoryScope;
   startedAt: string;
@@ -72,10 +65,6 @@ export interface ListEpisodes {
   kind?: EpisodeKind;
   limit?: number;
   scope?: MemoryScope;
-}
-
-export interface ObservationMutationOptions {
-  idempotency?: IdempotencyRequest;
 }
 
 interface EpisodeRow {
@@ -144,10 +133,10 @@ const episodeGroup = `
 function toEpisodeSummary(row: EpisodeRow): EpisodeSummary {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
-    ownerUserId: row.owner_user_id,
+    partitionId: row.workspace_id,
+    ownerId: row.owner_user_id,
     recordedByActorKind: row.recorded_by_actor_kind,
-    recordedByAgentId: row.recorded_by_agent_id,
+    sourceId: row.recorded_by_agent_id,
     kind: row.kind,
     scope: row.scope,
     startedAt: row.started_at,
@@ -160,7 +149,7 @@ function toEpisodeSummary(row: EpisodeRow): EpisodeSummary {
 function toObservation(row: ObservationRow): Observation {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    partitionId: row.workspace_id,
     episodeId: row.episode_id,
     ordinal: row.ordinal,
     kind: row.kind,
@@ -179,7 +168,7 @@ function normalizedTimestamp(value: string | undefined, fallback: string): strin
   return new Date(milliseconds).toISOString();
 }
 
-function normalizedEpisode(input: RecordEpisode): {
+export function normalizedEpisode(input: RecordEpisode): {
   endedAt: string;
   observations: Array<{
     content: string;
@@ -238,7 +227,7 @@ function normalizedEpisode(input: RecordEpisode): {
 
 async function episodeFromId(
   transaction: PostgresTransaction,
-  workspaceId: string,
+  partitionId: string,
   id: string,
 ): Promise<Episode | null> {
   const episodeResult = await transaction.query<EpisodeRow>(
@@ -249,7 +238,7 @@ async function episodeFromId(
       AND observation.episode_id = episode.id
      WHERE episode.workspace_id = $1 AND episode.id = $2
      GROUP BY ${episodeGroup}`,
-    [workspaceId, id],
+    [partitionId, id],
   );
   const episode = episodeResult.rows[0];
   if (!episode) return null;
@@ -274,7 +263,7 @@ async function episodeFromId(
      FROM observations observation
      WHERE observation.workspace_id = $1 AND observation.episode_id = $2
      ORDER BY observation.ordinal`,
-    [workspaceId, id],
+    [partitionId, id],
   );
   return {
     ...toEpisodeSummary(episode),
@@ -282,73 +271,17 @@ async function episodeFromId(
   };
 }
 
-export function createObservationModule(database: PostgresDatabase) {
+/** Read and delete Episode storage through a host-scoped database. */
+export function createObservationModule(storage: MemoryStorageContext) {
+  const { database } = storage;
   return {
-    async record(
-      actor: ActorContext,
-      input: RecordEpisode,
-      options: ObservationMutationOptions = {},
-    ): Promise<Episode> {
-      const normalized = normalizedEpisode(input);
-      try {
-        return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          const claim = await beginMutation<{ episode: Episode }>(
-            transaction,
-            actor,
-            options.idempotency,
-          );
-          if (claim.replay) return claim.replay.body.episode;
-          const result = await transaction.query<{ id: string }>(
-            `SELECT lore.record_episode(
-               $1, $2, $3, $4, $5, $6, $7, $8, $9::json
-             ) AS id`,
-            [
-              actor.workspaceId,
-              actor.userId,
-              actor.agentId ? "agent" : "human",
-              actor.agentId ?? null,
-              input.kind,
-              input.scope ?? "private",
-              normalized.startedAt,
-              normalized.endedAt,
-              JSON.stringify(normalized.observations),
-            ],
-          );
-          const recorded = result.rows[0];
-          if (!recorded) throw new Error("Episode record returned no row");
-          const episode = await episodeFromId(transaction, actor.workspaceId, recorded.id);
-          if (!episode) throw new Error("Recorded Episode was not readable in its transaction");
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            201,
-            { episode },
-            Boolean(options.idempotency),
-          );
-          return episode;
-        });
-      } catch (error) {
-        if (isPostgresAccessDenied(error)) {
-          throw new ObservationAccessDeniedError("Actor cannot record this Episode", {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    },
-
-    async retrieve(actor: ActorContext, id: string): Promise<Episode | null> {
+    async retrieve(id: string): Promise<Episode | null> {
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
-        return episodeFromId(transaction, actor.workspaceId, id);
+        return episodeFromId(transaction, storage.partitionId, id);
       });
     },
 
-    async retrieveObservations(
-      actor: ActorContext,
-      ids: readonly string[],
-    ): Promise<Observation[]> {
+    async retrieveObservations(ids: readonly string[]): Promise<Observation[]> {
       const uniqueIds = [...new Set(ids)];
       if (uniqueIds.length > MAX_OBSERVATION_BATCH_READ) {
         throw new TypeError(
@@ -357,7 +290,6 @@ export function createObservationModule(database: PostgresDatabase) {
       }
       if (uniqueIds.length === 0) return [];
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const result = await transaction.query<ObservationRow>(
           `SELECT
              observation.id,
@@ -380,16 +312,15 @@ export function createObservationModule(database: PostgresDatabase) {
            WHERE observation.workspace_id = $1
              AND observation.id = ANY($2::uuid[])
            ORDER BY array_position($2::uuid[], observation.id)`,
-          [actor.workspaceId, uniqueIds],
+          [storage.partitionId, uniqueIds],
         );
         return result.rows.map(toObservation);
       });
     },
 
-    async list(actor: ActorContext, input: ListEpisodes = {}): Promise<EpisodeSummary[]> {
+    async list(input: ListEpisodes = {}): Promise<EpisodeSummary[]> {
       const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
         const result = await transaction.query<EpisodeRow>(
           `SELECT ${episodeColumns}
            FROM episodes episode
@@ -408,7 +339,7 @@ export function createObservationModule(database: PostgresDatabase) {
            ORDER BY episode.created_at DESC, episode.id
            LIMIT $6`,
           [
-            actor.workspaceId,
+            storage.partitionId,
             input.kind ?? null,
             input.scope ?? null,
             input.cursor?.createdAt ?? null,
@@ -420,46 +351,17 @@ export function createObservationModule(database: PostgresDatabase) {
       });
     },
 
-    async forget(
-      actor: ActorContext,
-      id: string,
-      options: ObservationMutationOptions = {},
-    ): Promise<boolean> {
-      try {
-        return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          const claim = await beginMutation<{ deleted: boolean }>(
-            transaction,
-            actor,
-            options.idempotency,
-          );
-          if (claim.replay) return claim.replay.body.deleted;
-          const result = await transaction.query<{ id: string }>(
-            `DELETE FROM episodes
-             WHERE workspace_id = $1
-               AND id = $2
-               AND lore.can_write_memory(workspace_id, owner_user_id)
-             RETURNING id`,
-            [actor.workspaceId, id],
-          );
-          const deleted = result.rows.length === 1;
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            deleted ? 204 : 404,
-            { deleted },
-            Boolean(options.idempotency),
-          );
-          return deleted;
-        });
-      } catch (error) {
-        if (isPostgresAccessDenied(error)) {
-          throw new ObservationAccessDeniedError("Actor cannot forget this Episode", {
-            cause: error,
-          });
-        }
-        throw error;
-      }
+    async forget(id: string): Promise<boolean> {
+      return database.transaction(async (transaction) => {
+        const result = await transaction.query<{ id: string }>(
+          `DELETE FROM episodes
+           WHERE workspace_id = $1
+             AND id = $2
+           RETURNING id`,
+          [storage.partitionId, id],
+        );
+        return result.rows.length === 1;
+      });
     },
   };
 }

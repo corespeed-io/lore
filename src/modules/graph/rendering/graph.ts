@@ -1,5 +1,5 @@
-import type { MemoryGraph as GraphData, MemoryGraphLink as GraphLink } from "@corespeed/lore-core";
 import * as d3 from "d3";
+import type { GraphData, GraphLink } from "@/modules/graph/types";
 import { typeColor } from "@/shared/ui/colors";
 
 export function degrees(links: GraphLink[]): Record<string, number> {

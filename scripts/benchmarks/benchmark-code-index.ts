@@ -11,14 +11,14 @@ import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { ActorContext } from "@corespeed/lore-core";
-import { createMemoryModule } from "@corespeed/lore-core";
-import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
 import { Client } from "pg";
 import { createCodeEvidenceModule } from "../../src/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "../../src/modules/code/graph";
 import { createCodeIndexModule } from "../../src/modules/code/indexing/service";
 import { createContextRetrievalModule } from "../../src/modules/context/retrieval";
+import { createMemoryModule } from "../../src/modules/memories/service";
+import type { ActorContext } from "../../src/server/auth/actor-context";
+import { createPostgresDatabase } from "../../src/server/database/postgres";
 
 const execFileAsync = promisify(execFile);
 const BENCHMARK_REVISION = "code-index-performance-v4-derived-sets";

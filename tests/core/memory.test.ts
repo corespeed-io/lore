@@ -1,12 +1,10 @@
-import type { ActorContext, EmbeddingTask } from "@corespeed/lore-core";
-import {
-  createMemoryMaintenanceModule,
-  createMemoryModule,
-  installActorContext,
-  MemoryAccessDeniedError,
-} from "@corespeed/lore-core";
+import type { EmbeddingTask } from "@corespeed/lore-core";
+import { createMemoryMaintenanceModule, MemoryAccessDeniedError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/server/auth/access";
+import { createMemoryModule } from "../../src/modules/memories/service";
+import type { ActorContext } from "../../src/server/auth/actor-context";
+import { installActorContext } from "../../src/server/auth/actor-context";
 import type { MemoryTestContext } from "../support/memory-context";
 import { createMemoryTestContext } from "../support/memory-context";
 
@@ -997,8 +995,6 @@ test("Context-group expansion feeds only authorized candidates to reranking", as
       maximumGroups: 1,
     },
     rerankingProvider: {
-      provider: "fixture",
-      model: "fixture-context-reranker-v1",
       async rerank(input) {
         rerankedIds = input.documents.map((document) => document.id);
         return input.documents
@@ -1070,8 +1066,6 @@ test("Query planning retrieves distinct evidence with vocabulary absent from the
   ).toEqual([]);
   const planned = createMemoryModule(testContext.database, {
     queryPlanningProvider: {
-      provider: "fixture",
-      model: "fixture-planner-v1",
       async plan(input) {
         expect(input).toEqual({ query: "When is the car service?", maxQueries: 2 });
         return ["automobile maintenance appointment"];
@@ -1100,8 +1094,6 @@ test("Query planning still filters every expanded query through RLS", async () =
   });
   const planned = createMemoryModule(testContext.database, {
     queryPlanningProvider: {
-      provider: "fixture",
-      model: "fixture-planner-v1",
       async plan() {
         return ["obsidian vault passphrase"];
       },
@@ -1129,8 +1121,6 @@ test("Query planning failures fall back to the original query", async () => {
   });
   const planned = createMemoryModule(testContext.database, {
     queryPlanningProvider: {
-      provider: "fixture",
-      model: "failing-planner-v1",
       async plan() {
         throw new Error("unavailable");
       },
@@ -1164,8 +1154,6 @@ test("Reranking reorders only RLS-visible retrieval candidates", async () => {
   let candidateIds: string[] = [];
   const reranked = createMemoryModule(testContext.database, {
     rerankingProvider: {
-      provider: "fixture",
-      model: "fixture-reranker-v1",
       async rerank(input) {
         candidateIds = input.documents.map((document) => document.id);
         return [
@@ -1207,8 +1195,6 @@ test("Reranking scores compact anchor evidence while returning bounded expanded 
     evidenceNeighborChunks: 1,
     evidenceTopChunks: 2,
     rerankingProvider: {
-      provider: "fixture",
-      model: "compact-evidence-v1",
       async rerank(input) {
         rerankedEvidence = input.documents[0]?.text ?? null;
         return input.documents.map((document) => ({ documentId: document.id, score: 0.9 }));
@@ -1241,8 +1227,6 @@ test("Reranking failures fall back to deterministic fused retrieval", async () =
   const baseline = await basic.search(testContext.alice, { query: "orchid launch", limit: 1 });
   const reranked = createMemoryModule(testContext.database, {
     rerankingProvider: {
-      provider: "fixture",
-      model: "failing-reranker-v1",
       async rerank() {
         throw new Error("unavailable");
       },
@@ -1268,8 +1252,6 @@ test("Unnormalized reranker scores fall back to deterministic fused retrieval", 
   const baseline = await basic.search(testContext.alice, { query: "cedar launch", limit: 2 });
   const reranked = createMemoryModule(testContext.database, {
     rerankingProvider: {
-      provider: "fixture",
-      model: "logit-reranker-v1",
       async rerank(input) {
         return input.documents.map((document, index) => ({
           documentId: document.id,
@@ -1306,8 +1288,6 @@ test("Weighted rerank fusion can preserve strong first-stage evidence", async ()
   const reranked = createMemoryModule(testContext.database, {
     rerankWeight: 0,
     rerankingProvider: {
-      provider: "fixture",
-      model: "reverse-reranker-v1",
       async rerank(input) {
         return [...input.documents].reverse().map((document, index) => ({
           documentId: document.id,
@@ -1339,8 +1319,6 @@ test("A calibrated reranker can abstain even when fusion found one candidate", a
   const reranked = createMemoryModule(testContext.database, {
     rerankMinimumScore: 0.01,
     rerankingProvider: {
-      provider: "fixture",
-      model: "calibrated-reranker-v1",
       async rerank(input) {
         rerankCalls += 1;
         return input.documents.map((document) => ({
@@ -1376,8 +1354,6 @@ test("Optional rerank diversity avoids filling top-k with near-duplicate evidenc
   const reranked = createMemoryModule(testContext.database, {
     rerankDiversityLambda: 0.3,
     rerankingProvider: {
-      provider: "fixture",
-      model: "diversity-reranker-v1",
       async rerank() {
         return [
           { documentId: first.id, score: 0.9 },

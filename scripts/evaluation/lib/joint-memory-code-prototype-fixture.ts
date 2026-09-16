@@ -1,8 +1,7 @@
 /** PROTOTYPE — scratch-PGlite fixture for joint Memory + Code evaluation. */
 
 import { readdir, readFile } from "node:fs/promises";
-import type { ActorContext, Memory, PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryModule } from "@corespeed/lore-core";
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -14,6 +13,9 @@ import { createCodeEvidenceModule } from "../../../src/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "../../../src/modules/code/graph";
 import { createCodeIndexModule } from "../../../src/modules/code/indexing/service";
 import type { CodeArtifact } from "../../../src/modules/code/indexing/types";
+import type { Memory } from "../../../src/modules/memories/service";
+import { createMemoryModule } from "../../../src/modules/memories/service";
+import type { ActorContext } from "../../../src/server/auth/actor-context";
 import type {
   DependencyFingerprint,
   GroupedJointEvidencePacket,

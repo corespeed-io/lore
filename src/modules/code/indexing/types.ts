@@ -1,5 +1,5 @@
 import type { Lang, SgNode } from "@ast-grep/napi";
-import type { ActorContext } from "@corespeed/lore-core";
+import type { ActorContext } from "@/server/auth/actor-context";
 
 export type CodeParserKind = "text" | "tree_sitter";
 

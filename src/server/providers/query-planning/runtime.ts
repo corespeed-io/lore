@@ -1,13 +1,13 @@
 import "server-only";
-import type { QueryPlanningProvider } from "@corespeed/lore-core";
 import { createQueryPlanningProviderFromEnvironment } from "./factory";
+import type { ConfiguredQueryPlanningProvider } from "./types";
 
-let runtimeQueryPlanningProvider: QueryPlanningProvider | undefined;
+let runtimeQueryPlanningProvider: ConfiguredQueryPlanningProvider | undefined;
 let runtimeQueryPlanningProviderInitialized = false;
 
 export function getRuntimeQueryPlanningProvider(
   env: Record<string, string | undefined> = process.env,
-): QueryPlanningProvider | undefined {
+): ConfiguredQueryPlanningProvider | undefined {
   if (env !== process.env) {
     return createQueryPlanningProviderFromEnvironment(env, (message) => console.warn(message));
   }

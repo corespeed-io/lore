@@ -1,8 +1,31 @@
 # Project organization
 
-Lore has two implementation layers: `packages/lore-core` is the reusable memory
-engine; the application under `src` supplies identity, transport, deployment,
-product workflows, and UI. Product terminology is defined in [CONTEXT.md](../CONTEXT.md).
+Lore has two implementation layers: **Lore Core** (`packages/lore-core`) is the
+reusable memory engine; **Lore OSS** supplies identity, transport, deployment,
+concrete model adapters, product workflows, and UI. OSS depends on Core; Core does
+not import OSS or model SDKs. Product terminology is defined in [CONTEXT.md](../CONTEXT.md).
+
+## Interface boundaries
+
+Web UI, CLI, and MCP are separate modules that depend on the TypeScript SDK.
+The request path is `UI / CLI / MCP → TypeScript SDK → OSS API → Core → Postgres`;
+the Python SDK calls the same OSS API independently.
+
+| Module | Location | Responsibility |
+| --- | --- | --- |
+| Web UI | `src/shell/`, browser-facing domain files in `src/modules/`, and `src/shared/browser/` | Views, presentation, navigation, and SDK-backed remote state |
+| TypeScript SDK | `packages/typescript-sdk/` | Generated wire types, public content limits, and API client transport |
+| Python SDK | `packages/python-sdk/` | Generated Python contract and equivalent API client |
+| CLI | `packages/cli/` | Command parsing and output through the TypeScript SDK |
+| MCP | `packages/mcp/` | External stdio tools through the TypeScript SDK |
+| OSS API | `src/app/api/`, domain HTTP/services, and `src/server/` | Authentication, tenancy, authorization, request replay, and engine composition |
+| Core | `packages/lore-core/` | Memory algorithms and PostgreSQL storage mechanics |
+
+The UI remains a module of the Next.js application; this boundary does not require
+a separate UI package or service. Browser wire types and public content limits
+come from the SDK. Canonical content validation and chunking stay in server/Core
+code; the UI does not run a chunk preview. OSS model providers are injected into
+Core. `bun run architecture:check` guards these dependency boundaries in CI.
 
 ## Directory map
 
@@ -12,8 +35,8 @@ product workflows, and UI. Product terminology is defined in [CONTEXT.md](../CON
 | `src/shell/` | App routing, Sidebar, and workflows that compose multiple domains |
 | `src/modules/` | Product domains, each owning its implementation and interfaces |
 | `src/server/auth/` | Authentication, identity storage, access policy, and Actor request context |
-| `src/server/database/` | Request database construction |
-| `src/server/providers/` | Environment configuration, factories, and runtime provider instances |
+| `src/server/database/` | OSS role selection, database construction, and identity-bound engine stores |
+| `src/server/providers/` | Concrete model adapters, SDK/protocol handling, model configuration, factories, and runtime provider instances |
 | `src/server/http/` | Shared input handling, idempotency headers, and error responses |
 | `src/server/openapi/` | Shared contract helpers and assembly of the public OpenAPI document |
 | `src/server/telemetry/` | Server instrumentation and privacy filtering |
@@ -41,6 +64,7 @@ src/modules/memories/
   types.ts         # SDK-generated Memory aliases and browser presentation types
   input.ts         # Memory-specific HTTP input handling
   http.ts          # Testable request handlers
+  service.ts       # OSS authorization, request replay, and engine wire mapping
   client.ts        # Domain adapter for the TypeScript SDK
   hooks.ts         # Memory reads and cache behavior
   display.ts       # Memory title/type presentation
@@ -88,9 +112,9 @@ unbounded wait for long-running operations and support for caller cancellation.
 The SDK owns
 API paths, Workspace headers, serialization, response parsing, cancellation, and
 errors. There is no separate shared browser HTTP transport or custom SDK fetch
-wrapper. Components do not call `fetch` directly. Browser Memory types are aliases
-of the SDK's generated contract; server Zod schemas remain the validation and
-OpenAPI source. Human-only SDK methods for Agent administration and Workspace
+wrapper. Components do not call `fetch` directly. Browser Memory types and public
+content limits come from the SDK; server Zod schemas remain the validation and
+OpenAPI source, backed by Core's content and chunk invariants. Human-only SDK methods for Agent administration and Workspace
 portability do not add CLI commands or MCP tools.
 
 The development Graph benchmark is a separate measurement endpoint, outside the
@@ -102,7 +126,84 @@ routing and the SVG control separately from `WorkerCanvasGraph.tsx`.
 cache key and disables focus/reconnect refresh and error retries so a renderer
 comparison keeps its dataset stable. SDKs and Node scripts do not import SWR.
 
-Provider adapters and benchmark readers/judges use the official OpenAI, Google
+### Memory engine and host policy
+
+Core factories bind `MemoryStorageContext`: `{ database, partitionId, ownerId,
+sourceId? }`. `createMemoryModule(storage, options)` returns methods without an
+Actor parameter; Memory results use `partitionId`, `ownerId`, and nullable
+`sourceId`. These values identify stored data and attribution. They do not
+authenticate a caller or define Workspace membership. Core retains PostgreSQL
+queries and transactions, version checks, content/chunk invariants, Memory Links,
+and retrieval algorithms. Its internal `retrieval/query.ts`, `ranking.ts`, and
+`policy.ts` separate query preparation, feedback, fusion, recency, diversity, and
+versioned policy from the Memory module's storage orchestration.
+
+The supplied database must constrain every transaction before Core uses it.
+OSS `src/server/auth/actor-context.ts` owns User/Workspace/Agent context;
+`src/server/database/memory-storage.ts` installs it for every engine transaction,
+including later retrieval-feedback rounds. `src/server/database/postgres.ts`
+chooses `lore_app` or `lore_maintenance`. Core's `./postgres` adapter only handles
+connections, transactions, and a host-supplied `initializeTransaction` callback.
+An existing host transaction can be bound through `memoryStorageInTransaction`;
+its caller remains responsible for context, authorization, commit, and notification.
+
+OSS modules `memories/service.ts`, `graph/service.ts`, and
+`episodes/{service,evidence}.ts` compose those stores with product policy and map
+Core keys to the existing `workspaceId`, `ownerUserId`, and Agent provenance
+fields. Memory writes keep permission checks before version checks and mutate
+replay records inside the same transaction through
+`src/server/http/idempotency.ts`. Workspace lifecycle, memberships, grants,
+private/shared visibility, HTTP/SDK contracts, and existing tenant data remain
+OSS responsibilities. Metadata filters, scope selectors, and context-group
+expansion are retrieval inputs, never proof of authorization.
+
+Physical storage still uses columns such as `workspace_id`, `owner_user_id`, and
+`created_by_agent_id`. Their legacy names are part of the existing SQL schema;
+this interface change does not rename stored columns or require a migration.
+The engine does not call OSS membership/grant policy functions or install identity GUCs.
+Its pure lexical schema helper and embedding lease/generation functions remain
+storage requirements for the capabilities that use them.
+
+Episode admission is an OSS operation: `episodes/service.ts` validates with Core's
+`normalizedEpisode`, then calls the authorization-bearing `lore.record_episode`
+function and records request replay. Core's Observation module provides validation,
+store-bound reads, and deletion; its Episode evidence index still owns partitioning,
+embedding, and retrieval algorithms. Core maintenance keeps embedding leases and
+generation activation/pruning. Expired request replay and event cleanup,
+`purgeExpiredPortableCoreRecords`, lives in `src/modules/operations/maintenance.ts`.
+
+The `./testing` contract kit accepts host-bound contexts and a `testDatabase`
+helper with optional transaction initialization. Tests exercise both the OSS RLS
+schema and real CRUD/retrieval on a minimal independent PGlite schema without
+identity tables or authorization functions. The latter verifies the engine can
+operate without importing OSS policy; it does not supply a replacement security
+policy for a multi-user host.
+
+### Model capabilities
+
+Core defines the capabilities needed by its retrieval and maintenance modules:
+`EmbeddingProvider` embeds query/document text, `RerankingProvider` scores supplied
+candidate passages, and `QueryPlanningProvider` generates alternate queries. Core
+owns candidate selection within the host-constrained store, retrieval fusion, failure behavior, vector
+validation, and embedding-generation storage. Embedding provider/model/revision
+identity and dimensions remain part of its contract because incompatible vector
+spaces must never mix.
+
+OSS implements those interfaces in `src/server/providers/{embedding,reranking,query-planning}`.
+It owns model SDK dependencies, model selection and defaults, model-specific
+instructions and preprocessing, decoding, transport, response parsing, timeout and
+retry configuration, environment reads, and provider construction. Rich configured
+provider metadata used by benchmarks belongs to OSS types; the engine's reranking
+and planning interfaces expose only their operations. Shared exact-contract HTTP
+handling and response validation also live under `src/server/providers`.
+
+The factories inject these implementations into Core. A host can supply its own
+model adapters without changing Core or installing the OSS model SDKs. There is no
+separate providers package and no `@corespeed/lore-core/providers` entrypoint.
+Moving adapters does not change model protocols or their recorded revisions;
+stored vector identity and benchmark receipts remain reproducible.
+
+OSS provider adapters and benchmark readers/judges use the official OpenAI, Google
 Gen AI, Ollama, Cohere, and Voyage SDKs with their default transport. Use native
 SDK timeout and retry options; do not add a custom fetch wrapper around an SDK.
 Optional fetch injection on adapters that support it is a test seam, not a
@@ -122,7 +223,7 @@ documents the accepted liveness limit and recovery procedure.
 
 MemOS and the vLLM/llama.cpp reranking contracts (including `/score`) retain their
 specific HTTP adapters because the selected SDKs do not cover those exact
-contracts. Their small `packages/lore-core/src/provider-http.ts` boundary checks
+contracts. Their small `src/server/providers/provider-http.ts` boundary checks
 status and consumes bounded JSON; it does not implement a generic HTTP client.
 Dataset streaming, checksum verification, and temporary-file promotion belong to
 `scripts/benchmarks/lib/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
@@ -161,11 +262,14 @@ does not change the code-index revision or stored artifact format.
 
 1. Keep framework route files thin: construct runtime dependencies and delegate to
    a domain handler.
-2. Browser modules may import browser helpers, domain types, presentation, clients,
-   and hooks. Imports of server contracts must be type-only. Never import server
-   provider construction, database adapters, or native parsing into a client module.
+2. Browser modules may import browser helpers, SDK wire types and public limits,
+   domain presentation, clients, and hooks. Do not import server or Core modules,
+   including their types, into browser code. CLI and MCP depend on the SDK, not
+   OSS server modules or Core.
 3. Server implementation depends on the reusable engine and host runtime through
-   the existing interfaces. Keep environment reads out of `packages/lore-core`.
+   the existing interfaces. Keep concrete model adapters, model SDK dependencies,
+   identity/tenant policy, request idempotency, and environment reads out of
+   `packages/lore-core`.
 4. Each domain owns its OpenAPI paths and components; `src/server/openapi/document.ts`
    assembles them. SDK generation reads that assembled document. Zod owns Memory
    validation and its OpenAPI schemas; browser Memory types come from the generated
@@ -191,6 +295,7 @@ Use the ordinary verification commands:
 ```sh
 bun run typecheck
 bun run lint
+bun run architecture:check
 bun run design:check
 bun run service:test
 bun run test

@@ -1,6 +1,7 @@
 import { posix } from "node:path";
-import type { ActorContext, PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
-import { installActorContext } from "@corespeed/lore-core";
+import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
+import type { ActorContext } from "@/server/auth/actor-context";
+import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexValidationError, CodeRevisionConflictError } from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
 import type {

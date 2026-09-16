@@ -12,10 +12,6 @@ export default defineConfig({
         "./packages/lore-core/src/episodes/index.ts",
         import.meta.url,
       ).pathname,
-      "@corespeed/lore-core/providers": new URL(
-        "./packages/lore-core/src/providers.ts",
-        import.meta.url,
-      ).pathname,
       "@corespeed/lore-core": new URL("./packages/lore-core/src/index.ts", import.meta.url)
         .pathname,
       "@corespeed/lore-sdk": new URL("./packages/typescript-sdk/src/index.ts", import.meta.url)
