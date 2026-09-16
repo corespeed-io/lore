@@ -15,6 +15,7 @@ import { createMemoryModule } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
+import { Ollama } from "ollama/browser";
 import type { CodeEvidenceAssessment, MemoryCodeEvidence } from "../../src/modules/code/evidence";
 import { createCodeEvidenceModule } from "../../src/modules/code/evidence";
 import { createCodeIndexModule } from "../../src/modules/code/indexing/service";
@@ -282,10 +283,11 @@ function parseReaderOutput(value: unknown): JointReaderOutput {
 }
 
 async function callOllamaReader(model: string, prompt: string): Promise<JointReaderOutput> {
-  const response = await fetch("http://127.0.0.1:11434/api/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  const client = new Ollama({
+    host: "http://127.0.0.1:11434",
+  });
+  const body = await client
+    .chat({
       model,
       stream: false,
       think: false,
@@ -293,13 +295,13 @@ async function callOllamaReader(model: string, prompt: string): Promise<JointRea
       keep_alive: "10m",
       options: { temperature: 0, seed: 7, num_ctx: 8192, num_predict: 384 },
       messages: [{ role: "user", content: prompt }],
-    }),
-    signal: AbortSignal.timeout(180_000),
-  });
-  if (!response.ok) {
-    throw new Error(`Reader request failed (${response.status}): ${await response.text()}`);
-  }
-  const body = (await response.json()) as { message?: { content?: unknown } };
+    })
+    .catch((error: unknown) => {
+      if (error instanceof Error && "status_code" in error) {
+        throw new Error(`Reader request failed (${error.status_code})`);
+      }
+      throw new Error("Reader request failed");
+    });
   if (typeof body.message?.content !== "string") throw new Error("Reader response has no content");
   return parseReaderOutput(JSON.parse(body.message.content));
 }

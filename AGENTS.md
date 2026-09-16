@@ -8,26 +8,6 @@ copy. The canonical product vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
 The directory map and import conventions live in [`docs/architecture.md`](docs/architecture.md).
 Start at [`docs/README.md`](docs/README.md) for current guides and retained research.
 
-## Project organization
-
-- `src/app` owns Next.js routes and framework entrypoints; `src/shell` composes the product UI.
-- `src/modules/<domain>` owns domain HTTP handlers, schemas/types, client calls, hooks,
-  presentation, UI, and OpenAPI fragments. Import the specific file needed; keep browser
-  imports separate from server implementations and native code-index parsing.
-- `src/server` owns shared authentication, request context, database/provider runtime,
-  telemetry, HTTP input/error handling, and OpenAPI document assembly.
-- `src/shared/browser` owns browser transport, cache keys, request logs, and common hooks;
-  `src/shared/ui` owns shared visual helpers. Do not recreate aggregate `lib`, `types`,
-  HTTP-handler, browser-client, or hook files spanning unrelated domains.
-- `src/modules/code/indexing` separates Git ingestion, parsing, storage, read queries,
-  orchestration, and maintenance. The request path must never import the Node/native parser.
-- `tests` groups domain, core-engine, server, UI, SDK, benchmark, and integration tests;
-  `scripts` groups database, development, build, checks, benchmarks, and evaluation commands.
-- `packages/lore-core` and the SDK/CLI/MCP packages keep their existing independent seams.
-  Applied SQL migrations are immutable. Keep current guides and research that explains
-  a decision or reproducible result; remove superseded reports and completed handoffs.
-  Write new benchmark run artifacts under `evaluation/results`, not `docs/research`.
-
 ## What Lore is
 
 **Lore is an open-source, self-hostable memory system for users and their agents.**
@@ -58,14 +38,12 @@ been removed. Lore now has a native implementation, split into two concepts
   the union strictness of its hosts (`noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`) and is consumed in-repo as workspace
   TypeScript source (root tsconfig paths, vitest aliases, Next
-  `transpilePackages`). **Distribution is a shared-component convention, not
-  a mechanism** (Yunpeng, 2026-08-19; npm publishing, submodules, mirrors,
-  and sync scripts were all rejected): CoreSpeed HaaS carries its own
-  verbatim copy of this package. Engine changes land here first, then the
-  same change is mirrored into the HaaS copy as part of the same task; the
-  copies must stay semantically identical, and each repo's CI runs the
-  `./testing` contract suite against its own migration chain as the drift
-  backstop.
+  `transpilePackages`). **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
+  CoreSpeed HaaS retains its existing `packages/memory-core` vendored fork;
+  the planned cutover to a verbatim `packages/lore-core` copy was cancelled.
+  Lore changes land here; HaaS ports selected changes manually and records their
+  provenance. Do not require an automatic same-task mirror or assume semantic
+  identity between the packages. npm publishing remains out of scope.
 - **lore oss** — everything else in this repository: identity/tenancy,
   request context, HTTP/OpenAPI, SDKs/CLI/MCP, web UI, Memory Proposals
   (`src/modules/proposals/service.ts`, layered on the engine's exported
@@ -237,8 +215,19 @@ been removed. Lore now has a native implementation, split into two concepts
   native routes built through the pure handler seams in `src/modules/*/http.ts`;
 - `src/shell/App.tsx` owns the native Memory workflow and client routing,
   `src/shell/Sidebar.tsx` owns the Lore shell, and
-  `src/shared/browser/http.ts` is the shared browser transport; domain
-  `src/modules/*/client.ts` files own typed calls for native routes;
+  `src/shared/browser/sdk.ts` configures the same-origin TypeScript SDK client,
+  browser credentials, and `onRequest` request logging without a custom fetch wrapper.
+  Frontend reads and mutations follow SWR hooks → domain `src/modules/*/client.ts`
+  adapters → the SDK; API paths, Workspace headers, serialization, parsing,
+  cancellation, and errors belong to the SDK. Components must not call `fetch`
+  directly or recreate a shared browser HTTP transport. Development Graph benchmark
+  requests are the isolated exception: `src/modules/graph/prototype-client.ts`
+  directly reads text to measure the original decoded UTF-8 payload, including
+  whitespace. This endpoint is outside the public SDK/OpenAPI contract and returns
+  404 in production. `GraphScalePrototype.tsx` owns
+  prototype routing and the SVG control separately from `WorkerCanvasGraph.tsx`;
+  `prototype-hooks.ts` keeps benchmark remote state in SWR under its own cache key,
+  with focus/reconnect refresh and error retries disabled during measurements;
   Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search
   through the shared cancelable debounce hook (`src/shared/browser/use-debounced-callback.ts`);
   App drops the pending query via `searchCancelRef` on every query-context reset
@@ -324,17 +313,21 @@ been removed. Lore now has a native implementation, split into two concepts
   retrieval index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical
   Memory. Any future automatic retention must be an explicit opt-in deployment policy;
-- `packages/typescript-sdk` generates its public types from the canonical OpenAPI
-  document and owns the deep integration client. `packages/cli` and the external
+- The HTTP handlers and canonical OpenAPI document define one public API contract.
+  `packages/typescript-sdk` generates its public types from that document and owns
+  the integration client used by the frontend. `packages/cli` and the external
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
   scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
   MCP outside Portable Core and never accept a model-supplied Workspace override.
   `packages/python-sdk` provides the equivalent dependency-light Python seam from
-  the same generated OpenAPI contract; keep both SDKs behaviorally aligned;
+  the same generated OpenAPI contract; keep both SDKs behaviorally aligned.
+  Human-only TypeScript SDK Agent administration and Workspace portability methods
+  do not imply new CLI commands or MCP tools;
 - `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4.
-  HTTP Memory writes and the browser's inferred Memory types use these schemas;
-  OpenAPI generates its Memory/create/update components from them. Keep the
-  code-point/chunk validator in lore core. Metadata uses `z.record(z.string(),
+  HTTP Memory writes validate with these schemas, and OpenAPI generates its
+  Memory/create/update components from them. Browser Memory types in
+  `src/modules/memories/types.ts` alias the generated TypeScript SDK contract.
+  Keep the code-point/chunk validator in lore core. Metadata uses `z.record(z.string(),
   z.json())` with a serialized-size refinement; do not restore a handwritten JSON
   walker or separate depth/node-count policies. The shared HTTP input boundary maps
   Zod/parser stack exhaustion to 400 for excessively nested JSON. PostgreSQL enforces
@@ -378,6 +371,21 @@ been removed. Lore now has a native implementation, split into two concepts
   The tsvector columns remain — they power the scan predicates. Do not add
   content GIN indexes here without first fixing that request-path restriction
   and proving the win under `SET ROLE lore_app`;
+- provider adapters and benchmark readers/judges prefer official OpenAI, Google Gen AI,
+  Ollama, Cohere, and Voyage SDKs with their default transport. Use SDK-native timeout
+  and retry configuration; do not wrap their fetch. Direct optional fetch injection
+  is a test seam only. The accepted 2026-09-15 tradeoff is no Lore-enforced SDK response
+  byte cap and no Ollama SDK non-streaming timeout (provider timeout settings apply to
+  other providers). Maintenance leases do not cancel requests; a stalled native
+  Ollama call may hold the worker until recovery. Follow
+  [`docs/operations.md`](docs/operations.md#stalled-ollama-maintenance) and do not
+  describe a lease as a provider deadline. Ollama adapters reject the SDK cloud host to prevent implicit
+  environment credential use. Keep application-level embedding/result/score validation. MemOS and
+  vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
+  `packages/lore-core/src/provider-http.ts` with status handling and bounded reads.
+  `scripts/benchmarks/lib/dataset-download.ts` owns streaming, checksum-verified
+  downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
+  `memoryagentbench-download.ts`. Node service probes live in `scripts/dev/lib/local-http.mjs`;
 - `packages/lore-core/src/query-planning.ts` defines optional deployment-level multi-query planning.
   Its OpenAI/vLLM and Google adapters see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,

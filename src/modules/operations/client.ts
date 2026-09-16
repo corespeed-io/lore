@@ -1,21 +1,13 @@
-import { requestJson } from "@/shared/browser/http";
-import type { DeploymentCapabilities, ReadinessReport } from "./service";
+import type { DeploymentCapabilities, ReadinessReport } from "@corespeed/lore-sdk";
+import { getBrowserClient } from "@/shared/browser/sdk";
 
 export function getDeploymentCapabilities(
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<DeploymentCapabilities> {
-  return requestJson("/api/v1/capabilities", {
-    workspaceId,
-    operation: "GET /api/v1/capabilities",
-    signal,
-  });
+  return getBrowserClient().workspace(workspaceId).capabilities(signal);
 }
 
 export function getReadiness(signal?: AbortSignal): Promise<ReadinessReport> {
-  return requestJson("/readyz", {
-    acceptedStatuses: [503],
-    operation: "GET /readyz",
-    signal,
-  });
+  return getBrowserClient().readiness(signal);
 }

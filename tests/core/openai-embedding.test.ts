@@ -122,3 +122,80 @@ test("OpenAI adapter fails closed when its credential or response is invalid", a
   );
   await expect(provider.embed(["memory"], "document")).rejects.toThrow("invalid embedding");
 });
+
+test("OpenAI SDK retries rate limits using Retry-After and the configured retry budget", async () => {
+  let requests = 0;
+  const provider = createOpenAIEmbeddingProvider(
+    {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1024,
+      revision: "lore-embedding-v1",
+    },
+    {
+      apiKey: "test-openai-key",
+      fetch: async () => {
+        requests += 1;
+        return requests < 3
+          ? Response.json(
+              { error: { message: "rate limited" } },
+              { status: 429, headers: { "retry-after-ms": "1" } },
+            )
+          : Response.json({ data: [{ index: 0, embedding: vector() }] });
+      },
+    },
+  );
+
+  await expect(provider.embed(["memory"], "document")).resolves.toEqual([vector()]);
+  expect(requests).toBe(3);
+});
+
+test("OpenAI adapter honors zero retries and omits provider error bodies", async () => {
+  let requests = 0;
+  const provider = createOpenAIEmbeddingProvider(
+    {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1024,
+      revision: "lore-embedding-v1",
+    },
+    {
+      apiKey: "test-openai-key",
+      maxRetries: 0,
+      fetch: async () => {
+        requests += 1;
+        return Response.json({ error: { message: "private provider details" } }, { status: 503 });
+      },
+    },
+  );
+
+  await expect(provider.embed(["memory"], "document")).rejects.toThrow(
+    /^OpenAI embedding request failed \(503\)$/,
+  );
+  expect(requests).toBe(1);
+});
+
+test("OpenAI adapter rejects duplicate result indices before accepting any vectors", async () => {
+  const provider = createOpenAIEmbeddingProvider(
+    {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1024,
+      revision: "lore-embedding-v1",
+    },
+    {
+      apiKey: "test-openai-key",
+      fetch: async () =>
+        Response.json({
+          data: [
+            { index: 0, embedding: vector() },
+            { index: 0, embedding: vector() },
+          ],
+        }),
+    },
+  );
+
+  await expect(provider.embed(["first", "second"], "document")).rejects.toThrow(
+    "OpenAI returned an invalid embedding",
+  );
+});

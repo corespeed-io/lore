@@ -1,13 +1,12 @@
+import { Ollama } from "ollama/browser";
 import type { EmbeddingConfiguration } from "../embedding-config";
 import { QWEN3_EMBEDDING_PROTOCOL_REVISION } from "../embedding-config";
 import type { EmbeddingProvider, EmbeddingTask } from "../memory";
-import { readBoundedResponseJson, readBoundedResponseText } from "../provider-response";
 
 export interface OllamaEmbeddingOptions {
   baseUrl?: string;
   batchSize?: number;
   keepAlive?: string | number;
-  timeoutMs?: number;
   fetch?: typeof fetch;
 }
 
@@ -31,12 +30,15 @@ function boundedBatchSize(value: number | undefined): number {
   return Math.min(value, OLLAMA_REQUEST_BATCH_SIZE);
 }
 
-function endpoint(baseUrl: string): string {
+function ollamaHost(baseUrl: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("OLLAMA_BASE_URL must use http or https");
   }
-  return new URL("api/embed", `${url.toString().replace(/\/$/, "")}/`).toString();
+  if (url.hostname === "ollama.com") {
+    throw new Error("Ollama embeddings require a self-hosted server; ollama.com is not supported");
+  }
+  return url.toString().replace(/\/$/, "");
 }
 
 function embeddingsFrom(payload: OllamaEmbedResponse, dimensions: number): number[][] {
@@ -62,9 +64,10 @@ export function createOllamaEmbeddingProvider(
   if (configuration.provider !== "ollama") {
     throw new Error("Ollama adapter requires provider=ollama");
   }
-  const fetchImplementation = options.fetch ?? fetch;
-  const url = endpoint(options.baseUrl ?? "http://127.0.0.1:11434");
-  const timeoutMs = Math.max(1_000, Math.min(options.timeoutMs ?? 120_000, 600_000));
+  const client = new Ollama({
+    host: ollamaHost(options.baseUrl ?? "http://127.0.0.1:11434"),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+  });
   const batchSize = boundedBatchSize(options.batchSize);
   return {
     provider: configuration.provider,
@@ -76,30 +79,24 @@ export function createOllamaEmbeddingProvider(
       const embeddings: number[][] = [];
       for (let offset = 0; offset < texts.length; offset += batchSize) {
         const batch = texts.slice(offset, offset + batchSize);
-        const response = await fetchImplementation(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+        const response = await client
+          .embed({
             model: configuration.model,
             input: batch.map((text) => retrievalText(text, task, configuration.revision)),
             dimensions: configuration.dimensions,
             keep_alive: offset + batch.length < texts.length ? "30s" : (options.keepAlive ?? 0),
-          }),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!response.ok) {
-          const detail = (await readBoundedResponseText(response).catch(() => ""))
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 300);
-          throw new Error(
-            `Ollama embedding request failed (${response.status})${detail ? `: ${detail}` : ""}`,
-          );
-        }
-        const batchEmbeddings = embeddingsFrom(
-          await readBoundedResponseJson<OllamaEmbedResponse>(response),
-          configuration.dimensions,
-        );
+          })
+          .catch((error: unknown) => {
+            if (
+              error instanceof Error &&
+              "status_code" in error &&
+              typeof error.status_code === "number"
+            ) {
+              throw new Error(`Ollama embedding request failed (${error.status_code})`);
+            }
+            throw new Error("Ollama embedding request failed");
+          });
+        const batchEmbeddings = embeddingsFrom(response, configuration.dimensions);
         if (batchEmbeddings.length !== batch.length) {
           throw new Error("Ollama returned the wrong number of embeddings");
         }

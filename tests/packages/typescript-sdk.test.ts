@@ -458,9 +458,85 @@ describe("Lore TypeScript SDK", () => {
     expect(String(failure)).not.toContain(AGENT_TOKEN);
   });
 
-  test("times out stalled requests without requiring an MCP caller signal", async () => {
+  test.each([
+    { timeoutMs: undefined, deadline: 30_000 },
+    { timeoutMs: 75, deadline: 75 },
+  ])(
+    "times out stalled requests at $deadline ms without a caller signal",
+    async ({ timeoutMs, deadline }) => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = vi.fn().mockImplementation(
+          async (_url: URL, init?: RequestInit) =>
+            await new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+                once: true,
+              });
+            }),
+        );
+        const client = new LoreClient({
+          baseUrl: "http://127.0.0.1:3000",
+          fetch: fetchMock,
+          timeoutMs,
+        });
+        const pending = client.listWorkspaces();
+        const failure = expect(pending).rejects.toMatchObject({
+          status: 0,
+          code: "transport_error",
+          message: "Lore request timed out",
+        });
+        const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+        expect(request?.signal).toBeInstanceOf(AbortSignal);
+
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(request?.signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+
+        await failure;
+        expect(request?.signal?.aborted).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  test("a disabled deadline allows slow response bodies to complete", async () => {
     vi.useFakeTimers();
     try {
+      let body!: ReadableStreamDefaultController<Uint8Array>;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            body = controller;
+          },
+        }),
+      );
+      const fetchMock = vi.fn<typeof fetch>(async () => response);
+      const client = new LoreClient({
+        baseUrl: "http://127.0.0.1:3000",
+        timeoutMs: null,
+        fetch: fetchMock,
+      });
+      const pending = client.listWorkspaces();
+      const outcome = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      body.enqueue(new TextEncoder().encode("[]"));
+      body.close();
+
+      await expect(outcome).resolves.toEqual({ value: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test.each([undefined, null])(
+    "preserves explicit caller cancellation with timeoutMs %s",
+    async (timeoutMs) => {
       const fetchMock = vi.fn().mockImplementation(
         async (_url: URL, init?: RequestInit) =>
           await new Promise<Response>((_resolve, reject) => {
@@ -472,48 +548,26 @@ describe("Lore TypeScript SDK", () => {
       const client = new LoreClient({
         baseUrl: "http://127.0.0.1:3000",
         fetch: fetchMock,
+        timeoutMs,
       });
-      const pending = client.listWorkspaces();
-      const failure = expect(pending).rejects.toMatchObject({
-        status: 0,
-        code: "transport_error",
-        message: "Lore request timed out",
-      });
-      const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-      expect(request?.signal).toBeInstanceOf(AbortSignal);
+      const controller = new AbortController();
+      const reason = new DOMException("caller cancelled", "AbortError");
+      const pending = client.listWorkspaces(controller.signal);
 
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(request?.signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
+      controller.abort(reason);
 
-      await failure;
-      expect(request?.signal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      await expect(pending).rejects.toBe(reason);
+    },
+  );
 
-  test("preserves explicit caller cancellation", async () => {
-    const fetchMock = vi.fn().mockImplementation(
-      async (_url: URL, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
-            once: true,
-          });
-        }),
-    );
-    const client = new LoreClient({
-      baseUrl: "http://127.0.0.1:3000",
-      fetch: fetchMock,
-    });
-    const controller = new AbortController();
-    const reason = new DOMException("caller cancelled", "AbortError");
-    const pending = client.listWorkspaces(controller.signal);
-
-    controller.abort(reason);
-
-    await expect(pending).rejects.toBe(reason);
-  });
+  test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 300_001])(
+    "rejects invalid numeric timeoutMs %s",
+    (timeoutMs) => {
+      expect(() => new LoreClient({ baseUrl: "http://127.0.0.1:3000", timeoutMs })).toThrow(
+        "timeoutMs must be an integer from 1 to 300000 milliseconds",
+      );
+    },
+  );
 
   test("cancels a declared oversize error body before reading it", async () => {
     const cancel = vi.fn();

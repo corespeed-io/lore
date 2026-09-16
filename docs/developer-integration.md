@@ -1,8 +1,9 @@
 # Lore developer integration
 
-Lore exposes its stable `/api/v1` Memory contract to the TypeScript SDK, Python SDK,
-CLI, and external MCP adapter; deployment readiness remains the stable `/readyz`
-probe. These packages do not introduce a second authorization model or a tool-shaped
+Lore exposes its stable `/api/v1` contract to the TypeScript and Python SDKs.
+The frontend, CLI, and external MCP adapter use the TypeScript SDK; deployment
+readiness remains the stable `/readyz` probe. These packages do not introduce a
+second authorization model or a tool-shaped
 compatibility API. Each request still resolves an Actor, selects one Workspace, and
 executes under Postgres RLS.
 
@@ -26,7 +27,29 @@ safe error parsing. TypeScript `timeoutMs` is a total deadline spanning connecti
 and bounded response reading; CLI/MCP operators may set the same value with
 `LORE_REQUEST_TIMEOUT_MS` from 1 through 300,000 milliseconds. Python `timeout` is
 passed to `urllib` as a socket-operation timeout and must be greater than 0 and at
-most 300 seconds; it is not a total request deadline.
+most 300 seconds; it is not a total request deadline. Explicit TypeScript
+`timeoutMs: null` or Python `timeout=None` disables the SDK timeout. Omitting the
+option retains the 30-second default; TypeScript caller cancellation still works
+when its deadline is disabled.
+
+Ordinary success responses are capped at 128 MiB and error responses at 64 KiB.
+Workspace exports read complete archives under the server's record-count limits,
+without the ordinary success-response byte cap; the configured timeout still applies.
+
+The frontend follows `SWR hook → domain client → TypeScript SDK → HTTP API`.
+SWR owns cached remote state and mutations. Domain clients retain UI defaults;
+`src/shared/browser/sdk.ts` supplies the same-origin base URL, browser credentials,
+and an `onRequest` observer for request logs. It sets `timeoutMs: null` to preserve
+the browser's existing ability to wait for long-running imports, exports, Graph
+reads, and searches. API paths, Workspace headers,
+serialization, parsing, cancellation, and error handling stay in the SDK. There
+is no shared browser fetch wrapper. Browser Memory types alias the generated SDK
+types; server Zod schemas remain the source for validation and OpenAPI components.
+
+The development Graph scale benchmark is outside this public API contract. Its
+isolated client directly reads text to measure the decoded UTF-8 payload including
+whitespace, while SWR manages its remote state. The endpoint returns 404 in
+production and is not exposed by the public SDK, CLI, or MCP adapter.
 
 ## Shared connection environment
 
@@ -116,6 +139,12 @@ proposals require the current positive Memory version. Proposal listing and revi
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
 effect, while the opposite decision returns a conflict.
+
+For human administration, the Workspace client also provides
+`getCurrentHumanActor`, Agent list/create/update/delete methods, grant and
+credential management, and `exportWorkspace`/`importWorkspace`. These methods use
+the same Actor and Workspace authorization as the HTTP API. Their availability in
+the SDK does not add human administration commands to the CLI or tools to MCP.
 
 ## Python SDK
 

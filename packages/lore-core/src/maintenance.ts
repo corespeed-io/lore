@@ -62,8 +62,10 @@ function retryDelay(attempt: number): number {
 export function embeddingMaintenanceLeaseSeconds(providerTimeoutMs = 120_000): number {
   const safeTimeoutMs =
     Number.isFinite(providerTimeoutMs) && providerTimeoutMs > 0 ? providerTimeoutMs : 120_000;
-  // Provider HTTP adapters make at most three attempts. Keep the lease valid for
-  // that worst-case wall time plus a one-minute database completion margin.
+  // Reserve time for three nominal attempts plus database completion. This is
+  // a reclaim/ownership window, not a request deadline: SDK backoff or batching
+  // can exceed it, and native Ollama calls have no deadline. Expiry cannot
+  // interrupt provider.embed(); a replacement lease token fences old completions.
   return Math.max(30, Math.min(Math.ceil((safeTimeoutMs * 3) / 1_000) + 60, 3_600));
 }
 

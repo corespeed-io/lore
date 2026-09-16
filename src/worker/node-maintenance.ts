@@ -39,7 +39,10 @@ const maintenanceModules = embeddingProviders.map((embeddingProvider) =>
   createMemoryMaintenanceModule(database, {
     embeddingProvider,
     leaseSeconds: embeddingMaintenanceLeaseSeconds(
-      positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
+      // Ollama ignores the request timeout; use the default reclaim window.
+      embeddingProvider.provider === "ollama"
+        ? undefined
+        : positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
     ),
     logger: (entry) =>
       console.log(

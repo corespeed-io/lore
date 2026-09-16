@@ -1,4 +1,6 @@
-import { providerHttpError, readBoundedResponseJson } from "../provider-response";
+import { CohereClientV2 } from "cohere-ai";
+import { VoyageAIClient } from "voyageai";
+import { requestProviderJson } from "../provider-http";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 type HostedRerankingProvider = "cohere" | "memos" | "voyage";
@@ -11,14 +13,13 @@ export interface HostedRerankingOptions {
   timeoutMs?: number;
   instruction?: string;
   batchMaxCharacters?: number;
-  fetch?: typeof globalThis.fetch;
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && (value as number) > 0 ? (value as number) : fallback;
 }
 
-function endpoint(provider: HostedRerankingProvider, baseUrl?: string): string {
+function providerBaseUrl(provider: HostedRerankingProvider, baseUrl?: string): string {
   const defaultBaseUrl =
     provider === "cohere"
       ? "https://api.cohere.com"
@@ -32,8 +33,7 @@ function endpoint(provider: HostedRerankingProvider, baseUrl?: string): string {
   if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
     throw new Error(`${provider} reranking base URL must use https outside localhost`);
   }
-  const path = provider === "cohere" ? "v2/rerank" : provider === "memos" ? "rerank" : "v1/rerank";
-  return new URL(path, `${url.toString().replace(/\/$/, "")}/`).toString();
+  return url.toString().replace(/\/$/, "");
 }
 
 function documentBatches(
@@ -78,12 +78,11 @@ async function rerankMemosBatches(
 }
 
 function parseResults(
-  payload: { data?: unknown; results?: unknown },
+  results: unknown,
   documents: RerankDocument[],
   expectedCount: number,
   provider: HostedRerankingProvider,
 ): RerankResult[] {
-  const results = provider === "voyage" ? payload.data : payload.results;
   if (!Array.isArray(results) || results.length !== expectedCount) {
     throw new Error(`${provider} returned the wrong number of reranking results`);
   }
@@ -93,9 +92,10 @@ function parseResults(
       typeof item === "object" && item !== null && "index" in item
         ? (item as { index?: unknown }).index
         : undefined;
+    const scoreKey = provider === "memos" ? "relevance_score" : "relevanceScore";
     const score =
-      typeof item === "object" && item !== null && "relevance_score" in item
-        ? (item as { relevance_score?: unknown }).relevance_score
+      typeof item === "object" && item !== null && scoreKey in item
+        ? (item as Record<string, unknown>)[scoreKey]
         : undefined;
     if (
       !Number.isInteger(index) ||
@@ -122,8 +122,22 @@ export function createHostedRerankingProvider(options: HostedRerankingOptions): 
   const apiKey = options.apiKey.trim();
   if (!apiKey) throw new Error(`LORE_RERANK_API_KEY is required for ${options.provider}`);
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
-  const url = endpoint(options.provider, options.baseUrl);
+  const baseUrl = providerBaseUrl(options.provider, options.baseUrl);
+  const sdkOptions = {
+    timeoutInSeconds: timeoutMs / 1_000,
+    maxRetries: 0,
+  };
+  const cohere =
+    options.provider === "cohere"
+      ? new CohereClientV2({ ...sdkOptions, token: apiKey, baseUrl })
+      : undefined;
+  const voyage =
+    options.provider === "voyage"
+      ? new VoyageAIClient({
+          apiKey,
+          environment: new URL("v1", `${baseUrl}/`).toString(),
+        })
+      : undefined;
   const instruction = options.provider === "voyage" ? options.instruction?.trim() : undefined;
   const batchMaxCharacters = positiveInteger(options.batchMaxCharacters, 6_000);
   const fetchRerank = async (
@@ -133,34 +147,65 @@ export function createHostedRerankingProvider(options: HostedRerankingOptions): 
   ): Promise<RerankResult[]> => {
     const effectiveQuery =
       options.provider === "voyage" && instruction ? `${instruction}\n\n${query}` : query;
-    const response = await fetchImplementation(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `${options.provider === "memos" ? "Token" : "Bearer"} ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        query: effectiveQuery,
-        documents: documents.map((document) => document.text),
-        ...(options.provider === "cohere" || options.provider === "memos"
-          ? { top_n: top }
-          : { top_k: top, return_documents: false, truncation: true }),
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!response.ok) {
-      throw await providerHttpError(
-        response,
-        `${options.provider} reranking request failed with HTTP ${response.status}`,
-      );
+    if (cohere || voyage) {
+      let results: unknown;
+      try {
+        if (cohere) {
+          results = (
+            await cohere.rerank({
+              model,
+              query: effectiveQuery,
+              documents: documents.map((document) => document.text),
+              topN: top,
+            })
+          ).results;
+        } else if (voyage) {
+          results = (
+            await voyage.rerank(
+              {
+                model,
+                query: effectiveQuery,
+                documents: documents.map((document) => document.text),
+                topK: top,
+                returnDocuments: false,
+                truncation: true,
+              },
+              sdkOptions,
+            )
+          ).data;
+        }
+      } catch (error) {
+        const status =
+          typeof error === "object" && error !== null && "statusCode" in error
+            ? error.statusCode
+            : undefined;
+        throw new Error(
+          `${options.provider} reranking request failed${typeof status === "number" ? ` with HTTP ${status}` : ""}`,
+        );
+      }
+      return parseResults(results, documents, top, options.provider);
     }
-    return parseResults(
-      await readBoundedResponseJson<{ data?: unknown; results?: unknown }>(response),
-      documents,
-      top,
-      options.provider,
+    // MemOS has no supported TypeScript SDK for its Token-authenticated rerank API.
+    const payload = await requestProviderJson<{ results?: unknown }>(
+      new URL("rerank", `${baseUrl}/`).toString(),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Token ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          query: effectiveQuery,
+          documents: documents.map((document) => document.text),
+          top_n: top,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+        errorMessage: (status) =>
+          `${options.provider} reranking request failed with HTTP ${status}`,
+      },
     );
+    return parseResults(payload.results, documents, top, options.provider);
   };
   return {
     provider: options.provider,

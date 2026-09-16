@@ -2,7 +2,37 @@ import {
   createOllamaListwiseRerankingProvider,
   OLLAMA_LISTWISE_INSTRUCTION_SHA256,
 } from "@corespeed/lore-core/providers";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+afterEach(() => vi.unstubAllEnvs());
+
+test("Ollama rerankers reject cloud hosts before the SDK can inherit cloud credentials", async () => {
+  vi.stubEnv("OLLAMA_API_KEY", "unrelated-cloud-key");
+  const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+    return Response.json({
+      message: { content: JSON.stringify({ scores: [{ id: "c0", score: 0.8 }] }) },
+    });
+  });
+
+  expect(() =>
+    createOllamaListwiseRerankingProvider({
+      model: "qwen3.5:4b",
+      baseUrl: "https://ollama.com",
+      fetch,
+    }),
+  ).toThrow("ollama.com is not supported");
+  expect(fetch).not.toHaveBeenCalled();
+
+  const provider = createOllamaListwiseRerankingProvider({
+    model: "qwen3.5:4b",
+    baseUrl: "https://private-ollama.example.com",
+    fetch,
+  });
+  await expect(
+    provider.rerank({ query: "question", documents: [{ id: "memory", text: "text" }], limit: 1 }),
+  ).resolves.toEqual([{ documentId: "memory", score: 0.8 }]);
+});
 
 test("Ollama listwise adapter scores every opaque candidate with deterministic controls", async () => {
   let requestBody: Record<string, unknown> | undefined;
@@ -127,4 +157,19 @@ test("Ollama listwise adapter rejects insecure remote endpoints and cloud respon
       limit: 1,
     }),
   ).rejects.toThrow("refuses a remote/cloud response");
+});
+
+test("Ollama listwise SDK does not retry or expose provider error content", async () => {
+  const fetch = vi.fn(async () =>
+    Response.json({ error: "private evidence echoed by provider" }, { status: 503 }),
+  );
+  const provider = createOllamaListwiseRerankingProvider({ model: "qwen3.5:4b", fetch });
+  await expect(
+    provider.rerank({
+      query: "query",
+      documents: [{ id: "memory", text: "private evidence" }],
+      limit: 1,
+    }),
+  ).rejects.toThrow(new Error("ollama-listwise reranking request failed with HTTP 503"));
+  expect(fetch).toHaveBeenCalledTimes(1);
 });

@@ -118,6 +118,7 @@ test("removing a Memory compacts cached pages", () => {
 
 test("Memory pagination advances only from a settled full page inside the browse budget", () => {
   const ready = {
+    enabled: true,
     workspaceId,
     hasData: true,
     hasError: false,
@@ -128,6 +129,7 @@ test("Memory pagination advances only from a settled full page inside the browse
   };
 
   expect(shouldLoadNextMemoryPage(ready)).toBe(true);
+  expect(shouldLoadNextMemoryPage({ ...ready, enabled: false })).toBe(false);
   expect(shouldLoadNextMemoryPage({ ...ready, hasError: true })).toBe(false);
   expect(shouldLoadNextMemoryPage({ ...ready, requestedSize: 3 })).toBe(false);
   expect(shouldLoadNextMemoryPage({ ...ready, lastPageLength: 99 })).toBe(false);

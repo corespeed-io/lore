@@ -14,6 +14,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import pg from "pg";
+import { endpointIsHealthy, readOllamaModels } from "./lib/local-http.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = resolve(dirname(scriptPath), "../..");
@@ -443,15 +444,6 @@ function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-async function endpointIsHealthy(url) {
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 async function waitForEndpoint(url, timeoutMilliseconds) {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
@@ -610,15 +602,7 @@ async function ensureOllama(environment) {
   const embeddingProvider = configuredValue(environment, "LORE_EMBEDDING_PROVIDER", "ollama");
   if (embeddingProvider !== "ollama") return;
   const ollamaUrl = configuredValue(environment, "OLLAMA_BASE_URL", "http://127.0.0.1:11434");
-  const tagsUrl = `${ollamaUrl.replace(/\/$/, "")}/api/tags`;
-  let response;
-  try {
-    response = await fetch(tagsUrl, { signal: AbortSignal.timeout(2_000) });
-  } catch {
-    throw new Error(`Ollama is unavailable at ${ollamaUrl}. Start Ollama before Lore.`);
-  }
-  if (!response.ok) throw new Error(`Ollama health check failed with HTTP ${response.status}`);
-  const payload = await response.json();
+  const payload = await readOllamaModels(ollamaUrl);
   const embeddingModel = configuredValue(
     environment,
     "LORE_EMBEDDING_MODEL",

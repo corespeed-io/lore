@@ -9,7 +9,7 @@ import {
 } from "@/modules/code/evidence-presentation";
 import { useLoreMemoryCodeEvidence } from "@/modules/code/hooks";
 import { renderMarkdown } from "@/modules/memories/markdown";
-import type { MemoryScope } from "@/modules/memories/schemas";
+import type { MemoryScope } from "@/modules/memories/types";
 
 interface MemoryLink {
   id: string;

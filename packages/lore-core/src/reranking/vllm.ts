@@ -1,4 +1,4 @@
-import { providerHttpError, readBoundedResponseJson } from "../provider-response";
+import { requestProviderJson } from "../provider-http";
 import type { RerankDocument, RerankingProvider, RerankResult } from "../reranking";
 
 const DEFAULT_VLLM_BASE_URL = "http://127.0.0.1:8000";
@@ -161,7 +161,7 @@ function createLocalRerankingProvider(
     async rerank({ query, documents, limit }): Promise<RerankResult[]> {
       if (!documents.length || limit < 1) return [];
       const topN = Math.min(limit, documents.length);
-      const response = await fetchImplementation(url, {
+      const payload = await requestProviderJson<VllmRerankResponse>(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -175,19 +175,10 @@ function createLocalRerankingProvider(
           ...(provider === "vllm" ? { chat_template_kwargs: { instruction } } : {}),
         }),
         signal: AbortSignal.timeout(timeoutMs),
+        fetch: fetchImplementation,
+        errorMessage: (status) => `${provider} reranking request failed with HTTP ${status}`,
       });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `${provider} reranking request failed with HTTP ${response.status}`,
-        );
-      }
-      return parseResults(
-        await readBoundedResponseJson<VllmRerankResponse>(response),
-        documents,
-        topN,
-        provider,
-      );
+      return parseResults(payload, documents, topN, provider);
     },
   };
 }
@@ -233,7 +224,7 @@ export function createVllmScoreRerankingProvider(
     instruction,
     async rerank({ query, documents, limit }): Promise<RerankResult[]> {
       if (!documents.length || limit < 1) return [];
-      const response = await fetchImplementation(url, {
+      const payload = await requestProviderJson<VllmScoreResponse>(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -246,20 +237,13 @@ export function createVllmScoreRerankingProvider(
           instruction,
         }),
         signal: AbortSignal.timeout(timeoutMs),
+        fetch: fetchImplementation,
+        errorMessage: (status) => `vllm-score reranking request failed with HTTP ${status}`,
       });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `vllm-score reranking request failed with HTTP ${response.status}`,
-        );
-      }
       const originalIndexById = new Map(
         documents.map((document, index) => [document.id, index] as const),
       );
-      return parseScoreResults(
-        await readBoundedResponseJson<VllmScoreResponse>(response),
-        documents,
-      )
+      return parseScoreResults(payload, documents)
         .sort(
           (left, right) =>
             right.score - left.score ||

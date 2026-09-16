@@ -1,5 +1,44 @@
 import { createOllamaQueryPlanningProvider } from "@corespeed/lore-core/providers";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+afterEach(() => vi.unstubAllEnvs());
+
+test("Ollama planners omit invalid JSON content from SDK parsing errors", async () => {
+  const provider = createOllamaQueryPlanningProvider({
+    model: "qwen3.5:4b",
+    fetch: async () => new Response("private provider text, invalid JSON"),
+  });
+
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).rejects.toThrow(
+    /^Ollama query planner request failed$/,
+  );
+});
+
+test("Ollama planners reject cloud hosts before the SDK can inherit cloud credentials", async () => {
+  vi.stubEnv("OLLAMA_API_KEY", "unrelated-cloud-key");
+  const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+    return Response.json({ done: true, message: { content: '{"queries":["retrieval query"]}' } });
+  });
+
+  expect(() =>
+    createOllamaQueryPlanningProvider({
+      model: "qwen3.5:4b",
+      baseUrl: "https://ollama.com",
+      fetch,
+    }),
+  ).toThrow("ollama.com is not supported");
+  expect(fetch).not.toHaveBeenCalled();
+
+  const provider = createOllamaQueryPlanningProvider({
+    model: "qwen3.5:4b",
+    baseUrl: "https://private-ollama.example.com",
+    fetch,
+  });
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual([
+    "retrieval query",
+  ]);
+});
 
 test("Ollama query planning uses native bounded deterministic structured output", async () => {
   let requestBody: Record<string, unknown> | undefined;
@@ -41,6 +80,37 @@ test("Ollama query planning uses native bounded deterministic structured output"
     required: ["queries"],
     additionalProperties: false,
   });
+});
+
+test("Ollama query planning preserves path prefixes and defaults", async () => {
+  const provider = createOllamaQueryPlanningProvider({
+    model: "fixture",
+    baseUrl: "http://ollama.local:11434/proxy/",
+    fetch: async (input, init) => {
+      expect(String(input)).toBe("http://ollama.local:11434/proxy/api/chat");
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        keep_alive: 0,
+        think: false,
+        stream: false,
+        options: { num_ctx: 4096, num_predict: 256 },
+      });
+      return Response.json({ done: true, message: { content: '{"queries":["query"]}' } });
+    },
+  });
+
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual(["query"]);
+});
+
+test("Ollama query planning does not retry or expose HTTP error bodies", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(Response.json({ error: "sensitive provider details" }, { status: 503 }));
+  const provider = createOllamaQueryPlanningProvider({ model: "fixture", fetch });
+
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).rejects.toThrow(
+    /^Ollama query planner request failed with HTTP 503$/,
+  );
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 test.each([

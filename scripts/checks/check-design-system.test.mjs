@@ -39,7 +39,7 @@ function fixture() {
   write(root, "src/modules/graph/components/GraphView.tsx");
   write(root, "src/modules/memories/components/SearchResults.tsx");
   write(root, "src/modules/memories/components/MemoryView.tsx");
-  write(root, "src/shared/browser/http.ts");
+  write(root, "src/shared/browser/sdk.ts");
   write(root, "src/app/[...path]/page.tsx");
   write(root, "src/app/api/graph/route.ts");
   write(root, "packages/lore-core/src/graph.ts");

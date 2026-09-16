@@ -1,11 +1,4 @@
-import type { Memory } from "./schemas";
-
-export interface MemorySearchResult {
-  memory: Memory;
-  score: number;
-  rerankScore?: number;
-  evidence: string;
-}
+export type { Memory, MemoryScope, MemorySearchResult } from "@corespeed/lore-sdk";
 
 export interface MemorySourceSummary {
   id: string;

@@ -1,16 +1,16 @@
 import type { components, operations, paths } from "./generated/openapi.js";
-import { LORE_ERROR_CODES } from "./generated/runtime.js";
+import { LORE_ERROR_CODES } from "./generated/runtime.ts";
 
 export type {
   RepositoryGroundingContext,
   RetrievalGroundingMode,
   RetrievalGroundingPlan,
   RetrievalGroundingQuery,
-} from "./generated/grounding.js";
+} from "./generated/grounding.ts";
 export {
   planRetrievalGrounding,
   RETRIEVAL_GROUNDING_POLICY_REVISION,
-} from "./generated/grounding.js";
+} from "./generated/grounding.ts";
 
 export type LoreOpenApiPaths = paths;
 export type LoreOpenApiOperations = operations;
@@ -37,6 +37,18 @@ export type MemoryProposalStatus = MemoryProposal["status"];
 export type MemoryProposalReviewResult = Schema<"MemoryProposalReviewResult">;
 export type Workspace = Schema<"Workspace">;
 export type WorkspaceSummary = Schema<"WorkspaceSummary">;
+export type HumanActor = Schema<"HumanActor">;
+export type WorkspaceAgent = Schema<"WorkspaceAgent">;
+export type AgentCredential = Schema<"AgentCredential">;
+export type IssuedAgentCredential = Schema<"IssuedAgentCredential">;
+export type AgentWorkspaceGrant = Schema<"AgentWorkspaceGrant">;
+export type UpdateAgentInput = Schema<"UpdateAgentInput">;
+export type CreateAgentInput =
+  operations["createAgent"]["requestBody"]["content"]["application/json"];
+export type AgentGrantPermission = AgentWorkspaceGrant["permission"];
+export type WorkspaceArchive = Schema<"WorkspaceArchive">;
+export type ImportWorkspaceInput = Schema<"ImportWorkspaceInput">;
+export type WorkspaceImportResult = Schema<"WorkspaceImportResult">;
 export type MemoryGraph = Schema<"MemoryGraph">;
 export type CodeArtifact = Schema<"CodeArtifact">;
 export type CodeDependencyEdge = Schema<"CodeDependencyEdge">;
@@ -60,6 +72,15 @@ export type LoreGatewayAuthentication =
   | { type: "cloudflare-access-token"; token: string }
   | { type: "cloudflare-service-token"; clientId: string; clientSecret: string };
 
+/** Request timing and outcome; operation labels omit identifiers and query parameters. */
+export interface LoreRequestEvent {
+  operation: string;
+  at: number;
+  latencyMs: number;
+  ok: boolean;
+  error?: string;
+}
+
 export interface LoreClientOptions {
   baseUrl: string | URL;
   /** Establishes the Lore Actor at the application boundary. */
@@ -70,8 +91,12 @@ export interface LoreClientOptions {
   headers?: HeadersInit;
   /** Required to send authentication over non-loopback plain HTTP. */
   allowInsecure?: boolean;
-  /** Per-request timeout in milliseconds. Defaults to 30 seconds. */
-  timeoutMs?: number;
+  /** Per-request timeout in milliseconds. Defaults to 30 seconds; null disables it. */
+  timeoutMs?: number | null;
+  /** Browser cookie policy. Fetch defaults to same-origin when omitted. */
+  credentials?: RequestCredentials;
+  /** Called after response parsing. Caller cancellations are not reported. */
+  onRequest?: (event: LoreRequestEvent) => void;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -200,8 +225,9 @@ function normalizedLimit(value: number | undefined, fallback: number, maximum = 
   return value;
 }
 
-function normalizedTimeoutMs(value: number | undefined): number {
+function normalizedTimeoutMs(value: number | null | undefined): number | null {
   if (value === undefined) return DEFAULT_REQUEST_TIMEOUT_MS;
+  if (value === null) return null;
   if (!Number.isInteger(value) || value < 1 || value > MAX_REQUEST_TIMEOUT_MS) {
     throw new TypeError("timeoutMs must be an integer from 1 to 300000 milliseconds");
   }
@@ -351,6 +377,7 @@ function parsedJson(text: string, response: Response): unknown {
 
 interface RequestInput {
   acceptedStatuses?: readonly number[];
+  maximumResponseBytes?: number;
   body?: unknown;
   headers?: HeadersInit;
   method?: string;
@@ -365,7 +392,7 @@ interface JsonResponse<Result> {
 
 function requestAbortSignal(
   callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): {
   dispose: () => void;
   signal: AbortSignal;
@@ -376,15 +403,18 @@ function requestAbortSignal(
   const forwardCallerAbort = () => controller.abort(callerSignal?.reason);
   if (callerSignal?.aborted) forwardCallerAbort();
   else callerSignal?.addEventListener("abort", forwardCallerAbort, { once: true });
-  const timeout = setTimeout(() => {
-    didTimeOut = true;
-    controller.abort(new DOMException("Lore request timed out", "TimeoutError"));
-  }, timeoutMs);
+  const timeout =
+    timeoutMs === null
+      ? undefined
+      : setTimeout(() => {
+          didTimeOut = true;
+          controller.abort(new DOMException("Lore request timed out", "TimeoutError"));
+        }, timeoutMs);
   return {
     signal: controller.signal,
     timedOut: () => didTimeOut,
     dispose: () => {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
       callerSignal?.removeEventListener("abort", forwardCallerAbort);
     },
   };
@@ -394,7 +424,9 @@ class LoreTransport {
   readonly baseUrl: URL;
   readonly fetch: typeof globalThis.fetch;
   readonly headers: Headers;
-  readonly timeoutMs: number;
+  readonly timeoutMs: number | null;
+  readonly credentials: RequestCredentials | undefined;
+  readonly onRequest: ((event: LoreRequestEvent) => void) | undefined;
 
   constructor(options: LoreClientOptions) {
     this.baseUrl = normalizedBaseUrl(options.baseUrl);
@@ -413,11 +445,16 @@ class LoreTransport {
     if (typeof this.fetch !== "function") throw new TypeError("A Fetch implementation is required");
     this.headers = customHeaders;
     this.timeoutMs = normalizedTimeoutMs(options.timeoutMs);
+    this.credentials = options.credentials;
+    this.onRequest = options.onRequest;
     for (const [name, value] of actorHeaders(options.auth)) this.headers.set(name, value);
     for (const [name, value] of gatewayHeaders(options.gateway)) this.headers.set(name, value);
   }
 
   async json<Result>(path: string, input: RequestInput = {}): Promise<JsonResponse<Result>> {
+    const at = Date.now();
+    const operation = `${input.method ?? "GET"} /${path.split("?")[0]?.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ":id")}`;
+    let outcome: { ok: boolean; error?: string } | undefined;
     const headers = new Headers(this.headers);
     if (input.workspaceId) {
       headers.set("x-lore-workspace-id", normalizedUuid(input.workspaceId, "workspaceId"));
@@ -431,13 +468,19 @@ class LoreTransport {
         headers,
         body: input.body === undefined ? undefined : JSON.stringify(input.body),
         redirect: "error",
+        ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
         signal: requestAbort.signal,
       });
-      if (response.status === 204) return { data: undefined as Result, response };
+      if (response.status === 204) {
+        outcome = { ok: true };
+        return { data: undefined as Result, response };
+      }
       const accepted = response.ok || input.acceptedStatuses?.includes(response.status) === true;
       const text = await readBoundedText(
         response,
-        accepted ? MAX_SUCCESS_RESPONSE_BYTES : MAX_ERROR_RESPONSE_BYTES,
+        accepted
+          ? (input.maximumResponseBytes ?? MAX_SUCCESS_RESPONSE_BYTES)
+          : MAX_ERROR_RESPONSE_BYTES,
       );
       if (!accepted) {
         const payload = (() => {
@@ -457,19 +500,42 @@ class LoreTransport {
             : "http_error",
         );
       }
-      return { data: parsedJson(text, response) as Result, response };
+      const data = parsedJson(text, response) as Result;
+      outcome = { ok: true };
+      return { data, response };
     } catch (error) {
+      if (
+        !input.signal?.aborted &&
+        !(error instanceof Error && error.name === "AbortError" && !requestAbort.timedOut())
+      ) {
+        outcome = {
+          ok: false,
+          error:
+            error instanceof LoreApiError
+              ? error.message
+              : requestAbort.timedOut()
+                ? "Lore request timed out"
+                : "Lore request could not be completed",
+        };
+      }
       if (error instanceof LoreApiError) throw error;
       if (input.signal?.aborted) throw error;
       if (requestAbort.timedOut()) {
         throw new LoreApiError("Lore request timed out", 0, "transport_error", { cause: error });
       }
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (error instanceof Error && error.name === "AbortError") throw error;
       throw new LoreApiError("Lore request could not be completed", 0, "transport_error", {
         cause: error,
       });
     } finally {
       requestAbort.dispose();
+      if (outcome && this.onRequest) {
+        try {
+          this.onRequest({ operation, at, latencyMs: Date.now() - at, ...outcome });
+        } catch {
+          // Observability must not change the result of an API request.
+        }
+      }
     }
   }
 }
@@ -520,6 +586,133 @@ export class LoreWorkspaceClient {
     private readonly transport: LoreTransport,
     readonly workspaceId: string,
   ) {}
+
+  async getCurrentHumanActor(signal?: AbortSignal): Promise<HumanActor> {
+    return (
+      await this.transport.json<HumanActor>("api/v1/actor", {
+        workspaceId: this.workspaceId,
+        signal,
+      })
+    ).data;
+  }
+
+  async listAgents(signal?: AbortSignal): Promise<readonly WorkspaceAgent[]> {
+    return (
+      await this.transport.json<readonly WorkspaceAgent[]>("api/v1/agents", {
+        workspaceId: this.workspaceId,
+        signal,
+      })
+    ).data;
+  }
+
+  async createAgent(input: CreateAgentInput, signal?: AbortSignal): Promise<WorkspaceAgent> {
+    return (
+      await this.transport.json<WorkspaceAgent>("api/v1/agents", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        body: input,
+        signal,
+      })
+    ).data;
+  }
+
+  async updateAgent(
+    agentId: string,
+    input: UpdateAgentInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceAgent> {
+    return (
+      await this.transport.json<WorkspaceAgent>(
+        `api/v1/agents/${normalizedUuid(agentId, "agentId")}`,
+        { method: "PATCH", workspaceId: this.workspaceId, body: input, signal },
+      )
+    ).data;
+  }
+
+  async deleteAgent(agentId: string, signal?: AbortSignal): Promise<void> {
+    await this.transport.json<void>(`api/v1/agents/${normalizedUuid(agentId, "agentId")}`, {
+      method: "DELETE",
+      workspaceId: this.workspaceId,
+      signal,
+    });
+  }
+
+  async listAgentCredentials(
+    agentId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCredential[]> {
+    return (
+      await this.transport.json<readonly AgentCredential[]>(
+        `api/v1/agents/${normalizedUuid(agentId, "agentId")}/credentials`,
+        { workspaceId: this.workspaceId, signal },
+      )
+    ).data;
+  }
+
+  async issueAgentCredential(
+    agentId: string,
+    signal?: AbortSignal,
+  ): Promise<IssuedAgentCredential> {
+    return (
+      await this.transport.json<IssuedAgentCredential>(
+        `api/v1/agents/${normalizedUuid(agentId, "agentId")}/credentials`,
+        { method: "POST", workspaceId: this.workspaceId, signal },
+      )
+    ).data;
+  }
+
+  async revokeAgentCredential(credentialId: string, signal?: AbortSignal): Promise<void> {
+    await this.transport.json<void>(
+      `api/v1/agent-credentials/${normalizedUuid(credentialId, "credentialId")}`,
+      { method: "DELETE", workspaceId: this.workspaceId, signal },
+    );
+  }
+
+  async setAgentGrant(
+    agentId: string,
+    permission: AgentGrantPermission,
+    signal?: AbortSignal,
+  ): Promise<AgentWorkspaceGrant> {
+    return (
+      await this.transport.json<AgentWorkspaceGrant>(
+        `api/v1/agents/${normalizedUuid(agentId, "agentId")}/grant`,
+        { method: "PUT", workspaceId: this.workspaceId, body: { permission }, signal },
+      )
+    ).data;
+  }
+
+  async revokeAgentGrant(agentId: string, signal?: AbortSignal): Promise<void> {
+    await this.transport.json<void>(`api/v1/agents/${normalizedUuid(agentId, "agentId")}/grant`, {
+      method: "DELETE",
+      workspaceId: this.workspaceId,
+      signal,
+    });
+  }
+
+  async exportWorkspace(signal?: AbortSignal): Promise<WorkspaceArchive> {
+    return (
+      await this.transport.json<WorkspaceArchive>("api/v1/workspaces/export", {
+        workspaceId: this.workspaceId,
+        signal,
+        // Archive sizes are bounded by the server's record limits, not the ordinary JSON cap.
+        maximumResponseBytes: Number.POSITIVE_INFINITY,
+      })
+    ).data;
+  }
+
+  async importWorkspace(
+    input: ImportWorkspaceInput,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceImportResult> {
+    return (
+      await this.transport.json<WorkspaceImportResult>("api/v1/workspaces/import", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        body: input,
+        signal,
+      })
+    ).data;
+  }
 
   async capabilities(signal?: AbortSignal): Promise<DeploymentCapabilities> {
     return (

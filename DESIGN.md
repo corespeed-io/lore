@@ -13,7 +13,7 @@ the product model in `CONTEXT.md` defines every frontend data contract.
 - Application stylesheet: `src/app/globals.css`
 - Feature owner: `src/shell/App.tsx`
 - Shell owner: `src/shell/Sidebar.tsx`
-- Native browser transport: `src/shared/browser/http.ts`; domain calls: `src/modules/*/client.ts`
+- Browser SDK configuration: `src/shared/browser/sdk.ts`; SWR domain adapters: `src/modules/*/client.ts`
 - No second stylesheet or compatibility data model is authoritative.
 
 ## 2. Product principles

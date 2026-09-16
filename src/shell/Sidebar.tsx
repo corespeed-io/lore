@@ -15,6 +15,7 @@ interface SidebarProps {
   onNewMemory: () => void;
   onTabChange: (tab: Tab) => void;
   onSearch: (q: string) => void;
+  initialSearchQuery?: string;
   searchRef?: React.RefObject<HTMLInputElement | null>;
   /** App resets query context (tab change, drill, route, Workspace); it must be
    * able to drop a pending debounced search from every one of those paths. */
@@ -136,6 +137,7 @@ export function Sidebar({
   onNewMemory,
   onTabChange,
   onSearch,
+  initialSearchQuery = "",
   searchRef,
   searchCancelRef,
 }: SidebarProps) {
@@ -309,6 +311,7 @@ export function Sidebar({
             </label>
             <input
               id="memory-search"
+              defaultValue={initialSearchQuery}
               ref={inputRef}
               className="sidebar-search"
               placeholder="What do you remember?"

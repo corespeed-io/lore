@@ -1,13 +1,13 @@
 import { createHostedRerankingProvider } from "@corespeed/lore-core/providers";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+afterEach(() => vi.unstubAllGlobals());
 
 test("Cohere v2 adapter preserves authorized document ids", async () => {
   let requestBody: Record<string, unknown> | undefined;
-  const provider = createHostedRerankingProvider({
-    provider: "cohere",
-    model: "rerank-v4.0-pro",
-    apiKey: "cohere-secret",
-    fetch: async (input, init) => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>(async (input, init) => {
       expect(String(input)).toBe("https://api.cohere.com/v2/rerank");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cohere-secret");
       requestBody = JSON.parse(String(init?.body));
@@ -17,7 +17,12 @@ test("Cohere v2 adapter preserves authorized document ids", async () => {
           { index: 0, relevance_score: 0.25 },
         ],
       });
-    },
+    }),
+  );
+  const provider = createHostedRerankingProvider({
+    provider: "cohere",
+    model: "rerank-v4.0-pro",
+    apiKey: "cohere-secret",
   });
 
   await expect(
@@ -43,16 +48,19 @@ test("Cohere v2 adapter preserves authorized document ids", async () => {
 
 test("Voyage v1 adapter uses instruction-following query and disables returned documents", async () => {
   let requestBody: Record<string, unknown> | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      expect(String(input)).toBe("https://api.voyageai.com/v1/rerank");
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({ data: [{ index: 0, relevance_score: 0.875 }] });
+    }),
+  );
   const provider = createHostedRerankingProvider({
     provider: "voyage",
     model: "rerank-2.5",
     apiKey: "voyage-secret",
     instruction: "Prefer current user facts",
-    fetch: async (input, init) => {
-      expect(String(input)).toBe("https://api.voyageai.com/v1/rerank");
-      requestBody = JSON.parse(String(init?.body));
-      return Response.json({ data: [{ index: 0, relevance_score: 0.875 }] });
-    },
   });
 
   await expect(
@@ -74,12 +82,9 @@ test("Voyage v1 adapter uses instruction-following query and disables returned d
 
 test("Memos adapter batches the official memory reranker request and globally sorts scores", async () => {
   const requests: Array<Record<string, unknown>> = [];
-  const provider = createHostedRerankingProvider({
-    provider: "memos",
-    model: "memos-reranker-0.6b",
-    apiKey: "memos-secret",
-    batchMaxCharacters: 18,
-    fetch: async (input, init) => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof globalThis.fetch>(async (input, init) => {
       expect(String(input)).toBe("https://memos.memtensor.cn/api/openmem/v1/rerank");
       expect(new Headers(init?.headers).get("authorization")).toBe("Token memos-secret");
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -95,7 +100,13 @@ test("Memos adapter batches the official memory reranker request and globally so
               : 0.1,
         })),
       });
-    },
+    }),
+  );
+  const provider = createHostedRerankingProvider({
+    provider: "memos",
+    model: "memos-reranker-0.6b",
+    apiKey: "memos-secret",
+    batchMaxCharacters: 18,
   });
 
   await expect(
@@ -135,17 +146,18 @@ test("Memos adapter batches the official memory reranker request and globally so
 });
 
 test("hosted adapter rejects duplicate indexes from a provider", async () => {
+  vi.stubGlobal("fetch", async () =>
+    Response.json({
+      results: [
+        { index: 0, relevance_score: 0.8 },
+        { index: 0, relevance_score: 0.7 },
+      ],
+    }),
+  );
   const provider = createHostedRerankingProvider({
     provider: "cohere",
     model: "rerank-v4.0-fast",
     apiKey: "secret",
-    fetch: async () =>
-      Response.json({
-        results: [
-          { index: 0, relevance_score: 0.8 },
-          { index: 0, relevance_score: 0.7 },
-        ],
-      }),
   });
   await expect(
     provider.rerank({
@@ -160,11 +172,13 @@ test("hosted adapter rejects duplicate indexes from a provider", async () => {
 });
 
 test("hosted adapter rejects scores outside its calibrated zero-to-one contract", async () => {
+  vi.stubGlobal("fetch", async () =>
+    Response.json({ results: [{ index: 0, relevance_score: 1.25 }] }),
+  );
   const provider = createHostedRerankingProvider({
     provider: "memos",
     model: "memos-reranker-0.6b",
     apiKey: "secret",
-    fetch: async () => Response.json({ results: [{ index: 0, relevance_score: 1.25 }] }),
   });
   await expect(
     provider.rerank({
@@ -174,3 +188,84 @@ test("hosted adapter rejects scores outside its calibrated zero-to-one contract"
     }),
   ).rejects.toThrow("invalid reranking result");
 });
+
+test.each(["cohere", "voyage"] as const)(
+  "%s SDK sends one attempt and does not expose a provider error body",
+  async (providerName) => {
+    const fetch = vi.fn(async () =>
+      Response.json({ message: "private evidence echoed by provider" }, { status: 503 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const provider = createHostedRerankingProvider({
+      provider: providerName,
+      model: "reranker",
+      apiKey: "secret",
+    });
+    await expect(
+      provider.rerank({
+        query: "private question",
+        documents: [{ id: "first", text: "private evidence" }],
+        limit: 1,
+      }),
+    ).rejects.toThrow(new Error(`${providerName} reranking request failed with HTTP 503`));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  },
+);
+
+test.each(["cohere", "voyage"] as const)(
+  "%s SDK results remain subject to Lore's score contract",
+  async (providerName) => {
+    for (const result of [
+      { index: 0, relevance_score: 1.25 },
+      { index: 1, relevance_score: 0.5 },
+      { index: 0, relevance_score: "0.5" },
+      { index: 0 },
+    ]) {
+      vi.stubGlobal("fetch", async () =>
+        Response.json({ [providerName === "cohere" ? "results" : "data"]: [result] }),
+      );
+      const provider = createHostedRerankingProvider({
+        provider: providerName,
+        model: "reranker",
+        apiKey: "secret",
+      });
+      await expect(
+        provider.rerank({
+          query: "query",
+          documents: [{ id: "first", text: "first" }],
+          limit: 1,
+        }),
+      ).rejects.toThrow("invalid reranking result");
+    }
+  },
+);
+
+test.each(["cohere", "voyage"] as const)(
+  "%s SDK cancels a pending request at the configured deadline",
+  async (providerName) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const provider = createHostedRerankingProvider({
+      provider: providerName,
+      model: "reranker",
+      apiKey: "secret",
+      timeoutMs: 10,
+    });
+    await expect(
+      provider.rerank({
+        query: "query",
+        documents: [{ id: "first", text: "first" }],
+        limit: 1,
+      }),
+    ).rejects.toThrow(`${providerName} reranking request failed`);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  },
+);

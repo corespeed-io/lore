@@ -1,5 +1,7 @@
 import { createOpenAICompatibleQueryPlanningProvider } from "@corespeed/lore-core/providers";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+
+afterEach(() => vi.unstubAllEnvs());
 
 test("OpenAI-compatible query planning requests JSON and returns bounded queries", async () => {
   const provider = createOpenAICompatibleQueryPlanningProvider({
@@ -8,7 +10,9 @@ test("OpenAI-compatible query planning requests JSON and returns bounded queries
     baseUrl: "http://planner.test/v1/",
     fetch: async (input, init) => {
       expect(String(input)).toBe("http://planner.test/v1/chat/completions");
-      expect(init?.headers).toEqual({ "content-type": "application/json" });
+      const headers = new Headers(init?.headers);
+      expect(headers.get("content-type")).toBe("application/json");
+      expect(headers.has("authorization")).toBe(false);
       const body = JSON.parse(String(init?.body));
       expect(body).toMatchObject({
         model: "Qwen/Qwen3-4B-Instruct",
@@ -35,6 +39,49 @@ test("OpenAI-compatible query planning requests JSON and returns bounded queries
     "first evidence",
     "second evidence",
   ]);
+});
+
+test("vLLM query planning does not inherit OpenAI environment credentials", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "unrelated-openai-key");
+  vi.stubEnv("OPENAI_ADMIN_KEY", "unrelated-admin-key");
+  vi.stubEnv("OPENAI_ORG_ID", "unrelated-organization");
+  vi.stubEnv("OPENAI_PROJECT_ID", "unrelated-project");
+  const provider = createOpenAICompatibleQueryPlanningProvider({
+    provider: "vllm",
+    model: "fixture",
+    apiKey: " ",
+    baseUrl: "http://planner.test/proxy/v1/",
+    fetch: async (input, init) => {
+      expect(String(input)).toBe("http://planner.test/proxy/v1/chat/completions");
+      const headers = new Headers(init?.headers);
+      expect(headers.has("authorization")).toBe(false);
+      expect(headers.has("api-key")).toBe(false);
+      expect(headers.has("openai-organization")).toBe(false);
+      expect(headers.has("openai-project")).toBe(false);
+      return Response.json({ choices: [{ message: { content: '{"queries":["query"]}' } }] });
+    },
+  });
+
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual(["query"]);
+});
+
+test("OpenAI query planning leaves retries disabled and hides provider error bodies", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(
+      Response.json({ error: { message: "sensitive provider details" } }, { status: 429 }),
+    );
+  const provider = createOpenAICompatibleQueryPlanningProvider({
+    provider: "openai",
+    model: "fixture",
+    apiKey: "test-key",
+    fetch,
+  });
+
+  await expect(provider.plan({ query: "question", maxQueries: 1 })).rejects.toThrow(
+    /^query planner request failed with HTTP 429$/,
+  );
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 test("OpenAI-compatible query planning rejects malformed model output", async () => {

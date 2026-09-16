@@ -47,7 +47,9 @@ function maintenanceForEnvironment(env: CloudflareEnv) {
     providers.map((provider) =>
       createMemoryMaintenanceModule(database, {
         embeddingProvider: provider,
-        leaseSeconds: embeddingMaintenanceLeaseSeconds(Number(env.LORE_EMBEDDING_TIMEOUT_MS)),
+        leaseSeconds: embeddingMaintenanceLeaseSeconds(
+          provider.provider === "ollama" ? undefined : Number(env.LORE_EMBEDDING_TIMEOUT_MS),
+        ),
         logger: (entry) =>
           console.log(
             JSON.stringify({

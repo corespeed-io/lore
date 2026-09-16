@@ -1,10 +1,85 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   buildLongMemEvalV2JudgeMessages,
   createBenchmarkJudgeFromEnvironment,
   LONGMEMEVAL_V2_JUDGE_REVISION,
   parseLongMemEvalV2JudgeResponse,
 } from "../../scripts/benchmarks/lib/benchmark-judge";
+
+test("Google judge uses a non-stored SDK interaction and records usage", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    expect(request.url).toBe("https://generativelanguage.googleapis.com/v1beta/interactions");
+    expect(request.headers.get("x-goog-api-key")).toBe("test-key");
+    expect(await request.json()).toMatchObject({
+      model: "judge-model",
+      store: false,
+      stream: false,
+      generation_config: { max_output_tokens: 4096 },
+    });
+    return Response.json({
+      id: "judge-interaction",
+      status: "completed",
+      steps: [
+        {
+          type: "model_output",
+          content: [{ type: "text", text: '{"label":1,"reason":"matches"}' }],
+        },
+      ],
+      usage: { total_input_tokens: 20, total_output_tokens: 5, total_tokens: 25 },
+    });
+  });
+  try {
+    const judge = createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "google",
+      LORE_BENCHMARK_JUDGE_MODEL: "judge-model",
+      GEMINI_API_KEY: "test-key",
+    });
+    await expect(
+      judge?.judge({
+        kind: "gotchas",
+        question: "Why?",
+        referenceAnswer: "Because",
+        modelFullResponse: "Because",
+      }),
+    ).resolves.toMatchObject({ correct: true, totalTokens: 25 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  } finally {
+    fetch.mockRestore();
+  }
+});
+
+test.each(["google", "openai"])(
+  "%s judge hides upstream parser errors and does not retry",
+  async (provider) => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response("private upstream text", {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    try {
+      const judge = createBenchmarkJudgeFromEnvironment({
+        LORE_BENCHMARK_JUDGE_PROVIDER: provider,
+        LORE_BENCHMARK_JUDGE_MODEL: "judge-model",
+        LORE_BENCHMARK_JUDGE_API_KEY: "test-key",
+      });
+      await expect(
+        judge?.judge({
+          kind: "gotchas",
+          question: "Why?",
+          referenceAnswer: "Because",
+          modelFullResponse: "Because",
+        }),
+      ).rejects.toThrow(
+        new Error(`${provider === "google" ? "Google " : ""}benchmark judge request failed`),
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      fetch.mockRestore();
+    }
+  },
+);
 
 test("LongMemEval-V2 judge prompt pins the official abstention rubric", () => {
   const messages = buildLongMemEvalV2JudgeMessages({

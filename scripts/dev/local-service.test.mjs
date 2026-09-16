@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { endpointIsHealthy, readOllamaModels } from "./lib/local-http.mjs";
 import {
   buildMaintenanceEnvironment,
   buildRerankerArguments,
@@ -17,6 +18,51 @@ const databaseEnvironment = {
   LORE_MAINTENANCE_PASSWORD: "maintenance",
   LORE_RUNTIME_PASSWORD: "request",
 };
+
+test("local health probes discard response bodies and use a deadline", async (t) => {
+  const response = new Response("healthy");
+  const fetch = t.mock.method(globalThis, "fetch", async (_url, options) => {
+    assert.ok(options.signal instanceof AbortSignal);
+    return response;
+  });
+  assert.equal(await endpointIsHealthy("http://localhost/readyz"), true);
+  assert.equal(response.bodyUsed, true);
+  fetch.mock.restore();
+});
+
+test("Ollama SDK model probes preserve HTTP errors and release their body", async (t) => {
+  const response = Response.json({ error: "private provider detail" }, { status: 503 });
+  const fetch = t.mock.method(globalThis, "fetch", async () => response);
+  await assert.rejects(readOllamaModels("http://localhost:11434"), {
+    message: "Ollama health check failed with HTTP 503",
+  });
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(response.bodyUsed, true);
+  fetch.mock.restore();
+});
+
+test("Ollama SDK lists models through its native endpoint", async (t) => {
+  const models = { models: [{ name: "qwen3-embedding:0.6b" }] };
+  const fetch = t.mock.method(globalThis, "fetch", async (url) => {
+    assert.equal(String(url), "http://localhost:11434/api/tags");
+    return Response.json(models);
+  });
+
+  assert.deepEqual(await readOllamaModels("http://localhost:11434/"), models);
+  fetch.mock.restore();
+});
+
+test("Ollama SDK network errors retain actionable service startup guidance", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => {
+    throw new TypeError("connection refused");
+  });
+
+  await assert.rejects(readOllamaModels("http://localhost:11434"), {
+    message: "Ollama is unavailable at http://localhost:11434. Start Ollama before Lore.",
+  });
+  assert.equal(fetch.mock.callCount(), 1);
+  fetch.mock.restore();
+});
 
 test("local service defaults to local Postgres and hybrid retrieval", () => {
   const configuration = localServiceConfiguration(databaseEnvironment);

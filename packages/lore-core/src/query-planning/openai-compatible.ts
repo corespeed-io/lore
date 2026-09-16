@@ -1,4 +1,4 @@
-import { providerHttpError, readBoundedResponseJson } from "../provider-response";
+import OpenAI from "openai";
 import type { QueryPlanningProvider } from "../query-planning";
 import { parsePlannedQueries } from "./parse";
 
@@ -21,7 +21,7 @@ interface ChatCompletionResponse {
   choices?: unknown;
 }
 
-function endpoint(baseUrl: string, provider: "openai" | "vllm"): string {
+function apiBaseUrl(baseUrl: string, provider: "openai" | "vllm"): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("query planner base URL must use http or https");
@@ -34,7 +34,9 @@ function endpoint(baseUrl: string, provider: "openai" | "vllm"): string {
   ) {
     throw new Error("OpenAI query planner base URL must use https outside localhost");
   }
-  return new URL("chat/completions", `${url.toString().replace(/\/$/, "")}/`).toString();
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -63,14 +65,24 @@ export function createOpenAICompatibleQueryPlanningProvider(
   const configuredInstruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
   const instruction = `${configuredInstruction}\n${JSON_OUTPUT_INSTRUCTION}`;
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
   const defaultBaseUrl =
     options.provider === "openai" ? "https://api.openai.com/v1" : "http://127.0.0.1:8000/v1";
-  const url = endpoint(options.baseUrl ?? defaultBaseUrl, options.provider);
+  const baseURL = apiBaseUrl(options.baseUrl ?? defaultBaseUrl, options.provider);
   const apiKey = options.apiKey?.trim();
   if (options.provider === "openai" && !apiKey) {
     throw new Error("LORE_QUERY_PLANNER_API_KEY is required for OpenAI");
   }
+  const client = new OpenAI({
+    apiKey: apiKey || "not-required",
+    adminAPIKey: null,
+    organization: null,
+    project: null,
+    baseURL,
+    timeout: timeoutMs,
+    maxRetries: 0,
+    ...(apiKey ? {} : { defaultHeaders: { Authorization: null } }),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+  });
 
   return {
     provider: options.provider,
@@ -81,13 +93,8 @@ export function createOpenAICompatibleQueryPlanningProvider(
     decoding: { temperature: 0, maximumOutputTokens: 256 },
     async plan({ query, maxQueries }) {
       if (!query.trim() || maxQueries < 1) return [];
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify({
+      const payload = await client.chat.completions
+        .create({
           model,
           temperature: 0,
           ...(options.provider === "openai" ? { max_completion_tokens: 256 } : { max_tokens: 256 }),
@@ -99,19 +106,14 @@ export function createOpenAICompatibleQueryPlanningProvider(
               content: `Question: ${query}\nMaximum retrieval queries: ${maxQueries}`,
             },
           ],
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `query planner request failed with HTTP ${response.status}`,
-        );
-      }
-      return parsePlannedQueries(
-        responseText(await readBoundedResponseJson<ChatCompletionResponse>(response)),
-        maxQueries,
-      );
+        })
+        .catch((error: unknown) => {
+          if (error instanceof OpenAI.APIError && error.status !== undefined) {
+            throw new Error(`query planner request failed with HTTP ${error.status}`);
+          }
+          throw new Error("query planner request failed");
+        });
+      return parsePlannedQueries(responseText(payload), maxQueries);
     },
   };
 }

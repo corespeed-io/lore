@@ -1,25 +1,17 @@
-import { requestJson } from "@/shared/browser/http";
+import { getBrowserClient } from "@/shared/browser/sdk";
 import type { ImportWorkspaceArchive, WorkspaceArchive, WorkspaceImportResult } from "./service";
 
-export function exportWorkspaceArchive(
+export async function exportWorkspaceArchive(
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<WorkspaceArchive> {
-  return requestJson("/api/v1/workspaces/export", {
-    workspaceId,
-    operation: "GET /api/v1/workspaces/export",
-    signal,
-  });
+  const archive = await getBrowserClient().workspace(workspaceId).exportWorkspace(signal);
+  return { ...archive, memories: [...archive.memories], links: [...archive.links] };
 }
 
 export function importWorkspaceArchive(
   workspaceId: string,
   input: ImportWorkspaceArchive,
 ): Promise<WorkspaceImportResult> {
-  return requestJson("/api/v1/workspaces/import", {
-    method: "POST",
-    body: JSON.stringify(input),
-    workspaceId,
-    operation: "POST /api/v1/workspaces/import",
-  });
+  return getBrowserClient().workspace(workspaceId).importWorkspace(input);
 }

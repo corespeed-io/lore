@@ -161,6 +161,31 @@ an isolation smoke test before traffic. Preserve the failed cluster until the dr
 is signed off. The canonical procedure is PostgreSQL's
 [continuous archiving and PITR](https://www.postgresql.org/docs/18/continuous-archiving.html).
 
+## Stalled Ollama maintenance
+
+The native Ollama SDK has no non-streaming request deadline. A connected server
+that stops answering can leave `provider.embed()` pending indefinitely. The
+self-host worker waits for its current batch before polling again, so this can
+also delay other embedding generations, Code Index jobs, and discovery sweeps.
+This is an accepted consequence of using the SDK's default transport.
+
+The embedding lease is an ownership/reclaim window, not a watchdog. Ollama uses
+the default seven-minute window regardless of `LORE_EMBEDDING_TIMEOUT_MS`;
+expiry does not interrupt its HTTP request or record a timeout failure. Another
+worker can reclaim the job after expiry, while the lease token fences late
+completion by the old worker. SDK-backed providers with deadlines use their
+configured timeout to estimate a lease; retries and batching can still exceed it.
+
+Inspect the maintenance logs and `bun run db:embedding:report` for a lack of
+progress, and verify that Ollama itself responds. Restore or restart Ollama with
+the service manager used by the deployment, then restart a stuck maintenance
+worker through its supervisor (native development: `bun run service:restart`).
+The existing expired-lease claim path recovers the job while its retry budget
+remains; inspect the report's dead-job count for exhausted jobs. Do not clear lease
+tokens manually or mark unfinished jobs successful. `/livez` and `/readyz` are not worker
+liveness checks and do not prove this polling loop is progressing. Deployments
+that require bounded provider waits should use an SDK with native deadlines.
+
 ## Embedding generation rollout
 
 Changing preprocessing revision is a generation rollout even when provider and

@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   deleteAgent,
   listAgentCredentials,
@@ -57,6 +57,10 @@ function proposal(): MemoryProposal {
   };
 }
 
+beforeEach(() => {
+  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
   clearRequestLog();
@@ -74,9 +78,10 @@ test("natural-language search keeps Workspace context and server relevance order
   expect(await searchMemories(workspaceId, query)).toEqual(results);
   const [path, options] = fetcher.mock.calls[0] as [string, RequestInit];
   const url = new URL(path, "https://lore.test");
-  expect(url.pathname).toBe("/api/memories");
+  expect(url.pathname).toBe("/api/v1/memories");
   expect(url.searchParams.get("q")).toBe(query);
   expect(new Headers(options.headers).get("x-lore-workspace-id")).toBe(workspaceId);
+  expect(options.credentials).toBe("same-origin");
 });
 
 test("native browser client reads a Memory page with Workspace context", async () => {
@@ -95,7 +100,7 @@ test("native browser client reads a Memory page with Workspace context", async (
   expect((firstRequest?.headers as Headers | undefined)?.get("x-lore-workspace-id")).toBe(
     workspaceId,
   );
-  expect(getRequestLog().map((entry) => entry.operation)).toEqual(["GET /api/memories"]);
+  expect(getRequestLog().map((entry) => entry.operation)).toEqual(["GET /api/v1/memories"]);
 });
 
 test("intentional request cancellation is not reported as an API failure", async () => {
@@ -190,7 +195,9 @@ test("Proposal browser client scopes review history and decisions to one Workspa
     reviewed,
   );
 
-  expect(String(fetchMock.mock.calls[0]?.[0])).toContain("status=pending&limit=100");
+  const listUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+  expect(listUrl.searchParams.get("status")).toBe("pending");
+  expect(listUrl.searchParams.get("limit")).toBe("100");
   expect(String(fetchMock.mock.calls[1]?.[0])).toContain(`/${pending.id}/review`);
   for (const call of fetchMock.mock.calls) {
     expect(new Headers(call[1]?.headers).get("x-lore-workspace-id")).toBe(pending.workspaceId);
@@ -333,8 +340,12 @@ test("code transport scopes citation and job reads to the active Workspace", asy
   await listCodeIndexJobs(workspaceId, 5);
 
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(String(fetchMock.mock.calls[0][0])).toBe(`/api/v1/memories/${memoryId}/code-evidence`);
-  expect(String(fetchMock.mock.calls[1][0])).toBe("/api/v1/code/index-jobs?limit=5");
+  expect(String(fetchMock.mock.calls[0][0])).toBe(
+    `https://lore.test/api/v1/memories/${memoryId}/code-evidence`,
+  );
+  expect(String(fetchMock.mock.calls[1][0])).toBe(
+    "https://lore.test/api/v1/code/index-jobs?limit=5",
+  );
   for (const call of fetchMock.mock.calls) {
     const options = call[1];
     if (!options) throw new Error("Expected code request options");

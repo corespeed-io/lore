@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { providerHttpError, readBoundedResponseJson } from "@corespeed/lore-core";
+import { GoogleGenAI } from "@google/genai/web";
+import { Ollama } from "ollama/browser";
+import OpenAI from "openai";
 
 export interface BenchmarkReaderEvidence {
   id: string;
@@ -88,7 +90,6 @@ interface ReaderOptions {
   contextWindowTokens?: number;
   thinking?: boolean;
   keepAlive?: number | string;
-  fetch?: typeof globalThis.fetch;
 }
 
 const DEFAULT_INSTRUCTION = `Answer the question using only the retrieved memory evidence.
@@ -230,7 +231,10 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function openAICompatibleUserContent(text: string, image: BenchmarkReaderImage | undefined) {
+function openAICompatibleUserContent(
+  text: string,
+  image: BenchmarkReaderImage | undefined,
+): string | OpenAI.Chat.Completions.ChatCompletionContentPart[] {
   if (!image) return text;
   return [
     { type: "text", text },
@@ -244,8 +248,8 @@ function openAICompatibleUserContent(text: string, image: BenchmarkReaderImage |
 function googleUserInput(text: string, image: BenchmarkReaderImage | undefined) {
   if (!image) return text;
   return [
-    { type: "text", text },
-    { type: "image", mime_type: image.mimeType, data: image.data },
+    { type: "text" as const, text },
+    { type: "image" as const, mime_type: image.mimeType, data: image.data },
   ];
 }
 
@@ -268,8 +272,16 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
   const baseUrl =
     options.baseUrl ??
     (options.provider === "openai" ? "https://api.openai.com/v1" : "http://127.0.0.1:8002/v1");
-  const url = httpEndpoint(baseUrl, "chat/completions", "benchmark reader");
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
+  const client = new OpenAI({
+    apiKey: apiKey ?? "unused",
+    adminAPIKey: null,
+    organization: null,
+    project: null,
+    defaultHeaders: { Authorization: apiKey ? `Bearer ${apiKey}` : null },
+    baseURL: httpEndpoint(baseUrl, "", "benchmark reader"),
+    maxRetries: 0,
+    timeout: timeoutMs,
+  });
   return {
     provider: options.provider,
     model,
@@ -287,13 +299,8 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
     supportsQuestionImages: true,
     async answer(input) {
       const renderedInput = readerInput(input, maximumContextCharacters);
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify({
+      const payload = await client.chat.completions
+        .create({
           model,
           temperature: 0,
           max_tokens: maximumOutputTokens,
@@ -305,19 +312,15 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
               content: openAICompatibleUserContent(renderedInput, input.questionImage),
             },
           ],
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `benchmark reader request failed with HTTP ${response.status}`,
-        );
-      }
-      const payload = await readBoundedResponseJson<{
-        choices?: unknown;
-        usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
-      }>(response);
+        })
+        .catch((error: unknown) => {
+          if (error instanceof OpenAI.APIError) {
+            throw new Error(
+              `benchmark reader request failed${error.status ? ` with HTTP ${error.status}` : ""}`,
+            );
+          }
+          throw new Error("benchmark reader request failed");
+        });
       const first = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
       const message =
         typeof first === "object" && first !== null && "message" in first
@@ -357,8 +360,11 @@ function createGoogleReader(options: ReaderOptions): BenchmarkReaderProvider {
   const maximumOutputTokens = boundedInteger(options.maximumOutputTokens, 512, 32, 8_192);
   const timeoutMs = boundedInteger(options.timeoutMs, 120_000, 1, 900_000);
   const baseUrl = options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta";
-  const url = httpEndpoint(baseUrl, "interactions", "Google benchmark reader");
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
+  const client = new GoogleGenAI({
+    apiKey,
+    vertexai: false,
+    httpOptions: { baseUrl: httpEndpoint(baseUrl, "", "Google benchmark reader"), apiVersion: "" },
+  });
   return {
     provider: "google",
     model,
@@ -376,34 +382,29 @@ function createGoogleReader(options: ReaderOptions): BenchmarkReaderProvider {
     supportsQuestionImages: true,
     async answer(input) {
       const renderedInput = readerInput(input, maximumContextCharacters);
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          model,
-          input: googleUserInput(renderedInput, input.questionImage),
-          system_instruction: input.systemInstruction?.trim() || instruction,
-          store: false,
-          stream: false,
-          generation_config: { temperature: 0, max_output_tokens: maximumOutputTokens },
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `Google benchmark reader request failed with HTTP ${response.status}`,
-        );
-      }
-      const payload = await readBoundedResponseJson<{
-        status?: unknown;
-        steps?: unknown;
-        usage?: {
-          total_input_tokens?: unknown;
-          total_output_tokens?: unknown;
-          total_tokens?: unknown;
-        };
-      }>(response);
+      const payload = await client.interactions
+        .create(
+          {
+            model,
+            input: googleUserInput(renderedInput, input.questionImage),
+            system_instruction: input.systemInstruction?.trim() || instruction,
+            store: false,
+            stream: false,
+            generation_config: { max_output_tokens: maximumOutputTokens },
+          },
+          {
+            timeout: timeoutMs,
+            maxRetries: 0,
+            // The SDK omits temperature from its Interactions type; retain the documented API field.
+            body: { generation_config: { temperature: 0, max_output_tokens: maximumOutputTokens } },
+          },
+        )
+        .catch((error: unknown) => {
+          const status = error instanceof Error && "status" in error ? error.status : undefined;
+          throw new Error(
+            `Google benchmark reader request failed${typeof status === "number" ? ` with HTTP ${status}` : ""}`,
+          );
+        });
       if (payload.status !== "completed" || !Array.isArray(payload.steps)) {
         throw new Error("Google benchmark reader returned an incomplete interaction");
       }
@@ -457,7 +458,6 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
   );
   const maximumOutputTokens = boundedInteger(options.maximumOutputTokens, 512, 32, 8_192);
   const contextWindowTokens = boundedInteger(options.contextWindowTokens, 32_768, 1_024, 1_048_576);
-  const timeoutMs = boundedInteger(options.timeoutMs, 120_000, 1, 900_000);
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:11434";
   const endpoint = new URL(baseUrl);
   if (
@@ -467,19 +467,20 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
   ) {
     throw new Error("Ollama benchmark reader requires a loopback-only base URL");
   }
-  const url = httpEndpoint(baseUrl, "api/chat", "Ollama benchmark reader");
-  const versionUrl = httpEndpoint(baseUrl, "api/version", "Ollama benchmark reader");
-  const tagsUrl = httpEndpoint(baseUrl, "api/tags", "Ollama benchmark reader");
-  const showUrl = httpEndpoint(baseUrl, "api/show", "Ollama benchmark reader");
-  const fetchImplementation = options.fetch ?? globalThis.fetch;
-  const apiKey = options.apiKey?.trim();
+  const client = new Ollama({
+    host: httpEndpoint(baseUrl, "", "Ollama benchmark reader"),
+    ...(options.apiKey?.trim()
+      ? { headers: { authorization: `Bearer ${options.apiKey.trim()}` } }
+      : {}),
+  });
+  const sdkError = (error: unknown): never => {
+    if (error instanceof Error && "status_code" in error) {
+      throw new Error(`Ollama benchmark reader request failed with HTTP ${error.status_code}`);
+    }
+    throw new Error("Ollama benchmark reader request failed");
+  };
   const keepAlive = options.keepAlive ?? "5m";
   const thinking = options.thinking ?? false;
-  const headers = {
-    "content-type": "application/json",
-    ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-  };
-  const signal = () => AbortSignal.timeout(timeoutMs);
   return {
     provider: "ollama",
     model,
@@ -500,40 +501,11 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
     supportsQuestionImages: true,
     keepAlive,
     async inspectRuntime() {
-      const [versionResponse, tagsResponse, showResponse] = await Promise.all([
-        fetchImplementation(versionUrl, { headers, signal: signal() }),
-        fetchImplementation(tagsUrl, { headers, signal: signal() }),
-        fetchImplementation(showUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ model }),
-          signal: signal(),
-        }),
-      ]);
-      if (!versionResponse.ok || !tagsResponse.ok || !showResponse.ok) {
-        await Promise.all(
-          [versionResponse, tagsResponse, showResponse].map(async (response) => {
-            if (response.ok) {
-              await response.body?.cancel().catch(() => undefined);
-              return;
-            }
-            await providerHttpError(response, "Ollama benchmark reader inspection failed");
-          }),
-        );
-        throw new Error(
-          `Ollama benchmark reader inspection failed with HTTP ${versionResponse.status}/${tagsResponse.status}/${showResponse.status}`,
-        );
-      }
-      const versionPayload = await readBoundedResponseJson<{ version?: unknown }>(versionResponse);
-      const tagsPayload = await readBoundedResponseJson<{ models?: unknown }>(tagsResponse);
-      const showPayload = await readBoundedResponseJson<{
-        template?: unknown;
-        parameters?: unknown;
-        model_info?: unknown;
-        capabilities?: unknown;
-        remote_model?: unknown;
-        remote_host?: unknown;
-      }>(showResponse);
+      const [versionPayload, tagsPayload, showPayload] = await Promise.all([
+        client.version(),
+        client.list(),
+        client.show({ model }),
+      ]).catch(sdkError);
       const serverVersion = optionalString(versionPayload.version);
       if (!serverVersion) throw new Error("Ollama benchmark reader returned no server version");
       if (!Array.isArray(tagsPayload.models)) {
@@ -567,7 +539,10 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
       if (!name || !digest) {
         throw new Error("Ollama benchmark reader local model has no name or digest");
       }
-      if (optionalString(showPayload.remote_model) || optionalString(showPayload.remote_host)) {
+      if (
+        ("remote_model" in showPayload && optionalString(showPayload.remote_model)) ||
+        ("remote_host" in showPayload && optionalString(showPayload.remote_host))
+      ) {
         throw new Error("Ollama benchmark reader refuses a remote/cloud model");
       }
       const template = typeof showPayload.template === "string" ? showPayload.template : "";
@@ -599,26 +574,12 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
       };
     },
     async close() {
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ model, messages: [], stream: false, keep_alive: 0 }),
-        signal: signal(),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `Ollama benchmark reader unload failed with HTTP ${response.status}`,
-        );
-      }
-      await response.body?.cancel().catch(() => undefined);
+      await client.chat({ model, messages: [], stream: false, keep_alive: 0 }).catch(sdkError);
     },
     async answer(input) {
       const renderedInput = readerInput(input, maximumContextCharacters);
-      const response = await fetchImplementation(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const payload = await client
+        .chat({
           model,
           stream: false,
           think: thinking,
@@ -640,32 +601,15 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
               ...(input.questionImage ? { images: [input.questionImage.data] } : {}),
             },
           ],
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!response.ok) {
-        throw await providerHttpError(
-          response,
-          `Ollama benchmark reader request failed with HTTP ${response.status}`,
-        );
-      }
-      const payload = await readBoundedResponseJson<{
-        message?: unknown;
-        done?: unknown;
-        done_reason?: unknown;
-        remote_model?: unknown;
-        remote_host?: unknown;
-        prompt_eval_count?: unknown;
-        eval_count?: unknown;
-        total_duration?: unknown;
-        load_duration?: unknown;
-        prompt_eval_duration?: unknown;
-        eval_duration?: unknown;
-      }>(response);
+        })
+        .catch(sdkError);
       if (payload.done !== true) {
         throw new Error("Ollama benchmark reader returned an incomplete response");
       }
-      if (optionalString(payload.remote_model) || optionalString(payload.remote_host)) {
+      if (
+        ("remote_model" in payload && optionalString(payload.remote_model)) ||
+        ("remote_host" in payload && optionalString(payload.remote_host))
+      ) {
         throw new Error("Ollama benchmark reader refuses a remote/cloud response");
       }
       const content =
