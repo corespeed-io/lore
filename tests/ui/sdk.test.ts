@@ -12,8 +12,62 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   clearRequestLog();
+});
+
+test("a browser write can complete after the SDK's ordinary deadline", async () => {
+  vi.useFakeTimers();
+  let complete!: (response: Response) => void;
+  const fetcher = vi.fn<typeof fetch>(
+    (_input, init) =>
+      new Promise<Response>((resolve, reject) => {
+        complete = resolve;
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const saved = { id: memoryId, version: 1 };
+  const pending = rememberMemory(workspaceId, { content: "Fact", scope: "shared" });
+  const outcome = pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+  expect(fetcher.mock.calls[0]?.[1]?.credentials).toBe("same-origin");
+  expect(getRequestLog()).toEqual([]);
+  complete(Response.json(saved));
+
+  await expect(outcome).resolves.toEqual({ value: saved });
+  expect(getRequestLog()).toMatchObject([{ operation: "POST /api/v1/memories", ok: true }]);
+});
+
+test("a browser caller can still cancel a request after a long wait", async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn<typeof fetch>(
+    (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const controller = new AbortController();
+  const reason = new DOMException("caller cancelled", "AbortError");
+  const pending = getBrowserClient().listWorkspaces(controller.signal);
+  const outcome = pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+  controller.abort(reason);
+
+  await expect(outcome).resolves.toEqual({ error: reason });
+  expect(getRequestLog()).toEqual([]);
 });
 
 test("invalid JSON is recorded as a failure after consuming the body", async () => {

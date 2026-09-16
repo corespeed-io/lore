@@ -91,8 +91,8 @@ export interface LoreClientOptions {
   headers?: HeadersInit;
   /** Required to send authentication over non-loopback plain HTTP. */
   allowInsecure?: boolean;
-  /** Per-request timeout in milliseconds. Defaults to 30 seconds. */
-  timeoutMs?: number;
+  /** Per-request timeout in milliseconds. Defaults to 30 seconds; null disables it. */
+  timeoutMs?: number | null;
   /** Browser cookie policy. Fetch defaults to same-origin when omitted. */
   credentials?: RequestCredentials;
   /** Called after response parsing. Caller cancellations are not reported. */
@@ -225,8 +225,9 @@ function normalizedLimit(value: number | undefined, fallback: number, maximum = 
   return value;
 }
 
-function normalizedTimeoutMs(value: number | undefined): number {
+function normalizedTimeoutMs(value: number | null | undefined): number | null {
   if (value === undefined) return DEFAULT_REQUEST_TIMEOUT_MS;
+  if (value === null) return null;
   if (!Number.isInteger(value) || value < 1 || value > MAX_REQUEST_TIMEOUT_MS) {
     throw new TypeError("timeoutMs must be an integer from 1 to 300000 milliseconds");
   }
@@ -391,7 +392,7 @@ interface JsonResponse<Result> {
 
 function requestAbortSignal(
   callerSignal: AbortSignal | undefined,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): {
   dispose: () => void;
   signal: AbortSignal;
@@ -402,15 +403,18 @@ function requestAbortSignal(
   const forwardCallerAbort = () => controller.abort(callerSignal?.reason);
   if (callerSignal?.aborted) forwardCallerAbort();
   else callerSignal?.addEventListener("abort", forwardCallerAbort, { once: true });
-  const timeout = setTimeout(() => {
-    didTimeOut = true;
-    controller.abort(new DOMException("Lore request timed out", "TimeoutError"));
-  }, timeoutMs);
+  const timeout =
+    timeoutMs === null
+      ? undefined
+      : setTimeout(() => {
+          didTimeOut = true;
+          controller.abort(new DOMException("Lore request timed out", "TimeoutError"));
+        }, timeoutMs);
   return {
     signal: controller.signal,
     timedOut: () => didTimeOut,
     dispose: () => {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
       callerSignal?.removeEventListener("abort", forwardCallerAbort);
     },
   };
@@ -420,7 +424,7 @@ class LoreTransport {
   readonly baseUrl: URL;
   readonly fetch: typeof globalThis.fetch;
   readonly headers: Headers;
-  readonly timeoutMs: number;
+  readonly timeoutMs: number | null;
   readonly credentials: RequestCredentials | undefined;
   readonly onRequest: ((event: LoreRequestEvent) => void) | undefined;
 

@@ -404,6 +404,10 @@ The self-host worker claims one leased job at a time by default. Remote embeddin
 services can often improve indexing throughput with `LORE_MAINTENANCE_CONCURRENCY`
 (maximum 32); size `LORE_MAINTENANCE_POOL_SIZE` accordingly. Keep concurrency at 1
 for memory-constrained local Ollama unless a benchmark proves the machine benefits.
+Ollama's native SDK has no request deadline: a stalled call can hold the worker
+after its lease expires. The lease enables reclamation and fences late writes;
+it does not interrupt HTTP. See [stalled Ollama maintenance](operations.md#stalled-ollama-maintenance)
+for diagnosis and recovery.
 
 For a temporary single-operator deployment, `AUTH_MODE=password` accepts HTTP
 Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic username

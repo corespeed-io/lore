@@ -15,16 +15,22 @@ impact over exact-revision direct dependencies.
 The frontend, CLI, and external MCP adapter use this client against the same HTTP
 and OpenAPI contract. In the frontend, SWR hooks call domain adapters, which use
 `src/shared/browser/sdk.ts` to configure the SDK with same-origin browser
-credentials and an `onRequest` logging observer. The SDK uses its native transport;
+credentials, `timeoutMs: null`, and an `onRequest` logging observer. Browser requests
+have no SDK deadline, preserving long-running reads and writes; caller
+`AbortSignal` cancellation still applies. The SDK uses its native transport;
 frontend code does not supply a fetch wrapper. Browser Memory types alias the
 generated SDK types, while server Zod schemas supply validation and OpenAPI.
+
+Other clients default to a 30-second total request deadline, including response
+reading. Set `timeoutMs` to an integer from 1 through 300,000 milliseconds to change
+it, or explicitly pass `null` to disable it.
 
 The Workspace client also exposes human Actor reads, Agent lifecycle/grant/credential
 administration, and Workspace export/import. These methods preserve server-side
 human authorization and do not add corresponding CLI commands or MCP tools.
 Workspace exports read the complete archive under the server's record-count limits;
 they are exempt from the ordinary 128 MiB success-response cap. Error responses
-remain capped at 64 KiB, and the configured request timeout still applies.
+remain capped at 64 KiB, and any configured request deadline still applies.
 The development Graph scale benchmark uses a separate, production-disabled text
 endpoint to measure decoded UTF-8 payload bytes; it is outside this public SDK contract.
 

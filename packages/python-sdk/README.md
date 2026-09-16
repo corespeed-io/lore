@@ -14,6 +14,12 @@ Code retrieval requires an explicit repository key and full commit OID. V2 keeps
 citation-local freshness separate from bounded contextual impact over
 exact-revision direct dependencies.
 
+`LoreClient(..., timeout=30.0)` defaults to a 30-second urllib socket-operation
+timeout. A numeric timeout must be greater than zero and at most 300 seconds;
+pass `timeout=None` to disable it. This is not an overall request deadline: a
+response that continues delivering data can take longer than the configured
+timeout. Custom transports receive the configured timeout, including `None`.
+
 Human-authenticated Workspace clients also expose the current human Actor, Agent
 lifecycle, Workspace grants, credentials, and Workspace export/import. These
 methods reuse the same Workspace header and error handling as Memory operations.

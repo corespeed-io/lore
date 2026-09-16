@@ -72,8 +72,9 @@ ranked search do not load that browse window. Inactive Memory and Graph hooks
 retain their Workspace-scoped SWR cache but pause requests, focus/reconnect
 refreshes, and background page advancement. Returning to a consuming view
 revalidates its cache after any in-flight batch finishes. Already-issued requests
-may finish; further pages from an old or inactive view are not requested. The hidden Graph renderer stays mounted
-to retain its viewport, while its search requests pause.
+may finish; further pages from an old or inactive view are not requested. The
+hidden Graph renderer stays mounted to retain its viewport, while its search
+requests pause.
 
 The active Dashboard and browse views still fill at most 50 × 100 Memories:
 their current statistics and type counts use that complete browse window.
@@ -81,7 +82,10 @@ Scroll-driven network pagination requires separate summary/statistics reads;
 this page-demand policy does not change the existing counts or browse limit.
 
 `src/shared/browser/sdk.ts` constructs the same-origin SDK client with browser
-credentials and connects its `onRequest` observer to the request log. The SDK owns
+credentials and connects its `onRequest` observer to the request log. It explicitly
+disables the SDK deadline with `timeoutMs: null`, retaining the browser's previous
+unbounded wait for long-running operations and support for caller cancellation.
+The SDK owns
 API paths, Workspace headers, serialization, response parsing, cancellation, and
 errors. There is no separate shared browser HTTP transport or custom SDK fetch
 wrapper. Components do not call `fetch` directly. Browser Memory types are aliases
@@ -112,6 +116,9 @@ Ollama model probe also uses the SDK without a deadline. SDK responses have no
 Lore-enforced byte cap. These differences were explicitly accepted on 2026-09-15
 to keep SDK transport behavior native. Result counts, embedding dimensions,
 finite values, and normalized reranking scores are still validated by Lore.
+Maintenance leases do not cancel provider calls. A stalled Ollama request can
+hold the worker after lease expiry; the [operations runbook](operations.md#stalled-ollama-maintenance)
+documents the accepted liveness limit and recovery procedure.
 
 MemOS and the vLLM/llama.cpp reranking contracts (including `/score`) retain their
 specific HTTP adapters because the selected SDKs do not cover those exact

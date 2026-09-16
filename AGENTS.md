@@ -376,7 +376,10 @@ been removed. Lore now has a native implementation, split into two concepts
   and retry configuration; do not wrap their fetch. Direct optional fetch injection
   is a test seam only. The accepted 2026-09-15 tradeoff is no Lore-enforced SDK response
   byte cap and no Ollama SDK non-streaming timeout (provider timeout settings apply to
-  other providers). Ollama adapters reject the SDK cloud host to prevent implicit
+  other providers). Maintenance leases do not cancel requests; a stalled native
+  Ollama call may hold the worker until recovery. Follow
+  [`docs/operations.md`](docs/operations.md#stalled-ollama-maintenance) and do not
+  describe a lease as a provider deadline. Ollama adapters reject the SDK cloud host to prevent implicit
   environment credential use. Keep application-level embedding/result/score validation. MemOS and
   vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
   `packages/lore-core/src/provider-http.ts` with status handling and bounded reads.

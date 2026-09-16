@@ -27,7 +27,10 @@ safe error parsing. TypeScript `timeoutMs` is a total deadline spanning connecti
 and bounded response reading; CLI/MCP operators may set the same value with
 `LORE_REQUEST_TIMEOUT_MS` from 1 through 300,000 milliseconds. Python `timeout` is
 passed to `urllib` as a socket-operation timeout and must be greater than 0 and at
-most 300 seconds; it is not a total request deadline.
+most 300 seconds; it is not a total request deadline. Explicit TypeScript
+`timeoutMs: null` or Python `timeout=None` disables the SDK timeout. Omitting the
+option retains the 30-second default; TypeScript caller cancellation still works
+when its deadline is disabled.
 
 Ordinary success responses are capped at 128 MiB and error responses at 64 KiB.
 Workspace exports read complete archives under the server's record-count limits,
@@ -36,7 +39,9 @@ without the ordinary success-response byte cap; the configured timeout still app
 The frontend follows `SWR hook → domain client → TypeScript SDK → HTTP API`.
 SWR owns cached remote state and mutations. Domain clients retain UI defaults;
 `src/shared/browser/sdk.ts` supplies the same-origin base URL, browser credentials,
-and an `onRequest` observer for request logs. API paths, Workspace headers,
+and an `onRequest` observer for request logs. It sets `timeoutMs: null` to preserve
+the browser's existing ability to wait for long-running imports, exports, Graph
+reads, and searches. API paths, Workspace headers,
 serialization, parsing, cancellation, and error handling stay in the SDK. There
 is no shared browser fetch wrapper. Browser Memory types alias the generated SDK
 types; server Zod schemas remain the source for validation and OpenAPI components.

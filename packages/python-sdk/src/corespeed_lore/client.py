@@ -85,7 +85,7 @@ class ResponseLike(Protocol):
     def read(self, amount: int = -1) -> bytes: ...
 
 
-Transport = Callable[[Request, float], ResponseLike]
+Transport = Callable[[Request, Optional[float]], ResponseLike]
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -194,12 +194,16 @@ class LoreClient:
         access_client_secret: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         allow_insecure: bool = False,
-        timeout: float = 30.0,
+        timeout: Optional[float] = 30.0,
         transport: Optional[Transport] = None,
     ) -> None:
         self.base_url = _normalized_base_url(base_url)
-        if timeout <= 0 or timeout > 300:
-            raise TypeError("timeout must be greater than 0 and at most 300 seconds")
+        if timeout is not None and (
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or not 0 < timeout <= 300
+        ):
+            raise TypeError("timeout must be None or greater than 0 and at most 300 seconds")
         self.timeout = timeout
         self.headers: MutableMapping[str, str] = {
             str(name): str(value) for name, value in (headers or {}).items()

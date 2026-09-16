@@ -1,6 +1,7 @@
 import json
 import unittest
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+from unittest.mock import patch
 from urllib.request import Request
 
 from corespeed_lore import LoreApiError, LoreClient
@@ -49,7 +50,7 @@ class FakeResponse:
 class QueueTransport:
     def __init__(self, *responses):
         self.responses: List[FakeResponse] = list(responses)
-        self.requests: List[Tuple[Request, float]] = []
+        self.requests: List[Tuple[Request, Optional[float]]] = []
 
     def __call__(self, request, timeout):
         self.requests.append((request, timeout))
@@ -57,6 +58,40 @@ class QueueTransport:
 
 
 class LorePythonSdkTests(unittest.TestCase):
+    def test_timeout_defaults_and_explicit_options_reach_transport(self):
+        for options, expected in (
+            ({}, 30.0),
+            ({"timeout": 0.25}, 0.25),
+            ({"timeout": 300}, 300),
+            ({"timeout": None}, None),
+        ):
+            with self.subTest(options=options):
+                transport = QueueTransport(FakeResponse([]))
+                client = LoreClient(
+                    "http://localhost:3000", transport=transport, **options
+                )
+                self.assertEqual(client.list_workspaces(), [])
+                self.assertEqual(transport.requests[0][1], expected)
+
+    def test_none_timeout_disables_the_native_urllib_socket_timeout(self):
+        with patch("corespeed_lore.client.build_opener") as build_opener:
+            opener = build_opener.return_value
+            opener.open.return_value = FakeResponse([])
+            client = LoreClient("http://localhost:3000", timeout=None)
+
+            self.assertEqual(client.list_workspaces(), [])
+
+            self.assertEqual(opener.open.call_args.kwargs, {"timeout": None})
+            opener.open.assert_called_once()
+
+    def test_invalid_timeouts_fail_before_transport(self):
+        transport = QueueTransport()
+        for timeout in (0, -1, 300.001, float("nan"), float("inf"), -float("inf"), True, "30"):
+            with self.subTest(timeout=timeout):
+                with self.assertRaisesRegex(TypeError, "timeout must be"):
+                    LoreClient("http://localhost:3000", timeout=timeout, transport=transport)
+        self.assertEqual(transport.requests, [])
+
     def test_human_actor_and_agent_lifecycle_preserve_workspace_auth_and_payloads(self):
         actor = {"kind": "human", "userId": "30000000-0000-4000-8000-000000000001"}
         agent = {

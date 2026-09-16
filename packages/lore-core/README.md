@@ -51,6 +51,12 @@ Ollama SDK has no non-streaming request deadline. Timeout options on the other
 providers use the SDK's native policy. MemOS and vLLM/llama.cpp reranking retain
 bounded HTTP adapters for their provider-specific contracts.
 
+Maintenance leases fence ownership and allow reclamation; they do not cancel
+provider calls. `embeddingMaintenanceLeaseSeconds` estimates a reservation from
+nominal attempts, not worst-case SDK wall time. A stalled native Ollama call can
+hold a maintenance worker until the provider or worker is restarted; hosts that
+require request deadlines should select a provider SDK that supports them.
+
 ## Host extension seams
 
 `createMemoryMutationPrimitives` exposes the transaction-scoped insert/update

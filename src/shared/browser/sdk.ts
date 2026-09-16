@@ -6,6 +6,7 @@ export function getBrowserClient(): LoreClient {
   return new LoreClient({
     baseUrl: window.location.origin,
     credentials: "same-origin",
+    timeoutMs: null,
     onRequest: recordRequest,
   });
 }
