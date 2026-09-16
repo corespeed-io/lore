@@ -778,6 +778,39 @@ test("Memory HTTP metadata accepts nested JSON and rejects excessive size", asyn
   ]);
 
   expect(responses.map((response) => response.status)).toEqual([201, 400, 400, 400, 400]);
+  const memory = (await responses[0]?.json()) as { id: string; version: number };
+  const memoryById = createMemoryByIdHandlers(testContext.database);
+  for (const nestedJson of [
+    `${"[".repeat(6_000)}0${"]".repeat(6_000)}`,
+    `${'{"child":'.repeat(6_000)}0${"}".repeat(6_000)}`,
+  ]) {
+    const body = `{"content":"must not be saved","metadata":{"value":${nestedJson}}}`;
+    expect(body.length).toBeLessThan(100_000);
+    const invalidResponses = await Promise.all([
+      memories.POST(
+        new Request("http://lore.local/api/memories", { method: "POST", headers, body }),
+      ),
+      memoryById.PATCH(
+        new Request(`http://lore.local/api/memories/${memory.id}`, {
+          method: "PATCH",
+          headers: { ...headers, "if-match": `"memory-v${memory.version}"` },
+          body,
+        }),
+        memory.id,
+      ),
+    ]);
+    for (const response of invalidResponses) {
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        code: "invalid_request",
+        error: "Memory input is too deeply nested",
+      });
+    }
+  }
+  const stored = await memories.GET(new Request("http://lore.local/api/memories", { headers }));
+  expect(await stored.json()).toEqual([
+    expect.objectContaining({ id: memory.id, version: memory.version, content: "deep" }),
+  ]);
   await testContext.close();
 });
 

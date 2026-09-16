@@ -336,9 +336,10 @@ been removed. Lore now has a native implementation, split into two concepts
   OpenAPI generates its Memory/create/update components from them. Keep the
   code-point/chunk validator in lore core. Metadata uses `z.record(z.string(),
   z.json())` with a serialized-size refinement; do not restore a handwritten JSON
-  walker or separate depth/node-count policies. PostgreSQL enforces its Unicode
-  restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register recursive JSON
-  with Zod when generating OpenAPI so references target `#/components/schemas`.
+  walker or separate depth/node-count policies. The shared HTTP input boundary maps
+  Zod/parser stack exhaustion to 400 for excessively nested JSON. PostgreSQL enforces
+  its Unicode restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register
+  recursive JSON with Zod when generating OpenAPI so references target `#/components/schemas`.
   The reusable engine retains its host-independent types and authorization rules;
 - Node/self-host exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`

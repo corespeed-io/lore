@@ -59,11 +59,17 @@ export function parseMemoryInput<Schema extends z.ZodType>(
   schema: Schema,
   value: unknown,
 ): z.output<Schema> {
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    throw new BadRequestError(result.error.issues[0]?.message ?? "Invalid Memory input");
+  try {
+    const result = schema.safeParse(value);
+    if (!result.success) {
+      throw new BadRequestError(result.error.issues[0]?.message ?? "Invalid Memory input");
+    }
+    return result.data;
+  } catch (error) {
+    // Recursive JSON parsing can exhaust the runtime stack before Zod returns an issue.
+    if (error instanceof RangeError) throw new BadRequestError("Memory input is too deeply nested");
+    throw error;
   }
-  return result.data;
 }
 
 export function requiredRawString(value: unknown, name: string, maximumLength: number): string {
