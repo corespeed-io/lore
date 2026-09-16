@@ -1,5 +1,5 @@
-import { createAgentCredentialHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createAgentCredentialHandlers } from "@/modules/agents/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 interface RouteContext {
   params: Promise<{ id: string }>;

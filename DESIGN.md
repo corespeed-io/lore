@@ -9,11 +9,11 @@ the product model in `CONTEXT.md` defines every frontend data contract.
 
 ## 1. Source of truth
 
-- Canonical frontend: `src/app` and `src/components`
+- Canonical frontend: `src/app`, `src/shell`, and domain UI under `src/modules/*/components`
 - Application stylesheet: `src/app/globals.css`
-- Feature owner: `src/components/App.tsx`
-- Shell owner: `src/components/Sidebar.tsx`
-- Native browser API: `src/lib/lore-api.ts`
+- Feature owner: `src/shell/App.tsx`
+- Shell owner: `src/shell/Sidebar.tsx`
+- Native browser transport: `src/shared/browser/http.ts`; domain calls: `src/modules/*/client.ts`
 - No second stylesheet or compatibility data model is authoritative.
 
 ## 2. Product principles
@@ -144,15 +144,15 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `MemoryProposalsView.tsx` owns the human review inbox, evidence navigation,
   version-conflict state, and explicit proposal acceptance or rejection.
 - `MemoryView.tsx` owns the Memory detail workspace, including the Memory's Code
-  citations and their six-state drift assessment. `src/lib/code-evidence-view.ts`
+  citations and their six-state drift assessment. `src/modules/code/evidence-presentation.ts`
   owns that pure presentation model.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, read-only deployment readiness/capabilities, and
-  read-only Code Index job state. `src/lib/code-index-job-view.ts` owns that pure
+  read-only Code Index job state. `src/modules/code/job-presentation.ts` owns that pure
   presentation model.
 - `WorkerCanvasGraph.tsx` and `graph-canvas.worker.ts` own the production Graph's
   Worker-based D3 layout, Canvas paint, progressive reveal, elastic node drag,
-  label collision, and zoom/pan state. `src/lib/viz/graph.ts` retains the shared
+  label collision, and zoom/pan state. `src/modules/graph/rendering/graph.ts` retains the shared
   instance contract and the legacy SVG benchmark control.
 - `Sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
 - Route files only load runtime configuration and render the feature boundary.

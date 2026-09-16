@@ -56,6 +56,11 @@ exactly one User. Raw documents and interaction transcripts are Observation
 evidence, not Memory.
 _Avoid_: Page, document, gbrain page
 
+**Memory Title**:
+A Memory's explicit, human-readable name, separate from its body content.
+Titles may be changed or shared by multiple Memories without changing their identities.
+_Avoid_: Unique name, slug, Memory Reference, first-line preview
+
 **Memory Chunk**:
 A rebuildable, revision-tagged, non-overlapping retrieval partition of one Memory.
 Ordered chunks reconstruct the canonical content exactly; they preserve formatting,

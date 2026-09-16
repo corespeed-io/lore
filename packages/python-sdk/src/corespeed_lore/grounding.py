@@ -1,6 +1,6 @@
 """Pure host-side retrieval grounding gate.
 
-Hand-maintained port of ``src/lib/retrieval-grounding.ts``; keep the revision
+Hand-maintained port of ``src/modules/context/grounding.ts``; keep the revision
 string, patterns, and decision order behaviorally aligned with the TypeScript
 module. ``re.ASCII`` keeps ``\\b``/``\\w`` on JavaScript's ASCII word-boundary
 semantics so both implementations classify the same queries identically.

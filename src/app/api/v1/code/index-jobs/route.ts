@@ -1,6 +1,6 @@
-import { createCodeIndexJobHandlers } from "@/lib/code-http";
-import { configuredCodeRepositoriesFromEnvironment } from "@/lib/code-index-queue";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createCodeIndexJobHandlers } from "@/modules/code/http";
+import { configuredCodeRepositoriesFromEnvironment } from "@/modules/code/indexing/queue";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function GET(request: Request) {
   // The list read never consults the registry; parsing it here would let a

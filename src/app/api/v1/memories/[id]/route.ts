@@ -1,6 +1,6 @@
-import { createMemoryByIdHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
-import { getRuntimeMemoryModuleOptions } from "@/lib/runtime/embedding";
+import { createMemoryByIdHandlers } from "@/modules/memories/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
+import { getRuntimeMemoryModuleOptions } from "@/server/providers/embedding/runtime";
 
 interface RouteContext {
   params: Promise<{ id: string }>;

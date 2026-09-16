@@ -1,5 +1,5 @@
-import { createAgentHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createAgentHandlers } from "@/modules/agents/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 export async function GET(request: Request) {
   return createAgentHandlers(await getRuntimeDatabase()).GET(request);

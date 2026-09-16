@@ -63,7 +63,9 @@ See `AGENTS.md` and `CONTEXT.md` for the complete invariants and vocabulary.
 
 ### Testing
 
-- Tests live in `tests/` and follow the naming convention `<feature>.test.ts`.
+- Tests live in `tests/modules`, `tests/core`, `tests/server`, `tests/ui`,
+  `tests/packages`, `tests/benchmarks`, and `tests/integration`, following the naming
+  convention `<feature>.test.ts`. See [the architecture guide](../docs/architecture.md).
 - Use `vitest` for unit and integration tests.
 - Aim for >80% coverage on new logic.
 - Run `bun run test` before committing.

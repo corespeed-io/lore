@@ -8,7 +8,7 @@ executes under Postgres RLS.
 
 ## Build and contract generation
 
-The canonical OpenAPI document is implemented by `src/lib/openapi.ts` and served at
+The canonical OpenAPI document is implemented by `src/server/openapi/document.ts` and served at
 `/openapi.json`. The generator commits TypeScript types/runtime error codes, Python
 `TypedDict` contracts/runtime error codes, and CLI/MCP versions:
 
@@ -179,6 +179,28 @@ readiness, graph, pagination, strong-version, and replay-safe mutation behavior 
 the TypeScript client. It requires Python 3.12+; CI covers the minimum and current
 stable Python 3.14 release.
 
+## Host retrieval policy
+
+Both SDKs export the pure `retrieval-grounding-v5` gate: `planRetrievalGrounding`
+in TypeScript and `plan_retrieval_grounding` in Python. Call it with the original
+question and trusted repository context: `exact` for a selected repository and
+full commit OID, `configured` when the repository has no selected commit, or
+`none` when no repository is registered.
+
+Apply the plan before model tool selection:
+
+- If `shouldClarify` is true, return a clarification without a model turn. Use
+  `reasonCode` to render it in the user's language: `missing_commit_oid` or
+  `repository_unconfigured`. The supplied `clarification` is an English default.
+- If `shouldRetrieve` is true, perform the authorized `retrieveContext` /
+  `retrieve_context` call and pass its bounded evidence packet to the model.
+- Otherwise, `mode=off` skips retrieval; `mode=auto` leaves retrieval optional.
+
+The gate determines whether grounding is required. The compound retrieval API
+then chooses the Memory and Code routes under the authenticated Workspace. A
+missing exact Code revision cannot be replaced with a Memory search. See the
+[MCP host guidance](../packages/mcp/README.md) for specialist follow-up tools.
+
 ## CLI
 
 After `bun run build:packages`, run:
@@ -295,8 +317,10 @@ must not treat an unresolved target as proof that no runtime dependency exists.
 MCP output has an independent 128,000-character structured-output ceiling. List
 uses bounded content previews, search returns bounded evidence without duplicating
 full Memory content, and detail/mutation responses mark `contentTruncated` or
-`metadataTruncated` when a value cannot safely fit. Metadata inputs retain the
-Portable Core's 100,000-character, 32-level, and 10,000-value limits.
+`metadataTruncated` when a value cannot safely fit. The MCP adapter bounds metadata
+inputs to 100,000 serialized characters, 32 levels, and 10,000 values. The HTTP
+Memory schemas use Zod JSON validation with the 100,000-character limit; depth and
+value-count limits are specific to the MCP adapter.
 
 All five mutation tools accept an optional `idempotencyKey`. A caller retrying an
 operation after losing the response must reuse the same key; omitting it creates a

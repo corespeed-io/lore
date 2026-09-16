@@ -6,10 +6,10 @@ import {
   purgeExpiredPortableCoreRecords,
 } from "@corespeed/lore-core";
 import { createPostgresDatabase } from "@corespeed/lore-core/postgres";
-import { createCodeIndexMaintenanceModule } from "../lib/code-index";
-import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../lib/embedding/provider-factory";
-import { registerLoreTelemetry } from "../lib/register-telemetry";
-import { observeOperation } from "../lib/telemetry";
+import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
+import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
+import { registerLoreTelemetry } from "@/server/telemetry/register";
+import { observeOperation } from "@/server/telemetry/telemetry";
 
 registerLoreTelemetry();
 

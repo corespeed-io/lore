@@ -1,6 +1,6 @@
-import { createCapabilitiesHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
-import { getRuntimeEmbeddingProvider } from "@/lib/runtime/embedding";
+import { createCapabilitiesHandlers } from "@/modules/operations/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
+import { getRuntimeEmbeddingProvider } from "@/server/providers/embedding/runtime";
 
 export async function GET(request: Request) {
   return createCapabilitiesHandlers(await getRuntimeDatabase(), {

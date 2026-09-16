@@ -7,7 +7,7 @@ hard split only as the fallback. Ordered chunks must reconstruct the Memory exac
 retrieval may explicitly request adjacent chunks instead of storing overlap.
 
 Every derived row records `lore-memory-chunking-v2`. Benchmark reuse validates that
-revision as well as exact chunk content. The current pre-launch baseline adopts v2
-as a greenfield contract. After launch, a chunking change requires a new revision,
-a forward re-chunk/re-embedding migration, and versioned retrieval evaluation; it
-must not silently mix derivation behavior under the same revision.
+revision as well as exact chunk content. Applied migrations are immutable. A
+chunking change requires a new revision, a forward re-chunk/re-embedding migration,
+and versioned retrieval evaluation; it must not silently mix derivation behavior
+under the same revision.

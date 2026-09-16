@@ -1,5 +1,5 @@
-import { App } from "@/components/App";
-import { loadConfig } from "@/lib/config";
+import { loadConfig } from "@/server/config";
+import { App } from "@/shell/App";
 
 export const dynamic = "force-dynamic";
 

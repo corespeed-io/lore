@@ -47,20 +47,13 @@ ACL camera-ready status does not make the accompanying software complete or
 reproducible. Fixed commits, released prompts, result artifacts, dependency
 locks, and data revisions are audited separately below.
 
-## Current Lore evidence
+## Lore evidence at audit time
 
 Lore already has RLS-filtered lexical plus dense candidate generation,
 deterministic fusion, a Qwen3 0.6B cross-encoder, optional query planning,
 bounded feedback retrieval, evidence expansion, and temporal recency RRF.
 
-The local 35-question LoCoMo experiment improved answer F1 from `0.5090` to
-`0.5654` on its held-out slice and from `0.4313` to `0.4808` on its development
-slice with the 0.6B reranker. Planner plus reranker increased evidence recall but
-did not beat reranker-only answer quality on the held-out slice. These are small,
-non-comparable local measurements, not a paper leaderboard claim; see
-[the local LoCoMo ablation](./locomo-local-qwen35-4b-ablation.md).
-
-The conflict workload went the other direction: generic pairwise reranking
+On the local conflict workload, generic pairwise reranking
 regressed, while recency RRF helped. That suggests the next experiment should
 test **joint evidence-set reasoning** and temporal contradictions rather than
 merely increasing the size of the pairwise reranker; see

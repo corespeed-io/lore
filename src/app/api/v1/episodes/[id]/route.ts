@@ -1,5 +1,5 @@
-import { createEpisodeByIdHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
+import { createEpisodeByIdHandlers } from "@/modules/episodes/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
 
 interface RouteContext {
   params: Promise<{ id: string }>;

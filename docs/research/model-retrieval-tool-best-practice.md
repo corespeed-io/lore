@@ -93,7 +93,7 @@ The retrieval literature consistently rejects indiscriminate fixed retrieval:
 Lore's own small real-Git experiment points in the same direction. Its selective
 joint route passed all six tasks, while an always-on Memory + Code union had a
 `0.667` reader pass rate, `0.833` Code recall, and `0.5` route accuracy
-([joint-memory-code-real-git-v5 baseline](./joint-memory-code-real-git-v5-baseline.md)).
+([joint-memory-code-real-git-v6 baseline](./joint-memory-code-real-git-v6-baseline.md)).
 That is useful product-local evidence, although six tasks are not enough to settle
 the production policy.
 

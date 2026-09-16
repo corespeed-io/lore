@@ -1,5 +1,6 @@
-import { type NextRequest, NextResponse } from "next/server";
-import { checkAuth } from "./src/lib/auth";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { checkAuth } from "./src/server/auth/auth";
 
 export const config = { matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg).*)"] };
 

@@ -1,6 +1,6 @@
-import { createReadinessHandlers } from "@/lib/http";
-import { getRuntimeDatabase } from "@/lib/runtime/database";
-import { getRuntimeEmbeddingProvider } from "@/lib/runtime/embedding";
+import { createReadinessHandlers } from "@/modules/operations/http";
+import { getRuntimeDatabase } from "@/server/database/runtime";
+import { getRuntimeEmbeddingProvider } from "@/server/providers/embedding/runtime";
 
 export const dynamic = "force-dynamic";
 

@@ -21,12 +21,12 @@ for explicit owner remap; an archive-provided identity is never trusted as that
 target. Existing unversioned routes remain available to the bundled UI, but clients
 should generate integrations from the v1 document.
 
-Lore v1 starts from one complete `0001_v1_baseline.sql` migration and schema
-revision 1. The product is pre-launch, so migrations support greenfield databases
-only. Earlier development ledgers are deliberately rejected instead of becoming a
-permanent compatibility surface; recreate those development databases from the v1
-baseline. Once published, the baseline is immutable and future schema work begins
-at `0002`.
+Lore uses a forward-only migration chain beginning with `0001_v1_baseline.sql`.
+`bun run db:migrate` initializes an empty database or upgrades an existing database
+whose migration ledger and checksums pass preflight. Applied migration files,
+including the production baseline, are immutable; schema changes require a new
+numbered migration. Readiness requires the database schema revision to match the
+running application.
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
@@ -103,7 +103,7 @@ rejects any pre-existing member of either Lore group role so a production runtim
 credential cannot silently inherit access to restored private data. On a new
 cluster, the admin must have `CREATEROLE` so the restore can create Lore's two
 NOLOGIN group roles. Afterwards run
-`scripts/create-runtime-role.mjs` against the restored database to provision fresh
+`scripts/database/create-runtime-role.mjs` against the restored database to provision fresh
 login credentials; never copy production runtime passwords into a drill.
 
 A restore drill is complete only after all of these pass against the restored
@@ -184,12 +184,12 @@ LORE_EMBEDDING_BUILD_PROVIDER=google
 LORE_EMBEDDING_BUILD_MODEL=gemini-embedding-2
 ```
 
-The scheduled sweep discovers every missing chunk. Inspect exact coverage with:
-
 Each discovery sweep scans without blocking Memory writes, then locks only the
 bounded cleanup/candidate Memory rows in UUID order. It reconciles at most one
 configured batch each of terminal jobs, stale jobs, and new candidates. Embedding
 HTTP work runs after that transaction and holds none of those locks.
+
+Inspect exact coverage with:
 
 ```bash
 LORE_MAINTENANCE_DATABASE_URL=postgres://... \
@@ -264,8 +264,10 @@ worker. CoreSpeed Cloud uses Cloudflare Workers native observability from
 `bun run db:migrate` runs the same preflight as `bun run db:preflight` before taking
 the migration lock. dbmate owns SQL parsing and application; Lore owns the advisory
 lock, schema compatibility checks, and SHA-256 values stored beside dbmate versions
-in `lore_schema_migrations`. A Lore schema without that current ledger is rejected;
-pre-launch development schemas must be recreated from the greenfield v1 baseline.
+in `lore_schema_migrations`. An existing Lore schema without a recognized ledger,
+or with missing or changed checksums, is rejected. Investigate the ledger mismatch
+against the deployed release and backup before proceeding; do not edit applied
+migrations or replace a production database to bypass preflight.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

@@ -66,18 +66,18 @@ working directory, no tools/plugins), the result was:
 This continues to reject unconditional Memory injection while showing that the
 new contextual receipt does not regress bounded answer generation.
 
-## Limits and next measurement
+## Limits and follow-up measurement
 
 This is six hand-authored cases from one adjacent commit pair, not a repository-
 disjoint benchmark. Contextual traversal is deliberately one-hop; it is not a
 transitive blast-radius engine. Exact active generation ids are not yet included
 in the public receipt.
 
-Fresh evaluation indexing was visibly measured in minutes on this development
-machine, while the contextual comparison itself is bounded. The next performance
-gate should separately instrument cold base indexing, incremental target indexing,
-warm retrieval, contextual traversal, parsed/reused file counts, database growth,
-and peak memory instead of reporting one blended wall time.
+The subsequent [Code Index performance report](code-index-performance-v4-derived-sets.md)
+separately measures fresh and incremental indexing, warm retrieval, contextual
+traversal, database growth, and peak memory. It identifies the complete-revision
+in-memory build as a remaining bottleneck; its fresh index measurements do not
+claim a controlled cold-cache result.
 
 Reproduction:
 

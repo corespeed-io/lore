@@ -1,7 +1,8 @@
 import "server-only";
 
 import pg from "pg";
-import type { GraphData, MemoryScope } from "@/lib/types";
+import type { GraphData } from "@/modules/graph/types";
+import type { MemoryScope } from "@/modules/memories/schemas";
 
 interface NodeRow {
   id: string;
