@@ -20,7 +20,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
@@ -46,7 +46,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Cache Vitest modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: node_modules/.experimental-vitest-cache
           key: ${{ runner.os }}-bun1.4.2-vitest-${{ hashFiles('bun.lock') }}-${{ github.sha }}
@@ -88,7 +88,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
@@ -112,7 +112,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
@@ -131,7 +131,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
@@ -139,7 +139,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Cache Next build
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .next/cache
           key: ${{ runner.os }}-${{ runner.arch }}-bun1.4.2-next-${{ hashFiles('bun.lock') }}-${{ github.sha }}
