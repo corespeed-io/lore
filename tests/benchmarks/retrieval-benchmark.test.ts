@@ -1,9 +1,9 @@
 import { expect, test } from "vitest";
-import type { RetrievalBenchmarkCaseMetrics } from "../../scripts/benchmarks/lib/retrieval-benchmark";
+import type { RetrievalBenchmarkCaseMetrics } from "../../tools/evaluation/retrieval/retrieval-benchmark";
 import {
   aggregateRetrievalBenchmark,
   evaluateRetrievalBenchmarkCase,
-} from "../../scripts/benchmarks/lib/retrieval-benchmark";
+} from "../../tools/evaluation/retrieval/retrieval-benchmark";
 
 test("positive retrieval cases report ranking quality and latency", () => {
   const metrics = evaluateRetrievalBenchmarkCase({

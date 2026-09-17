@@ -1,7 +1,7 @@
 import { appendFile } from "node:fs/promises";
 import { Server } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { createRetrievalPolicyMcpHarness } from "../../scripts/benchmarks/lib/retrieval-policy-mcp";
+import { createRetrievalPolicyMcpHarness } from "../../tools/evaluation/policy/retrieval-policy-mcp";
 
 const selectedTools = new Set(
   (process.env.LORE_RETRIEVAL_POLICY_TOOLS ?? "")

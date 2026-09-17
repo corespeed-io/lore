@@ -2,14 +2,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { readJsonArray } from "../../scripts/benchmarks/lib/json-array";
-import type { LongMemEvalRecord } from "../../scripts/benchmarks/lib/longmemeval";
+import type { LongMemEvalRecord } from "../../tools/evaluation/retrieval/longmemeval";
 import {
   LONGMEMEVAL_QUESTION_TYPES,
   parseLongMemEvalRecord,
   readLongMemEvalPartitions,
   toLongMemEvalPartition,
-} from "../../scripts/benchmarks/lib/longmemeval";
+} from "../../tools/evaluation/retrieval/longmemeval";
+import { readJsonArray } from "../../tools/evaluation/shared/json-array";
 
 const fixture: LongMemEvalRecord = {
   question_id: "question-1",

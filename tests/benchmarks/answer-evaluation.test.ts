@@ -3,7 +3,7 @@ import {
   evaluateLongMemEvalV2Answer,
   extractBoxedAnswer,
   isUnknownLongMemEvalV2Answer,
-} from "../../scripts/benchmarks/lib/answer-evaluation";
+} from "../../tools/evaluation/shared/answer-evaluation";
 
 test("boxed answer extraction handles nested braces", () => {
   expect(extractBoxedAnswer("reasoning \\boxed{Reports; {Problems}} trailing")).toBe(

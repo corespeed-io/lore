@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { createBenchmarkMetering } from "../../scripts/benchmarks/lib/benchmark-metering";
+import { createBenchmarkMetering } from "../../tools/evaluation/shared/benchmark-metering";
 
 test("benchmark metering records actual provider workload and preserves model metadata", async () => {
   const modelMetadata = {

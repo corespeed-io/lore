@@ -46,9 +46,17 @@ Core. `bun run architecture:check` guards these dependency boundaries in CI.
 | `packages/` | Memory engine, TypeScript/Python SDKs, CLI, and external MCP adapter |
 | `db/` | Immutable applied migrations and database setup |
 | `tools/sdk-codegen/` | Isolated OpenAPI code-generation toolchain |
-| `scripts/` | Development, operational, validation, benchmark, and evaluation commands |
+| `tools/evaluation/` | Quality and performance tools grouped by retrieval, code, context, policy, chunking, and graph |
+| `scripts/` | Development, build, validation, and database operations |
 | `tests/` | Automated tests grouped by the code they exercise |
 | `evaluation/` | Versioned evaluation inputs and results |
+
+Use the [script index](../scripts/README.md) for daily development and operations,
+and the [evaluation tool index](../tools/evaluation/README.md) for repeatable quality
+and performance measurements. Keep the harnesses used by retained research
+baselines; retire superseded interactive demos and compatibility exports. Run the
+stable package commands from the repository root. Evaluation inputs and reports
+stay in `evaluation/`; the Docker runtime copies only `scripts/database/`.
 
 ## Domain modules
 
@@ -226,7 +234,7 @@ specific HTTP adapters because the selected SDKs do not cover those exact
 contracts. Their small `src/server/providers/provider-http.ts` boundary checks
 status and consumes bounded JSON; it does not implement a generic HTTP client.
 Dataset streaming, checksum verification, and temporary-file promotion belong to
-`scripts/benchmarks/lib/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
+`tools/evaluation/shared/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
 protocol stays in its own download adapter. Native development health probes live
 in `scripts/dev/lib/local-http.mjs`. These downloads, generic health probes, Lore's
 own SDK transport, and the isolated development Graph benchmark remain direct HTTP

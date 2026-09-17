@@ -4,13 +4,13 @@ import {
   aggregateRetrievalPolicyTrials,
   parseRetrievalPolicySuite,
   scoreRetrievalPolicyTrial,
-} from "../../scripts/benchmarks/lib/retrieval-policy-benchmark";
-import { parseClaudeRetrievalPolicyArtifacts } from "../../scripts/benchmarks/lib/retrieval-policy-claude";
+} from "../../tools/evaluation/policy/retrieval-policy-benchmark";
+import { parseClaudeRetrievalPolicyArtifacts } from "../../tools/evaluation/policy/retrieval-policy-claude";
 import {
   codexRetrievalPolicyToolFilter,
   parseCodexRetrievalPolicyArtifacts,
-} from "../../scripts/benchmarks/lib/retrieval-policy-codex";
-import { createRetrievalPolicyMcpHarness } from "../../scripts/benchmarks/lib/retrieval-policy-mcp";
+} from "../../tools/evaluation/policy/retrieval-policy-codex";
+import { createRetrievalPolicyMcpHarness } from "../../tools/evaluation/policy/retrieval-policy-mcp";
 
 const COMMIT_OID = "a".repeat(40);
 

@@ -15,7 +15,7 @@ import {
   renderLongMemEvalV2Trajectory,
   selectLongMemEvalV2Questions,
   validateLongMemEvalV2QuestionScreenshot,
-} from "../../scripts/benchmarks/lib/longmemeval-v2";
+} from "../../tools/evaluation/retrieval/longmemeval-v2";
 
 test("LongMemEval-V2 parser validates and normalizes official question fields", () => {
   expect(

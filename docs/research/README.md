@@ -42,5 +42,6 @@ revision and workload. Proposed experiments are not shipped capabilities.
 - [Large D3 force graphs](d3-large-force-graph.md)
 
 Superseded benchmark versions, one-off model traces, and completed handoffs are
-available in Git history. The executable benchmark harnesses and fixtures remain
-under `scripts/benchmarks`, `scripts/evaluation`, and `evaluation`.
+available in Git history. Current executable harnesses are grouped in the
+[evaluation tool index](../../tools/evaluation/README.md); versioned suites and
+dataset manifests remain under `evaluation/`.

@@ -399,7 +399,7 @@ been removed. Lore now has a native implementation, split into two concepts
   environment credential use. Keep application-level embedding/result/score validation. MemOS and
   vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
   `src/server/providers/provider-http.ts` with status handling and bounded reads.
-  `scripts/benchmarks/lib/dataset-download.ts` owns streaming, checksum-verified
+  `tools/evaluation/shared/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
   `memoryagentbench-download.ts`. Node service probes live in `scripts/dev/lib/local-http.mjs`;
 - `packages/lore-core/src/query-planning.ts` defines the optional multi-query planning capability.
@@ -873,7 +873,7 @@ Benchmark is part of the product quality system even without AutoDream.
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
   disposable database whose schema was generated at a non-lore width through
-  `scripts/benchmarks/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
+  `tools/evaluation/retrieval/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
   the baseline; the four `length(path) <= 1024` checks stay). It exercises the
   engine's host-baked `embeddingDimensions` option the way a non-lore host's
   own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments

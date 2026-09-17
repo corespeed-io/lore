@@ -6,7 +6,7 @@ import {
   longMemEvalV2ReaderInstruction,
   renderBenchmarkReaderInput,
   renderLongMemEvalV2ReaderInput,
-} from "../../scripts/benchmarks/lib/benchmark-reader";
+} from "../../tools/evaluation/shared/benchmark-reader";
 
 test("fixed-reader prompt preserves rank while enforcing a hard context budget", () => {
   const prompt = renderBenchmarkReaderInput(

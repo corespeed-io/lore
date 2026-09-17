@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import {
   assembleGroupedJointEvidence,
   planJointEvidenceRoute,
-} from "../../scripts/evaluation/lib/joint-memory-code-prototype";
-import { buildJointReaderPrompt } from "../../scripts/evaluation/lib/joint-memory-code-reader-prototype";
+} from "../../src/modules/context/policy";
+import { buildJointReaderPrompt } from "../../tools/evaluation/context/reader";
 
 test("reader evidence centers a bounded Code passage around the retrieval match", () => {
   const matchText = "submit_memory_proposal";

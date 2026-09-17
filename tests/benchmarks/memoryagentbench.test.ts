@@ -6,7 +6,7 @@ import {
   memoryAgentBenchSubstringExactMatch,
   parseConflictResolutionFacts,
   parseMemoryAgentBenchRow,
-} from "../../scripts/benchmarks/lib/memoryagentbench";
+} from "../../tools/evaluation/retrieval/memoryagentbench";
 
 test("MemoryAgentBench row parser preserves aligned questions and accepted answers", () => {
   const row = parseMemoryAgentBenchRow({
