@@ -46,7 +46,7 @@ been removed. Lore now has a native implementation, split into two concepts
   identity between the packages. npm publishing remains out of scope.
 - **lore oss** — everything else in this repository: identity/tenancy,
   request context and authorization, request idempotency, HTTP/OpenAPI,
-  SDKs/CLI/MCP, web UI, Memory Proposals
+  TypeScript SDK/CLI/MCP, web UI, Memory Proposals
   (`src/modules/proposals/service.ts`, layered on the engine's exported
   `createMemoryMutationPrimitives`), code-aware memory, portability,
   evaluation, deployment profiles, and concrete model adapters under
@@ -158,7 +158,7 @@ been removed. Lore now has a native implementation, split into two concepts
   It keeps file-level imports separate from symbol-level dependencies and returns
   explicit `resolved`/`ambiguous`/`unresolved` states instead of guessing between
   same-name definitions. Its stable public read is
-  `GET /api/v1/code/dependencies`, surfaced through both SDKs, the CLI, and the
+  `GET /api/v1/code/dependencies`, surfaced through the TypeScript SDK, CLI, and
   single read-only `lore_code_dependencies` MCP tool; it accepts exactly one
   symbol or repository-relative path and caps both edges and ambiguity candidates
   at 200 with explicit truncation. `src/modules/code/evidence.ts` owns immutable typed
@@ -173,8 +173,8 @@ been removed. Lore now has a native implementation, split into two concepts
   pruning must not delete citation anchors.
   `src/modules/context/policy.ts` owns the pure versioned route/packet policy and
   `src/modules/context/retrieval.ts` owns its production read-only orchestration.
-  `POST /api/v1/context/retrieve`, both SDKs, and `lore_retrieve_context` expose one
-  bounded packet with separate Memory, exact-revision Code, anchor, conflict, and
+  `POST /api/v1/context/retrieve`, the TypeScript SDK, and `lore_retrieve_context`
+  expose one bounded packet with separate Memory, exact-revision Code, anchor, conflict, and
   receipt fields. The joint path may call only side-effect-free evidence `assess`,
   never persisted `revalidate`; repository key and full commit OID are paired,
   Workspace remains process/header context, and repository paths stay server-only.
@@ -195,9 +195,8 @@ been removed. Lore now has a native implementation, split into two concepts
   also uses generic code vocabulary ("what is our commit message convention?").
   The gate's source of truth is the import-free `src/modules/context/grounding.ts`;
   `sdk:generate` copies it verbatim into the TypeScript SDK
-  (`@corespeed/lore-sdk` exports it for hosts) and the Python SDK carries a
-  hand-aligned `plan_retrieval_grounding` port with mirrored parity tests. Gate
-  changes must keep all three in lockstep and bump the policy revision.
+  (`@corespeed/lore-sdk` exports it for hosts). Gate changes must regenerate the
+  SDK copy and bump the policy revision.
   `joint-memory-code-v2` keeps local anchor freshness separate from contextual
   impact. For change routes it compares at most five cited declarations across the
   cited and requested exact revisions, follows at most 25 direct callee/import/
@@ -336,8 +335,7 @@ been removed. Lore now has a native implementation, split into two concepts
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
   scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
   MCP outside Portable Core and never accept a model-supplied Workspace override.
-  `packages/python-sdk` provides the equivalent dependency-light Python seam from
-  the same generated OpenAPI contract; keep both SDKs behaviorally aligned.
+  Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;
 - `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4.
@@ -994,8 +992,7 @@ Benchmark is part of the product quality system even without AutoDream.
 The existing application uses:
 
 - Next.js 16 (App Router), React 19, Hono, Bun 1.3.14+ for self-host runtimes,
-  package management, tooling, and tests; TypeScript 7, and Python 3.12+ for the
-  generated Python SDK and source verification;
+  package management, tooling, and tests; TypeScript 7;
 - dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
   PostgreSQL transactions; Lore has no runtime ORM;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
@@ -1039,8 +1036,8 @@ does not expose. Do not replace that dependency with the workspace compiler unti
 the generator supports its API.
 
 All handwritten JavaScript-family source, including tooling and `next.config.ts`,
-must use TypeScript/TSX. Keep generated JavaScript outputs and the Python SDK in
-their native formats. `bun run typecheck` checks both the application and
+must use TypeScript/TSX. Keep generated JavaScript outputs in their native format.
+`bun run typecheck` checks both the application and
 `scripts/tsconfig.json`; tooling uses Bun types with ESNext/bundler resolution,
 checked indexed access, exact optional properties, erasable syntax, and explicit
 `.ts` imports. Keep Next/Cloudflare ambient declarations out of that tooling
@@ -1078,10 +1075,9 @@ bun run lint       # biome check .
 bun run format     # biome check --write .
 bun run architecture:check # enforce UI/SDK/API/Core dependency boundaries
 bun run design:check # enforce and self-test the Lore UI contract
-bun run sdk:generate # regenerate TypeScript/Python contracts and package versions
+bun run sdk:generate # regenerate TypeScript contracts and package versions
 bun run sdk:check  # fail when generated developer contracts drift
-bun run test:python # run the Python 3.12+ SDK tests
-bun run test       # vitest plus the Python SDK tests
+bun run test       # application and Core tests with Vitest
 bun run build:packages # build the TypeScript SDK, CLI, and external MCP packages
 bun run packages:smoke # pack/install/import the release artifacts
 bun run build      # Next production, maintenance, and developer-package builds
@@ -1104,8 +1100,7 @@ database without `bench` or `benchmark` in the name. It is renderer load data,
 not a persisted Memory Affinity model and not an Evaluation Suite.
 
 Before opening a PR, design:check, typecheck, lint, test, build, packages:smoke,
-and the deployment dry runs must all pass. `bun run test` requires Python 3.12+
-because it includes the generated Python SDK suite.
+and the deployment dry runs must all pass.
 
 Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but
@@ -1122,8 +1117,8 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   that isolation; migration tests must still execute migrations on empty databases.
   Both Vitest configs enable `experimental.fsModuleCache` (the Vitest 4 API).
   Clear stale module caches with `bun --bun vitest --clearCache`; cached modules never
-  replace test execution. CI's stable `check` gate requires the tests, build, and
-  Python matrix jobs to succeed; cache hits must not skip their checks.
+  replace test execution. CI's stable `check` gate requires the tests and build
+  jobs to succeed; cache hits must not skip their checks.
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's
   `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.

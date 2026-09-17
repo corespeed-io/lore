@@ -12,9 +12,9 @@ over PostgreSQL. Its factories bind a host-constrained `MemoryStorageContext`;
 identity or tenant model. It defines the model capabilities that hosts supply.
 **Lore OSS** is the self-hostable product built on that engine in this repository:
 identity, tenancy and sharing policy, request authorization and idempotency, the
-HTTP API and SDKs, the web UI, Memory Proposals, code-aware memory, portability,
-evaluation, and deployment profiles, including concrete model adapters and their
-configuration. Its Workspace/User/Agent model and public fields remain unchanged.
+HTTP API and TypeScript SDK, the web UI, Memory Proposals, code-aware memory,
+portability, evaluation, and deployment profiles, including concrete model adapters
+and their configuration. Its Workspace/User/Agent model and public fields remain unchanged.
 CoreSpeed HaaS retains a separate vendored `packages/memory-core` fork with its own identity
 plane and schema chain, and manually ports selected changes from Lore. It does
 not consume a verbatim Lore Core copy.

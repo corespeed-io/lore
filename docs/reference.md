@@ -6,7 +6,6 @@ with the [project README](../README.md) if you are new to Lore.
 ## Run with Docker
 
 Bun 1.3.14+ and a Postgres distribution with pgvector are required.
-The source verification loop additionally requires Python 3.12+ for the Python SDK.
 The fastest self-hosted setup is:
 
 ```bash
@@ -556,12 +555,12 @@ exposed to Workspace members or Agents.
 ## SDK, CLI, and MCP
 
 Lore's developer tools share the stable `/api/v1` Memory contract plus the stable
-`/readyz` probe. TypeScript and Python types come from the same OpenAPI document
+`/readyz` probe. TypeScript types come from the canonical OpenAPI document
 served at `/openapi.json`; the CLI and external MCP server delegate authentication,
 Workspace selection, pagination, ETags, idempotency, bounded response reads, and API
 error handling to the TypeScript SDK.
 
-Generate/check both language contracts and build the JavaScript packages:
+Generate/check the TypeScript contract and build the JavaScript packages:
 
 ```bash
 bun run sdk:generate
@@ -593,9 +592,8 @@ remember/update/forget, `lore_observe` for non-canonical Episode evidence, and
 Workspace. Supply the same `idempotencyKey` when retrying a mutation whose response
 was lost:
 
-For combined retrieval, use `lore_retrieve_context`. The matching SDK methods are
-`workspace.retrieveContext(...)` in TypeScript and
-`workspace.retrieve_context(...)` in Python. They call
+For combined retrieval, use `lore_retrieve_context` or the TypeScript SDK method
+`workspace.retrieveContext(...)`. They call
 `POST /api/v1/context/retrieve` once, require repository key and exact commit OID
 together for Code, preserve typed anchor states, and never persist assessment.
 The original question controls routing; optional channel-specific Memory and Code
@@ -673,7 +671,6 @@ bun run sdk:check
 bun run typecheck
 bun run lint
 bun run test
-bun run test:python
 bun run build
 bun run build:packages
 bun run packages:smoke
@@ -681,10 +678,6 @@ bun audit --audit-level=high
 bun --bun opennextjs-cloudflare build
 bun --bun wrangler deploy --dry-run
 ```
-
-`test:python` selects Python 3.12 or newer, preferring 3.14, 3.13, then 3.12. Set
-`LORE_PYTHON=/absolute/path/to/python` when a supported interpreter is not on the
-usual command path.
 
 The deterministic Evaluation fixture is
 [`evaluation/suites/synthetic-v1.json`](../evaluation/suites/synthetic-v1.json). The

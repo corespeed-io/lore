@@ -17,7 +17,7 @@
 
 Package-specific setup lives with the [memory engine](../packages/lore-core/README.md),
 [TypeScript SDK](../packages/typescript-sdk/README.md),
-[Python SDK](../packages/python-sdk/README.md), [CLI](../packages/cli/README.md), and
+[CLI](../packages/cli/README.md), and
 [MCP adapter](../packages/mcp/README.md).
 
 ## Architecture decisions

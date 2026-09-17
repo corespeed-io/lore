@@ -38,7 +38,6 @@ flowchart LR
     CLI["CLI"] --> SDK
     MCP["MCP"] --> SDK
     SDK --> API["OSS API<br/>Auth · tenancy"]
-    Python["Python SDK"] --> API
     API --> Core["Lore Core"]
     Core --> Database[("Postgres + pgvector")]
     Providers["Model providers · OSS"] -. inject .-> Core
@@ -48,7 +47,7 @@ flowchart LR
     classDef core fill:#e6f6ec,stroke:#24864b,color:#123b24,stroke-width:3px
     classDef data fill:#e3f6f5,stroke:#0f766e,color:#123b3a,stroke-width:2px
     classDef model fill:#fff4cc,stroke:#b7791f,color:#422006,stroke-width:2px
-    class UI,CLI,MCP,SDK,Python interface
+    class UI,CLI,MCP,SDK interface
     class API api
     class Core core
     class Database data
@@ -93,8 +92,8 @@ the [native one-command service](docs/reference.md#native-one-command-service-on
   top-k.
 - **A navigable memory graph** — durable Memory Links, visible-node-safe edges,
   derived affinity, and clickable `[[reference]]` wikilinks.
-- **Agent-ready interfaces** — versioned HTTP APIs, generated TypeScript and Python
-  contracts, SDKs, a CLI, and an external MCP adapter.
+- **Agent-ready interfaces** — versioned HTTP APIs, a TypeScript SDK with generated
+  contracts, a CLI, and an external MCP adapter.
 - **Measurable production operation** — background embedding jobs, portable
   Workspace archives, health probes, and Evaluation Suites for quality, isolation,
   latency, and cost.
@@ -117,7 +116,7 @@ See the documentation before deploying beyond localhost:
 - [Documentation index](docs/README.md) — current guides, architecture decisions, and research
 - [Developer integration](docs/developer-integration.md) — API, SDK, CLI, MCP, and host retrieval setup
 - [Technical reference](docs/reference.md) — embedding, reranking, planning, APIs,
-  SDKs, Cloudflare, development, and benchmarks
+  SDK, Cloudflare, development, and benchmarks
 - [Operations and portability](docs/operations.md) — backup and restore, Workspace
   archives, embedding rollouts, health probes, and telemetry
 - [Product vocabulary](CONTEXT.md) — the canonical domain model and invariants
@@ -125,7 +124,7 @@ See the documentation before deploying beyond localhost:
 
 ## Development
 
-Full source verification requires Bun 1.3.14+ and Python 3.12+.
+Full source verification requires Bun 1.3.14+.
 
 ```bash
 bun install --frozen-lockfile

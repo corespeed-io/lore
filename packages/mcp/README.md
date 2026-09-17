@@ -32,9 +32,8 @@ in the receipt so retrieval remains auditable.
 
 Hosts should apply Lore's `required | auto | off` grounding policy before model
 tool selection; `@corespeed/lore-sdk` exports the versioned gate as
-`planRetrievalGrounding`, and the Python SDK ships the aligned
-`plan_retrieval_grounding`. Grounding is required for prior Workspace decisions, user-specific
-facts, and current or exact-revision repository claims; it stays off for tasks fully
+`planRetrievalGrounding`. Grounding is required for prior Workspace decisions,
+user-specific facts, and current or exact-revision repository claims; it stays off for tasks fully
 supported by supplied text and unconstrained brainstorming. When Code truth is
 required but exact revision context is unavailable, the gate returns
 `shouldClarify` with a stable `reasonCode` — `missing_commit_oid` when a

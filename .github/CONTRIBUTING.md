@@ -4,8 +4,7 @@
 
 ## Development setup
 
-Use Bun 1.3.14 or newer and Postgres with pgvector. Python SDK verification also
-requires Python 3.12 or newer.
+Use Bun 1.3.14 or newer and Postgres with pgvector.
 `bun.lock` is the only dependency lockfile; do not add `package-lock.json`,
 `pnpm-lock.yaml`, or `yarn.lock`.
 

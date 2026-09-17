@@ -20,7 +20,7 @@ also disable automatic `.env` loading.
 | Directory | Purpose | Commands |
 | --- | --- | --- |
 | [`build/`](build/) | Package verification and the dbmate binary used by self-host deployments | `build:dbmate`, `packages:smoke` |
-| [`checks/`](checks/) | Design rules, PostgreSQL and Bun/Next HTTP smoke, and Python SDK tests | `design:check`, `smoke:memory-core`, `smoke:next`, `test:python` |
+| [`checks/`](checks/) | Design rules, PostgreSQL and Bun/Next HTTP smoke | `design:check`, `smoke:memory-core`, `smoke:next` |
 | [`database/`](database/) | Migrations, runtime roles, backup/restore, recovery checks, and embedding generation administration | `db:migrate`, `db:preflight`, `db:bootstrap`, `db:backup`, `db:restore`, `db:pitr:check`, `db:embedding:report`, `db:embedding:activate` |
 | [`dev/`](dev/) | Native local-service lifecycle and its tests | `service:up`, `service:down`, `service:restart`, `service:status`, `service:logs`, `service:test` |
 

@@ -1,6 +1,7 @@
 # Lore developer integration
 
-Lore exposes its stable `/api/v1` contract to the TypeScript and Python SDKs.
+Lore exposes its stable `/api/v1` contract through the TypeScript SDK and direct
+HTTP access for clients in other languages.
 The frontend, CLI, and external MCP adapter use the TypeScript SDK; deployment
 readiness remains the stable `/readyz` probe. These packages do not introduce a
 second authorization model or a tool-shaped
@@ -11,11 +12,11 @@ executes under Postgres RLS.
 
 Bun 1.3.14+ builds the packages and runs the CLI/MCP executables. The TypeScript
 SDK exports standard ESM and declarations and remains usable by other compatible
-hosts and browsers. The Python SDK uses Python 3.12+.
+hosts and browsers.
 
 The canonical OpenAPI document is implemented by `src/server/openapi/document.ts` and served at
-`/openapi.json`. The generator commits TypeScript types/runtime error codes, Python
-`TypedDict` contracts/runtime error codes, and CLI/MCP versions:
+`/openapi.json`. The generator commits TypeScript types/runtime error codes and
+CLI/MCP versions:
 
 ```bash
 bun run sdk:generate
@@ -24,17 +25,14 @@ bun run build:packages
 ```
 
 `sdk:check` fails when the OpenAPI document and any generated artifact differ. The
-handwritten SDK runtimes wrap those types with the behavior OpenAPI alone cannot provide:
+handwritten SDK runtime wraps those types with the behavior OpenAPI alone cannot provide:
 authentication, `x-lore-workspace-id`, opaque cursors, strong Memory ETags,
 idempotency keys, bounded response reads, a default 30-second request deadline, and
 safe error parsing. TypeScript `timeoutMs` is a total deadline spanning connection
 and bounded response reading; CLI/MCP operators may set the same value with
-`LORE_REQUEST_TIMEOUT_MS` from 1 through 300,000 milliseconds. Python `timeout` is
-passed to `urllib` as a socket-operation timeout and must be greater than 0 and at
-most 300 seconds; it is not a total request deadline. Explicit TypeScript
-`timeoutMs: null` or Python `timeout=None` disables the SDK timeout. Omitting the
-option retains the 30-second default; TypeScript caller cancellation still works
-when its deadline is disabled.
+`LORE_REQUEST_TIMEOUT_MS` from 1 through 300,000 milliseconds. Explicit
+`timeoutMs: null` disables the SDK timeout. Omitting the option retains the
+30-second default; caller cancellation still works when the deadline is disabled.
 
 Ordinary success responses are capped at 128 MiB and error responses at 64 KiB.
 Workspace exports read complete archives under the server's record-count limits,
@@ -151,73 +149,11 @@ credential management, and `exportWorkspace`/`importWorkspace`. These methods us
 the same Actor and Workspace authorization as the HTTP API. Their availability in
 the SDK does not add human administration commands to the CLI or tools to MCP.
 
-## Python SDK
-
-Build/install the package with an ordinary Python packaging frontend, or install it
-directly from the checkout:
-
-```bash
-python3 -m pip install ./packages/python-sdk
-```
-
-```py
-import os
-from corespeed_lore import LoreClient
-
-lore = LoreClient(
-    os.environ.get("LORE_URL", "http://127.0.0.1:3000"),
-    agent_token=os.environ["LORE_AGENT_TOKEN"],
-)
-memories = lore.workspace(os.environ["LORE_WORKSPACE_ID"])
-
-episode = memories.record_episode(
-    {
-        "kind": "conversation",
-        "observations": [{"kind": "message", "content": "The rollout starts Monday."}],
-    },
-    idempotency_key="rollout-episode-1",
-)
-
-created = memories.remember(
-    "The rollout starts Monday.",
-    scope="shared",
-    idempotency_key="rollout-note-1",
-)
-memories.update_memory(
-    created["id"],
-    expected_version=created["version"],
-    content="The rollout starts Tuesday.",
-    idempotency_key="rollout-note-update-1",
-)
-memories.propose_memory(
-    {
-        "kind": "create",
-        "content": "Suggested note awaiting human review.",
-        "scope": "private",
-        "evidenceObservationIds": [episode["observations"][0]["id"]],
-    },
-    idempotency_key="suggested-note-1",
-)
-
-dependencies = memories.query_code_dependencies(
-    "corespeed/lore",
-    "0123456789abcdef0123456789abcdef01234567",
-    "callers",
-    symbol="createMemoryModule",
-    limit=50,
-)
-```
-
-The dependency-light synchronous client provides the same core Workspace/Memory,
-readiness, graph, pagination, strong-version, and replay-safe mutation behavior as
-the TypeScript client. It requires Python 3.12+; CI covers the minimum and current
-stable Python 3.14 release.
-
 ## Host retrieval policy
 
-Both SDKs export the pure `retrieval-grounding-v5` gate: `planRetrievalGrounding`
-in TypeScript and `plan_retrieval_grounding` in Python. Call it with the original
-question and trusted repository context: `exact` for a selected repository and
+The TypeScript SDK exports the pure `retrieval-grounding-v5` gate as
+`planRetrievalGrounding`. Call it with the original question and trusted repository
+context: `exact` for a selected repository and
 full commit OID, `configured` when the repository has no selected commit, or
 `none` when no repository is registered.
 
@@ -226,8 +162,8 @@ Apply the plan before model tool selection:
 - If `shouldClarify` is true, return a clarification without a model turn. Use
   `reasonCode` to render it in the user's language: `missing_commit_oid` or
   `repository_unconfigured`. The supplied `clarification` is an English default.
-- If `shouldRetrieve` is true, perform the authorized `retrieveContext` /
-  `retrieve_context` call and pass its bounded evidence packet to the model.
+- If `shouldRetrieve` is true, perform the authorized `retrieveContext` call
+  and pass its bounded evidence packet to the model.
 - Otherwise, `mode=off` skips retrieval; `mode=auto` leaves retrieval optional.
 
 The gate determines whether grounding is required. The compound retrieval API
