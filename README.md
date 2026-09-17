@@ -124,7 +124,7 @@ See the documentation before deploying beyond localhost:
 
 ## Development
 
-Full source verification requires Bun 1.3.14+.
+Full source verification requires Bun 1.4.2+.
 
 ```bash
 bun install --frozen-lockfile

@@ -764,8 +764,8 @@ async function up(): Promise<void> {
   secureManagedFiles();
   const environment = loadEnvironment();
   const configuration = localServiceConfiguration(environment);
-  if (!Bun.semver.satisfies(Bun.version, ">=1.3.14")) {
-    throw new Error("Bun 1.3.14 or newer is required");
+  if (!Bun.semver.satisfies(Bun.version, ">=1.4.2")) {
+    throw new Error("Bun 1.4.2 or newer is required");
   }
   if (
     configuration.searchMode === "rerank" &&

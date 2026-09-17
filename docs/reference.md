@@ -5,7 +5,7 @@ with the [project README](../README.md) if you are new to Lore.
 
 ## Run with Docker
 
-Bun 1.3.14+ and a Postgres distribution with pgvector are required.
+Bun 1.4.2+ and a Postgres distribution with pgvector are required.
 The fastest self-hosted setup is:
 
 ```bash
@@ -569,7 +569,7 @@ bun run build:packages
 ```
 
 Use an Agent credential from the one-time `/agents` flow through environment
-variables. CLI/MCP require Bun 1.3.14+ and disable automatic `.env` loading.
+variables. CLI/MCP require Bun 1.4.2+ and disable automatic `.env` loading.
 Secrets are not accepted as CLI flags:
 
 ```bash

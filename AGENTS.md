@@ -991,7 +991,7 @@ Benchmark is part of the product quality system even without AutoDream.
 
 The existing application uses:
 
-- Next.js 16 (App Router), React 19, Hono, Bun 1.3.14+ for self-host runtimes,
+- Next.js 16 (App Router), React 19, Hono, Bun 1.4.2+ for self-host runtimes,
   package management, tooling, and tests; TypeScript 7;
 - dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
   PostgreSQL transactions; Lore has no runtime ORM;
@@ -1117,8 +1117,8 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   that isolation; migration tests must still execute migrations on empty databases.
   Both Vitest configs enable `experimental.fsModuleCache` (the Vitest 4 API).
   Clear stale module caches with `bun --bun vitest --clearCache`; cached modules never
-  replace test execution. CI's stable `check` gate requires the tests and build
-  jobs to succeed; cache hits must not skip their checks.
+  replace test execution. CI's stable `check` gate requires every validation
+  job to succeed; cache hits must not skip their checks.
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's
   `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
@@ -1159,12 +1159,16 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   runs, or it measures the cache instead of the change. `skipLibCheck: true` compounds
   this: a conflict between two `.d.ts` files is silent at the declaration site and only
   surfaces as errors at unrelated call sites.
-- Wrangler is held at 4.119.0. From 4.123.0 its bundled workerd (`1.20260811.1`)
-  emits nodejs_compat globals — including `declare const Buffer: any` — into
-  `cf:typegen`'s `cloudflare-env.d.ts`. That collides with `@types/node`'s global
-  `Buffer`, and every `Buffer.toString(encoding)` call in the repo then fails as
-  `TS2554: Expected 0 arguments, but got 1`. Regenerating `cloudflare-env.d.ts` with a
-  newer wrangler reintroduces it, so resolve the collision before bumping wrangler.
+- Wrangler upgrades must regenerate `cloudflare-env.d.ts` and pass a fresh
+  typecheck. Wrangler 4.123.0's workerd generated `declare const Buffer: any`,
+  which collided with the runtime types and broke `Buffer.toString(encoding)`.
+  Wrangler 4.134.0 / workerd `1.20260917.1` no longer emits that declaration;
+  the generated types work without declaration patches or type suppressions.
+- Voyage's SDK stays at `voyageai` 0.1.0. Releases 0.2.0 through 0.4.0 route
+  the public client through local inference exports, causing Wrangler to resolve
+  the optional `@huggingface/transformers` dependency even for hosted reranking.
+  Do not add local ONNX/transformer dependencies or bundler stubs to the Worker;
+  require a successful Cloudflare dry run before upgrading this SDK.
 
 ## Commit / PR conventions
 

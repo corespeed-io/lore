@@ -13,7 +13,7 @@ Memory-to-Code evidence without accepting a Workspace or filesystem path.
 It delegates all access control to Lore/Postgres RLS and stores no Memory or
 authorization state.
 
-Requires Bun 1.3.14 or newer. Install with `bun add --global @corespeed/lore-mcp`
+Requires Bun 1.4.2 or newer. Install with `bun add --global @corespeed/lore-mcp`
 and configure the MCP host to run `lore-mcp` with explicit environment variables.
 The executable disables automatic `.env` loading.
 

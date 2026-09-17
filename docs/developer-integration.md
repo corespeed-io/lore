@@ -10,7 +10,7 @@ executes under Postgres RLS.
 
 ## Build and contract generation
 
-Bun 1.3.14+ builds the packages and runs the CLI/MCP executables. The TypeScript
+Bun 1.4.2+ builds the packages and runs the CLI/MCP executables. The TypeScript
 SDK exports standard ESM and declarations and remains usable by other compatible
 hosts and browsers.
 

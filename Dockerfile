@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.14 AS builder
+FROM oven/bun:1.4.2 AS builder
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
 COPY packages/lore-core/package.json ./packages/lore-core/package.json
@@ -10,7 +10,7 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-FROM oven/bun:1.3.14 AS runner
+FROM oven/bun:1.4.2 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
