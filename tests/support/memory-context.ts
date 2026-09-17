@@ -35,35 +35,54 @@ export interface MemoryTestContext {
   close(): Promise<void>;
 }
 
-export async function createMemoryTestContext(): Promise<MemoryTestContext> {
+// Vitest isolates this module per test file. Cache only an immutable, freshly
+// migrated snapshot; every context below owns its own database and connection.
+let template: Promise<Blob> | undefined;
+
+async function createTemplate(): Promise<Blob> {
   const postgres = new PGlite({ extensions: { pg_trgm, vector } });
-  await postgres.waitReady;
-  await migrate(postgres);
-  await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)", [
-    ALICE_USER_ID,
-    "Alice",
-    BOB_USER_ID,
-    "Bob",
-    CAROL_USER_ID,
-    "Carol",
-  ]);
-  await postgres.query("INSERT INTO workspaces (id, name) VALUES ($1, $2), ($3, $4)", [
-    OPERATIONS_WORKSPACE_ID,
-    "Operations",
-    RESEARCH_WORKSPACE_ID,
-    "Research",
-  ]);
-  await postgres.query(
-    `INSERT INTO memberships (workspace_id, user_id, role)
+  try {
+    await postgres.waitReady;
+    await migrate(postgres);
+    await postgres.query(
+      "INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)",
+      [ALICE_USER_ID, "Alice", BOB_USER_ID, "Bob", CAROL_USER_ID, "Carol"],
+    );
+    await postgres.query("INSERT INTO workspaces (id, name) VALUES ($1, $2), ($3, $4)", [
+      OPERATIONS_WORKSPACE_ID,
+      "Operations",
+      RESEARCH_WORKSPACE_ID,
+      "Research",
+    ]);
+    await postgres.query(
+      `INSERT INTO memberships (workspace_id, user_id, role)
      VALUES ($1, $2, 'owner'), ($1, $3, 'member')`,
-    [OPERATIONS_WORKSPACE_ID, ALICE_USER_ID, BOB_USER_ID],
-  );
-  await postgres.query(
-    `INSERT INTO memberships (workspace_id, user_id, role)
+      [OPERATIONS_WORKSPACE_ID, ALICE_USER_ID, BOB_USER_ID],
+    );
+    await postgres.query(
+      `INSERT INTO memberships (workspace_id, user_id, role)
      VALUES ($1, $2, 'owner')`,
-    [RESEARCH_WORKSPACE_ID, CAROL_USER_ID],
-  );
-  await postgres.exec("SET ROLE lore_app");
+      [RESEARCH_WORKSPACE_ID, CAROL_USER_ID],
+    );
+    return await postgres.dumpDataDir("none");
+  } finally {
+    await postgres.close();
+  }
+}
+
+export async function createMemoryTestContext(): Promise<MemoryTestContext> {
+  template ??= createTemplate();
+  const postgres = new PGlite({
+    extensions: { pg_trgm, vector },
+    loadDataDir: await template,
+  });
+  try {
+    await postgres.waitReady;
+    await postgres.exec("SET ROLE lore_app");
+  } catch (error) {
+    await postgres.close();
+    throw error;
+  }
 
   function databaseForRole(role: "lore_app" | "lore_maintenance" | "NONE"): PostgresDatabase {
     return {

@@ -21,6 +21,7 @@ export default defineConfig({
     },
   },
   test: {
+    experimental: { fsModuleCache: true },
     environment: "node",
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     testTimeout: 30_000,
