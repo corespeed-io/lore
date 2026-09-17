@@ -8,14 +8,13 @@ not import OSS or model SDKs. Product terminology is defined in [CONTEXT.md](../
 ## Interface boundaries
 
 Web UI, CLI, and MCP are separate modules that depend on the TypeScript SDK.
-The request path is `UI / CLI / MCP → TypeScript SDK → OSS API → Core → Postgres`;
-the Python SDK calls the same OSS API independently.
+The request path is `UI / CLI / MCP → TypeScript SDK → OSS API → Core → Postgres`.
+Clients in other languages can call the HTTP API described by OpenAPI.
 
 | Module | Location | Responsibility |
 | --- | --- | --- |
 | Web UI | `src/shell/`, browser-facing domain files in `src/modules/`, and `src/shared/browser/` | Views, presentation, navigation, and SDK-backed remote state |
 | TypeScript SDK | `packages/typescript-sdk/` | Generated wire types, public content limits, and API client transport |
-| Python SDK | `packages/python-sdk/` | Generated Python contract and equivalent API client |
 | CLI | `packages/cli/` | Command parsing and output through the TypeScript SDK |
 | MCP | `packages/mcp/` | External stdio tools through the TypeScript SDK |
 | OSS API | `src/app/api/`, domain HTTP/services, and `src/server/` | Authentication, tenancy, authorization, request replay, and engine composition |
@@ -43,7 +42,7 @@ Core. `bun run architecture:check` guards these dependency boundaries in CI.
 | `src/shared/browser/` | Browser SDK configuration, SWR cache keys, request logs, and common hooks |
 | `src/shared/ui/` | Shared visual helpers |
 | `src/worker/` | Node maintenance entrypoint |
-| `packages/` | Memory engine, TypeScript/Python SDKs, CLI, and external MCP adapter |
+| `packages/` | Memory engine, TypeScript SDK, CLI, and external MCP adapter |
 | `db/` | Immutable applied migrations and database setup |
 | `tools/sdk-codegen/` | Isolated OpenAPI code-generation toolchain |
 | `tools/evaluation/` | Quality and performance tools grouped by retrieval, code, context, policy, chunking, and graph |
@@ -92,8 +91,8 @@ cache-key vocabulary so mutations can invalidate related views consistently.
 Cross-domain UI composition belongs in `src/shell`.
 
 HTTP handlers and the canonical OpenAPI document define the API contract consumed
-by the TypeScript and Python SDKs. The CLI and external MCP adapter delegate to the
-TypeScript SDK. The frontend follows `SWR hook → domain client → TypeScript SDK`:
+by the TypeScript SDK and direct HTTP clients. The CLI and external MCP adapter
+delegate to the TypeScript SDK. The frontend follows `SWR hook → domain client → TypeScript SDK`:
 SWR owns remote state and cache invalidation, while domain clients preserve UI
 defaults and adapt results to their views.
 
@@ -132,7 +131,7 @@ UTF-8 payload, including whitespace. `GraphScalePrototype.tsx` owns prototype
 routing and the SVG control separately from `WorkerCanvasGraph.tsx`.
 `prototype-hooks.ts` still keeps its remote state in SWR with a separate benchmark
 cache key and disables focus/reconnect refresh and error retries so a renderer
-comparison keeps its dataset stable. SDKs and Node scripts do not import SWR.
+comparison keeps its dataset stable. The SDK and Node scripts do not import SWR.
 
 ### Memory engine and host policy
 
@@ -308,11 +307,10 @@ Vitest 4's `experimental.fsModuleCache`. CI restores
 Vitest invalidates entries when source or configuration changes. Every test and
 its database fixture still executes on each run.
 
-CI has three job groups: `tests` runs quality checks, application/Core tests, and
-PostgreSQL smoke; `build` runs package smoke plus Node and Cloudflare builds;
-`python-sdk` tests Python 3.12 and 3.14. The stable `check` job requires all three
-groups to succeed. PR updates cancel older runs; branch pushes run CI only on
-`main`. The Cloudflare build reuses that job's fresh Next build through
+CI has two job groups: `tests` runs quality checks, application/Core tests, and
+PostgreSQL smoke; `build` runs package smoke plus Node and Cloudflare builds.
+The stable `check` job requires both groups to succeed. PR updates cancel older
+runs; branch pushes run CI only on `main`. The Cloudflare build reuses that job's fresh Next build through
 `--skipNextBuild` before the Wrangler deployment dry run.
 The two Bun jobs share the package download cache keyed by OS, architecture, Bun
 version, and lockfile; both still run `bun install --frozen-lockfile`. The build

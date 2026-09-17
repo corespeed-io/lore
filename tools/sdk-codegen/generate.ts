@@ -12,73 +12,19 @@ const groundingOutputUrl = new URL(
 );
 const cliVersionOutputUrl = new URL("packages/cli/src/generated/version.ts", repositoryUrl);
 const mcpVersionOutputUrl = new URL("packages/mcp/src/generated/version.ts", repositoryUrl);
-const pythonContractOutputUrl = new URL(
-  "packages/python-sdk/src/corespeed_lore/generated_contract.py",
-  repositoryUrl,
-);
 
 interface PackageManifest {
   version: string;
 }
 
 interface JsonSchema {
-  $ref?: string;
-  additionalProperties?: boolean | JsonSchema;
-  anyOf?: readonly JsonSchema[];
   const?: unknown;
   enum?: readonly unknown[];
-  items?: JsonSchema;
-  oneOf?: readonly JsonSchema[];
   properties?: Readonly<Record<string, JsonSchema>>;
-  required?: readonly string[];
-  type?: string;
 }
 
 interface OpenApiDocument {
   components: { schemas: Readonly<Record<string, JsonSchema>> };
-  info: { version: string };
-}
-
-const PYTHON_KEYWORDS = new Set([
-  "False",
-  "None",
-  "True",
-  "and",
-  "as",
-  "assert",
-  "async",
-  "await",
-  "break",
-  "class",
-  "continue",
-  "def",
-  "del",
-  "elif",
-  "else",
-  "except",
-  "finally",
-  "for",
-  "from",
-  "global",
-  "if",
-  "import",
-  "in",
-  "is",
-  "lambda",
-  "nonlocal",
-  "not",
-  "or",
-  "pass",
-  "raise",
-  "return",
-  "try",
-  "while",
-  "with",
-  "yield",
-]);
-
-function isPythonIdentifier(value: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && !PYTHON_KEYWORDS.has(value);
 }
 
 function generatedHeader(source: string): string {
@@ -121,77 +67,6 @@ function memoryContentLimits(document: OpenApiDocument) {
   return { recommendedCharacters, maximumCharacters };
 }
 
-function pythonType(schema: JsonSchema, forwardReferences = false): string {
-  if (schema.$ref) {
-    const name = schema.$ref.split("/").at(-1) ?? "Any";
-    return forwardReferences ? JSON.stringify(name) : name;
-  }
-  if (schema.const !== undefined) return `Literal[${JSON.stringify(schema.const)}]`;
-  if (schema.enum?.length) {
-    return `Literal[${schema.enum.map((value) => JSON.stringify(value)).join(", ")}]`;
-  }
-  const alternatives = schema.oneOf ?? schema.anyOf;
-  if (alternatives?.length) {
-    const rendered = [
-      ...new Set(alternatives.map((alternative) => pythonType(alternative, forwardReferences))),
-    ];
-    return rendered.length === 1 ? rendered[0] : `Union[${rendered.join(", ")}]`;
-  }
-  if (schema.type === "array") {
-    return `list[${pythonType(schema.items ?? {}, forwardReferences)}]`;
-  }
-  if (schema.type === "object") {
-    const valueType =
-      typeof schema.additionalProperties === "object"
-        ? pythonType(schema.additionalProperties, forwardReferences)
-        : "Any";
-    return `dict[str, ${valueType}]`;
-  }
-  if (schema.type === "string") return "str";
-  if (schema.type === "integer") return "int";
-  if (schema.type === "number") return "float";
-  if (schema.type === "boolean") return "bool";
-  if (schema.type === "null") return "None";
-  return "Any";
-}
-
-function generatedPythonContract(document: OpenApiDocument, errorCodes: readonly string[]): string {
-  const schemas = document.components.schemas;
-  const definitions = Object.entries(schemas)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, schema]) => {
-      if (schema.type !== "object" || !schema.properties) {
-        return `${name}: TypeAlias = ${pythonType(schema, true)}`;
-      }
-      const required = new Set(schema.required ?? []);
-      const requiresFunctionalSyntax = Object.keys(schema.properties).some(
-        (field) => !isPythonIdentifier(field),
-      );
-      if (requiresFunctionalSyntax) {
-        const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {
-          const annotation = pythonType(fieldSchema, true);
-          return `    ${JSON.stringify(field)}: ${required.has(field) ? annotation : `NotRequired[${annotation}]`},`;
-        });
-        return `${name} = TypedDict(\n    ${JSON.stringify(name)},\n  {\n${fields.join("\n")}\n  },\n)`;
-      }
-      const fields = Object.entries(schema.properties).map(([field, fieldSchema]) => {
-        const annotation = pythonType(fieldSchema);
-        return `    ${field}: ${required.has(field) ? annotation : `NotRequired[${annotation}]`}`;
-      });
-      return `class ${name}(TypedDict):\n${fields.length ? fields.join("\n") : "    pass"}`;
-    });
-  return `# Generated from Lore's canonical OpenAPI document. Do not edit by hand.
-from __future__ import annotations
-
-from typing import Any, Final, Literal, NotRequired, TypeAlias, TypedDict, Union
-
-LORE_API_VERSION: Final[str] = ${JSON.stringify(document.info.version)}
-LORE_ERROR_CODES: Final[frozenset[str]] = frozenset(${JSON.stringify(errorCodes)})
-
-${definitions.join("\n\n")}
-`;
-}
-
 export async function generatedSdkTypes(): Promise<string> {
   const ast = await openapiTS(loreOpenApiDocument() as never, {
     alphabetize: true,
@@ -228,7 +103,6 @@ async function generatedArtifacts(): Promise<ReadonlyMap<URL, string>> {
       mcpVersionOutputUrl,
       `${generatedHeader("packages/mcp/package.json")}export const LORE_MCP_VERSION = ${JSON.stringify(mcpVersion)};\n`,
     ],
-    [pythonContractOutputUrl, generatedPythonContract(document, errorCodes)],
   ]);
 }
 

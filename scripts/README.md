@@ -7,7 +7,7 @@ helpers and colocated tests support those commands.
 | Directory | Purpose | Commands |
 | --- | --- | --- |
 | [`build/`](build/) | Package verification and the dbmate binary used by self-host deployments | `build:dbmate`, `packages:smoke` |
-| [`checks/`](checks/) | Design rules, real PostgreSQL product smoke, and Python SDK tests | `design:check`, `smoke:memory-core`, `test:python` |
+| [`checks/`](checks/) | Design rules and real PostgreSQL product smoke | `design:check`, `smoke:memory-core` |
 | [`database/`](database/) | Migrations, runtime roles, backup/restore, recovery checks, and embedding generation administration | `db:migrate`, `db:preflight`, `db:bootstrap`, `db:backup`, `db:restore`, `db:pitr:check`, `db:embedding:report`, `db:embedding:activate` |
 | [`dev/`](dev/) | Native local-service lifecycle and its tests | `service:up`, `service:down`, `service:restart`, `service:status`, `service:logs`, `service:test` |
 
