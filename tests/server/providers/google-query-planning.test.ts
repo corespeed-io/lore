@@ -92,30 +92,37 @@ test("Google query planning leaves SDK retries disabled and hides HTTP error det
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("Google query planning uses the SDK request timeout", async () => {
-  const abort = vi.fn();
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = new Request(input, init);
-    return new Promise<Response>((_resolve, reject) => {
-      request.signal.addEventListener(
-        "abort",
-        () => {
+test.each([false, true])(
+  "Google query planning uses the SDK request timeout (already aborted: %s)",
+  async (alreadyAborted) => {
+    const abort = vi.fn();
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      // Exercise native fetch's rejection of a signal that expired before it started listening.
+      if (alreadyAborted && !request.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        const onAbort = () => {
           abort();
           reject(request.signal.reason);
-        },
-        { once: true },
-      );
+        };
+        if (request.signal.aborted) onAbort();
+        else request.signal.addEventListener("abort", onAbort, { once: true });
+      });
     });
-  });
-  const provider = createGoogleQueryPlanningProvider({
-    model: "gemini-test",
-    apiKey: "secret",
-    timeoutMs: 10,
-  });
+    const provider = createGoogleQueryPlanningProvider({
+      model: "gemini-test",
+      apiKey: "secret",
+      timeoutMs: 10,
+    });
 
-  await expect(provider.plan({ query: "question", maxQueries: 1 })).rejects.toThrow();
-  expect(abort).toHaveBeenCalledTimes(1);
-});
+    await expect(provider.plan({ query: "question", maxQueries: 1 })).rejects.toThrow();
+    expect(abort).toHaveBeenCalledTimes(1);
+  },
+);
 
 test("Google query planning rejects malformed query output", async () => {
   vi.stubGlobal("fetch", async () =>
