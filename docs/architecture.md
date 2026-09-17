@@ -342,6 +342,12 @@ Shared database fixtures remain in `tests/support`; runnable worker fixtures rem
 in `tests/fixtures`. Vitest on Bun discovers all groups recursively. Colocated
 local-service and design-check tests use `bun:test`.
 
+Tests focus on Lore's own rules and algorithms. Component rendering, DOM
+interaction, and database connectivity are outside the test scope. Pure browser
+logic (routing, cache isolation, pagination, and presentation rules) remains
+covered. Database-backed tests exercise Lore's SQL, authorization, transaction,
+and migration behavior rather than the database driver itself.
+
 The shared database fixture builds a migrated, seeded PGlite snapshot once per
 test module and restores it into a fresh database for each context. Tests share
 only the immutable snapshot, never a live connection or mutable database. Migration
@@ -352,15 +358,16 @@ Vitest 4's `experimental.fsModuleCache`. CI restores
 Vitest invalidates entries when source or configuration changes. Every test and
 its database fixture still executes on each run.
 
-CI has two job groups: `tests` runs quality checks, application/Core tests, and
-PostgreSQL smoke; `build` runs package smoke, the self-host build and
-`bun run smoke:next` HTTP checks, then the Cloudflare build.
-The stable `check` job requires both groups to succeed. PR updates cancel older
+CI runs five parallel jobs: `static` checks lint, types, and dependencies;
+`tests` runs application/Core and local-service tests; `database` checks Lore's
+PostgreSQL behavior and maintenance build; `packages` checks SDK/CLI/MCP artifacts;
+`build` checks Next, `bun run smoke:next` HTTP contracts, and Cloudflare.
+The stable `check` job requires all five jobs to succeed. PR updates cancel older
 runs; branch pushes run CI only on `main`. The Cloudflare build reuses that job's
 fresh Next build through
 `--skipNextBuild` before the Wrangler deployment dry run.
-The two Bun jobs share the package download cache keyed by OS, architecture, Bun
-version, and lockfile; both still run `bun install --frozen-lockfile`. The build
+The jobs share the package download cache keyed by OS, architecture, Bun
+version, and lockfile; each still runs `bun install --frozen-lockfile`. The build
 job also restores `.next/cache` for incremental compilation. Build and test
 caches get a new entry per commit with a same-lockfile restore prefix; dependency
 downloads reuse one entry until the lockfile changes. Cache hits never skip a

@@ -1110,7 +1110,14 @@ do not treat generated `.next` or `.open-next` output as source or commit it.
 Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 `wrangler.jsonc` or `.dev.vars.example`.
 
-## Existing UI/test gotchas
+## Testing scope and gotchas
+
+Test Lore's own logic: validation, parsing, retrieval, authorization, state
+transitions, and API contracts. Do not add component rendering, DOM interaction,
+or database-connectivity tests. Pure browser logic such as pagination, cache
+isolation, and routing still belongs in tests. Use a database when the behavior
+under test is our SQL, transaction policy, migration, or RLS rule; do not replace
+those rules with mocks that merely repeat their implementation.
 
 - `tests/support/memory-context.ts` caches a migrated, seeded PGlite snapshot per
   isolated test module and restores a fresh database for every context. Preserve
@@ -1119,17 +1126,7 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   Clear stale module caches with `bun --bun vitest --clearCache`; cached modules never
   replace test execution. CI's stable `check` gate requires every validation
   job to succeed; cache hits must not skip their checks.
-- Setting an input's `.value` and dispatching `input` does not trigger React 19's
-  `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
-- Sidebar search interaction tests opt into `happy-dom` and use React `act` plus
-  native input/composition/form events to exercise debounce, IME, and drawer behavior.
-  Other component tests are `tests/**/*.test.tsx` and run in Vitest's default `node`
-  environment through `renderToStaticMarkup`. There is no DOM testing library. Seed
-  server data with an `SWRConfig` `fallback` keyed by `unstable_serialize(loreKeys…)`
-  and a fresh `provider`, which is also how an Actor's empty or denied RLS-filtered
-  read is modelled. `useEffect` never runs, so anything painted from an effect (the
-  Markdown body, the Graph canvas) is absent from the markup.
 - `tests/modules/code/code-index.test.ts` builds real Git fixtures with `git add`, so a
   user-level global gitignore (`~/.config/git/ignore` or `core.excludesfile`)
   that excludes fixture paths like `dist/` silently drops files from the

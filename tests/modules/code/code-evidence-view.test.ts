@@ -1,5 +1,5 @@
 import type { CodeIndexJob, MemoryCodeEvidence } from "@corespeed/lore-sdk";
-import { expect, test } from "vitest";
+import { expect, expectTypeOf, test } from "vitest";
 import type { MemoryCodeEvidence as ServerMemoryCodeEvidence } from "@/modules/code/evidence";
 import {
   codeEvidenceSectionState,
@@ -45,29 +45,10 @@ function citation(
 }
 
 // The SDK contract consumed by the browser must match the server's Code responses.
-test("SDK Code contracts stay assignable to the server modules", () => {
-  const evidence: ServerMemoryCodeEvidence = citation(1, "current");
-  const mirroredEvidence: MemoryCodeEvidence = evidence;
-  const job: CodeIndexJob = {
-    id: "80000000-0000-4000-8000-000000000001",
-    repositoryId: "70000000-0000-4000-8000-000000000001",
-    repositoryKey: "corespeed/lore",
-    commitOid: "b".repeat(40),
-    sourceRef: null,
-    indexerRevision: "code-index-v1",
-    status: "succeeded",
-    attemptCount: 1,
-    maximumAttempts: 5,
-    availableAt: "2026-08-15T00:00:00.000Z",
-    completedAt: "2026-08-15T00:01:00.000Z",
-    lastError: null,
-    createdAt: "2026-08-15T00:00:00.000Z",
-    updatedAt: "2026-08-15T00:01:00.000Z",
-  };
-  const mirroredJob: ServerCodeIndexJob = job;
-  expect(mirroredEvidence.validationState).toBe("current");
-  expect(mirroredJob.status).toBe("succeeded");
-});
+expectTypeOf<MemoryCodeEvidence>().toMatchTypeOf<ServerMemoryCodeEvidence>();
+expectTypeOf<ServerMemoryCodeEvidence>().toMatchTypeOf<MemoryCodeEvidence>();
+expectTypeOf<CodeIndexJob>().toMatchTypeOf<ServerCodeIndexJob>();
+expectTypeOf<ServerCodeIndexJob>().toMatchTypeOf<CodeIndexJob>();
 
 test("drift states a reader must not miss rank ahead of settled citations", () => {
   const summary = summarizeCodeEvidence([

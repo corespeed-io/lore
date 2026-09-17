@@ -25,7 +25,7 @@ export default defineConfig({
     deps: { interopDefault: false },
     experimental: { fsModuleCache: true },
     environment: "node",
-    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    include: ["tests/**/*.test.ts"],
     testTimeout: 30_000,
   },
 });
