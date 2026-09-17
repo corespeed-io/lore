@@ -75,6 +75,17 @@ async function request(path: string, status: number, options: RequestInit = {}) 
     ...options,
   });
   assert.equal(response.status, status, `${options.method ?? "GET"} ${path}`);
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+  assert.equal(
+    response.headers.get("strict-transport-security"),
+    "max-age=63072000; includeSubDomains; preload",
+  );
+  const csp = response.headers.get("content-security-policy") ?? "";
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /script-src 'self' 'unsafe-inline'(;|$)/);
+  assert.doesNotMatch(csp, /unsafe-eval/);
   return response;
 }
 

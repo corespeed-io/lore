@@ -6,8 +6,8 @@ import { createApi } from "./app";
 /** Each request gets its own Hyperdrive adapter; sockets never cross request lifetimes. */
 export function fetchCloudflareApi(
   request: Request,
-  env: CloudflareEnv,
-  context: ExecutionContext,
+  env: Pick<CloudflareEnv, "HYPERDRIVE" | "MEMORY_MAINTENANCE_QUEUE">,
+  context: Pick<ExecutionContext, "waitUntil">,
 ) {
   const app = createApi({
     database: () =>

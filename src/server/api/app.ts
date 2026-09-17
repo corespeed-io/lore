@@ -14,6 +14,7 @@ import { proposals } from "@/modules/proposals/routes";
 import { workspaces } from "@/modules/workspaces/routes";
 import { errorResponse } from "@/server/api/errors";
 import { authorizeRequest } from "@/server/auth/auth";
+import { securityHeaders } from "@/server/security-headers";
 import { type ApiDependencies, type ApiEnv, createRequestDependencies } from "./dependencies";
 
 /** One routing table for Next.js and workerd. Hosts own database/provider lifetimes. */
@@ -21,6 +22,11 @@ export function createApi(dependencies: ApiDependencies) {
   const app = new Hono<ApiEnv>();
   app.onError(errorResponse);
   app.notFound((c) => c.json({ code: "not_found", error: "Not found" }, 404));
+  const headers = securityHeaders();
+  app.use(async (c, next) => {
+    await next();
+    for (const { key, value } of headers) c.header(key, value);
+  });
   app.use(async (c, next) => {
     const request = createRequestDependencies(dependencies, c.req.raw);
     c.set("database", request.database);
@@ -31,7 +37,6 @@ export function createApi(dependencies: ApiDependencies) {
     const denied = await authorizeRequest(c.req.raw);
     if (denied) c.res = denied;
     else await next();
-    c.header("X-Content-Type-Options", "nosniff");
     if (!c.res.headers.has("cache-control")) c.header("Cache-Control", "private, no-store");
   });
   app.use(methodNotAllowed({ app, onMethodNotAllowed: respondToUnsupportedMethod }));
