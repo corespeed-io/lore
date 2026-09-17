@@ -310,8 +310,7 @@ test("grounding reason codes let hosts render their own clarification copy", () 
 });
 
 test("multi-word grounding triggers match every JavaScript whitespace form", () => {
-  // Pinned in lockstep with the Python port, whose re.ASCII flag narrows \s:
-  // an ASCII-only suite let the two implementations diverge unnoticed.
+  // Include Unicode whitespace so ASCII-only cases cannot hide missed triggers.
   for (const space of [" ", " ", "　", " "]) {
     for (const query of [
       `Does the current${space}code reject that?`,
