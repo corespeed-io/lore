@@ -22,7 +22,7 @@ export interface LoreCliIo {
 
 export interface RunLoreCliOptions {
   environment?: Readonly<Record<string, string | undefined>>;
-  fetch?: typeof globalThis.fetch;
+  fetch?: LoreClientOptions["fetch"];
   io?: LoreCliIo;
 }
 

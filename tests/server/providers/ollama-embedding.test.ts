@@ -1,11 +1,17 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { createOllamaEmbeddingProvider } from "@/server/providers/embedding/ollama";
 
+function mockFetch(
+  implementation: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  return Object.assign(vi.fn(implementation), { preconnect: globalThis.fetch.preconnect });
+}
+
 afterEach(() => vi.unstubAllEnvs());
 
 test("Ollama embeddings reject cloud hosts before the SDK can inherit cloud credentials", async () => {
   vi.stubEnv("OLLAMA_API_KEY", "unrelated-cloud-key");
-  const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+  const fetch = mockFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
     expect(new Headers(init?.headers).get("authorization")).toBeNull();
     return Response.json({ embeddings: [[0.5]] });
   });
@@ -40,11 +46,11 @@ test("Ollama adapter sends the deployment model, dimensions, and unload policy",
     {
       baseUrl: "http://ollama.local:11434/",
       keepAlive: 0,
-      fetch: async (input, init) => {
+      fetch: mockFetch(async (input, init) => {
         expect(String(input)).toBe("http://ollama.local:11434/api/embed");
         requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
         return Response.json({ embeddings: [Array.from({ length: 1024 }, () => 0.5)] });
-      },
+      }),
     },
   );
 
@@ -70,10 +76,10 @@ test("Ollama adapter applies the official Qwen3 retrieval instruction only to qu
       revision: "lore-embedding-v2",
     },
     {
-      fetch: async (_input, init) => {
+      fetch: mockFetch(async (_input, init) => {
         requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
         return Response.json({ embeddings: [Array.from({ length: 1024 }, () => 0.5)] });
-      },
+      }),
     },
   );
 
@@ -98,10 +104,10 @@ test("Ollama adapter keys query preprocessing to the generation revision", async
       revision: "lore-embedding-v1",
     },
     {
-      fetch: async (_input, init) => {
+      fetch: mockFetch(async (_input, init) => {
         requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
         return Response.json({ embeddings: [Array.from({ length: 1024 }, () => 0.5)] });
-      },
+      }),
     },
   );
 
@@ -122,14 +128,14 @@ test("Ollama adapter bounds large jobs into response-safe batches", async () => 
     {
       batchSize: 2,
       keepAlive: 0,
-      fetch: async (_input, init) => {
+      fetch: mockFetch(async (_input, init) => {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         requests.push(body);
         const input = body.input as string[];
         return Response.json({
           embeddings: input.map(() => Array.from({ length: 1024 }, () => 0.5)),
         });
-      },
+      }),
     },
   );
 
@@ -148,10 +154,10 @@ test("Ollama adapter leaves non-Qwen query text unchanged", async () => {
       revision: "lore-embedding-v1",
     },
     {
-      fetch: async (_input, init) => {
+      fetch: mockFetch(async (_input, init) => {
         requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
         return Response.json({ embeddings: [Array.from({ length: 1024 }, () => 0.5)] });
-      },
+      }),
     },
   );
 
@@ -172,7 +178,7 @@ test.each([
       dimensions: 1024,
       revision: "lore-embedding-v2",
     },
-    { fetch: async () => Response.json({ embeddings }) },
+    { fetch: mockFetch(async () => Response.json({ embeddings })) },
   );
 
   await expect(provider.embed(["query"], "query")).rejects.toThrow("invalid embedding");
@@ -188,10 +194,10 @@ test("Ollama SDK does not retry failures and the adapter omits provider error bo
       revision: "lore-embedding-v2",
     },
     {
-      fetch: async () => {
+      fetch: mockFetch(async () => {
         requests += 1;
         return Response.json({ error: "private provider details" }, { status: 503 });
-      },
+      }),
     },
   );
 
@@ -209,7 +215,7 @@ test("Ollama embeddings omit invalid JSON content from SDK parsing errors", asyn
       dimensions: 1024,
       revision: "lore-embedding-v2",
     },
-    { fetch: async () => new Response("private provider text, invalid JSON") },
+    { fetch: mockFetch(async () => new Response("private provider text, invalid JSON")) },
   );
 
   await expect(provider.embed(["memory"], "document")).rejects.toThrow(

@@ -19,13 +19,9 @@ import {
   type MemoryMutationOptions as VersionOptions,
   validatedEmbeddingDimensions,
 } from "@corespeed/lore-core";
+import { beginMutation, completeMutation, type IdempotencyRequest } from "@/server/api/idempotency";
 import { type ActorContext, installActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage, memoryStorageInTransaction } from "@/server/database/memory-storage";
-import {
-  beginMutation,
-  completeMutation,
-  type IdempotencyRequest,
-} from "@/server/http/idempotency";
 
 export interface Memory extends Omit<StoredMemory, "partitionId" | "ownerId" | "sourceId"> {
   workspaceId: string;

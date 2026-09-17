@@ -1,9 +1,4 @@
-import { livenessReport } from "@/modules/operations/service";
+import { handleNextApi } from "@/server/api/next";
 
 export const dynamic = "force-dynamic";
-
-export function GET() {
-  return Response.json(livenessReport(), {
-    headers: { "cache-control": "no-store" },
-  });
-}
+export { handleNextApi as GET };

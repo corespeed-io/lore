@@ -5,12 +5,11 @@ import type {
 } from "@corespeed/lore-sdk";
 import { getBrowserClient } from "@/shared/browser/sdk";
 
-export async function exportWorkspaceArchive(
+export function exportWorkspaceArchive(
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<WorkspaceArchive> {
-  const archive = await getBrowserClient().workspace(workspaceId).exportWorkspace(signal);
-  return { ...archive, memories: [...archive.memories], links: [...archive.links] };
+  return getBrowserClient().workspace(workspaceId).exportWorkspace(signal);
 }
 
 export function importWorkspaceArchive(

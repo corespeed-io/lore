@@ -42,7 +42,7 @@ test("LongMemEval-V2 reader protocol keeps memory before the question and domain
 
 test("vLLM fixed reader sends multimodal deterministic chat input and records usage", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(String(input)).toBe("http://reader.test/v1/chat/completions");
     const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({ model: "Qwen/reader", temperature: 0, max_tokens: 256 });
@@ -61,6 +61,7 @@ test("vLLM fixed reader sends multimodal deterministic chat input and records us
       usage: { prompt_tokens: 100, completion_tokens: 8, total_tokens: 108 },
     });
   };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
   try {
     const reader = createBenchmarkReaderFromEnvironment({
       LORE_BENCHMARK_READER_PROVIDER: "vllm",
@@ -87,7 +88,7 @@ test("vLLM fixed reader sends multimodal deterministic chat input and records us
 
 test("Google fixed reader disables storage and reads the final model-output step", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_input, init) => {
+  const fetchMock = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const request = _input instanceof Request ? _input : new Request(_input, init);
     expect(request.url).toBe("https://generativelanguage.googleapis.com/v1beta/interactions");
     const body = (await request.json()) as { input: unknown };
@@ -106,6 +107,7 @@ test("Google fixed reader disables storage and reads the final model-output step
       usage: { total_input_tokens: 80, total_output_tokens: 5, total_tokens: 85 },
     });
   };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
   try {
     const reader = createBenchmarkReaderFromEnvironment({
       LORE_BENCHMARK_READER_PROVIDER: "google",
@@ -126,7 +128,7 @@ test("Google fixed reader disables storage and reads the final model-output step
 
 test("Ollama fixed reader bounds residency and records native accounting", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(String(input)).toBe("http://127.0.0.1:12434/api/chat");
     const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({
@@ -168,6 +170,7 @@ test("Ollama fixed reader bounds residency and records native accounting", async
       eval_duration: 300,
     });
   };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
   try {
     const reader = createBenchmarkReaderFromEnvironment({
       LORE_BENCHMARK_READER_PROVIDER: "ollama",
@@ -221,7 +224,7 @@ test("Ollama fixed reader bounds residency and records native accounting", async
 test("Ollama reader pins a local model digest and unloads explicitly", async () => {
   const requests: Array<{ url: string; body: unknown }> = [];
   const originalFetch = globalThis.fetch;
-  const fetchMock: typeof globalThis.fetch = async (input, init) => {
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
     if (url.endsWith("/api/version")) return Response.json({ version: "0.12.3" });
@@ -255,7 +258,7 @@ test("Ollama reader pins a local model digest and unloads explicitly", async () 
     return new Response(null, { status: 404 });
   };
 
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
   const activeReader = createBenchmarkReaderFromEnvironment({
     LORE_BENCHMARK_READER_PROVIDER: "ollama",
     LORE_BENCHMARK_READER_MODEL: "qwen-reader:4b",

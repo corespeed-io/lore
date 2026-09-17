@@ -26,23 +26,6 @@ export function normalizeUuid(value: string): string | null {
   return UUID_PATTERN.test(normalized) ? normalized : null;
 }
 
-function requestCookies(request: Request) {
-  const values = new Map<string, string>();
-  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
-    const separator = part.indexOf("=");
-    if (separator < 0) continue;
-    const name = part.slice(0, separator).trim();
-    const value = part.slice(separator + 1).trim();
-    if (name) values.set(name, decodeURIComponent(value));
-  }
-  return {
-    get(name: string) {
-      const value = values.get(name);
-      return value === undefined ? undefined : { value };
-    },
-  };
-}
-
 function bearerToken(request: Request): string | null {
   const authorization = request.headers.get("authorization") ?? "";
   return authorization.startsWith("Bearer lore_agent_") ? authorization.slice(7) : null;
@@ -65,7 +48,7 @@ export function createRequestContextResolver(database: PostgresDatabase) {
       if (bearerToken(request)) {
         throw new RequestAuthenticationError("Agent credential cannot act as a human User");
       }
-      const authentication = await checkAuth(request.headers, requestCookies(request));
+      const authentication = await checkAuth(request.headers);
       if (!authentication.ok || !authentication.principal) {
         throw new RequestAuthenticationError(authentication.detail ?? "Authentication required");
       }

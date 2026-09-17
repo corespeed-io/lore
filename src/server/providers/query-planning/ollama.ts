@@ -1,6 +1,6 @@
-import { Ollama } from "ollama/browser";
+import { type Fetch, Ollama } from "ollama/browser";
+import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { parsePlannedQueries } from "./parse";
-import type { ConfiguredQueryPlanningProvider } from "./types";
 
 const DEFAULT_INSTRUCTION = `Rewrite a memory recall question into distinct evidence-retrieval queries.
 For counts, comparisons, temporal reasoning, or multi-hop questions, create separate queries for each fact needed.
@@ -12,7 +12,7 @@ export interface OllamaQueryPlanningOptions {
   instruction?: string;
   keepAlive?: string | number;
   contextWindowTokens?: number;
-  fetch?: typeof globalThis.fetch;
+  fetch?: Fetch;
 }
 
 interface OllamaChatResponse {

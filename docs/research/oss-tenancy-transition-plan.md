@@ -165,7 +165,7 @@ layer for both product models.
 - [Archive and import behavior](../../src/modules/portability/service.ts),
   [portability behavior tests](../../tests/integration/portable-core.test.ts).
 - [Backup and restore guide](../operations.md#logical-backup-and-restore-drill),
-  [migration history validation](../../scripts/database/lib/migration-preflight.mjs).
+  [migration history validation](../../scripts/database/lib/migration-preflight.ts).
 - [Browser shell](../../src/shell/App.tsx), [CLI](../../packages/cli/src/index.ts),
   [MCP](../../packages/mcp/src/index.ts), [authentication](../../src/server/auth/auth.ts).
 - [OSS source comparison and target scope](oss-memory-module-boundaries.md).

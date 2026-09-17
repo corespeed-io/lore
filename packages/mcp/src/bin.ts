@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S bun --no-env-file
 
 import { serveLoreMcpStdio } from "./index.js";
 

@@ -19,7 +19,7 @@ function runEvaluation(entrypoint: string, args: string[] = [], initialExitCode?
            process.argv = [process.execPath, ${JSON.stringify(entrypoint)}, "--strict", ...${JSON.stringify(args)}];
            await import(${JSON.stringify(`./${entrypoint}`)});`,
         ];
-  const result = spawnSync("bun", command, {
+  const result = spawnSync(process.execPath, ["--no-env-file", ...command], {
     cwd: repositoryRoot,
     encoding: "utf8",
     timeout: 25_000,

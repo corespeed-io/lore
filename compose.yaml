@@ -15,7 +15,7 @@ services:
 
   migrate:
     build: .
-    command: ["sh", "-c", "node scripts/database/migrate.mjs && node scripts/database/create-runtime-role.mjs"]
+    command: ["sh", "-c", "bun --no-env-file scripts/database/migrate.ts && bun --no-env-file scripts/database/create-runtime-role.ts"]
     environment:
       DATABASE_URL: postgres://lore_admin:${LORE_DB_ADMIN_PASSWORD:?Set LORE_DB_ADMIN_PASSWORD in .env}@postgres:5432/lore?sslmode=disable
       LORE_RUNTIME_ROLE: lore_runtime
@@ -91,7 +91,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/readyz"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -100,7 +100,7 @@ services:
 
   maintenance:
     build: .
-    command: ["node", ".worker/maintenance-worker.js"]
+    command: ["bun", "--no-env-file", ".worker/maintenance-worker.js"]
     environment:
       LORE_MAINTENANCE_DATABASE_URL: postgres://lore_maintenance_runtime:${LORE_DB_MAINTENANCE_PASSWORD:?Set LORE_DB_MAINTENANCE_PASSWORD in .env}@postgres:5432/lore
       LORE_MAINTENANCE_POOL_SIZE: ${LORE_MAINTENANCE_POOL_SIZE:-2}

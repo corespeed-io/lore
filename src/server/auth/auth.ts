@@ -2,6 +2,7 @@
 // in the Edge runtime — use only Web APIs (atob, fetch, jose), never Node-only
 // ones (Buffer, node:*, fs). A Node API pulled in here poisons the middleware
 // bundle: it passes typecheck and breaks only at build/deploy.
+import { parse as parseCookies } from "hono/utils/cookie";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { loadConfig } from "@/server/config";
 
@@ -74,10 +75,7 @@ async function checkPassword(
   return { ok: false, status: 401, wwwAuthenticate: true, detail: "auth required" };
 }
 
-export async function checkAuth(
-  headers: Headers,
-  cookies: { get(n: string): { value: string } | undefined },
-): Promise<AuthResult> {
+export async function checkAuth(headers: Headers): Promise<AuthResult> {
   const cfg = loadConfig();
 
   if (cfg.authMode === "proxy") {
@@ -88,7 +86,9 @@ export async function checkAuth(
         status: 403,
         detail: "AUTH_MODE=proxy but ACCESS_AUD/ACCESS_TEAM_DOMAIN are not set",
       };
-    const token = headers.get("cf-access-jwt-assertion") || cookies.get("CF_Authorization")?.value;
+    const token =
+      headers.get("cf-access-jwt-assertion") ||
+      parseCookies(headers.get("cookie") ?? "", "CF_Authorization").CF_Authorization;
     if (!token) return { ok: false, status: 403, detail: "Cloudflare Access required" };
     try {
       // Real verification: signature against Cloudflare's JWKS, plus issuer,
@@ -158,4 +158,34 @@ export async function checkAuth(
     detail:
       "auth not configured: set AUTH_MODE (proxy|password), or ALLOW_INSECURE=1 to run with no auth",
   };
+}
+
+const OPERATIONAL_PROBE_PATHS = new Set(["/api/health", "/livez", "/readyz"]);
+
+export function isOperationalProbePath(path: string): boolean {
+  return OPERATIONAL_PROBE_PATHS.has(path);
+}
+
+/** Shared admission policy. Domain handlers still authenticate the Actor and enforce RLS. */
+export async function authorizeRequest(request: Request): Promise<Response | undefined> {
+  const path = new URL(request.url).pathname;
+  if (isOperationalProbePath(path)) return;
+  const authorization = request.headers.get("authorization") ?? "";
+  if (path.startsWith("/api/") && /^Bearer lore_agent_[0-9a-f]{64}$/.test(authorization)) return;
+  const result = await checkAuth(request.headers);
+  if (result.ok) return;
+  const status = result.status ?? 403;
+  return Response.json(
+    {
+      code: status === 401 ? "authentication_required" : "access_denied",
+      error: result.detail ?? (status === 401 ? "auth required" : "forbidden"),
+    },
+    {
+      status,
+      headers: {
+        "cache-control": "private, no-store",
+        ...(result.wwwAuthenticate ? { "www-authenticate": "Basic" } : {}),
+      },
+    },
+  );
 }

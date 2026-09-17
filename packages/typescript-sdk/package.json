@@ -20,11 +20,8 @@
     }
   },
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "prepack": "bun run --cwd ../.. sdk:check && bun run build"
-  },
-  "engines": {
-    "node": ">=20"
+    "build": "bun --no-env-file -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && bun --no-env-file --bun tsc -p tsconfig.json",
+    "prepack": "bun --no-env-file run --cwd ../.. sdk:check && bun --no-env-file run build"
   },
   "publishConfig": {
     "access": "public"

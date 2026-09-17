@@ -14,8 +14,10 @@ import pg from "pg";
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import type { ActorContext } from "../../../src/server/auth/actor-context";
 import { createPostgresDatabase } from "../../../src/server/database/postgres";
-import type { ConfiguredQueryPlanningProvider } from "../../../src/server/providers/query-planning/types";
-import type { ConfiguredRerankingProvider } from "../../../src/server/providers/reranking/types";
+import type {
+  ConfiguredQueryPlanningProvider,
+  ConfiguredRerankingProvider,
+} from "../../../src/server/providers/metadata";
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
 import { requireExactIndexedMemory } from "./indexed-memory-validation";
 import type {

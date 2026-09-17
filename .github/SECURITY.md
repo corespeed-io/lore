@@ -27,8 +27,9 @@ reviewers and contributors must preserve these invariants:
 - **Cloud database reads are never edge-cached.** The Hyperdrive configuration must
   use `--caching-disabled`; RLS and revocation checks depend on fresh,
   transaction-local context.
-- A strict Content-Security-Policy and standard security headers are set in
-  `next.config.mjs`.
+- Next-rendered pages and Hono API responses share the Content-Security-Policy
+  and standard security headers in `src/server/security-headers.ts`, including
+  APIs dispatched directly by the Cloudflare Worker.
 
 ## Deploying safely
 

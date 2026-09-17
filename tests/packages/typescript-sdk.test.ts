@@ -511,7 +511,9 @@ describe("Lore TypeScript SDK", () => {
           },
         }),
       );
-      const fetchMock = vi.fn<typeof fetch>(async () => response);
+      const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+        async () => response,
+      );
       const client = new LoreClient({
         baseUrl: "http://127.0.0.1:3000",
         timeoutMs: null,

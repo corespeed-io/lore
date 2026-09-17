@@ -1,5 +1,6 @@
 "use client";
 
+import type { AgentGrantPermission, WorkspaceAgent } from "@corespeed/lore-sdk";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRMutation from "swr/mutation";
 import { loreKeys } from "@/shared/browser/cache-keys";
@@ -14,7 +15,6 @@ import {
   setAgentGrant,
   updateAgent,
 } from "./client";
-import type { AgentGrantPermission, WorkspaceAgent } from "./types";
 
 export function useLoreAgents(workspaceId: string) {
   return useSWR(workspaceId ? loreKeys.agents(workspaceId) : null, ([, , scopedWorkspaceId]) =>
@@ -56,7 +56,7 @@ export function useLoreAgentMutations(workspaceId: string) {
         async (updated) => {
           await mutateCache(
             isLoreAgentsCacheKey,
-            (current: WorkspaceAgent[] | undefined) =>
+            (current: readonly WorkspaceAgent[] | undefined) =>
               current?.map((candidate) =>
                 candidate.id === updated.id
                   ? {
@@ -80,7 +80,7 @@ export function useLoreAgentMutations(workspaceId: string) {
       await Promise.all([
         mutateCache(
           isLoreAgentsCacheKey,
-          (current: WorkspaceAgent[] | undefined) =>
+          (current: readonly WorkspaceAgent[] | undefined) =>
             current?.filter((candidate) => candidate.id !== arg.agentId),
           { revalidate: false },
         ),

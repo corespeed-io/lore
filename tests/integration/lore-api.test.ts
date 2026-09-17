@@ -1,3 +1,4 @@
+import type { MemoryProposal } from "@corespeed/lore-sdk";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   deleteAgent,
@@ -14,7 +15,6 @@ import { getDeploymentCapabilities, getReadiness } from "@/modules/operations/cl
 import { exportWorkspaceArchive, importWorkspaceArchive } from "@/modules/portability/client";
 import type { WorkspaceArchive } from "@/modules/portability/service";
 import { listMemoryProposals, reviewMemoryProposal } from "@/modules/proposals/client";
-import type { MemoryProposal } from "@/modules/proposals/types";
 import { listWorkspaces } from "@/modules/workspaces/client";
 import { clearRequestLog, getRequestLog } from "@/shared/browser/request-log";
 

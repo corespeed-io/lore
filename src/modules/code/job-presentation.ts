@@ -1,4 +1,4 @@
-import type { CodeIndexJob, CodeIndexJobStatus } from "./types";
+import type { CodeIndexJob } from "@corespeed/lore-sdk";
 
 /**
  * Presentation model for Code Index jobs in the operator surface.
@@ -29,7 +29,7 @@ interface CodeIndexJobStatusPresentation {
   description: string;
 }
 
-const STATUS_PRESENTATION: Record<CodeIndexJobStatus, CodeIndexJobStatusPresentation> = {
+const STATUS_PRESENTATION: Record<CodeIndexJob["status"], CodeIndexJobStatusPresentation> = {
   pending: { tone: "running", description: "Queued and waiting for a maintenance worker." },
   processing: { tone: "running", description: "A maintenance worker holds the lease." },
   succeeded: { tone: "ok", description: "The revision is indexed and its generation is active." },
@@ -64,7 +64,7 @@ export interface CodeIndexJobRow {
   repositoryKey: string;
   shortCommitOid: string;
   sourceRef: string | null;
-  status: CodeIndexJobStatus;
+  status: CodeIndexJob["status"];
   tone: CodeIndexJobTone;
   /** Modifier for the Workspace's existing `operations-status` badge. */
   badgeTone: "neutral" | "ok" | "unready";

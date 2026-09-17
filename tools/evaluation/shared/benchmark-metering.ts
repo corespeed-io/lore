@@ -1,6 +1,8 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
-import type { ConfiguredQueryPlanningProvider } from "../../../src/server/providers/query-planning/types";
-import type { ConfiguredRerankingProvider } from "../../../src/server/providers/reranking/types";
+import type {
+  ConfiguredQueryPlanningProvider,
+  ConfiguredRerankingProvider,
+} from "../../../src/server/providers/metadata";
 
 interface EmbeddingWorkload {
   calls: number;

@@ -1,5 +1,5 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
-import OpenAI from "openai";
+import OpenAI, { type ClientOptions } from "openai";
 import type { EmbeddingConfiguration } from "./config";
 
 const OPENAI_BASE_URL = "https://api.openai.com";
@@ -9,7 +9,7 @@ export interface OpenAIEmbeddingOptions {
   apiKey: string;
   baseUrl?: string;
   batchSize?: number;
-  fetch?: typeof fetch;
+  fetch?: ClientOptions["fetch"];
   maxRetries?: number;
   timeoutMs?: number;
 }

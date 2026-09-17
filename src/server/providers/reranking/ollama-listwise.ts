@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
-import { Ollama } from "ollama/browser";
-import type { ConfiguredRerankingProvider } from "./types";
+import { type Fetch, Ollama } from "ollama/browser";
+import type { ConfiguredRerankingProvider } from "../metadata";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 
@@ -21,7 +21,7 @@ export interface OllamaListwiseRerankingOptions {
   maximumOutputTokens?: number;
   maximumDocumentCharacters?: number;
   keepAlive?: number | string;
-  fetch?: typeof globalThis.fetch;
+  fetch?: Fetch;
 }
 
 interface OllamaListwiseResponse {

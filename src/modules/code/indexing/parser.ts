@@ -3,18 +3,27 @@ import type { SgNode } from "@ast-grep/napi";
 import { Lang, parseAsync } from "@ast-grep/napi";
 import { CODE_INDEX_LIMITS } from "./limits";
 import type {
-  ArtifactSpan,
   CodeArtifactSymbol,
   CodeDependencyKind,
   CodeParseStatus,
   CodeSourceFile,
-  LanguageSelection,
   PreparedArtifact,
   PreparedDependencyEdge,
   PreparedFileIndex,
   PreparedModuleBinding,
 } from "./types";
 import { hasControlCharacters, sha256 } from "./validation";
+
+interface ArtifactSpan {
+  start: number;
+  end: number;
+  anchor: SgNode;
+}
+
+interface LanguageSelection {
+  language: string;
+  parserLanguage: Lang;
+}
 
 const SYMBOL_KINDS = new Set([
   "abstract_class_declaration",

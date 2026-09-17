@@ -1,7 +1,7 @@
+import type { CodeIndexJob } from "@corespeed/lore-sdk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SWRConfig, unstable_serialize } from "swr";
 import { expect, test } from "vitest";
-import type { CodeIndexJob, CodeIndexJobStatus } from "@/modules/code/types";
 import { WorkspaceOperationsView } from "@/modules/operations/components/WorkspaceOperationsView";
 import { loreKeys } from "@/shared/browser/cache-keys";
 
@@ -9,7 +9,7 @@ const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
 
 function job(
   index: number,
-  status: CodeIndexJobStatus,
+  status: CodeIndexJob["status"],
   overrides: Partial<CodeIndexJob> = {},
 ): CodeIndexJob {
   return {

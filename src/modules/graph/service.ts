@@ -9,14 +9,6 @@ import {
 import type { ActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage } from "@/server/database/memory-storage";
 
-export type {
-  ConnectMemories,
-  MemoryGraph,
-  MemoryGraphLink,
-  MemoryGraphNode,
-  ReadMemoryGraph,
-} from "@corespeed/lore-core";
-
 export interface MemoryLink extends Omit<StoredMemoryLink, "partitionId"> {
   workspaceId: string;
 }

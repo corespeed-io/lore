@@ -1,8 +1,8 @@
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
 import { CohereClientV2 } from "cohere-ai";
 import { VoyageAIClient } from "voyageai";
-import { requestProviderJson } from "../provider-http";
-import type { ConfiguredRerankingProvider } from "./types";
+import type { ConfiguredRerankingProvider } from "../metadata";
+import { requestProviderJson } from "../request";
 
 type HostedRerankingProvider = "cohere" | "memos" | "voyage";
 

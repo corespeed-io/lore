@@ -7,17 +7,19 @@ test("Cohere v2 adapter preserves authorized document ids", async () => {
   let requestBody: Record<string, unknown> | undefined;
   vi.stubGlobal(
     "fetch",
-    vi.fn<typeof globalThis.fetch>(async (input, init) => {
-      expect(String(input)).toBe("https://api.cohere.com/v2/rerank");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cohere-secret");
-      requestBody = JSON.parse(String(init?.body));
-      return Response.json({
-        results: [
-          { index: 1, relevance_score: 0.95 },
-          { index: 0, relevance_score: 0.25 },
-        ],
-      });
-    }),
+    vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (input, init) => {
+        expect(String(input)).toBe("https://api.cohere.com/v2/rerank");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cohere-secret");
+        requestBody = JSON.parse(String(init?.body));
+        return Response.json({
+          results: [
+            { index: 1, relevance_score: 0.95 },
+            { index: 0, relevance_score: 0.25 },
+          ],
+        });
+      },
+    ),
   );
   const provider = createHostedRerankingProvider({
     provider: "cohere",
@@ -50,11 +52,13 @@ test("Voyage v1 adapter uses instruction-following query and disables returned d
   let requestBody: Record<string, unknown> | undefined;
   vi.stubGlobal(
     "fetch",
-    vi.fn<typeof globalThis.fetch>(async (input, init) => {
-      expect(String(input)).toBe("https://api.voyageai.com/v1/rerank");
-      requestBody = JSON.parse(String(init?.body));
-      return Response.json({ data: [{ index: 0, relevance_score: 0.875 }] });
-    }),
+    vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (input, init) => {
+        expect(String(input)).toBe("https://api.voyageai.com/v1/rerank");
+        requestBody = JSON.parse(String(init?.body));
+        return Response.json({ data: [{ index: 0, relevance_score: 0.875 }] });
+      },
+    ),
   );
   const provider = createHostedRerankingProvider({
     provider: "voyage",
@@ -84,23 +88,25 @@ test("Memos adapter batches the official memory reranker request and globally so
   const requests: Array<Record<string, unknown>> = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn<typeof globalThis.fetch>(async (input, init) => {
-      expect(String(input)).toBe("https://memos.memtensor.cn/api/openmem/v1/rerank");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Token memos-secret");
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      requests.push(body);
-      const documents = body.documents as string[];
-      return Response.json({
-        results: documents.map((document, index) => ({
-          index,
-          relevance_score: document.includes("current")
-            ? 0.95
-            : document.includes("related")
-              ? 0.7
-              : 0.1,
-        })),
-      });
-    }),
+    vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (input, init) => {
+        expect(String(input)).toBe("https://memos.memtensor.cn/api/openmem/v1/rerank");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Token memos-secret");
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        requests.push(body);
+        const documents = body.documents as string[];
+        return Response.json({
+          results: documents.map((document, index) => ({
+            index,
+            relevance_score: document.includes("current")
+              ? 0.95
+              : document.includes("related")
+                ? 0.7
+                : 0.1,
+          })),
+        });
+      },
+    ),
   );
   const provider = createHostedRerankingProvider({
     provider: "memos",
@@ -243,7 +249,7 @@ test.each(["cohere", "voyage"] as const)(
 test.each(["cohere", "voyage"] as const)(
   "%s SDK cancels a pending request at the configured deadline",
   async (providerName) => {
-    const fetch = vi.fn<typeof globalThis.fetch>(
+    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async (_input, init) =>
         new Promise((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {

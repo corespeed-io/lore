@@ -12,8 +12,62 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  static:
+    name: Lint, types & dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.2 }
+      - name: Cache Bun downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Check formatting and lint
+        run: bun run lint
+      - name: Check module dependency boundaries
+        run: bun run architecture:check
+      - name: Check UI conventions
+        run: bun run design:check
+      - name: Check TypeScript types
+        run: bun run typecheck
+      - name: Audit dependency vulnerabilities
+        run: bun audit --audit-level=high
+
   tests:
-    name: Lint, typecheck & tests
+    name: Application, Core & local service tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.2 }
+      - name: Cache Bun downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Cache Vitest modules
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.experimental-vitest-cache
+          key: ${{ runner.os }}-bun1.4.2-vitest-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-bun1.4.2-vitest-${{ hashFiles('bun.lock') }}-
+      - name: Test local service scripts
+        run: bun run service:test
+      - name: Run application tests
+        run: bun --no-env-file --bun vitest run
+      - name: Run Core typecheck and tests
+        run: bun run --cwd packages/lore-core check
+
+  database:
+    name: PostgreSQL & maintenance
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -31,87 +85,79 @@ jobs:
           --health-retries 30
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 24 }
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.3.14 }
+        with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
         uses: actions/cache@v5
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Cache Vitest modules
-        uses: actions/cache@v5
-        with:
-          path: node_modules/.experimental-vitest-cache
-          key: ${{ runner.os }}-node24-vitest-${{ hashFiles('bun.lock') }}-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-node24-vitest-${{ hashFiles('bun.lock') }}-
-      - name: Check formatting and lint
-        run: bun run lint
-      - name: Check module dependency boundaries
-        run: bun run architecture:check
-      - name: Check UI conventions
-        run: bun run design:check
-      - name: Check TypeScript types
-        run: bun run typecheck
-      - name: Test local service scripts
-        run: bun run service:test
-      - name: Audit dependency vulnerabilities
-        run: bun audit --audit-level=high
-      - name: Run application tests
-        run: bunx vitest run
-      - name: Run Core typecheck and tests
-        run: bun run --cwd packages/lore-core check
+      - name: Build maintenance worker
+        run: bun run build:maintenance
+      - name: Bundle database migration tool
+        run: bun run build:dbmate
       - name: Run PostgreSQL memory smoke test
         run: bun run smoke:memory-core
         env:
           LORE_SMOKE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lore_memory_core_smoke_ci
 
-  build:
-    name: Build web, SDK, CLI & MCP
+  packages:
+    name: SDK, CLI & MCP packages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 24 }
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version: 1.3.14 }
+        with: { bun-version: 1.4.2 }
       - name: Cache Bun downloads
         uses: actions/cache@v5
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # bun pm pack runs each package's existing prepack build before installation.
+      - name: Build and test SDK, CLI and MCP packages
+        run: bun run packages:smoke
+
+  build:
+    name: Web & Cloudflare build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.4.2 }
+      - name: Cache Bun downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.4.2-
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Cache Next build
         uses: actions/cache@v5
         with:
           path: .next/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-node24-next-${{ hashFiles('bun.lock') }}-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node24-next-${{ hashFiles('bun.lock') }}-
-      # npm pack runs each package's existing prepack build before installation.
-      - name: Build and test SDK, CLI and MCP packages
-        run: bun run packages:smoke
+          key: ${{ runner.os }}-${{ runner.arch }}-bun1.4.2-next-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun1.4.2-next-${{ hashFiles('bun.lock') }}-
       - name: Build Next.js application
-        run: bunx next build
-      - name: Build maintenance worker
-        run: bun run build:maintenance
-      - name: Bundle database migration tool
-        run: bun run build:dbmate
+        run: bun --bun next build
+      - name: Smoke test Bun Next.js server and Hono API
+        run: bun run smoke:next
       # Reuse this job's fresh standalone Next output; still build the Worker bundle.
       - name: Build Cloudflare Worker
-        run: bunx opennextjs-cloudflare build --skipNextBuild
+        run: bun --bun opennextjs-cloudflare build --skipNextBuild
       - name: Validate Cloudflare deployment (dry run)
-        run: bunx wrangler deploy --dry-run
+        run: bun --bun wrangler deploy --dry-run
 
   check:
     name: All checks
     if: ${{ always() }}
-    needs: [tests, build]
+    needs: [static, tests, database, packages, build]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to pass

@@ -9,12 +9,10 @@ import {
 } from "@corespeed/lore-core";
 import openNextWorker from "./.open-next/worker.js";
 import { purgeExpiredPortableCoreRecords } from "./src/modules/operations/maintenance";
-import { createOperationsModule, livenessReport } from "./src/modules/operations/service";
+import { isApiPath } from "./src/server/api/app";
+import { fetchCloudflareApi } from "./src/server/api/cloudflare";
 import { createRequestPostgresDatabase } from "./src/server/database/postgres";
-import {
-  createEmbeddingProviderFromEnvironment,
-  createMaintenanceEmbeddingProvidersFromEnvironment,
-} from "./src/server/providers/embedding/factory";
+import { createMaintenanceEmbeddingProvidersFromEnvironment } from "./src/server/providers/embedding/factory";
 
 // Preserve any OpenNext Durable Object exports if a cache adapter enables them.
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache } from "./.open-next/worker.js";
@@ -72,37 +70,6 @@ function maintenanceDatabaseForEnvironment(env: CloudflareEnv) {
   );
 }
 
-function probeResponse(body: unknown, status = 200): Response {
-  return Response.json(body, {
-    status,
-    headers: { "cache-control": "no-store" },
-  });
-}
-
-async function readinessResponse(env: CloudflareEnv): Promise<Response> {
-  const database = createRequestPostgresDatabase(
-    { connectionString: env.HYPERDRIVE.connectionString },
-    { role: "lore_app" },
-  );
-  const embeddingProvider = createEmbeddingProviderFromEnvironment(
-    {
-      LORE_EMBEDDING_PROVIDER: env.LORE_EMBEDDING_PROVIDER,
-      LORE_EMBEDDING_MODEL: env.LORE_EMBEDDING_MODEL,
-      LORE_EMBEDDING_TIMEOUT_MS: env.LORE_EMBEDDING_TIMEOUT_MS,
-      GEMINI_API_KEY: env.GEMINI_API_KEY,
-      OPENAI_API_KEY: env.OPENAI_API_KEY,
-      OLLAMA_BASE_URL: env.OLLAMA_BASE_URL,
-      OLLAMA_KEEP_ALIVE: env.OLLAMA_KEEP_ALIVE,
-    },
-    (message) => console.warn(message),
-  );
-  const report = await createOperationsModule(database, {
-    embeddingConfigured: true,
-    embeddingIdentity: embeddingProvider,
-  }).readiness();
-  return probeResponse(report, report.status === "unready" ? 503 : 200);
-}
-
 function isJobMessage(value: unknown): value is MemoryEmbeddingJobMessage {
   return (
     !!value &&
@@ -117,8 +84,7 @@ export default {
     // process must remain observable even when application auth or rendering is
     // unhealthy, and readiness needs only the request-scoped Hyperdrive client.
     const path = new URL(request.url).pathname;
-    if (path === "/livez") return probeResponse(livenessReport());
-    if (path === "/readyz") return readinessResponse(env);
+    if (isApiPath(path)) return fetchCloudflareApi(request, env, context);
     return openNextWorker.fetch(request, env, context);
   },
 

@@ -69,11 +69,11 @@ been removed. Lore now has a native implementation, split into two concepts
   generated column stays for the scan predicate). Every new migration
   must update `lore_system_state.schema_revision` to its own version number —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
-  `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.mjs`) and
+  `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
-  `tests/integration/http.test.ts`, and `scripts/checks/smoke-memory-core.ts` pin the current
+  `tests/integration/api.test.ts`, and `scripts/checks/smoke-memory-core.ts` pin the current
   revision;
 - dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
@@ -210,11 +210,16 @@ been removed. Lore now has a native implementation, split into two concepts
   accept a model-supplied local path, credential, or Workspace override. Configure
   the self-host registry with `LORE_CODE_REPOSITORIES`; an empty registry disables
   public enqueue. Keep native Git/AST parsing out of Cloudflare request bundles;
-  it runs only in the Node/self-host maintenance worker. Parser, symbol, or chunking
+  it runs only in the Bun/self-host maintenance worker. Parser, symbol, or chunking
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
-  native routes built through the pure handler seams in `src/modules/*/http.ts`;
+  Hono subrouters exported directly by `src/modules/*/routes.ts` and composed by
+  `src/server/api/app.ts` through `app.route()`. Route handlers call domain services
+  directly; do not add handler factories or forwarding router layers.
+  Next.js mounts Hono directly through `hono/vercel`;
+  the application stays one Next.js service running on Bun. Cloudflare dispatches APIs directly
+  to Hono on workerd;
 - `src/shell/App.tsx` owns the native Memory workflow and client routing,
   `src/shell/Sidebar.tsx` owns the Lore shell, and
   `src/shared/browser/sdk.ts` configures the same-origin TypeScript SDK client,
@@ -289,10 +294,10 @@ been removed. Lore now has a native implementation, split into two concepts
   prior active generation to bounded rollback. Postgres is the durable job source;
   rollout maintenance drains both the serving and explicitly configured building
   provider/model generations, because request writes continue to enqueue serving
-  jobs until cutover. The self-host Node worker polls both sequentially by default,
+  jobs until cutover. The self-host Bun worker polls both sequentially by default,
   while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
   database sweep as the delivery backstop;
-- `src/server/http/idempotency.ts`, `src/modules/operations/maintenance.ts`,
+- `src/server/api/idempotency.ts`, `src/modules/operations/maintenance.ts`,
   `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
   own OSS replay, expired replay/event cleanup, and operational integration.
   Memory mutation events are database triggers in the
@@ -324,7 +329,7 @@ been removed. Lore now has a native implementation, split into two concepts
   retrieval index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical
   Memory. Any future automatic retention must be an explicit opt-in deployment policy;
-- The HTTP handlers and canonical OpenAPI document define one public API contract.
+- The API route handlers and canonical OpenAPI document define one public API contract.
   `packages/typescript-sdk` generates its public types from that document and owns
   the integration client used by the frontend. `packages/cli` and the external
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
@@ -335,9 +340,8 @@ been removed. Lore now has a native implementation, split into two concepts
   do not imply new CLI commands or MCP tools;
 - `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4.
   HTTP Memory writes validate with these schemas, and OpenAPI generates its
-  Memory/create/update components from them. Browser Memory types in
-  `src/modules/memories/types.ts` alias the generated TypeScript SDK contract.
-  Browser wire types and public content limits come only from the SDK; browser
+  Memory/create/update components from them. Browser wire types and public content
+  limits are imported directly from the generated TypeScript SDK contract; browser
   modules must not import server/Core modules or run canonical chunk previews.
   Keep canonical content validation and chunking in server/Core code.
   Metadata uses `z.record(z.string(),
@@ -348,7 +352,7 @@ been removed. Lore now has a native implementation, split into two concepts
   recursive JSON with Zod when generating OpenAPI so references target `#/components/schemas`.
   The reusable engine retains storage types and content invariants; OSS owns
   authorization policy and the public wire mapping;
-- Node/self-host exports privacy-filtered OTLP only when explicitly configured.
+- Self-hosting exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
   orchestration health does not depend on application auth or rendering;
@@ -396,17 +400,17 @@ been removed. Lore now has a native implementation, split into two concepts
   describe a lease as a provider deadline. Ollama adapters reject the SDK cloud host to prevent implicit
   environment credential use. Keep application-level embedding/result/score validation. MemOS and
   vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
-  `src/server/providers/provider-http.ts` with status handling and bounded reads.
+  `src/server/providers/request.ts` with status handling and bounded reads.
   `tools/evaluation/shared/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
-  `memoryagentbench-download.ts`. Node service probes live in `scripts/dev/lib/local-http.mjs`;
+  `memoryagentbench-download.ts`. Local service probes live in `scripts/dev/lib/health-check.ts`;
 - `packages/lore-core/src/query-planning.ts` defines the optional multi-query planning capability.
   OSS adapters in `src/server/providers/query-planning` see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,
   fuses only visible results, and then optionally reranks them;
 - Docker/Compose targets OSS self-hosting; OpenNext + two cache-disabled Hyperdrive
   bindings target CoreSpeed Cloud on Cloudflare Workers;
-- `scripts/dev/local-service.mjs` owns the native Apple Silicon development loop exposed
+- `scripts/dev/local-service.ts` owns the native Apple Silicon development loop exposed
   by `bun run service:{up,down,restart,status,logs}`; keep its tests in
   `bun run service:test` and CI. It may idempotently extend an existing `.env` only
   when the complete native database block is absent, provisions distinct request and
@@ -730,8 +734,9 @@ Lore owns one domain model and one Postgres schema across deployments. Avoid a
 generic “pluggable database” abstraction: Postgres and RLS are architectural
 requirements.
 
-- **OSS self-host:** Node/Docker application plus Postgres. Operators may attach
-  local, OIDC, or trusted-proxy identity adapters.
+- **OSS self-host:** Next.js + Hono, maintenance, and database tooling run on
+  Bun/Docker, with Postgres. Operators may attach local, OIDC, or
+  trusted-proxy identity adapters.
 - **CoreSpeed Cloud:** Cloudflare is the only managed deployment target. Use Workers
   for the request path, Hyperdrive for Postgres, Queues for asynchronous work, and
   Workflows only when a job genuinely needs durable multi-step orchestration. D1 is
@@ -773,7 +778,7 @@ surfaces:
   search its RLS-visible Code Artifacts while hiding language detection, AST
   traversal, structural splitting, symbol breadcrumbs, parser recovery, formatted
   fallback, exact Git object reads, complete manifest accounting, hashing, and
-  revision-conflict handling. Native Git access and parsing are Node indexing
+  revision-conflict handling. Native Git access and parsing are Bun indexing
   concerns, not Cloudflare request-path dependencies.
 - **Code Dependency Graph module:** return bounded callers/callees from one exact
   active Code Index Generation while hiding edge storage, path-versus-symbol
@@ -871,7 +876,7 @@ Benchmark is part of the product quality system even without AutoDream.
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
   disposable database whose schema was generated at a non-lore width through
-  `tools/evaluation/retrieval/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
+  `tools/evaluation/retrieval/benchmark-migrate-dimensions.ts` (the audited 1024→N transform of
   the baseline; the four `length(path) <= 1024` checks stay). It exercises the
   engine's host-baked `embeddingDimensions` option the way a non-lore host's
   own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
@@ -986,24 +991,62 @@ Benchmark is part of the product quality system even without AutoDream.
 
 The existing application uses:
 
-- Next.js 16 (App Router), React 19, Bun 1.3.14+ for package management,
-  Node 24 LTS for self-hosted execution, and TypeScript 7;
+- Next.js 16 (App Router), React 19, Hono, Bun 1.4.2+ for self-host runtimes,
+  package management, tooling, and tests; TypeScript 7;
 - dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
   PostgreSQL transactions; Lore has no runtime ORM;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
   hairlines, Geist Sans/Mono, flat 12px cards, and 6px controls.
 
-`bun.lock` is the only dependency lockfile. Bun installs dependencies and dispatches
-scripts; Next.js self-hosting and migration scripts execute on Node 24, and the
-Cloudflare bundle executes on Workerd. Do not add an npm/pnpm/Yarn lockfile or claim
-that Cloudflare runs Bun/Node as a process.
+`bun.lock` is the only dependency lockfile. Bun installs dependencies and runs
+self-host application/maintenance processes, TypeScript scripts, builds, and tests.
+CLI commands use `bun --bun` where needed to override dependency Node shebangs;
+`bunfig.toml` also sets `[run] bun = true`. Docker uses the pinned Bun image and
+runs the generated standalone `server.js` and maintenance bundle with Bun.
+The Cloudflare bundle executes on workerd. Do not add an
+npm/pnpm/Yarn lockfile or claim that Cloudflare runs Bun/Node as a process.
+Keep credential-sensitive script and CLI/MCP entrypoints on `--no-env-file`;
+the local service manager explicitly reads its environment and filters credentials
+for each child. `node:` compatibility imports do not require a Node process.
+Core and the TypeScript SDK remain reusable libraries: preserve their standard
+module contracts and do not introduce Bun-only APIs into their portable code.
+
+`src/server/api/app.ts` composes domain subrouters exported by `src/modules/*/routes.ts`
+with Hono's `app.route()`. Keep route callbacks inline for parameter inference and
+use `.get()`/`.post()`/etc.; Hono-owned responses use `c.json()`/`c.body()`.
+Mount shared subrouters at both `/api` and `/api/v1`, and keep versioned-only
+resources under `/api/v1`. Hosts inject lazy dependencies through
+`src/server/api/dependencies.ts` and Hono context variables. Route modules own
+Hono routing, parsing, authorization, and responses; domain services remain
+framework-independent. Use `app.request()` for API tests, including middleware
+and routing. Preserve the unversioned aliases and v1 contract, HEAD/OPTIONS/405
+behavior, and shared admission policy in
+`src/server/auth/auth.ts`. Domain handlers still authorize Actors and install RLS.
+Next mounts Hono through its API catch-all via `hono/vercel`. Cloudflare uses
+request-local Hyperdrive adapters and `waitUntil` queue notifications, before
+OpenNext routing. Default dev/start/local-service commands remain single-service
+Next.js on Bun with native hot reload; do not add an internal HTTP proxy, custom
+outer server, or second API process to this profile.
 
 TypeScript 7.0.2 is the workspace compiler. `tools/sdk-codegen` deliberately keeps
 TypeScript 5.9.3 isolated as a library dependency: `openapi-typescript` 7.13 uses
 the legacy compiler API (`factory`/`createPrinter`), which the TypeScript 7 package
 does not expose. Do not replace that dependency with the workspace compiler until
 the generator supports its API.
+
+All handwritten JavaScript-family source, including tooling and `next.config.ts`,
+must use TypeScript/TSX. Keep generated JavaScript outputs in their native format.
+`bun run typecheck` checks both the application and
+`scripts/tsconfig.json`; tooling uses Bun types with ESNext/bundler resolution,
+checked indexed access, exact optional properties, erasable syntax, and explicit
+`.ts` imports. Keep Next/Cloudflare ambient declarations out of that tooling
+configuration: their global `ProcessEnv` augmentation incorrectly requires
+deployment variables in isolated child environments. The two scripts that import
+application modules
+(`smoke-memory-core.ts` and `embedding-generation.ts`) stay in the app typecheck.
+Do not substitute `any`, unchecked casts, or suppressed diagnostics for input
+validation or accurate types.
 
 These commands remain the current verification loop:
 
@@ -1027,7 +1070,7 @@ bun run benchmark:locomo:fetch # fetch the pinned CC BY-NC ACL 2024 dataset
 bun run benchmark:locomo # run the local categories 1-4 QA/F1 profile
 bun run benchmark:memoryagentbench:fetch # fetch the pinned Conflict Resolution slice
 bun run benchmark:memoryagentbench # run the local conflict/multi-hop profile
-bun run typecheck  # generate Next types, then tsc --noEmit
+bun run typecheck  # generate Next types, then check application and Bun scripts
 bun run lint       # biome check .
 bun run format     # biome check --write .
 bun run architecture:check # enforce UI/SDK/API/Core dependency boundaries
@@ -1038,7 +1081,7 @@ bun run test       # application and Core tests with Vitest
 bun run build:packages # build the TypeScript SDK, CLI, and external MCP packages
 bun run packages:smoke # pack/install/import the release artifacts
 bun run build      # Next production, maintenance, and developer-package builds
-bun run build:maintenance # bundle the self-host Node maintenance entrypoint
+bun run build:maintenance # bundle the self-host Bun maintenance entrypoint
 bun audit --audit-level=high # dependency vulnerability gate
 bun run preview:cloudflare # build and preview through workerd
 ```
@@ -1073,9 +1116,9 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   isolated test module and restores a fresh database for every context. Preserve
   that isolation; migration tests must still execute migrations on empty databases.
   Both Vitest configs enable `experimental.fsModuleCache` (the Vitest 4 API).
-  Clear stale module caches with `bunx vitest --clearCache`; cached modules never
-  replace test execution. CI's stable `check` gate requires the tests and build
-  jobs to succeed; cache hits must not skip their checks.
+  Clear stale module caches with `bun --bun vitest --clearCache`; cached modules never
+  replace test execution. CI's stable `check` gate requires every validation
+  job to succeed; cache hits must not skip their checks.
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's
   `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
@@ -1116,12 +1159,16 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
   runs, or it measures the cache instead of the change. `skipLibCheck: true` compounds
   this: a conflict between two `.d.ts` files is silent at the declaration site and only
   surfaces as errors at unrelated call sites.
-- Wrangler is held at 4.119.0. From 4.123.0 its bundled workerd (`1.20260811.1`)
-  emits nodejs_compat globals — including `declare const Buffer: any` — into
-  `cf:typegen`'s `cloudflare-env.d.ts`. That collides with `@types/node`'s global
-  `Buffer`, and every `Buffer.toString(encoding)` call in the repo then fails as
-  `TS2554: Expected 0 arguments, but got 1`. Regenerating `cloudflare-env.d.ts` with a
-  newer wrangler reintroduces it, so resolve the collision before bumping wrangler.
+- Wrangler upgrades must regenerate `cloudflare-env.d.ts` and pass a fresh
+  typecheck. Wrangler 4.123.0's workerd generated `declare const Buffer: any`,
+  which collided with the runtime types and broke `Buffer.toString(encoding)`.
+  Wrangler 4.134.0 / workerd `1.20260917.1` no longer emits that declaration;
+  the generated types work without declaration patches or type suppressions.
+- Voyage's SDK stays at `voyageai` 0.1.0. Releases 0.2.0 through 0.4.0 route
+  the public client through local inference exports, causing Wrangler to resolve
+  the optional `@huggingface/transformers` dependency even for hosted reranking.
+  Do not add local ONNX/transformer dependencies or bundler stubs to the Worker;
+  require a successful Cloudflare dry run before upgrading this SDK.
 
 ## Commit / PR conventions
 

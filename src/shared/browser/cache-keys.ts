@@ -1,4 +1,4 @@
-import type { MemoryProposalStatus } from "@/modules/proposals/types";
+import type { MemoryProposalStatus } from "@corespeed/lore-sdk";
 
 export const loreKeys = {
   workspaces: ["lore", "workspaces"] as const,

@@ -1,3 +1,4 @@
+import type { CodeIndexJob, MemoryCodeEvidence } from "@corespeed/lore-sdk";
 import { expect, test } from "vitest";
 import type { MemoryCodeEvidence as ServerMemoryCodeEvidence } from "@/modules/code/evidence";
 import {
@@ -6,17 +7,12 @@ import {
   summarizeCodeEvidence,
 } from "@/modules/code/evidence-presentation";
 import type { CodeIndexJob as ServerCodeIndexJob } from "@/modules/code/indexing/types";
-import type {
-  CodeEvidenceValidationState,
-  CodeIndexJob,
-  MemoryCodeEvidence,
-} from "@/modules/code/types";
 
 const MEMORY_ID = "40000000-0000-4000-8000-000000000001";
 
 function citation(
   index: number,
-  validationState: CodeEvidenceValidationState,
+  validationState: MemoryCodeEvidence["validationState"],
   overrides: Partial<MemoryCodeEvidence> = {},
 ): MemoryCodeEvidence {
   return {
@@ -48,10 +44,8 @@ function citation(
   };
 }
 
-// The browser mirrors in src/modules/memories/types.ts must stay structurally assignable to
-// the server contracts they render, or the UI would silently drift from the
-// module that produces the data.
-test("browser Code contracts stay assignable to the server modules", () => {
+// The SDK contract consumed by the browser must match the server's Code responses.
+test("SDK Code contracts stay assignable to the server modules", () => {
   const evidence: ServerMemoryCodeEvidence = citation(1, "current");
   const mirroredEvidence: MemoryCodeEvidence = evidence;
   const job: CodeIndexJob = {
@@ -101,7 +95,7 @@ test("drift states a reader must not miss rank ahead of settled citations", () =
 });
 
 test("every citation states its condition in words, never color alone", () => {
-  const states: CodeEvidenceValidationState[] = [
+  const states: MemoryCodeEvidence["validationState"][] = [
     "ambiguous",
     "changed",
     "current",

@@ -1,4 +1,3 @@
-import type { Lang, SgNode } from "@ast-grep/napi";
 import type { ActorContext } from "@/server/auth/actor-context";
 
 export type CodeParserKind = "text" | "tree_sitter";
@@ -251,15 +250,4 @@ export interface VerifiedGitPreparation {
   dependencies: readonly PreparedDependencyEdge[];
   parsedFileCount: number;
   reusedFileCount: number;
-}
-
-export interface ArtifactSpan {
-  start: number;
-  end: number;
-  anchor: SgNode;
-}
-
-export interface LanguageSelection {
-  language: string;
-  parserLanguage: Lang;
 }

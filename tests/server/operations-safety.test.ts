@@ -7,7 +7,7 @@ import {
   archivedWalArtifactCheck,
   archivedWalCheck,
   restoreDrillCheck,
-} from "../../scripts/database/lib/pitr-check.mjs";
+} from "../../scripts/database/lib/pitr-check.ts";
 
 test("PITR checks reject no-op commands without exposing their value", () => {
   expect(archiveCommandCheck("true")).toEqual({

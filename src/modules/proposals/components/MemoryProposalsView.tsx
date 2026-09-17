@@ -1,16 +1,16 @@
 "use client";
 
+import type {
+  MemoryProposal,
+  MemoryProposalReviewResult,
+  MemoryProposalStatus,
+} from "@corespeed/lore-sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreAgents } from "@/modules/agents/hooks";
 import { useLoreObservations } from "@/modules/episodes/hooks";
 import { memoryTitle } from "@/modules/memories/display";
 import { useLoreMemory } from "@/modules/memories/hooks";
 import { useLoreMemoryProposalMutations, useLoreMemoryProposals } from "@/modules/proposals/hooks";
-import type {
-  MemoryProposal,
-  MemoryProposalReviewResult,
-  MemoryProposalStatus,
-} from "@/modules/proposals/types";
 import { loreKeys } from "@/shared/browser/cache-keys";
 
 interface MemoryProposalsViewProps {

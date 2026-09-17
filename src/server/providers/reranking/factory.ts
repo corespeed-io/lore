@@ -1,6 +1,6 @@
+import type { ConfiguredRerankingProvider } from "../metadata";
 import { createHostedRerankingProvider } from "./hosted";
 import { createOllamaListwiseRerankingProvider } from "./ollama-listwise";
-import type { ConfiguredRerankingProvider } from "./types";
 import {
   createLlamaCppRerankingProvider,
   createVllmRerankingProvider,

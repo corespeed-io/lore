@@ -1,10 +1,10 @@
+import type { CodeIndexJob } from "@corespeed/lore-sdk";
 import { expect, test } from "vitest";
 import { summarizeCodeIndexJobs } from "@/modules/code/job-presentation";
-import type { CodeIndexJob, CodeIndexJobStatus } from "@/modules/code/types";
 
 function job(
   index: number,
-  status: CodeIndexJobStatus,
+  status: CodeIndexJob["status"],
   overrides: Partial<CodeIndexJob> = {},
 ): CodeIndexJob {
   return {
@@ -63,7 +63,7 @@ test("newest-first server order is preserved inside each tone", () => {
 });
 
 test("every queue status carries an operator-readable explanation", () => {
-  const statuses: CodeIndexJobStatus[] = [
+  const statuses: CodeIndexJob["status"][] = [
     "cancelled",
     "dead",
     "pending",

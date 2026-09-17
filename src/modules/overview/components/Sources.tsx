@@ -1,6 +1,10 @@
 "use client";
 
-import type { MemorySourceSummary } from "@/modules/memories/types";
+export interface MemorySourceSummary {
+  id: string;
+  name: string;
+  memoryCount: number;
+}
 
 interface SourcesProps {
   sources: MemorySourceSummary[];

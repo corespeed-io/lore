@@ -13,6 +13,10 @@ Memory-to-Code evidence without accepting a Workspace or filesystem path.
 It delegates all access control to Lore/Postgres RLS and stores no Memory or
 authorization state.
 
+Requires Bun 1.4.2 or newer. Install with `bun add --global @corespeed/lore-mcp`
+and configure the MCP host to run `lore-mcp` with explicit environment variables.
+The executable disables automatic `.env` loading.
+
 `lore_retrieve_context` is the read-only orchestration surface for answering with
 both stores. It routes the question, retrieves only Actor-visible Memory evidence,
 searches Code only when an operator repository key and exact full commit OID are

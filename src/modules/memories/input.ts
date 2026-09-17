@@ -1,6 +1,10 @@
 import type { MemoryScope } from "@corespeed/lore-core";
-import { BadRequestError, parseMemoryInput } from "@/server/http/input";
+import { BadRequestError, parseMemoryInput } from "@/server/api/input";
 import { CreateMemoryInputSchema, MemoryMetadataSchema, MemoryScopeSchema } from "./schemas";
+
+export function memoryEtag(version: number): string {
+  return `"memory-v${version}"`;
+}
 
 export function requiredMemoryContent(value: unknown): string {
   return parseMemoryInput(CreateMemoryInputSchema.shape.content, value);

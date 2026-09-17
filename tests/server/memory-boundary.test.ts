@@ -1,8 +1,8 @@
 import type { EmbeddingProvider, PostgresDatabase } from "@corespeed/lore-core";
 import { expect, test, vi } from "vitest";
 import { createMemoryModule } from "@/modules/memories/service";
+import { mutationRequestHash } from "@/server/api/idempotency";
 import { createAccessModule } from "@/server/auth/access";
-import { mutationRequestHash } from "@/server/http/idempotency";
 import { createMemoryTestContext } from "../support/memory-context";
 
 function embeddingProvider(): EmbeddingProvider {

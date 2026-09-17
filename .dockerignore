@@ -5,6 +5,7 @@
 .superpowers
 .next
 .open-next
+.worker
 node_modules
 .env
 .env.*

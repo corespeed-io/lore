@@ -1,15 +1,15 @@
 "use client";
 
+import type { WorkspaceSummary } from "@corespeed/lore-sdk";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import type { WorkspaceSummary } from "@/modules/workspaces/types";
 import { useDebouncedCallback } from "@/shared/browser/use-debounced-callback";
 import type { Tab } from "@/shell/route";
 
 interface SidebarProps {
   activeTab: Tab;
   activeWorkspaceId: string;
-  workspaces: WorkspaceSummary[];
+  workspaces: readonly WorkspaceSummary[];
   onWorkspaceChange: (workspaceId: string) => void;
   onCreateWorkspace: () => void;
   onNewMemory: () => void;

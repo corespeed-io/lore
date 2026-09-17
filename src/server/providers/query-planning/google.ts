@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai/web";
+import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { parsePlannedQueries } from "./parse";
-import type { ConfiguredQueryPlanningProvider } from "./types";
 
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_INSTRUCTION = `Rewrite a memory recall question into distinct evidence-retrieval queries.

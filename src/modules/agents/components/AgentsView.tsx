@@ -1,17 +1,17 @@
 "use client";
 
+import type {
+  AgentCredential,
+  AgentGrantPermission,
+  IssuedAgentCredential,
+  WorkspaceAgent,
+} from "@corespeed/lore-sdk";
 import { useEffect, useRef, useState } from "react";
 import {
   useLoreAgentCredentials,
   useLoreAgentMutations,
   useLoreAgents,
 } from "@/modules/agents/hooks";
-import type {
-  AgentCredential,
-  AgentGrantPermission,
-  IssuedAgentCredential,
-  WorkspaceAgent,
-} from "@/modules/agents/types";
 
 interface IssuedCredentialState extends IssuedAgentCredential {
   agentName: string;

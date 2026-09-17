@@ -18,6 +18,7 @@ revision and workload. Proposed experiments are not shipped capabilities.
 
 ## Retrieval and local inference
 
+- [Hono and Next.js integration](hono-next-outer-server-community.md) — community adapter comparison and the selected Next-to-Hono architecture.
 - [OSS memory-engine module boundaries](oss-memory-module-boundaries.md) — source comparison of engine, storage, model and product responsibilities.
 - [Withdrawn OSS tenancy transition](oss-tenancy-transition-plan.md) — historical data-coverage audit; tenant removal was not implemented and is no longer the target.
 - [Query-time Memory retrieval audit](query-time-memory-retrieval-audit.md)

@@ -21,7 +21,7 @@ and output schemas stay with their runner family. The policy MCP fixture remains
 in [`packages/mcp/benchmark-fixture.ts`](../../packages/mcp/benchmark-fixture.ts)
 so its server dependency resolves within that package.
 
-The standalone [dimension setup helper](retrieval/benchmark-migrate-dimensions.mjs)
+The standalone [dimension setup helper](retrieval/benchmark-migrate-dimensions.ts)
 documents how to prepare a disposable benchmark database for non-default embedding
 dimensions. The Code SQL microbenchmark measures predicate strategies outside
 production RLS; its timings are not application request latency.

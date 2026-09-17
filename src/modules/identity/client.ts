@@ -1,9 +1,9 @@
+import type { HumanActor } from "@corespeed/lore-sdk";
 import { getBrowserClient } from "@/shared/browser/sdk";
-import type { HumanActorSummary } from "./types";
 
 export function getCurrentHumanActor(
   workspaceId: string,
   signal?: AbortSignal,
-): Promise<HumanActorSummary> {
+): Promise<HumanActor> {
   return getBrowserClient().workspace(workspaceId).getCurrentHumanActor(signal);
 }

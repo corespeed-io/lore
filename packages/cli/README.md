@@ -11,5 +11,9 @@ content in process arguments. `code dependencies callers|callees` queries one
 exact repository commit and accepts exactly one symbol or repository-relative
 source path; run `lore --help` for the command surface.
 
+Requires Bun 1.4.2 or newer. Install with `bun add --global @corespeed/lore-cli`
+and run `lore --help`. The executable disables automatic `.env` loading; pass
+credentials explicitly through the process environment.
+
 See the repository's [developer integration guide](https://github.com/corespeed-io/lore/blob/main/docs/developer-integration.md)
 for setup.

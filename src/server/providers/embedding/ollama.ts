@@ -1,5 +1,5 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
-import { Ollama } from "ollama/browser";
+import { type Fetch, Ollama } from "ollama/browser";
 import type { EmbeddingConfiguration } from "./config";
 import { QWEN3_EMBEDDING_PROTOCOL_REVISION } from "./config";
 
@@ -7,7 +7,7 @@ export interface OllamaEmbeddingOptions {
   baseUrl?: string;
   batchSize?: number;
   keepAlive?: string | number;
-  fetch?: typeof fetch;
+  fetch?: Fetch;
 }
 
 interface OllamaEmbedResponse {

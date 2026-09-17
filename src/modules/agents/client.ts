@@ -1,17 +1,17 @@
-import { getBrowserClient } from "@/shared/browser/sdk";
 import type {
   AgentCredential,
   AgentGrantPermission,
   AgentWorkspaceGrant,
   IssuedAgentCredential,
   WorkspaceAgent,
-} from "./types";
+} from "@corespeed/lore-sdk";
+import { getBrowserClient } from "@/shared/browser/sdk";
 
-export async function listAgents(
+export function listAgents(
   workspaceId: string,
   signal?: AbortSignal,
-): Promise<WorkspaceAgent[]> {
-  return [...(await getBrowserClient().workspace(workspaceId).listAgents(signal))];
+): Promise<readonly WorkspaceAgent[]> {
+  return getBrowserClient().workspace(workspaceId).listAgents(signal);
 }
 
 export function createAgent(
@@ -33,14 +33,12 @@ export function deleteAgent(workspaceId: string, agentId: string): Promise<void>
   return getBrowserClient().workspace(workspaceId).deleteAgent(agentId);
 }
 
-export async function listAgentCredentials(
+export function listAgentCredentials(
   workspaceId: string,
   agentId: string,
   signal?: AbortSignal,
-): Promise<AgentCredential[]> {
-  return [
-    ...(await getBrowserClient().workspace(workspaceId).listAgentCredentials(agentId, signal)),
-  ];
+): Promise<readonly AgentCredential[]> {
+  return getBrowserClient().workspace(workspaceId).listAgentCredentials(agentId, signal);
 }
 
 export function issueAgentCredential(

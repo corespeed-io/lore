@@ -17,7 +17,7 @@ Clients in other languages can call the HTTP API described by OpenAPI.
 | TypeScript SDK | `packages/typescript-sdk/` | Generated wire types, public content limits, and API client transport |
 | CLI | `packages/cli/` | Command parsing and output through the TypeScript SDK |
 | MCP | `packages/mcp/` | External stdio tools through the TypeScript SDK |
-| OSS API | `src/app/api/`, domain HTTP/services, and `src/server/` | Authentication, tenancy, authorization, request replay, and engine composition |
+| OSS API | `src/server/api/`, domain routes/services, and `src/server/` | Authentication, tenancy, authorization, request replay, and engine composition |
 | Core | `packages/lore-core/` | Memory algorithms and PostgreSQL storage mechanics |
 
 The UI remains a module of the Next.js application; this boundary does not require
@@ -25,6 +25,48 @@ a separate UI package or service. Browser wire types and public content limits
 come from the SDK. Canonical content validation and chunking stay in server/Core
 code; the UI does not run a chunk preview. OSS model providers are injected into
 Core. `bun run architecture:check` guards these dependency boundaries in CI.
+
+## API runtimes
+
+`src/server/api/app.ts` composes the Hono subrouters exported by
+`src/modules/*/routes.ts` using `app.route()`. These Hono subrouters declare inline
+`.get()`, `.post()`, etc. handlers and call their domain services directly.
+There is no intervening handler factory or forwarding router layer.
+Services remain independent of Hono. The same shared subrouters mount
+at `/api` and `/api/v1`; versioned-only resources mount only under `/api/v1`.
+`src/server/api/dependencies.ts` binds typed, lazy Hono context functions to each
+request. It reuses that request's database adapter and identity resolver; handlers
+choose when to resolve an Actor or User. Liveness probes, admission failures, and
+unmatched or unsupported routes do not initialize application dependencies. Shared
+`onError` handling maps known domain failures to the public error contract and
+hides unexpected error details. API tests use `app.request()`.
+Public paths, headers, authentication, RLS, and SDK/OpenAPI contracts are shared
+across both hosts.
+`src/server/auth/auth.ts` owns the common admission policy; domain handlers
+still resolve and authorize every Actor independently.
+
+Self-hosting runs Next.js on Bun and mounts Hono through `hono/vercel`.
+The API catch-all, liveness, and readiness routes share `src/server/api/next.ts`;
+`bun run dev` and `bun run start` explicitly run the Next CLI with `bun --bun`,
+retaining native hot reload. Docker runs Next's generated standalone `server.js`
+with Bun. The development Graph benchmark keeps its dedicated Next route.
+The Next adapter owns a lazy pooled database and uses the deployment's provider
+instances. There is no internal HTTP proxy or second process.
+Hono's `/livez` handler does not access the database. Next's `/openapi.json` is
+statically generated. These routes and `/readyz` export only GET; Next handles HEAD, OPTIONS,
+and unsupported methods automatically.
+
+Cloudflare's `worker.ts` sends API and operational requests directly to Hono and
+sends frontend requests to OpenNext. The Cloudflare host creates a request-local
+Hyperdrive adapter and injects a queue notifier using `waitUntil`. It never runs
+Bun or local Git ingestion. Provider/auth string configuration uses Workers'
+`nodejs_compat` environment population; database and queue bindings are explicit.
+
+Bun also owns package management, builds, maintenance, database tooling, and
+CLI/MCP execution. `src/worker/maintenance.ts` builds with Bun's `--target=bun`.
+Runtime-specific setup stays in the Next.js and Cloudflare adapters; shared
+routing and domain code use Web `Request`/`Response` APIs. Core and the TypeScript
+SDK retain portable module contracts for other hosts.
 
 ## Directory map
 
@@ -36,12 +78,12 @@ Core. `bun run architecture:check` guards these dependency boundaries in CI.
 | `src/server/auth/` | Authentication, identity storage, access policy, and Actor request context |
 | `src/server/database/` | OSS role selection, database construction, and identity-bound engine stores |
 | `src/server/providers/` | Concrete model adapters, SDK/protocol handling, model configuration, factories, and runtime provider instances |
-| `src/server/http/` | Shared input handling, idempotency headers, and error responses |
+| `src/server/api/` | Hono composition and request context, Next.js/workerd hosts, input handling, idempotency headers, and error responses |
 | `src/server/openapi/` | Shared contract helpers and assembly of the public OpenAPI document |
 | `src/server/telemetry/` | Server instrumentation and privacy filtering |
 | `src/shared/browser/` | Browser SDK configuration, SWR cache keys, request logs, and common hooks |
 | `src/shared/ui/` | Shared visual helpers |
-| `src/worker/` | Node maintenance entrypoint |
+| `src/worker/` | Bun maintenance entrypoint |
 | `packages/` | Memory engine, TypeScript SDK, CLI, and external MCP adapter |
 | `db/` | Immutable applied migrations and database setup |
 | `tools/sdk-codegen/` | Isolated OpenAPI code-generation toolchain |
@@ -68,9 +110,8 @@ A module contains the files its implementation needs. For example:
 ```text
 src/modules/memories/
   schemas.ts       # Server Zod validation and OpenAPI schema source
-  types.ts         # SDK-generated Memory aliases and browser presentation types
-  input.ts         # Memory-specific HTTP input handling
-  http.ts          # Testable request handlers
+  input.ts         # Memory-specific API input handling
+  routes.ts        # Hono subrouters with inline request handlers
   service.ts       # OSS authorization, request replay, and engine wire mapping
   client.ts        # Domain adapter for the TypeScript SDK
   hooks.ts         # Memory reads and cache behavior
@@ -85,12 +126,12 @@ persistence stays in `packages/lore-core`. A feature does not need a service fil
 client file, or new package unless it has behavior to own.
 
 Callers import the specific interface they use. Do not recreate aggregate `lib`,
-`types`, HTTP-handler, browser-client, or hook files spanning unrelated domains,
+`types`, route, browser-client, or hook files spanning unrelated domains,
 or barrels that re-export server code alongside browser code. Domain hooks share the central
 cache-key vocabulary so mutations can invalidate related views consistently.
 Cross-domain UI composition belongs in `src/shell`.
 
-HTTP handlers and the canonical OpenAPI document define the API contract consumed
+API route handlers and the canonical OpenAPI document define the API contract consumed
 by the TypeScript SDK and direct HTTP clients. The CLI and external MCP adapter
 delegate to the TypeScript SDK. The frontend follows `SWR hook → domain client → TypeScript SDK`:
 SWR owns remote state and cache invalidation, while domain clients preserve UI
@@ -131,7 +172,7 @@ UTF-8 payload, including whitespace. `GraphScalePrototype.tsx` owns prototype
 routing and the SVG control separately from `WorkerCanvasGraph.tsx`.
 `prototype-hooks.ts` still keeps its remote state in SWR with a separate benchmark
 cache key and disables focus/reconnect refresh and error retries so a renderer
-comparison keeps its dataset stable. The SDK and Node scripts do not import SWR.
+comparison keeps its dataset stable. The SDK and server scripts do not import SWR.
 
 ### Memory engine and host policy
 
@@ -159,7 +200,7 @@ OSS modules `memories/service.ts`, `graph/service.ts`, and
 Core keys to the existing `workspaceId`, `ownerUserId`, and Agent provenance
 fields. Memory writes keep permission checks before version checks and mutate
 replay records inside the same transaction through
-`src/server/http/idempotency.ts`. Workspace lifecycle, memberships, grants,
+`src/server/api/idempotency.ts`. Workspace lifecycle, memberships, grants,
 private/shared visibility, HTTP/SDK contracts, and existing tenant data remain
 OSS responsibilities. Metadata filters, scope selectors, and context-group
 expansion are retrieval inputs, never proof of authorization.
@@ -230,19 +271,19 @@ documents the accepted liveness limit and recovery procedure.
 
 MemOS and the vLLM/llama.cpp reranking contracts (including `/score`) retain their
 specific HTTP adapters because the selected SDKs do not cover those exact
-contracts. Their small `src/server/providers/provider-http.ts` boundary checks
+contracts. Their small `src/server/providers/request.ts` boundary checks
 status and consumes bounded JSON; it does not implement a generic HTTP client.
 Dataset streaming, checksum verification, and temporary-file promotion belong to
 `tools/evaluation/shared/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
 protocol stays in its own download adapter. Native development health probes live
-in `scripts/dev/lib/local-http.mjs`. These downloads, generic health probes, Lore's
+in `scripts/dev/lib/health-check.ts`. These downloads, generic health probes, Lore's
 own SDK transport, and the isolated development Graph benchmark remain direct HTTP
 boundaries.
 
 Voyage is pinned to the official remote-only SDK 0.1.0. Newer releases pull optional
 local-inference modules into their public entrypoint and fail the Cloudflare build
 without unused native dependencies. The pinned release supports the full rerank
-contract used here; upgrade only after both Node and Cloudflare builds pass.
+contract used here; upgrade only after both self-host and Cloudflare builds pass.
 
 CoreSpeed HaaS retains a separate vendored `packages/memory-core` fork. The planned
 verbatim-copy cutover was cancelled on 2026-09-15; selected Lore changes are ported
@@ -261,8 +302,8 @@ manually with provenance, rather than mirrored automatically in every task.
 - `service.ts`: indexing transaction orchestration.
 - `maintenance.ts`: leased background processing.
 
-HTTP handlers import the read and queue interfaces. Native parsing and local Git
-run only through the Node worker and operator tooling. Moving implementation files
+API route handlers import the read and queue interfaces. Native parsing and local Git
+run only through the Bun worker and operator tooling. Moving implementation files
 does not change the code-index revision or stored artifact format.
 
 ## Import and runtime rules
@@ -279,8 +320,8 @@ does not change the code-index revision or stored artifact format.
    `packages/lore-core`.
 4. Each domain owns its OpenAPI paths and components; `src/server/openapi/document.ts`
    assembles them. SDK generation reads that assembled document. Zod owns Memory
-   validation and its OpenAPI schemas; browser Memory types come from the generated
-   SDK contract, without a second handwritten wire model.
+   validation and its OpenAPI schemas. Browser wire types are imported directly from
+   the generated SDK contract; presentation-only types stay with their consumers.
 5. Do not add compatibility re-export files at the retired `src/lib` paths. Update
    callers when moving an interface.
 
@@ -288,6 +329,9 @@ does not change the code-index revision or stored artifact format.
 
 Operational scripts are grouped under `scripts/{database,dev,build,checks}`;
 benchmarks, evaluations, and their shared helpers live in `tools/evaluation`.
+All handwritten JavaScript-family source is TypeScript/TSX. The root typecheck
+covers application code; `scripts/tsconfig.json` covers standalone tooling with
+Bun types, checked indexed access, and exact optional properties.
 Package-script names remain the supported command surface:
 `bun run service:up`, `bun run db:migrate`, `bun run sdk:check`, and the existing
 benchmark commands still work from the repository root.
@@ -295,7 +339,8 @@ benchmark commands still work from the repository root.
 Tests are grouped under `tests/modules/<domain>`, `tests/core`, `tests/server`,
 `tests/ui`, `tests/packages`, `tests/benchmarks`, and `tests/integration`.
 Shared database fixtures remain in `tests/support`; runnable worker fixtures remain
-in `tests/fixtures`. Vitest discovers all groups recursively.
+in `tests/fixtures`. Vitest on Bun discovers all groups recursively. Colocated
+local-service and design-check tests use `bun:test`.
 
 The shared database fixture builds a migrated, seeded PGlite snapshot once per
 test module and restores it into a fresh database for each context. Tests share
@@ -308,9 +353,11 @@ Vitest invalidates entries when source or configuration changes. Every test and
 its database fixture still executes on each run.
 
 CI has two job groups: `tests` runs quality checks, application/Core tests, and
-PostgreSQL smoke; `build` runs package smoke plus Node and Cloudflare builds.
+PostgreSQL smoke; `build` runs package smoke, the self-host build and
+`bun run smoke:next` HTTP checks, then the Cloudflare build.
 The stable `check` job requires both groups to succeed. PR updates cancel older
-runs; branch pushes run CI only on `main`. The Cloudflare build reuses that job's fresh Next build through
+runs; branch pushes run CI only on `main`. The Cloudflare build reuses that job's
+fresh Next build through
 `--skipNextBuild` before the Wrangler deployment dry run.
 The two Bun jobs share the package download cache keyed by OS, architecture, Bun
 version, and lockfile; both still run `bun install --frozen-lockfile`. The build

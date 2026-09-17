@@ -1,5 +1,6 @@
 "use client";
 
+import type { Memory, MemoryProposalReviewResult, MemoryScope } from "@corespeed/lore-sdk";
 import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "@/modules/agents/components/AgentsView";
@@ -9,7 +10,6 @@ import { useLoreGraph } from "@/modules/graph/hooks";
 import type { GraphData } from "@/modules/graph/types";
 import { MemoryView } from "@/modules/memories/components/MemoryView";
 import { SearchResults } from "@/modules/memories/components/SearchResults";
-import { memoryTitle, memoryType } from "@/modules/memories/display";
 import {
   removeMemoryFromPages,
   upsertMemoryPages,
@@ -17,11 +17,9 @@ import {
   useLoreMemory,
   useLoreSearch,
 } from "@/modules/memories/hooks";
-import type { Memory, MemoryScope } from "@/modules/memories/types";
 import { WorkspaceOperationsView } from "@/modules/operations/components/WorkspaceOperationsView";
 import { Overview } from "@/modules/overview/components/Overview";
 import { MemoryProposalsView } from "@/modules/proposals/components/MemoryProposalsView";
-import type { MemoryProposalReviewResult } from "@/modules/proposals/types";
 import { useLoreWorkspaces } from "@/modules/workspaces/hooks";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import type { RouteState, Tab } from "@/shell/route";
@@ -41,8 +39,6 @@ const TAB_LABELS: Record<Tab, string> = {
 const EMPTY_GRAPH: GraphData = { nodes: [], links: [] };
 
 interface GraphStore {
-  nodes: GraphData["nodes"];
-  links: GraphData["links"];
   byId: Record<string, GraphData["nodes"][number]>;
   byReference: Record<string, string>;
   adj: Record<string, Set<string>>;
@@ -51,15 +47,6 @@ interface GraphStore {
 interface MemoryLink {
   id: string;
   label: string;
-}
-
-interface MemoryDetailState {
-  memory: Memory;
-  title: string;
-  type: string;
-  id: string;
-  body: string;
-  related: MemoryLink[];
 }
 
 interface AppProps {
@@ -97,7 +84,7 @@ function buildGraph(data: GraphData): GraphStore {
     adj[link.source].add(link.target);
     adj[link.target].add(link.source);
   }
-  return { nodes: data.nodes, links: data.links, byId, byReference, adj };
+  return { byId, byReference, adj };
 }
 
 function graphNeighbors(graph: GraphStore | null, id: string): MemoryLink[] {
@@ -108,17 +95,6 @@ function graphNeighbors(graph: GraphStore | null, id: string): MemoryLink[] {
       id: neighborId,
       label: graph.byId[neighborId]?.label ?? neighborId,
     }));
-}
-
-function memoryDetailState(memory: Memory, graph: GraphStore | null): MemoryDetailState {
-  return {
-    memory,
-    title: memoryTitle(memory),
-    type: memoryType(memory),
-    id: memory.id,
-    body: memory.content,
-    related: graphNeighbors(graph, memory.id),
-  };
 }
 
 function errorMessage(cause: unknown): string {
@@ -183,17 +159,13 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     isLoading: searchLoading,
     mutate: mutateSearch,
   } = useLoreSearch(needsSearch ? activeWorkspaceId : "", searchQuery, 25);
-  const { data: selectedMemoryData, error: selectedMemoryRequestError } = useLoreMemory(
+  const { data: selectedMemory, error: selectedMemoryRequestError } = useLoreMemory(
     routeReady ? activeWorkspaceId : "",
     selectedMemoryId,
   );
   const mutations = useLoreMutations(activeWorkspaceId);
   const saving = mutations.isMutating;
   const graph = useMemo(() => buildGraph(graphData), [graphData]);
-  const selectedMemory = useMemo(
-    () => (selectedMemoryData ? memoryDetailState(selectedMemoryData, graph) : null),
-    [graph, selectedMemoryData],
-  );
   const graphError = graphRequestError ? errorMessage(graphRequestError) : null;
   const graphLoaded = !activeWorkspaceId || !graphLoading;
   const workspaceRequestError =
@@ -385,7 +357,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     try {
       await mutations.forgetMemory.trigger({
         id: memoryId,
-        version: selectedMemory.memory.version,
+        version: selectedMemory.version,
       });
       await mutations.mutateCache(loreKeys.memory(activeWorkspaceId, memoryId), undefined, {
         revalidate: false,
@@ -494,18 +466,9 @@ export function App({ appTitle, appSubtitle }: AppProps) {
             {selectedMemory ? (
               <MemoryView
                 workspaceId={activeWorkspaceId}
-                title={selectedMemory.title}
-                type={selectedMemory.type}
-                id={selectedMemory.id}
-                body={selectedMemory.body}
-                wikilinkTargets={graph?.byReference ?? {}}
-                scope={selectedMemory.memory.scope}
-                ownerUserId={selectedMemory.memory.ownerUserId}
-                createdByAgentId={selectedMemory.memory.createdByAgentId}
-                createdAt={selectedMemory.memory.createdAt}
-                updatedAt={selectedMemory.memory.updatedAt}
-                version={selectedMemory.memory.version}
-                related={selectedMemory.related}
+                memory={selectedMemory}
+                wikilinkTargets={graph.byReference}
+                related={graphNeighbors(graph, selectedMemory.id)}
                 backLabel={TAB_LABELS[tab]}
                 saving={saving}
                 error={mutationError}
@@ -519,7 +482,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 onLocalGraph={setLocalGraphId}
                 onEdit={() => {
                   setMutationError(null);
-                  setEditor({ mode: "edit", memory: selectedMemory.memory });
+                  setEditor({ mode: "edit", memory: selectedMemory });
                 }}
                 onForget={() => void removeOpenMemory()}
               />

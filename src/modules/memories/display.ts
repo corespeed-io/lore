@@ -1,4 +1,4 @@
-import type { Memory } from "./types";
+import type { Memory } from "@corespeed/lore-sdk";
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
