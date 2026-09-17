@@ -1,9 +1,9 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
 import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import type { BenchmarkReaderProvider } from "../../scripts/benchmarks/lib/benchmark-reader";
-import { memoryAgentBenchSubstringExactMatch } from "../../scripts/benchmarks/lib/memoryagentbench";
 import { createMemoryModule } from "../../src/modules/memories/service";
+import { memoryAgentBenchSubstringExactMatch } from "../../tools/evaluation/retrieval/memoryagentbench";
+import type { BenchmarkReaderProvider } from "../../tools/evaluation/shared/benchmark-reader";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("MemoryAgentBench conflict pipeline preserves sequence and rejects private tripwires", async () => {

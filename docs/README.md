@@ -12,6 +12,8 @@
 | Operate, back up, restore, or migrate Lore | [Operations and portability](operations.md) |
 | Work on the interface | [Design system](../DESIGN.md) |
 | Contribute code | [Contributing](../.github/CONTRIBUTING.md) |
+| Find development and database commands | [Script index](../scripts/README.md) |
+| Run quality and performance measurements | [Evaluation tool index](../tools/evaluation/README.md) |
 
 Package-specific setup lives with the [memory engine](../packages/lore-core/README.md),
 [TypeScript SDK](../packages/typescript-sdk/README.md),
@@ -30,7 +32,8 @@ Package-specific setup lives with the [memory engine](../packages/lore-core/READ
 [Research index](research/README.md) lists retained source audits and benchmark
 reports. Each report applies to its recorded date, revision, and workload; it does
 not replace current setup instructions or establish a production performance guarantee.
-Executable suites live in [`evaluation/`](../evaluation/).
+Executable harnesses live in [`tools/evaluation/`](../tools/evaluation/README.md);
+versioned suites and dataset manifests live in [`evaluation/`](../evaluation/).
 
 Keep durable decisions and reproducible findings in documentation. Store individual
 benchmark run artifacts in `evaluation/results`; remove superseded reports and

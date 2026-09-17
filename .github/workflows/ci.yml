@@ -1,19 +1,19 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  python-sdk:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.14"]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - run: python -m pip install ./packages/python-sdk
-      - run: PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s packages/python-sdk/tests
-  check:
+  tests:
+    name: Lint, typecheck & tests
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -33,22 +33,107 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 24 }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - name: Cache Bun downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Cache Vitest modules
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.experimental-vitest-cache
+          key: ${{ runner.os }}-node24-vitest-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-node24-vitest-${{ hashFiles('bun.lock') }}-
+      - name: Check formatting and lint
+        run: bun run lint
+      - name: Check module dependency boundaries
+        run: bun run architecture:check
+      - name: Check UI conventions
+        run: bun run design:check
+      - name: Check TypeScript types
+        run: bun run typecheck
+      - name: Test local service scripts
+        run: bun run service:test
+      - name: Audit dependency vulnerabilities
+        run: bun audit --audit-level=high
+      - name: Run application tests
+        run: bunx vitest run
+      - name: Run Core typecheck and tests
+        run: bun run --cwd packages/lore-core check
+      - name: Run PostgreSQL memory smoke test
+        run: bun run smoke:memory-core
+        env:
+          LORE_SMOKE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lore_memory_core_smoke_ci
+
+  build:
+    name: Build web, SDK, CLI & MCP
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24 }
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.3.14 }
-      - run: bun install --frozen-lockfile
-      - run: bun run lint
-      - run: bun run architecture:check
-      - run: bun run design:check
-      - run: bun run typecheck
-      - run: bun run service:test
-      - run: bun run test
-      - run: bun run smoke:memory-core
+      - name: Cache Bun downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-1.3.14-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Cache Next build
+        uses: actions/cache@v5
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-node24-next-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node24-next-${{ hashFiles('bun.lock') }}-
+      # npm pack runs each package's existing prepack build before installation.
+      - name: Build and test SDK, CLI and MCP packages
+        run: bun run packages:smoke
+      - name: Build Next.js application
+        run: bunx next build
+      - name: Build maintenance worker
+        run: bun run build:maintenance
+      - name: Bundle database migration tool
+        run: bun run build:dbmate
+      # Reuse this job's fresh standalone Next output; still build the Worker bundle.
+      - name: Build Cloudflare Worker
+        run: bunx opennextjs-cloudflare build --skipNextBuild
+      - name: Validate Cloudflare deployment (dry run)
+        run: bunx wrangler deploy --dry-run
+
+  python-sdk:
+    name: Python SDK tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Python SDK
+        run: python -m pip install ./packages/python-sdk
+      - name: Run Python SDK tests
+        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s packages/python-sdk/tests
+
+  check:
+    name: All checks
+    if: ${{ always() }}
+    needs: [tests, build, python-sdk]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to pass
         env:
-          LORE_SMOKE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lore_memory_core_smoke_ci
-      - run: bun run packages:smoke
-      - run: bun run build
-      - run: bun audit --audit-level=high
-      - run: bunx opennextjs-cloudflare build
-      - run: bunx wrangler deploy --dry-run
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: printf '%s\n' "$JOB_RESULTS" | jq -e 'all(.[]; .result == "success")'

@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import {
   CODE_AWARE_MEMORY_EVALUATION_REVISION,
   scoreCodeAwareMemoryEvaluation,
-} from "../../scripts/evaluation/lib/code-aware-memory-evaluation";
-import { runCodeAwareMemoryFoundationEvaluation } from "../../scripts/evaluation/lib/code-aware-memory-foundation-evaluation";
+} from "../../tools/evaluation/code/code-aware-memory-evaluation";
+import { runCodeAwareMemoryFoundationEvaluation } from "../../tools/evaluation/code/code-aware-memory-foundation-evaluation";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("code-aware evaluation keeps hard failures separate from aggregate quality", () => {

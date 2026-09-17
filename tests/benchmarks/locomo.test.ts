@@ -9,8 +9,8 @@ import {
   readLocomoPartitions,
   renderLocomoDialog,
   toLocomoPartition,
-} from "../../scripts/benchmarks/lib/locomo";
-import { nltkPorterStem } from "../../scripts/benchmarks/lib/nltk-porter-stemmer";
+} from "../../tools/evaluation/retrieval/locomo";
+import { nltkPorterStem } from "../../tools/evaluation/shared/nltk-porter-stemmer";
 
 const fixture = {
   sample_id: "conv-fixture",

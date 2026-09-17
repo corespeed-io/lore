@@ -19,7 +19,7 @@ COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/.worker ./.worker
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/db ./db
-COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/scripts/database ./scripts/database
 COPY --from=builder /app/package.json ./package.json
 
 EXPOSE 3000

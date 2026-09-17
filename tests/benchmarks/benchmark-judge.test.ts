@@ -4,7 +4,7 @@ import {
   createBenchmarkJudgeFromEnvironment,
   LONGMEMEVAL_V2_JUDGE_REVISION,
   parseLongMemEvalV2JudgeResponse,
-} from "../../scripts/benchmarks/lib/benchmark-judge";
+} from "../../tools/evaluation/shared/benchmark-judge";
 
 test("Google judge uses a non-stored SDK interaction and records usage", async () => {
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

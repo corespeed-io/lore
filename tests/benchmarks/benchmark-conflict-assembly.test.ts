@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import {
   assembleVersionedMultiHopAnswer,
   assembleVersionedSingleHopAnswer,
-} from "../../scripts/benchmarks/lib/benchmark-conflict-assembly";
-import type { BenchmarkReaderProvider } from "../../scripts/benchmarks/lib/benchmark-reader";
+} from "../../tools/evaluation/shared/benchmark-conflict-assembly";
+import type { BenchmarkReaderProvider } from "../../tools/evaluation/shared/benchmark-reader";
 
 function readerReturning(text: string): BenchmarkReaderProvider {
   return {

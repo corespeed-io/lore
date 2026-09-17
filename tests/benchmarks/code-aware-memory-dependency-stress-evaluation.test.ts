@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { runCodeAwareMemoryDependencyStressEvaluation } from "../../scripts/evaluation/lib/code-aware-memory-dependency-stress-evaluation";
+import { runCodeAwareMemoryDependencyStressEvaluation } from "../../tools/evaluation/code/code-aware-memory-dependency-stress-evaluation";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("dependency stress evaluation exercises semantic long-tail cases without hiding failures", async () => {

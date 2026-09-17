@@ -399,7 +399,7 @@ been removed. Lore now has a native implementation, split into two concepts
   environment credential use. Keep application-level embedding/result/score validation. MemOS and
   vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
   `src/server/providers/provider-http.ts` with status handling and bounded reads.
-  `scripts/benchmarks/lib/dataset-download.ts` owns streaming, checksum-verified
+  `tools/evaluation/shared/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
   `memoryagentbench-download.ts`. Node service probes live in `scripts/dev/lib/local-http.mjs`;
 - `packages/lore-core/src/query-planning.ts` defines the optional multi-query planning capability.
@@ -873,7 +873,7 @@ Benchmark is part of the product quality system even without AutoDream.
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
   disposable database whose schema was generated at a non-lore width through
-  `scripts/benchmarks/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
+  `tools/evaluation/retrieval/benchmark-migrate-dimensions.mjs` (the audited 1024→N transform of
   the baseline; the four `length(path) <= 1024` checks stay). It exercises the
   engine's host-baked `embeddingDimensions` option the way a non-lore host's
   own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
@@ -1074,6 +1074,13 @@ Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
 
 ## Existing UI/test gotchas
 
+- `tests/support/memory-context.ts` caches a migrated, seeded PGlite snapshot per
+  isolated test module and restores a fresh database for every context. Preserve
+  that isolation; migration tests must still execute migrations on empty databases.
+  Both Vitest configs enable `experimental.fsModuleCache` (the Vitest 4 API).
+  Clear stale module caches with `bunx vitest --clearCache`; cached modules never
+  replace test execution. CI's stable `check` gate requires the tests, build, and
+  Python matrix jobs to succeed; cache hits must not skip their checks.
 - Setting an input's `.value` and dispatching `input` does not trigger React 19's
   `onChange`; use real keystrokes or the native value setter.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.

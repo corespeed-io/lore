@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { datasetIsVerified, downloadDataset } from "../../scripts/benchmarks/lib/dataset-download";
+import { datasetIsVerified, downloadDataset } from "../../tools/evaluation/shared/dataset-download";
 
 const directories: string[] = [];
 const body = new TextEncoder().encode("A pinned 数据集\n");

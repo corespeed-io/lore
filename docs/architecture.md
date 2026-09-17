@@ -46,9 +46,17 @@ Core. `bun run architecture:check` guards these dependency boundaries in CI.
 | `packages/` | Memory engine, TypeScript/Python SDKs, CLI, and external MCP adapter |
 | `db/` | Immutable applied migrations and database setup |
 | `tools/sdk-codegen/` | Isolated OpenAPI code-generation toolchain |
-| `scripts/` | Development, operational, validation, benchmark, and evaluation commands |
+| `tools/evaluation/` | Quality and performance tools grouped by retrieval, code, context, policy, chunking, and graph |
+| `scripts/` | Development, build, validation, and database operations |
 | `tests/` | Automated tests grouped by the code they exercise |
 | `evaluation/` | Versioned evaluation inputs and results |
+
+Use the [script index](../scripts/README.md) for daily development and operations,
+and the [evaluation tool index](../tools/evaluation/README.md) for repeatable quality
+and performance measurements. Keep the harnesses used by retained research
+baselines; retire superseded interactive demos and compatibility exports. Run the
+stable package commands from the repository root. Evaluation inputs and reports
+stay in `evaluation/`; the Docker runtime copies only `scripts/database/`.
 
 ## Domain modules
 
@@ -226,7 +234,7 @@ specific HTTP adapters because the selected SDKs do not cover those exact
 contracts. Their small `src/server/providers/provider-http.ts` boundary checks
 status and consumes bounded JSON; it does not implement a generic HTTP client.
 Dataset streaming, checksum verification, and temporary-file promotion belong to
-`scripts/benchmarks/lib/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
+`tools/evaluation/shared/dataset-download.ts`; the MemoryAgentBench row-to-JSONL
 protocol stays in its own download adapter. Native development health probes live
 in `scripts/dev/lib/local-http.mjs`. These downloads, generic health probes, Lore's
 own SDK transport, and the isolated development Graph benchmark remain direct HTTP
@@ -279,9 +287,9 @@ does not change the code-index revision or stored artifact format.
 
 ## Scripts and tests
 
-Script groups are `database`, `dev`, `build`, `checks`, `benchmarks`, and
-`evaluation`. Shared benchmark/evaluation helpers and their fixtures live within
-the corresponding group. Package-script names remain the supported command surface:
+Operational scripts are grouped under `scripts/{database,dev,build,checks}`;
+benchmarks, evaluations, and their shared helpers live in `tools/evaluation`.
+Package-script names remain the supported command surface:
 `bun run service:up`, `bun run db:migrate`, `bun run sdk:check`, and the existing
 benchmark commands still work from the repository root.
 
@@ -289,6 +297,29 @@ Tests are grouped under `tests/modules/<domain>`, `tests/core`, `tests/server`,
 `tests/ui`, `tests/packages`, `tests/benchmarks`, and `tests/integration`.
 Shared database fixtures remain in `tests/support`; runnable worker fixtures remain
 in `tests/fixtures`. Vitest discovers all groups recursively.
+
+The shared database fixture builds a migrated, seeded PGlite snapshot once per
+test module and restores it into a fresh database for each context. Tests share
+only the immutable snapshot, never a live connection or mutable database. Migration
+tests still initialize empty databases and execute the migration chain directly.
+Both Vitest configurations enable persistent module transformation caching through
+Vitest 4's `experimental.fsModuleCache`. CI restores
+`node_modules/.experimental-vitest-cache` across commits with the same lockfile;
+Vitest invalidates entries when source or configuration changes. Every test and
+its database fixture still executes on each run.
+
+CI has three job groups: `tests` runs quality checks, application/Core tests, and
+PostgreSQL smoke; `build` runs package smoke plus Node and Cloudflare builds;
+`python-sdk` tests Python 3.12 and 3.14. The stable `check` job requires all three
+groups to succeed. PR updates cancel older runs; branch pushes run CI only on
+`main`. The Cloudflare build reuses that job's fresh Next build through
+`--skipNextBuild` before the Wrangler deployment dry run.
+The two Bun jobs share the package download cache keyed by OS, architecture, Bun
+version, and lockfile; both still run `bun install --frozen-lockfile`. The build
+job also restores `.next/cache` for incremental compilation. Build and test
+caches get a new entry per commit with a same-lockfile restore prefix; dependency
+downloads reuse one entry until the lockfile changes. Cache hits never skip a
+test, installation, or production build.
 
 Use the ordinary verification commands:
 

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { summarizeTokenUsage } from "../../scripts/benchmarks/lib/token-usage";
+import { summarizeTokenUsage } from "../../tools/evaluation/shared/token-usage";
 
 test("token usage totals are nullable when provider coverage is incomplete", () => {
   expect(

@@ -1,9 +1,9 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { evaluateLongMemEvalV2Answer } from "../../scripts/benchmarks/lib/answer-evaluation";
-import type { BenchmarkReaderProvider } from "../../scripts/benchmarks/lib/benchmark-reader";
 import { createEpisodeEvidenceModule } from "../../src/modules/episodes/evidence";
 import { createObservationModule } from "../../src/modules/episodes/service";
+import { evaluateLongMemEvalV2Answer } from "../../tools/evaluation/shared/answer-evaluation";
+import type { BenchmarkReaderProvider } from "../../tools/evaluation/shared/benchmark-reader";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("LongMemEval-V2 fixed-reader pipeline keeps haystack filtering and RLS before answering", async () => {

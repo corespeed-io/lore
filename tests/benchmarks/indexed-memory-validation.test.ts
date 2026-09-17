@@ -1,11 +1,11 @@
 import type { EmbeddingProvider } from "@corespeed/lore-core";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import type { IndexedMemoryChunk } from "../../scripts/benchmarks/lib/indexed-memory-validation";
+import type { IndexedMemoryChunk } from "../../tools/evaluation/retrieval/indexed-memory-validation";
 import {
   requireExactIndexedMemory,
   validateExactIndexedMemory,
-} from "../../scripts/benchmarks/lib/indexed-memory-validation";
+} from "../../tools/evaluation/retrieval/indexed-memory-validation";
 
 const provider: EmbeddingProvider = {
   provider: "test",
