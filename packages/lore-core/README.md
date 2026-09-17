@@ -8,8 +8,8 @@ and leased embedding maintenance over host-constrained PostgreSQL transactions.
 
 This package is the **lore core** half of the lore core / lore oss split
 (Linear HAAS-71). The lore repository's application — identity/tenancy, HTTP
-API, OpenAPI, SDKs, web UI, Memory Proposals, code-aware memory, portability,
-evaluation, and concrete model adapters — is **lore oss**, the host of this
+API, OpenAPI, TypeScript SDK, web UI, Memory Proposals, code-aware memory,
+portability, evaluation, and concrete model adapters — is **lore oss**, the host of this
 engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 
 ## The contract

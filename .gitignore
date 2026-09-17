@@ -13,8 +13,6 @@ backups/
 *.log
 *.tsbuildinfo
 packages/*/dist/
-packages/python-sdk/build/
-packages/python-sdk/src/*.egg-info/
 __pycache__/
 *.py[cod]
 next-env.d.ts

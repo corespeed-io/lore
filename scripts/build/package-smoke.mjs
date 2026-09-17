@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { supportedPythonInterpreter } from "./python-interpreter.mjs";
 
 const repository = new URL("../../", import.meta.url);
 
@@ -49,11 +48,7 @@ function packedTarball(packageDirectory, destination) {
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "lore-package-smoke-"));
 try {
   const consumer = join(temporaryDirectory, "consumer");
-  const pythonPackage = join(temporaryDirectory, "python-sdk");
-  const pythonTarget = join(temporaryDirectory, "python-target");
   await mkdir(consumer);
-  await mkdir(pythonTarget);
-  await cp(new URL("packages/python-sdk", repository), pythonPackage, { recursive: true });
   await writeFile(
     join(consumer, "package.json"),
     JSON.stringify({ name: "lore-package-smoke", private: true, type: "module" }),
@@ -121,25 +116,6 @@ try {
     throw new Error("Packed MCP executable did not start and validate configuration safely");
   }
 
-  const python = supportedPythonInterpreter();
-  if (!python) {
-    throw new Error(
-      "Lore Python package smoke requires Python 3.12 or newer. Set LORE_PYTHON to a supported interpreter.",
-    );
-  }
-  run(python, [
-    "-m",
-    "pip",
-    "install",
-    "--disable-pip-version-check",
-    "--no-deps",
-    "--target",
-    pythonTarget,
-    pythonPackage,
-  ]);
-  run(python, ["-c", "from corespeed_lore import LoreClient; print(LoreClient.__name__)"], {
-    env: { ...process.env, PYTHONPATH: pythonTarget },
-  });
   console.log("Lore package smoke passed.");
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
