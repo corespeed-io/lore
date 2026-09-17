@@ -11,6 +11,7 @@ import {
   type Episode,
   LoreApiError,
   LoreClient,
+  type LoreClientOptions,
   loreConfigurationFromEnvironment,
   MEMORY_CONTENT_LIMITS,
   type Memory,
@@ -1160,7 +1161,7 @@ export function createLoreMcpServer(options: LoreMcpServerOptions): McpServer {
 
 export function serveLoreMcpStdio(
   environment: Readonly<Record<string, string | undefined>> = process.env,
-  fetchImplementation?: typeof globalThis.fetch,
+  fetchImplementation?: LoreClientOptions["fetch"],
 ): StdioServerHandle {
   const configuration = loreConfigurationFromEnvironment(environment);
   if (!configuration.workspaceId) {

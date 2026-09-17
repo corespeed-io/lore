@@ -1,18 +1,21 @@
 "use client";
 
+import type { Memory } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import useSWRInfinite from "swr/infinite";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume";
 import { getMemory, listMemories, searchMemories } from "./client";
-import type { Memory } from "./types";
 
 export const MEMORY_PAGE_SIZE = 100;
 
 export const MAX_MEMORY_PAGES = 50;
 
-export function upsertMemoryPages(pages: Memory[][] | undefined, saved: Memory): Memory[][] {
+export function upsertMemoryPages(
+  pages: readonly (readonly Memory[])[] | undefined,
+  saved: Memory,
+): Memory[][] {
   if (!pages?.length) return [[saved]];
   const memories = [saved, ...pages.flat().filter((memory) => memory.id !== saved.id)];
   return pages.map((_, pageIndex) =>
@@ -45,9 +48,9 @@ export function shouldLoadNextMemoryPage(state: MemoryPageAdvanceState): boolean
 }
 
 export function removeMemoryFromPages(
-  pages: Memory[][] | undefined,
+  pages: (readonly Memory[])[] | undefined,
   memoryId: string,
-): Memory[][] | undefined {
+): (readonly Memory[])[] | undefined {
   if (!pages?.length) return pages;
   const memories = pages.flat().filter((memory) => memory.id !== memoryId);
   return pages.map((_, pageIndex) =>
@@ -69,7 +72,7 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
   }, [enabled, workspaceId]);
 
   const swr = useSWRInfinite(
-    (pageIndex, previousPage: Memory[] | null) => {
+    (pageIndex, previousPage: readonly Memory[] | null) => {
       if (
         !workspaceId ||
         pageIndex >= MAX_MEMORY_PAGES ||

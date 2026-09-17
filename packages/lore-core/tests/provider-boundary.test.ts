@@ -32,11 +32,15 @@ test("public engine entries run without OSS or installed provider SDKs", async (
       new URL("fixtures/provider-consumer.ts", import.meta.url),
       join(consumerDirectory, "consumer.ts"),
     );
-    const { stdout } = await execute("bun", ["--no-install", "--no-env-file", "consumer.ts"], {
-      cwd: consumerDirectory,
-      env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "" },
-      timeout: 20_000,
-    });
+    const { stdout } = await execute(
+      process.execPath,
+      ["--no-install", "--no-env-file", "consumer.ts"],
+      {
+        cwd: consumerDirectory,
+        env: { ...process.env, NODE_PATH: "", NODE_OPTIONS: "" },
+        timeout: 20_000,
+      },
+    );
     expect(stdout.trim()).toBe("independent core consumer passed");
   } finally {
     await rm(consumerDirectory, { recursive: true, force: true });

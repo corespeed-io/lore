@@ -20,7 +20,7 @@ afterEach(() => {
 test("a browser write can complete after the SDK's ordinary deadline", async () => {
   vi.useFakeTimers();
   let complete!: (response: Response) => void;
-  const fetcher = vi.fn<typeof fetch>(
+  const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
     (_input, init) =>
       new Promise<Response>((resolve, reject) => {
         complete = resolve;
@@ -47,7 +47,7 @@ test("a browser write can complete after the SDK's ordinary deadline", async () 
 
 test("a browser caller can still cancel a request after a long wait", async () => {
   vi.useFakeTimers();
-  const fetcher = vi.fn<typeof fetch>(
+  const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
     (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });

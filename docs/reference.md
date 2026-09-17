@@ -5,7 +5,7 @@ with the [project README](../README.md) if you are new to Lore.
 
 ## Run with Docker
 
-Bun 1.3.14+, Node 24 LTS, and a Postgres distribution with pgvector are required.
+Bun 1.3.14+ and a Postgres distribution with pgvector are required.
 The source verification loop additionally requires Python 3.12+ for the Python SDK.
 The fastest self-hosted setup is:
 
@@ -414,11 +414,21 @@ Basic but always maps an accepted login to `LORE_LOCAL_SUBJECT`; the Basic usern
 cannot be used to select or impersonate another internal User. Multi-user deployments
 should use a verified identity proxy such as Cloudflare Access.
 
-Lore keeps a single text lockfile, `bun.lock`. Bun owns dependency installation and
-script dispatch; self-hosted application and migration code still execute on Node 24,
-while the Cloudflare artifact executes on Workerd.
+Lore keeps a single text lockfile, `bun.lock`. Bun owns dependency installation,
+builds, TypeScript scripts, the Next.js + Hono application, CLI/MCP, and the
+maintenance worker. Cloudflare executes its deployed bundle on workerd.
 
 ## Local development
+
+### Application process layout
+
+`bun run dev` starts Next.js on Bun with Hono mounted through `hono/vercel` in its
+API catch-all route. `bun run build` builds the application; `bun run start`
+starts Next.js in production. The Next CLI commands explicitly use `bun --bun`
+so its Node shebang does not select the runtime. Docker runs Next's generated
+standalone `server.js` with Bun. Frontend and API share one process, one origin,
+authentication, and the existing development hot reload. Next retains thin
+`/livez` and `/readyz` adapters and the statically generated `/openapi.json` route.
 
 ### Native one-command service on Apple Silicon
 
@@ -441,7 +451,8 @@ and maintenance passwords, creates the local `lore` database if necessary, runs
 migrations, and provisions narrow `lore_app` and `lore_maintenance` login roles.
 If `.env` already exists without native database settings, `service:up` extends it
 idempotently; a partial native configuration fails with the exact missing keys.
-It then starts the loopback-only Next.js development server and maintenance worker.
+It then starts the loopback-only Next.js development server with Hono APIs on Bun
+and the maintenance worker on Bun.
 
 Reranking remains available as an explicit deployment-level diagnostic mode. To
 add a Qwen3-Reranker 0.6B Q8 llama.cpp server, install llama.cpp, set
@@ -559,20 +570,21 @@ bun run build:packages
 ```
 
 Use an Agent credential from the one-time `/agents` flow through environment
-variables. Secrets are not accepted as CLI flags:
+variables. CLI/MCP require Bun 1.3.14+ and disable automatic `.env` loading.
+Secrets are not accepted as CLI flags:
 
 ```bash
 export LORE_URL=http://127.0.0.1:3000
 export LORE_WORKSPACE_ID=10000000-0000-4000-8000-000000000001
 export LORE_AGENT_TOKEN=lore_agent_...
 
-printf %s "deployment notes" | node packages/cli/dist/bin.js memory search --stdin --limit 10
-printf %s "Release approved" | node packages/cli/dist/bin.js memory remember --stdin \
+printf %s "deployment notes" | bun --no-env-file packages/cli/dist/bin.js memory search --stdin --limit 10
+printf %s "Release approved" | bun --no-env-file packages/cli/dist/bin.js memory remember --stdin \
   --scope private --idempotency-key release-approved-1
-printf %s "Suggested release note" | node packages/cli/dist/bin.js memory propose create \
+printf %s "Suggested release note" | bun --no-env-file packages/cli/dist/bin.js memory propose create \
   --stdin --scope private --idempotency-key release-proposal-1
 printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":"Release approved"}]}' \
-  | node packages/cli/dist/bin.js episode record --stdin --idempotency-key release-episode-1
+  | bun --no-env-file packages/cli/dist/bin.js episode record --stdin --idempotency-key release-episode-1
 ```
 
 The stdio MCP adapter exposes bounded list/search/get, direct version-safe
@@ -593,8 +605,8 @@ queries are returned in the receipt rather than hidden as planner state.
 {
   "mcpServers": {
     "lore": {
-      "command": "node",
-      "args": ["/absolute/path/to/lore/packages/mcp/dist/bin.js"],
+      "command": "bun",
+      "args": ["--no-env-file", "/absolute/path/to/lore/packages/mcp/dist/bin.js"],
       "env": {
         "LORE_URL": "http://127.0.0.1:3000",
         "LORE_WORKSPACE_ID": "10000000-0000-4000-8000-000000000001",
@@ -623,7 +635,8 @@ telemetry privacy.
 
 ## CoreSpeed Cloud / Cloudflare
 
-Cloudflare is the only managed deployment target. Lore uses OpenNext on Workers,
+Cloudflare is the only managed deployment target. Lore runs Hono APIs directly on
+Workers and serves the Next.js frontend through OpenNext, with
 Queues for low-latency job wake-ups, and two cache-disabled Hyperdrive bindings to
 the same Postgres schema:
 
@@ -632,16 +645,16 @@ the same Postgres schema:
 bun run db:migrate
 
 # Use the non-owner runtime database login created by db:bootstrap.
-bunx wrangler hyperdrive create lore \
+bun --bun wrangler hyperdrive create lore \
   --connection-string="postgres://lore_runtime:...@db.example.com:5432/lore" \
   --caching-disabled
 
-bunx wrangler hyperdrive create lore-maintenance \
+bun --bun wrangler hyperdrive create lore-maintenance \
   --connection-string="postgres://lore_maintenance_runtime:...@db.example.com:5432/lore" \
   --caching-disabled
 
-bunx wrangler queues create lore-memory-maintenance
-bunx wrangler queues create lore-memory-maintenance-dead-letter
+bun --bun wrangler queues create lore-memory-maintenance
+bun --bun wrangler queues create lore-memory-maintenance-dead-letter
 
 # Put the returned id and Cloudflare Access values in wrangler.jsonc.
 bun run deploy:cloudflare
@@ -665,8 +678,8 @@ bun run build
 bun run build:packages
 bun run packages:smoke
 bun audit --audit-level=high
-bunx opennextjs-cloudflare build
-bunx wrangler deploy --dry-run
+bun --bun opennextjs-cloudflare build
+bun --bun wrangler deploy --dry-run
 ```
 
 `test:python` selects Python 3.12 or newer, preferring 3.14, 3.13, then 3.12. Set

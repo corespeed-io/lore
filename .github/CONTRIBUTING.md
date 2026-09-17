@@ -4,7 +4,8 @@
 
 ## Development setup
 
-Use Bun 1.3.14 or newer, Node.js 24 LTS, and Postgres with pgvector.
+Use Bun 1.3.14 or newer and Postgres with pgvector. Python SDK verification also
+requires Python 3.12 or newer.
 `bun.lock` is the only dependency lockfile; do not add `package-lock.json`,
 `pnpm-lock.yaml`, or `yarn.lock`.
 
@@ -66,7 +67,8 @@ See `AGENTS.md` and `CONTEXT.md` for the complete invariants and vocabulary.
 - Tests live in `tests/modules`, `tests/core`, `tests/server`, `tests/ui`,
   `tests/packages`, `tests/benchmarks`, and `tests/integration`, following the naming
   convention `<feature>.test.ts`. See [the architecture guide](../docs/architecture.md).
-- Use `vitest` for unit and integration tests.
+- Use Vitest on Bun for application and Core unit/integration tests; colocated
+  development and design-check scripts use `bun:test`.
 - Aim for >80% coverage on new logic.
 - Run `bun run test` before committing.
 

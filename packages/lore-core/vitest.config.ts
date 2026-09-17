@@ -2,6 +2,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Bun already provides CJS/ESM interop without Vitest's Node conversion.
+    deps: { interopDefault: false },
     experimental: { fsModuleCache: true },
     environment: "node",
     include: ["tests/**/*.test.ts"],

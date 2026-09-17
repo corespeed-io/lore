@@ -28,7 +28,7 @@ reviewers and contributors must preserve these invariants:
   use `--caching-disabled`; RLS and revocation checks depend on fresh,
   transaction-local context.
 - A strict Content-Security-Policy and standard security headers are set in
-  `next.config.mjs`.
+  `next.config.ts`.
 
 ## Deploying safely
 

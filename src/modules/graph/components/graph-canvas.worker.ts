@@ -1,7 +1,8 @@
 /// <reference lib="webworker" />
 
 import * as d3 from "d3";
-import { PARTICLE_FIELD_RADIUS_MULTIPLIER } from "@/modules/graph/rendering/physics";
+
+const PARTICLE_FIELD_RADIUS_MULTIPLIER = 16;
 
 type WorkerNode = d3.SimulationNodeDatum & {
   id: string;

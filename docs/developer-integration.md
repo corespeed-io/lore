@@ -9,6 +9,10 @@ executes under Postgres RLS.
 
 ## Build and contract generation
 
+Bun 1.3.14+ builds the packages and runs the CLI/MCP executables. The TypeScript
+SDK exports standard ESM and declarations and remains usable by other compatible
+hosts and browsers. The Python SDK uses Python 3.12+.
+
 The canonical OpenAPI document is implemented by `src/server/openapi/document.ts` and served at
 `/openapi.json`. The generator commits TypeScript types/runtime error codes, Python
 `TypedDict` contracts/runtime error codes, and CLI/MCP versions:
@@ -53,7 +57,8 @@ production and is not exposed by the public SDK, CLI, or MCP adapter.
 
 ## Shared connection environment
 
-The CLI and MCP process use the same variables:
+The CLI and MCP process use the same variables. Their executable entrypoints
+disable automatic `.env` loading; supply credentials in the process environment:
 
 | Variable | Meaning |
 | --- | --- |
@@ -235,30 +240,30 @@ missing exact Code revision cannot be replaced with a Memory search. See the
 After `bun run build:packages`, run:
 
 ```bash
-node packages/cli/dist/bin.js workspace list
-node packages/cli/dist/bin.js memory list --limit 25
-printf %s "release date" | node packages/cli/dist/bin.js memory search --stdin
-node packages/cli/dist/bin.js memory get MEMORY_UUID
-printf %s "fact" | node packages/cli/dist/bin.js memory remember --stdin \
+bun --no-env-file packages/cli/dist/bin.js workspace list
+bun --no-env-file packages/cli/dist/bin.js memory list --limit 25
+printf %s "release date" | bun --no-env-file packages/cli/dist/bin.js memory search --stdin
+bun --no-env-file packages/cli/dist/bin.js memory get MEMORY_UUID
+printf %s "fact" | bun --no-env-file packages/cli/dist/bin.js memory remember --stdin \
   --scope private --idempotency-key fact-1
-printf %s "suggested fact" | node packages/cli/dist/bin.js memory propose create \
+printf %s "suggested fact" | bun --no-env-file packages/cli/dist/bin.js memory propose create \
   --stdin --scope private \
   --code-evidence CODE_ARTIFACT_UUID:implements --idempotency-key proposal-1
 printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":"raw evidence"}]}' \
-  | node packages/cli/dist/bin.js episode record --stdin --idempotency-key episode-1
-node packages/cli/dist/bin.js episode list --scope private
-node packages/cli/dist/bin.js code dependencies callers \
+  | bun --no-env-file packages/cli/dist/bin.js episode record --stdin --idempotency-key episode-1
+bun --no-env-file packages/cli/dist/bin.js episode list --scope private
+bun --no-env-file packages/cli/dist/bin.js code dependencies callers \
   --repository corespeed/lore --commit FULL_COMMIT_OID \
   --symbol createMemoryModule --limit 50
-node packages/cli/dist/bin.js memory propose update MEMORY_UUID --version 2 \
+bun --no-env-file packages/cli/dist/bin.js memory propose update MEMORY_UUID --version 2 \
   --content "suggested replacement" --observation-evidence OBSERVATION_UUID \
   --idempotency-key proposal-update-1
-printf %s "new fact" | node packages/cli/dist/bin.js memory update MEMORY_UUID \
+printf %s "new fact" | bun --no-env-file packages/cli/dist/bin.js memory update MEMORY_UUID \
   --version 2 --stdin --idempotency-key fact-update-1
-node packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3 \
+bun --no-env-file packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3 \
   --idempotency-key fact-forget-1
-node packages/cli/dist/bin.js capabilities
-node packages/cli/dist/bin.js readiness
+bun --no-env-file packages/cli/dist/bin.js capabilities
+bun --no-env-file packages/cli/dist/bin.js readiness
 ```
 
 Commands emit JSON to stdout. Diagnostics go to stderr; API failures exit `1` and
@@ -274,7 +279,7 @@ helper. It is deliberately external to the Lore application and Portable Core.
 Start it with the shared environment above:
 
 ```bash
-node packages/mcp/dist/bin.js
+bun --no-env-file packages/mcp/dist/bin.js
 ```
 
 It exposes:
@@ -335,7 +340,7 @@ export LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","reposito
 
 The model supplies `repositoryKey` and a full 40/64-character commit OID. It cannot
 supply or discover `repositoryPath`; an empty registry disables enqueue. Native
-Git and AST work runs in the Node maintenance worker, never in the MCP or
+Git and AST work runs in the Bun maintenance worker, never in the MCP or
 Cloudflare request bundle.
 
 `lore_code_dependencies` accepts exactly one `symbol` or `path` plus

@@ -1,6 +1,6 @@
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
-import { requestProviderJson } from "../provider-http";
-import type { ConfiguredRerankingProvider } from "./types";
+import type { ConfiguredRerankingProvider } from "../metadata";
+import { type ProviderRequestOptions, requestProviderJson } from "../request";
 
 const DEFAULT_VLLM_BASE_URL = "http://127.0.0.1:8000";
 const DEFAULT_LLAMACPP_BASE_URL = "http://127.0.0.1:8080";
@@ -19,7 +19,7 @@ export interface VllmRerankingOptions {
   apiKey?: string;
   instruction?: string;
   timeoutMs?: number;
-  fetch?: typeof globalThis.fetch;
+  fetch?: ProviderRequestOptions["fetch"];
 }
 
 export type LlamaCppRerankingOptions = Omit<VllmRerankingOptions, "instruction">;

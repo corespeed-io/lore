@@ -26,7 +26,7 @@ interface DragRegressionMetrics {
 
 test("worker drag follows the pointer, stays calm, and springs after release", async () => {
   const fixture = new URL("../../fixtures/graph-worker-drag-regression.ts", import.meta.url);
-  const { stdout } = await execFileAsync("bun", [fixture.pathname], {
+  const { stdout } = await execFileAsync(process.execPath, ["--no-env-file", fixture.pathname], {
     timeout: 10_000,
   });
   const metrics = JSON.parse(stdout) as DragRegressionMetrics;

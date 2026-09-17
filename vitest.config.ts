@@ -21,6 +21,8 @@ export default defineConfig({
     },
   },
   test: {
+    // Bun already provides CJS/ESM interop; Vitest's Node interop drops Zod exports.
+    deps: { interopDefault: false },
     experimental: { fsModuleCache: true },
     environment: "node",
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],

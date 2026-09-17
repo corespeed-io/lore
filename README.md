@@ -108,7 +108,9 @@ Stable integrations use `/api/v1`; the OpenAPI 3.1 document is available at
 `/openapi.json`. Human requests select a Workspace with `x-lore-workspace-id`;
 Agents also present a `lore_agent_…` bearer credential.
 
-The OSS profile runs on Node, Docker, and Postgres. CoreSpeed Cloud uses the same
+The OSS profile runs Next.js with Hono APIs, maintenance, and database tooling on
+Bun, with Docker and Postgres support.
+CoreSpeed Cloud uses the same
 domain modules and schema on Cloudflare Workers with cache-disabled Hyperdrive.
 See the documentation before deploying beyond localhost:
 
@@ -123,7 +125,7 @@ See the documentation before deploying beyond localhost:
 
 ## Development
 
-Full source verification requires Bun 1.3.14+, Node 24 LTS, and Python 3.12+.
+Full source verification requires Bun 1.3.14+ and Python 3.12+.
 
 ```bash
 bun install --frozen-lockfile

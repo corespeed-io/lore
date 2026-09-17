@@ -111,7 +111,7 @@ test("LongMemEval-V2 judge response parser matches strict JSON and official fall
 
 test("vLLM judge sends the official protocol and records its separate token cost", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
     expect(String(input)).toBe("http://judge.test/v1/chat/completions");
     const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({
@@ -125,6 +125,7 @@ test("vLLM judge sends the official protocol and records its separate token cost
       usage: { prompt_tokens: 210, completion_tokens: 12, total_tokens: 222 },
     });
   };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
   try {
     const judge = createBenchmarkJudgeFromEnvironment({
       LORE_BENCHMARK_JUDGE_PROVIDER: "vllm",

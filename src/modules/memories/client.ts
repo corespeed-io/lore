@@ -2,10 +2,10 @@ import type {
   CreateMemoryInput,
   Memory,
   MemoryScope,
+  MemorySearchResult,
   UpdateMemoryInput,
 } from "@corespeed/lore-sdk";
 import { getBrowserClient } from "@/shared/browser/sdk";
-import type { MemorySearchResult } from "./types";
 
 export async function listMemories(
   workspaceId: string,
@@ -18,7 +18,7 @@ export async function listMemories(
     updatedBefore?: string;
     signal?: AbortSignal;
   } = {},
-): Promise<Memory[]> {
+): Promise<readonly Memory[]> {
   const { metadataFilter, ...filters } = input;
   const page = await getBrowserClient()
     .workspace(workspaceId)
@@ -28,10 +28,10 @@ export async function listMemories(
       offset: input.offset ?? 0,
       metadata: metadataFilter,
     });
-  return [...page.memories];
+  return page.memories;
 }
 
-export async function searchMemories(
+export function searchMemories(
   workspaceId: string,
   query: string,
   limit = 25,
@@ -42,19 +42,17 @@ export async function searchMemories(
     updatedAfter?: string;
     updatedBefore?: string;
   } = {},
-): Promise<MemorySearchResult[]> {
+): Promise<readonly MemorySearchResult[]> {
   const { metadataFilter, ...rest } = filters;
-  return [
-    ...(await getBrowserClient()
-      .workspace(workspaceId)
-      .searchMemories({
-        ...rest,
-        query,
-        limit,
-        signal,
-        metadata: metadataFilter,
-      })),
-  ];
+  return getBrowserClient()
+    .workspace(workspaceId)
+    .searchMemories({
+      ...rest,
+      query,
+      limit,
+      signal,
+      metadata: metadataFilter,
+    });
 }
 
 export function getMemory(workspaceId: string, id: string, signal?: AbortSignal): Promise<Memory> {

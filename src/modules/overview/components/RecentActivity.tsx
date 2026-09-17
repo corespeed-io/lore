@@ -1,7 +1,7 @@
 "use client";
 
+import type { Memory } from "@corespeed/lore-sdk";
 import { memoryTitle, memoryType } from "@/modules/memories/display";
-import type { Memory } from "@/modules/memories/types";
 
 interface RecentActivityProps {
   items: Memory[];

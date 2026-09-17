@@ -8,29 +8,9 @@ import {
   type EpisodeSummary as StoredEpisodeSummary,
   type Observation as StoredObservation,
 } from "@corespeed/lore-core/episodes";
+import { beginMutation, completeMutation, type IdempotencyRequest } from "@/server/api/idempotency";
 import { type ActorContext, installActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage, memoryStorageInTransaction } from "@/server/database/memory-storage";
-import {
-  beginMutation,
-  completeMutation,
-  type IdempotencyRequest,
-} from "@/server/http/idempotency";
-
-export type {
-  EpisodeKind,
-  ListEpisodes,
-  ObservationKind,
-  RecordEpisode,
-  RecordObservation,
-} from "@corespeed/lore-core/episodes";
-export {
-  MAX_EPISODE_CONTENT_CHARACTERS,
-  MAX_EPISODE_METADATA_CHARACTERS,
-  MAX_EPISODE_OBSERVATIONS,
-  MAX_OBSERVATION_BATCH_READ,
-  MAX_OBSERVATION_CONTENT_CHARACTERS,
-} from "@corespeed/lore-core/episodes";
-export * from "./evidence";
 
 export class ObservationAccessDeniedError extends Error {
   override name = "ObservationAccessDeniedError";

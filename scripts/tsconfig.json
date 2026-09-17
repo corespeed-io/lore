@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["bun"],
+    "plugins": [],
+    "paths": {},
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "erasableSyntaxOnly": true
+  },
+  "include": [
+    "**/*.ts",
+    "../tools/evaluation/graph/seed-graph-benchmark.ts",
+    "../tools/evaluation/retrieval/benchmark-migrate-dimensions.ts"
+  ],
+  "exclude": ["checks/smoke-memory-core.ts", "database/embedding-generation.ts"]
+}

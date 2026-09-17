@@ -1,35 +1,21 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import type {
+  Episode,
+  HumanActor,
+  IssuedAgentCredential,
+  MemoryProposal,
+  MemoryProposalReviewResult,
+  MemorySearchResult,
+  WorkspaceAgent,
+  WorkspaceSummary,
+} from "@corespeed/lore-sdk";
 import { Client } from "pg";
-import { createAgentCredentialHandlers, createAgentHandlers } from "../../src/modules/agents/http";
-import type { IssuedAgentCredential, WorkspaceAgent } from "../../src/modules/agents/types";
-import {
-  createEpisodeByIdHandlers,
-  createEpisodeHandlers,
-  createObservationHandlers,
-} from "../../src/modules/episodes/http";
-import type { Episode } from "../../src/modules/episodes/types";
-import { createGraphHandlers } from "../../src/modules/graph/http";
 import type { GraphData } from "../../src/modules/graph/types";
-import { createActorHandlers } from "../../src/modules/identity/http";
-import type { HumanActorSummary } from "../../src/modules/identity/types";
-import { createMemoryHandlers } from "../../src/modules/memories/http";
 import type { Memory } from "../../src/modules/memories/schemas";
-import type { MemorySearchResult } from "../../src/modules/memories/types";
-import {
-  createCapabilitiesHandlers,
-  createReadinessHandlers,
-} from "../../src/modules/operations/http";
 import { LORE_SCHEMA_REVISION } from "../../src/modules/operations/service";
-import {
-  createMemoryProposalHandlers,
-  createMemoryProposalReviewHandlers,
-} from "../../src/modules/proposals/http";
-import type { MemoryProposal, MemoryProposalReviewResult } from "../../src/modules/proposals/types";
-import { createWorkspaceHandlers } from "../../src/modules/workspaces/http";
-import type { WorkspaceSummary } from "../../src/modules/workspaces/types";
+import { createApi } from "../../src/server/api/app";
 import { createPostgresDatabase } from "../../src/server/database/postgres";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -95,22 +81,26 @@ async function requireFreshDatabase(connectionString: string, expectedName: stri
   }
 }
 
-async function runNodeScript(
+async function runBunScript(
   file: string,
   environment: Record<string, string | undefined>,
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("node", [file], {
-      cwd: repositoryRoot,
-      env: { ...process.env, ...environment },
-      stdio: "inherit",
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${file} failed (${signal ?? `exit ${code ?? "unknown"}`})`));
-    });
+  const child = Bun.spawn({
+    cmd: [process.execPath, "--no-env-file", file],
+    cwd: repositoryRoot,
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      TMPDIR: process.env.TMPDIR,
+      LORE_DBMATE_BINARY: process.env.LORE_DBMATE_BINARY,
+      ...environment,
+    },
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
   });
+  const code = await child.exited;
+  if (code !== 0) throw new Error(`${file} failed (${child.signalCode ?? `exit ${code}`})`);
 }
 
 function runtimeConnection(adminUrl: URL, role: string, password: string): string {
@@ -172,8 +162,8 @@ const maintenanceRole = `lore_smoke_maintenance_${roleSuffix}`;
 const runtimePassword = randomBytes(32).toString("base64url");
 const maintenancePassword = randomBytes(32).toString("base64url");
 
-await runNodeScript("scripts/database/migrate.mjs", { DATABASE_URL: smokeDatabaseUrl });
-await runNodeScript("scripts/database/create-runtime-role.mjs", {
+await runBunScript("scripts/database/migrate.ts", { DATABASE_URL: smokeDatabaseUrl });
+await runBunScript("scripts/database/create-runtime-role.ts", {
   DATABASE_URL: smokeDatabaseUrl,
   LORE_RUNTIME_ROLE: runtimeRole,
   LORE_RUNTIME_PASSWORD: runtimePassword,
@@ -194,15 +184,27 @@ const database = createPostgresDatabase(
 );
 
 try {
-  const readinessResponse = await createReadinessHandlers(database, {
-    embeddingConfigured: true,
-    embeddingIdentity: {
-      provider: "ollama",
-      model: "qwen3-embedding:0.6b",
-      dimensions: 1024,
-      revision: "lore-embedding-v2",
-    },
-  }).GET();
+  const app = createApi({
+    database: () => database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+
+  const readinessResponse = await createApi({
+    database: () => database,
+    memoryOptions: () => ({
+      embeddingProvider: {
+        provider: "ollama",
+        model: "qwen3-embedding:0.6b",
+        dimensions: 1024,
+        revision: "lore-embedding-v2",
+        async embed() {
+          throw new Error("Readiness must not call the embedding provider");
+        },
+      },
+    }),
+    codeRepositories: () => ({}),
+  }).request("/readyz");
   await expectStatus(readinessResponse, 200, "read degraded readiness");
   assert.equal(readinessResponse.headers.get("cache-control"), "no-store");
   const readiness = (await readinessResponse.json()) as {
@@ -220,21 +222,8 @@ try {
     },
   });
 
-  const workspaces = createWorkspaceHandlers(database);
-  const actors = createActorHandlers(database);
-  const agents = createAgentHandlers(database);
-  const credentials = createAgentCredentialHandlers(database);
-  const capabilities = createCapabilitiesHandlers(database, { embeddingConfigured: true });
-  const episodes = createEpisodeHandlers(database);
-  const episodeById = createEpisodeByIdHandlers(database);
-  const observations = createObservationHandlers(database);
-  const proposals = createMemoryProposalHandlers(database);
-  const reviews = createMemoryProposalReviewHandlers(database);
-  const memories = createMemoryHandlers(database);
-  const graph = createGraphHandlers(database);
-
   const aliceWorkspace = await expectJson<WorkspaceSummary>(
-    await workspaces.POST(
+    await app.request(
       jsonRequest("/api/v1/workspaces", {
         method: "POST",
         body: { name: "Memory Core Smoke" },
@@ -244,8 +233,8 @@ try {
     "create Alice Workspace",
   );
   const aliceHeaders = workspaceHeaders(aliceWorkspace.id);
-  const alice = await expectJson<HumanActorSummary>(
-    await actors.GET(jsonRequest("/api/v1/actor", { headers: aliceHeaders })),
+  const alice = await expectJson<HumanActor>(
+    await app.request(jsonRequest("/api/v1/actor", { headers: aliceHeaders })),
     200,
     "resolve Alice",
   );
@@ -255,7 +244,7 @@ try {
     features: { observationEvidence: boolean };
     schemaRevision: number;
   }>(
-    await capabilities.GET(jsonRequest("/api/v1/capabilities", { headers: aliceHeaders })),
+    await app.request(jsonRequest("/api/v1/capabilities", { headers: aliceHeaders })),
     200,
     "read capabilities",
   );
@@ -268,7 +257,7 @@ try {
   );
 
   const agent = await expectJson<WorkspaceAgent>(
-    await agents.POST(
+    await app.request(
       jsonRequest("/api/v1/agents", {
         method: "POST",
         headers: aliceHeaders,
@@ -279,12 +268,11 @@ try {
     "create Agent",
   );
   const credential = await expectJson<IssuedAgentCredential>(
-    await credentials.POST(
+    await app.request(
       jsonRequest(`/api/v1/agents/${agent.id}/credentials`, {
         method: "POST",
         headers: aliceHeaders,
       }),
-      agent.id,
     ),
     201,
     "issue Agent credential",
@@ -297,7 +285,7 @@ try {
   const rawEvidence = "Raw evidence marker: quartz pelican telemetry.";
   const canonicalContent = "The owner uses cobalt lanterns for release notes.";
   const episode = await expectJson<Episode>(
-    await episodes.POST(
+    await app.request(
       jsonRequest("/api/v1/episodes", {
         method: "POST",
         headers: { ...agentHeaders, "idempotency-key": "smoke-episode-canonical-1" },
@@ -329,7 +317,7 @@ try {
   );
 
   const rawSearch = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=quartz%20pelican%20telemetry", {
         headers: aliceHeaders,
       }),
@@ -340,7 +328,7 @@ try {
   assert.equal(rawSearch.length, 0, "raw Observations must stay outside canonical retrieval");
 
   const proposal = await expectJson<MemoryProposal>(
-    await proposals.POST(
+    await app.request(
       jsonRequest("/api/v1/memory-proposals", {
         method: "POST",
         headers: { ...agentHeaders, "idempotency-key": "smoke-proposal-canonical-1" },
@@ -365,26 +353,24 @@ try {
   );
 
   await expectStatus(
-    await reviews.POST(
+    await app.request(
       jsonRequest(`/api/v1/memory-proposals/${proposal.id}/review`, {
         method: "POST",
         headers: agentHeaders,
         body: { decision: "accept" },
       }),
-      proposal.id,
     ),
     403,
     "reject Agent Proposal review",
   );
 
   const accepted = await expectJson<MemoryProposalReviewResult>(
-    await reviews.POST(
+    await app.request(
       jsonRequest(`/api/v1/memory-proposals/${proposal.id}/review`, {
         method: "POST",
         headers: aliceHeaders,
         body: { decision: "accept" },
       }),
-      proposal.id,
     ),
     200,
     "human accepts Memory Proposal",
@@ -405,7 +391,7 @@ try {
   const acceptedMemory = accepted.memory;
   assert.ok(acceptedMemory, "accepted Proposal must create canonical Memory");
   const canonicalHumanSearch = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=cobalt%20lanterns%20release", {
         headers: aliceHeaders,
       }),
@@ -419,7 +405,7 @@ try {
     "human lexical search must return accepted canonical Memory",
   );
   const canonicalAgentSearch = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=cobalt%20lanterns%20release", {
         headers: agentHeaders,
       }),
@@ -433,7 +419,7 @@ try {
     "authorized Agent lexical search must return accepted canonical Memory",
   );
   const rawSearchAfterAcceptance = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=quartz%20pelican%20telemetry", {
         headers: aliceHeaders,
       }),
@@ -448,7 +434,7 @@ try {
   );
 
   const visibleGraph = await expectJson<GraphData>(
-    await graph.GET(jsonRequest("/api/v1/graph", { headers: aliceHeaders })),
+    await app.request(jsonRequest("/api/v1/graph", { headers: aliceHeaders })),
     200,
     "read Memory Graph",
   );
@@ -464,7 +450,7 @@ try {
 
   selectHumanPrincipal("smoke-bob");
   const bobWorkspace = await expectJson<WorkspaceSummary>(
-    await workspaces.POST(
+    await app.request(
       jsonRequest("/api/v1/workspaces", {
         method: "POST",
         body: { name: "Bob Smoke Fixture" },
@@ -473,8 +459,8 @@ try {
     201,
     "create Bob Workspace",
   );
-  const bob = await expectJson<HumanActorSummary>(
-    await actors.GET(jsonRequest("/api/v1/actor", { headers: workspaceHeaders(bobWorkspace.id) })),
+  const bob = await expectJson<HumanActor>(
+    await app.request(jsonRequest("/api/v1/actor", { headers: workspaceHeaders(bobWorkspace.id) })),
     200,
     "resolve Bob",
   );
@@ -492,7 +478,7 @@ try {
   }
 
   const bobPrivate = await expectJson<Memory>(
-    await memories.POST(
+    await app.request(
       jsonRequest("/api/v1/memories", {
         method: "POST",
         headers: workspaceHeaders(aliceWorkspace.id),
@@ -506,7 +492,7 @@ try {
     "create Bob private tripwire",
   );
   const bobSearch = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=indigo%20narwhal%20ledger", {
         headers: workspaceHeaders(aliceWorkspace.id),
       }),
@@ -522,7 +508,7 @@ try {
 
   selectHumanPrincipal("smoke-alice");
   const alicePrivateSearch = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=indigo%20narwhal%20ledger", {
         headers: aliceHeaders,
       }),
@@ -532,7 +518,7 @@ try {
   );
   assert.equal(alicePrivateSearch.length, 0, "co-member must not retrieve private Memory");
   const agentPrivateSearch = await expectJson<MemorySearchResult[]>(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories?q=indigo%20narwhal%20ledger", {
         headers: agentHeaders,
       }),
@@ -542,7 +528,7 @@ try {
   );
   assert.equal(agentPrivateSearch.length, 0, "co-member Agent must not retrieve private Memory");
   const aliceIsolatedGraph = await expectJson<GraphData>(
-    await graph.GET(jsonRequest("/api/v1/graph", { headers: aliceHeaders })),
+    await app.request(jsonRequest("/api/v1/graph", { headers: aliceHeaders })),
     200,
     "exclude Bob private Memory from Alice Graph",
   );
@@ -552,14 +538,14 @@ try {
   );
 
   await expectStatus(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories", { headers: workspaceHeaders(bobWorkspace.id) }),
     ),
     403,
     "reject Alice cross-Workspace read",
   );
   await expectStatus(
-    await memories.GET(
+    await app.request(
       jsonRequest("/api/v1/memories", {
         headers: { ...agentHeaders, "x-lore-workspace-id": bobWorkspace.id },
       }),
@@ -569,7 +555,7 @@ try {
   );
 
   const disposableEpisode = await expectJson<Episode>(
-    await episodes.POST(
+    await app.request(
       jsonRequest("/api/v1/episodes", {
         method: "POST",
         headers: { ...agentHeaders, "idempotency-key": "smoke-episode-forget-1" },
@@ -585,7 +571,7 @@ try {
   const disposableObservationId = disposableEpisode.observations[0]?.id;
   assert.ok(disposableObservationId);
   const doomedProposal = await expectJson<MemoryProposal>(
-    await proposals.POST(
+    await app.request(
       jsonRequest("/api/v1/memory-proposals", {
         method: "POST",
         headers: { ...agentHeaders, "idempotency-key": "smoke-proposal-forget-1" },
@@ -600,18 +586,17 @@ try {
     "submit disposable-evidence Proposal",
   );
   await expectStatus(
-    await episodeById.DELETE(
+    await app.request(
       jsonRequest(`/api/v1/episodes/${disposableEpisode.id}`, {
         method: "DELETE",
         headers: { ...aliceHeaders, "idempotency-key": "smoke-forget-episode-1" },
       }),
-      disposableEpisode.id,
     ),
     204,
     "forget Episode",
   );
   const forgottenEvidence = await expectJson<unknown[]>(
-    await observations.GET(
+    await app.request(
       jsonRequest(`/api/v1/observations?id=${disposableObservationId}`, {
         headers: aliceHeaders,
       }),
@@ -620,13 +605,12 @@ try {
     "read forgotten Observation",
   );
   assert.equal(forgottenEvidence.length, 0, "forgotten Observation must be unavailable");
-  const conflictedReview = await reviews.POST(
+  const conflictedReview = await app.request(
     jsonRequest(`/api/v1/memory-proposals/${doomedProposal.id}/review`, {
       method: "POST",
       headers: aliceHeaders,
       body: { decision: "accept" },
     }),
-    doomedProposal.id,
   );
   await expectStatus(conflictedReview, 409, "refuse Proposal with forgotten evidence");
   const conflictBody = (await conflictedReview.json()) as { code?: string };

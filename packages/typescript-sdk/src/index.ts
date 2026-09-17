@@ -99,7 +99,7 @@ export interface LoreClientOptions {
   credentials?: RequestCredentials;
   /** Called after response parsing. Caller cancellations are not reported. */
   onRequest?: (event: LoreRequestEvent) => void;
-  fetch?: typeof globalThis.fetch;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 }
 
 export interface LoreEnvironmentConfiguration {
@@ -424,7 +424,7 @@ function requestAbortSignal(
 
 class LoreTransport {
   readonly baseUrl: URL;
-  readonly fetch: typeof globalThis.fetch;
+  readonly fetch: NonNullable<LoreClientOptions["fetch"]>;
   readonly headers: Headers;
   readonly timeoutMs: number | null;
   readonly credentials: RequestCredentials | undefined;

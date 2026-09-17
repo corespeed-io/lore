@@ -1,7 +1,7 @@
+import type { MemoryCodeEvidence } from "@corespeed/lore-sdk";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SWRConfig, unstable_serialize } from "swr";
 import { expect, test } from "vitest";
-import type { CodeEvidenceValidationState, MemoryCodeEvidence } from "@/modules/code/types";
 import { MemoryView } from "@/modules/memories/components/MemoryView";
 import { loreKeys } from "@/shared/browser/cache-keys";
 
@@ -10,7 +10,7 @@ const MEMORY_ID = "40000000-0000-4000-8000-000000000001";
 
 function citation(
   index: number,
-  validationState: CodeEvidenceValidationState,
+  validationState: MemoryCodeEvidence["validationState"],
   overrides: Partial<MemoryCodeEvidence> = {},
 ): MemoryCodeEvidence {
   return {
@@ -62,17 +62,19 @@ function renderMemoryViewWith(config: Record<string, unknown>): string {
     <SWRConfig value={config}>
       <MemoryView
         workspaceId={WORKSPACE_ID}
-        title="Retrieval grounding gate"
-        type="reference"
-        id={MEMORY_ID}
-        body="The gate is planned host-side."
+        memory={{
+          id: MEMORY_ID,
+          workspaceId: WORKSPACE_ID,
+          content: "# Retrieval grounding gate\n\nThe gate is planned host-side.",
+          metadata: { type: "reference" },
+          scope: "private",
+          ownerUserId: "10000000-0000-4000-8000-000000000001",
+          createdByAgentId: null,
+          createdAt: "2026-08-14T00:00:00.000Z",
+          updatedAt: "2026-08-15T00:00:00.000Z",
+          version: 3,
+        }}
         wikilinkTargets={{}}
-        scope="private"
-        ownerUserId="10000000-0000-4000-8000-000000000001"
-        createdByAgentId={null}
-        createdAt="2026-08-14T00:00:00.000Z"
-        updatedAt="2026-08-15T00:00:00.000Z"
-        version={3}
         related={[]}
         backLabel="Memories"
         saving={false}

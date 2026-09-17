@@ -130,73 +130,75 @@ beforeEach(() => {
 
   vi.stubGlobal(
     "fetch",
-    vi.fn<typeof fetch>(async (input, init) => {
-      const request = new Request(input, init);
-      const entry = {
-        url: new URL(request.url),
-        workspaceId: request.headers.get("x-lore-workspace-id"),
-      };
-      requests.push(entry);
-      switch (entry.url.pathname) {
-        case "/api/v1/workspaces":
-          return json(workspaces);
-        case "/api/v1/agents":
-        case "/api/v1/memory-proposals":
-        case "/api/v1/code/index-jobs":
-        case `/api/v1/memories/${MEMORY_ID}/code-evidence`:
-          return json([]);
-        case "/api/v1/actor":
-          return json({ userId: USER_ID, workspaceId: entry.workspaceId });
-        case "/api/v1/capabilities":
-          return json({
-            apiVersion: "v1",
-            schemaRevision: 3,
-            deploymentId: WORKSPACE_A,
-            features: {},
-            activeEmbeddingGeneration: null,
-            memoryChunking: {
-              revision: "lore-memory-chunking-v2",
-              maximumCharacters: 1200,
-              overlapCharacters: 0,
-            },
-            limits: { workspaceArchiveMemories: 10000, workspaceArchiveLinks: 50000 },
-          });
-        case "/readyz":
-          return json({
-            status: "ready",
-            components: {
-              database: "ok",
-              schema: "ok",
-              rlsRole: "ok",
-              vector: "ok",
-              embedding: "disabled",
-            },
-          });
-        case "/api/v1/graph":
-          return json({
-            nodes: [
-              {
-                id: MEMORY_ID,
-                reference: MEMORY_ID,
-                label: "Memory 1",
-                type: "note",
-                preview: "Memory body 1",
-                scope: "shared",
-                updatedAt: DATE,
+    vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (input, init) => {
+        const request = new Request(input, init);
+        const entry = {
+          url: new URL(request.url),
+          workspaceId: request.headers.get("x-lore-workspace-id"),
+        };
+        requests.push(entry);
+        switch (entry.url.pathname) {
+          case "/api/v1/workspaces":
+            return json(workspaces);
+          case "/api/v1/agents":
+          case "/api/v1/memory-proposals":
+          case "/api/v1/code/index-jobs":
+          case `/api/v1/memories/${MEMORY_ID}/code-evidence`:
+            return json([]);
+          case "/api/v1/actor":
+            return json({ userId: USER_ID, workspaceId: entry.workspaceId });
+          case "/api/v1/capabilities":
+            return json({
+              apiVersion: "v1",
+              schemaRevision: 3,
+              deploymentId: WORKSPACE_A,
+              features: {},
+              activeEmbeddingGeneration: null,
+              memoryChunking: {
+                revision: "lore-memory-chunking-v2",
+                maximumCharacters: 1200,
+                overlapCharacters: 0,
               },
-            ],
-            links: [],
-          });
-        case "/api/v1/memories":
-          if (request.method === "POST") return saveResponse(request);
-          return entry.url.searchParams.has("q") ? json([]) : browseResponse(entry);
-        case `/api/v1/memories/${MEMORY_ID}`:
-          return json(memory());
-        default:
-          unexpectedRequests.push(entry.url.pathname);
-          throw new Error(`Unexpected HTTP request: ${entry.url.pathname}`);
-      }
-    }),
+              limits: { workspaceArchiveMemories: 10000, workspaceArchiveLinks: 50000 },
+            });
+          case "/readyz":
+            return json({
+              status: "ready",
+              components: {
+                database: "ok",
+                schema: "ok",
+                rlsRole: "ok",
+                vector: "ok",
+                embedding: "disabled",
+              },
+            });
+          case "/api/v1/graph":
+            return json({
+              nodes: [
+                {
+                  id: MEMORY_ID,
+                  reference: MEMORY_ID,
+                  label: "Memory 1",
+                  type: "note",
+                  preview: "Memory body 1",
+                  scope: "shared",
+                  updatedAt: DATE,
+                },
+              ],
+              links: [],
+            });
+          case "/api/v1/memories":
+            if (request.method === "POST") return saveResponse(request);
+            return entry.url.searchParams.has("q") ? json([]) : browseResponse(entry);
+          case `/api/v1/memories/${MEMORY_ID}`:
+            return json(memory());
+          default:
+            unexpectedRequests.push(entry.url.pathname);
+            throw new Error(`Unexpected HTTP request: ${entry.url.pathname}`);
+        }
+      },
+    ),
   );
 });
 

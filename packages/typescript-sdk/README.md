@@ -12,6 +12,10 @@ one Workspace-scoped request, with Code pinned to an explicit repository key and
 full commit OID. V2 keeps citation-local freshness separate from bounded contextual
 impact over exact-revision direct dependencies.
 
+Install with `bun add @corespeed/lore-sdk`. The package exports standard ESM and
+TypeScript declarations; applications can use it in any runtime with the required
+Web APIs, including browsers and Bun. Repository builds and packaging use Bun.
+
 The frontend, CLI, and external MCP adapter use this client against the same HTTP
 and OpenAPI contract. In the frontend, SWR hooks call domain adapters, which use
 `src/shared/browser/sdk.ts` to configure the SDK with same-origin browser

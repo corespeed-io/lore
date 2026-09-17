@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "vitest";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
-import { createContextRetrievalHandlers } from "@/modules/context/http";
+import { createApi } from "@/server/api/app";
+
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import { createMemoryTestContext } from "../../support/memory-context";
 
@@ -96,8 +97,13 @@ test("HTTP retrieves Memory plus exact-revision Code with side-effect-free ancho
     ],
   });
 
-  const handler = createContextRetrievalHandlers(context.database);
-  const response = await handler.POST(
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+
+  const response = await app.request(
     new Request("http://lore.local/api/v1/context/retrieve", {
       method: "POST",
       headers: {
@@ -161,7 +167,7 @@ test("HTTP retrieves Memory plus exact-revision Code with side-effect-free ancho
     validatedCommitOid: BASE_COMMIT,
   });
 
-  const crossWorkspace = await handler.POST(
+  const crossWorkspace = await app.request(
     new Request("http://lore.local/api/v1/context/retrieve", {
       method: "POST",
       headers: {
@@ -178,7 +184,7 @@ test("HTTP retrieves Memory plus exact-revision Code with side-effect-free ancho
   );
   expect(crossWorkspace.status).toBe(403);
 
-  const missingCommit = await handler.POST(
+  const missingCommit = await app.request(
     new Request("http://lore.local/api/v1/context/retrieve", {
       method: "POST",
       headers: {
@@ -243,8 +249,13 @@ test("a co-member's private Memory and its Code anchor never enter the packet", 
     relationship: "rationale",
   });
 
-  const handler = createContextRetrievalHandlers(context.database);
-  const response = await handler.POST(
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+
+  const response = await app.request(
     new Request("http://lore.local/api/v1/context/retrieve", {
       method: "POST",
       headers: {

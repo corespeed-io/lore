@@ -1,8 +1,4 @@
-import type {
-  CodeEvidenceRelationship,
-  CodeEvidenceValidationState,
-  MemoryCodeEvidence,
-} from "./types";
+import type { MemoryCodeEvidence } from "@corespeed/lore-sdk";
 
 /**
  * Presentation model for Memory-to-Code citation anchors.
@@ -23,7 +19,10 @@ interface CodeEvidenceStatePresentation {
   description: string;
 }
 
-const STATE_PRESENTATION: Record<CodeEvidenceValidationState, CodeEvidenceStatePresentation> = {
+const STATE_PRESENTATION: Record<
+  MemoryCodeEvidence["validationState"],
+  CodeEvidenceStatePresentation
+> = {
   current: {
     tone: "ok",
     label: "current",
@@ -59,7 +58,7 @@ const STATE_PRESENTATION: Record<CodeEvidenceValidationState, CodeEvidenceStateP
   },
 };
 
-const RELATIONSHIP_DESCRIPTION: Record<CodeEvidenceRelationship, string> = {
+const RELATIONSHIP_DESCRIPTION: Record<MemoryCodeEvidence["relationship"], string> = {
   supports: "This code supports the Memory.",
   contradicts: "This code contradicts the Memory.",
   implements: "This code implements the Memory.",
@@ -73,7 +72,7 @@ export interface CodeEvidenceRow {
   tone: CodeEvidenceTone;
   stateLabel: string;
   stateDescription: string;
-  relationship: CodeEvidenceRelationship;
+  relationship: MemoryCodeEvidence["relationship"];
   relationshipDescription: string;
   /** Repository-relative path recorded when the Memory cited this code. */
   citedPath: string;

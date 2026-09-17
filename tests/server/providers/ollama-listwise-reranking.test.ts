@@ -4,11 +4,17 @@ import {
   OLLAMA_LISTWISE_INSTRUCTION_SHA256,
 } from "@/server/providers/reranking/ollama-listwise";
 
+function mockFetch(
+  implementation: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  return Object.assign(vi.fn(implementation), { preconnect: globalThis.fetch.preconnect });
+}
+
 afterEach(() => vi.unstubAllEnvs());
 
 test("Ollama rerankers reject cloud hosts before the SDK can inherit cloud credentials", async () => {
   vi.stubEnv("OLLAMA_API_KEY", "unrelated-cloud-key");
-  const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+  const fetch = mockFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
     expect(new Headers(init?.headers).get("authorization")).toBeNull();
     return Response.json({
       message: { content: JSON.stringify({ scores: [{ id: "c0", score: 0.8 }] }) },
@@ -41,7 +47,7 @@ test("Ollama listwise adapter scores every opaque candidate with deterministic c
     baseUrl: "http://127.0.0.1:11435",
     keepAlive: "5m",
     maximumDocumentCharacters: 12,
-    fetch: async (input, init) => {
+    fetch: mockFetch(async (input, init) => {
       expect(String(input)).toBe("http://127.0.0.1:11435/api/chat");
       requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return Response.json({
@@ -55,7 +61,7 @@ test("Ollama listwise adapter scores every opaque candidate with deterministic c
           }),
         },
       });
-    },
+    }),
   });
 
   const results = await provider.rerank({
@@ -119,7 +125,9 @@ test("Ollama listwise adapter rejects missing, duplicate, foreign, and unbounded
   for (const scores of invalidScores) {
     const provider = createOllamaListwiseRerankingProvider({
       model: "qwen3.5:4b",
-      fetch: async () => Response.json({ message: { content: JSON.stringify({ scores }) } }),
+      fetch: mockFetch(async () =>
+        Response.json({ message: { content: JSON.stringify({ scores }) } }),
+      ),
     });
     await expect(
       provider.rerank({
@@ -144,11 +152,12 @@ test("Ollama listwise adapter rejects insecure remote endpoints and cloud respon
 
   const provider = createOllamaListwiseRerankingProvider({
     model: "qwen3.5:4b",
-    fetch: async () =>
+    fetch: mockFetch(async () =>
       Response.json({
         remote_model: "cloud-model",
         message: { content: JSON.stringify({ scores: [{ id: "c0", score: 0.8 }] }) },
       }),
+    ),
   });
   await expect(
     provider.rerank({
@@ -160,7 +169,7 @@ test("Ollama listwise adapter rejects insecure remote endpoints and cloud respon
 });
 
 test("Ollama listwise SDK does not retry or expose provider error content", async () => {
-  const fetch = vi.fn(async () =>
+  const fetch = mockFetch(async () =>
     Response.json({ error: "private evidence echoed by provider" }, { status: 503 }),
   );
   const provider = createOllamaListwiseRerankingProvider({ model: "qwen3.5:4b", fetch });

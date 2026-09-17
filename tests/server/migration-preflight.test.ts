@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import {
   dbmateHistoryStatus,
   isSchemaRevisionSupported,
-} from "../../scripts/database/lib/migration-preflight.mjs";
+} from "../../scripts/database/lib/migration-preflight.ts";
 
 const migrations = [
   { version: "0001", checksum: "one" },

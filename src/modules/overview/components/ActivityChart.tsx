@@ -1,6 +1,6 @@
 "use client";
 
-import type { Memory } from "@/modules/memories/types";
+import type { Memory } from "@corespeed/lore-sdk";
 
 const DAY = 86_400_000;
 export const MAX_ACTIVITY_DAYS = 180;

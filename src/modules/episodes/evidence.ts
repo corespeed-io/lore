@@ -10,18 +10,6 @@ import {
 import type { ActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage } from "@/server/database/memory-storage";
 
-export type {
-  EpisodeEvidenceIndexResult,
-  EpisodeEvidenceModuleOptions,
-  EpisodeEvidenceSearchResult,
-  IndexEpisodeEvidence,
-  SearchEpisodeEvidence,
-} from "@corespeed/lore-core/episodes";
-export {
-  EPISODE_EVIDENCE_INDEX_REVISION,
-  EPISODE_EVIDENCE_RETRIEVAL_POLICY,
-} from "@corespeed/lore-core/episodes";
-
 export class EpisodeEvidenceAccessDeniedError extends Error {
   override name = "EpisodeEvidenceAccessDeniedError";
   readonly status = 403;

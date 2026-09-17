@@ -1,9 +1,9 @@
 "use client";
 
+import type { MemoryScope } from "@corespeed/lore-sdk";
 import { useSWRConfig } from "swr";
 import useSWRMutation from "swr/mutation";
 import { forgetMemory, rememberMemory, updateMemory } from "@/modules/memories/client";
-import type { MemoryScope } from "@/modules/memories/types";
 import { createWorkspace } from "@/modules/workspaces/client";
 import { loreKeys } from "@/shared/browser/cache-keys";
 

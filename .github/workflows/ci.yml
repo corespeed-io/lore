@@ -31,8 +31,6 @@ jobs:
           --health-retries 30
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 24 }
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: 1.3.14 }
       - name: Cache Bun downloads
@@ -47,8 +45,8 @@ jobs:
         uses: actions/cache@v5
         with:
           path: node_modules/.experimental-vitest-cache
-          key: ${{ runner.os }}-node24-vitest-${{ hashFiles('bun.lock') }}-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-node24-vitest-${{ hashFiles('bun.lock') }}-
+          key: ${{ runner.os }}-bun1.3.14-vitest-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-bun1.3.14-vitest-${{ hashFiles('bun.lock') }}-
       - name: Check formatting and lint
         run: bun run lint
       - name: Check module dependency boundaries
@@ -62,7 +60,7 @@ jobs:
       - name: Audit dependency vulnerabilities
         run: bun audit --audit-level=high
       - name: Run application tests
-        run: bunx vitest run
+        run: bun --no-env-file --bun vitest run
       - name: Run Core typecheck and tests
         run: bun run --cwd packages/lore-core check
       - name: Run PostgreSQL memory smoke test
@@ -75,8 +73,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 24 }
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - uses: oven-sh/setup-bun@v2
@@ -93,22 +89,24 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .next/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-node24-next-${{ hashFiles('bun.lock') }}-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-node24-next-${{ hashFiles('bun.lock') }}-
-      # npm pack runs each package's existing prepack build before installation.
+          key: ${{ runner.os }}-${{ runner.arch }}-bun1.3.14-next-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun1.3.14-next-${{ hashFiles('bun.lock') }}-
+      # bun pm pack runs each package's existing prepack build before installation.
       - name: Build and test SDK, CLI and MCP packages
         run: bun run packages:smoke
       - name: Build Next.js application
-        run: bunx next build
+        run: bun --bun next build
+      - name: Smoke test Bun Next.js server and Hono API
+        run: bun run smoke:next
       - name: Build maintenance worker
         run: bun run build:maintenance
       - name: Bundle database migration tool
         run: bun run build:dbmate
       # Reuse this job's fresh standalone Next output; still build the Worker bundle.
       - name: Build Cloudflare Worker
-        run: bunx opennextjs-cloudflare build --skipNextBuild
+        run: bun --bun opennextjs-cloudflare build --skipNextBuild
       - name: Validate Cloudflare deployment (dry run)
-        run: bunx wrangler deploy --dry-run
+        run: bun --bun wrangler deploy --dry-run
 
   python-sdk:
     name: Python SDK tests (${{ matrix.python-version }})

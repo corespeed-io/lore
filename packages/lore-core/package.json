@@ -13,8 +13,8 @@
     "./testing": "./src/testing.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "typecheck": "bun --bun tsc --noEmit",
+    "test": "bun --no-env-file --bun vitest run",
     "check": "bun run typecheck && bun run test"
   },
   "dependencies": {
@@ -26,9 +26,6 @@
     "@electric-sql/pglite": "^0.5.5",
     "@electric-sql/pglite-pgvector": "^0.0.6",
     "vitest": "^4.1.10"
-  },
-  "engines": {
-    "node": ">=20"
   },
   "peerDependencies": {
     "vitest": ">=2"

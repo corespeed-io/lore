@@ -1,7 +1,7 @@
+import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { createGoogleQueryPlanningProvider } from "./google";
 import { createOllamaQueryPlanningProvider } from "./ollama";
 import { createOpenAICompatibleQueryPlanningProvider } from "./openai-compatible";
-import type { ConfiguredQueryPlanningProvider } from "./types";
 
 export type QueryPlanningConfigurationWarning = (message: string) => void;
 

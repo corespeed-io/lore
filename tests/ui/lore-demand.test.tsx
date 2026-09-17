@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import type { Memory } from "@corespeed/lore-sdk";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { type Cache, SWRConfig } from "swr";
@@ -8,7 +9,6 @@ import { readGraph } from "@/modules/graph/client";
 import { useLoreGraph } from "@/modules/graph/hooks";
 import { listMemories } from "@/modules/memories/client";
 import { useLoreMemories } from "@/modules/memories/hooks";
-import type { Memory } from "@/modules/memories/types";
 
 vi.mock("@/modules/graph/client", () => ({ readGraph: vi.fn() }));
 vi.mock("@/modules/memories/client", () => ({
@@ -253,7 +253,7 @@ test("pausing a multi-page refresh stops its next request and keeps existing pag
   const pages = currentMemories.data;
   const refresh = deferred<Memory[]>();
   vi.mocked(listMemories).mockReturnValueOnce(refresh.promise);
-  let refreshing!: Promise<Memory[][] | undefined>;
+  let refreshing!: ReturnType<typeof currentMemories.mutate>;
   await act(async () => {
     refreshing = currentMemories.mutate();
   });
@@ -289,7 +289,7 @@ test("switching Workspaces stops the old page batch without exposing its cached 
   vi.mocked(listMemories)
     .mockReturnValueOnce(refresh.promise)
     .mockReturnValueOnce(nextWorkspace.promise);
-  let refreshing!: Promise<Memory[][] | undefined>;
+  let refreshing!: ReturnType<typeof currentMemories.mutate>;
   await act(async () => {
     refreshing = currentMemories.mutate();
   });

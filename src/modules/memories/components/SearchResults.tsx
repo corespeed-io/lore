@@ -1,13 +1,13 @@
 "use client";
 
+import type { Memory, MemorySearchResult } from "@corespeed/lore-sdk";
 import { useEffect, useRef, useState } from "react";
 import { memoryTitle, memoryType } from "@/modules/memories/display";
 import { plain } from "@/modules/memories/markdown";
 import { typeLabel, typeSort } from "@/modules/memories/presentation";
-import type { Memory, MemorySearchResult } from "@/modules/memories/types";
 
 interface SearchResultsProps {
-  results: MemorySearchResult[];
+  results: readonly MemorySearchResult[];
   memories: Memory[];
   capped: boolean;
   loading: boolean;

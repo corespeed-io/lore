@@ -1,5 +1,6 @@
 "use client";
 
+import type { Memory } from "@corespeed/lore-sdk";
 import { useEffect, useMemo, useRef } from "react";
 import type { CodeEvidenceRow, CodeEvidenceSummary } from "@/modules/code/evidence-presentation";
 import {
@@ -8,8 +9,8 @@ import {
   summarizeCodeEvidence,
 } from "@/modules/code/evidence-presentation";
 import { useLoreMemoryCodeEvidence } from "@/modules/code/hooks";
+import { memoryTitle, memoryType } from "@/modules/memories/display";
 import { renderMarkdown } from "@/modules/memories/markdown";
-import type { MemoryScope } from "@/modules/memories/types";
 
 interface MemoryLink {
   id: string;
@@ -18,17 +19,8 @@ interface MemoryLink {
 
 interface MemoryViewProps {
   workspaceId: string;
-  title: string;
-  type: string;
-  id: string;
-  body: string;
+  memory: Memory;
   wikilinkTargets: Readonly<Record<string, string>>;
-  scope: MemoryScope;
-  ownerUserId: string;
-  createdByAgentId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
   related: MemoryLink[];
   backLabel: string;
   saving: boolean;
@@ -169,17 +161,8 @@ function CodeCitations({ summary, hasError }: { summary: CodeEvidenceSummary; ha
 
 export function MemoryView({
   workspaceId,
-  title,
-  type,
-  id,
-  body,
+  memory,
   wikilinkTargets,
-  scope,
-  ownerUserId,
-  createdByAgentId,
-  createdAt,
-  updatedAt,
-  version,
   related,
   backLabel,
   saving,
@@ -190,6 +173,18 @@ export function MemoryView({
   onEdit,
   onForget,
 }: MemoryViewProps) {
+  const {
+    id,
+    content: body,
+    scope,
+    ownerUserId,
+    createdByAgentId,
+    createdAt,
+    updatedAt,
+    version,
+  } = memory;
+  const title = memoryTitle(memory);
+  const type = memoryType(memory);
   const bodyHtml = useMemo(
     () => renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""), wikilinkTargets),
     [body, wikilinkTargets],

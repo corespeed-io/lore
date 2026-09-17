@@ -103,7 +103,7 @@ rejects any pre-existing member of either Lore group role so a production runtim
 credential cannot silently inherit access to restored private data. On a new
 cluster, the admin must have `CREATEROLE` so the restore can create Lore's two
 NOLOGIN group roles. Afterwards run
-`scripts/database/create-runtime-role.mjs` against the restored database to provision fresh
+`scripts/database/create-runtime-role.ts` against the restored database to provision fresh
 login credentials; never copy production runtime passwords into a drill.
 
 A restore drill is complete only after all of these pass against the restored
@@ -250,7 +250,7 @@ Memory chunks are not rewritten during a model switch.
 ### Memory Core product smoke
 
 `bun run smoke:memory-core` exercises the complete migration chain and the stable
-HTTP handler seam against a real Postgres/pgvector database. It covers the runtime
+API routes against a real Postgres/pgvector database. It covers the runtime
 `lore_app` role, readiness and capabilities, Workspace and private-Memory RLS,
 Agent credentials, Observation evidence, human-only Proposal review, lexical
 retrieval without a working embedding generation, Graph visibility, and explicit
@@ -280,8 +280,8 @@ custom span attributes contain only bounded operation/outcome/error-class names.
 They never add Memory content, retrieval queries, Workspace/User/Agent/Memory ids,
 archive payloads, or provider error messages.
 
-Those OTLP variables apply to the Node application and self-host maintenance
-worker. CoreSpeed Cloud uses Cloudflare Workers native observability from
+Those OTLP variables apply to the self-host application and maintenance worker
+on Bun. CoreSpeed Cloud uses Cloudflare Workers native observability from
 `wrangler.jsonc`; the Node OTLP SDK is deliberately not loaded inside workerd.
 
 ## Migration preflight

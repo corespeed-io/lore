@@ -7,7 +7,7 @@ import {
   inspectMigrationHistory,
   migrationFiles,
   prepareDbmateHistory,
-} from "../../scripts/database/lib/migration-preflight.mjs";
+} from "../../scripts/database/lib/migration-preflight.ts";
 
 const baselineUrl = new URL("../../db/migrations/0001_v1_baseline.sql", import.meta.url);
 

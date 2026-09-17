@@ -1,16 +1,16 @@
 "use client";
 
+import type { Memory } from "@corespeed/lore-sdk";
 import { GraphHealth } from "@/modules/graph/components/GraphHealth";
 import { TopHubs } from "@/modules/graph/components/TopHubs";
 import type { GraphData } from "@/modules/graph/types";
 import { memoryType } from "@/modules/memories/display";
-import type { Memory, MemorySourceSummary } from "@/modules/memories/types";
 import { ActivityChart } from "@/modules/overview/components/ActivityChart";
 import { Breakdown } from "@/modules/overview/components/Breakdown";
 import { ConnectionHealth } from "@/modules/overview/components/ConnectionHealth";
 import { RecentActivity } from "@/modules/overview/components/RecentActivity";
 import { RecentRequests } from "@/modules/overview/components/RecentRequests";
-import { Sources } from "@/modules/overview/components/Sources";
+import { type MemorySourceSummary, Sources } from "@/modules/overview/components/Sources";
 import { StatCards } from "@/modules/overview/components/StatCards";
 
 interface OverviewProps {

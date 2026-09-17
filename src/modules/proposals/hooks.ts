@@ -1,10 +1,10 @@
 "use client";
 
+import type { MemoryProposalStatus } from "@corespeed/lore-sdk";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRMutation from "swr/mutation";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { listMemoryProposals, reviewMemoryProposal } from "./client";
-import type { MemoryProposalStatus } from "./types";
 
 export function useLoreMemoryProposals(workspaceId: string, status: MemoryProposalStatus) {
   return useSWR(
