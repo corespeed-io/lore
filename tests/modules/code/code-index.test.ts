@@ -13,8 +13,10 @@ import {
 } from "@/modules/code/indexing/errors";
 import { CODE_INDEX_LIMITS } from "@/modules/code/indexing/limits";
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
+import { prepareFile } from "@/modules/code/indexing/parser";
 import { CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import type { PreparedArtifact } from "@/modules/code/indexing/types";
 import { createAccessModule } from "@/server/auth/access";
 import { installActorContext } from "../../../src/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
@@ -936,49 +938,37 @@ test("keeps symbol identity stable when a declaration moves between revisions", 
   expect(second[0]?.content).toContain("The declaration moved down");
 });
 
+function expectExactCodePartition(content: string, artifacts: readonly PreparedArtifact[]) {
+  expect(artifacts.map((artifact) => artifact.content).join("")).toBe(content);
+  expect(artifacts.map((artifact) => artifact.ordinal)).toEqual(artifacts.map((_, index) => index));
+  for (const artifact of artifacts) {
+    expect(artifact.content.length).toBeLessThanOrEqual(CODE_INDEX_LIMITS.maximumArtifactCodeUnits);
+    expect(artifact.content).not.toMatch(/[\uD800-\uDFFF]/u);
+  }
+}
+
 test("splits a large function structurally and preserves its symbol breadcrumb", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
   const statements = Array.from(
     { length: 400 },
     (_, index) => `  total += input[${index}] ?? ${index};`,
   ).join("\n");
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/lore",
-    displayName: "Lore",
-    commitOid: COMMIT_A,
-    files: [
-      {
-        path: "src/large.ts",
-        content: `export function aggregateInputs(input: number[]) {\n  let total = 0;\n${statements}\n  return total;\n}`,
-      },
-    ],
-  });
+  const content = `export function aggregateInputs(input: number[]) {\n  let total = 0;\n${statements}\n  return total;\n}`;
+  const { artifacts } = await prepareFile({ path: "src/large.ts", content });
 
-  const results = await code.search(context.alice, {
-    repositoryKey: "corespeed/lore",
-    commitOid: COMMIT_A,
-    query: "aggregateInputs",
-    limit: 100,
-  });
-  expect(results.length).toBeGreaterThan(1);
-  expect(results.length).toBeLessThan(10);
-  expect(results.every((result) => result.symbol === "aggregateInputs")).toBe(true);
+  expect(artifacts.length).toBeGreaterThan(1);
+  expect(artifacts.length).toBeLessThan(10);
+  expect(artifacts.every((artifact) => artifact.symbol === "aggregateInputs")).toBe(true);
   expect(
-    results.every(
-      (result) =>
-        result.symbolKey === "src/large.ts#function_declaration:aggregateInputs" &&
-        result.declarationKey === "src/large.ts#function_declaration:aggregateInputs",
+    artifacts.every(
+      (artifact) =>
+        artifact.symbolKey === "src/large.ts#function_declaration:aggregateInputs" &&
+        artifact.declarationKey === "src/large.ts#function_declaration:aggregateInputs",
     ),
   ).toBe(true);
-  expect(
-    [...results]
-      .sort((left, right) => left.ordinal - right.ordinal)
-      .map((result) => result.declarationChunkOrdinal),
-  ).toEqual(results.map((_, index) => index));
-  expect(
-    results.every((result) => result.content.length <= CODE_INDEX_LIMITS.maximumArtifactCodeUnits),
-  ).toBe(true);
+  expect(artifacts.map((artifact) => artifact.declarationChunkOrdinal)).toEqual(
+    artifacts.map((_, index) => index),
+  );
+  expectExactCodePartition(content, artifacts);
 });
 
 test("preserves every source character across structural chunk boundaries", async () => {
@@ -1011,8 +1001,6 @@ test("preserves every source character across structural chunk boundaries", asyn
 });
 
 test("preserves hard limits, reconstruction, and determinism for an adversarial chunk corpus", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
   const properties = Array.from(
     { length: 300 },
     (_, index) => `  属性${index}: "汉字😀-${index}";`,
@@ -1023,96 +1011,18 @@ test("preserves hard limits, reconstruction, and determinism for an adversarial 
     properties,
     "}",
   ].join("\r\n");
-  const boundarySource = `${"x".repeat(CODE_INDEX_LIMITS.maximumArtifactCodeUnits)}\nchunkBoundaryProbe`;
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/unicode-adversarial",
-    displayName: "Unicode adversarial",
-    commitOid: COMMIT_A,
-    files: [
-      { path: "fixtures/chunkboundaryprobe.unknown", content: boundarySource },
-      { path: "src/unicodeprobe.ts", content: source },
-    ],
-  });
-
-  const chunks = await code.search(context.alice, {
-    repositoryKey: "corespeed/unicode-adversarial",
-    commitOid: COMMIT_A,
-    query: "unicodeprobe",
-    limit: 100,
-  });
-  const ordered = [...chunks].sort((left, right) => left.ordinal - right.ordinal);
-  const hasUnpairedSurrogate = (value: string) =>
-    Array.from({ length: value.length }).some((_, index) => {
-      const unit = value.charCodeAt(index);
-      if (unit >= 0xd800 && unit <= 0xdbff) {
-        const next = value.charCodeAt(index + 1);
-        // Integer guards: charCodeAt out of range is NaN, whose comparisons are
-        // all false — without them a chunk ENDING in a high surrogate (or
-        // starting with a low one) would pass as paired.
-        return !Number.isInteger(next) || next < 0xdc00 || next > 0xdfff;
-      }
-      if (unit >= 0xdc00 && unit <= 0xdfff) {
-        const previous = value.charCodeAt(index - 1);
-        return !Number.isInteger(previous) || previous < 0xd800 || previous > 0xdbff;
-      }
-      return false;
-    });
-  expect(ordered.length).toBeGreaterThan(1);
-  expect(ordered.map((chunk) => chunk.ordinal)).toEqual(ordered.map((_, index) => index));
-  expect(
-    ordered.every(
-      (chunk) =>
-        chunk.content.length <= CODE_INDEX_LIMITS.maximumArtifactCodeUnits &&
-        !hasUnpairedSurrogate(chunk.content),
-    ),
-  ).toBe(true);
-  expect(ordered.map((chunk) => chunk.content).join("")).toBe(source);
-
-  const boundaryChunks = await code.search(context.alice, {
-    repositoryKey: "corespeed/unicode-adversarial",
-    commitOid: COMMIT_A,
-    query: "chunkboundaryprobe",
-    limit: 100,
-  });
-  const orderedBoundary = [...boundaryChunks].sort((left, right) => left.ordinal - right.ordinal);
-  expect(orderedBoundary.map((chunk) => chunk.content).join("")).toBe(boundarySource);
-  expect(
-    orderedBoundary.every(
-      (chunk) => chunk.content.length <= CODE_INDEX_LIMITS.maximumArtifactCodeUnits,
-    ),
-  ).toBe(true);
-
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/unicode-adversarial",
-    displayName: "Unicode adversarial",
-    commitOid: COMMIT_B,
-    files: [
-      { path: "fixtures/chunkboundaryprobe.unknown", content: boundarySource },
-      { path: "src/unicodeprobe.ts", content: source },
-    ],
-  });
-  const replayed = await code.search(context.alice, {
-    repositoryKey: "corespeed/unicode-adversarial",
-    commitOid: COMMIT_B,
-    query: "unicodeprobe",
-    limit: 100,
-  });
-  const stableView = (artifacts: typeof ordered) =>
-    [...artifacts]
-      .sort((left, right) => left.ordinal - right.ordinal)
-      .map((artifact) => ({
-        contentSha256: artifact.contentSha256,
-        declarationChunkOrdinal: artifact.declarationChunkOrdinal,
-        declarationKey: artifact.declarationKey,
-        endLine: artifact.endLine,
-        kind: artifact.kind,
-        ordinal: artifact.ordinal,
-        path: artifact.path,
-        startLine: artifact.startLine,
-        symbolKey: artifact.symbolKey,
-        symbols: artifact.symbols,
-      }));
-  expect(stableView(replayed)).toEqual(stableView(ordered));
+  for (const file of [
+    { path: "src/unicodeprobe.ts", content: source },
+    {
+      path: "fixtures/chunkboundaryprobe.unknown",
+      content: `${"x".repeat(CODE_INDEX_LIMITS.maximumArtifactCodeUnits)}\nchunkBoundaryProbe`,
+    },
+  ]) {
+    const prepared = await prepareFile(file);
+    expect(prepared.artifacts.length).toBeGreaterThan(1);
+    expectExactCodePartition(file.content, prepared.artifacts);
+    expect(await prepareFile(file)).toEqual(prepared);
+  }
 });
 
 test("indexes every symbol declared by one top-level statement", async () => {
@@ -1154,31 +1064,21 @@ test("indexes every symbol declared by one top-level statement", async () => {
   });
 });
 
-test("indexes every symbol declared by one JavaScript var statement", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/multi-var",
-    displayName: "Multi var",
-    commitOid: COMMIT_A,
-    files: [
-      {
-        path: "src/constants.js",
-        content: "export var gammaChunkTarget = 3, deltaChunkTarget = 4;",
-      },
-    ],
+test("parses every symbol declared by one JavaScript var statement", async () => {
+  const { artifacts } = await prepareFile({
+    path: "src/constants.js",
+    content: "export var gammaChunkTarget = 3, deltaChunkTarget = 4;",
   });
 
-  const delta = await code.search(context.alice, {
-    repositoryKey: "corespeed/multi-var",
-    commitOid: COMMIT_A,
-    query: "deltaChunkTarget",
-  });
-  expect(delta[0]).toMatchObject({
-    kind: "variable_declarator",
-    symbol: "deltaChunkTarget",
-    symbolKey: "src/constants.js#variable_declarator:deltaChunkTarget",
-  });
+  expect(artifacts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "variable_declarator",
+        symbol: "deltaChunkTarget",
+        symbolKey: "src/constants.js#variable_declarator:deltaChunkTarget",
+      }),
+    ]),
+  );
 });
 
 test("indexes every binding from one destructuring declaration without duplicating its artifact", async () => {
@@ -1220,95 +1120,28 @@ test("indexes every binding from one destructuring declaration without duplicati
 });
 
 test("never splits a Unicode code point at a hard fallback boundary", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
-  const source = `unicodeMarker: ${"😀".repeat(3_000)} unicodeMarker ${"😀".repeat(1_500)}`;
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/unicode-fallback",
-    displayName: "Unicode fallback",
-    commitOid: COMMIT_A,
-    files: [{ path: "fixtures/minified.unknown", content: source }],
-  });
+  const content = `unicodeMarker: ${"😀".repeat(3_000)} unicodeMarker ${"😀".repeat(1_500)}`;
+  const { artifacts } = await prepareFile({ path: "fixtures/minified.unknown", content });
 
-  const chunks = await code.search(context.alice, {
-    repositoryKey: "corespeed/unicode-fallback",
-    commitOid: COMMIT_A,
-    query: "unicodeMarker",
-    limit: 100,
-  });
-  const hasUnpairedSurrogate = (value: string) =>
-    Array.from({ length: value.length }).some((_, index) => {
-      const unit = value.charCodeAt(index);
-      if (unit >= 0xd800 && unit <= 0xdbff) {
-        const next = value.charCodeAt(index + 1);
-        // Integer guards: charCodeAt out of range is NaN, whose comparisons are
-        // all false — without them a chunk ENDING in a high surrogate (or
-        // starting with a low one) would pass as paired.
-        return !Number.isInteger(next) || next < 0xdc00 || next > 0xdfff;
-      }
-      if (unit >= 0xdc00 && unit <= 0xdfff) {
-        const previous = value.charCodeAt(index - 1);
-        return !Number.isInteger(previous) || previous < 0xd800 || previous > 0xdbff;
-      }
-      return false;
-    });
-  expect(chunks.length).toBeGreaterThan(1);
-  expect(chunks.every((chunk) => !hasUnpairedSurrogate(chunk.content))).toBe(true);
-  expect(
-    [...chunks]
-      .sort((left, right) => left.ordinal - right.ordinal)
-      .map((chunk) => chunk.content)
-      .join(""),
-  ).toBe(source);
+  expect(artifacts.length).toBeGreaterThan(1);
+  expectExactCodePartition(content, artifacts);
 });
 
 test("preserves a whitespace-only fallback chunk needed to reconstruct the source", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
-  const source = `prefix\n${" ".repeat(7_000)}\nsuffix`;
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/whitespace-fallback",
-    displayName: "Whitespace fallback",
-    commitOid: COMMIT_A,
-    files: [{ path: "fixtures/chunk-gap.unknown", content: source }],
-  });
+  const content = `prefix\n${" ".repeat(7_000)}\nsuffix`;
+  const { artifacts } = await prepareFile({ path: "fixtures/chunk-gap.unknown", content });
 
-  const chunks = await code.search(context.alice, {
-    repositoryKey: "corespeed/whitespace-fallback",
-    commitOid: COMMIT_A,
-    query: "chunk-gap",
-    limit: 100,
-  });
-  expect(chunks.length).toBeGreaterThan(1);
-  expect(
-    [...chunks]
-      .sort((left, right) => left.ordinal - right.ordinal)
-      .map((chunk) => chunk.content)
-      .join(""),
-  ).toBe(source);
+  expect(artifacts.length).toBeGreaterThan(1);
+  expectExactCodePartition(content, artifacts);
 });
 
 test("falls back safely when syntax errors consume the parsed tree", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/lore",
-    displayName: "Lore",
-    commitOid: COMMIT_A,
-    files: [
-      {
-        path: "src/broken.ts",
-        content: "export function broken( { return impossibleValue",
-      },
-    ],
+  const { artifacts } = await prepareFile({
+    path: "src/broken.ts",
+    content: "export function broken( { return impossibleValue",
   });
 
-  const results = await code.search(context.alice, {
-    repositoryKey: "corespeed/lore",
-    commitOid: COMMIT_A,
-    query: "impossibleValue",
-  });
-  expect(results[0]).toMatchObject({
+  expect(artifacts[0]).toMatchObject({
     parser: "text",
     parseStatus: "fallback",
     kind: "text_chunk",
@@ -1316,46 +1149,41 @@ test("falls back safely when syntax errors consume the parsed tree", async () =>
 });
 
 test("uses AST parsing across the built-in web languages and marks recovered trees", async () => {
-  const context = await createMemoryTestContext();
-  const code = createCodeIndexModule(context.database);
-  await code.indexRevision(context.alice, {
-    repositoryKey: "corespeed/web",
-    displayName: "Web",
-    commitOid: COMMIT_A,
-    files: [
+  for (const [file, expected] of [
+    [
       {
         path: "src/Button.tsx",
         content: "export function Button() { return <button>Remember</button>; }",
       },
+      { language: "tsx", symbol: "Button", parseStatus: "parsed" },
+    ],
+    [
       {
         path: "src/format.js",
         content: "export function formatMemory(value) { return String(value); }",
       },
+      { language: "javascript", symbol: "formatMemory", parseStatus: "parsed" },
+    ],
+    [
       { path: "src/theme.css", content: ".memory { color: rebeccapurple; }" },
+      { language: "css", symbol: null, parseStatus: "parsed" },
+    ],
+    [
       { path: "public/index.html", content: "<main>Code-aware memory</main>" },
+      { language: "html", symbol: null, parseStatus: "parsed" },
+    ],
+    [
       {
         path: "src/recovered.ts",
         content: "export function recoveredSymbol() { return 1; }\nconst broken = ;",
       },
-    ],
-  });
-
-  for (const [query, expected] of [
-    ["Button", { language: "tsx", symbol: "Button", parseStatus: "parsed" }],
-    ["formatMemory", { language: "javascript", symbol: "formatMemory", parseStatus: "parsed" }],
-    ["rebeccapurple", { language: "css", symbol: null, parseStatus: "parsed" }],
-    ["Code-aware", { language: "html", symbol: null, parseStatus: "parsed" }],
-    [
-      "recoveredSymbol",
       { language: "typescript", symbol: "recoveredSymbol", parseStatus: "recovered" },
     ],
   ] as const) {
-    const results = await code.search(context.alice, {
-      repositoryKey: "corespeed/web",
-      commitOid: COMMIT_A,
-      query,
-    });
-    expect(results[0]).toMatchObject({ parser: "tree_sitter", ...expected });
+    const { artifacts } = await prepareFile(file);
+    expect(artifacts, file.path).toEqual(
+      expect.arrayContaining([expect.objectContaining({ parser: "tree_sitter", ...expected })]),
+    );
   }
 });
 

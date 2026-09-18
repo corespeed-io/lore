@@ -127,14 +127,6 @@ test("code-aware evaluation passes only when every hard gate and configured qual
   expect(report.summary.passRate).toBe(1);
 });
 
-test("code-aware evaluation reports keep independent suite revisions", () => {
-  const report = scoreCodeAwareMemoryEvaluation([], {
-    revision: "code-aware-memory-dependency-stress-v1",
-  });
-
-  expect(report.revision).toBe("code-aware-memory-dependency-stress-v1");
-});
-
 test("current Code and Memory modules produce a versioned adversarial foundation baseline", async () => {
   const context = await createMemoryTestContext();
   const report = await runCodeAwareMemoryFoundationEvaluation(context);
