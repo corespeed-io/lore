@@ -116,6 +116,15 @@ try {
   const deniedBody: unknown = await denied.json();
   assert.ok(deniedBody !== null && typeof deniedBody === "object" && "code" in deniedBody);
   assert.equal(deniedBody.code, "authentication_required");
+  // A page request carries no Hono admission of its own: only `src/middleware.ts`
+  // rejects it. Assert that here, so moving or renaming that file can never
+  // silently leave the UI unauthenticated.
+  const unauthenticatedPage = await request("/", 401);
+  assert.equal(unauthenticatedPage.headers.get("www-authenticate"), "Basic");
+  assert.equal(
+    ((await unauthenticatedPage.json()) as { code?: unknown }).code,
+    "authentication_required",
+  );
   const headers = { authorization };
   const missing = await request("/api/__standalone_smoke_missing", 404, { headers });
   assert.deepEqual(await missing.json(), { code: "not_found", error: "Not found" });

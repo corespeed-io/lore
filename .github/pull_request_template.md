@@ -13,4 +13,4 @@
 - [ ] Retrieval filters Workspace/private visibility before ranking
 - [ ] No generic upstream-tool passthrough or unrestricted request-path service role
 - [ ] Updated `AGENTS.md` if I changed behavior agents rely on (commands, flows, gotchas)
-- [ ] Updated `CONTEXT.md` if I changed canonical domain language
+- [ ] Updated `docs/CONTEXT.md` if I changed canonical domain language

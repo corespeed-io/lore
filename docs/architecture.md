@@ -3,7 +3,7 @@
 Lore has two implementation layers: **Lore Core** (`packages/lore-core`) is the
 reusable memory engine; **Lore OSS** supplies identity, transport, deployment,
 concrete model adapters, product workflows, and UI. OSS depends on Core; Core does
-not import OSS or model SDKs. Product terminology is defined in [CONTEXT.md](../CONTEXT.md).
+not import OSS or model SDKs. Product terminology is defined in [CONTEXT.md](CONTEXT.md).
 
 ## Interface boundaries
 
@@ -56,7 +56,7 @@ Hono's `/livez` handler does not access the database. Next's `/openapi.json` is
 statically generated. These routes and `/readyz` export only GET; Next handles HEAD, OPTIONS,
 and unsupported methods automatically.
 
-Cloudflare's `worker.ts` sends API and operational requests directly to Hono and
+Cloudflare's `src/worker/cloudflare.ts` sends API and operational requests directly to Hono and
 sends frontend requests to OpenNext. The Cloudflare host creates a request-local
 Hyperdrive adapter and injects a queue notifier using `waitUntil`. It never runs
 Bun or local Git ingestion. Provider/auth string configuration uses Workers'
@@ -73,6 +73,7 @@ SDK retain portable module contracts for other hosts.
 | Directory | Responsibility |
 | --- | --- |
 | `src/app/` | Next.js pages, route entrypoints, global styles, and framework composition |
+| `src/middleware.ts` | Next.js middleware, which Next expects inside `src/` when `src/app` is used |
 | `src/shell/` | App routing, Sidebar, and workflows that compose multiple domains |
 | `src/modules/` | Product domains, each owning its implementation and interfaces |
 | `src/server/auth/` | Authentication, identity storage, access policy, and Actor request context |
@@ -83,7 +84,8 @@ SDK retain portable module contracts for other hosts.
 | `src/server/telemetry/` | Server instrumentation and privacy filtering |
 | `src/shared/browser/` | Browser SDK configuration, SWR cache keys, request logs, and common hooks |
 | `src/shared/ui/` | Shared visual helpers |
-| `src/worker/` | Bun maintenance entrypoint |
+| `src/types/` | Generated and hand-written ambient declarations, including the Wrangler binding types |
+| `src/worker/` | Deployment entrypoints: `maintenance.ts` for Bun, `cloudflare.ts` for the Wrangler `main` |
 | `packages/` | Memory engine, TypeScript SDK, CLI, and external MCP adapter |
 | `db/` | Immutable applied migrations and database setup |
 | `tools/sdk-codegen/` | Isolated OpenAPI code-generation toolchain |

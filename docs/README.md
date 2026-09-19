@@ -5,12 +5,12 @@
 | Goal | Guide |
 | --- | --- |
 | Run Lore locally | [Quick start](../README.md#quick-start) |
-| Understand the product model | [Product vocabulary](../CONTEXT.md) |
+| Understand the product model | [Product vocabulary](CONTEXT.md) |
 | Find code and understand module boundaries | [Architecture](architecture.md) |
 | Connect an application or agent | [Developer integration](developer-integration.md) |
 | Configure providers, deployment, and benchmarks | [Technical reference](reference.md) |
 | Operate, back up, restore, or migrate Lore | [Operations and portability](operations.md) |
-| Work on the interface | [Design system](../DESIGN.md) |
+| Work on the interface | [Design system](DESIGN.md) |
 | Contribute code | [Contributing](../.github/CONTRIBUTING.md) |
 | Find development and database commands | [Script index](../scripts/README.md) |
 | Run quality and performance measurements | [Evaluation tool index](../tools/evaluation/README.md) |

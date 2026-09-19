@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "lore",
-  "main": "worker.ts",
+  "main": "src/worker/cloudflare.ts",
   "compatibility_date": "2026-08-07",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {

@@ -77,7 +77,7 @@
     "start:maintenance": "bun --no-env-file .worker/maintenance-worker.js",
     "preview:cloudflare": "bun --bun opennextjs-cloudflare build && bun --bun opennextjs-cloudflare preview",
     "deploy:cloudflare": "bun --bun opennextjs-cloudflare build && bun --bun opennextjs-cloudflare deploy",
-    "cf:typegen": "bun --bun wrangler types --env-interface CloudflareEnv --env-file .dev.vars.example --strict-vars false cloudflare-env.d.ts",
+    "cf:typegen": "bun --bun wrangler types --env-interface CloudflareEnv --env-file .dev.vars.example --strict-vars false src/types/cloudflare-env.d.ts",
     "design:check": "bun --no-env-file scripts/checks/check-design-system.ts . && bun --no-env-file test ./scripts/checks/check-design-system.test.ts",
     "lint": "biome check .",
     "sdk:check": "bun tools/sdk-codegen/generate.ts --check",

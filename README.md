@@ -119,7 +119,7 @@ See the documentation before deploying beyond localhost:
   SDK, Cloudflare, development, and benchmarks
 - [Operations and portability](docs/operations.md) — backup and restore, Workspace
   archives, embedding rollouts, health probes, and telemetry
-- [Product vocabulary](CONTEXT.md) — the canonical domain model and invariants
+- [Product vocabulary](docs/CONTEXT.md) — the canonical domain model and invariants
 - [Contributing guide](.github/CONTRIBUTING.md) — local setup and contribution flow
 
 ## Development

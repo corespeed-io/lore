@@ -59,7 +59,7 @@ Workspace, ownership, and scope from the first migration. When adding a feature:
 - ✗ No unrestricted request-path service role or caller-trusted ownership fields
 - ✗ No generic upstream-tool passthrough
 
-See `AGENTS.md` and `CONTEXT.md` for the complete invariants and vocabulary.
+See `AGENTS.md` and `docs/CONTEXT.md` for the complete invariants and vocabulary.
 
 ### Testing
 

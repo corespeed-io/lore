@@ -38,7 +38,7 @@ function write(root: string, path: string, contents = "export {};\n") {
 function fixture() {
   const root = mkdtempSync(resolve(tmpdir(), "lore-design-"));
   fixtureRoots.add(root);
-  write(root, "DESIGN.md", "# Lore design system\n");
+  write(root, "docs/DESIGN.md", "# Lore design system\n");
   write(
     root,
     "src/app/globals.css",

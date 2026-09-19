@@ -1,11 +1,11 @@
 # Design system — Lore
 
 > Status: Active
-> Canonical source: `DESIGN.md`
+> Canonical source: `docs/DESIGN.md`
 > Last decision review: 2026-08-10
 
 This document is Lore's binding UI contract. Lore is a native Memory System;
-the product model in `CONTEXT.md` defines every frontend data contract.
+the product model in `docs/CONTEXT.md` defines every frontend data contract.
 
 ## 1. Source of truth
 

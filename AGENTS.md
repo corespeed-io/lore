@@ -4,7 +4,7 @@ Orientation for AI coding agents (Claude Code, Codex, Cursor, Gemini, Copilot, �
 working in this repo. **This file is the single source of truth for agent-facing
 project instructions.** `CLAUDE.md` is a symlink to it and
 `.github/copilot-instructions.md` points to it — only ever edit this file, not a
-copy. The canonical product vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
+copy. The canonical product vocabulary lives in [`CONTEXT.md`](docs/CONTEXT.md).
 The directory map and import conventions live in [`docs/architecture.md`](docs/architecture.md).
 Start at [`docs/README.md`](docs/README.md) for current guides and retained research.
 
@@ -254,7 +254,7 @@ been removed. Lore now has a native implementation, split into two concepts
   through the shared cancelable debounce hook (`src/shared/browser/use-debounced-callback.ts`);
   App drops the pending query via `searchCancelRef` on every query-context reset
   (Workspace, tab, type drill, route navigation, opening a Memory). Behavioral
-  contract (normative copy in DESIGN.md): typing debounces, explicit submission is
+  contract (normative copy in docs/DESIGN.md): typing debounces, explicit submission is
   immediate and closes the mobile drawer, an Enter consumed by IME composition
   never submits, and a deliberate Enter always searches;
 - `src/shared/browser/cache-keys.ts` owns Workspace-scoped SWR keys; domain
@@ -550,7 +550,7 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 - security-header and Cloudflare Access JWT-verification techniques;
 - pure utilities and tests whose behavior remains part of the new product.
 
-The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
+The active frontend contract is [`DESIGN.md`](docs/DESIGN.md). Keep one application
 stylesheet (`src/app/globals.css`). Graph combines native durable Memory Links with
 derived affinity for isolated Memories; never wire it back to the removed gbrain proxy.
 
@@ -609,7 +609,7 @@ requirement of the Memory interface.
 
 ## Domain model and invariants
 
-Use the terms and definitions in [`CONTEXT.md`](CONTEXT.md). The central relations
+Use the terms and definitions in [`CONTEXT.md`](docs/CONTEXT.md). The central relations
 are:
 
 ```text
@@ -1126,8 +1126,9 @@ Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but
 do not treat generated `.next` or `.open-next` output as source or commit it.
 
-`cloudflare-env.d.ts` is the exception: it is the checked-in generated binding and
-Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
+`src/types/cloudflare-env.d.ts` is the exception: it is the checked-in generated
+binding and Workerd type contract, kept beside the other ambient declarations
+rather than in the repository root. Regenerate it with `bun run cf:typegen` after changing
 `wrangler.jsonc` or `.dev.vars.example`.
 
 ## Testing scope and gotchas
@@ -1171,12 +1172,24 @@ those rules with mocks that merely repeat their implementation.
   Index job stranded in `processing` until its lease expires. A `processing` row is
   not proof of active work — check the worker's CPU before concluding it is indexing.
 - `tsconfig.json` sets `incremental: true`, so `bun run typecheck` can report success
-  purely from a stale `tsconfig.tsbuildinfo`. Any bisect over dependency, generated-type,
-  or `tsconfig` changes must `rm -f tsconfig.tsbuildinfo .next/cache/.tsbuildinfo` between
+  purely from a stale build-info file. `tsBuildInfoFile` keeps it out of the repository
+  root, so any bisect over dependency, generated-type,
+  or `tsconfig` changes must `rm -f .next/cache/tsconfig.tsbuildinfo .next/cache/.tsbuildinfo` between
   runs, or it measures the cache instead of the change. `skipLibCheck: true` compounds
   this: a conflict between two `.d.ts` files is silent at the declaration site and only
   surfaces as errors at unrelated call sites.
-- Wrangler upgrades must regenerate `cloudflare-env.d.ts` and pass a fresh
+- `src/middleware.ts` must keep that name. Next 16 deprecates `middleware` in favour
+  of `proxy`, but the rename is not cosmetic: a `middleware.ts` compiles to the edge
+  runtime while a `proxy.ts` compiles to the Node.js runtime, and `runtime` is not
+  configurable in a Proxy file. OpenNext then has to bundle a Node.js middleware and
+  fails on `Could not resolve "@opentelemetry/api"`, so `opennextjs-cloudflare build`
+  breaks. Verify `.next/server/middleware-manifest.json` still lists an edge
+  entrypoint after touching this file, and migrate to `proxy.ts` only together with a
+  green Cloudflare bundle. Moving the file into `src/` is safe on its own, and Next's
+  own `src` guidance asks for it there.
+  `bun run smoke:next` asserts an unauthenticated `GET /` is 401, which is the only
+  check that proves the file still runs at all.
+- Wrangler upgrades must regenerate `src/types/cloudflare-env.d.ts` and pass a fresh
   typecheck. Wrangler 4.123.0's workerd generated `declare const Buffer: any`,
   which collided with the runtime types and broke `Buffer.toString(encoding)`.
   Wrangler 4.134.0 / workerd `1.20260917.1` no longer emits that declaration;
@@ -1197,7 +1210,7 @@ those rules with mocks that merely repeat their implementation.
   requests it.
 - Preserve unrelated user changes and untracked files.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
-  same PR. Update [`CONTEXT.md`](CONTEXT.md) whenever canonical domain language
+  same PR. Update [`CONTEXT.md`](docs/CONTEXT.md) whenever canonical domain language
   changes.
 
 <!-- BEGIN:nextjs-agent-rules -->

@@ -7,15 +7,15 @@ import {
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
 } from "@corespeed/lore-core";
-import openNextWorker from "./.open-next/worker.js";
-import { purgeExpiredPortableCoreRecords } from "./src/modules/operations/maintenance";
-import { isApiPath } from "./src/server/api/app";
-import { fetchCloudflareApi } from "./src/server/api/cloudflare";
-import { createRequestPostgresDatabase } from "./src/server/database/postgres";
-import { createMaintenanceEmbeddingProvidersFromEnvironment } from "./src/server/providers/embedding/factory";
+import openNextWorker from "../../.open-next/worker.js";
+import { purgeExpiredPortableCoreRecords } from "../modules/operations/maintenance";
+import { isApiPath } from "../server/api/app";
+import { fetchCloudflareApi } from "../server/api/cloudflare";
+import { createRequestPostgresDatabase } from "../server/database/postgres";
+import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../server/providers/embedding/factory";
 
 // Preserve any OpenNext Durable Object exports if a cache adapter enables them.
-export { BucketCachePurge, DOQueueHandler, DOShardedTagCache } from "./.open-next/worker.js";
+export { BucketCachePurge, DOQueueHandler, DOShardedTagCache } from "../../.open-next/worker.js";
 
 function embeddingEnvironment(env: CloudflareEnv): Record<string, string | undefined> {
   return {

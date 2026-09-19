@@ -3,7 +3,7 @@ import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REQUIRED_PATHS = [
-  "DESIGN.md",
+  "docs/DESIGN.md",
   "src/app/globals.css",
   "src/shell/App.tsx",
   "src/shell/Sidebar.tsx",
@@ -77,7 +77,7 @@ export function checkDesignSystem(projectRoot: string) {
     try {
       statSync(resolve(root, path));
     } catch {
-      findings.push(`${path}:1 required by DESIGN.md but missing`);
+      findings.push(`${path}:1 required by docs/DESIGN.md but missing`);
     }
   }
 
@@ -126,7 +126,7 @@ export function checkDesignSystem(projectRoot: string) {
         finding(
           "src/app/globals.css",
           lineNumber(stylesheet, match.index),
-          `retired class ${retiredClass} must not return; use the active DESIGN.md vocabulary`,
+          `retired class ${retiredClass} must not return; use the active docs/DESIGN.md vocabulary`,
         ),
       );
     }
