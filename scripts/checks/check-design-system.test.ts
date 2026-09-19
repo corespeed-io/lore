@@ -46,9 +46,9 @@ function fixture() {
   );
   write(root, "src/shell/App.tsx");
   write(root, "src/shell/Sidebar.tsx");
-  write(root, "src/modules/graph/components/GraphView.tsx");
-  write(root, "src/modules/memories/components/SearchResults.tsx");
-  write(root, "src/modules/memories/components/MemoryView.tsx");
+  write(root, "src/modules/graph/browser/GraphView.tsx");
+  write(root, "src/modules/memories/browser/SearchResults.tsx");
+  write(root, "src/modules/memories/browser/MemoryView.tsx");
   write(root, "src/shared/browser/sdk.ts");
   write(root, "src/app/[...path]/page.tsx");
   write(root, "src/server/api/app.ts");

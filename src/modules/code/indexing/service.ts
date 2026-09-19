@@ -8,9 +8,8 @@ import {
   CodeRevisionConflictError,
 } from "./errors";
 import { readGitRevisionFiles, resolveGitCommit, resolveGitTreeOid } from "./git";
-import { CODE_INDEX_LIMITS } from "./limits";
 import { prepareFile } from "./parser";
-import { CODE_INDEX_REVISION } from "./protocol";
+import { CODE_INDEX_LIMITS, CODE_INDEX_REVISION } from "./protocol";
 import { createCodeIndexReadModule } from "./read";
 import type {
   ActiveGitRevisionRow,

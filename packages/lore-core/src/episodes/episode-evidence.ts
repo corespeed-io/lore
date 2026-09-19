@@ -1,11 +1,8 @@
-import type { PostgresTransaction } from "../db";
-import type { EmbeddingProvider } from "../embedding";
-import { validatedEmbeddingDimensions } from "../embedding";
-import { embeddingVectorLiteral, embeddingVectorLiterals } from "../embedding/vector";
+import type { EmbeddingProvider, QueryPlanningProvider, RerankingProvider } from "../capabilities";
+import { validatedEmbeddingDimensions } from "../capabilities";
+import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "../db";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
-import type { MemoryStorageContext, MemoryStorageScope } from "../memory-storage";
-import type { QueryPlanningProvider } from "../query-planning";
-import type { RerankingProvider } from "../reranking";
+import { embeddingVectorLiteral, embeddingVectorLiterals } from "../vector";
 
 export const EPISODE_EVIDENCE_INDEX_REVISION =
   `lore-episode-evidence-v1+${MEMORY_CHUNKING_REVISION}` as const;

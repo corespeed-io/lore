@@ -13,7 +13,7 @@ Clients in other languages can call the HTTP API described by OpenAPI.
 
 | Module | Location | Responsibility |
 | --- | --- | --- |
-| Web UI | `src/shell/`, browser-facing domain files in `src/modules/`, and `src/shared/browser/` | Views, presentation, navigation, and SDK-backed remote state |
+| Web UI | `src/shell/`, `src/modules/*/browser/`, and `src/shared/browser/` | Views, presentation, navigation, and SDK-backed remote state |
 | TypeScript SDK | `packages/typescript-sdk/` | Generated wire types, public content limits, and API client transport |
 | CLI | `packages/cli/` | Command parsing and output through the TypeScript SDK |
 | MCP | `packages/mcp/` | External stdio tools through the TypeScript SDK |
@@ -102,28 +102,31 @@ stay in `evaluation/`; the Docker runtime copies only `scripts/database/`.
 ## Domain modules
 
 `src/modules` contains `memories`, `proposals`, `episodes`, `agents`, `workspaces`,
-`identity`, `graph`, `code`, `context`, `evaluations`, `operations`, `portability`,
-and `overview`.
+`graph`, `code`, `context`, `evaluations`, `operations`, and `portability`.
 
-A module contains the files its implementation needs. For example:
+A module contains the files its implementation needs, and everything a browser may
+import lives in one `browser/` directory:
 
 ```text
 src/modules/memories/
-  schemas.ts       # Server Zod validation and OpenAPI schema source
-  input.ts         # Memory-specific API input handling
-  routes.ts        # Hono subrouters with inline request handlers
-  service.ts       # OSS authorization, request replay, and engine wire mapping
-  client.ts        # Domain adapter for the TypeScript SDK
-  hooks.ts         # Memory reads and cache behavior
-  display.ts       # Memory title/type presentation
-  markdown.ts      # Memory content rendering
-  openapi.ts       # Memory paths and schema components
-  components/      # MemoryView and SearchResults
+  schemas.ts        # Server Zod validation and OpenAPI schema source
+  input.ts          # Memory-specific API input handling
+  routes.ts         # Hono subrouters with inline request handlers
+  service.ts        # OSS authorization, request replay, and engine wire mapping
+  openapi.ts        # Memory paths and schema components
+  browser/
+    data.ts         # SDK calls plus their SWR hooks and cache behavior
+    presentation.ts # Memory title/type presentation
+    markdown.ts     # Memory content rendering
+    MemoryView.tsx  # Views, colocated with the data they read
+    SearchResults.tsx
 ```
 
 Modules with their own application persistence use `service.ts`. Canonical Memory
-persistence stays in `packages/lore-core`. A feature does not need a service file,
-client file, or new package unless it has behavior to own.
+persistence stays in `packages/lore-core`. A feature does not need a service file
+or new package unless it has behavior to own, and a domain folder is not warranted
+for a single endpoint: the Actor endpoint belongs to `workspaces`, and the
+cross-domain Dashboard view belongs to `src/shell/overview/`.
 
 Callers import the specific interface they use. Do not recreate aggregate `lib`,
 `types`, route, browser-client, or hook files spanning unrelated domains,
@@ -131,11 +134,17 @@ or barrels that re-export server code alongside browser code. Domain hooks share
 cache-key vocabulary so mutations can invalidate related views consistently.
 Cross-domain UI composition belongs in `src/shell`.
 
+`bun run architecture:check` matches `src/modules/*/browser/**` as a directory, so
+a new browser file never requires a `biome.json` edit. Keep that guard keyed on the
+directory: an allowlist of file names silently makes the file layout load-bearing
+and pushes unrelated helpers into whichever name is already blessed.
+
 API route handlers and the canonical OpenAPI document define the API contract consumed
 by the TypeScript SDK and direct HTTP clients. The CLI and external MCP adapter
-delegate to the TypeScript SDK. The frontend follows `SWR hook → domain client → TypeScript SDK`:
-SWR owns remote state and cache invalidation, while domain clients preserve UI
-defaults and adapt results to their views.
+delegate to the TypeScript SDK. The frontend follows `component → domain browser/data.ts
+→ TypeScript SDK`: SWR owns remote state and cache invalidation, while that file's
+plain functions preserve UI defaults and adapt results to their views. A domain
+whose calls only forward to the SDK does not get an extra adapter file for it.
 
 The shell restores its URL for the selected Workspace before enabling domain
 reads. Dashboard and unqueried Memory browse enable the paged Memory window;
@@ -167,10 +176,10 @@ portability do not add CLI commands or MCP tools.
 
 The development Graph benchmark is a separate measurement endpoint, outside the
 public SDK/OpenAPI contract, and returns 404 in production. Its isolated
-`prototype-client.ts` reads response text directly to measure the original decoded
+`browser/prototype.ts` reads response text directly to measure the original decoded
 UTF-8 payload, including whitespace. `GraphScalePrototype.tsx` owns prototype
-routing and the SVG control separately from `WorkerCanvasGraph.tsx`.
-`prototype-hooks.ts` still keeps its remote state in SWR with a separate benchmark
+routing and the SVG control separately from `WorkerCanvasGraph.tsx`. The same
+prototype file keeps its remote state in SWR with a separate benchmark
 cache key and disables focus/reconnect refresh and error retries so a renderer
 comparison keeps its dataset stable. The SDK and server scripts do not import SWR.
 
@@ -184,7 +193,9 @@ authenticate a caller or define Workspace membership. Core retains PostgreSQL
 queries and transactions, version checks, content/chunk invariants, Memory Links,
 and retrieval algorithms. Its internal `retrieval/query.ts`, `ranking.ts`, and
 `policy.ts` separate query preparation, feedback, fusion, recency, diversity, and
-versioned policy from the Memory module's storage orchestration.
+versioned policy from the Memory module's storage orchestration. `db.ts` holds the
+whole storage seam — transaction interface, `MemoryStorageContext`, and the
+RLS-denial predicate — and `capabilities.ts` holds the model contracts.
 
 The supplied database must constrain every transaction before Core uses it.
 OSS `src/server/auth/actor-context.ts` owns User/Workspace/Agent context;
@@ -230,8 +241,9 @@ policy for a multi-user host.
 ### Model capabilities
 
 Core defines the capabilities needed by its retrieval and maintenance modules:
-`EmbeddingProvider` embeds query/document text, `RerankingProvider` scores supplied
-candidate passages, and `QueryPlanningProvider` generates alternate queries. Core
+`packages/lore-core/src/capabilities.ts` declares all three: `EmbeddingProvider`
+embeds query/document text, `RerankingProvider` scores supplied candidate passages,
+and `QueryPlanningProvider` generates alternate queries. Core
 owns candidate selection within the host-constrained store, retrieval fusion, failure behavior, vector
 validation, and embedding-generation storage. Embedding provider/model/revision
 identity and dimensions remain part of its contract because incompatible vector
@@ -293,7 +305,7 @@ manually with provenance, rather than mirrored automatically in every task.
 
 `src/modules/code/indexing` separates the existing indexing implementation into:
 
-- `types.ts`, `limits.ts`, `protocol.ts`, and `errors.ts`: contracts and invariants.
+- `types.ts`, `protocol.ts` (revision and bounds), and `errors.ts`: contracts and invariants.
 - `git.ts`: authenticated commit and tree-object ingestion.
 - `parser.ts`: native AST parsing and deterministic artifact preparation.
 - `validation.ts`: source validation, hashing, and preparation utilities.
@@ -310,8 +322,9 @@ does not change the code-index revision or stored artifact format.
 
 1. Keep framework route files thin: construct runtime dependencies and delegate to
    a domain handler.
-2. Browser modules may import browser helpers, SDK wire types and public limits,
-   domain presentation, clients, and hooks. Do not import server or Core modules,
+2. Browser modules live in `src/modules/*/browser/`, `src/shell/`, or
+   `src/shared/{browser,ui}/`, and may import browser helpers, SDK wire types and
+   public limits, and other browser modules. Do not import server or Core modules,
    including their types, into browser code. CLI and MCP depend on the SDK, not
    OSS server modules or Core.
 3. Server implementation depends on the reusable engine and host runtime through
@@ -329,6 +342,10 @@ does not change the code-index revision or stored artifact format.
 
 Operational scripts are grouped under `scripts/{database,dev,build,checks}`;
 benchmarks, evaluations, and their shared helpers live in `tools/evaluation`.
+In both trees an executable entrypoint is a verb phrase (`run-retrieval.ts`,
+`fetch-locomo.ts`, `run-preflight.ts`) and a library is a noun phrase
+(`retrieval.ts`, `retrieval-suite.ts`, `lib/migration-preflight.ts`). Do not
+distinguish an entrypoint from its library by word order.
 All handwritten JavaScript-family source is TypeScript/TSX. The root typecheck
 covers application code; `scripts/tsconfig.json` covers standalone tooling with
 Bun types, checked indexed access, and exact optional properties.

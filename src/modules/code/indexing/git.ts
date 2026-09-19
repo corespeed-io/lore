@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 import { CodeIndexValidationError } from "./errors";
-import { CODE_INDEX_LIMITS } from "./limits";
+import { CODE_INDEX_LIMITS } from "./protocol";
 import type {
   CodeSourceFile,
   GitRevisionManifest,

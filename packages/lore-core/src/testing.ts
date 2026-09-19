@@ -1,9 +1,8 @@
 import { expect, test } from "vitest";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
-import type { EmbeddingProvider } from "./embedding";
+import type { EmbeddingProvider } from "./capabilities";
+import type { MemoryStorageContext, PostgresDatabase, PostgresTransaction } from "./db";
 import { createMemoryMaintenanceModule } from "./maintenance";
 import { createMemoryModule, type MemoryScope } from "./memory";
-import type { MemoryStorageContext } from "./memory-storage";
 
 /**
  * Host-pluggable schema contract kit. A host supplies storage contexts whose

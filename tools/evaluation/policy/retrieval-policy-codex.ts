@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RetrievalPolicyToolCall, RetrievalPolicyTrace } from "./retrieval-policy-benchmark";
+import type { RetrievalPolicyToolCall, RetrievalPolicyTrace } from "./retrieval-policy";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fixturePath = fileURLToPath(

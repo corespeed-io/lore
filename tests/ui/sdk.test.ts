@@ -1,6 +1,6 @@
 import { LoreApiError, LoreClient } from "@corespeed/lore-sdk";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { forgetMemory, rememberMemory, updateMemory } from "@/modules/memories/client";
+import { forgetMemory, rememberMemory, updateMemory } from "@/modules/memories/browser/data";
 import { clearRequestLog, getRequestLog } from "@/shared/browser/request-log";
 import { getBrowserClient } from "@/shared/browser/sdk";
 

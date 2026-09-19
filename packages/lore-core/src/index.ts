@@ -14,14 +14,10 @@
  * the embedding, reranking, and query-planning capability interfaces.
  */
 
-export * from "./database-errors";
+export * from "./capabilities";
 export * from "./db";
-export * from "./embedding";
 export * from "./graph";
 export * from "./maintenance";
 export * from "./memory";
 export * from "./memory-chunking";
 export * from "./memory-content";
-export * from "./memory-storage";
-export * from "./query-planning";
-export * from "./reranking";

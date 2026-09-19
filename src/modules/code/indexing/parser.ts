@@ -1,7 +1,7 @@
 import { extname } from "node:path";
 import type { SgNode } from "@ast-grep/napi";
 import { Lang, parseAsync } from "@ast-grep/napi";
-import { CODE_INDEX_LIMITS } from "./limits";
+import { CODE_INDEX_LIMITS } from "./protocol";
 import type {
   CodeArtifactSymbol,
   CodeDependencyKind,

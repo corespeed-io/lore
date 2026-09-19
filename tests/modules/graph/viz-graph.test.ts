@@ -5,7 +5,7 @@ import {
   holdVerdict,
   labelBoxesOverlap,
   labelsToHide,
-} from "../../../src/modules/graph/rendering/graph";
+} from "../../../src/modules/graph/browser/rendering/graph";
 
 test("degrees counts undirected endpoints", () => {
   const d = degrees([

@@ -11,10 +11,9 @@ import {
   CodeIndexValidationError,
   CodeRevisionConflictError,
 } from "@/modules/code/indexing/errors";
-import { CODE_INDEX_LIMITS } from "@/modules/code/indexing/limits";
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
 import { prepareFile } from "@/modules/code/indexing/parser";
-import { CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
+import { CODE_INDEX_LIMITS, CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import type { PreparedArtifact } from "@/modules/code/indexing/types";
 import { createAccessModule } from "@/server/auth/access";

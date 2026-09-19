@@ -1,5 +1,5 @@
+import type { MemoryStorageContext } from "./db";
 import type { Memory, MemoryScope } from "./memory";
-import type { MemoryStorageContext } from "./memory-storage";
 
 export interface MemoryGraphNode {
   id: string;

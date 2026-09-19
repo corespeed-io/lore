@@ -1,6 +1,6 @@
 import manifest from "../../../evaluation/external/longmemeval.json";
 import { readJsonArray } from "../shared/json-array";
-import type { RetrievalBenchmarkPartition } from "./retrieval-benchmark";
+import type { RetrievalBenchmarkPartition } from "./retrieval";
 
 interface LongMemEvalTurn {
   role: string;

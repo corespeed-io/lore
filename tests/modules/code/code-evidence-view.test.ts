@@ -1,11 +1,11 @@
 import type { CodeIndexJob, MemoryCodeEvidence } from "@corespeed/lore-sdk";
 import { expect, expectTypeOf, test } from "vitest";
-import type { MemoryCodeEvidence as ServerMemoryCodeEvidence } from "@/modules/code/evidence";
 import {
   codeEvidenceSectionState,
   shortCommitOid,
   summarizeCodeEvidence,
-} from "@/modules/code/evidence-presentation";
+} from "@/modules/code/browser/evidence-presentation";
+import type { MemoryCodeEvidence as ServerMemoryCodeEvidence } from "@/modules/code/evidence";
 import type { CodeIndexJob as ServerCodeIndexJob } from "@/modules/code/indexing/types";
 
 const MEMORY_ID = "40000000-0000-4000-8000-000000000001";

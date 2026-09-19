@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { esc, plain, renderMarkdown } from "../../../src/modules/memories/markdown.js";
+import { esc, plain, renderMarkdown } from "../../../src/modules/memories/browser/markdown.js";
 
 const TARGET_MEMORY_ID = "e6f22a12-8b29-57ef-bbdf-ce11121303c7";
 

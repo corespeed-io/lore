@@ -152,7 +152,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   presentation model.
 - `WorkerCanvasGraph.tsx` and `graph-canvas.worker.ts` own the production Graph's
   Worker-based D3 layout, Canvas paint, progressive reveal, elastic node drag,
-  label collision, and zoom/pan state. `src/modules/graph/rendering/graph.ts` retains the shared
+  label collision, and zoom/pan state. `src/modules/graph/browser/rendering/graph.ts` retains the shared
   instance contract and the legacy SVG benchmark control.
 - `Sidebar.tsx` owns shell navigation, Workspace selection, mobile drawer, and search.
 - Route files only load runtime configuration and render the feature boundary.

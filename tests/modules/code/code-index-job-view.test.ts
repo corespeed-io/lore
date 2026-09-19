@@ -1,6 +1,6 @@
 import type { CodeIndexJob } from "@corespeed/lore-sdk";
 import { expect, test } from "vitest";
-import { summarizeCodeIndexJobs } from "@/modules/code/job-presentation";
+import { summarizeCodeIndexJobs } from "@/modules/code/browser/job-presentation";
 
 function job(
   index: number,

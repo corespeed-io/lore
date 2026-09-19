@@ -3,25 +3,25 @@
 import type { Memory, MemoryProposalReviewResult, MemoryScope } from "@corespeed/lore-sdk";
 import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AgentsView } from "@/modules/agents/components/AgentsView";
-import { GraphView } from "@/modules/graph/components/GraphView";
-import { LocalGraphModal } from "@/modules/graph/components/LocalGraphModal";
-import { useLoreGraph } from "@/modules/graph/hooks";
-import type { GraphData } from "@/modules/graph/types";
-import { MemoryView } from "@/modules/memories/components/MemoryView";
-import { SearchResults } from "@/modules/memories/components/SearchResults";
+import { AgentsView } from "@/modules/agents/browser/AgentsView";
+import { useLoreGraph } from "@/modules/graph/browser/data";
+import { GraphView } from "@/modules/graph/browser/GraphView";
+import { LocalGraphModal } from "@/modules/graph/browser/LocalGraphModal";
+import type { GraphData } from "@/modules/graph/browser/types";
 import {
   removeMemoryFromPages,
   upsertMemoryPages,
   useLoreMemories,
   useLoreMemory,
   useLoreSearch,
-} from "@/modules/memories/hooks";
-import { WorkspaceOperationsView } from "@/modules/operations/components/WorkspaceOperationsView";
-import { Overview } from "@/modules/overview/components/Overview";
-import { MemoryProposalsView } from "@/modules/proposals/components/MemoryProposalsView";
-import { useLoreWorkspaces } from "@/modules/workspaces/hooks";
+} from "@/modules/memories/browser/data";
+import { MemoryView } from "@/modules/memories/browser/MemoryView";
+import { SearchResults } from "@/modules/memories/browser/SearchResults";
+import { WorkspaceOperationsView } from "@/modules/operations/browser/WorkspaceOperationsView";
+import { MemoryProposalsView } from "@/modules/proposals/browser/MemoryProposalsView";
+import { useLoreWorkspaces } from "@/modules/workspaces/browser/data";
 import { loreKeys } from "@/shared/browser/cache-keys";
+import { Overview } from "@/shell/overview/Overview";
 import type { RouteState, Tab } from "@/shell/route";
 import { parseRoute, routeUrl } from "@/shell/route";
 import { Sidebar } from "@/shell/Sidebar";

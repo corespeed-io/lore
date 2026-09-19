@@ -5,17 +5,16 @@ import {
   listAgentCredentials,
   setAgentGrant,
   updateAgent,
-} from "@/modules/agents/client";
-import { listCodeIndexJobs, listMemoryCodeEvidence } from "@/modules/code/client";
-import { getObservations } from "@/modules/episodes/client";
-import { getCurrentHumanActor } from "@/modules/identity/client";
-import { listMemories, searchMemories } from "@/modules/memories/client";
+} from "@/modules/agents/browser/data";
+import { listCodeIndexJobs, listMemoryCodeEvidence } from "@/modules/code/browser/data";
+import { getObservations } from "@/modules/episodes/browser/data";
+import { listMemories, searchMemories } from "@/modules/memories/browser/data";
 import type { Memory } from "@/modules/memories/schemas";
-import { getDeploymentCapabilities, getReadiness } from "@/modules/operations/client";
-import { exportWorkspaceArchive, importWorkspaceArchive } from "@/modules/portability/client";
+import { getDeploymentCapabilities, getReadiness } from "@/modules/operations/browser/data";
+import { exportWorkspaceArchive, importWorkspaceArchive } from "@/modules/portability/browser/data";
 import type { WorkspaceArchive } from "@/modules/portability/service";
-import { listMemoryProposals, reviewMemoryProposal } from "@/modules/proposals/client";
-import { listWorkspaces } from "@/modules/workspaces/client";
+import { listMemoryProposals, reviewMemoryProposal } from "@/modules/proposals/browser/data";
+import { getCurrentHumanActor, listWorkspaces } from "@/modules/workspaces/browser/data";
 import { clearRequestLog, getRequestLog } from "@/shared/browser/request-log";
 
 function memory(index: number): Memory {

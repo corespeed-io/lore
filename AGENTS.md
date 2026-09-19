@@ -213,6 +213,11 @@ been removed. Lore now has a native implementation, split into two concepts
   it runs only in the Bun/self-host maintenance worker. Parser, symbol, or chunking
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
+- the `workspaces` module owns the active-session surface: Workspace list/create
+  plus `GET /api/v1/actor`, which resolves the verified human Actor *inside* the
+  active Workspace. There is no separate `identity` module — the Identity
+  aggregate's storage and policy live in `src/server/auth/`, and a four-file domain
+  folder for one workspace-scoped endpoint was scaffolding, not a seam;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   Hono subrouters exported directly by `src/modules/*/routes.ts` and composed by
   `src/server/api/app.ts` through `app.route()`. Route handlers call domain services
@@ -221,23 +226,29 @@ been removed. Lore now has a native implementation, split into two concepts
   the application stays one Next.js service running on Bun. Cloudflare dispatches APIs directly
   to Hono on workerd;
 - `src/shell/App.tsx` owns the native Memory workflow and client routing,
-  `src/shell/Sidebar.tsx` owns the Lore shell, and
+  `src/shell/Sidebar.tsx` owns the Lore shell, `src/shell/overview/` owns the
+  Dashboard view (it composes several domains and owns no domain of its own, so it
+  is not a `src/modules` entry), and
   `src/shared/browser/sdk.ts` configures the same-origin TypeScript SDK client,
   browser credentials, and `onRequest` request logging without a custom fetch wrapper.
   UI remains a distinct module within Next.js; it does not need a separate package
   or service. UI, CLI, and MCP depend on the TypeScript SDK, which calls the OSS API;
   the API supplies authorization and tenancy before composing Core and PostgreSQL.
-  `bun run architecture:check` guards these dependency boundaries in CI.
-  Frontend reads and mutations follow SWR hooks → domain `src/modules/*/client.ts`
-  adapters → the SDK; API paths, Workspace headers, serialization, parsing,
-  cancellation, and errors belong to the SDK. Components must not call `fetch`
+  `bun run architecture:check` guards these dependency boundaries in CI. Every
+  browser-side file of a domain lives under `src/modules/*/browser/`, and that
+  directory glob — not a list of blessed file names — is what the guard matches.
+  Adding a browser file must never require editing `biome.json`.
+  `browser/data.ts` owns a domain's SDK calls together with its SWR hooks; API
+  paths, Workspace headers, serialization, parsing, cancellation, and errors
+  belong to the SDK. Do not reintroduce a per-domain `client.ts` layer that only
+  forwards to the SDK. Components must not call `fetch`
   directly or recreate a shared browser HTTP transport. Development Graph benchmark
-  requests are the isolated exception: `src/modules/graph/prototype-client.ts`
+  requests are the isolated exception: `src/modules/graph/browser/prototype.ts`
   directly reads text to measure the original decoded UTF-8 payload, including
   whitespace. This endpoint is outside the public SDK/OpenAPI contract and returns
   404 in production. `GraphScalePrototype.tsx` owns
   prototype routing and the SVG control separately from `WorkerCanvasGraph.tsx`;
-  `prototype-hooks.ts` keeps benchmark remote state in SWR under its own cache key,
+  the same file keeps benchmark remote state in SWR under its own cache key,
   with focus/reconnect refresh and error retries disabled during measurements;
   Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search
   through the shared cancelable debounce hook (`src/shared/browser/use-debounced-callback.ts`);
@@ -247,7 +258,7 @@ been removed. Lore now has a native implementation, split into two concepts
   immediate and closes the mobile drawer, an Enter consumed by IME composition
   never submits, and a deliberate Enter always searches;
 - `src/shared/browser/cache-keys.ts` owns Workspace-scoped SWR keys; domain
-  `src/modules/*/hooks.ts` own hooks for Workspaces,
+  `src/modules/*/browser/data.ts` own hooks for Workspaces,
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
@@ -257,8 +268,8 @@ been removed. Lore now has a native implementation, split into two concepts
 - code-aware Memory has exactly two human surfaces, both read-only. `MemoryView.tsx`
   renders a Memory's Code citations from `GET /api/v1/memories/{id}/code-evidence`
   and `WorkspaceOperationsView.tsx` renders this Workspace's Code Index queue from
-  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/modules/code/evidence-presentation.ts`
-  and `src/modules/code/job-presentation.ts` own their pure presentation models: the six
+  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/modules/code/browser/evidence-presentation.ts`
+  and `src/modules/code/browser/job-presentation.ts` own their pure presentation models: the six
   validation states rank `changed`/`deleted`/`ambiguous` first, job tones rank `dead`
   first, and each state is stated in words as well as tone. Repository identity in the
   browser is a `repositoryKey` plus a commit OID; the operator-configured
@@ -274,18 +285,18 @@ been removed. Lore now has a native implementation, split into two concepts
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
   the Memory UUID) for native wikilink navigation;
-- `src/modules/memories/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
+- `src/modules/memories/browser/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
   references remain inert, and raw HTML stays escaped;
-- `src/modules/graph/components/WorkerCanvasGraph.tsx` and its colocated Worker own the production
+- `src/modules/graph/browser/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
   one Canvas, cold layout reveals progressively, and interaction frames transfer
   coordinate deltas. Preserve viewport culling, the 40,000-link paint cap, label
   collision, elastic drag, user zoom/pan across hide/show and resize, and fit behavior.
   Labels are intentionally interaction-driven (hover, selection, or filtering),
   while centrality is expressed through node size and physics rather than persistent
-  degree annotations. `src/modules/graph/rendering/graph.ts` retains the shared Graph instance contract,
+  degree annotations. `src/modules/graph/browser/rendering/graph.ts` retains the shared Graph instance contract,
   label helpers, and the legacy SVG benchmark control;
 - `packages/lore-core/src/maintenance.ts` owns leased, idempotent document embedding and
   deployment-wide re-index discovery. A provider/model/revision change builds
@@ -361,7 +372,8 @@ been removed. Lore now has a native implementation, split into two concepts
   `LORE_QUERY_PLANNER_NUM_CTX` to any benchmark reader sharing the same model server
   so Ollama does not reload between calls. Do not route local Qwen planners through
   the less controllable OpenAI-compatible surface;
-- `packages/lore-core/src/reranking.ts` defines the second-stage capability contract;
+- `packages/lore-core/src/capabilities.ts` defines the embedding, reranking, and
+  query-planning capability contracts in one file;
   `src/server/providers/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
   plus vLLM-Metal `/score`, while `src/server/providers/reranking/hosted.ts` has concrete Cohere
   v2, Memos MemReranker, and Voyage v1 adapters. Search fuses exact simple/English
@@ -404,7 +416,7 @@ been removed. Lore now has a native implementation, split into two concepts
   `tools/evaluation/shared/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
   `memoryagentbench-download.ts`. Local service probes live in `scripts/dev/lib/health-check.ts`;
-- `packages/lore-core/src/query-planning.ts` defines the optional multi-query planning capability.
+- Optional multi-query planning is the `QueryPlanningProvider` capability.
   OSS adapters in `src/server/providers/query-planning` see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,
   fuses only visible results, and then optionally reranks them;
@@ -876,7 +888,7 @@ Benchmark is part of the product quality system even without AutoDream.
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
   disposable database whose schema was generated at a non-lore width through
-  `tools/evaluation/retrieval/benchmark-migrate-dimensions.ts` (the audited 1024→N transform of
+  `tools/evaluation/retrieval/migrate-dimensions.ts` (the audited 1024→N transform of
   the baseline; the four `length(path) <= 1024` checks stay). It exercises the
   engine's host-baked `embeddingDimensions` option the way a non-lore host's
   own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
@@ -1011,6 +1023,14 @@ the local service manager explicitly reads its environment and filters credentia
 for each child. `node:` compatibility imports do not require a Node process.
 Core and the TypeScript SDK remain reusable libraries: preserve their standard
 module contracts and do not introduce Bun-only APIs into their portable code.
+
+Under `tools/` and `scripts/`, an executable entrypoint is named as a verb phrase
+(`run-retrieval.ts`, `fetch-locomo.ts`, `seed-graph-benchmark.ts`,
+`evaluate-code-aware-memory.ts`, `check-design-system.ts`, `migrate-dimensions.ts`)
+and a library is named as a noun phrase (`retrieval.ts`, `retrieval-suite.ts`,
+`locomo.ts`, `retrieval-policy.ts`). Never distinguish the two by word order alone:
+`benchmark-retrieval.ts` beside `retrieval-benchmark.ts` is the failure this rule
+exists to prevent, because "benchmark" reads as both verb and noun.
 
 `src/server/api/app.ts` composes domain subrouters exported by `src/modules/*/routes.ts`
 with Hono's `app.route()`. Keep route callbacks inline for parameter inference and

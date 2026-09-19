@@ -54,16 +54,7 @@
         "src/shell/**",
         "src/shared/browser/**",
         "src/shared/ui/**",
-        "src/modules/*/components/**",
-        "src/modules/*/rendering/**",
-        "src/modules/*/client.ts",
-        "src/modules/*/hooks.ts",
-        "src/modules/*/types.ts",
-        "src/modules/*/*presentation.ts",
-        "src/modules/*/display.ts",
-        "src/modules/*/markdown.ts",
-        "src/modules/*/prototype-client.ts",
-        "src/modules/*/prototype-hooks.ts"
+        "src/modules/*/browser/**"
       ],
       "linter": {
         "rules": {
