@@ -1214,15 +1214,32 @@ those rules with mocks that merely repeat their implementation.
 ## Commit / PR conventions
 
 - Conventional commits: `feat(scope): …`, `fix: …`, `chore: …`, `docs: …`.
-- `main` is protected; changes land through PRs.
-- Automatic Ensemble review and the `/ship` workflow are disabled for this
-  repository. Use the repository checks and ordinary PR workflow for commit,
-  PR, and release requests. Run Ensemble review only when the user explicitly
-  requests it.
 - Preserve unrelated user changes and untracked files.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
   same PR. Update [`CONTEXT.md`](docs/CONTEXT.md) whenever canonical domain language
   changes.
+- `/ship` is the supported flow for turning finished work into a merge-ready PR
+  (Yunpeng, 2026-09-20; it was previously disabled here). It commits, merges the
+  base, runs the repository checks, opens or updates the PR, and loops with an
+  independent reviewer until CI is green and the reviewer posts `APPROVE`.
+  **`/ship` never merges** — see the next item for why nothing else can either.
+- **An agent cannot merge this repository, and that is not a misconfiguration.**
+  `main` requires at least one approving review, the agent opens the PR as
+  `corespeed-agent-ensemble[bot]`, and GitHub forbids approving your own PR. That
+  account also holds no repository permission at all
+  (`admin`/`maintain`/`push`/`triage`/`pull` are all false; reading
+  `branches/main/protection` returns 403), so `gh pr merge --admin` is not a
+  fallback. When `gh pr view` reports `mergeable=MERGEABLE` with
+  `mergeStateStatus=BLOCKED` and `reviews=0`, the work is finished and the only
+  missing input is a human `Approve` or an independent reviewer identity. Say so
+  and stop; do not look for a bypass.
+- Ship's reviewer loop is how an agent-authored PR gets that approval. Do not run
+  it as a rubber stamp: it is an independent session, and a `REQUEST_CHANGES`
+  verdict is work to do, not an obstacle to route around.
+- Every CI job must pass before merge: `static`, `tests`, `database`, `packages`,
+  `build`, and the aggregate `check` gate that requires the other five. Run
+  `design:check`, `typecheck`, `lint`, `test`, `build`, `packages:smoke`, and the
+  deployment dry runs locally first rather than discovering failures in CI.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
