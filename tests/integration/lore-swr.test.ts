@@ -1,12 +1,15 @@
 import { expect, test } from "vitest";
-import { isLoreAgentCredentialsCacheKey, isLoreAgentsCacheKey } from "@/modules/agents/hooks";
+import {
+  isLoreAgentCredentialsCacheKey,
+  isLoreAgentsCacheKey,
+} from "@/modules/agents/browser/data";
 import {
   MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
   removeMemoryFromPages,
   shouldLoadNextMemoryPage,
   upsertMemoryPages,
-} from "@/modules/memories/hooks";
+} from "@/modules/memories/browser/data";
 import type { Memory } from "@/modules/memories/schemas";
 import { loreKeys } from "@/shared/browser/cache-keys";
 

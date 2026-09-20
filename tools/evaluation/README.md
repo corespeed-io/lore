@@ -15,13 +15,20 @@ excluded from the runtime image.
 | [`graph/`](graph/) | Synthetic Graph renderer stress data | `benchmark:graph:seed`, `prototype:graph-scale` |
 | [`shared/`](shared/) | Cross-family readers, judges, downloads, integrity checks, scoring, and usage accounting | Imported by the runners |
 
+An executable entrypoint is named as a verb phrase (`run-retrieval.ts`,
+`fetch-locomo.ts`, `evaluate-code-aware-memory.ts`, `seed-graph-benchmark.ts`) and
+a library is named as a noun phrase (`retrieval.ts`, `retrieval-suite.ts`,
+`locomo.ts`, `retrieval-policy.ts`). Do not reintroduce a `benchmark-` prefix: it
+reads as both verb and noun, which is how `benchmark-retrieval.ts` and
+`retrieval-benchmark.ts` once ended up side by side meaning opposite things.
+
 `*` denotes related commands, including dataset fetch and profile variants; see
 [package.json](../../package.json) for their exact names. Domain-specific helpers
 and output schemas stay with their runner family. The policy MCP fixture remains
 in [`packages/mcp/benchmark-fixture.ts`](../../packages/mcp/benchmark-fixture.ts)
 so its server dependency resolves within that package.
 
-The standalone [dimension setup helper](retrieval/benchmark-migrate-dimensions.ts)
+The standalone [dimension setup helper](retrieval/migrate-dimensions.ts)
 documents how to prepare a disposable benchmark database for non-default embedding
 dimensions. The Code SQL microbenchmark measures predicate strategies outside
 production RLS; its timings are not application request latency.

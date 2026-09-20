@@ -4,7 +4,6 @@ import { contextPaths, contextSchemas } from "@/modules/context/openapi";
 import { episodesPaths, episodesSchemas } from "@/modules/episodes/openapi";
 import { evaluationsPaths, evaluationsSchemas } from "@/modules/evaluations/openapi";
 import { graphPaths } from "@/modules/graph/openapi";
-import { identityPaths, identitySchemas } from "@/modules/identity/openapi";
 import { memoriesPaths, memoriesSchemas } from "@/modules/memories/openapi";
 import { operationsPaths, operationsSchemas } from "@/modules/operations/openapi";
 import { LORE_API_VERSION } from "@/modules/operations/service";
@@ -25,7 +24,6 @@ export function loreOpenApiDocument(): Record<string, unknown> {
     servers: [{ url: "/" }],
     security: actorSecurity,
     paths: {
-      ...identityPaths,
       ...workspacesPaths,
       ...memoriesPaths,
       ...codePaths,
@@ -47,7 +45,6 @@ export function loreOpenApiDocument(): Record<string, unknown> {
         ...contextSchemas,
         ...codeSchemas,
         ...workspacesSchemas,
-        ...identitySchemas,
         ...agentsSchemas,
         ...evaluationsSchemas,
         ...portabilitySchemas,

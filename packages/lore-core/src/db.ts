@@ -15,3 +15,29 @@ export interface PostgresTransaction {
 export interface PostgresDatabase {
   transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>): Promise<Result>;
 }
+
+/** Opaque storage keys. They carry attribution, never membership or permissions. */
+export interface MemoryStorageScope {
+  partitionId: string;
+  ownerId: string;
+  sourceId?: string;
+}
+
+/**
+ * A host-bound store. Every transaction must already enforce the caller's access
+ * policy before invoking its callback, including subsequent retrieval rounds.
+ * Core never installs identity context or chooses database privileges.
+ */
+export interface MemoryStorageContext extends MemoryStorageScope {
+  database: PostgresDatabase;
+}
+
+export function isPostgresAccessDenied(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "42501" ||
+    (typeof candidate.message === "string" &&
+      /row-level security|permission denied/i.test(candidate.message))
+  );
+}

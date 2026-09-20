@@ -3,8 +3,8 @@
 import type { MemoryScope } from "@corespeed/lore-sdk";
 import { useSWRConfig } from "swr";
 import useSWRMutation from "swr/mutation";
-import { forgetMemory, rememberMemory, updateMemory } from "@/modules/memories/client";
-import { createWorkspace } from "@/modules/workspaces/client";
+import { forgetMemory, rememberMemory, updateMemory } from "@/modules/memories/browser/data";
+import { createWorkspace } from "@/modules/workspaces/browser/data";
 import { loreKeys } from "@/shared/browser/cache-keys";
 
 interface SaveMemoryInput {

@@ -1,11 +1,8 @@
-import { isPostgresAccessDenied } from "./database-errors";
-import type { PostgresTransaction } from "./db";
-import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./embedding";
-import { embeddingVectorLiteral } from "./embedding/vector";
+import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
+import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "./db";
+import { isPostgresAccessDenied } from "./db";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
 import { prepareMemoryContent } from "./memory-content";
-import type { MemoryStorageContext, MemoryStorageScope } from "./memory-storage";
-
 import type {
   ContextGroupExpansionOptions,
   ListMemory,
@@ -38,6 +35,7 @@ import {
   rerankEvidence,
   timestampMilliseconds,
 } from "./retrieval/ranking";
+import { embeddingVectorLiteral } from "./vector";
 
 export type * from "./memory-types";
 export * from "./retrieval/policy";

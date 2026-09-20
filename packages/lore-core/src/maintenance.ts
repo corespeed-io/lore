@@ -1,7 +1,7 @@
+import type { EmbeddingProvider } from "./capabilities";
+import { validatedEmbeddingDimensions } from "./capabilities";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
-import type { EmbeddingProvider } from "./embedding";
-import { validatedEmbeddingDimensions } from "./embedding";
-import { embeddingVectorLiterals } from "./embedding/vector";
+import { embeddingVectorLiterals } from "./vector";
 
 export type MemoryMaintenanceStatus = "complete" | "retry" | "dead" | "idle";
 

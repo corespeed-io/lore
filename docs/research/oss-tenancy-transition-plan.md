@@ -160,7 +160,7 @@ layer for both product models.
 
 ## Source evidence
 
-- [Domain vocabulary](../../CONTEXT.md), [request context](../../src/server/auth/request-context.ts),
+- [Domain vocabulary](../CONTEXT.md), [request context](../../src/server/auth/request-context.ts),
   [access implementation](../../src/server/auth/access.ts).
 - [Archive and import behavior](../../src/modules/portability/service.ts),
   [portability behavior tests](../../tests/integration/portable-core.test.ts).

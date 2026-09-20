@@ -172,7 +172,7 @@ Workspaces, hides benchmark answer tripwires behind RLS, keys corpus reuse by th
 dataset/render/chunking revisions, records `lore-memory-chunking-v2`, reports the
 reader/judge/retrieval configurations, and marks unresolved judge cases and score
 completeness
-([Lore V2 runner](../../tools/evaluation/retrieval/benchmark-longmemeval-v2.ts)).
+([Lore V2 runner](../../tools/evaluation/retrieval/run-longmemeval-v2.ts)).
 
 Implementation update: that prerequisite is now resolved. The runner preserves
 each rendered trajectory exactly across one or more bounded workflow
@@ -182,7 +182,7 @@ before top-k, then groups evidence back by trajectory identity. Bob-private
 tripwires use the same Episode-evidence path. Raw trajectories never become
 canonical Memories, and deleting an Episode cascades its rebuildable artifacts
 ([bounded-Memory ADR](../adr/0003-bounded-memory-not-document.md),
-[Lore V2 runner](../../tools/evaluation/retrieval/benchmark-longmemeval-v2.ts)).
+[Lore V2 runner](../../tools/evaluation/retrieval/run-longmemeval-v2.ts)).
 
 V2-Small is therefore the right primary agent-memory gate, V2-Medium is the right
 scale gate, and legacy LongMemEval remains a distinct coverage track rather than a

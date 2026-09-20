@@ -292,7 +292,7 @@ still need the complete benchmark below.
 
 ## Measured SQL microbenchmark
 
-The checked-in `scripts/benchmark-code-search.ts` harness owns a disposable schema
+The checked-in `tools/evaluation/code/run-code-search.ts` harness owns a disposable schema
 inside a database whose name contains `benchmark`. It loads two equal scopes,
 applies the scope predicates before ranking, builds B-tree/FTS/trigram indexes, runs
 warmups plus timed samples, and captures `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`.
@@ -323,7 +323,7 @@ Hyperdrive latency. The combined production query still has symbol/path channels
 and index size/WAL were not captured. The result is strong enough to reject the
 unindexed content scan, but not to claim full code-search performance.
 
-The checked-in `scripts/benchmark-code-index.ts` now covers the next seam against a
+The checked-in `tools/evaluation/code/run-code-index.ts` now covers the next seam against a
 caller-provided migrated disposable PostgreSQL database. It first indexes a base
 commit from scratch, then the target commit incrementally, and finally replays the
 target as a no-op. Each phase reports wall time plus indexed, parsed, reused, and

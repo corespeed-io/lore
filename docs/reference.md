@@ -909,7 +909,7 @@ LORE_BENCHMARK_JUDGE_PROVIDER=vllm \
 Query/document preprocessing is part of the versioned embedding protocol. Testing
 a different preprocessing strategy requires a new revision and re-index, not a
 hidden benchmark-only prompt. See [`AGENTS.md`](../AGENTS.md) for architecture and
-working agreements and [`CONTEXT.md`](../CONTEXT.md) for canonical domain terminology.
+working agreements and [`CONTEXT.md`](CONTEXT.md) for canonical domain terminology.
 
 ### LoCoMo locally
 

@@ -5,7 +5,7 @@ import {
   workspaceArchiveSourceOwners,
   workspaceImportFingerprint,
   workspaceOwnerMap,
-} from "@/modules/portability/presentation";
+} from "@/modules/portability/browser/presentation";
 import type { WorkspaceArchive } from "@/modules/portability/service";
 
 const ALICE_ID = "10000000-0000-4000-8000-000000000001";

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
-import { jsonObject, requiredString } from "@/server/api/input";
+import { jsonObject, requiredString, requireHumanActor } from "@/server/api/input";
 import { createAccessModule } from "@/server/auth/access";
 
 export const workspaces = new Hono<ApiEnv>()
@@ -19,3 +19,9 @@ export const workspaces = new Hono<ApiEnv>()
     });
     return c.json(workspace, 201);
   });
+
+/** The verified human Actor inside the active Workspace, not the Identity aggregate. */
+export const actor = new Hono<ApiEnv>().get("/", async (c) => {
+  const resolved = requireHumanActor(await c.var.resolveActor());
+  return c.json({ kind: "human", userId: resolved.userId });
+});

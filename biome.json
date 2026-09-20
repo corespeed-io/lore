@@ -54,16 +54,7 @@
         "src/shell/**",
         "src/shared/browser/**",
         "src/shared/ui/**",
-        "src/modules/*/components/**",
-        "src/modules/*/rendering/**",
-        "src/modules/*/client.ts",
-        "src/modules/*/hooks.ts",
-        "src/modules/*/types.ts",
-        "src/modules/*/*presentation.ts",
-        "src/modules/*/display.ts",
-        "src/modules/*/markdown.ts",
-        "src/modules/*/prototype-client.ts",
-        "src/modules/*/prototype-hooks.ts"
+        "src/modules/*/browser/**"
       ],
       "linter": {
         "rules": {
@@ -110,6 +101,69 @@
                       "**/context/policy.*"
                     ],
                     "message": "Browser modules use the Lore SDK and browser contracts; do not import Core, server implementations, CLI, or MCP, including types."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/lore-core/src/**", "packages/lore-core/tests/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/**",
+                      "**/src/app/**",
+                      "**/src/modules/**",
+                      "**/src/server/**",
+                      "**/src/shared/**",
+                      "**/src/shell/**",
+                      "**/src/types/**",
+                      "**/src/worker/**",
+                      "@corespeed/lore-sdk",
+                      "@corespeed/lore-sdk/**",
+                      "@corespeed/lore-cli",
+                      "@corespeed/lore-cli/**",
+                      "@corespeed/lore-mcp",
+                      "@corespeed/lore-mcp/**",
+                      "**/typescript-sdk/**",
+                      "**/packages/cli/**",
+                      "**/packages/mcp/**",
+                      "next",
+                      "next/**",
+                      "hono",
+                      "hono/**",
+                      "react",
+                      "react/**",
+                      "swr",
+                      "swr/**",
+                      "zod",
+                      "zod/**",
+                      "jose",
+                      "server-only",
+                      "openai",
+                      "openai/**",
+                      "@google/genai",
+                      "@google/genai/**",
+                      "ollama",
+                      "ollama/**",
+                      "cohere-ai",
+                      "cohere-ai/**",
+                      "voyageai",
+                      "voyageai/**",
+                      "@ast-grep/napi",
+                      "@vercel/otel",
+                      "@opentelemetry/**"
+                    ],
+                    "message": "The engine must not know its host: keep OSS identity/tenancy, HTTP, UI, wire validation, and concrete model SDKs out of packages/lore-core. Hosts inject capabilities through the embedding, reranking, and query-planning interfaces."
                   }
                 ]
               }

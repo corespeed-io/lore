@@ -38,7 +38,7 @@ The mapped implementation is primarily in
 [`packages/lore-core/src/memory.ts`](../../packages/lore-core/src/memory.ts),
 [`src/server/providers/reranking`](../../src/server/providers/reranking),
 [`src/server/providers/query-planning`](../../src/server/providers/query-planning), and
-[`tools/evaluation/retrieval/retrieval-benchmark.ts`](../../tools/evaluation/retrieval/retrieval-benchmark.ts).
+[`tools/evaluation/retrieval/retrieval.ts`](../../tools/evaluation/retrieval/retrieval.ts).
 
 ## Benchmark provenance
 
@@ -64,7 +64,7 @@ The mapped implementation is primarily in
   [retrieval evaluator](https://github.com/xiaowu0162/LongMemEval/blob/9e0b455f4ef0e2ab8f2e582289761153549043fc/src/retrieval/eval_utils.py)).
 - **Lore mapping:**
   [`evaluation/external/longmemeval.json`](../../evaluation/external/longmemeval.json),
-  [`tools/evaluation/retrieval/benchmark-longmemeval.ts`](../../tools/evaluation/retrieval/benchmark-longmemeval.ts), and
+  [`tools/evaluation/retrieval/run-longmemeval.ts`](../../tools/evaluation/retrieval/run-longmemeval.ts), and
   [`tools/evaluation/retrieval/longmemeval.ts`](../../tools/evaluation/retrieval/longmemeval.ts) pin the cleaned
   release, isolate every question in its own Workspace, store sessions as private
   Memories, and add a Bob-private answer tripwire.
@@ -109,7 +109,7 @@ The mapped implementation is primarily in
   ([harness](https://github.com/xiaowu0162/LongMemEval-V2/blob/ef67f10aacd9080c75aeb2dd527a0af25dc26f1b/evaluation/harness.py)).
 - **Lore mapping:**
   [`evaluation/external/longmemeval-v2.json`](../../evaluation/external/longmemeval-v2.json),
-  [`tools/evaluation/retrieval/benchmark-longmemeval-v2.ts`](../../tools/evaluation/retrieval/benchmark-longmemeval-v2.ts),
+  [`tools/evaluation/retrieval/run-longmemeval-v2.ts`](../../tools/evaluation/retrieval/run-longmemeval-v2.ts),
   [`tools/evaluation/shared/benchmark-reader.ts`](../../tools/evaluation/shared/benchmark-reader.ts), and
   [`tools/evaluation/shared/benchmark-judge.ts`](../../tools/evaluation/shared/benchmark-judge.ts) pin the
   data, reader/judge prompts, images, RLS tripwires, timing, and usage metadata.
@@ -146,8 +146,8 @@ The mapped implementation is primarily in
   it does not establish a universal recency-ranking policy.
 - **Lore mapping:**
   [`evaluation/external/memoryagentbench.json`](../../evaluation/external/memoryagentbench.json),
-  [`tools/evaluation/retrieval/benchmark-memoryagentbench.ts`](../../tools/evaluation/retrieval/benchmark-memoryagentbench.ts),
-  and [`tools/evaluation/retrieval/benchmark-memoryagentbench-accurate.ts`](../../tools/evaluation/retrieval/benchmark-memoryagentbench-accurate.ts)
+  [`tools/evaluation/retrieval/run-memoryagentbench.ts`](../../tools/evaluation/retrieval/run-memoryagentbench.ts),
+  and [`tools/evaluation/retrieval/run-memoryagentbench-accurate.ts`](../../tools/evaluation/retrieval/run-memoryagentbench-accurate.ts)
   preserve incremental order, use the official normalized substring metric for
   the conflict answer, and plant Bob-private tripwires.
 - **Deviations and limits:** the conflict runner's latest-literal-answer Memory

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { CodeIndexValidationError } from "./errors";
-import { CODE_INDEX_LIMITS } from "./limits";
+import { CODE_INDEX_LIMITS } from "./protocol";
 import type { CodeSourceFile, GitRevisionManifest } from "./types";
 
 export function sha256(content: string | Uint8Array): string {

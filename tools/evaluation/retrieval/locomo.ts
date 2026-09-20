@@ -1,7 +1,7 @@
 import manifest from "../../../evaluation/external/locomo.json";
 import { readJsonArray } from "../shared/json-array";
 import { nltkPorterStem } from "../shared/nltk-porter-stemmer";
-import type { RetrievalBenchmarkPartition } from "./retrieval-benchmark";
+import type { RetrievalBenchmarkPartition } from "./retrieval";
 
 export const LOCOMO_CATEGORIES = [1, 2, 3, 4, 5] as const;
 export type LocomoCategory = (typeof LOCOMO_CATEGORIES)[number];

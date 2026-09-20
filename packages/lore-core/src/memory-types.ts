@@ -1,6 +1,4 @@
-import type { EmbeddingProvider } from "./embedding";
-import type { QueryPlanningProvider } from "./query-planning";
-import type { RerankingProvider } from "./reranking";
+import type { EmbeddingProvider, QueryPlanningProvider, RerankingProvider } from "./capabilities";
 
 export type MemoryScope = "shared" | "private";
 

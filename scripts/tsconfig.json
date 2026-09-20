@@ -14,7 +14,7 @@
   "include": [
     "**/*.ts",
     "../tools/evaluation/graph/seed-graph-benchmark.ts",
-    "../tools/evaluation/retrieval/benchmark-migrate-dimensions.ts"
+    "../tools/evaluation/retrieval/migrate-dimensions.ts"
   ],
   "exclude": ["checks/smoke-memory-core.ts", "database/embedding-generation.ts"]
 }

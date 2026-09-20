@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { graphNodeCentrality } from "../../../src/modules/graph/rendering/centrality";
+import { graphNodeCentrality } from "../../../src/modules/graph/browser/rendering/centrality";
 
 describe("graph node centrality", () => {
   test("connection count increases gravity and visual radius", () => {

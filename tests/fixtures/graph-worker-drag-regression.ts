@@ -5,7 +5,7 @@ type WorkerMessage =
   | { type: "frame"; nodeIndices: Uint32Array; positions: Float32Array };
 
 const worker = new Worker(
-  new URL("../../src/modules/graph/components/graph-canvas.worker.ts", import.meta.url),
+  new URL("../../src/modules/graph/browser/graph-canvas.worker.ts", import.meta.url),
   {
     type: "module",
   },

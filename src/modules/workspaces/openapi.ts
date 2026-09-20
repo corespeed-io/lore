@@ -3,9 +3,22 @@ import {
   jsonResponse,
   requestBody,
   timestampProperties,
+  workspaceHeader,
 } from "@/server/openapi/shared";
 
 export const workspacesPaths = {
+  "/api/v1/actor": {
+    get: {
+      operationId: "getCurrentHumanActor",
+      security: humanSecurity,
+      parameters: [workspaceHeader],
+      responses: {
+        "200": jsonResponse("Verified human Actor for the active Workspace", {
+          $ref: "#/components/schemas/HumanActor",
+        }),
+      },
+    },
+  },
   "/api/v1/workspaces": {
     get: {
       operationId: "listWorkspaces",
@@ -36,6 +49,15 @@ export const workspacesPaths = {
 };
 
 export const workspacesSchemas = {
+  HumanActor: {
+    type: "object",
+    additionalProperties: false,
+    required: ["kind", "userId"],
+    properties: {
+      kind: { const: "human" },
+      userId: { type: "string", format: "uuid" },
+    },
+  },
   Workspace: {
     type: "object",
     additionalProperties: false,

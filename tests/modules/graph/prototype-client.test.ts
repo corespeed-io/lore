@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { readGraphScalePrototype } from "@/modules/graph/prototype-client";
+import { readGraphScalePrototype } from "@/modules/graph/browser/prototype";
 import { clearRequestLog } from "@/shared/browser/request-log";
 
 afterEach(() => {

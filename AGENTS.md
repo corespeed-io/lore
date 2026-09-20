@@ -4,7 +4,7 @@ Orientation for AI coding agents (Claude Code, Codex, Cursor, Gemini, Copilot, �
 working in this repo. **This file is the single source of truth for agent-facing
 project instructions.** `CLAUDE.md` is a symlink to it and
 `.github/copilot-instructions.md` points to it — only ever edit this file, not a
-copy. The canonical product vocabulary lives in [`CONTEXT.md`](CONTEXT.md).
+copy. The canonical product vocabulary lives in [`CONTEXT.md`](docs/CONTEXT.md).
 The directory map and import conventions live in [`docs/architecture.md`](docs/architecture.md).
 Start at [`docs/README.md`](docs/README.md) for current guides and retained research.
 
@@ -34,16 +34,27 @@ been removed. Lore now has a native implementation, split into two concepts
   `MemoryStorageContext`; methods take no Actor. The host initializes and
   authorizes every storage transaction. Host-baked invariants are module
   options: `embeddingDimensions` (lore oss pins 1024) and
-  `defaultMemoryScope` (lore oss keeps "shared"). The package is written at
-  the union strictness of its hosts (`noUncheckedIndexedAccess`,
-  `exactOptionalPropertyTypes`) and is consumed in-repo as workspace
-  TypeScript source (root tsconfig paths, vitest aliases, Next
-  `transpilePackages`). **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
+  `defaultMemoryScope` (lore oss keeps "shared").
+  **It is a package to enforce a boundary, not to ship an artifact.** It is
+  `private`, has no build script and no `files`/`main`/`types`, `exports` points
+  straight at `./src`, and `build:packages`/`packages:smoke` cover only the SDK,
+  CLI, and MCP. What the directory buys is two independent proofs that the engine
+  does not know its host: its own `tsconfig.json` has no `@/*` mapping, so a
+  reverse import into OSS cannot compile, and `biome.json` denies it OSS paths,
+  host frameworks, Zod, and every concrete model SDK. Keep both — neither one
+  catches everything the other does. It is also held to the union strictness of
+  its hosts (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), which the
+  application is not, and CI runs `bun run --cwd packages/lore-core check` as its
+  own gate against a minimal PGlite schema with no identity tables. In-repo it is
+  consumed as workspace TypeScript source (root tsconfig paths, vitest aliases,
+  Next `transpilePackages`), never as a built dependency.
+  **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
   CoreSpeed HaaS retains its existing `packages/memory-core` vendored fork;
   the planned cutover to a verbatim `packages/lore-core` copy was cancelled.
   Lore changes land here; HaaS ports selected changes manually and records their
   provenance. Do not require an automatic same-task mirror or assume semantic
-  identity between the packages. npm publishing remains out of scope.
+  identity between the packages. npm publishing remains out of scope, so
+  "reusable engine" names the dependency direction, not a shipped package.
 - **lore oss** — everything else in this repository: identity/tenancy,
   request context and authorization, request idempotency, HTTP/OpenAPI,
   TypeScript SDK/CLI/MCP, web UI, Memory Proposals
@@ -213,6 +224,11 @@ been removed. Lore now has a native implementation, split into two concepts
   it runs only in the Bun/self-host maintenance worker. Parser, symbol, or chunking
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
+- the `workspaces` module owns the active-session surface: Workspace list/create
+  plus `GET /api/v1/actor`, which resolves the verified human Actor *inside* the
+  active Workspace. There is no separate `identity` module — the Identity
+  aggregate's storage and policy live in `src/server/auth/`, and a four-file domain
+  folder for one workspace-scoped endpoint was scaffolding, not a seam;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   Hono subrouters exported directly by `src/modules/*/routes.ts` and composed by
   `src/server/api/app.ts` through `app.route()`. Route handlers call domain services
@@ -221,33 +237,39 @@ been removed. Lore now has a native implementation, split into two concepts
   the application stays one Next.js service running on Bun. Cloudflare dispatches APIs directly
   to Hono on workerd;
 - `src/shell/App.tsx` owns the native Memory workflow and client routing,
-  `src/shell/Sidebar.tsx` owns the Lore shell, and
+  `src/shell/Sidebar.tsx` owns the Lore shell, `src/shell/overview/` owns the
+  Dashboard view (it composes several domains and owns no domain of its own, so it
+  is not a `src/modules` entry), and
   `src/shared/browser/sdk.ts` configures the same-origin TypeScript SDK client,
   browser credentials, and `onRequest` request logging without a custom fetch wrapper.
   UI remains a distinct module within Next.js; it does not need a separate package
   or service. UI, CLI, and MCP depend on the TypeScript SDK, which calls the OSS API;
   the API supplies authorization and tenancy before composing Core and PostgreSQL.
-  `bun run architecture:check` guards these dependency boundaries in CI.
-  Frontend reads and mutations follow SWR hooks → domain `src/modules/*/client.ts`
-  adapters → the SDK; API paths, Workspace headers, serialization, parsing,
-  cancellation, and errors belong to the SDK. Components must not call `fetch`
+  `bun run architecture:check` guards these dependency boundaries in CI. Every
+  browser-side file of a domain lives under `src/modules/*/browser/`, and that
+  directory glob — not a list of blessed file names — is what the guard matches.
+  Adding a browser file must never require editing `biome.json`.
+  `browser/data.ts` owns a domain's SDK calls together with its SWR hooks; API
+  paths, Workspace headers, serialization, parsing, cancellation, and errors
+  belong to the SDK. Do not reintroduce a per-domain `client.ts` layer that only
+  forwards to the SDK. Components must not call `fetch`
   directly or recreate a shared browser HTTP transport. Development Graph benchmark
-  requests are the isolated exception: `src/modules/graph/prototype-client.ts`
+  requests are the isolated exception: `src/modules/graph/browser/prototype.ts`
   directly reads text to measure the original decoded UTF-8 payload, including
   whitespace. This endpoint is outside the public SDK/OpenAPI contract and returns
   404 in production. `GraphScalePrototype.tsx` owns
   prototype routing and the SVG control separately from `WorkerCanvasGraph.tsx`;
-  `prototype-hooks.ts` keeps benchmark remote state in SWR under its own cache key,
+  the same file keeps benchmark remote state in SWR under its own cache key,
   with focus/reconnect refresh and error retries disabled during measurements;
   Sidebar's labelled Semantic search form reuses the Workspace-scoped hybrid search
   through the shared cancelable debounce hook (`src/shared/browser/use-debounced-callback.ts`);
   App drops the pending query via `searchCancelRef` on every query-context reset
   (Workspace, tab, type drill, route navigation, opening a Memory). Behavioral
-  contract (normative copy in DESIGN.md): typing debounces, explicit submission is
+  contract (normative copy in docs/DESIGN.md): typing debounces, explicit submission is
   immediate and closes the mobile drawer, an Enter consumed by IME composition
   never submits, and a deliberate Enter always searches;
 - `src/shared/browser/cache-keys.ts` owns Workspace-scoped SWR keys; domain
-  `src/modules/*/hooks.ts` own hooks for Workspaces,
+  `src/modules/*/browser/data.ts` own hooks for Workspaces,
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
@@ -257,8 +279,8 @@ been removed. Lore now has a native implementation, split into two concepts
 - code-aware Memory has exactly two human surfaces, both read-only. `MemoryView.tsx`
   renders a Memory's Code citations from `GET /api/v1/memories/{id}/code-evidence`
   and `WorkspaceOperationsView.tsx` renders this Workspace's Code Index queue from
-  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/modules/code/evidence-presentation.ts`
-  and `src/modules/code/job-presentation.ts` own their pure presentation models: the six
+  the bounded newest-first `GET /api/v1/code/index-jobs`. `src/modules/code/browser/evidence-presentation.ts`
+  and `src/modules/code/browser/job-presentation.ts` own their pure presentation models: the six
   validation states rank `changed`/`deleted`/`ambiguous` first, job tones rank `dead`
   first, and each state is stated in words as well as tone. Repository identity in the
   browser is a `repositoryKey` plus a commit OID; the operator-configured
@@ -274,18 +296,18 @@ been removed. Lore now has a native implementation, split into two concepts
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
   the Memory UUID) for native wikilink navigation;
-- `src/modules/memories/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
+- `src/modules/memories/browser/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
   references remain inert, and raw HTML stays escaped;
-- `src/modules/graph/components/WorkerCanvasGraph.tsx` and its colocated Worker own the production
+- `src/modules/graph/browser/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
   one Canvas, cold layout reveals progressively, and interaction frames transfer
   coordinate deltas. Preserve viewport culling, the 40,000-link paint cap, label
   collision, elastic drag, user zoom/pan across hide/show and resize, and fit behavior.
   Labels are intentionally interaction-driven (hover, selection, or filtering),
   while centrality is expressed through node size and physics rather than persistent
-  degree annotations. `src/modules/graph/rendering/graph.ts` retains the shared Graph instance contract,
+  degree annotations. `src/modules/graph/browser/rendering/graph.ts` retains the shared Graph instance contract,
   label helpers, and the legacy SVG benchmark control;
 - `packages/lore-core/src/maintenance.ts` owns leased, idempotent document embedding and
   deployment-wide re-index discovery. A provider/model/revision change builds
@@ -361,7 +383,8 @@ been removed. Lore now has a native implementation, split into two concepts
   `LORE_QUERY_PLANNER_NUM_CTX` to any benchmark reader sharing the same model server
   so Ollama does not reload between calls. Do not route local Qwen planners through
   the less controllable OpenAI-compatible surface;
-- `packages/lore-core/src/reranking.ts` defines the second-stage capability contract;
+- `packages/lore-core/src/capabilities.ts` defines the embedding, reranking, and
+  query-planning capability contracts in one file;
   `src/server/providers/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
   plus vLLM-Metal `/score`, while `src/server/providers/reranking/hosted.ts` has concrete Cohere
   v2, Memos MemReranker, and Voyage v1 adapters. Search fuses exact simple/English
@@ -404,7 +427,7 @@ been removed. Lore now has a native implementation, split into two concepts
   `tools/evaluation/shared/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
   `memoryagentbench-download.ts`. Local service probes live in `scripts/dev/lib/health-check.ts`;
-- `packages/lore-core/src/query-planning.ts` defines the optional multi-query planning capability.
+- Optional multi-query planning is the `QueryPlanningProvider` capability.
   OSS adapters in `src/server/providers/query-planning` see only the original question; search keeps
   that question, runs every generated query under the same Actor/RLS transaction,
   fuses only visible results, and then optionally reranks them;
@@ -538,7 +561,7 @@ Historical UI ideas may be reintroduced only when they serve the native product:
 - security-header and Cloudflare Access JWT-verification techniques;
 - pure utilities and tests whose behavior remains part of the new product.
 
-The active frontend contract is [`DESIGN.md`](DESIGN.md). Keep one application
+The active frontend contract is [`DESIGN.md`](docs/DESIGN.md). Keep one application
 stylesheet (`src/app/globals.css`). Graph combines native durable Memory Links with
 derived affinity for isolated Memories; never wire it back to the removed gbrain proxy.
 
@@ -597,7 +620,7 @@ requirement of the Memory interface.
 
 ## Domain model and invariants
 
-Use the terms and definitions in [`CONTEXT.md`](CONTEXT.md). The central relations
+Use the terms and definitions in [`CONTEXT.md`](docs/CONTEXT.md). The central relations
 are:
 
 ```text
@@ -876,7 +899,7 @@ Benchmark is part of the product quality system even without AutoDream.
   scope so semantic RLS is tested rather than bypassed by benchmark filtering.
 - `LORE_BENCHMARK_EMBEDDING_DIMENSIONS` runs a retrieval benchmark against a
   disposable database whose schema was generated at a non-lore width through
-  `tools/evaluation/retrieval/benchmark-migrate-dimensions.ts` (the audited 1024→N transform of
+  `tools/evaluation/retrieval/migrate-dimensions.ts` (the audited 1024→N transform of
   the baseline; the four `length(path) <= 1024` checks stay). It exercises the
   engine's host-baked `embeddingDimensions` option the way a non-lore host's
   own chain does (CoreSpeed HaaS: 1536). It is a benchmark setting: deployments
@@ -1012,6 +1035,14 @@ for each child. `node:` compatibility imports do not require a Node process.
 Core and the TypeScript SDK remain reusable libraries: preserve their standard
 module contracts and do not introduce Bun-only APIs into their portable code.
 
+Under `tools/` and `scripts/`, an executable entrypoint is named as a verb phrase
+(`run-retrieval.ts`, `fetch-locomo.ts`, `seed-graph-benchmark.ts`,
+`evaluate-code-aware-memory.ts`, `check-design-system.ts`, `migrate-dimensions.ts`)
+and a library is named as a noun phrase (`retrieval.ts`, `retrieval-suite.ts`,
+`locomo.ts`, `retrieval-policy.ts`). Never distinguish the two by word order alone:
+`benchmark-retrieval.ts` beside `retrieval-benchmark.ts` is the failure this rule
+exists to prevent, because "benchmark" reads as both verb and noun.
+
 `src/server/api/app.ts` composes domain subrouters exported by `src/modules/*/routes.ts`
 with Hono's `app.route()`. Keep route callbacks inline for parameter inference and
 use `.get()`/`.post()`/etc.; Hono-owned responses use `c.json()`/`c.body()`.
@@ -1106,8 +1137,9 @@ Next.js 16 keeps development output in `.next/dev`, separate from production
 build output. A production build no longer clobbers the running dev manifest, but
 do not treat generated `.next` or `.open-next` output as source or commit it.
 
-`cloudflare-env.d.ts` is the exception: it is the checked-in generated binding and
-Workerd type contract. Regenerate it with `bun run cf:typegen` after changing
+`src/types/cloudflare-env.d.ts` is the exception: it is the checked-in generated
+binding and Workerd type contract, kept beside the other ambient declarations
+rather than in the repository root. Regenerate it with `bun run cf:typegen` after changing
 `wrangler.jsonc` or `.dev.vars.example`.
 
 ## Testing scope and gotchas
@@ -1151,12 +1183,24 @@ those rules with mocks that merely repeat their implementation.
   Index job stranded in `processing` until its lease expires. A `processing` row is
   not proof of active work — check the worker's CPU before concluding it is indexing.
 - `tsconfig.json` sets `incremental: true`, so `bun run typecheck` can report success
-  purely from a stale `tsconfig.tsbuildinfo`. Any bisect over dependency, generated-type,
-  or `tsconfig` changes must `rm -f tsconfig.tsbuildinfo .next/cache/.tsbuildinfo` between
+  purely from a stale build-info file. `tsBuildInfoFile` keeps it out of the repository
+  root, so any bisect over dependency, generated-type,
+  or `tsconfig` changes must `rm -f .next/cache/tsconfig.tsbuildinfo .next/cache/.tsbuildinfo` between
   runs, or it measures the cache instead of the change. `skipLibCheck: true` compounds
   this: a conflict between two `.d.ts` files is silent at the declaration site and only
   surfaces as errors at unrelated call sites.
-- Wrangler upgrades must regenerate `cloudflare-env.d.ts` and pass a fresh
+- `src/middleware.ts` must keep that name. Next 16 deprecates `middleware` in favour
+  of `proxy`, but the rename is not cosmetic: a `middleware.ts` compiles to the edge
+  runtime while a `proxy.ts` compiles to the Node.js runtime, and `runtime` is not
+  configurable in a Proxy file. OpenNext then has to bundle a Node.js middleware and
+  fails on `Could not resolve "@opentelemetry/api"`, so `opennextjs-cloudflare build`
+  breaks. Verify `.next/server/middleware-manifest.json` still lists an edge
+  entrypoint after touching this file, and migrate to `proxy.ts` only together with a
+  green Cloudflare bundle. Moving the file into `src/` is safe on its own, and Next's
+  own `src` guidance asks for it there.
+  `bun run smoke:next` asserts an unauthenticated `GET /` is 401, which is the only
+  check that proves the file still runs at all.
+- Wrangler upgrades must regenerate `src/types/cloudflare-env.d.ts` and pass a fresh
   typecheck. Wrangler 4.123.0's workerd generated `declare const Buffer: any`,
   which collided with the runtime types and broke `Buffer.toString(encoding)`.
   Wrangler 4.134.0 / workerd `1.20260917.1` no longer emits that declaration;
@@ -1170,15 +1214,32 @@ those rules with mocks that merely repeat their implementation.
 ## Commit / PR conventions
 
 - Conventional commits: `feat(scope): …`, `fix: …`, `chore: …`, `docs: …`.
-- `main` is protected; changes land through PRs.
-- Automatic Ensemble review and the `/ship` workflow are disabled for this
-  repository. Use the repository checks and ordinary PR workflow for commit,
-  PR, and release requests. Run Ensemble review only when the user explicitly
-  requests it.
 - Preserve unrelated user changes and untracked files.
 - If behavior, commands, architecture, or a gotcha changes, update this file in the
-  same PR. Update [`CONTEXT.md`](CONTEXT.md) whenever canonical domain language
+  same PR. Update [`CONTEXT.md`](docs/CONTEXT.md) whenever canonical domain language
   changes.
+- `/ship` is the supported flow for turning finished work into a merge-ready PR
+  (Yunpeng, 2026-09-20; it was previously disabled here). It commits, merges the
+  base, runs the repository checks, opens or updates the PR, and loops with an
+  independent reviewer until CI is green and the reviewer posts `APPROVE`.
+  **`/ship` never merges** — see the next item for why nothing else can either.
+- **An agent cannot merge this repository, and that is not a misconfiguration.**
+  `main` requires at least one approving review, the agent opens the PR as
+  `corespeed-agent-ensemble[bot]`, and GitHub forbids approving your own PR. That
+  account also holds no repository permission at all
+  (`admin`/`maintain`/`push`/`triage`/`pull` are all false; reading
+  `branches/main/protection` returns 403), so `gh pr merge --admin` is not a
+  fallback. When `gh pr view` reports `mergeable=MERGEABLE` with
+  `mergeStateStatus=BLOCKED` and `reviews=0`, the work is finished and the only
+  missing input is a human `Approve` or an independent reviewer identity. Say so
+  and stop; do not look for a bypass.
+- Ship's reviewer loop is how an agent-authored PR gets that approval. Do not run
+  it as a rubber stamp: it is an independent session, and a `REQUEST_CHANGES`
+  verdict is work to do, not an obstacle to route around.
+- Every CI job must pass before merge: `static`, `tests`, `database`, `packages`,
+  `build`, and the aggregate `check` gate that requires the other five. Run
+  `design:check`, `typecheck`, `lint`, `test`, `build`, `packages:smoke`, and the
+  deployment dry runs locally first rather than discovering failures in CI.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

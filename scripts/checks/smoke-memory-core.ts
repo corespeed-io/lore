@@ -12,7 +12,7 @@ import type {
   WorkspaceSummary,
 } from "@corespeed/lore-sdk";
 import { Client } from "pg";
-import type { GraphData } from "../../src/modules/graph/types";
+import type { GraphData } from "../../src/modules/graph/browser/types";
 import type { Memory } from "../../src/modules/memories/schemas";
 import { LORE_SCHEMA_REVISION } from "../../src/modules/operations/service";
 import { createApi } from "../../src/server/api/app";

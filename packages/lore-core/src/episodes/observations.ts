@@ -1,6 +1,5 @@
-import type { PostgresTransaction } from "../db";
+import type { MemoryStorageContext, PostgresTransaction } from "../db";
 import type { MemoryScope } from "../memory";
-import type { MemoryStorageContext } from "../memory-storage";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
