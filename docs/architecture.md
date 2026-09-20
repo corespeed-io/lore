@@ -18,7 +18,7 @@ Clients in other languages can call the HTTP API described by OpenAPI.
 | CLI | `packages/cli/` | Command parsing and output through the TypeScript SDK |
 | MCP | `packages/mcp/` | External stdio tools through the TypeScript SDK |
 | OSS API | `src/server/api/`, domain routes/services, and `src/server/` | Authentication, tenancy, authorization, request replay, and engine composition |
-| Core | `packages/lore-core/` | Memory algorithms and PostgreSQL storage mechanics |
+| Core | `packages/lore-core/` | Memory algorithms and PostgreSQL storage mechanics (a boundary, not a published artifact — see below) |
 
 The UI remains a module of the Next.js application; this boundary does not require
 a separate UI package or service. Browser wire types and public content limits
@@ -187,6 +187,15 @@ comparison keeps its dataset stable. The SDK and server scripts do not import SW
 
 ### Memory engine and host policy
 
+Core is the one entry under `packages/` that is not a distributable: it is
+`private`, has no build script, and `exports` resolves to `./src`. It is a
+package so that the layering is mechanically enforced rather than merely
+documented. Its own `tsconfig.json` omits the `@/*` mapping, so an import from
+the engine back into OSS fails to compile, and `bun run architecture:check`
+denies it OSS paths, host frameworks, Zod, and concrete model SDKs. Its stricter
+compiler settings and its own CI gate apply to the engine alone. Treat a change
+that needs either guard relaxed as a design question, not a configuration fix.
+
 Core factories bind `MemoryStorageContext`: `{ database, partitionId, ownerId,
 sourceId? }`. `createMemoryModule(storage, options)` returns methods without an
 Actor parameter; Memory results use `partitionId`, `ownerId`, and nullable
@@ -332,7 +341,8 @@ does not change the code-index revision or stored artifact format.
 3. Server implementation depends on the reusable engine and host runtime through
    the existing interfaces. Keep concrete model adapters, model SDK dependencies,
    identity/tenant policy, request idempotency, and environment reads out of
-   `packages/lore-core`.
+   `packages/lore-core`; `architecture:check` now enforces this direction on the
+   engine side as well as on the browser, SDK, CLI, and MCP sides.
 4. Each domain owns its OpenAPI paths and components; `src/server/openapi/document.ts`
    assembles them. SDK generation reads that assembled document. Zod owns Memory
    validation and its OpenAPI schemas. Browser wire types are imported directly from

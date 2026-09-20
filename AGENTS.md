@@ -34,16 +34,27 @@ been removed. Lore now has a native implementation, split into two concepts
   `MemoryStorageContext`; methods take no Actor. The host initializes and
   authorizes every storage transaction. Host-baked invariants are module
   options: `embeddingDimensions` (lore oss pins 1024) and
-  `defaultMemoryScope` (lore oss keeps "shared"). The package is written at
-  the union strictness of its hosts (`noUncheckedIndexedAccess`,
-  `exactOptionalPropertyTypes`) and is consumed in-repo as workspace
-  TypeScript source (root tsconfig paths, vitest aliases, Next
-  `transpilePackages`). **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
+  `defaultMemoryScope` (lore oss keeps "shared").
+  **It is a package to enforce a boundary, not to ship an artifact.** It is
+  `private`, has no build script and no `files`/`main`/`types`, `exports` points
+  straight at `./src`, and `build:packages`/`packages:smoke` cover only the SDK,
+  CLI, and MCP. What the directory buys is two independent proofs that the engine
+  does not know its host: its own `tsconfig.json` has no `@/*` mapping, so a
+  reverse import into OSS cannot compile, and `biome.json` denies it OSS paths,
+  host frameworks, Zod, and every concrete model SDK. Keep both — neither one
+  catches everything the other does. It is also held to the union strictness of
+  its hosts (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), which the
+  application is not, and CI runs `bun run --cwd packages/lore-core check` as its
+  own gate against a minimal PGlite schema with no identity tables. In-repo it is
+  consumed as workspace TypeScript source (root tsconfig paths, vitest aliases,
+  Next `transpilePackages`), never as a built dependency.
+  **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
   CoreSpeed HaaS retains its existing `packages/memory-core` vendored fork;
   the planned cutover to a verbatim `packages/lore-core` copy was cancelled.
   Lore changes land here; HaaS ports selected changes manually and records their
   provenance. Do not require an automatic same-task mirror or assume semantic
-  identity between the packages. npm publishing remains out of scope.
+  identity between the packages. npm publishing remains out of scope, so
+  "reusable engine" names the dependency direction, not a shipped package.
 - **lore oss** — everything else in this repository: identity/tenancy,
   request context and authorization, request idempotency, HTTP/OpenAPI,
   TypeScript SDK/CLI/MCP, web UI, Memory Proposals
