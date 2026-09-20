@@ -9,11 +9,11 @@ the product model in `docs/CONTEXT.md` defines every frontend data contract.
 
 ## 1. Source of truth
 
-- Canonical frontend: `src/app`, `src/shell`, and domain UI under `src/modules/*/components`
+- Canonical frontend: `src/app`, `src/shell`, and domain UI under `src/modules/*/browser`
 - Application stylesheet: `src/app/globals.css`
 - Feature owner: `src/shell/App.tsx`
 - Shell owner: `src/shell/Sidebar.tsx`
-- Browser SDK configuration: `src/shared/browser/sdk.ts`; SWR domain adapters: `src/modules/*/client.ts`
+- Browser SDK configuration: `src/shared/browser/sdk.ts`; SWR domain data: `src/modules/*/browser/data.ts`
 - No second stylesheet or compatibility data model is authoritative.
 
 ## 2. Product principles
@@ -144,11 +144,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - `MemoryProposalsView.tsx` owns the human review inbox, evidence navigation,
   version-conflict state, and explicit proposal acceptance or rejection.
 - `MemoryView.tsx` owns the Memory detail workspace, including the Memory's Code
-  citations and their six-state drift assessment. `src/modules/code/evidence-presentation.ts`
+  citations and their six-state drift assessment. `src/modules/code/browser/evidence-presentation.ts`
   owns that pure presentation model.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, read-only deployment readiness/capabilities, and
-  read-only Code Index job state. `src/modules/code/job-presentation.ts` owns that pure
+  read-only Code Index job state. `src/modules/code/browser/job-presentation.ts` owns that pure
   presentation model.
 - `WorkerCanvasGraph.tsx` and `graph-canvas.worker.ts` own the production Graph's
   Worker-based D3 layout, Canvas paint, progressive reveal, elastic node drag,
