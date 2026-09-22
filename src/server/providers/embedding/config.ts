@@ -3,7 +3,7 @@ import { validatedEmbeddingDimensions } from "@corespeed/lore-core";
 export const EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v1";
 export const QWEN3_EMBEDDING_PROTOCOL_REVISION = "lore-embedding-v2";
 
-export type EmbeddingProviderName = "google" | "ollama" | "openai";
+export type EmbeddingProviderName = "google" | "ollama" | "openai" | "vercel";
 
 /**
  * One deployment's embedding space. `dimensions` is a host-baked schema
@@ -22,6 +22,7 @@ export const DEFAULT_EMBEDDING_MODELS: Record<EmbeddingProviderName, string> = {
   google: "gemini-embedding-2",
   ollama: "qwen3-embedding:0.6b",
   openai: "text-embedding-3-small",
+  vercel: "openai/text-embedding-3-small",
 };
 
 export function isQwen3EmbeddingModel(model: string): boolean {
@@ -36,7 +37,12 @@ export function embeddingProtocolRevision(provider: EmbeddingProviderName, model
 
 export function embeddingProviderName(value: string): EmbeddingProviderName {
   const provider = value.trim();
-  if (provider !== "google" && provider !== "ollama" && provider !== "openai") {
+  if (
+    provider !== "google" &&
+    provider !== "ollama" &&
+    provider !== "openai" &&
+    provider !== "vercel"
+  ) {
     throw new Error(`Unsupported embedding provider: ${provider}`);
   }
   return provider;

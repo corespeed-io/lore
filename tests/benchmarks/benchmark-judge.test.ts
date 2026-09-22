@@ -151,3 +151,56 @@ test("vLLM judge sends the official protocol and records its separate token cost
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Vercel AI Gateway judge sends the parameters that surface documents", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe("https://ai-gateway.vercel.sh/v1/chat/completions");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-gateway-key");
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({
+      model: "openai/gpt-6-astra",
+      max_tokens: 4096,
+      reasoning_effort: "medium",
+    });
+    expect(body.max_completion_tokens).toBeUndefined();
+    return Response.json({
+      choices: [{ message: { content: '{"label": 1, "reason": "matches"}' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+    });
+  };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
+  try {
+    const judge = createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "vercel",
+      LORE_BENCHMARK_JUDGE_MODEL: "openai/gpt-6-astra",
+      AI_GATEWAY_API_KEY: "test-gateway-key",
+    });
+    await expect(
+      judge?.judge({
+        kind: "gotchas",
+        question: "Why?",
+        referenceAnswer: "Because",
+        modelFullResponse: "Because",
+      }),
+    ).resolves.toMatchObject({ correct: true, totalTokens: 25 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Vercel AI Gateway judge requires a gateway credential and a creator/model id", () => {
+  expect(() =>
+    createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "vercel",
+      LORE_BENCHMARK_JUDGE_MODEL: "openai/gpt-6-astra",
+    }),
+  ).toThrow("LORE_BENCHMARK_JUDGE_API_KEY or AI_GATEWAY_API_KEY is required");
+  expect(() =>
+    createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "vercel",
+      LORE_BENCHMARK_JUDGE_MODEL: "gpt-6-astra",
+      AI_GATEWAY_API_KEY: "test-gateway-key",
+    }),
+  ).toThrow("creator/model ids");
+});

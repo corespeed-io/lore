@@ -2,6 +2,7 @@
 # with `wrangler secret put`; never commit the populated file.
 GEMINI_API_KEY=replace-with-a-server-side-key
 OPENAI_API_KEY=replace-with-a-server-side-key
+AI_GATEWAY_API_KEY=replace-with-a-server-side-key
 LORE_QUERY_PLANNER_API_KEY=replace-with-a-server-side-key
 LORE_RERANK_API_KEY=replace-with-a-server-side-key
 COHERE_API_KEY=replace-with-a-server-side-key

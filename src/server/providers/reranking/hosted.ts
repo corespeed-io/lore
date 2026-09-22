@@ -1,10 +1,21 @@
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
 import { CohereClientV2 } from "cohere-ai";
 import { VoyageAIClient } from "voyageai";
+import {
+  assertVercelAIGatewayModel,
+  VERCEL_AI_GATEWAY_HOST,
+} from "@/server/providers/vercel-ai-gateway";
 import type { ConfiguredRerankingProvider } from "../metadata";
 import { requestProviderJson } from "../request";
 
-type HostedRerankingProvider = "cohere" | "memos" | "voyage";
+type HostedRerankingProvider = "cohere" | "memos" | "vercel" | "voyage";
+
+/**
+ * Vercel AI Gateway serves reranking as the Cohere Rerank contract
+ * (`POST /v2/rerank`) rather than on its OpenAI-compatible surface, so the same
+ * Cohere client reaches it with only a host and credential change. The dialect
+ * carries no instruction field.
+ */
 
 export interface HostedRerankingOptions {
   provider: HostedRerankingProvider;
@@ -20,14 +31,16 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && (value as number) > 0 ? (value as number) : fallback;
 }
 
+/** Each managed reranker's own API host; `LORE_RERANK_BASE_URL` overrides it. */
+const HOSTED_RERANK_BASE_URLS: Record<HostedRerankingProvider, string> = {
+  cohere: "https://api.cohere.com",
+  memos: "https://memos.memtensor.cn/api/openmem/v1",
+  vercel: VERCEL_AI_GATEWAY_HOST,
+  voyage: "https://api.voyageai.com",
+};
+
 function providerBaseUrl(provider: HostedRerankingProvider, baseUrl?: string): string {
-  const defaultBaseUrl =
-    provider === "cohere"
-      ? "https://api.cohere.com"
-      : provider === "memos"
-        ? "https://memos.memtensor.cn/api/openmem/v1"
-        : "https://api.voyageai.com";
-  const url = new URL(baseUrl ?? defaultBaseUrl);
+  const url = new URL(baseUrl ?? HOSTED_RERANK_BASE_URLS[provider]);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`${provider} reranking base URL must use http or https`);
   }
@@ -124,6 +137,7 @@ export function createHostedRerankingProvider(
   if (!model) throw new Error(`LORE_RERANK_MODEL is required for ${options.provider}`);
   const apiKey = options.apiKey.trim();
   if (!apiKey) throw new Error(`LORE_RERANK_API_KEY is required for ${options.provider}`);
+  if (options.provider === "vercel") assertVercelAIGatewayModel(model, "cohere/rerank-v3.5");
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
   const baseUrl = providerBaseUrl(options.provider, options.baseUrl);
   const sdkOptions = {
@@ -131,7 +145,7 @@ export function createHostedRerankingProvider(
     maxRetries: 0,
   };
   const cohere =
-    options.provider === "cohere"
+    options.provider === "cohere" || options.provider === "vercel"
       ? new CohereClientV2({ ...sdkOptions, token: apiKey, baseUrl })
       : undefined;
   const voyage =

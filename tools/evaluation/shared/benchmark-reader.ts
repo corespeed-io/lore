@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { GoogleGenAI } from "@google/genai/web";
 import { Ollama } from "ollama/browser";
 import OpenAI from "openai";
+import {
+  assertVercelAIGatewayModel,
+  VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
+} from "../../../src/server/providers/vercel-ai-gateway";
 
 export interface BenchmarkReaderEvidence {
   id: string;
@@ -79,7 +83,7 @@ export interface BenchmarkReaderProvider {
 }
 
 interface ReaderOptions {
-  provider: "google" | "ollama" | "openai" | "vllm";
+  provider: "google" | "ollama" | "openai" | "vercel" | "vllm";
   model: string;
   baseUrl?: string;
   apiKey?: string;
@@ -253,12 +257,39 @@ function googleUserInput(text: string, image: BenchmarkReaderImage | undefined) 
   ];
 }
 
+/**
+ * Vercel AI Gateway serves the same Chat Completions contract, including
+ * `image_url` data URLs, so one transport covers OpenAI, vLLM, and the gateway.
+ */
+function openAICompatibleBaseUrl(provider: ReaderOptions["provider"]): string {
+  if (provider === "openai") return "https://api.openai.com/v1";
+  if (provider === "vercel") return VERCEL_AI_GATEWAY_OPENAI_BASE_URL;
+  return "http://127.0.0.1:8002/v1";
+}
+
+/** Deployment credential each reader provider falls back to. */
+const READER_CREDENTIAL_VARIABLES: Record<ReaderOptions["provider"], string | undefined> = {
+  google: "GEMINI_API_KEY",
+  ollama: undefined,
+  openai: "OPENAI_API_KEY",
+  vercel: "AI_GATEWAY_API_KEY",
+  vllm: "OPENAI_API_KEY",
+};
+
 function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderProvider {
   const model = options.model.trim();
   if (!model) throw new Error("LORE_BENCHMARK_READER_MODEL is required");
   const apiKey = options.apiKey?.trim();
   if (options.provider === "openai" && !apiKey) {
     throw new Error("LORE_BENCHMARK_READER_API_KEY or OPENAI_API_KEY is required for OpenAI");
+  }
+  if (options.provider === "vercel") {
+    if (!apiKey) {
+      throw new Error(
+        "LORE_BENCHMARK_READER_API_KEY or AI_GATEWAY_API_KEY is required for the Vercel AI Gateway",
+      );
+    }
+    assertVercelAIGatewayModel(model, "openai/gpt-6-astra");
   }
   const instruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
   const maximumContextCharacters = boundedInteger(
@@ -269,9 +300,7 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
   );
   const maximumOutputTokens = boundedInteger(options.maximumOutputTokens, 512, 32, 8_192);
   const timeoutMs = boundedInteger(options.timeoutMs, 120_000, 1, 900_000);
-  const baseUrl =
-    options.baseUrl ??
-    (options.provider === "openai" ? "https://api.openai.com/v1" : "http://127.0.0.1:8002/v1");
+  const baseUrl = options.baseUrl ?? openAICompatibleBaseUrl(options.provider);
   const client = new OpenAI({
     apiKey: apiKey ?? "unused",
     adminAPIKey: null,
@@ -679,6 +708,14 @@ function configuredBoolean(
   throw new Error(`${name} must be 0, 1, false, or true`);
 }
 
+function readerCredential(
+  env: Record<string, string | undefined>,
+  provider: ReaderOptions["provider"],
+): string | undefined {
+  const name = READER_CREDENTIAL_VARIABLES[provider];
+  return name ? env[name] : undefined;
+}
+
 export function createBenchmarkReaderFromEnvironment(
   env: Record<string, string | undefined>,
 ): BenchmarkReaderProvider | undefined {
@@ -688,6 +725,7 @@ export function createBenchmarkReaderFromEnvironment(
     provider !== "google" &&
     provider !== "ollama" &&
     provider !== "openai" &&
+    provider !== "vercel" &&
     provider !== "vllm"
   ) {
     throw new Error(`Unsupported LORE_BENCHMARK_READER_PROVIDER ${JSON.stringify(provider)}`);
@@ -696,13 +734,7 @@ export function createBenchmarkReaderFromEnvironment(
     provider,
     model: env.LORE_BENCHMARK_READER_MODEL ?? "",
     baseUrl: env.LORE_BENCHMARK_READER_BASE_URL,
-    apiKey:
-      env.LORE_BENCHMARK_READER_API_KEY ??
-      (provider === "google"
-        ? env.GEMINI_API_KEY
-        : provider === "openai" || provider === "vllm"
-          ? env.OPENAI_API_KEY
-          : undefined),
+    apiKey: env.LORE_BENCHMARK_READER_API_KEY ?? readerCredential(env, provider),
     instruction: env.LORE_BENCHMARK_READER_INSTRUCTION,
     timeoutMs: configuredInteger(env, "LORE_BENCHMARK_READER_TIMEOUT_MS", 120_000),
     maximumContextCharacters: configuredInteger(

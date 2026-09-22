@@ -1,3 +1,4 @@
+import { keepAlive, optionalString, positiveInteger } from "@/server/providers/environment";
 import type { ConfiguredRerankingProvider } from "../metadata";
 import { createHostedRerankingProvider } from "./hosted";
 import { createOllamaListwiseRerankingProvider } from "./ollama-listwise";
@@ -9,21 +10,14 @@ import {
 
 export type RerankingConfigurationWarning = (message: string) => void;
 
-function positiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function optionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-function keepAlive(value: string | undefined): string | number {
-  if (value === undefined || value === "") return 0;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : value;
-}
+/** Deployment credential each managed reranker falls back to. */
+const HOSTED_RERANK_CREDENTIAL_VARIABLES: Record<"cohere" | "memos" | "vercel" | "voyage", string> =
+  {
+    cohere: "COHERE_API_KEY",
+    memos: "MEMOS_API_KEY",
+    vercel: "AI_GATEWAY_API_KEY",
+    voyage: "VOYAGE_API_KEY",
+  };
 
 function warnOnRerankingFailure(
   provider: ConfiguredRerankingProvider,
@@ -58,6 +52,7 @@ export function createRerankingProviderFromEnvironment(
       provider !== "ollama-listwise" &&
       provider !== "cohere" &&
       provider !== "memos" &&
+      provider !== "vercel" &&
       provider !== "voyage"
     ) {
       throw new Error(`unsupported LORE_RERANK_PROVIDER ${JSON.stringify(provider)}`);
@@ -92,11 +87,7 @@ export function createRerankingProviderFromEnvironment(
               baseUrl: optionalString(env.LORE_RERANK_BASE_URL),
               apiKey:
                 optionalString(env.LORE_RERANK_API_KEY) ??
-                (provider === "cohere"
-                  ? optionalString(env.COHERE_API_KEY)
-                  : provider === "memos"
-                    ? optionalString(env.MEMOS_API_KEY)
-                    : optionalString(env.VOYAGE_API_KEY)) ??
+                optionalString(env[HOSTED_RERANK_CREDENTIAL_VARIABLES[provider]]) ??
                 "",
               instruction: env.LORE_RERANK_INSTRUCTION,
               timeoutMs: positiveInteger(env.LORE_RERANK_TIMEOUT_MS, 30_000),
@@ -104,6 +95,11 @@ export function createRerankingProviderFromEnvironment(
     if (provider === "llamacpp" && optionalString(env.LORE_RERANK_INSTRUCTION)) {
       warn(
         "Lore llamacpp reranking ignores LORE_RERANK_INSTRUCTION; the GGUF model owns its template",
+      );
+    }
+    if (provider === "vercel" && optionalString(env.LORE_RERANK_INSTRUCTION)) {
+      warn(
+        "Lore Vercel AI Gateway reranking ignores LORE_RERANK_INSTRUCTION; the Cohere Rerank contract has no instruction field",
       );
     }
     return warnOnRerankingFailure(configured, warn);

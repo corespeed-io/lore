@@ -1,3 +1,4 @@
+import { keepAlive, optionalString, positiveInteger } from "@/server/providers/environment";
 import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { createGoogleQueryPlanningProvider } from "./google";
 import { createOllamaQueryPlanningProvider } from "./ollama";
@@ -5,21 +6,12 @@ import { createOpenAICompatibleQueryPlanningProvider } from "./openai-compatible
 
 export type QueryPlanningConfigurationWarning = (message: string) => void;
 
-function positiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function optionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-function keepAlive(value: string | undefined): string | number {
-  if (value === undefined || value === "") return 0;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : value;
-}
+/** Deployment credential each OpenAI-compatible planner falls back to. */
+const PLANNER_CREDENTIAL_VARIABLES: Record<"openai" | "vercel" | "vllm", string> = {
+  openai: "OPENAI_API_KEY",
+  vercel: "AI_GATEWAY_API_KEY",
+  vllm: "OPENAI_API_KEY",
+};
 
 function warnOnPlanningFailure(
   provider: ConfiguredQueryPlanningProvider,
@@ -51,6 +43,7 @@ export function createQueryPlanningProviderFromEnvironment(
       provider !== "google" &&
       provider !== "ollama" &&
       provider !== "openai" &&
+      provider !== "vercel" &&
       provider !== "vllm"
     ) {
       throw new Error(`unsupported LORE_QUERY_PLANNER_PROVIDER ${JSON.stringify(provider)}`);
@@ -88,7 +81,8 @@ export function createQueryPlanningProviderFromEnvironment(
         model: env.LORE_QUERY_PLANNER_MODEL ?? "",
         baseUrl: optionalString(env.LORE_QUERY_PLANNER_BASE_URL),
         apiKey:
-          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ?? optionalString(env.OPENAI_API_KEY),
+          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ??
+          optionalString(env[PLANNER_CREDENTIAL_VARIABLES[provider]]),
         instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
         timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
       }),

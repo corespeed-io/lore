@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
-import { createOpenAIEmbeddingProvider } from "@/server/providers/embedding/openai";
+import {
+  createOpenAIEmbeddingProvider,
+  createVercelAIGatewayEmbeddingProvider,
+} from "@/server/providers/embedding/openai-compatible";
 
 const vector = (dimensions = 1024, first = 0.5) => [
   first,
@@ -197,5 +200,72 @@ test("OpenAI adapter rejects duplicate result indices before accepting any vecto
 
   await expect(provider.embed(["first", "second"], "document")).rejects.toThrow(
     "OpenAI returned an invalid embedding",
+  );
+});
+
+const gatewayConfiguration = {
+  provider: "vercel",
+  model: "openai/text-embedding-3-small",
+  dimensions: 1024,
+  revision: "lore-embedding-v1",
+} as const;
+
+test("Vercel AI Gateway adapter posts the deployment dimensions to the gateway", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const provider = createVercelAIGatewayEmbeddingProvider(gatewayConfiguration, {
+    apiKey: "test-gateway-key",
+    fetch: async (input, init) => {
+      expect(String(input)).toBe("https://ai-gateway.vercel.sh/v1/embeddings");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-gateway-key");
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({ data: [{ index: 0, embedding: vector() }] });
+    },
+  });
+
+  await expect(provider.embed(["memory"], "document")).resolves.toEqual([vector()]);
+  expect(requestBody).toEqual({
+    input: ["memory"],
+    model: "openai/text-embedding-3-small",
+    dimensions: 1024,
+    encoding_format: "float",
+  });
+});
+
+test("Vercel AI Gateway adapter fails closed on model ids, credentials, and vector width", async () => {
+  expect(() =>
+    createVercelAIGatewayEmbeddingProvider(
+      { ...gatewayConfiguration, model: "text-embedding-3-small" },
+      { apiKey: "test-gateway-key" },
+    ),
+  ).toThrow("creator/model ids");
+  expect(() =>
+    createVercelAIGatewayEmbeddingProvider(gatewayConfiguration, { apiKey: " " }),
+  ).toThrow("AI_GATEWAY_API_KEY is required");
+  expect(() =>
+    createVercelAIGatewayEmbeddingProvider(
+      { ...gatewayConfiguration, provider: "openai" },
+      { apiKey: "test-gateway-key" },
+    ),
+  ).toThrow("Vercel AI Gateway adapter requires provider=vercel");
+
+  const provider = createVercelAIGatewayEmbeddingProvider(gatewayConfiguration, {
+    apiKey: "test-gateway-key",
+    fetch: async () => Response.json({ data: [{ index: 0, embedding: vector(768) }] }),
+  });
+  await expect(provider.embed(["memory"], "document")).rejects.toThrow(
+    "Vercel AI Gateway returned an invalid embedding",
+  );
+});
+
+test("Vercel AI Gateway adapter names itself in request failures without upstream bodies", async () => {
+  const provider = createVercelAIGatewayEmbeddingProvider(gatewayConfiguration, {
+    apiKey: "test-gateway-key",
+    maxRetries: 0,
+    fetch: async () =>
+      Response.json({ error: { message: "upstream provider details" } }, { status: 502 }),
+  });
+
+  await expect(provider.embed(["memory"], "document")).rejects.toThrow(
+    /^Vercel AI Gateway embedding request failed \(502\)$/,
   );
 });

@@ -275,3 +275,59 @@ test.each(["cohere", "voyage"] as const)(
     expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   },
 );
+
+test("Vercel AI Gateway reranking speaks the Cohere contract at the gateway host", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async (input, init) => {
+        expect(String(input)).toBe("https://ai-gateway.vercel.sh/v2/rerank");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer gateway-secret");
+        requestBody = JSON.parse(String(init?.body));
+        return Response.json({
+          results: [
+            { index: 1, relevance_score: 0.91 },
+            { index: 0, relevance_score: 0.12 },
+          ],
+        });
+      },
+    ),
+  );
+  const provider = createHostedRerankingProvider({
+    provider: "vercel",
+    model: "cohere/rerank-v3.5",
+    apiKey: "gateway-secret",
+  });
+
+  expect(provider).toMatchObject({ provider: "vercel", revision: "lore-vercel-reranking-v1" });
+  await expect(
+    provider.rerank({
+      query: "Where did I study?",
+      documents: [
+        { id: "first", text: "I studied in Boston." },
+        { id: "second", text: "I graduated from MIT." },
+      ],
+      limit: 2,
+    }),
+  ).resolves.toEqual([
+    { documentId: "second", score: 0.91 },
+    { documentId: "first", score: 0.12 },
+  ]);
+  expect(requestBody).toEqual({
+    model: "cohere/rerank-v3.5",
+    query: "Where did I study?",
+    documents: ["I studied in Boston.", "I graduated from MIT."],
+    top_n: 2,
+  });
+});
+
+test("Vercel AI Gateway reranking requires a creator/model slug", () => {
+  expect(() =>
+    createHostedRerankingProvider({
+      provider: "vercel",
+      model: "rerank-v3.5",
+      apiKey: "gateway-secret",
+    }),
+  ).toThrow("creator/model ids");
+});
