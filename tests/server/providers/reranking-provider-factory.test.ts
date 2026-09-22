@@ -13,6 +13,18 @@ test.each([
     { LORE_RERANK_PROVIDER: "cohere", LORE_RERANK_MODEL: "rerank-v4.0-pro" },
   ],
   [
+    "a missing AI Gateway key",
+    { LORE_RERANK_PROVIDER: "vercel", LORE_RERANK_MODEL: "cohere/rerank-v3.5" },
+  ],
+  [
+    "a gateway model slug without a creator",
+    {
+      LORE_RERANK_PROVIDER: "vercel",
+      LORE_RERANK_MODEL: "rerank-v3.5",
+      AI_GATEWAY_API_KEY: "secret",
+    },
+  ],
+  [
     "an invalid URL",
     {
       LORE_RERANK_PROVIDER: "vllm",
@@ -37,6 +49,24 @@ test.each([
   );
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toMatch(/^Lore reranking disabled: /);
+});
+
+test("reranking provider factory routes the gateway through its Cohere contract", () => {
+  const warnings: string[] = [];
+  expect(
+    createRerankingProviderFromEnvironment(
+      {
+        LORE_RERANK_PROVIDER: "vercel",
+        LORE_RERANK_MODEL: "cohere/rerank-v3.5",
+        LORE_RERANK_INSTRUCTION: "Rank memory passages",
+        AI_GATEWAY_API_KEY: "secret",
+      },
+      (message) => warnings.push(message),
+    ),
+  ).toMatchObject({ provider: "vercel", model: "cohere/rerank-v3.5" });
+  expect(warnings).toEqual([
+    "Lore Vercel AI Gateway reranking ignores LORE_RERANK_INSTRUCTION; the Cohere Rerank contract has no instruction field",
+  ]);
 });
 
 test("reranking provider factory supports explicit managed adapters", () => {

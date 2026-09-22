@@ -279,7 +279,14 @@ Gen AI, Ollama, Cohere, and Voyage SDKs with their default transport. Use native
 SDK timeout and retry options; do not add a custom fetch wrapper around an SDK.
 Optional fetch injection on adapters that support it is a test seam, not a
 production transport layer. Embedding allows two SDK retries by default for
-OpenAI/Google; planners, readers, judges, and hosted rerankers disable retries.
+OpenAI/Google/Vercel AI Gateway; planners, readers, judges, and hosted rerankers
+disable retries. Vercel AI Gateway is one credential
+(`AI_GATEWAY_API_KEY`) over two contracts: embedding, planning, and benchmark
+reader/judge use the OpenAI SDK against `https://ai-gateway.vercel.sh/v1`, while
+its reranking is the Cohere Rerank contract, so the Cohere SDK points at the bare
+gateway host. It is a provider in its own right: its `creator/model` slugs and its
+provider name belong to the embedding-space identity, so gateway vectors never mix
+with the vectors of the same upstream model called natively.
 Ollama adapters support self-hosted servers and reject the SDK cloud host so that
 ambient `OLLAMA_API_KEY` cannot silently authenticate a cloud request. Ollama
 performs one attempt and its SDK has no non-streaming request timeout.

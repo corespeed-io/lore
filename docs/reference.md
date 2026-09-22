@@ -57,6 +57,21 @@ LORE_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_API_KEY=replace-with-a-server-side-key
 ```
 
+Vercel AI Gateway reaches many upstream embedding models with one credential over
+OpenAI's `/v1/embeddings` contract. Models are `creator/model` ids, and the gateway
+maps Lore's root-level `dimensions` field onto each upstream provider's own field,
+so choose a model that can serve 1024 values:
+
+```bash
+LORE_EMBEDDING_PROVIDER=vercel
+LORE_EMBEDDING_MODEL=openai/text-embedding-3-small
+AI_GATEWAY_API_KEY=replace-with-a-server-side-key
+```
+
+A vector's provider is part of its embedding-space identity, so the gateway is a
+separate generation from calling the same upstream model natively. Moving between
+`openai` and `vercel` is a deployment-wide re-index, not a credential swap.
+
 Lore calls each provider directly and sends API keys only from the server. The
 Google adapter distinguishes document indexing from retrieval queries using the
 model's documented retrieval preprocessing. For Qwen3-Embedding, the Ollama adapter
@@ -203,9 +218,10 @@ latency, and memory residency beat the smaller reranker on the target suite. See
 the [primary-source query-time audit](research/query-time-memory-retrieval-audit.md).
 
 Managed deployments can instead use [Cohere v2](https://docs.cohere.com/v2/reference/rerank),
-[Memos MemReranker](https://memos-docs.openmem.net/cn/api_docs/core/rerank/), or
-[Voyage v1](https://docs.voyageai.com/reference/reranker-api) without changing the
-Memory interface:
+[Memos MemReranker](https://memos-docs.openmem.net/cn/api_docs/core/rerank/),
+[Voyage v1](https://docs.voyageai.com/reference/reranker-api), or
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway/sdks-and-apis/cohere-rerank)
+without changing the Memory interface:
 
 ```bash
 # Quality-first multilingual Cohere reranking:
@@ -222,7 +238,18 @@ MEMOS_API_KEY=...
 LORE_RERANK_PROVIDER=voyage
 LORE_RERANK_MODEL=rerank-2.5
 VOYAGE_API_KEY=...
+
+# Or reach a rerank model through Vercel AI Gateway's Cohere-compatible API:
+LORE_RERANK_PROVIDER=vercel
+LORE_RERANK_MODEL=cohere/rerank-v3.5
+AI_GATEWAY_API_KEY=...
 ```
+
+Vercel AI Gateway serves reranking as the Cohere Rerank contract (`POST /v2/rerank`)
+rather than on its OpenAI-compatible surface, so Lore reaches it with the same
+Cohere client and a different host. Its models are `creator/model` slugs, and that
+dialect carries no instruction field, so `LORE_RERANK_INSTRUCTION` is ignored and
+warned about instead of being silently dropped.
 
 These are concrete adapters for the providers' official APIs—not a caller-selected
 URL passthrough. `LORE_RERANK_API_KEY` overrides the provider-specific key and
@@ -338,6 +365,10 @@ LORE_QUERY_PLANNER_MAX_QUERIES=3
 # Or use Gemini's non-stored Interactions API and the existing GEMINI_API_KEY:
 # LORE_QUERY_PLANNER_PROVIDER=google
 # LORE_QUERY_PLANNER_MODEL=your-gemini-model
+
+# Or route the planner through Vercel AI Gateway with AI_GATEWAY_API_KEY:
+# LORE_QUERY_PLANNER_PROVIDER=vercel
+# LORE_QUERY_PLANNER_MODEL=openai/gpt-5.1-mini
 ```
 
 The feature is disabled by default because it adds model latency and cost. Invalid
@@ -348,7 +379,9 @@ User, Workspace, or Agent preferences.
 The Ollama adapter uses native `/api/chat`, structured output, `think: false`, fixed
 deterministic decoding, and bounded context/output. The Google adapter uses Gemini's
 current structured-output Interactions API with `store: false`; OpenAI and vLLM use
-`/v1/chat/completions` with bounded JSON output. Lore validates returned query strings and enforces the query count/length limits
+`/v1/chat/completions` with bounded JSON output. Vercel AI Gateway uses the same
+chat-completions transport but states the plan contract as a JSON schema, which is
+the structured-output format its documented surface accepts across upstream models. Lore validates returned query strings and enforces the query count/length limits
 before retrieval. These calls use official SDKs with default transport and native
 timeout/retry settings; SDK response bodies have no Lore-specific byte cap. The
 Ollama SDK has no non-streaming request deadline, so timeout environment settings
@@ -895,6 +928,11 @@ rubrics; the report records judge model, protocol revision, latency, reasons, an
 tokens separately from the reader. Without a judge, those cases remain explicitly
 unresolved and `scoreComplete` is false, so partial accuracy cannot masquerade as a
 full V2 score.
+
+The reader and judge also accept `LORE_BENCHMARK_READER_PROVIDER=vercel` and
+`LORE_BENCHMARK_JUDGE_PROVIDER=vercel` with a `creator/model` id and
+`AI_GATEWAY_API_KEY`, which is one way to reach a vision-capable model for the 29
+screenshot-backed questions without a second provider account.
 
 For example, an OpenAI-compatible local judge can be added to the command above:
 

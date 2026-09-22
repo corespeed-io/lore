@@ -25,6 +25,15 @@ test("embedding provider factory builds the default local provider", () => {
 test.each([
   ["a missing Google credential", { LORE_EMBEDDING_PROVIDER: "google" }],
   ["a missing OpenAI credential", { LORE_EMBEDDING_PROVIDER: "openai" }],
+  ["a missing AI Gateway credential", { LORE_EMBEDDING_PROVIDER: "vercel" }],
+  [
+    "a gateway model id without a creator",
+    {
+      LORE_EMBEDDING_PROVIDER: "vercel",
+      LORE_EMBEDDING_MODEL: "text-embedding-3-small",
+      AI_GATEWAY_API_KEY: "test-key",
+    },
+  ],
   ["an unsupported provider", { LORE_EMBEDDING_PROVIDER: "gogle" }],
   [
     "an unsupported Google model",
@@ -45,6 +54,22 @@ test.each([
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toMatch(/^Lore embeddings disabled: /);
   expect(runtimeDependencyStatus("embedding").status).toBe("degraded");
+});
+
+test("embedding provider factory builds the Vercel AI Gateway provider from its own key", () => {
+  const warnings: string[] = [];
+  const provider = createEmbeddingProviderFromEnvironment(
+    { LORE_EMBEDDING_PROVIDER: "vercel", AI_GATEWAY_API_KEY: "test-gateway-key" },
+    (message) => warnings.push(message),
+  );
+
+  expect(provider).toMatchObject({
+    provider: "vercel",
+    model: "openai/text-embedding-3-small",
+    dimensions: 1024,
+    revision: "lore-embedding-v1",
+  });
+  expect(warnings).toEqual([]);
 });
 
 test("embedding provider factory reports runtime failures without swallowing them", async () => {

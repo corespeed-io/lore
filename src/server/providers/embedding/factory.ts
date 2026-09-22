@@ -4,7 +4,10 @@ import { markDependencyFailure, markDependencySuccess } from "@/server/telemetry
 import { embeddingBuildEnvironment, embeddingConfigurationFromEnvironment } from "./config";
 import { createGoogleEmbeddingProvider } from "./google";
 import { createOllamaEmbeddingProvider } from "./ollama";
-import { createOpenAIEmbeddingProvider } from "./openai";
+import {
+  createOpenAIEmbeddingProvider,
+  createVercelAIGatewayEmbeddingProvider,
+} from "./openai-compatible";
 
 export type EmbeddingConfigurationWarning = (message: string) => void;
 
@@ -33,6 +36,11 @@ function warnOnEmbeddingFailure(
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function optionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }
 
 function keepAlive(value: string | undefined): string | number {
@@ -87,6 +95,14 @@ export function createEmbeddingProviderFromEnvironment(
         return warnOnEmbeddingFailure(
           createOpenAIEmbeddingProvider(configuration, {
             apiKey: env.OPENAI_API_KEY ?? "",
+            timeoutMs,
+          }),
+          warn,
+        );
+      case "vercel":
+        return warnOnEmbeddingFailure(
+          createVercelAIGatewayEmbeddingProvider(configuration, {
+            apiKey: optionalString(env.AI_GATEWAY_API_KEY) ?? "",
             timeoutMs,
           }),
           warn,

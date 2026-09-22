@@ -4,7 +4,15 @@ import { VoyageAIClient } from "voyageai";
 import type { ConfiguredRerankingProvider } from "../metadata";
 import { requestProviderJson } from "../request";
 
-type HostedRerankingProvider = "cohere" | "memos" | "voyage";
+type HostedRerankingProvider = "cohere" | "memos" | "vercel" | "voyage";
+
+/**
+ * Vercel AI Gateway serves reranking as the Cohere Rerank contract
+ * (`POST /v2/rerank`) rather than on its OpenAI-compatible surface, so the same
+ * Cohere client reaches it with only a host and credential change. Its model
+ * slugs are `creator/model` ids, and the dialect carries no instruction field.
+ */
+const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 
 export interface HostedRerankingOptions {
   provider: HostedRerankingProvider;
@@ -26,7 +34,9 @@ function providerBaseUrl(provider: HostedRerankingProvider, baseUrl?: string): s
       ? "https://api.cohere.com"
       : provider === "memos"
         ? "https://memos.memtensor.cn/api/openmem/v1"
-        : "https://api.voyageai.com";
+        : provider === "vercel"
+          ? VERCEL_AI_GATEWAY_BASE_URL
+          : "https://api.voyageai.com";
   const url = new URL(baseUrl ?? defaultBaseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`${provider} reranking base URL must use http or https`);
@@ -124,6 +134,9 @@ export function createHostedRerankingProvider(
   if (!model) throw new Error(`LORE_RERANK_MODEL is required for ${options.provider}`);
   const apiKey = options.apiKey.trim();
   if (!apiKey) throw new Error(`LORE_RERANK_API_KEY is required for ${options.provider}`);
+  if (options.provider === "vercel" && !/^[^\s/]+\/\S+$/u.test(model)) {
+    throw new Error("Vercel AI Gateway models are creator/model ids such as cohere/rerank-v3.5");
+  }
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
   const baseUrl = providerBaseUrl(options.provider, options.baseUrl);
   const sdkOptions = {
@@ -131,7 +144,7 @@ export function createHostedRerankingProvider(
     maxRetries: 0,
   };
   const cohere =
-    options.provider === "cohere"
+    options.provider === "cohere" || options.provider === "vercel"
       ? new CohereClientV2({ ...sdkOptions, token: apiKey, baseUrl })
       : undefined;
   const voyage =

@@ -44,6 +44,23 @@ test("each provider has a valid default model when only the provider is selected
     dimensions: 1024,
     revision: EMBEDDING_PROTOCOL_REVISION,
   });
+  expect(embeddingConfigurationFromEnvironment({ LORE_EMBEDDING_PROVIDER: "vercel" })).toEqual({
+    provider: "vercel",
+    model: "openai/text-embedding-3-small",
+    dimensions: 1024,
+    revision: EMBEDDING_PROTOCOL_REVISION,
+  });
+});
+
+test("gateway-routed models keep an embedding-space identity of their own", () => {
+  const gateway = embeddingConfiguration({
+    provider: "vercel",
+    model: "openai/text-embedding-3-small",
+  });
+  const native = embeddingConfiguration({ provider: "openai", model: "text-embedding-3-small" });
+
+  expect(gateway.revision).toBe(native.revision);
+  expect(gateway.provider).not.toBe(native.provider);
 });
 
 test("only Qwen3 Ollama models opt into the v2 query preprocessing space", () => {

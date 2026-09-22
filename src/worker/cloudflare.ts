@@ -26,6 +26,7 @@ function embeddingEnvironment(env: CloudflareEnv): Record<string, string | undef
     LORE_EMBEDDING_TIMEOUT_MS: env.LORE_EMBEDDING_TIMEOUT_MS,
     GEMINI_API_KEY: env.GEMINI_API_KEY,
     OPENAI_API_KEY: env.OPENAI_API_KEY,
+    AI_GATEWAY_API_KEY: env.AI_GATEWAY_API_KEY,
     OLLAMA_BASE_URL: env.OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE: env.OLLAMA_KEEP_ALIVE,
   };

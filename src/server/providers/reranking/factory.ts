@@ -58,6 +58,7 @@ export function createRerankingProviderFromEnvironment(
       provider !== "ollama-listwise" &&
       provider !== "cohere" &&
       provider !== "memos" &&
+      provider !== "vercel" &&
       provider !== "voyage"
     ) {
       throw new Error(`unsupported LORE_RERANK_PROVIDER ${JSON.stringify(provider)}`);
@@ -96,7 +97,9 @@ export function createRerankingProviderFromEnvironment(
                   ? optionalString(env.COHERE_API_KEY)
                   : provider === "memos"
                     ? optionalString(env.MEMOS_API_KEY)
-                    : optionalString(env.VOYAGE_API_KEY)) ??
+                    : provider === "vercel"
+                      ? optionalString(env.AI_GATEWAY_API_KEY)
+                      : optionalString(env.VOYAGE_API_KEY)) ??
                 "",
               instruction: env.LORE_RERANK_INSTRUCTION,
               timeoutMs: positiveInteger(env.LORE_RERANK_TIMEOUT_MS, 30_000),
@@ -104,6 +107,11 @@ export function createRerankingProviderFromEnvironment(
     if (provider === "llamacpp" && optionalString(env.LORE_RERANK_INSTRUCTION)) {
       warn(
         "Lore llamacpp reranking ignores LORE_RERANK_INSTRUCTION; the GGUF model owns its template",
+      );
+    }
+    if (provider === "vercel" && optionalString(env.LORE_RERANK_INSTRUCTION)) {
+      warn(
+        "Lore Vercel AI Gateway reranking ignores LORE_RERANK_INSTRUCTION; the Cohere Rerank contract has no instruction field",
       );
     }
     return warnOnRerankingFailure(configured, warn);

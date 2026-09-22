@@ -1,11 +1,13 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
 import OpenAI, { type ClientOptions } from "openai";
-import type { EmbeddingConfiguration } from "./config";
+import type { EmbeddingConfiguration, EmbeddingProviderName } from "./config";
 
 const OPENAI_BASE_URL = "https://api.openai.com";
+/** Vercel AI Gateway's OpenAI-compatible surface; `/v1/embeddings` is appended. */
+const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 const OPENAI_REQUEST_BATCH_SIZE = 100;
 
-export interface OpenAIEmbeddingOptions {
+export interface OpenAICompatibleEmbeddingOptions {
   apiKey: string;
   baseUrl?: string;
   batchSize?: number;
@@ -14,14 +16,23 @@ export interface OpenAIEmbeddingOptions {
   timeoutMs?: number;
 }
 
+interface EmbeddingAdapter {
+  provider: Extract<EmbeddingProviderName, "openai" | "vercel">;
+  /** Human-readable service name used by every error this adapter raises. */
+  label: string;
+  defaultBaseUrl: string;
+  credentialError: string;
+  validateModel?(model: string): void;
+}
+
 interface OpenAIEmbeddingResponse {
   data?: unknown;
 }
 
-function apiBaseUrl(baseUrl: string): string {
+function apiBaseUrl(baseUrl: string, label: string): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("OpenAI embedding base URL must use http or https");
+    throw new Error(`${label} embedding base URL must use http or https`);
   }
   const base = `${url.toString().replace(/\/$/, "")}/`;
   return new URL("v1", base).toString();
@@ -44,9 +55,10 @@ function embeddingsFrom(
   payload: OpenAIEmbeddingResponse,
   expectedCount: number,
   dimensions: number,
+  label: string,
 ): number[][] {
   if (!Array.isArray(payload.data) || payload.data.length !== expectedCount) {
-    throw new Error("OpenAI returned the wrong number of embeddings");
+    throw new Error(`${label} returned the wrong number of embeddings`);
   }
   const embeddings: Array<number[] | undefined> = Array.from({ length: expectedCount });
   for (const item of payload.data) {
@@ -67,32 +79,34 @@ function embeddingsFrom(
       embedding.length !== dimensions ||
       embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))
     ) {
-      throw new Error("OpenAI returned an invalid embedding");
+      throw new Error(`${label} returned an invalid embedding`);
     }
     embeddings[index as number] = embedding as number[];
   }
   if (embeddings.some((embedding) => embedding === undefined)) {
-    throw new Error("OpenAI returned an invalid embedding index");
+    throw new Error(`${label} returned an invalid embedding index`);
   }
   return embeddings as number[][];
 }
 
-export function createOpenAIEmbeddingProvider(
+function createEmbeddingProvider(
+  adapter: EmbeddingAdapter,
   configuration: EmbeddingConfiguration,
-  options: OpenAIEmbeddingOptions,
+  options: OpenAICompatibleEmbeddingOptions,
 ): EmbeddingProvider {
-  if (configuration.provider !== "openai") {
-    throw new Error("OpenAI adapter requires provider=openai");
+  if (configuration.provider !== adapter.provider) {
+    throw new Error(`${adapter.label} adapter requires provider=${adapter.provider}`);
   }
+  adapter.validateModel?.(configuration.model);
   const apiKey = options.apiKey.trim();
-  if (!apiKey) throw new Error("OPENAI_API_KEY is required for the OpenAI embedding provider");
+  if (!apiKey) throw new Error(adapter.credentialError);
   const timeoutMs = Math.max(1_000, boundedInteger(options.timeoutMs, 120_000, 600_000));
   const client = new OpenAI({
     apiKey,
     adminAPIKey: null,
     organization: null,
     project: null,
-    baseURL: apiBaseUrl(options.baseUrl ?? OPENAI_BASE_URL),
+    baseURL: apiBaseUrl(options.baseUrl ?? adapter.defaultBaseUrl, adapter.label),
     timeout: timeoutMs,
     maxRetries: boundedInteger(options.maxRetries, 2, 5),
     ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -118,13 +132,62 @@ export function createOpenAIEmbeddingProvider(
           })
           .catch((error: unknown) => {
             if (error instanceof OpenAI.APIError && error.status !== undefined) {
-              throw new Error(`OpenAI embedding request failed (${error.status})`);
+              throw new Error(`${adapter.label} embedding request failed (${error.status})`);
             }
-            throw new Error("OpenAI embedding request failed");
+            throw new Error(`${adapter.label} embedding request failed`);
           });
-        embeddings.push(...embeddingsFrom(response, batch.length, configuration.dimensions));
+        embeddings.push(
+          ...embeddingsFrom(response, batch.length, configuration.dimensions, adapter.label),
+        );
       }
       return embeddings;
     },
   };
+}
+
+export function createOpenAIEmbeddingProvider(
+  configuration: EmbeddingConfiguration,
+  options: OpenAICompatibleEmbeddingOptions,
+): EmbeddingProvider {
+  return createEmbeddingProvider(
+    {
+      provider: "openai",
+      label: "OpenAI",
+      defaultBaseUrl: OPENAI_BASE_URL,
+      credentialError: "OPENAI_API_KEY is required for the OpenAI embedding provider",
+    },
+    configuration,
+    options,
+  );
+}
+
+/**
+ * Vercel AI Gateway routes one credential to many upstream embedding models over
+ * OpenAI's `/v1/embeddings` contract. The gateway maps the root-level
+ * `dimensions` field onto each upstream provider's own field, so Lore's 1024
+ * protocol invariant travels unchanged; a model that cannot serve 1024 values
+ * fails this adapter's width check rather than silently storing a short vector.
+ */
+export function createVercelAIGatewayEmbeddingProvider(
+  configuration: EmbeddingConfiguration,
+  options: OpenAICompatibleEmbeddingOptions,
+): EmbeddingProvider {
+  return createEmbeddingProvider(
+    {
+      provider: "vercel",
+      label: "Vercel AI Gateway",
+      defaultBaseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+      credentialError:
+        "AI_GATEWAY_API_KEY is required for the Vercel AI Gateway embedding provider",
+      validateModel(model) {
+        if (!/^[^\s/]+\/\S+$/u.test(model)) {
+          throw new Error(
+            "Vercel AI Gateway models are creator/model ids such as openai/text-embedding-3-small",
+          );
+        }
+      },
+    },
+    configuration,
+    options,
+  );
 }

@@ -51,6 +51,7 @@ export function createQueryPlanningProviderFromEnvironment(
       provider !== "google" &&
       provider !== "ollama" &&
       provider !== "openai" &&
+      provider !== "vercel" &&
       provider !== "vllm"
     ) {
       throw new Error(`unsupported LORE_QUERY_PLANNER_PROVIDER ${JSON.stringify(provider)}`);
@@ -88,7 +89,10 @@ export function createQueryPlanningProviderFromEnvironment(
         model: env.LORE_QUERY_PLANNER_MODEL ?? "",
         baseUrl: optionalString(env.LORE_QUERY_PLANNER_BASE_URL),
         apiKey:
-          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ?? optionalString(env.OPENAI_API_KEY),
+          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ??
+          (provider === "vercel"
+            ? optionalString(env.AI_GATEWAY_API_KEY)
+            : optionalString(env.OPENAI_API_KEY)),
         instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
         timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
       }),

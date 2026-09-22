@@ -112,3 +112,65 @@ test("custom OpenAI planner instructions retain the required JSON contract", asy
 
   await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual(["query"]);
 });
+
+test("Vercel AI Gateway query planning states its contract as a JSON schema", async () => {
+  const provider = createOpenAICompatibleQueryPlanningProvider({
+    provider: "vercel",
+    model: "openai/gpt-5.1-mini",
+    apiKey: "test-gateway-key",
+    fetch: async (input, init) => {
+      expect(String(input)).toBe("https://ai-gateway.vercel.sh/v1/chat/completions");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-gateway-key");
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({
+        model: "openai/gpt-5.1-mini",
+        temperature: 0,
+        max_tokens: 256,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "lore_query_plan",
+            schema: {
+              type: "object",
+              properties: { queries: { type: "array", items: { type: "string" } } },
+              required: ["queries"],
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+      return Response.json({
+        choices: [{ message: { content: '{"queries":["first","second"]}' } }],
+      });
+    },
+  });
+
+  await expect(provider.plan({ query: "Compare both events", maxQueries: 2 })).resolves.toEqual([
+    "first",
+    "second",
+  ]);
+});
+
+test("Vercel AI Gateway query planning requires a credential and a creator/model id", () => {
+  expect(() =>
+    createOpenAICompatibleQueryPlanningProvider({
+      provider: "vercel",
+      model: "openai/gpt-5.1-mini",
+    }),
+  ).toThrow("LORE_QUERY_PLANNER_API_KEY is required for Vercel AI Gateway");
+  expect(() =>
+    createOpenAICompatibleQueryPlanningProvider({
+      provider: "vercel",
+      model: "gpt-5.1-mini",
+      apiKey: "test-gateway-key",
+    }),
+  ).toThrow("creator/model ids");
+  expect(() =>
+    createOpenAICompatibleQueryPlanningProvider({
+      provider: "vercel",
+      model: "openai/gpt-5.1-mini",
+      apiKey: "test-gateway-key",
+      baseUrl: "http://gateway.internal/v1",
+    }),
+  ).toThrow("Vercel AI Gateway query planner base URL must use https outside localhost");
+});

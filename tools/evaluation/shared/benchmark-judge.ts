@@ -29,7 +29,7 @@ export interface BenchmarkJudgeProvider {
 }
 
 interface JudgeOptions {
-  provider: "google" | "openai" | "vllm";
+  provider: "google" | "openai" | "vercel" | "vllm";
   model: string;
   baseUrl?: string;
   apiKey?: string;
@@ -179,6 +179,13 @@ function positiveInteger(
     : fallback;
 }
 
+/** Vercel AI Gateway serves the same Chat Completions contract as OpenAI and vLLM. */
+function openAICompatibleBaseUrl(provider: JudgeOptions["provider"]): string {
+  if (provider === "vercel") return "https://ai-gateway.vercel.sh/v1";
+  if (provider === "vllm") return "http://127.0.0.1:8002/v1";
+  return "https://api.openai.com/v1";
+}
+
 function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
   const model = options.model.trim();
   if (!model) throw new Error("LORE_BENCHMARK_JUDGE_MODEL is required");
@@ -186,9 +193,12 @@ function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvi
   if (options.provider === "openai" && !apiKey) {
     throw new Error("LORE_BENCHMARK_JUDGE_API_KEY or OPENAI_API_KEY is required for OpenAI");
   }
-  const baseUrl =
-    options.baseUrl ??
-    (options.provider === "openai" ? "https://api.openai.com/v1" : "http://127.0.0.1:8002/v1");
+  if (options.provider === "vercel" && !apiKey) {
+    throw new Error(
+      "LORE_BENCHMARK_JUDGE_API_KEY or AI_GATEWAY_API_KEY is required for the Vercel AI Gateway",
+    );
+  }
+  const baseUrl = options.baseUrl ?? openAICompatibleBaseUrl(options.provider);
   const timeoutMs = positiveInteger(options.timeoutMs, 43_200_000, 1, 43_200_000);
   const maximumOutputTokens = positiveInteger(options.maximumOutputTokens, 4_096, 32, 8_192);
   const client = new OpenAI({
@@ -215,7 +225,12 @@ function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvi
         .create({
           model,
           messages,
-          max_completion_tokens: maximumOutputTokens,
+          // The gateway documents `max_tokens` rather than OpenAI's
+          // `max_completion_tokens`, and accepts `reasoning_effort` as an alias
+          // for its own `reasoning.effort`.
+          ...(options.provider === "vercel"
+            ? { max_tokens: maximumOutputTokens }
+            : { max_completion_tokens: maximumOutputTokens }),
           reasoning_effort: options.reasoningEffort ?? "medium",
           ...(options.provider === "openai" ? { store: false } : {}),
         })
@@ -349,7 +364,12 @@ export function createBenchmarkJudgeFromEnvironment(
 ): BenchmarkJudgeProvider | undefined {
   const provider = env.LORE_BENCHMARK_JUDGE_PROVIDER?.trim().toLowerCase();
   if (!provider) return undefined;
-  if (provider !== "google" && provider !== "openai" && provider !== "vllm") {
+  if (
+    provider !== "google" &&
+    provider !== "openai" &&
+    provider !== "vercel" &&
+    provider !== "vllm"
+  ) {
     throw new Error(`Unsupported LORE_BENCHMARK_JUDGE_PROVIDER ${JSON.stringify(provider)}`);
   }
   const reasoning = env.LORE_BENCHMARK_JUDGE_REASONING_EFFORT?.trim().toLowerCase() || "medium";
@@ -362,7 +382,11 @@ export function createBenchmarkJudgeFromEnvironment(
     baseUrl: env.LORE_BENCHMARK_JUDGE_BASE_URL,
     apiKey:
       env.LORE_BENCHMARK_JUDGE_API_KEY ??
-      (provider === "google" ? env.GEMINI_API_KEY : env.OPENAI_API_KEY),
+      (provider === "google"
+        ? env.GEMINI_API_KEY
+        : provider === "vercel"
+          ? env.AI_GATEWAY_API_KEY
+          : env.OPENAI_API_KEY),
     reasoningEffort: reasoning,
     timeoutMs: configuredInteger(env, "LORE_BENCHMARK_JUDGE_TIMEOUT_MS", 43_200_000),
     maximumOutputTokens: configuredInteger(env, "LORE_BENCHMARK_JUDGE_MAX_OUTPUT_TOKENS", 4_096),

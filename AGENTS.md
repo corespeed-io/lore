@@ -383,6 +383,21 @@ been removed. Lore now has a native implementation, split into two concepts
   `LORE_QUERY_PLANNER_NUM_CTX` to any benchmark reader sharing the same model server
   so Ollama does not reload between calls. Do not route local Qwen planners through
   the less controllable OpenAI-compatible surface;
+- Vercel AI Gateway is one deployment credential (`AI_GATEWAY_API_KEY`) over two
+  different contracts, and Lore's adapters follow that split rather than assuming
+  one surface. Embedding, query planning, and the benchmark reader/judge use its
+  OpenAI-compatible surface (`https://ai-gateway.vercel.sh/v1`), shared with the
+  native OpenAI adapters in
+  `src/server/providers/embedding/openai-compatible.ts`; the planner states
+  structured output as `json_schema` there because that surface does not document
+  OpenAI's `json_object` mode. Reranking is **not** on that surface: the gateway
+  serves it as the Cohere Rerank contract (`POST /v2/rerank`), so
+  `src/server/providers/reranking/hosted.ts` reaches it with the same Cohere
+  client at the bare host, and warns that the dialect has no instruction field.
+  Every gateway model is a `creator/model` slug, which the adapters require. A
+  vector's provider is part of its embedding-space identity, so reaching one model
+  through the gateway is a different generation from calling that provider
+  natively — moving between them is a deployment-wide re-index;
 - `packages/lore-core/src/capabilities.ts` defines the embedding, reranking, and
   query-planning capability contracts in one file;
   `src/server/providers/reranking/vllm.ts` implements strict vLLM and llama.cpp `/v1/rerank`
@@ -453,8 +468,8 @@ export/download, checksum-backed import dry-run, explicit owner remap, import
 receipts, and deployment readiness/capabilities are available in `/operations`.
 Chunking and lexical indexing
 are synchronous; document embedding, retry, and deployment-wide re-indexing are
-background maintenance. The Ollama, Google Gemini, and OpenAI adapters are
-configured once per deployment, and embedding failure is explicit (`NULL`) and
+background maintenance. The Ollama, Google Gemini, OpenAI, and Vercel AI Gateway
+adapters are configured once per deployment, and embedding failure is explicit (`NULL`) and
 never blocks a Memory write. Local deployment defaults are Qwen3-Embedding 0.6B at
 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
 The self-host worker defaults to one leased embedding job at a time; optional

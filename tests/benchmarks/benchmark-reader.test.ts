@@ -323,3 +323,49 @@ test("Ollama reader validates explicit keep-alive durations", () => {
     }),
   ).toThrow(/THINKING/);
 });
+
+test("Vercel AI Gateway fixed reader sends images through the gateway with its own key", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe("https://ai-gateway.vercel.sh/v1/chat/completions");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-gateway-key");
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({ model: "openai/gpt-5.1", temperature: 0, max_tokens: 512 });
+    expect(body.store).toBeUndefined();
+    expect(body.messages[1].content[1]).toEqual({
+      type: "image_url",
+      image_url: { url: "data:image/png;base64,iVBORw==" },
+    });
+    return Response.json({
+      choices: [{ message: { content: "\\boxed{Reports}" } }],
+      usage: { prompt_tokens: 40, completion_tokens: 4, total_tokens: 44 },
+    });
+  };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
+  try {
+    const reader = createBenchmarkReaderFromEnvironment({
+      LORE_BENCHMARK_READER_PROVIDER: "vercel",
+      LORE_BENCHMARK_READER_MODEL: "openai/gpt-5.1",
+      AI_GATEWAY_API_KEY: "test-gateway-key",
+    });
+    expect(reader).toMatchObject({ provider: "vercel", supportsQuestionImages: true });
+    await expect(
+      reader?.answer({
+        question: "Which module?",
+        questionImage: { data: "iVBORw==", mimeType: "image/png" },
+        evidence: [{ id: "memory", text: "Reports appears before Problems" }],
+      }),
+    ).resolves.toMatchObject({ text: "\\boxed{Reports}", totalTokens: 44 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Vercel AI Gateway fixed reader requires a gateway credential", () => {
+  expect(() =>
+    createBenchmarkReaderFromEnvironment({
+      LORE_BENCHMARK_READER_PROVIDER: "vercel",
+      LORE_BENCHMARK_READER_MODEL: "openai/gpt-5.1",
+    }),
+  ).toThrow("LORE_BENCHMARK_READER_API_KEY or AI_GATEWAY_API_KEY is required");
+});
