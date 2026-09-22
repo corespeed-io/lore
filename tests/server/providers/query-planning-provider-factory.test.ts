@@ -14,13 +14,13 @@ test.each([
   ],
   [
     "a missing AI Gateway key",
-    { LORE_QUERY_PLANNER_PROVIDER: "vercel", LORE_QUERY_PLANNER_MODEL: "openai/gpt-5.1-mini" },
+    { LORE_QUERY_PLANNER_PROVIDER: "vercel", LORE_QUERY_PLANNER_MODEL: "openai/gpt-6-astra" },
   ],
   [
     "a gateway model id without a creator",
     {
       LORE_QUERY_PLANNER_PROVIDER: "vercel",
-      LORE_QUERY_PLANNER_MODEL: "gpt-5.1-mini",
+      LORE_QUERY_PLANNER_MODEL: "gpt-6-astra",
       AI_GATEWAY_API_KEY: "secret",
     },
   ],
@@ -71,11 +71,11 @@ test("query planning accepts the Vercel AI Gateway deployment key", () => {
   expect(
     createQueryPlanningProviderFromEnvironment({
       LORE_QUERY_PLANNER_PROVIDER: "vercel",
-      LORE_QUERY_PLANNER_MODEL: "openai/gpt-5.1-mini",
+      LORE_QUERY_PLANNER_MODEL: "openai/gpt-6-astra",
       OPENAI_API_KEY: "unrelated-openai-key",
       AI_GATEWAY_API_KEY: "secret",
     }),
-  ).toMatchObject({ provider: "vercel", model: "openai/gpt-5.1-mini" });
+  ).toMatchObject({ provider: "vercel", model: "openai/gpt-6-astra" });
 });
 
 test("query planning accepts native Ollama and inherits its deployment endpoint", () => {

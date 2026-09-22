@@ -5,6 +5,13 @@ import { createOpenAICompatibleQueryPlanningProvider } from "./openai-compatible
 
 export type QueryPlanningConfigurationWarning = (message: string) => void;
 
+/** Deployment credential each OpenAI-compatible planner falls back to. */
+const PLANNER_CREDENTIAL_VARIABLES: Record<"openai" | "vercel" | "vllm", string> = {
+  openai: "OPENAI_API_KEY",
+  vercel: "AI_GATEWAY_API_KEY",
+  vllm: "OPENAI_API_KEY",
+};
+
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -90,9 +97,7 @@ export function createQueryPlanningProviderFromEnvironment(
         baseUrl: optionalString(env.LORE_QUERY_PLANNER_BASE_URL),
         apiKey:
           optionalString(env.LORE_QUERY_PLANNER_API_KEY) ??
-          (provider === "vercel"
-            ? optionalString(env.AI_GATEWAY_API_KEY)
-            : optionalString(env.OPENAI_API_KEY)),
+          optionalString(env[PLANNER_CREDENTIAL_VARIABLES[provider]]),
         instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
         timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
       }),

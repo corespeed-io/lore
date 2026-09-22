@@ -159,7 +159,7 @@ test("Vercel AI Gateway judge sends the parameters that surface documents", asyn
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-gateway-key");
     const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({
-      model: "openai/gpt-5.1",
+      model: "openai/gpt-6-astra",
       max_tokens: 4096,
       reasoning_effort: "medium",
     });
@@ -173,7 +173,7 @@ test("Vercel AI Gateway judge sends the parameters that surface documents", asyn
   try {
     const judge = createBenchmarkJudgeFromEnvironment({
       LORE_BENCHMARK_JUDGE_PROVIDER: "vercel",
-      LORE_BENCHMARK_JUDGE_MODEL: "openai/gpt-5.1",
+      LORE_BENCHMARK_JUDGE_MODEL: "openai/gpt-6-astra",
       AI_GATEWAY_API_KEY: "test-gateway-key",
     });
     await expect(
@@ -189,11 +189,18 @@ test("Vercel AI Gateway judge sends the parameters that surface documents", asyn
   }
 });
 
-test("Vercel AI Gateway judge requires a gateway credential", () => {
+test("Vercel AI Gateway judge requires a gateway credential and a creator/model id", () => {
   expect(() =>
     createBenchmarkJudgeFromEnvironment({
       LORE_BENCHMARK_JUDGE_PROVIDER: "vercel",
-      LORE_BENCHMARK_JUDGE_MODEL: "openai/gpt-5.1",
+      LORE_BENCHMARK_JUDGE_MODEL: "openai/gpt-6-astra",
     }),
   ).toThrow("LORE_BENCHMARK_JUDGE_API_KEY or AI_GATEWAY_API_KEY is required");
+  expect(() =>
+    createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "vercel",
+      LORE_BENCHMARK_JUDGE_MODEL: "gpt-6-astra",
+      AI_GATEWAY_API_KEY: "test-gateway-key",
+    }),
+  ).toThrow("creator/model ids");
 });

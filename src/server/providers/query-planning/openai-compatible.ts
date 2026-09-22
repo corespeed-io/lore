@@ -1,4 +1,8 @@
 import OpenAI, { type ClientOptions } from "openai";
+import {
+  assertVercelAIGatewayModel,
+  VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
+} from "@/server/providers/vercel-ai-gateway";
 import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { parsePlannedQueries } from "./parse";
 
@@ -44,7 +48,7 @@ const PROVIDER_LABELS: Record<OpenAICompatibleQueryPlanningProviderName, string>
 
 const DEFAULT_BASE_URLS: Record<OpenAICompatibleQueryPlanningProviderName, string> = {
   openai: "https://api.openai.com/v1",
-  vercel: "https://ai-gateway.vercel.sh/v1",
+  vercel: VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
   vllm: "http://127.0.0.1:8000/v1",
 };
 
@@ -104,9 +108,7 @@ export function createOpenAICompatibleQueryPlanningProvider(
       `LORE_QUERY_PLANNER_API_KEY is required for ${PROVIDER_LABELS[options.provider]}`,
     );
   }
-  if (options.provider === "vercel" && !/^[^\s/]+\/\S+$/u.test(model)) {
-    throw new Error("Vercel AI Gateway models are creator/model ids such as openai/gpt-5.1-mini");
-  }
+  if (options.provider === "vercel") assertVercelAIGatewayModel(model, "openai/gpt-6-astra");
   const client = new OpenAI({
     apiKey: apiKey || "not-required",
     adminAPIKey: null,

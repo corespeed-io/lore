@@ -9,6 +9,15 @@ import {
 
 export type RerankingConfigurationWarning = (message: string) => void;
 
+/** Deployment credential each managed reranker falls back to. */
+const HOSTED_RERANK_CREDENTIAL_VARIABLES: Record<"cohere" | "memos" | "vercel" | "voyage", string> =
+  {
+    cohere: "COHERE_API_KEY",
+    memos: "MEMOS_API_KEY",
+    vercel: "AI_GATEWAY_API_KEY",
+    voyage: "VOYAGE_API_KEY",
+  };
+
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -93,13 +102,7 @@ export function createRerankingProviderFromEnvironment(
               baseUrl: optionalString(env.LORE_RERANK_BASE_URL),
               apiKey:
                 optionalString(env.LORE_RERANK_API_KEY) ??
-                (provider === "cohere"
-                  ? optionalString(env.COHERE_API_KEY)
-                  : provider === "memos"
-                    ? optionalString(env.MEMOS_API_KEY)
-                    : provider === "vercel"
-                      ? optionalString(env.AI_GATEWAY_API_KEY)
-                      : optionalString(env.VOYAGE_API_KEY)) ??
+                optionalString(env[HOSTED_RERANK_CREDENTIAL_VARIABLES[provider]]) ??
                 "",
               instruction: env.LORE_RERANK_INSTRUCTION,
               timeoutMs: positiveInteger(env.LORE_RERANK_TIMEOUT_MS, 30_000),

@@ -1,10 +1,12 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
 import OpenAI, { type ClientOptions } from "openai";
+import {
+  assertVercelAIGatewayModel,
+  VERCEL_AI_GATEWAY_HOST,
+} from "@/server/providers/vercel-ai-gateway";
 import type { EmbeddingConfiguration, EmbeddingProviderName } from "./config";
 
 const OPENAI_BASE_URL = "https://api.openai.com";
-/** Vercel AI Gateway's OpenAI-compatible surface; `/v1/embeddings` is appended. */
-const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 const OPENAI_REQUEST_BATCH_SIZE = 100;
 
 export interface OpenAICompatibleEmbeddingOptions {
@@ -176,16 +178,10 @@ export function createVercelAIGatewayEmbeddingProvider(
     {
       provider: "vercel",
       label: "Vercel AI Gateway",
-      defaultBaseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+      defaultBaseUrl: VERCEL_AI_GATEWAY_HOST,
       credentialError:
         "AI_GATEWAY_API_KEY is required for the Vercel AI Gateway embedding provider",
-      validateModel(model) {
-        if (!/^[^\s/]+\/\S+$/u.test(model)) {
-          throw new Error(
-            "Vercel AI Gateway models are creator/model ids such as openai/text-embedding-3-small",
-          );
-        }
-      },
+      validateModel: (model) => assertVercelAIGatewayModel(model, "openai/text-embedding-3-small"),
     },
     configuration,
     options,

@@ -330,7 +330,7 @@ test("Vercel AI Gateway fixed reader sends images through the gateway with its o
     expect(String(input)).toBe("https://ai-gateway.vercel.sh/v1/chat/completions");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-gateway-key");
     const body = JSON.parse(String(init?.body));
-    expect(body).toMatchObject({ model: "openai/gpt-5.1", temperature: 0, max_tokens: 512 });
+    expect(body).toMatchObject({ model: "openai/gpt-6-astra", temperature: 0, max_tokens: 512 });
     expect(body.store).toBeUndefined();
     expect(body.messages[1].content[1]).toEqual({
       type: "image_url",
@@ -345,7 +345,7 @@ test("Vercel AI Gateway fixed reader sends images through the gateway with its o
   try {
     const reader = createBenchmarkReaderFromEnvironment({
       LORE_BENCHMARK_READER_PROVIDER: "vercel",
-      LORE_BENCHMARK_READER_MODEL: "openai/gpt-5.1",
+      LORE_BENCHMARK_READER_MODEL: "openai/gpt-6-astra",
       AI_GATEWAY_API_KEY: "test-gateway-key",
     });
     expect(reader).toMatchObject({ provider: "vercel", supportsQuestionImages: true });
@@ -361,11 +361,18 @@ test("Vercel AI Gateway fixed reader sends images through the gateway with its o
   }
 });
 
-test("Vercel AI Gateway fixed reader requires a gateway credential", () => {
+test("Vercel AI Gateway fixed reader requires a gateway credential and a creator/model id", () => {
   expect(() =>
     createBenchmarkReaderFromEnvironment({
       LORE_BENCHMARK_READER_PROVIDER: "vercel",
-      LORE_BENCHMARK_READER_MODEL: "openai/gpt-5.1",
+      LORE_BENCHMARK_READER_MODEL: "openai/gpt-6-astra",
     }),
   ).toThrow("LORE_BENCHMARK_READER_API_KEY or AI_GATEWAY_API_KEY is required");
+  expect(() =>
+    createBenchmarkReaderFromEnvironment({
+      LORE_BENCHMARK_READER_PROVIDER: "vercel",
+      LORE_BENCHMARK_READER_MODEL: "gpt-6-astra",
+      AI_GATEWAY_API_KEY: "test-gateway-key",
+    }),
+  ).toThrow("creator/model ids");
 });

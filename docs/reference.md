@@ -368,7 +368,7 @@ LORE_QUERY_PLANNER_MAX_QUERIES=3
 
 # Or route the planner through Vercel AI Gateway with AI_GATEWAY_API_KEY:
 # LORE_QUERY_PLANNER_PROVIDER=vercel
-# LORE_QUERY_PLANNER_MODEL=openai/gpt-5.1-mini
+# LORE_QUERY_PLANNER_MODEL=openai/gpt-6-astra
 ```
 
 The feature is disabled by default because it adds model latency and cost. Invalid
