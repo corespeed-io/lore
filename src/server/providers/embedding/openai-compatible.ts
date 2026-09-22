@@ -18,13 +18,14 @@ export interface OpenAICompatibleEmbeddingOptions {
   timeoutMs?: number;
 }
 
-interface EmbeddingAdapter {
+interface EmbeddingSurface {
   provider: Extract<EmbeddingProviderName, "openai" | "vercel">;
   /** Human-readable service name used by every error this adapter raises. */
   label: string;
   defaultBaseUrl: string;
-  credentialError: string;
-  validateModel?(model: string): void;
+  credentialVariable: string;
+  /** Set only by the gateway, whose model ids are `creator/model` slugs. */
+  gatewayModelExample?: string;
 }
 
 interface OpenAIEmbeddingResponse {
@@ -92,23 +93,28 @@ function embeddingsFrom(
 }
 
 function createEmbeddingProvider(
-  adapter: EmbeddingAdapter,
+  surface: EmbeddingSurface,
   configuration: EmbeddingConfiguration,
   options: OpenAICompatibleEmbeddingOptions,
 ): EmbeddingProvider {
-  if (configuration.provider !== adapter.provider) {
-    throw new Error(`${adapter.label} adapter requires provider=${adapter.provider}`);
+  if (configuration.provider !== surface.provider) {
+    throw new Error(`${surface.label} adapter requires provider=${surface.provider}`);
   }
-  adapter.validateModel?.(configuration.model);
+  if (surface.gatewayModelExample)
+    assertVercelAIGatewayModel(configuration.model, surface.gatewayModelExample);
   const apiKey = options.apiKey.trim();
-  if (!apiKey) throw new Error(adapter.credentialError);
+  if (!apiKey) {
+    throw new Error(
+      `${surface.credentialVariable} is required for the ${surface.label} embedding provider`,
+    );
+  }
   const timeoutMs = Math.max(1_000, boundedInteger(options.timeoutMs, 120_000, 600_000));
   const client = new OpenAI({
     apiKey,
     adminAPIKey: null,
     organization: null,
     project: null,
-    baseURL: apiBaseUrl(options.baseUrl ?? adapter.defaultBaseUrl, adapter.label),
+    baseURL: apiBaseUrl(options.baseUrl ?? surface.defaultBaseUrl, surface.label),
     timeout: timeoutMs,
     maxRetries: boundedInteger(options.maxRetries, 2, 5),
     ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -134,12 +140,12 @@ function createEmbeddingProvider(
           })
           .catch((error: unknown) => {
             if (error instanceof OpenAI.APIError && error.status !== undefined) {
-              throw new Error(`${adapter.label} embedding request failed (${error.status})`);
+              throw new Error(`${surface.label} embedding request failed (${error.status})`);
             }
-            throw new Error(`${adapter.label} embedding request failed`);
+            throw new Error(`${surface.label} embedding request failed`);
           });
         embeddings.push(
-          ...embeddingsFrom(response, batch.length, configuration.dimensions, adapter.label),
+          ...embeddingsFrom(response, batch.length, configuration.dimensions, surface.label),
         );
       }
       return embeddings;
@@ -156,7 +162,7 @@ export function createOpenAIEmbeddingProvider(
       provider: "openai",
       label: "OpenAI",
       defaultBaseUrl: OPENAI_BASE_URL,
-      credentialError: "OPENAI_API_KEY is required for the OpenAI embedding provider",
+      credentialVariable: "OPENAI_API_KEY",
     },
     configuration,
     options,
@@ -179,9 +185,8 @@ export function createVercelAIGatewayEmbeddingProvider(
       provider: "vercel",
       label: "Vercel AI Gateway",
       defaultBaseUrl: VERCEL_AI_GATEWAY_HOST,
-      credentialError:
-        "AI_GATEWAY_API_KEY is required for the Vercel AI Gateway embedding provider",
-      validateModel: (model) => assertVercelAIGatewayModel(model, "openai/text-embedding-3-small"),
+      credentialVariable: "AI_GATEWAY_API_KEY",
+      gatewayModelExample: "openai/text-embedding-3-small",
     },
     configuration,
     options,

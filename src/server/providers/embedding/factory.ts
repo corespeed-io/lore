@@ -1,5 +1,6 @@
 import type { EmbeddingProvider } from "@corespeed/lore-core";
 import { validatedEmbeddingDimensions } from "@corespeed/lore-core";
+import { keepAlive, optionalString, positiveInteger } from "@/server/providers/environment";
 import { markDependencyFailure, markDependencySuccess } from "@/server/telemetry/telemetry";
 import { embeddingBuildEnvironment, embeddingConfigurationFromEnvironment } from "./config";
 import { createGoogleEmbeddingProvider } from "./google";
@@ -31,22 +32,6 @@ function warnOnEmbeddingFailure(
       }
     },
   };
-}
-
-function positiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function optionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-function keepAlive(value: string | undefined): string | number {
-  if (value === undefined || value === "") return 0;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : value;
 }
 
 export interface EmbeddingProviderFactoryOptions {

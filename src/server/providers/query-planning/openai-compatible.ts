@@ -40,32 +40,59 @@ interface ChatCompletionResponse {
   choices?: unknown;
 }
 
-const PROVIDER_LABELS: Record<OpenAICompatibleQueryPlanningProviderName, string> = {
-  openai: "OpenAI",
-  vercel: "Vercel AI Gateway",
-  vllm: "vLLM",
+/**
+ * What differs between the OpenAI-compatible planner surfaces. `selfHosted`
+ * covers the two policies an operator-run endpoint relaxes together: it may be
+ * plaintext loopback, and it needs no deployment credential.
+ */
+interface PlannerSurface {
+  label: string;
+  defaultBaseUrl: string;
+  selfHosted: boolean;
+  /** OpenAI renamed this parameter; the gateway and vLLM document `max_tokens`. */
+  outputTokenParameter: "max_completion_tokens" | "max_tokens";
+  structuredOutput: "json_object" | "json_schema";
+  /** Set only by the gateway, whose model ids are `creator/model` slugs. */
+  gatewayModelExample?: string;
+}
+
+const PLANNER_SURFACES: Record<OpenAICompatibleQueryPlanningProviderName, PlannerSurface> = {
+  openai: {
+    label: "OpenAI",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    selfHosted: false,
+    outputTokenParameter: "max_completion_tokens",
+    structuredOutput: "json_object",
+  },
+  vercel: {
+    label: "Vercel AI Gateway",
+    defaultBaseUrl: VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
+    selfHosted: false,
+    outputTokenParameter: "max_tokens",
+    structuredOutput: "json_schema",
+    gatewayModelExample: "openai/gpt-6-astra",
+  },
+  vllm: {
+    label: "vLLM",
+    defaultBaseUrl: "http://127.0.0.1:8000/v1",
+    selfHosted: true,
+    outputTokenParameter: "max_tokens",
+    structuredOutput: "json_object",
+  },
 };
 
-const DEFAULT_BASE_URLS: Record<OpenAICompatibleQueryPlanningProviderName, string> = {
-  openai: "https://api.openai.com/v1",
-  vercel: VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
-  vllm: "http://127.0.0.1:8000/v1",
-};
-
-function apiBaseUrl(baseUrl: string, provider: OpenAICompatibleQueryPlanningProviderName): string {
+function apiBaseUrl(baseUrl: string, surface: PlannerSurface): string {
   const url = new URL(baseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("query planner base URL must use http or https");
   }
   if (
-    provider !== "vllm" &&
+    !surface.selfHosted &&
     url.protocol !== "https:" &&
     url.hostname !== "127.0.0.1" &&
     url.hostname !== "localhost"
   ) {
-    throw new Error(
-      `${PROVIDER_LABELS[provider]} query planner base URL must use https outside localhost`,
-    );
+    throw new Error(`${surface.label} query planner base URL must use https outside localhost`);
   }
   url.search = "";
   url.hash = "";
@@ -98,17 +125,13 @@ export function createOpenAICompatibleQueryPlanningProvider(
   const configuredInstruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
   const instruction = `${configuredInstruction}\n${JSON_OUTPUT_INSTRUCTION}`;
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-  const baseURL = apiBaseUrl(
-    options.baseUrl ?? DEFAULT_BASE_URLS[options.provider],
-    options.provider,
-  );
+  const surface = PLANNER_SURFACES[options.provider];
+  const baseURL = apiBaseUrl(options.baseUrl ?? surface.defaultBaseUrl, surface);
   const apiKey = options.apiKey?.trim();
-  if (options.provider !== "vllm" && !apiKey) {
-    throw new Error(
-      `LORE_QUERY_PLANNER_API_KEY is required for ${PROVIDER_LABELS[options.provider]}`,
-    );
+  if (!surface.selfHosted && !apiKey) {
+    throw new Error(`LORE_QUERY_PLANNER_API_KEY is required for ${surface.label}`);
   }
-  if (options.provider === "vercel") assertVercelAIGatewayModel(model, "openai/gpt-6-astra");
+  if (surface.gatewayModelExample) assertVercelAIGatewayModel(model, surface.gatewayModelExample);
   const client = new OpenAI({
     apiKey: apiKey || "not-required",
     adminAPIKey: null,
@@ -134,9 +157,9 @@ export function createOpenAICompatibleQueryPlanningProvider(
         .create({
           model,
           temperature: 0,
-          ...(options.provider === "openai" ? { max_completion_tokens: 256 } : { max_tokens: 256 }),
+          [surface.outputTokenParameter]: 256,
           response_format:
-            options.provider === "vercel"
+            surface.structuredOutput === "json_schema"
               ? {
                   type: "json_schema",
                   json_schema: { name: "lore_query_plan", schema: QUERY_PLAN_RESPONSE_SCHEMA },

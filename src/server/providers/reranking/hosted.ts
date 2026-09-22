@@ -31,16 +31,16 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && (value as number) > 0 ? (value as number) : fallback;
 }
 
+/** Each managed reranker's own API host; `LORE_RERANK_BASE_URL` overrides it. */
+const HOSTED_RERANK_BASE_URLS: Record<HostedRerankingProvider, string> = {
+  cohere: "https://api.cohere.com",
+  memos: "https://memos.memtensor.cn/api/openmem/v1",
+  vercel: VERCEL_AI_GATEWAY_HOST,
+  voyage: "https://api.voyageai.com",
+};
+
 function providerBaseUrl(provider: HostedRerankingProvider, baseUrl?: string): string {
-  const defaultBaseUrl =
-    provider === "cohere"
-      ? "https://api.cohere.com"
-      : provider === "memos"
-        ? "https://memos.memtensor.cn/api/openmem/v1"
-        : provider === "vercel"
-          ? VERCEL_AI_GATEWAY_HOST
-          : "https://api.voyageai.com";
-  const url = new URL(baseUrl ?? defaultBaseUrl);
+  const url = new URL(baseUrl ?? HOSTED_RERANK_BASE_URLS[provider]);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`${provider} reranking base URL must use http or https`);
   }

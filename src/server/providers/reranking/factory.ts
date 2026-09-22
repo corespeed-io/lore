@@ -1,3 +1,4 @@
+import { keepAlive, optionalString, positiveInteger } from "@/server/providers/environment";
 import type { ConfiguredRerankingProvider } from "../metadata";
 import { createHostedRerankingProvider } from "./hosted";
 import { createOllamaListwiseRerankingProvider } from "./ollama-listwise";
@@ -17,22 +18,6 @@ const HOSTED_RERANK_CREDENTIAL_VARIABLES: Record<"cohere" | "memos" | "vercel" |
     vercel: "AI_GATEWAY_API_KEY",
     voyage: "VOYAGE_API_KEY",
   };
-
-function positiveInteger(value: string | undefined, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function optionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-function keepAlive(value: string | undefined): string | number {
-  if (value === undefined || value === "") return 0;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : value;
-}
 
 function warnOnRerankingFailure(
   provider: ConfiguredRerankingProvider,
