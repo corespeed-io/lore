@@ -88,7 +88,10 @@ export async function boundedJsonObject(
   if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared) > maximumBytes) {
     throw tooLarge();
   }
-  const chunks: Uint8Array[] = [];
+  // Decode as the body streams so each raw chunk is released once counted: a body
+  // near the bound is never held as chunks, a copied buffer, and a string at once.
+  const decoder = new TextDecoder();
+  const text: string[] = [];
   let received = 0;
   if (request.body) {
     const reader = request.body.getReader();
@@ -100,18 +103,13 @@ export async function boundedJsonObject(
         await reader.cancel().catch(() => undefined);
         throw tooLarge();
       }
-      chunks.push(value);
+      text.push(decoder.decode(value, { stream: true }));
     }
   }
-  const bytes = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+  text.push(decoder.decode());
   let value: unknown;
   try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
+    value = JSON.parse(text.join(""));
   } catch {
     throw new BadRequestError("Request body must be valid JSON");
   }
