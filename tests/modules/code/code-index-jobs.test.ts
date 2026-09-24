@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { afterEach, expect, onTestFinished, test } from "vitest";
-import { CodeIndexValidationError } from "@/modules/code/indexing/errors";
+import { CodeIndexValidationError, GitOperationalError } from "@/modules/code/indexing/errors";
+import { gitFailure } from "@/modules/code/indexing/git";
 import type { CodeIndexMaintenanceLog } from "@/modules/code/indexing/maintenance";
 import {
   classifyCodeIndexFailure,
@@ -517,6 +518,30 @@ test("failure classification keeps deterministic messages only when they reveal 
       serverPath,
     ]),
   ).toMatchObject({ terminal: false });
+});
+
+test("transient Git failures stay retryable while revision failures end the job", () => {
+  const message = "Unable to read the requested Git revision";
+  // Resource exhaustion or a killed process: a later attempt can succeed.
+  for (const cause of [{ code: "EAGAIN" }, { code: "EMFILE" }, { signal: "SIGKILL" }]) {
+    const failure = gitFailure(cause, message);
+    expect(failure).toBeInstanceOf(GitOperationalError);
+    expect(classifyCodeIndexFailure(failure, [])).toMatchObject({
+      terminal: false,
+      errorClass: "GitOperationalError",
+    });
+  }
+  // Git exiting non-zero, a missing path, or the output bound: the revision is unreadable.
+  for (const cause of [
+    { code: 128 },
+    { code: "ENOENT" },
+    { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
+    new Error("fatal: bad object"),
+  ]) {
+    const failure = gitFailure(cause, message);
+    expect(failure).toBeInstanceOf(CodeIndexValidationError);
+    expect(classifyCodeIndexFailure(failure, [])).toMatchObject({ terminal: true });
+  }
 });
 
 test("the registry binds repositories to Workspaces and fails closed without a binding", () => {

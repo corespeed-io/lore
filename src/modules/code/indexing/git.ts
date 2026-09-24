@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
-import { CodeIndexValidationError } from "./errors";
+import { CodeIndexValidationError, GitOperationalError } from "./errors";
 import { CODE_INDEX_LIMITS } from "./protocol";
 import type {
   CodeSourceFile,
@@ -13,6 +13,34 @@ import { sha256, validateAndSortFiles, validatePath, validatePlainText } from ".
 
 const execFileAsync = promisify(execFile);
 
+/** System errnos a later attempt can outlive: resource exhaustion or an interrupted call. */
+const TRANSIENT_ERRNOS: ReadonlySet<string> = new Set([
+  "EAGAIN",
+  "EBUSY",
+  "EINTR",
+  "EIO",
+  "EMFILE",
+  "ENFILE",
+  "ENOMEM",
+  "ETIMEDOUT",
+]);
+
+/**
+ * Classifies a failed Git or filesystem call. A transient errno or a killed process is
+ * operational and retryable; anything else (Git exiting non-zero, a missing path, an
+ * output bound) says the revision cannot be read and is a validation failure.
+ */
+export function gitFailure(error: unknown, message: string): Error {
+  const { code, signal } =
+    typeof error === "object" && error !== null
+      ? (error as { code?: unknown; signal?: unknown })
+      : {};
+  if ((typeof code === "string" && TRANSIENT_ERRNOS.has(code)) || typeof signal === "string") {
+    return new GitOperationalError(message, { cause: error });
+  }
+  return new CodeIndexValidationError(message, { cause: error });
+}
+
 async function gitOutput(repositoryPath: string, arguments_: readonly string[]): Promise<Buffer> {
   try {
     const result = await execFileAsync("git", ["-C", repositoryPath, ...arguments_], {
@@ -21,9 +49,7 @@ async function gitOutput(repositoryPath: string, arguments_: readonly string[]):
     });
     return Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
   } catch (error) {
-    throw new CodeIndexValidationError("Unable to read the requested Git revision", {
-      cause: error,
-    });
+    throw gitFailure(error, "Unable to read the requested Git revision");
   }
 }
 
@@ -56,6 +82,9 @@ async function readGitBlobBatch(
     child.once("error", reject);
     child.once("close", (code, signal) => {
       if (code === 0 && !signal && outputBytes <= maximumOutputBytes) resolve();
+      else if (signal && outputBytes <= maximumOutputBytes)
+        // Killed from outside (OOM, shutdown), not by the output bound below.
+        reject(gitFailure({ signal }, "Unable to batch-read Git blobs"));
       else
         reject(
           new CodeIndexValidationError("Unable to batch-read Git blobs", {
@@ -271,9 +300,7 @@ export async function resolveGitCommit(repositoryPath: string, commitOid: string
   try {
     canonicalPath = await realpath(repositoryPath);
   } catch (error) {
-    throw new CodeIndexValidationError("repositoryPath must identify a local Git repository", {
-      cause: error,
-    });
+    throw gitFailure(error, "repositoryPath must identify a local Git repository");
   }
   const resolvedCommit = (
     await gitOutput(canonicalPath, ["rev-parse", "--verify", `${commitOid}^{commit}`])
