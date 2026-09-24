@@ -1,5 +1,6 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
 import { type Fetch, Ollama } from "ollama/browser";
+import { providerBaseUrl } from "@/server/providers/environment";
 import type { EmbeddingConfiguration } from "./config";
 import { QWEN3_EMBEDDING_PROTOCOL_REVISION } from "./config";
 
@@ -31,10 +32,9 @@ function boundedBatchSize(value: number | undefined): number {
 }
 
 function ollamaHost(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("OLLAMA_BASE_URL must use http or https");
-  }
+  // Ollama is sent no credential, so plain HTTP to a LAN host stays allowed; the
+  // shared parser still refuses other schemes and never echoes the URL.
+  const url = providerBaseUrl(baseUrl, "OLLAMA_BASE_URL", { requireHttps: false });
   if (url.hostname === "ollama.com") {
     throw new Error("Ollama embeddings require a self-hosted server; ollama.com is not supported");
   }

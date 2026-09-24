@@ -101,7 +101,7 @@ test("a reader key is never sent to a plaintext endpoint outside loopback", () =
         LORE_BENCHMARK_READER_BASE_URL: "http://reader.test/v1",
         [key]: "secret",
       }),
-    ).toThrow("must use https outside loopback when it sends an API key");
+    ).toThrow("must use https outside loopback or host.docker.internal");
   }
   for (const baseUrl of ["http://127.0.0.1:8002/v1", "http://localhost:8002/v1"]) {
     expect(

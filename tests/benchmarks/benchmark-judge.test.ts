@@ -245,7 +245,7 @@ test("a judge key is never sent to a plaintext endpoint outside loopback", () =>
         LORE_BENCHMARK_JUDGE_BASE_URL: "http://judge.test/v1",
         [key]: "secret",
       }),
-    ).toThrow("must use https outside loopback when it sends an API key");
+    ).toThrow("must use https outside loopback or host.docker.internal");
   }
   expect(
     createBenchmarkJudgeFromEnvironment({
