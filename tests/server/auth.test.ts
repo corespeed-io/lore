@@ -1,5 +1,14 @@
-import { beforeEach, expect, test } from "vitest";
-import { authorizeRequest, checkAuth, isOperationalProbePath } from "../../src/server/auth/auth.js";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  admitRequest,
+  authorizeRequest,
+  checkAuth,
+  isCrossSiteRequest,
+  isOperationalProbePath,
+} from "../../src/server/auth/auth.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 beforeEach(() => {
   for (const k of [
@@ -158,4 +167,183 @@ test("operational probes bypass application authentication without widening API 
   expect(isOperationalProbePath("/api/v1/memories")).toBe(false);
   expect(isOperationalProbePath("/livez/extra")).toBe(false);
   expect(isOperationalProbePath("/readyz?full=1")).toBe(false);
+});
+
+// Cloudflare Access: a locally generated signing key served from a stubbed team JWKS.
+const ACCESS_TEAM = "lore-test.cloudflareaccess.com";
+const ACCESS_AUD = "lore-access-audience";
+const accessKeys = (async () => {
+  const signing = await generateKeyPair("RS256");
+  const foreign = await generateKeyPair("RS256");
+  const publicJwk = { ...(await exportJWK(signing.publicKey)), kid: "lore-test", alg: "RS256" };
+  return { foreign, publicJwk, signing };
+})();
+const jwksRequests: string[] = [];
+
+async function accessToken(
+  claims: { aud?: string; iss?: string; sub?: string | null; email?: string },
+  times: { exp?: number; nbf?: number } = {},
+  foreignKey = false,
+): Promise<string> {
+  const keys = await accessKeys;
+  const now = Math.floor(Date.now() / 1_000);
+  const jwt = new SignJWT(claims.email ? { email: claims.email } : {})
+    .setProtectedHeader({ alg: "RS256", kid: "lore-test" })
+    .setIssuer(claims.iss ?? `https://${ACCESS_TEAM}`)
+    .setAudience(claims.aud ?? ACCESS_AUD)
+    .setIssuedAt(now - 60)
+    .setExpirationTime(times.exp ?? now + 300);
+  if (times.nbf !== undefined) jwt.setNotBefore(times.nbf);
+  if (claims.sub !== null) jwt.setSubject(claims.sub ?? "access-subject");
+  return jwt.sign(foreignKey ? keys.foreign.privateKey : keys.signing.privateKey);
+}
+
+async function useAccessProxy(): Promise<void> {
+  const { publicJwk } = await accessKeys;
+  process.env.AUTH_MODE = "proxy";
+  process.env.ACCESS_AUD = ACCESS_AUD;
+  process.env.ACCESS_TEAM_DOMAIN = ACCESS_TEAM;
+  vi.stubGlobal("fetch", async (input: string | URL | Request) => {
+    const url = input instanceof Request ? input.url : String(input);
+    jwksRequests.push(url);
+    if (url !== `https://${ACCESS_TEAM}/cdn-cgi/access/certs`) {
+      return new Response("unexpected JWKS request", { status: 404 });
+    }
+    return Response.json({ keys: [publicJwk] });
+  });
+}
+
+test("proxy mode accepts a Cloudflare Access JWT signed by the team JWKS", async () => {
+  await useAccessProxy();
+  const header = await checkAuth(
+    new Headers({
+      "cf-access-jwt-assertion": await accessToken({ email: "operator@example.com" }),
+    }),
+  );
+  const cookie = await checkAuth(
+    new Headers({ cookie: `CF_Authorization=${await accessToken({ sub: "cookie-subject" })}` }),
+  );
+
+  expect(jwksRequests).toContain(`https://${ACCESS_TEAM}/cdn-cgi/access/certs`);
+  expect(header).toEqual({
+    ok: true,
+    principal: {
+      provider: `cloudflare-access:${ACCESS_TEAM}`,
+      subject: "access-subject",
+      displayName: "operator@example.com",
+      email: "operator@example.com",
+    },
+  });
+  expect(cookie).toMatchObject({
+    ok: true,
+    principal: { subject: "cookie-subject", displayName: "cookie-subject" },
+  });
+});
+
+test.each([
+  ["wrong audience", () => accessToken({ aud: "another-application" })],
+  ["wrong issuer", () => accessToken({ iss: "https://attacker.cloudflareaccess.com" })],
+  ["expired token", () => accessToken({}, { exp: Math.floor(Date.now() / 1_000) - 120 })],
+  ["not-yet-valid token", () => accessToken({}, { nbf: Math.floor(Date.now() / 1_000) + 3_600 })],
+  ["token signed by a key outside the team JWKS", () => accessToken({}, {}, true)],
+])("proxy mode rejects a Cloudflare Access JWT with a %s", async (_case, token) => {
+  await useAccessProxy();
+  await expect(
+    checkAuth(new Headers({ "cf-access-jwt-assertion": await token() })),
+  ).resolves.toEqual({ ok: false, status: 403, detail: "Cloudflare Access token invalid" });
+});
+
+test("proxy mode rejects a validly signed Cloudflare Access JWT without a subject", async () => {
+  await useAccessProxy();
+  await expect(
+    checkAuth(new Headers({ "cf-access-jwt-assertion": await accessToken({ sub: null }) })),
+  ).resolves.toEqual({ ok: false, status: 403, detail: "Cloudflare Access subject missing" });
+});
+
+test("admission returns the verified principal so handlers need not verify it again", async () => {
+  process.env.AUTH_MODE = "password";
+  process.env.UI_PASSWORD = "secret";
+  process.env.LORE_LOCAL_SUBJECT = "admitted-operator";
+  const admitted = await admitRequest(
+    new Request("https://lore.test/api/v1/memories", {
+      headers: { authorization: `Basic ${btoa("user:secret")}` },
+    }),
+  );
+  expect(admitted).toEqual({
+    principal: { provider: "local", subject: "admitted-operator", displayName: "Local User" },
+  });
+  const agent = await admitRequest(
+    new Request("https://lore.test/api/v1/memories", {
+      headers: { authorization: `Bearer lore_agent_${"a".repeat(64)}` },
+    }),
+  );
+  expect(agent).toEqual({});
+  const denied = await admitRequest(new Request("https://lore.test/api/v1/memories"));
+  expect(denied.principal).toBeUndefined();
+  expect(denied.denied?.status).toBe(401);
+});
+
+test.each([
+  ["a cross-site Fetch Metadata request", { "sec-fetch-site": "cross-site" }],
+  ["a foreign Origin", { origin: "https://attacker.example" }],
+  [
+    "a same-site but cross-origin Origin",
+    { origin: "https://evil.lore.test", "sec-fetch-site": "same-site" },
+  ],
+  ["an opaque null Origin", { origin: "null" }],
+])("unsafe requests from %s are rejected before authentication", async (_case, headers) => {
+  process.env.AUTH_MODE = "password";
+  process.env.UI_PASSWORD = "secret";
+  for (const path of ["/api/workspaces", "/api/v1/workspaces"]) {
+    const request = new Request(`https://lore.test${path}`, {
+      method: "POST",
+      headers: { ...headers, authorization: `Basic ${btoa("user:secret")}` },
+    });
+    expect(isCrossSiteRequest(request)).toBe(true);
+    const response = await authorizeRequest(request);
+    expect(response?.status).toBe(403);
+    await expect(response?.json()).resolves.toEqual({
+      code: "access_denied",
+      error: "Cross-site request rejected",
+    });
+  }
+});
+
+test("same-origin browsers, proxied origins, safe methods, and non-browser clients pass", () => {
+  const unsafe = (url: string, headers: Record<string, string>) =>
+    new Request(url, { method: "POST", headers });
+  expect(isCrossSiteRequest(unsafe("https://lore.test/api/v1/workspaces", {}))).toBe(false);
+  expect(
+    isCrossSiteRequest(
+      unsafe("https://lore.test/api/v1/workspaces", {
+        origin: "https://lore.test",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+  ).toBe(false);
+  // Self-host behind a TLS proxy: Next sees its listen address, the browser the public host.
+  expect(
+    isCrossSiteRequest(
+      unsafe("http://0.0.0.0:3000/api/v1/workspaces", {
+        host: "lore.example.com",
+        origin: "https://lore.example.com",
+      }),
+    ),
+  ).toBe(false);
+  expect(
+    isCrossSiteRequest(
+      unsafe("http://localhost:3000/api/v1/workspaces", {
+        host: "localhost:3000",
+        "x-forwarded-host": "lore.example.com",
+        origin: "https://lore.example.com",
+      }),
+    ),
+  ).toBe(false);
+  expect(
+    isCrossSiteRequest(
+      new Request("https://lore.test/api/v1/memories", {
+        headers: { origin: "https://attacker.example", "sec-fetch-site": "cross-site" },
+      }),
+    ),
+  ).toBe(false);
 });

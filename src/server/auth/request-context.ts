@@ -1,7 +1,7 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { createAccessModule } from "./access";
-import { checkAuth } from "./auth";
+import { type AuthPrincipal, checkAuth } from "./auth";
 import { createIdentityModule } from "./identity";
 
 export class RequestAuthenticationError extends Error {
@@ -43,20 +43,29 @@ export function createRequestContextResolver(database: PostgresDatabase) {
   const access = createAccessModule(database);
   const identities = createIdentityModule(database);
 
+  // Hono passes the principal its admission already verified; other callers verify here.
+  async function verifiedPrincipal(
+    request: Request,
+    admitted: AuthPrincipal | undefined,
+  ): Promise<AuthPrincipal> {
+    if (admitted) return admitted;
+    const authentication = await checkAuth(request.headers);
+    if (!authentication.ok || !authentication.principal) {
+      throw new RequestAuthenticationError(authentication.detail ?? "Authentication required");
+    }
+    return authentication.principal;
+  }
+
   return {
-    async resolveUser(request: Request): Promise<UserContext> {
+    async resolveUser(request: Request, principal?: AuthPrincipal): Promise<UserContext> {
       if (bearerToken(request)) {
         throw new RequestAuthenticationError("Agent credential cannot act as a human User");
       }
-      const authentication = await checkAuth(request.headers);
-      if (!authentication.ok || !authentication.principal) {
-        throw new RequestAuthenticationError(authentication.detail ?? "Authentication required");
-      }
-      const user = await identities.register(authentication.principal);
+      const user = await identities.register(await verifiedPrincipal(request, principal));
       return { userId: user.id };
     },
 
-    async resolveActor(request: Request): Promise<ActorContext> {
+    async resolveActor(request: Request, principal?: AuthPrincipal): Promise<ActorContext> {
       const workspaceId = requestedWorkspace(request);
       const token = bearerToken(request);
       if (token) {
@@ -65,10 +74,12 @@ export function createRequestContextResolver(database: PostgresDatabase) {
         return actor;
       }
 
-      const user = await this.resolveUser(request);
-      const actor = await access.selectWorkspace(user, workspaceId);
-      if (!actor) throw new WorkspaceAccessError("User is not an active Workspace member");
-      return actor;
+      const { activeMember, user } = await identities.registerInWorkspace(
+        await verifiedPrincipal(request, principal),
+        workspaceId,
+      );
+      if (!activeMember) throw new WorkspaceAccessError("User is not an active Workspace member");
+      return { userId: user.id, workspaceId };
     },
   };
 }

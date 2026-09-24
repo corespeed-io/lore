@@ -385,3 +385,64 @@ test("bounded JSON bodies stop reading a chunked stream once it crosses the byte
     "Request body must be valid JSON",
   );
 });
+
+test("shared admission rejects cross-site unsafe requests on both API prefixes", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  const { app, database } = noDatabaseApi();
+  const crossSiteHeaders: Record<string, string>[] = [
+    { "sec-fetch-site": "cross-site", "content-type": "text/plain" },
+    { origin: "https://attacker.example", "content-type": "text/plain" },
+  ];
+  for (const path of ["/api/workspaces", "/api/v1/workspaces", "/api/v1/workspaces/import"]) {
+    for (const headers of crossSiteHeaders) {
+      const response = await app.request(`http://lore.local${path}`, {
+        method: "POST",
+        headers,
+        body: '{"name":"csrf"}',
+      });
+      expect(response.status, path).toBe(403);
+      expect(await response.json()).toEqual({
+        code: "access_denied",
+        error: "Cross-site request rejected",
+      });
+    }
+  }
+  expect(database).not.toHaveBeenCalled();
+});
+
+test("a same-origin human request verifies once and resolves its Actor in one transaction", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "hono-one-transaction");
+  const context = await createMemoryTestContext();
+  let transactions = 0;
+  const app = createApi({
+    database: () => ({
+      transaction: (use) => {
+        transactions += 1;
+        return context.database.transaction(use);
+      },
+    }),
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const created = await app.request("http://lore.local/api/v1/workspaces", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "http://lore.local",
+      "sec-fetch-site": "same-origin",
+    },
+    body: JSON.stringify({ name: "Same origin" }),
+  });
+  expect(created.status).toBe(201);
+  const workspace = (await created.json()) as { id: string };
+
+  transactions = 0;
+  const actor = await app.request("http://lore.local/api/v1/actor", {
+    headers: { "x-lore-workspace-id": workspace.id },
+  });
+  expect(actor.status).toBe(200);
+  expect(transactions).toBe(1);
+});
