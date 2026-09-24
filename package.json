@@ -49,7 +49,7 @@
     "benchmark:code-index": "bun tools/evaluation/code/run-code-index.ts",
     "benchmark:code-search": "bun tools/evaluation/code/run-code-search.ts",
     "benchmark:memory-chunking": "bun tools/evaluation/chunking/run-memory-chunking.ts",
-    "benchmark:retrieval-policy": "bun tools/evaluation/policy/run-retrieval-policy.ts",
+    "benchmark:retrieval-policy": "bun --no-env-file tools/evaluation/policy/run-retrieval-policy.ts",
     "evaluate:code-aware-memory": "bun tools/evaluation/code/evaluate-code-aware-memory.ts",
     "evaluate:code-aware-memory:stress": "bun tools/evaluation/code/evaluate-code-aware-memory.ts --suite dependency-stress",
     "evaluate:joint-memory-code": "bun tools/evaluation/context/evaluate-joint-memory-code.ts",
