@@ -45,6 +45,14 @@ same `Idempotency-Key`.
 Memory browse pagination accepts an opaque `cursor` and returns the next value in
 `x-lore-next-cursor`. Do not parse or persist assumptions about the cursor format.
 
+Every JSON request body is bounded while it is read. The default bound is
+10,485,760 UTF-8 bytes (10 MiB), the cap Next's middleware body clone used to
+impose on self-host. `POST /api/v1/episodes` allows 13,048,576 bytes, enough for
+its full content and metadata limits even with every character `\uXXXX`-escaped,
+and Workspace import allows 50,000,000. A larger body is refused with 413
+`payload_too_large`: a declared `Content-Length` is refused before any byte is
+read, and a streamed body is counted as it arrives and abandoned at the bound.
+
 ## Workspace export and import
 
 `GET /api/v1/workspaces/export` requires a human Actor and
@@ -72,11 +80,23 @@ User; Lore does not guess ownership. Always run with `dryRun: true` first. The
 default `remap` policy always creates fresh ids, `skip` omits visible colliding rows,
 and `error` rejects visible collisions. Checksum, counts, field limits, link endpoints, and
 owner mapping are validated before writes; metadata is checked with the same
-100,000-character rule as the Memory API, so anything export produced imports. An
-import request larger than 50,000,000 bytes is refused with 413
-`payload_too_large` before it is parsed, whether it declares `Content-Length` or
-streams. Imported Memories get embedding jobs in the import transaction, so dense
-retrieval does not wait for the sweep.
+100,000-character rule as the Memory API, so anything export produced imports.
+A dry run runs the same validation as the real import, so it also refuses, with
+400 `invalid_archive`, text PostgreSQL would reject at write time: a NUL character
+or an unpaired UTF-16 surrogate in content, a Link kind, or any metadata key or
+string; a metadata object with its own `__proto__` key (the metadata schema drops
+it, so the stored metadata would differ from what the checksum covers); a
+timestamp that is not RFC 3339 `date-time` within PostgreSQL's range (years 0001
+to 9999, a real calendar day, offsets up to ±15:59); and an archive nested too
+deeply to checksum. Only a human Actor may import: an Agent is refused with 403
+before its request body is read. An import request larger than 50,000,000 bytes is
+refused with 413 `payload_too_large` before it is parsed, whether it declares
+`Content-Length` or streams. Imported Memories get embedding jobs in the import
+transaction, so dense retrieval does not wait for the sweep.
+
+Archive timestamps carry millisecond precision, the precision of the driver's
+`Date`. Import records the archive's timestamp text as source provenance exactly as
+given, up to PostgreSQL's microseconds.
 
 A completed archive checksum is replay-safe for that importer and Workspace while
 every Memory it imported still exists. If some or all of them were deleted,
@@ -243,7 +263,14 @@ HTTP work runs after that transaction and holds none of those locks.
 Inspect exact coverage with the read-only report. It never creates a generation
 or seeds jobs; before the worker's first sweep for that identity it prints
 `not initialized`. The `db:embedding:*` commands run with `--no-env-file`, so pass
-every variable explicitly:
+every variable explicitly. `report` and `activate` require the generation to be
+named: either `LORE_EMBEDDING_BUILD_PROVIDER` and `LORE_EMBEDDING_BUILD_MODEL`
+(which take precedence), or `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`.
+With neither pair they exit with an error before connecting, rather than fall back
+to the default Ollama model, which could activate an old generation and roll
+serving back to it. Both print the provider, model, dimensions, revision, and the
+variable pair they acted on under `generation`; check it before relying on the
+result:
 
 ```bash
 LORE_MAINTENANCE_DATABASE_URL=postgres://... \
@@ -253,15 +280,18 @@ LORE_EMBEDDING_BUILD_MODEL=gemini-embedding-2 \
 ```
 
 Activation refuses any missing chunk, unfinished job, or dead job. Once the report
-is complete, activate in one database transaction, then deploy the request process
-with the new provider/model:
+is complete, activate in one database transaction with the same variables, then
+deploy the request process with the new provider/model:
 
 ```bash
-bun run db:embedding:activate
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+LORE_EMBEDDING_BUILD_PROVIDER=google \
+LORE_EMBEDDING_BUILD_MODEL=gemini-embedding-2 \
+  bun run db:embedding:activate
 ```
 
 The former generation becomes `retiring` and remains queryable by the previous app
-configuration during a rolling deploy. Roll back by selecting the former
+configuration during a rolling deploy. Roll back by naming the former
 provider/model as the build target and running the same activation command.
 `LORE_EMBEDDING_ROLLBACK_SECONDS` defaults to seven days; after that window the
 maintenance sweep prunes an idle retiring generation and its vectors. Canonical
@@ -344,8 +374,11 @@ remains the correctness backstop.
   compatibility, pgvector, and a fail-closed RLS probe. The RLS check reads
   `pg_catalog`: every public table except the non-tenant `lore_system_state` and
   `lore_schema_migrations` must enable RLS, so a table added by a later migration
-  is covered without editing a list. `db:restore` verifies restored databases the
-  same way.
+  is covered without editing a list. A table an extension owns (a `pg_depend` row
+  with `deptype = 'e'` on `pg_extension`, such as PostGIS `spatial_ref_sys`) is
+  exempt, so installing such an extension in `public` does not fail readiness.
+  Every tenant table Lore uses must still exist and enable RLS, whoever owns it.
+  `db:restore` verifies restored databases the same way.
 - An embedding-provider failure produces `status: degraded` but HTTP 200 because
   lexical retrieval remains available. Database, role, schema, vector, or RLS
   failure produces `status: unready` and HTTP 503.
