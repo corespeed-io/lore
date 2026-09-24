@@ -177,15 +177,22 @@ COMMENT ON FUNCTION lore.fail_code_index_job(uuid, uuid, text) IS 'Ends one leas
 -- cancelled job used to block that commit forever: enqueue was INSERT ... ON
 -- CONFLICT DO NOTHING, and lore_app has no UPDATE on code_index_jobs. Re-enqueue
 -- now re-arms the existing row for the new requester, atomically under its row
--- lock. It also takes over a job whose requester can no longer be claimed (a
--- revoked grant, a disabled Agent, or a suspended Membership), which would
--- otherwise stay pending forever. A job that can still run is left untouched.
--- The requester is always the current Actor, never a caller-supplied identity.
+-- lock: a cancelled job at once, and a dead job once it has been dead for the
+-- re-arm cooldown. It also takes over a job whose requester can no longer be
+-- claimed (a revoked grant, a disabled Agent, or a suspended Membership), which
+-- would otherwise stay pending forever. A job that can still run, or a dead job
+-- inside its cooldown, is left untouched. The requester is always the current
+-- Actor, never a caller-supplied identity.
 CREATE FUNCTION lore.enqueue_code_index_job(target_repository_id uuid, target_repository_path text, target_commit_oid text, target_source_ref text, target_indexer_revision text) RETURNS uuid
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'public'
     AS $$
 DECLARE
+  -- A dead job has spent its whole retry budget with backoff (or failed a
+  -- deterministic check), so re-arming it on every request would let any
+  -- write-authorized Actor restart a full run of Git reads and parsing in a loop.
+  -- Re-enqueue re-arms it only once it has been dead this long.
+  dead_job_rearm_cooldown CONSTANT interval := interval '15 minutes';
   target_workspace_id uuid := lore.current_workspace_id();
   inserted_job_id uuid;
   existing_job public.code_index_jobs%ROWTYPE;
@@ -236,7 +243,11 @@ BEGIN
   );
   -- A processing lease is honoured for the one-hour maximum lease any claim can
   -- request, so an orphaned job is never taken from a worker still inside it.
-  IF existing_job.status IN ('dead', 'cancelled')
+  IF existing_job.status = 'cancelled'
+    OR (
+      existing_job.status = 'dead'
+      AND existing_job.completed_at <= now() - dead_job_rearm_cooldown
+    )
     OR (
       NOT requester_can_run
       AND (
@@ -257,7 +268,7 @@ BEGIN
   RETURN existing_job.id;
 END
 $$;
-COMMENT ON FUNCTION lore.enqueue_code_index_job(uuid, text, text, text, text) IS 'Queues one exact Code Revision for the current Actor, re-arming a terminal or orphaned job with the same key.';
+COMMENT ON FUNCTION lore.enqueue_code_index_job(uuid, text, text, text, text) IS 'Queues one exact Code Revision for the current Actor, re-arming a cancelled job, a dead job past its 15-minute cooldown, or an orphaned job with the same key.';
 
 -- An Agent's Code Index request carries that Agent's authority. Disabling the
 -- Agent left its jobs pending forever (claim skips them), and deleting it then ran
@@ -484,6 +495,66 @@ ALTER POLICY memory_links_select ON public.memory_links USING (
       AND ((target.scope = 'shared'::public.memory_scope) OR (target.owner_user_id = lore.current_user_id()))
   ))
 );
+
+-- One-time cleanup of Code Index state that the code shipping with this revision
+-- can never finish.
+--
+-- A worker claims only jobs of its own CODE_INDEX_REVISION, so an unfinished job
+-- of any other indexer revision would stay pending, or leased, forever. Cancel it
+-- with a content-free reason; enqueueing the commit again creates a job for the
+-- current revision. The literal must equal CODE_INDEX_REVISION in
+-- src/modules/code/indexing/protocol.ts at the time 0004 ships. It stays fixed
+-- afterwards, because an applied migration is frozen.
+UPDATE public.code_index_jobs job
+SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
+    completed_at = now(), updated_at = now(),
+    last_error = 'Superseded by a newer Code Index revision'
+WHERE job.status IN ('pending', 'processing')
+  AND job.indexer_revision <> 'ast-grep-0.45.3-web-structural-graph-v7-exact-root-partition';
+
+-- Before indexer revision v7, a blob holding only a UTF-8 byte-order mark (the
+-- three bytes EF BB BF) decoded to no text but was recorded as an indexed
+-- manifest entry. No parser can produce an Artifact for it, so the revision's
+-- generation could never become ready. Current code excludes such a blob as
+-- `empty`, so its manifest and source digests now disagree with the immutable
+-- revision row, and every later index of that commit fails as an OID/content
+-- conflict. Delete exactly the revisions that hold such an entry, have no ready,
+-- active, or retiring generation, and are cited by no Memory or Proposal Code
+-- Evidence; indexing the commit again then records it afresh.
+-- The delete cannot fail or orphan a row: code_revision_files and
+-- code_index_generations cascade from the revision, code_artifacts from the
+-- generation, and code_dependency_edges from both of their Artifacts. The
+-- Artifact delete trigger then prunes payloads and Symbol/Dependency Sets that no
+-- remaining Artifact references (their payload rows cascade from the sets). No
+-- other table references these rows by foreign key, no trigger on them rejects a
+-- delete, and Code Evidence anchors carry no foreign key to Code Index rows.
+DELETE FROM public.code_revisions revision
+WHERE EXISTS (
+    SELECT 1
+    FROM public.code_revision_files file
+    WHERE file.revision_id = revision.id
+      AND file.index_status = 'indexed'
+      AND file.byte_size = 3
+      -- SHA-256 of the three bytes EF BB BF.
+      AND file.content_sha256 = 'f1945cd6c19e56b3c1c78943ef5ec18116907a4ca1efc40a57d48ab1db7adfc5'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.code_index_generations generation
+    WHERE generation.revision_id = revision.id
+      AND generation.status IN ('ready', 'active', 'retiring')
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.memory_code_evidence evidence
+    WHERE evidence.cited_revision_id = revision.id
+       OR evidence.validated_revision_id = revision.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.memory_proposal_code_evidence evidence
+    WHERE evidence.cited_revision_id = revision.id
+  );
 
 REVOKE ALL ON FUNCTION
   lore.can_read_workspace(uuid),

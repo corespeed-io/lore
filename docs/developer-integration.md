@@ -279,12 +279,21 @@ Self-host operators enable indexing by setting a server-side registry, for examp
 export LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath":"/absolute/path/to/lore","workspaceIds":["<workspace-uuid>"]}}'
 ```
 
-`workspaceIds` names the Workspaces whose Actors may index and read that
-repository. An entry without it is served only when `AUTH_MODE` is `password` or
+`workspaceIds` names the Workspaces whose Actors may enqueue and index that
+repository. It does not gate reads: a Workspace keeps searching the Code it indexed
+earlier (see [binding existing repositories](operations.md#binding-existing-repositories-after-a-proxy-mode-upgrade)).
+An entry without it is served only when `AUTH_MODE` is `password` or
 `none` (a single operator); in `proxy` mode it is ignored with a server-side
 warning, so a multi-user deployment must bind every repository. A Workspace outside
 the binding gets the same "not configured" error as an unknown key. The maintenance
 worker reads the same variable and resolves paths from it rather than from the job.
+A job whose key that worker does not serve to the job's Workspace retries rather
+than ending, and an invalid value disables only the worker's Code Indexing.
+
+Poll `lore_code_index_status` (or `GET /api/v1/code/index-jobs/{id}`) for `dead`. A dead job re-arms
+when you enqueue the same commit again at least 15 minutes after it died; a
+`cancelled` job re-arms at once. Inside the cooldown, enqueue returns the dead job
+unchanged with its `lastError`.
 
 The model supplies `repositoryKey` and a full 40/64-character commit OID. It cannot
 supply or discover `repositoryPath`; an empty registry disables enqueue. Native

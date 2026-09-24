@@ -5,8 +5,12 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { afterEach, expect, onTestFinished, test } from "vitest";
-import { CodeIndexValidationError, GitOperationalError } from "@/modules/code/indexing/errors";
-import { gitFailure } from "@/modules/code/indexing/git";
+import {
+  CodeIndexValidationError,
+  CodeRepositoryUnavailableError,
+  GitOperationalError,
+} from "@/modules/code/indexing/errors";
+import { gitFailure, resolveGitCommit } from "@/modules/code/indexing/git";
 import type { CodeIndexMaintenanceLog } from "@/modules/code/indexing/maintenance";
 import {
   classifyCodeIndexFailure,
@@ -36,12 +40,21 @@ afterEach(() => {
   }
 });
 
-async function committedRepository(files: Record<string, string>) {
-  const repositoryPath = await mkdtemp(join(tmpdir(), "lore-code-index-jobs-"));
+async function temporaryDirectory(): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), "lore-code-index-jobs-"));
   onTestFinished(async () => {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await rm(path, { force: true, recursive: true });
   });
+  return path;
+}
+
+async function committedRepository(files: Record<string, string>) {
+  const repositoryPath = await temporaryDirectory();
   await execFileAsync("git", ["init", "--quiet", repositoryPath]);
+  return { repositoryPath, commitOid: await commitFiles(repositoryPath, files) };
+}
+
+async function commitFiles(repositoryPath: string, files: Record<string, string>) {
   for (const [path, content] of Object.entries(files)) {
     await mkdir(dirname(join(repositoryPath, path)), { recursive: true });
     await writeFile(join(repositoryPath, path), content, "utf8");
@@ -62,7 +75,17 @@ async function committedRepository(files: Record<string, string>) {
     "fixture",
   ]);
   const { stdout } = await execFileAsync("git", ["-C", repositoryPath, "rev-parse", "HEAD"]);
-  return { repositoryPath, commitOid: stdout.trim() };
+  return stdout.trim();
+}
+
+/** Clears a retried job's backoff so the next run can claim it at once. */
+async function claimableNow(context: MemoryTestContext, jobId: string): Promise<void> {
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE code_index_jobs SET available_at = now() WHERE id = $1 AND status = 'pending'",
+      [jobId],
+    ),
+  );
 }
 
 function registry(
@@ -166,7 +189,7 @@ test("a lease that is still valid on its final attempt is not retired", async ()
   await expect(jobRow(context, queued.id)).resolves.toMatchObject({ status: "processing" });
 });
 
-test("re-enqueueing a dead job re-arms it for the new requester", async () => {
+test("re-enqueueing a dead job past its cooldown re-arms it for the new requester", async () => {
   const context = await createMemoryTestContext();
   const { repositoryPath, commitOid } = await committedRepository({
     "src/rearm.ts": 'export const rearmMarker = "indexed after re-arm";\n',
@@ -176,7 +199,8 @@ test("re-enqueueing a dead job re-arms it for the new requester", async () => {
   await context.adminDatabase.transaction((transaction) =>
     transaction.query(
       `UPDATE code_index_jobs
-       SET status = 'dead', attempt_count = max_attempts, completed_at = now(),
+       SET status = 'dead', attempt_count = max_attempts,
+           completed_at = now() - interval '16 minutes',
            available_at = now() + interval '1 hour', last_error = 'earlier failure'
        WHERE id = $1`,
       [queued.id],
@@ -234,6 +258,62 @@ test("re-enqueueing a runnable job leaves its requester and retry state untouche
     status: "pending",
     requested_by_user_id: context.alice.userId,
     last_error: "Code Index processing failed",
+  });
+});
+
+test("a dead job re-arms only after its 15-minute cooldown, a cancelled job at once", async () => {
+  const context = await createMemoryTestContext();
+  const { repositoryPath, commitOid } = await committedRepository({
+    "src/cooldown.ts": "export const cooldown = true;\n",
+  });
+  const queue = createCodeIndexQueueModule(context.database, registry(repositoryPath));
+  const queued = await queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid });
+  const endAs = (status: "cancelled" | "dead", age: string) =>
+    context.adminDatabase.transaction((transaction) =>
+      transaction.query(
+        `UPDATE code_index_jobs
+         SET status = $2::code_index_job_status, attempt_count = max_attempts,
+             completed_at = now() - $3::interval, last_error = 'earlier failure'
+         WHERE id = $1`,
+        [queued.id, status, age],
+      ),
+    );
+
+  // Inside the cooldown the dead job comes back as it is, still Alice's.
+  for (const age of ["0 seconds", "14 minutes 59 seconds"]) {
+    await endAs("dead", age);
+    await expect(
+      queue.enqueue(context.bob, { repositoryKey: REPOSITORY_KEY, commitOid }),
+      age,
+    ).resolves.toMatchObject({
+      id: queued.id,
+      status: "dead",
+      attemptCount: 5,
+      lastError: "earlier failure",
+    });
+    await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+      status: "dead",
+      requested_by_user_id: context.alice.userId,
+      last_error: "earlier failure",
+    });
+  }
+
+  // Past it, the same request re-arms the job for Bob with a fresh budget.
+  await endAs("dead", "15 minutes 1 second");
+  await expect(
+    queue.enqueue(context.bob, { repositoryKey: REPOSITORY_KEY, commitOid }),
+  ).resolves.toMatchObject({ id: queued.id, status: "pending", attemptCount: 0, lastError: null });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    requested_by_user_id: context.bob.userId,
+  });
+
+  // A cancelled job never waits.
+  await endAs("cancelled", "0 seconds");
+  await expect(
+    queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid }),
+  ).resolves.toMatchObject({ id: queued.id, status: "pending", attemptCount: 0, lastError: null });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    requested_by_user_id: context.alice.userId,
   });
 });
 
@@ -382,7 +462,8 @@ test("only a write-authorized Actor of the repository's Workspace can enqueue or
   await context.adminDatabase.transaction((transaction) =>
     transaction.query(
       `UPDATE code_index_jobs
-       SET status = 'dead', attempt_count = max_attempts, completed_at = now()
+       SET status = 'dead', attempt_count = max_attempts,
+           completed_at = now() - interval '1 hour'
        WHERE id = $1`,
       [queued.id],
     ),
@@ -482,37 +563,99 @@ test("re-enqueue honours an orphaned job's live lease for up to an hour", async 
   });
 });
 
-test("a commit missing from the repository fails terminally on its first attempt", async () => {
+test("a commit not yet fetched into the local clone retries and indexes once it arrives", async () => {
   const context = await createMemoryTestContext();
-  const { repositoryPath } = await committedRepository({ "src/index.ts": "export const a = 1;\n" });
-  const repositories = registry(repositoryPath);
-  const queue = createCodeIndexQueueModule(context.database, repositories);
-  const queued = await queue.enqueue(context.alice, {
-    repositoryKey: REPOSITORY_KEY,
-    commitOid: "f".repeat(40),
+  const origin = await committedRepository({ "src/early.ts": "export const early = 1;\n" });
+  const clonePath = join(await temporaryDirectory(), "clone");
+  await execFileAsync("git", ["clone", "--quiet", origin.repositoryPath, clonePath]);
+  const lateCommit = await commitFiles(origin.repositoryPath, {
+    "src/late.ts": 'export const lateMarker = "fetched after enqueue";\n',
   });
+  const repositories = registry(clonePath);
+  const queued = await createCodeIndexQueueModule(context.database, repositories).enqueue(
+    context.alice,
+    { repositoryKey: REPOSITORY_KEY, commitOid: lateCommit },
+  );
   const logs: CodeIndexMaintenanceLog[] = [];
+  const maintenance = createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
+    repositories,
+    logger: (entry) => logs.push(entry),
+  });
 
-  await expect(
-    createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
-      repositories,
-      logger: (entry) => logs.push(entry),
-    }).run(queued.id),
-  ).resolves.toEqual({ status: "dead", jobId: queued.id });
-
-  const row = await jobRow(context, queued.id);
-  expect(row).toMatchObject({
-    status: "dead",
+  await expect(maintenance.run(queued.id)).resolves.toEqual({
+    status: "retry",
+    jobId: queued.id,
+    retryAfterSeconds: 30,
+  });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "pending",
     attempt_count: 1,
     last_error: "Unable to read the requested Git revision",
   });
+
+  await execFileAsync("git", ["-C", clonePath, "fetch", "--quiet", "origin"]);
+  await claimableNow(context, queued.id);
+  await expect(maintenance.run(queued.id)).resolves.toMatchObject({
+    status: "complete",
+    jobId: queued.id,
+  });
+  await expect(
+    createCodeIndexModule(context.database).search(context.alice, {
+      repositoryKey: REPOSITORY_KEY,
+      commitOid: lateCommit,
+      query: "lateMarker",
+    }),
+  ).resolves.toMatchObject([{ path: "src/late.ts" }]);
   expect(logs).toEqual([
-    {
-      event: "job_dead",
+    { event: "job_retry", jobId: queued.id, attempt: 1, errorClass: "GitOperationalError" },
+    { event: "job_complete", jobId: queued.id, attempt: 2 },
+  ]);
+  expect(JSON.stringify(logs)).not.toContain(clonePath);
+});
+
+test("a commit that never arrives backs off through its retry budget, then ends dead", async () => {
+  const context = await createMemoryTestContext();
+  const { repositoryPath } = await committedRepository({ "src/index.ts": "export const a = 1;\n" });
+  const repositories = registry(repositoryPath);
+  const queued = await createCodeIndexQueueModule(context.database, repositories).enqueue(
+    context.alice,
+    { repositoryKey: REPOSITORY_KEY, commitOid: "f".repeat(40) },
+  );
+  const logs: CodeIndexMaintenanceLog[] = [];
+  const maintenance = createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
+    repositories,
+    logger: (entry) => logs.push(entry),
+  });
+
+  for (const [attempt, retryAfterSeconds] of [30, 60, 120, 240].entries()) {
+    await expect(maintenance.run(queued.id)).resolves.toEqual({
+      status: "retry",
       jobId: queued.id,
-      attempt: 1,
-      errorClass: "CodeIndexValidationError",
-    },
+      retryAfterSeconds,
+    });
+    await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+      status: "pending",
+      attempt_count: attempt + 1,
+      last_error: "Unable to read the requested Git revision",
+    });
+    // The backoff holds: the job is not claimable again until it elapses.
+    await expect(maintenance.run(queued.id)).resolves.toEqual({ status: "idle" });
+    await claimableNow(context, queued.id);
+  }
+  await expect(maintenance.run(queued.id)).resolves.toEqual({ status: "dead", jobId: queued.id });
+
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "dead",
+    attempt_count: 5,
+    last_error: "Unable to read the requested Git revision",
+    completed_at: expect.anything(),
+  });
+  expect(logs.map((entry) => [entry.event, entry.attempt, entry.errorClass])).toEqual([
+    ["job_retry", 1, "GitOperationalError"],
+    ["job_retry", 2, "GitOperationalError"],
+    ["job_retry", 3, "GitOperationalError"],
+    ["job_retry", 4, "GitOperationalError"],
+    ["job_dead", 5, "GitOperationalError"],
   ]);
   expect(JSON.stringify(logs)).not.toContain(repositoryPath);
   await expect(
@@ -521,6 +664,37 @@ test("a commit missing from the repository fails terminally on its first attempt
     status: "dead",
     lastError: "Unable to read the requested Git revision",
   });
+});
+
+test("a repository path that does not resolve yet retries until the clone is in place", async () => {
+  const context = await createMemoryTestContext();
+  const origin = await committedRepository({
+    "src/mounted.ts": 'export const mountedMarker = "read after the mount";\n',
+  });
+  const mountPath = join(await temporaryDirectory(), "not-mounted-yet");
+  const repositories = registry(mountPath);
+  const queued = await createCodeIndexQueueModule(context.database, repositories).enqueue(
+    context.alice,
+    { repositoryKey: REPOSITORY_KEY, commitOid: origin.commitOid },
+  );
+  const logs: CodeIndexMaintenanceLog[] = [];
+  const maintenance = createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
+    repositories,
+    logger: (entry) => logs.push(entry),
+  });
+
+  await expect(maintenance.run(queued.id)).resolves.toMatchObject({ status: "retry" });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "pending",
+    attempt_count: 1,
+    last_error: "The configured repository is not available",
+  });
+
+  await execFileAsync("git", ["clone", "--quiet", origin.repositoryPath, mountPath]);
+  await claimableNow(context, queued.id);
+  await expect(maintenance.run(queued.id)).resolves.toMatchObject({ status: "complete" });
+  expect(logs.map((entry) => entry.event)).toEqual(["job_retry", "job_complete"]);
+  expect(JSON.stringify(logs)).not.toContain(mountPath);
 });
 
 test("an OID/content conflict fails terminally instead of spending its retries", async () => {
@@ -630,29 +804,95 @@ test("failure classification keeps deterministic messages only when they reveal 
       serverPath,
     ]),
   ).toMatchObject({ terminal: false });
+  // A recognized retryable failure keeps its fixed message, still subject to the path guard.
+  expect(
+    classifyCodeIndexFailure(new CodeRepositoryUnavailableError(CODE_REPOSITORY_NOT_CONFIGURED), [
+      serverPath,
+    ]),
+  ).toEqual({
+    terminal: false,
+    detail: CODE_REPOSITORY_NOT_CONFIGURED,
+    errorClass: "CodeRepositoryUnavailableError",
+  });
+  expect(
+    classifyCodeIndexFailure(new GitOperationalError(`cannot open ${serverPath}`), [serverPath]),
+  ).toEqual({
+    terminal: false,
+    detail: "Code Index processing failed",
+    errorClass: "GitOperationalError",
+  });
 });
 
-test("transient Git failures stay retryable while revision failures end the job", () => {
+test("a persisted failure detail carries no control characters and keeps the column bound", () => {
+  // Committer-chosen repository-relative paths reach terminal messages verbatim.
+  const hostile = "src/tab\there\nnew\u001b[2Jline\u007fdel\u009bcsi.ts";
+  expect(
+    classifyCodeIndexFailure(
+      new CodeIndexValidationError(`Invalid repository-relative path: ${hostile}`),
+      [],
+    ),
+  ).toMatchObject({
+    terminal: true,
+    detail: "Invalid repository-relative path: src/tab�here�new�[2Jline�del�csi.ts",
+  });
+  // The bound counts characters as SQL does, so an astral character is never split.
+  const long = classifyCodeIndexFailure(
+    new CodeIndexValidationError(`Duplicate source path: ${"\u{1F600}".repeat(1_200)}`),
+    [],
+  ).detail;
+  expect(Array.from(long)).toHaveLength(1_000);
+  expect(long.endsWith("\u{1F600}")).toBe(true);
+  expect(
+    classifyCodeIndexFailure(new CodeIndexValidationError(`\t${"x".repeat(1_500)}`), []).detail,
+  ).toBe("x".repeat(1_000));
+});
+
+test("Git reads the local clone can outlive stay retryable while a present revision's failures end the job", async () => {
   const message = "Unable to read the requested Git revision";
-  // Resource exhaustion or a killed process: a later attempt can succeed.
-  for (const cause of [{ code: "EAGAIN" }, { code: "EMFILE" }, { signal: "SIGKILL" }]) {
+  // Resource exhaustion, a killed process, or a missing path or Git executable.
+  for (const cause of [
+    { code: "EAGAIN" },
+    { code: "EMFILE" },
+    { code: "ENOENT" },
+    { signal: "SIGKILL" },
+  ]) {
     const failure = gitFailure(cause, message);
     expect(failure).toBeInstanceOf(GitOperationalError);
     expect(classifyCodeIndexFailure(failure, [])).toMatchObject({
       terminal: false,
+      detail: message,
       errorClass: "GitOperationalError",
     });
   }
-  // Git exiting non-zero, a missing path, or the output bound: the revision is unreadable.
+  // Git exiting non-zero over a present commit, or the output bound: identical on every retry.
   for (const cause of [
     { code: 128 },
-    { code: "ENOENT" },
     { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
     new Error("fatal: bad object"),
   ]) {
     const failure = gitFailure(cause, message);
     expect(failure).toBeInstanceOf(CodeIndexValidationError);
     expect(classifyCodeIndexFailure(failure, [])).toMatchObject({ terminal: true });
+  }
+  // A path that does not resolve yet, a directory that is not a repository yet (a mount
+  // point before its volume), and a commit that is not fetched yet all retry.
+  const { repositoryPath } = await committedRepository({ "src/a.ts": "export const a = 1;\n" });
+  const unmounted = await temporaryDirectory();
+  for (const [path, detail] of [
+    [join(unmounted, "missing"), "The configured repository is not available"],
+    [unmounted, message],
+    [repositoryPath, message],
+  ] as const) {
+    const failure = await resolveGitCommit(path, "f".repeat(40)).then(
+      () => new Error("Expected resolution to fail"),
+      (error: unknown) => error,
+    );
+    expect(failure, path).toBeInstanceOf(GitOperationalError);
+    expect(classifyCodeIndexFailure(failure, [path])).toEqual({
+      terminal: false,
+      detail,
+      errorClass: "GitOperationalError",
+    });
   }
 });
 
@@ -870,42 +1110,116 @@ test("the worker indexes from its own registry and ignores a tampered job path",
   ).resolves.toMatchObject([{ path: "src/trusted.ts" }]);
 });
 
-test("a key removed from the worker registry or no longer bound to the Workspace fails terminally", async () => {
+test("a key this worker's registry does not serve to the Workspace retries until a worker does", async () => {
   const context = await createMemoryTestContext();
   const { repositoryPath, commitOid } = await committedRepository({
-    "src/removed.ts": "export const removed = true;\n",
+    "src/rolled.ts": 'export const rolledMarker = "served after the registry update";\n',
   });
   const queue = createCodeIndexQueueModule(context.database, registry(repositoryPath));
-  const removedJob = await queue.enqueue(context.alice, {
-    repositoryKey: REPOSITORY_KEY,
-    commitOid,
-  });
+  const queued = await queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid });
   const logs: CodeIndexMaintenanceLog[] = [];
-  const withoutKey = createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
-    repositories: { "corespeed/other": { displayName: "Other", repositoryPath: "/srv/other" } },
-    logger: (entry) => logs.push(entry),
+  const worker = (repositories: ConfiguredCodeRepositories) =>
+    createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
+      repositories,
+      logger: (entry) => logs.push(entry),
+    });
+  // A worker whose registry lacks the key, and one that binds it to another Workspace:
+  // a rolling registry update, or workers with different registries.
+  const withoutKey = worker({
+    "corespeed/other": { displayName: "Other", repositoryPath: "/srv/other" },
   });
+  const rebound = worker(registry(repositoryPath, [context.carol.workspaceId]));
 
-  await expect(withoutKey.run(removedJob.id)).resolves.toEqual({
-    status: "dead",
-    jobId: removedJob.id,
+  await expect(withoutKey.run(queued.id)).resolves.toEqual({
+    status: "retry",
+    jobId: queued.id,
+    retryAfterSeconds: 30,
   });
-  await expect(jobRow(context, removedJob.id)).resolves.toMatchObject({
-    status: "dead",
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "pending",
     attempt_count: 1,
     last_error: CODE_REPOSITORY_NOT_CONFIGURED,
   });
-
-  // Re-arm, then run under a registry that binds the key to another Workspace.
-  await queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid });
-  const rebound = createCodeIndexMaintenanceModule(context.maintenanceDatabase, {
-    repositories: registry(repositoryPath, [context.carol.workspaceId]),
-    logger: (entry) => logs.push(entry),
+  await claimableNow(context, queued.id);
+  await expect(rebound.run(queued.id)).resolves.toEqual({
+    status: "retry",
+    jobId: queued.id,
+    retryAfterSeconds: 60,
   });
-  await expect(rebound.run(removedJob.id)).resolves.toMatchObject({ status: "dead" });
-  await expect(jobRow(context, removedJob.id)).resolves.toMatchObject({
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "pending",
+    attempt_count: 2,
     last_error: CODE_REPOSITORY_NOT_CONFIGURED,
   });
-  expect(logs.map((entry) => entry.event)).toEqual(["job_dead", "job_dead"]);
+
+  // Only the exhausted budget ends it dead.
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE code_index_jobs
+       SET attempt_count = max_attempts - 1, available_at = now()
+       WHERE id = $1`,
+      [queued.id],
+    ),
+  );
+  await expect(withoutKey.run(queued.id)).resolves.toEqual({ status: "dead", jobId: queued.id });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "dead",
+    attempt_count: 5,
+    last_error: CODE_REPOSITORY_NOT_CONFIGURED,
+  });
+
+  // After the cooldown, re-enqueue re-arms it for a worker that serves the key.
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE code_index_jobs SET completed_at = now() - interval '16 minutes' WHERE id = $1",
+      [queued.id],
+    ),
+  );
+  await queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid });
+  await expect(
+    worker(registry(repositoryPath, [context.alice.workspaceId])).run(queued.id),
+  ).resolves.toMatchObject({ status: "complete", jobId: queued.id });
+  await expect(
+    createCodeIndexModule(context.database).search(context.alice, {
+      repositoryKey: REPOSITORY_KEY,
+      commitOid,
+      query: "rolledMarker",
+    }),
+  ).resolves.toMatchObject([{ path: "src/rolled.ts" }]);
+  expect(logs.map((entry) => [entry.event, entry.errorClass])).toEqual([
+    ["job_retry", "CodeRepositoryUnavailableError"],
+    ["job_retry", "CodeRepositoryUnavailableError"],
+    ["job_dead", "CodeRepositoryUnavailableError"],
+    ["job_complete", undefined],
+  ]);
   expect(JSON.stringify(logs)).not.toContain(repositoryPath);
+});
+
+test("a committer-chosen path with control characters ends dead with an inert detail", async () => {
+  const context = await createMemoryTestContext();
+  const { repositoryPath, commitOid } = await committedRepository({
+    "src/ok.ts": "export const ok = 1;\n",
+    "src/tab\there\nnew\u001b[2Jline.ts": "export const hostile = 1;\n",
+  });
+  const repositories = registry(repositoryPath);
+  const queued = await createCodeIndexQueueModule(context.database, repositories).enqueue(
+    context.alice,
+    { repositoryKey: REPOSITORY_KEY, commitOid },
+  );
+
+  await expect(
+    createCodeIndexMaintenanceModule(context.maintenanceDatabase, { repositories }).run(queued.id),
+  ).resolves.toEqual({ status: "dead", jobId: queued.id });
+  const job = await createCodeIndexModule(context.database).getIndexJob(context.alice, {
+    jobId: queued.id,
+  });
+  expect(job).toMatchObject({ status: "dead", attemptCount: 1 });
+  // Whether Git quotes the path or hands it over raw, no reader of job status receives a
+  // tab, line break, or terminal escape.
+  expect(job.lastError).toMatch(/^Invalid repository-relative path: /);
+  const controls = Array.from(job.lastError ?? "").filter((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+  });
+  expect(controls).toEqual([]);
 });

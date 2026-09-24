@@ -8,6 +8,7 @@ import { expect, onTestFinished, test } from "vitest";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import {
   CodeIndexAccessDeniedError,
+  CodeIndexRetryableError,
   CodeIndexValidationError,
   CodeRevisionConflictError,
 } from "@/modules/code/indexing/errors";
@@ -165,21 +166,27 @@ test("indexes the exact committed Git tree instead of dirty working-tree bytes",
   ).rejects.toBeInstanceOf(CodeRevisionConflictError);
 });
 
-test("rejects a well-formed Git OID that does not exist in the repository", async () => {
+test("rejects a well-formed Git OID that is not in the repository as retryable", async () => {
   const context = await createMemoryTestContext();
   const code = createCodeIndexModule(context.database);
   const repositoryPath = await temporaryGitRepository();
   await writeRepositoryFile(repositoryPath, "index.ts", "export const value = 1;\n");
   await commitGitRepository(repositoryPath);
 
-  await expect(
-    code.indexGitRevision(context.alice, {
+  // The commit may simply not be fetched yet, so a job keeps its retry budget.
+  const failure = await code
+    .indexGitRevision(context.alice, {
       repositoryKey: "corespeed/missing-commit",
       displayName: "Missing commit",
       repositoryPath,
       commitOid: "f".repeat(40),
-    }),
-  ).rejects.toBeInstanceOf(CodeIndexValidationError);
+    })
+    .then(
+      () => new Error("Expected indexing to fail"),
+      (error: unknown) => error,
+    );
+  expect(failure).toBeInstanceOf(CodeIndexRetryableError);
+  expect(failure).toMatchObject({ message: "Unable to read the requested Git revision" });
 });
 
 test("queues an exact Git revision without publishing partial search results", async () => {
