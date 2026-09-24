@@ -1,5 +1,5 @@
 export const RETRIEVAL_FEEDBACK_CANDIDATE_POLICY = {
-  revision: "iterative-tail-reserve-v2",
+  revision: "iterative-tail-reserve-v3",
   targetShare: 0.2,
   minimumSlots: 1,
 } as const;

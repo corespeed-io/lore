@@ -1563,6 +1563,49 @@ test("Bounded retrieval feedback can follow an iterative three-hop chain", async
   await testContext.close();
 });
 
+test("Deeper retrieval feedback keeps earlier bridge Memories when the candidate pool is full", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const firstHop = await memories.remember(testContext.alice, {
+    content: "Alicevra's spouse is Bobnix.",
+  });
+  // Nine weaker first-pass matches fill the ten-candidate pool, so the feedback
+  // reserve is its trailing two slots.
+  for (let index = 1; index <= 9; index += 1) {
+    await memories.remember(testContext.alice, {
+      content: `The spouse's employer filed note ${index}.`,
+    });
+  }
+  const secondHop = await memories.remember(testContext.alice, {
+    content: "Bobnix's employer is Acmequill.",
+  });
+  await memories.remember(testContext.alice, {
+    content: "Acmequill's headquarters moved twice.",
+  });
+  const thirdHop = await memories.remember(testContext.alice, {
+    content: "Acmequill's headquarters are in Berlinora.",
+  });
+  const query = "Where is Alicevra's spouse's employer headquartered?";
+  const search = (retrievalFeedbackQueries: number) =>
+    createMemoryModule(testContext.database, { retrievalFeedbackQueries }).search(
+      testContext.alice,
+      { query, limit: 10 },
+    );
+
+  const firstPass = (await search(0)).map((result) => result.memory.id);
+  const depthOne = (await search(1)).map((result) => result.memory.id);
+  const depthTwo = (await search(2)).map((result) => result.memory.id);
+
+  expect(firstPass).toHaveLength(10);
+  expect(firstPass[0]).toBe(firstHop.id);
+  expect(firstPass).not.toContain(secondHop.id);
+  expect(depthOne).toEqual([...firstPass.slice(0, 9), secondHop.id]);
+  // Round two finds two novel Memories; it fills the reserve's free slot and
+  // must not evict round one's bridge to make room for both.
+  expect(depthTwo).toEqual([...firstPass.slice(0, 8), secondHop.id, thirdHop.id]);
+  await testContext.close();
+});
+
 test("Memory list contains shared and owner-private Memories but no private neighbors", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);

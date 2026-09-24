@@ -1141,6 +1141,11 @@ export function createMemoryModule(
       let feedbackSeedQuery = query;
       let feedbackSources = fusionResults;
       const feedbackSourceIds = new Set<string>();
+      // The first pass stays fixed across rounds; every round's candidates join
+      // one shared feedback reserve in discovery order, so a later round never
+      // evicts an earlier round's bridge Memory.
+      let firstPassResults = fusionResults;
+      let feedbackPool: MemorySearchResult[] = [];
       for (let round = 0; round < retrievalFeedbackQueries; round += 1) {
         const feedback = feedbackRetrievalQueries(feedbackSeedQuery, feedbackSources, 1)[0];
         if (!feedback) break;
@@ -1162,7 +1167,7 @@ export function createMemoryModule(
                AND ($6::jsonb IS NULL OR metadata @> $6::jsonb)`,
             [
               storageScope.partitionId,
-              fusionResults.map((result) => result.memory.id),
+              [...firstPassResults, ...feedbackPool].map((result) => result.memory.id),
               scope,
               updatedAfter,
               updatedBefore,
@@ -1193,11 +1198,11 @@ export function createMemoryModule(
             visibleMemoryIds: new Set(stillVisible.rows.map((row) => row.id)),
           };
         });
-        fusionResults = appendFeedbackResults(
-          fusionResults.filter((result) => feedbackRead.visibleMemoryIds.has(result.memory.id)),
-          feedbackRead.results,
-          resultLimit,
-        );
+        const isStillVisible = (result: MemorySearchResult) =>
+          feedbackRead.visibleMemoryIds.has(result.memory.id);
+        firstPassResults = firstPassResults.filter(isStillVisible);
+        feedbackPool = [...feedbackPool.filter(isStillVisible), ...feedbackRead.results];
+        fusionResults = appendFeedbackResults(firstPassResults, feedbackPool, resultLimit);
         if (!feedbackRead.results.length) break;
         feedbackSeedQuery = feedback.query;
         feedbackSources = feedbackRead.results;
