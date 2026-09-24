@@ -27,6 +27,14 @@ import {
 } from "@/server/api/input";
 import { observeOperation } from "@/server/telemetry/telemetry";
 
+/**
+ * An Episode may reach its content and metadata limits with every UTF-16 unit sent
+ * as a six-byte `\uXXXX` escape (the default of Python's json.dumps), so its body
+ * bound allows that plus 1 MiB of envelope, above the default JSON body bound.
+ */
+const MAX_EPISODE_BODY_BYTES =
+  6 * (MAX_EPISODE_CONTENT_CHARACTERS + MAX_EPISODE_METADATA_CHARACTERS) + 1024 * 1024;
+
 function episodeKind(value: unknown, optional = false): EpisodeKind | undefined {
   if (optional && (value === undefined || value === null || value === "")) return undefined;
   if (
@@ -130,7 +138,7 @@ export const episodes = new Hono<ApiEnv>()
     const observations = createObservationModule(await c.var.database());
     const request = c.req.raw;
     const actor = await c.var.resolveActor();
-    const body = await jsonObject(request);
+    const body = await jsonObject(request, MAX_EPISODE_BODY_BYTES);
     const input = {
       kind: episodeKind(body.kind) as EpisodeKind,
       scope: memoryScope(body.scope) ?? "private",
