@@ -392,6 +392,28 @@ test("CLI returns a safe API exit code without printing the credential", async (
   expect(captured.stderr.join("")).not.toContain(AGENT_TOKEN);
 });
 
+test("CLI names a malformed gateway secret without printing it", async () => {
+  const captured = captureIo();
+  const fetchMock = vi.fn();
+  const exitCode = await runLoreCli(["memory", "list"], {
+    environment: {
+      LORE_URL: "https://lore.example.test",
+      LORE_WORKSPACE_ID: WORKSPACE_ID,
+      LORE_AGENT_TOKEN: AGENT_TOKEN,
+      LORE_ACCESS_CLIENT_ID: "client-id.access",
+      LORE_ACCESS_CLIENT_SECRET: "leaked-secret\ninjected: 1",
+    },
+    fetch: fetchMock,
+    io: captured.io,
+  });
+
+  expect(exitCode).toBe(2);
+  expect(captured.stderr.join("")).toBe(
+    "lore: LORE_ACCESS_CLIENT_SECRET must contain 1 to 4096 visible ASCII characters\n",
+  );
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("CLI reports network and refused-redirect failures as runtime errors", async () => {
   const captured = captureIo();
   const exitCode = await runLoreCli(["memory", "list"], {
