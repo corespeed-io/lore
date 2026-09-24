@@ -796,7 +796,7 @@ export function createMemoryProposalsModule(
             chunksChanged: applied.chunksChanged,
           };
         });
-        if (reviewed?.chunksChanged) notifyMaintenance(reviewed.jobId);
+        notifyMaintenance(reviewed?.jobId ?? null);
         return reviewed ? { proposal: reviewed.proposal, memory: reviewed.memory } : null;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
