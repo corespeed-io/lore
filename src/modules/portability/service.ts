@@ -119,8 +119,8 @@ interface ExportMemoryRow {
   content: string;
   metadata: Record<string, unknown>;
   version: number;
-  created_at: string;
-  updated_at: string;
+  created_at: Date | string;
+  updated_at: Date | string;
   running_bytes: number | string;
 }
 
@@ -131,8 +131,8 @@ interface ExportLinkRow {
   kind: string;
   weight: number;
   metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
+  created_at: Date | string;
+  updated_at: Date | string;
   running_bytes: number | string;
 }
 
@@ -185,11 +185,83 @@ async function survivingImportedMemories(
   return new Map(provenance.rows.map((row) => [row.source_memory_id, row.memory_id]));
 }
 
-function timestamp(value: unknown, name: string): string {
-  const parsed = new Date(String(value));
-  if (!Number.isFinite(parsed.getTime()))
-    throw new PortabilityValidationError(`${name} is invalid`);
-  return parsed.toISOString();
+/**
+ * A database timestamp as archive text. The `pg` and PGlite drivers return a Date,
+ * whose ISO form keeps its milliseconds (`String(Date)` would drop them); text is
+ * already exact and is kept as it is.
+ */
+function exportedTimestamp(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+// RFC 3339 `date-time`, as the archive schema publishes it, to PostgreSQL's
+// microsecond precision.
+const ARCHIVE_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
+// PostgreSQL refuses a time zone displacement beyond 15:59.
+const MAX_OFFSET_HOURS = 15;
+
+/**
+ * Validate an archive timestamp without JavaScript's lenient Date parsing, which
+ * rolls 2026-02-30 into March and accepts years and offsets PostgreSQL rejects.
+ * The text is returned unchanged, so its full precision reaches import provenance.
+ */
+function importedTimestamp(value: unknown, name: string): string {
+  const match = typeof value === "string" ? ARCHIVE_TIMESTAMP.exec(value) : null;
+  if (typeof value !== "string" || !match) {
+    throw new PortabilityValidationError(`${name} must be an RFC 3339 timestamp`);
+  }
+  const [year, month, day, hour, minute, second, offsetHours, offsetMinutes] = match
+    .slice(1)
+    .map((field) => Number(field ?? 0));
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (
+    year < 1 ||
+    daysInMonth === undefined ||
+    day < 1 ||
+    day > daysInMonth ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHours > MAX_OFFSET_HOURS ||
+    offsetMinutes > 59
+  ) {
+    throw new PortabilityValidationError(`${name} is out of range`);
+  }
+  return value;
+}
+
+// PostgreSQL refuses NUL and unpaired UTF-16 surrogates in text and JSONB.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+function storableText(value: string): boolean {
+  return !value.includes("\0") && !LONE_SURROGATE.test(value);
+}
+
+/**
+ * Reject archive JSON that only PostgreSQL would refuse, at write time, which a dry
+ * run never reaches: NUL or an unpaired surrogate in any key or string. An own
+ * `__proto__` key is refused too, because the metadata schema drops it while the
+ * checksum covers it, so the stored metadata would differ from the checksummed one.
+ */
+function assertStorableJson(value: unknown, name: string): void {
+  try {
+    JSON.stringify(value, (key: string, item: unknown) => {
+      if (key === "__proto__") {
+        throw new PortabilityValidationError(`${name} must not contain a __proto__ key`);
+      }
+      if (!storableText(key) || (typeof item === "string" && !storableText(item))) {
+        throw new PortabilityValidationError(`${name} contains a NUL character or invalid Unicode`);
+      }
+      return item;
+    });
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new PortabilityValidationError(`${name} is too deeply nested`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 function uuid(value: unknown, name: string): string {
@@ -217,6 +289,7 @@ function metadata(value: unknown, name: string): Record<string, unknown> {
       `${name}: ${parsed.error.issues[0]?.message ?? "metadata is invalid"}`,
     );
   }
+  assertStorableJson(value, name);
   return parsed.data;
 }
 
@@ -231,6 +304,20 @@ async function archiveChecksum(archive: WorkspaceArchive): Promise<string> {
   return mutationRequestHash(archivePayload(archive));
 }
 
+/** The checksum of an archive supplied for import, whose fields may be arbitrarily deep. */
+async function importedArchiveChecksum(archive: WorkspaceArchive): Promise<string> {
+  try {
+    return await archiveChecksum(archive);
+  } catch (error) {
+    // The checksum covers every field, including unknown ones validation ignores, so
+    // deep nesting there still exhausts the canonical JSON recursion.
+    if (error instanceof RangeError) {
+      throw new PortabilityValidationError("archive is too deeply nested", { cause: error });
+    }
+    throw error;
+  }
+}
+
 function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
   if (!archive || typeof archive !== "object") {
     throw new PortabilityValidationError("archive is required");
@@ -243,7 +330,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     "manifest.sourceDeploymentId",
   );
   const sourceWorkspaceId = uuid(archive.manifest.sourceWorkspaceId, "manifest.sourceWorkspaceId");
-  const exportedAt = timestamp(archive.manifest.exportedAt, "manifest.exportedAt");
+  const exportedAt = importedTimestamp(archive.manifest.exportedAt, "manifest.exportedAt");
   if (!/^[0-9a-f]{64}$/.test(archive.manifest.checksum)) {
     throw new PortabilityValidationError("manifest.checksum must be lowercase SHA-256");
   }
@@ -294,8 +381,8 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
       throw error;
     }
     const normalizedMetadata = metadata(memory.metadata, `memories[${index}].metadata`);
-    const createdAt = timestamp(memory.createdAt, `memories[${index}].createdAt`);
-    const updatedAt = timestamp(memory.updatedAt, `memories[${index}].updatedAt`);
+    const createdAt = importedTimestamp(memory.createdAt, `memories[${index}].createdAt`);
+    const updatedAt = importedTimestamp(memory.updatedAt, `memories[${index}].updatedAt`);
     if (!Number.isInteger(memory.version) || memory.version < 1) {
       throw new PortabilityValidationError(`memories[${index}].version is invalid`);
     }
@@ -328,7 +415,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     if (
       typeof link.kind !== "string" ||
       !link.kind.trim() ||
-      link.kind.includes("\0") ||
+      !storableText(link.kind) ||
       link.kind.length > 64
     ) {
       throw new PortabilityValidationError(`links[${index}].kind is invalid`);
@@ -337,8 +424,8 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
       throw new PortabilityValidationError(`links[${index}].weight is invalid`);
     }
     const normalizedMetadata = metadata(link.metadata, `links[${index}].metadata`);
-    const createdAt = timestamp(link.createdAt, `links[${index}].createdAt`);
-    const updatedAt = timestamp(link.updatedAt, `links[${index}].updatedAt`);
+    const createdAt = importedTimestamp(link.createdAt, `links[${index}].createdAt`);
+    const updatedAt = importedTimestamp(link.updatedAt, `links[${index}].updatedAt`);
     normalizedLinks.push({
       id,
       sourceMemoryId: source,
@@ -589,8 +676,8 @@ export function createPortabilityModule(
           content: memory.content,
           metadata: memory.metadata,
           version: memory.version,
-          createdAt: timestamp(memory.created_at, "memory.createdAt"),
-          updatedAt: timestamp(memory.updated_at, "memory.updatedAt"),
+          createdAt: exportedTimestamp(memory.created_at),
+          updatedAt: exportedTimestamp(memory.updated_at),
         })),
         links: exported.links.map((link) => ({
           id: link.id,
@@ -599,8 +686,8 @@ export function createPortabilityModule(
           kind: link.kind,
           weight: Number(link.weight),
           metadata: link.metadata,
-          createdAt: timestamp(link.created_at, "link.createdAt"),
-          updatedAt: timestamp(link.updated_at, "link.updatedAt"),
+          createdAt: exportedTimestamp(link.created_at),
+          updatedAt: exportedTimestamp(link.updated_at),
         })),
       };
       archive.manifest.checksum = await archiveChecksum(archive);
@@ -613,7 +700,7 @@ export function createPortabilityModule(
     ): Promise<WorkspaceImportResult> {
       if (actor.agentId) throw new PortabilityAccessDeniedError("Workspace import requires a User");
       const archive = normalizedArchive(input.archive);
-      const checksum = await archiveChecksum(input.archive);
+      const checksum = await importedArchiveChecksum(input.archive);
       if (checksum !== input.archive.manifest.checksum) {
         throw new PortabilityValidationError("archive checksum does not match its records");
       }
