@@ -16,25 +16,29 @@ type RestoredDatabaseState = {
   maintenance_queue_restricted: boolean;
 };
 
+/**
+ * Public tables without tenant data, the only ones allowed to lack RLS. Keep in
+ * step with NON_TENANT_PUBLIC_TABLES in src/modules/operations/service.ts; every
+ * other public table, including one added by a later migration, must enable RLS.
+ */
+export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
+
 export async function verifyRestoredDatabase(
   query: (sql: string) => Promise<{ rows: RestoredDatabaseState[] }>,
 ): Promise<RestoredDatabaseState> {
+  const nonTenantTables = NON_TENANT_PUBLIC_TABLES.map((name) => `'${name}'`).join(", ");
   const result = await query(
-    `WITH required_rls_tables(table_name) AS (
-       VALUES
-         ('users'), ('workspaces'), ('memberships'), ('agents'),
-         ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
-         ('memories'), ('memory_chunks'), ('memory_links'),
-         ('evaluation_suites'), ('evaluation_cases'), ('evaluation_runs'),
-         ('evaluation_results'), ('memory_embedding_jobs'),
-         ('request_idempotency_records'), ('memory_events'),
-         ('embedding_generations'), ('memory_chunk_embeddings'),
-         ('workspace_imports'), ('memory_import_provenance')
-     ), rls_state AS (
-       SELECT count(relation.oid) = count(*) AND bool_and(relation.relrowsecurity) AS enabled
-       FROM required_rls_tables required
-       LEFT JOIN pg_class relation
-         ON relation.oid = to_regclass('public.' || required.table_name)
+    `WITH rls_state AS (
+       -- memories must exist, so an empty or foreign database cannot pass.
+       SELECT to_regclass('public.memories') IS NOT NULL AND NOT EXISTS (
+         SELECT 1
+         FROM pg_class relation
+         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'public'
+           AND relation.relkind IN ('r', 'p')
+           AND NOT relation.relrowsecurity
+           AND relation.relname NOT IN (${nonTenantTables})
+       ) AS enabled
      ), required_maintenance_functions(signature) AS (
        VALUES
          ('lore.enqueue_stale_memory_embedding_jobs(text,text,text,integer)'),

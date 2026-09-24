@@ -1,4 +1,7 @@
 import { expect, test } from "vitest";
+import { createCodeEvidenceModule } from "@/modules/code/evidence";
+import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import { createApi } from "@/server/api/app";
 import { AccessDeniedError, createAccessModule } from "@/server/auth/access";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import { installActorContext } from "../../src/server/auth/actor-context";
@@ -387,4 +390,178 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
   });
 
   await testContext.close();
+});
+
+async function agentCitation() {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const code = createCodeIndexModule(testContext.database);
+  const evidence = createCodeEvidenceModule(testContext.database);
+  const agent = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Citing assistant",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const agentActor = await access.authenticateAgent(
+    credential.token,
+    testContext.alice.workspaceId,
+  );
+  if (!agentActor) throw new Error("Expected Agent credential to authenticate");
+  const memory = await memories.remember(agentActor, {
+    content: "The release guard is implemented in the cited declaration.",
+    scope: "private",
+  });
+  const repositoryKey = "corespeed/agent-citation";
+  const commitOid = "a".repeat(40);
+  await code.indexRevision(testContext.alice, {
+    repositoryKey,
+    displayName: "Agent citation",
+    commitOid,
+    files: [{ path: "src/guard.ts", content: "export function releaseGuard() { return true; }\n" }],
+  });
+  const [artifact] = await code.search(testContext.alice, {
+    repositoryKey,
+    commitOid,
+    query: "releaseGuard",
+  });
+  if (!artifact) throw new Error("Expected releaseGuard Artifact");
+  const citation = await evidence.cite(agentActor, {
+    memoryId: memory.id,
+    artifactId: artifact.id,
+    relationship: "supports",
+  });
+  expect(citation.createdByAgentId).toBe(agent.id);
+  return { access, agent, citation, testContext };
+}
+
+// Every anchor column except created_by_agent_id, with a value that differs.
+const anchorMutations = [
+  ["id", "gen_random_uuid()"],
+  ["workspace_id", "gen_random_uuid()"],
+  ["memory_id", "gen_random_uuid()"],
+  ["repository_id", "gen_random_uuid()"],
+  ["cited_revision_id", "gen_random_uuid()"],
+  ["cited_generation_id", "gen_random_uuid()"],
+  ["cited_artifact_id", "gen_random_uuid()"],
+  ["cited_commit_oid", "repeat('b', 40)"],
+  ["relationship", "'contradicts'"],
+  ["cited_path", "'src/other.ts'"],
+  ["cited_symbol_key", "'src/other.ts#other'"],
+  ["cited_declaration_key", "'src/other.ts#other@1'"],
+  ["cited_declaration_chunk_ordinal", "7"],
+  ["cited_declaration_context_sha256", "repeat('c', 64)"],
+  ["cited_content_sha256", "repeat('d', 64)"],
+  ["created_by_user_id", "'10000000-0000-4000-8000-000000000002'"],
+  ["created_at", "created_at - interval '1 day'"],
+] as const;
+
+test("Deleting a disabled Agent that cited Code Evidence keeps the citation without provenance", async () => {
+  const { access, agent, citation, testContext } = await agentCitation();
+
+  // While the Agent exists, its provenance cannot be cleared by any role.
+  for (const database of [testContext.database, testContext.adminDatabase]) {
+    await expect(
+      database.transaction(async (transaction) => {
+        await installActorContext(transaction, testContext.alice);
+        await transaction.query(
+          "UPDATE memory_code_evidence SET created_by_agent_id = NULL WHERE id = $1",
+          [citation.id],
+        );
+      }),
+    ).rejects.toThrow(/Memory Code Evidence anchors are immutable/);
+  }
+
+  await access.updateAgent(testContext.alice, agent.id, { status: "disabled" });
+  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("deleted");
+
+  const surviving = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{
+      created_by_agent_id: string | null;
+      created_by_user_id: string;
+      cited_artifact_id: string;
+    }>(
+      `SELECT created_by_agent_id, created_by_user_id, cited_artifact_id
+       FROM memory_code_evidence
+       WHERE id = $1`,
+      [citation.id],
+    ),
+  );
+  expect(surviving.rows).toEqual([
+    {
+      created_by_agent_id: null,
+      created_by_user_id: testContext.alice.userId,
+      cited_artifact_id: citation.citedArtifactId,
+    },
+  ]);
+  // A cleared reference cannot be pointed at another Agent afterwards.
+  const other = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Other assistant",
+    permission: "write",
+  });
+  await expect(
+    testContext.adminDatabase.transaction((transaction) =>
+      transaction.query("UPDATE memory_code_evidence SET created_by_agent_id = $1 WHERE id = $2", [
+        other.id,
+        citation.id,
+      ]),
+    ),
+  ).rejects.toThrow(/Memory Code Evidence anchors are immutable/);
+});
+
+test.each(anchorMutations)(
+  "Memory Code Evidence anchor column %s stays immutable",
+  async (column, value) => {
+    const { citation, testContext } = await agentCitation();
+    await expect(
+      testContext.adminDatabase.transaction((transaction) =>
+        transaction.query(`UPDATE memory_code_evidence SET ${column} = ${value} WHERE id = $1`, [
+          citation.id,
+        ]),
+      ),
+    ).rejects.toThrow(/Memory Code Evidence anchors are immutable/);
+  },
+);
+
+test("A suspended owner Membership denies the owner's Agents until it is reactivated", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgentForWorkspace(testContext.bob, {
+    name: "Member assistant",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(testContext.bob, agent.id);
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const capabilities = () =>
+    app.request(
+      new Request("http://lore.local/api/v1/capabilities", {
+        headers: {
+          authorization: `Bearer ${credential.token}`,
+          "x-lore-workspace-id": testContext.bob.workspaceId,
+        },
+      }),
+    );
+
+  await expect(
+    access.authenticateAgent(credential.token, testContext.bob.workspaceId),
+  ).resolves.toMatchObject({ agentId: agent.id, userId: testContext.bob.userId });
+  expect((await capabilities()).status).toBe(200);
+
+  await testContext.suspendMembership(testContext.bob);
+  await expect(
+    access.authenticateAgent(credential.token, testContext.bob.workspaceId),
+  ).resolves.toBeNull();
+  const denied = await capabilities();
+  expect(denied.status).toBe(403);
+  await expect(denied.json()).resolves.toMatchObject({ code: "access_denied" });
+
+  await access.addMember(testContext.alice, testContext.bob.userId, { role: "member" });
+  await expect(
+    access.authenticateAgent(credential.token, testContext.bob.workspaceId),
+  ).resolves.toMatchObject({ agentId: agent.id });
+  expect((await capabilities()).status).toBe(200);
 });

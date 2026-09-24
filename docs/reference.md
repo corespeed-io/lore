@@ -401,22 +401,21 @@ GET /api/memories?q=deployment+status&scope=shared&updated_after=2026-01-01T00:0
 
 After eight failed attempts a job remains `dead` for operator inspection instead of
 retrying forever. Updating that Memory or changing the deployment embedding space
-creates a fresh versioned job. After fixing a transient outage, a database operator
-can explicitly retry that same version:
+creates a fresh versioned job. After fixing a transient outage, retry the dead jobs
+of one generation with the maintenance login. Take the generation id from
+`bun run db:embedding:report`; without `--apply` the command only counts:
 
-```sql
-UPDATE memory_embedding_jobs
-SET status = 'pending',
-    attempt_count = 0,
-    available_at = now(),
-    lease_token = NULL,
-    leased_at = NULL,
-    last_error = NULL,
-    completed_at = NULL,
-    updated_at = now()
-WHERE id = 'replace-with-exact-job-id'
-  AND status = 'dead';
+```bash
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id>
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id> --apply
 ```
+
+`--apply` re-arms every dead job of that building or active generation whose Memory
+still has the job's version, owner, and scope, as `pending` with a fresh retry budget
+(`attempt_count` 0). Dead jobs for a Memory that has since changed stay dead; the
+next sweep cancels them. Do not edit `memory_embedding_jobs` by hand.
 
 The deployment sweep prunes succeeded/cancelled history after 7 days and dead-job
 diagnostics after 30 days.
@@ -424,18 +423,29 @@ diagnostics after 30 days.
 Embedding generations follow `building → active → retiring`. Use
 `LORE_EMBEDDING_BUILD_PROVIDER` and `LORE_EMBEDDING_BUILD_MODEL` on the maintenance
 worker to build beside the active model, inspect coverage with
-`bun run db:embedding:report`, and cut over with
-`bun run db:embedding:activate`. Retiring vectors remain rollback-capable for
+`bun run db:embedding:report` (read-only: it reports `not initialized` rather than
+creating a generation), and cut over with `bun run db:embedding:activate`. All three
+`db:embedding:*` commands run with `--no-env-file`, so pass
+`LORE_MAINTENANCE_DATABASE_URL` and the embedding variables explicitly. Retiring vectors remain rollback-capable for
 `LORE_EMBEDDING_ROLLBACK_SECONDS` (seven days by default).
 Preprocessing revisions use the same rollout even when provider/model strings do
 not change. An upgraded request process reports embedding as degraded and keeps
 lexical retrieval available until its exact generation has been built and activated;
 see [the operations runbook](operations.md#embedding-generation-rollout).
 
-The self-host worker claims one leased job at a time by default. Remote embedding
-services can often improve indexing throughput with `LORE_MAINTENANCE_CONCURRENCY`
-(maximum 32); size `LORE_MAINTENANCE_POOL_SIZE` accordingly. Keep concurrency at 1
+The self-host worker runs three independent loops: the discovery/retention sweep,
+Code Index jobs, and embedding jobs, each with its own backoff, so a long Code Index
+job never delays embeddings and a stalled embedding provider never delays Code
+Indexing or the sweep. The embedding loop claims one leased job at a time by default.
+Remote embedding services can often improve indexing throughput with
+`LORE_MAINTENANCE_CONCURRENCY` (maximum 32), which is a hard bound on concurrently
+held embedding leases. `LORE_MAINTENANCE_POOL_SIZE` defaults to that concurrency plus
+two (one connection each for the Code Index and sweep loops). Keep concurrency at 1
 for memory-constrained local Ollama unless a benchmark proves the machine benefits.
+`bun --no-env-file .worker/maintenance-worker.js --once` runs one sweep, one Code
+Index claim, and one embedding round, then exits non-zero if any of them hit an
+infrastructure error; CI uses it to prove the built bundle connects and claims as
+the maintenance login.
 Ollama's native SDK has no request deadline: a stalled call can hold the worker
 after its lease expires. The lease enables reclamation and fences late writes;
 it does not interrupt HTTP. See [stalled Ollama maintenance](operations.md#stalled-ollama-maintenance)
@@ -529,6 +539,10 @@ export LORE_MAINTENANCE_PASSWORD=maintenance-password
 bun run db:bootstrap
 ```
 
+The bootstrap sends each password to Postgres only as a SCRAM-SHA-256 verifier
+computed locally, so no cleartext password reaches the server log. Runtime passwords
+must therefore be printable ASCII (for example `openssl rand -base64 32`).
+
 Set `DATABASE_URL` to the new runtime login, copy the remaining local values from
 `.env.example`, and run:
 
@@ -536,7 +550,10 @@ Set `DATABASE_URL` to the new runtime login, copy the remaining local values fro
 bun run dev
 ```
 
-Run the self-host maintenance process in a second terminal using its own login:
+Run the self-host maintenance process in a second terminal using its own login.
+Code Indexing runs only when the worker is also given `LORE_CODE_REPOSITORIES` (and
+`AUTH_MODE` for Workspace-unbound entries); see
+[Code Index jobs](operations.md#code-index-jobs).
 
 ```bash
 bun run build:maintenance

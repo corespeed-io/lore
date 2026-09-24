@@ -5,11 +5,14 @@ import {
   pruneRetiringEmbeddingGenerations,
 } from "@corespeed/lore-core";
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
+import { configuredCodeRepositoriesFromEnvironment } from "@/modules/code/indexing/queue";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createPostgresDatabase } from "@/server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
 import { registerLoreTelemetry } from "@/server/telemetry/register";
 import { observeOperation } from "@/server/telemetry/telemetry";
+import type { MaintenanceLoopName, MaintenanceLoopOptions } from "./maintenance-loops";
+import { runMaintenanceCycle, runMaintenanceLoops } from "./maintenance-loops";
 
 registerLoreTelemetry();
 
@@ -17,6 +20,11 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
+
+// `--once` runs a single sweep, Code Index claim, and embedding round, then
+// exits 0 only if none of them raised. CI uses it to prove the built bundle can
+// connect and claim as the maintenance login.
+const runOnce = process.argv.slice(2).includes("--once");
 
 const connectionString = process.env.LORE_MAINTENANCE_DATABASE_URL;
 if (!connectionString) {
@@ -27,11 +35,22 @@ const embeddingProviders = createMaintenanceEmbeddingProvidersFromEnvironment(
   process.env,
   (message) => console.warn(message),
 );
+// The worker resolves repository paths from its own registry rather than the
+// path stored in a job row, and an empty registry disables Code Indexing here
+// (jobs stay pending for a worker that has one), matching the request path.
+const codeRepositories = configuredCodeRepositoriesFromEnvironment(process.env, (message) =>
+  console.warn(message),
+);
+const workerConcurrency = Math.min(
+  positiveInteger(process.env.LORE_MAINTENANCE_CONCURRENCY, 1),
+  32,
+);
 
+// One connection per embedding lane plus the Code Index and sweep loops.
 const database = createPostgresDatabase(
   {
     connectionString,
-    max: positiveInteger(process.env.LORE_MAINTENANCE_POOL_SIZE, 2),
+    max: positiveInteger(process.env.LORE_MAINTENANCE_POOL_SIZE, workerConcurrency + 2),
   },
   { role: "lore_maintenance" },
 );
@@ -58,97 +77,109 @@ const maintenanceModules = embeddingProviders.map((embeddingProvider) =>
 );
 const maintenance =
   maintenanceModules.length > 0 ? createMemoryMaintenanceCoordinator(maintenanceModules) : null;
-const codeIndexMaintenance = createCodeIndexMaintenanceModule(database, {
-  logger: (entry) =>
-    console.log(
-      JSON.stringify({
-        component: "code-index-maintenance",
-        ...entry,
-      }),
-    ),
-});
+const codeIndexMaintenance =
+  Object.keys(codeRepositories).length > 0
+    ? createCodeIndexMaintenanceModule(database, {
+        repositories: codeRepositories,
+        logger: (entry) =>
+          console.log(
+            JSON.stringify({
+              component: "code-index-maintenance",
+              ...entry,
+            }),
+          ),
+      })
+    : null;
+if (!codeIndexMaintenance) {
+  console.log(
+    JSON.stringify({
+      component: "code-index-maintenance",
+      event: "disabled",
+      reason: "LORE_CODE_REPOSITORIES configures no repository for this worker",
+    }),
+  );
+}
 const pollIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_POLL_MS, 1_000);
 const sweepIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_SWEEP_MS, 300_000);
 const embeddingRollbackSeconds = positiveInteger(
   process.env.LORE_EMBEDDING_ROLLBACK_SECONDS,
   604_800,
 );
-const workerConcurrency = Math.min(
-  positiveInteger(process.env.LORE_MAINTENANCE_CONCURRENCY, 1),
-  32,
-);
-let stopping = false;
 
+const stop = new AbortController();
 function requestStop(): void {
-  stopping = true;
+  stop.abort();
 }
 
 process.once("SIGINT", requestStop);
 process.once("SIGTERM", requestStop);
 
-async function wait(milliseconds: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+async function sweep(): Promise<void> {
+  const result = await observeOperation("maintenance.sweep", async () => {
+    const purged = await purgeExpiredPortableCoreRecords(database);
+    const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
+      database,
+      embeddingRollbackSeconds,
+    );
+    const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
+    const generations = maintenance ? await maintenance.generationReports() : [];
+    return { generations, prunedEmbeddingGenerations, purged, seeded };
+  });
+  console.log(
+    JSON.stringify({
+      component: "memory-maintenance",
+      event: "sweep_complete",
+      seededJobs: result.seeded.length,
+      purgedIdempotencyRecords: result.purged.idempotencyRecords,
+      purgedMemoryEvents: result.purged.memoryEvents,
+      prunedEmbeddingGenerations: result.prunedEmbeddingGenerations,
+      embeddingStatus: result.generations.length > 0 ? "configured" : "disabled",
+      embeddingGenerations: result.generations,
+    }),
+  );
 }
 
-try {
-  let nextSweepAt = 0;
-  let infrastructureBackoffMs = pollIntervalMs;
-  while (!stopping) {
-    try {
-      if (Date.now() >= nextSweepAt) {
-        const sweep = await observeOperation("maintenance.sweep", async () => {
-          const purged = await purgeExpiredPortableCoreRecords(database);
-          const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
-            database,
-            embeddingRollbackSeconds,
-          );
-          const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
-          const generations = maintenance ? await maintenance.generationReports() : [];
-          return { generations, prunedEmbeddingGenerations, purged, seeded };
-        });
-        console.log(
-          JSON.stringify({
-            component: "memory-maintenance",
-            event: "sweep_complete",
-            seededJobs: sweep.seeded.length,
-            purgedIdempotencyRecords: sweep.purged.idempotencyRecords,
-            purgedMemoryEvents: sweep.purged.memoryEvents,
-            prunedEmbeddingGenerations: sweep.prunedEmbeddingGenerations,
-            embeddingStatus: sweep.generations.length > 0 ? "configured" : "disabled",
-            embeddingGenerations: sweep.generations,
-          }),
-        );
-        nextSweepAt = Date.now() + sweepIntervalMs;
-      }
+function reportInfrastructureError(loop: MaintenanceLoopName, error: unknown): void {
+  // Error messages can carry connection strings or provider payloads; log only
+  // which loop failed and the error class.
+  console.error(
+    JSON.stringify({
+      component: loop === "code-index" ? "code-index-maintenance" : "memory-maintenance",
+      event: "infrastructure_error",
+      loop,
+      errorClass: error instanceof Error ? error.constructor.name : "NonErrorThrow",
+    }),
+  );
+}
 
-      const codeIndexResult = await observeOperation("code-index-maintenance.job", () =>
-        codeIndexMaintenance.run(),
-      );
-      const results = maintenance
-        ? await Promise.all(
-            Array.from({ length: workerConcurrency }, () =>
-              observeOperation("maintenance.job", () => maintenance.run()),
-            ),
-          )
-        : [];
-      infrastructureBackoffMs = pollIntervalMs;
-      if (
-        (codeIndexResult.status === "idle" || codeIndexResult.status === "retry") &&
-        results.every((result) => result.status === "idle" || result.status === "retry")
-      ) {
-        await wait(pollIntervalMs);
+const loopOptions: MaintenanceLoopOptions = {
+  signal: stop.signal,
+  pollIntervalMs,
+  sweepIntervalMs,
+  embeddingConcurrency: workerConcurrency,
+  sweep,
+  ...(codeIndexMaintenance
+    ? {
+        codeIndexJob: () =>
+          observeOperation("code-index-maintenance.job", () => codeIndexMaintenance.run()),
       }
-    } catch {
-      console.error(
-        JSON.stringify({
-          component: "memory-maintenance",
-          event: "infrastructure_error",
-        }),
-      );
-      await wait(infrastructureBackoffMs);
-      infrastructureBackoffMs = Math.min(infrastructureBackoffMs * 2, 60_000);
-    }
+    : {}),
+  ...(maintenance
+    ? { embeddingJob: () => observeOperation("maintenance.job", () => maintenance.run()) }
+    : {}),
+  onInfrastructureError: reportInfrastructureError,
+};
+
+let exitCode = 0;
+try {
+  if (runOnce) {
+    const cycle = await runMaintenanceCycle(loopOptions);
+    console.log(JSON.stringify({ component: "maintenance", event: "cycle_complete", ...cycle }));
+    if (!cycle.ok) exitCode = 1;
+  } else {
+    await runMaintenanceLoops(loopOptions);
   }
 } finally {
   await database.close();
 }
+process.exitCode = exitCode;

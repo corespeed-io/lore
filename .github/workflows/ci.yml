@@ -103,6 +103,34 @@ jobs:
         run: bun run smoke:memory-core
         env:
           LORE_SMOKE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lore_memory_core_smoke_ci
+      # The smoke database is migrated and holds Memories. Provision known request
+      # and maintenance logins (SCRAM verifiers, never cleartext) so the next step
+      # can authenticate as the maintenance login the way a deployment does.
+      - name: Provision CI runtime logins
+        run: bun --no-env-file scripts/database/create-runtime-role.ts
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lore_memory_core_smoke_ci
+          LORE_RUNTIME_ROLE: lore_ci_request
+          LORE_RUNTIME_PASSWORD: lore-ci-request-login
+          LORE_MAINTENANCE_ROLE: lore_ci_maintenance
+          LORE_MAINTENANCE_PASSWORD: lore-ci-maintenance-login
+      # One cycle of the built bundle: a sweep that seeds embedding jobs for the
+      # smoke Memories, a Code Index claim, and an embedding claim. No embedding
+      # server listens on port 9, so the claimed job must come back as a retry;
+      # that proves the claim and finish paths ran under SET ROLE lore_maintenance.
+      - name: Run one maintenance cycle from the built bundle
+        run: |
+          set -o pipefail
+          bun --no-env-file .worker/maintenance-worker.js --once | tee maintenance-cycle.log
+          jq -eR 'fromjson? | select(.event == "cycle_complete")
+            | .ok and .sweep == "ok" and .codeIndex == "idle"
+              and (.embedding | any(. == "retry"))' maintenance-cycle.log
+        env:
+          LORE_MAINTENANCE_DATABASE_URL: postgres://lore_ci_maintenance:lore-ci-maintenance-login@127.0.0.1:5432/lore_memory_core_smoke_ci
+          LORE_CODE_REPOSITORIES: '{"corespeed/lore-ci":{"displayName":"Lore CI","repositoryPath":"${{ github.workspace }}","workspaceIds":["00000000-0000-4000-8000-000000000000"]}}'
+          LORE_EMBEDDING_PROVIDER: ollama
+          LORE_EMBEDDING_MODEL: qwen3-embedding:0.6b
+          OLLAMA_BASE_URL: http://127.0.0.1:9
 
   packages:
     name: SDK, CLI & MCP packages

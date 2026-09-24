@@ -28,6 +28,42 @@ test("restore verification accepts the real leased-job grants without direct que
   await expect(verify()).resolves.toMatchObject({ runtime_roles_safe: true, tenant_rls: true });
 });
 
+test("restore verification requires RLS on every tenant table, including tables added later", async () => {
+  const protectedTables = await postgres.query<{ relname: string }>(
+    `SELECT relname
+     FROM pg_class
+     WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND relrowsecurity
+     ORDER BY relname`,
+  );
+  const names = protectedTables.rows.map((table) => table.relname);
+  // The hand-kept list this replaced covered 21 tables and missed the rest.
+  expect(names).toEqual(
+    expect.arrayContaining([
+      "code_index_jobs",
+      "episode_evidence_chunk_embeddings",
+      "memory_code_evidence",
+      "memory_proposals",
+    ]),
+  );
+  for (const table of names) {
+    await postgres.exec("BEGIN");
+    try {
+      await postgres.exec(`ALTER TABLE public.${table} DISABLE ROW LEVEL SECURITY`);
+      await expect(verify(), table).rejects.toThrow("Restored database failed Lore");
+    } finally {
+      await postgres.exec("ROLLBACK");
+    }
+  }
+  await postgres.exec("BEGIN");
+  try {
+    await postgres.exec("CREATE TABLE public.future_tenant_records (id uuid PRIMARY KEY)");
+    await expect(verify()).rejects.toThrow("Restored database failed Lore");
+  } finally {
+    await postgres.exec("ROLLBACK");
+  }
+  await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
+});
+
 test.each([
   ["queue discovery", "lore.list_pending_memory_embedding_jobs(text,text,text,integer,integer)"],
   ["job claiming", "lore.claim_memory_embedding_job(uuid,text,text,text,uuid,integer)"],

@@ -3,7 +3,13 @@ import { validatedEmbeddingDimensions } from "./capabilities";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiterals } from "./vector";
 
-export type MemoryMaintenanceStatus = "complete" | "retry" | "dead" | "idle";
+/**
+ * `lost` means this run no longer held the job's lease when it tried to finish:
+ * another run reclaimed an expired lease (a slow provider), or the Memory was
+ * deleted mid-embed and its job cascaded away. The job is not this run's to
+ * finish, so it is a normal outcome rather than an infrastructure failure.
+ */
+export type MemoryMaintenanceStatus = "complete" | "retry" | "dead" | "idle" | "lost";
 
 export interface MemoryMaintenanceResult {
   status: MemoryMaintenanceStatus;
@@ -12,7 +18,7 @@ export interface MemoryMaintenanceResult {
 }
 
 export interface MemoryMaintenanceLog {
-  event: "job_complete" | "job_retry" | "job_dead";
+  event: "job_complete" | "job_retry" | "job_dead" | "job_lost";
   jobId: string;
   attempt: number;
   chunkCount: number;
@@ -146,7 +152,17 @@ export function createMemoryMaintenanceModule(
       );
       return result.rows[0]?.status ?? null;
     });
-    if (!status) throw new Error("Maintenance job lease was lost before failure completion");
+    // A NULL status means the lease is no longer ours. The replacement lease
+    // token already fenced every write this run attempted.
+    if (!status) {
+      logger({
+        event: "job_lost",
+        jobId: job.id,
+        attempt: job.attempt_count,
+        chunkCount,
+      });
+      return { status: "lost", jobId: job.id };
+    }
     if (status === "dead") {
       logger({
         event: "job_dead",
@@ -165,34 +181,43 @@ export function createMemoryMaintenanceModule(
     return { status: "retry", jobId: job.id, retryAfterSeconds: delay };
   }
 
+  /** Reads coverage without creating the generation; null when it does not exist yet. */
+  async function findGenerationReport(): Promise<EmbeddingGenerationReport | null> {
+    return database.transaction(async (transaction) => {
+      const result = await transaction.query<{
+        id: string;
+        status: EmbeddingGenerationReport["status"];
+        eligible_chunks: string | number;
+        embedded_chunks: string | number;
+        missing_chunks: string | number;
+        pending_jobs: string | number;
+        dead_jobs: string | number;
+      }>("SELECT * FROM lore.embedding_generation_report($1, $2, $3)", [
+        provider.provider,
+        provider.model,
+        provider.revision,
+      ]);
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        status: row.status,
+        eligibleChunks: Number(row.eligible_chunks),
+        embeddedChunks: Number(row.embedded_chunks),
+        missingChunks: Number(row.missing_chunks),
+        pendingJobs: Number(row.pending_jobs),
+        deadJobs: Number(row.dead_jobs),
+      };
+    });
+  }
+
   return {
+    findGenerationReport,
+
     async generationReport(): Promise<EmbeddingGenerationReport> {
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<{
-          id: string;
-          status: EmbeddingGenerationReport["status"];
-          eligible_chunks: string | number;
-          embedded_chunks: string | number;
-          missing_chunks: string | number;
-          pending_jobs: string | number;
-          dead_jobs: string | number;
-        }>("SELECT * FROM lore.embedding_generation_report($1, $2, $3)", [
-          provider.provider,
-          provider.model,
-          provider.revision,
-        ]);
-        const row = result.rows[0];
-        if (!row) throw new Error("Embedding generation is not initialized");
-        return {
-          id: row.id,
-          status: row.status,
-          eligibleChunks: Number(row.eligible_chunks),
-          embeddedChunks: Number(row.embedded_chunks),
-          missingChunks: Number(row.missing_chunks),
-          pendingJobs: Number(row.pending_jobs),
-          deadJobs: Number(row.dead_jobs),
-        };
-      });
+      const report = await findGenerationReport();
+      if (!report) throw new Error("Embedding generation is not initialized");
+      return report;
     },
 
     async activateGeneration(): Promise<string> {

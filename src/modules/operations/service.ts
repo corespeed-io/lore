@@ -2,7 +2,15 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/telemetry";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 3;
+export const LORE_SCHEMA_REVISION = 4;
+
+/**
+ * The only public tables that hold no tenant data and so carry no RLS: the
+ * deployment singleton and dbmate's migration ledger. Readiness requires RLS on
+ * every other public table, so a table added by a later migration is covered
+ * without editing a list. scripts/database/restore.ts keeps the same allowlist.
+ */
+export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
 
 export interface DeploymentCapabilities {
   apiVersion: "v1";
@@ -114,34 +122,16 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           database.transaction(async (transaction) => {
             await transaction.query("SELECT set_config('statement_timeout', '2000', true)");
             const result = await transaction.query<ReadinessRow>(
-              `WITH required_rls_tables(table_name) AS (
-                 VALUES
-                   ('users'), ('workspaces'), ('memberships'), ('agents'),
-                   ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
-                   ('memories'), ('memory_chunks'), ('memory_links'),
-                   ('evaluation_suites'), ('evaluation_cases'), ('evaluation_runs'),
-                   ('evaluation_results'), ('memory_embedding_jobs'),
-                   ('request_idempotency_records'), ('memory_events'),
-                   ('embedding_generations'), ('memory_chunk_embeddings'),
-                   ('workspace_imports'), ('memory_import_provenance'),
-                   ('memory_proposals'), ('memory_proposal_evidence'),
-                   ('episodes'), ('observations'),
-                   ('memory_proposal_observation_evidence'),
-                   ('memory_proposal_code_evidence'),
-                   ('code_repositories'), ('code_revisions'),
-                   ('code_revision_files'), ('code_index_generations'),
-                   ('code_index_jobs'), ('code_artifact_payloads'), ('code_artifacts'),
-                   ('code_symbol_sets'), ('code_symbol_payloads'),
-                   ('code_dependency_sets'), ('code_dependency_payloads'),
-                   ('code_dependency_edges'),
-                   ('memory_code_evidence')
-               ), rls_state AS (
-                 SELECT
-                   count(relation.oid) = count(*)
-                     AND bool_and(relation.relrowsecurity) AS enabled
-                 FROM required_rls_tables required
-                 LEFT JOIN pg_class relation
-                   ON relation.oid = to_regclass('public.' || required.table_name)
+              `WITH rls_state AS (
+                 SELECT NOT EXISTS (
+                   SELECT 1
+                   FROM pg_class relation
+                   JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+                   WHERE namespace.nspname = 'public'
+                     AND relation.relkind IN ('r', 'p')
+                     AND NOT relation.relrowsecurity
+                     AND NOT (relation.relname = ANY ($5::text[]))
+                 ) AS enabled
                ), runtime_role AS (
                  SELECT NOT role.rolsuper AND NOT role.rolbypassrls AS safe
                  FROM pg_roles role
@@ -167,14 +157,17 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                    AND NULLIF(current_setting('lore.user_id', true), '') IS NULL
                    AND NULLIF(current_setting('lore.agent_id', true), '') IS NULL
                    AND NOT EXISTS (SELECT 1 FROM memories LIMIT 1) AS rls_probe`,
-              options.embeddingIdentity
-                ? [
-                    options.embeddingIdentity.provider,
-                    options.embeddingIdentity.model,
-                    options.embeddingIdentity.dimensions,
-                    options.embeddingIdentity.revision,
-                  ]
-                : [null, null, null, null],
+              [
+                ...(options.embeddingIdentity
+                  ? [
+                      options.embeddingIdentity.provider,
+                      options.embeddingIdentity.model,
+                      options.embeddingIdentity.dimensions,
+                      options.embeddingIdentity.revision,
+                    ]
+                  : [null, null, null, null]),
+                [...NON_TENANT_PUBLIC_TABLES],
+              ],
             );
             const value = result.rows[0];
             if (!value) throw new Error("Readiness query returned no result");
