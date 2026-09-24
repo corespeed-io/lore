@@ -514,6 +514,42 @@ test("Deleting a target removes proposal content and prevents later acceptance",
   await testContext.close();
 });
 
+test("Accepting an update locks its target Memory before the Proposal, like forget", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const target = await memories.remember(testContext.alice, { content: "Lock order target" });
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: target.id,
+    expectedVersion: target.version,
+    content: "Lock order replacement",
+  });
+  const locks: string[] = [];
+  const recording = createMemoryProposalsModule({
+    transaction: (use) =>
+      testContext.database.transaction((transaction) =>
+        use({
+          query: (sql, params) => {
+            if (/FOR UPDATE/.test(sql)) {
+              locks.push(/FROM memory_proposals/.test(sql) ? "proposal" : "memory");
+            }
+            return transaction.query(sql, params);
+          },
+        }),
+      ),
+  });
+
+  await expect(
+    recording.reviewProposal(testContext.alice, proposal.id, "accept"),
+  ).resolves.toMatchObject({ proposal: { status: "accepted" } });
+  // PGlite has one session, so a real deadlock cannot be reproduced here; the order
+  // of row locks is the invariant that prevents one against a concurrent forget.
+  expect(locks[0]).toBe("memory");
+  expect(locks.indexOf("proposal")).toBeGreaterThan(0);
+
+  await testContext.close();
+});
+
 test("Expired proposal content is purged with Portable Core retention", async () => {
   const testContext = await createMemoryTestContext();
   const proposalId = crypto.randomUUID();
