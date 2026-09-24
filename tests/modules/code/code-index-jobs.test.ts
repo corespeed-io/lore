@@ -12,6 +12,7 @@ import {
   classifyCodeIndexFailure,
   createCodeIndexMaintenanceModule,
 } from "@/modules/code/indexing/maintenance";
+import { CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
 import type { ConfiguredCodeRepositories } from "@/modules/code/indexing/queue";
 import {
   CODE_REPOSITORY_NOT_CONFIGURED,
@@ -22,6 +23,7 @@ import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createApi } from "@/server/api/app";
 import { createAccessModule } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { installActorContext } from "@/server/auth/actor-context";
 import type { MemoryTestContext } from "../../support/memory-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
@@ -368,6 +370,105 @@ test("a job whose Agent lost its grant is taken over by the next authorized requ
     requested_by_agent_id: null,
   });
   await expect(maintenance.run(queued.id)).resolves.toMatchObject({ status: "complete" });
+});
+
+test("only a write-authorized Actor of the repository's Workspace can enqueue or re-arm", async () => {
+  const context = await createMemoryTestContext();
+  const { repositoryPath, commitOid } = await committedRepository({
+    "src/guard.ts": "export const guard = 1;\n",
+  });
+  const queue = createCodeIndexQueueModule(context.database, registry(repositoryPath));
+  const queued = await queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid });
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE code_index_jobs
+       SET status = 'dead', attempt_count = max_attempts, completed_at = now()
+       WHERE id = $1`,
+      [queued.id],
+    ),
+  );
+  const access = createAccessModule(context.database);
+  const reader = await access.createAgentForWorkspace(context.alice, {
+    name: "Read-only assistant",
+    permission: "read",
+  });
+  const readerActor = await access.authenticateAgent(
+    (await access.issueAgentCredential(context.alice, reader.id)).token,
+    context.alice.workspaceId,
+  );
+  if (!readerActor) throw new Error("Expected the read-only Agent to authenticate");
+  // The context a writer Agent held before its grant was revoked.
+  const { agent: revoked, actor: revokedActor } = await writerAgent(context);
+  await access.revokeAgentGrant(context.alice, revoked.id);
+  await context.suspendMembership(context.bob);
+
+  // The SECURITY DEFINER function bypasses RLS, so its own checks are the only guard:
+  // no Actor here may re-arm the dead job, take it over, or change its repository path.
+  for (const [label, actor] of [
+    ["read-only Agent", readerActor],
+    ["Agent whose grant was revoked", revokedActor],
+    ["suspended member", context.bob],
+    ["member of another Workspace", context.carol],
+  ] as const) {
+    await expect(
+      context.database.transaction(async (transaction) => {
+        await installActorContext(transaction, actor);
+        return transaction.query("SELECT lore.enqueue_code_index_job($1, $2, $3, NULL, $4)", [
+          queued.repositoryId,
+          "/srv/elsewhere",
+          commitOid,
+          CODE_INDEX_REVISION,
+        ]);
+      }),
+      label,
+    ).rejects.toMatchObject({ code: "42501" });
+  }
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "dead",
+    requested_by_user_id: context.alice.userId,
+    requested_by_agent_id: null,
+    repository_path: repositoryPath,
+  });
+});
+
+test("re-enqueue honours an orphaned job's live lease for up to an hour", async () => {
+  const context = await createMemoryTestContext();
+  const { repositoryPath, commitOid } = await committedRepository({
+    "src/fence.ts": "export const fence = true;\n",
+  });
+  const queue = createCodeIndexQueueModule(context.database, registry(repositoryPath));
+  const { access, agent, actor } = await writerAgent(context);
+  const queued = await queue.enqueue(actor, { repositoryKey: REPOSITORY_KEY, commitOid });
+  await access.revokeAgentGrant(context.alice, agent.id);
+  const leaseAge = (age: string) =>
+    context.adminDatabase.transaction((transaction) =>
+      transaction.query(
+        `UPDATE code_index_jobs
+         SET status = 'processing', lease_token = gen_random_uuid(),
+             leased_at = now() - $2::interval, attempt_count = 1
+         WHERE id = $1`,
+        [queued.id, age],
+      ),
+    );
+
+  // A worker may still hold a 30-minute-old lease: taking the job over would let two
+  // workers index it at once.
+  await leaseAge("30 minutes");
+  await queue.enqueue(context.bob, { repositoryKey: REPOSITORY_KEY, commitOid });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    status: "processing",
+    requested_by_agent_id: agent.id,
+  });
+
+  // Past the longest possible lease nobody can still hold it.
+  await leaseAge("2 hours");
+  await expect(
+    queue.enqueue(context.bob, { repositoryKey: REPOSITORY_KEY, commitOid }),
+  ).resolves.toMatchObject({ id: queued.id, status: "pending", attemptCount: 0 });
+  await expect(jobRow(context, queued.id)).resolves.toMatchObject({
+    requested_by_user_id: context.bob.userId,
+    requested_by_agent_id: null,
+  });
 });
 
 test("a commit missing from the repository fails terminally on its first attempt", async () => {
