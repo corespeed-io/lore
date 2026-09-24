@@ -272,9 +272,18 @@ test("import enqueues embedding jobs in its transaction and notifies them after 
     testContext.carol,
   );
   const notifications: string[] = [];
+  const batches: number[] = [];
   const portability = createPortabilityModule(testContext.database, {
     embeddingProvider: provider,
-    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+    maintenanceNotifier: {
+      notify: () => {
+        throw new Error("A bulk import must use the batched notifier when the host offers one");
+      },
+      notifyMany: (messages) => {
+        batches.push(messages.length);
+        notifications.push(...messages.map(({ jobId }) => jobId));
+      },
+    },
   });
 
   const dryRun = await portability.importWorkspace(testContext.alice, {
@@ -290,6 +299,7 @@ test("import enqueues embedding jobs in its transaction and notifies them after 
   });
 
   expect(notifications).toHaveLength(2);
+  expect(batches).toEqual([2]);
   const jobs = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ id: string; memory_id: string; status: string }>(
       "SELECT id, memory_id, status FROM memory_embedding_jobs WHERE workspace_id = $1",

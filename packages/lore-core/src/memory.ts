@@ -757,12 +757,11 @@ async function insertChunks(
   );
 }
 
-async function enqueueEmbeddingJob(
+/** The embedding generation for this provider identity, created on first use. */
+async function embeddingGenerationId(
   transaction: PostgresTransaction,
-  memory: MemoryRow,
   embeddingProvider: EmbeddingProvider,
-  onlyWhenStale = false,
-): Promise<string | null> {
+): Promise<string> {
   const generation = await transaction.query<{ id: string }>(
     `SELECT id
      FROM lore.ensure_embedding_generation($1, $2, $3, $4)`,
@@ -775,6 +774,16 @@ async function enqueueEmbeddingJob(
   );
   const generationId = generation.rows[0]?.id;
   if (!generationId) throw new Error("Embedding generation could not be resolved");
+  return generationId;
+}
+
+async function enqueueEmbeddingJob(
+  transaction: PostgresTransaction,
+  memory: MemoryRow,
+  embeddingProvider: EmbeddingProvider,
+  onlyWhenStale = false,
+): Promise<string | null> {
+  const generationId = await embeddingGenerationId(transaction, embeddingProvider);
   const jobId = crypto.randomUUID();
   const inserted = await transaction.query<{ inserted: boolean }>(
     `INSERT INTO memory_embedding_jobs (
@@ -864,6 +873,18 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     } catch {
       // The durable Postgres job remains discoverable by the maintenance sweep.
       // A queue notification is only a latency optimization.
+    }
+  }
+
+  /** Notify many jobs after a bulk write, batched when the host transport supports it. */
+  function notifyMaintenanceMany(jobIds: readonly string[]): void {
+    if (jobIds.length === 0 || !maintenanceNotifier) return;
+    const messages = jobIds.map((jobId) => ({ jobId }));
+    try {
+      if (maintenanceNotifier.notifyMany) maintenanceNotifier.notifyMany(messages);
+      else for (const message of messages) maintenanceNotifier.notify(message);
+    } catch {
+      // As above: the sweep still discovers every durable job.
     }
   }
 
@@ -971,18 +992,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     memories: readonly EmbeddingJobMemory[],
   ): Promise<string[]> {
     if (!embeddingProvider || memories.length === 0) return [];
-    const generation = await transaction.query<{ id: string }>(
-      `SELECT id
-       FROM lore.ensure_embedding_generation($1, $2, $3, $4)`,
-      [
-        embeddingProvider.provider,
-        embeddingProvider.model,
-        embeddingProvider.dimensions,
-        embeddingProvider.revision,
-      ],
-    );
-    const generationId = generation.rows[0]?.id;
-    if (!generationId) throw new Error("Embedding generation could not be resolved");
+    const generationId = await embeddingGenerationId(transaction, embeddingProvider);
     const jobIds: string[] = [];
     for (let offset = 0; offset < memories.length; offset += EMBEDDING_JOB_BATCH_SIZE) {
       const jobs = memories.slice(offset, offset + EMBEDDING_JOB_BATCH_SIZE).map((memory) => ({
@@ -1022,6 +1032,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     enqueueEmbeddingJobsInTransaction,
     insertMemoryInTransaction,
     notifyMaintenance,
+    notifyMaintenanceMany,
     updateMemoryInTransaction,
   };
 }

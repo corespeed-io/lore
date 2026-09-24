@@ -52,6 +52,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
   return {
     enqueueEmbeddingJobsInTransaction: primitives.enqueueEmbeddingJobsInTransaction,
     notifyMaintenance: primitives.notifyMaintenance,
+    notifyMaintenanceMany: primitives.notifyMaintenanceMany,
     async insertMemoryInTransaction(
       transaction: PostgresTransaction,
       actor: ActorContext,

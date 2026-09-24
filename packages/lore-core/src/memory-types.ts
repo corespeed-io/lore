@@ -106,6 +106,12 @@ export interface MemoryEmbeddingJobMessage {
 
 export interface MemoryMaintenanceNotifier {
   notify(message: MemoryEmbeddingJobMessage): void;
+  /**
+   * Optional bulk form for hosts whose transport batches (a queue's sendBatch), so a
+   * bulk write sends a few batches instead of one message per job. Without it the
+   * engine calls `notify` for each message.
+   */
+  notifyMany?(messages: readonly MemoryEmbeddingJobMessage[]): void;
 }
 
 /**

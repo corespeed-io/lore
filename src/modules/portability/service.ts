@@ -19,6 +19,8 @@ export const MAX_WORKSPACE_ARCHIVE_MEMORIES = 10_000;
 export const MAX_WORKSPACE_ARCHIVE_LINKS = 50_000;
 /** The largest accepted import request body, in UTF-8 bytes. */
 export const MAX_WORKSPACE_IMPORT_BODY_BYTES = 50_000_000;
+/** Embedding jobs an import wakes directly: ten Queue batches, like one sweep. */
+const MAX_IMPORT_MAINTENANCE_NOTIFICATIONS = 1_000;
 /**
  * Export budget for one compact archive, in UTF-8 bytes. An import body also carries
  * the ownerMap (at most 10,000 entries of about 80 bytes) and its own envelope, so
@@ -406,18 +408,18 @@ function* recordBatches(records: readonly object[]): Generator<string> {
 /**
  * Run one set-based INSERT per bounded batch. `sql` reads its rows from
  * `jsonb_to_recordset($1::jsonb)`, so RLS WITH CHECK and row triggers still apply to
- * every row exactly as they would to single-row inserts. Returns RETURNING row count.
+ * every row exactly as they would to single-row inserts. Returns the RETURNING rows.
  */
-async function insertInBatches(
+async function insertInBatches<Row extends object = { id: string }>(
   transaction: PostgresTransaction,
   sql: string,
   records: readonly object[],
   parameters: readonly unknown[],
-): Promise<number> {
-  let returned = 0;
+): Promise<Row[]> {
+  const returned: Row[] = [];
   for (const batch of recordBatches(records)) {
-    const result = await transaction.query<{ id: string }>(sql, [batch, ...parameters]);
-    returned += result.rows.length;
+    const result = await transaction.query<Row>(sql, [batch, ...parameters]);
+    returned.push(...result.rows);
   }
   return returned;
 }
@@ -429,7 +431,8 @@ const INSERT_IMPORTED_MEMORIES = `INSERT INTO memories (
           record.metadata
    FROM jsonb_to_recordset($1::jsonb) AS record(
      id uuid, scope memory_scope, content text, metadata jsonb
-   )`;
+   )
+   RETURNING id, version`;
 
 const INSERT_IMPORTED_CHUNKS = `INSERT INTO memory_chunks (
      id, workspace_id, memory_id, ordinal, content, chunking_revision
@@ -467,7 +470,7 @@ export function createPortabilityModule(
   options: PortabilityModuleOptions = {},
 ) {
   const { maximumArchiveBytes = MAX_WORKSPACE_ARCHIVE_BYTES, ...mutationOptions } = options;
-  const { enqueueEmbeddingJobsInTransaction, notifyMaintenance } =
+  const { enqueueEmbeddingJobsInTransaction, notifyMaintenanceMany } =
     createMemoryMutationPrimitives(mutationOptions);
 
   return {
@@ -734,7 +737,7 @@ export function createPortabilityModule(
           memoryIdMap[memory.id] = targetId;
           return { memory, targetId };
         });
-        await insertInBatches(
+        const insertedMemories = await insertInBatches<{ id: string; version: number | string }>(
           transaction,
           INSERT_IMPORTED_MEMORIES,
           targets.map(({ memory, targetId }) => ({
@@ -765,15 +768,23 @@ export function createPortabilityModule(
           })),
           [actor.workspaceId, importId],
         );
+        // Jobs target the version each INSERT actually produced, not an assumed default.
+        const insertedVersions = new Map(
+          insertedMemories.map((row) => [row.id, Number(row.version)] as const),
+        );
         const jobIds = await enqueueEmbeddingJobsInTransaction(
           transaction,
-          targets.map(({ memory, targetId }) => ({
-            id: targetId,
-            workspace_id: actor.workspaceId,
-            owner_user_id: actor.userId,
-            scope: memory.scope,
-            version: 1,
-          })),
+          targets.map(({ memory, targetId }) => {
+            const version = insertedVersions.get(targetId);
+            if (version === undefined) throw new Error("Imported Memory was not inserted");
+            return {
+              id: targetId,
+              workspace_id: actor.workspaceId,
+              owner_user_id: actor.userId,
+              scope: memory.scope,
+              version,
+            };
+          }),
         );
         const importedLinks = await insertInBatches(
           transaction,
@@ -791,7 +802,7 @@ export function createPortabilityModule(
         const result: WorkspaceImportResult = {
           archiveChecksum: checksum,
           dryRun: false,
-          importedLinks,
+          importedLinks: importedLinks.length,
           importedMemories: targets.length,
           memoryIdMap,
           replayed: false,
@@ -804,7 +815,9 @@ export function createPortabilityModule(
         return { jobIds, result };
       });
       // Queue hints are post-commit latency optimizations; the jobs are durable.
-      for (const jobId of imported.jobIds) notifyMaintenance(jobId);
+      // Wake maintenance for a bounded number of jobs; the scheduled sweep delivers the
+      // rest, so a 10,000-Memory import never fans out into thousands of queue sends.
+      notifyMaintenanceMany(imported.jobIds.slice(0, MAX_IMPORT_MAINTENANCE_NOTIFICATIONS));
       return imported.result;
     },
   };
