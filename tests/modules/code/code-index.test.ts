@@ -14,7 +14,10 @@ import {
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
 import { prepareFile } from "@/modules/code/indexing/parser";
 import { CODE_INDEX_LIMITS, CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
-import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
+import {
+  type ConfiguredCodeRepository,
+  createCodeIndexQueueModule,
+} from "@/modules/code/indexing/queue";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import type { PreparedArtifact } from "@/modules/code/indexing/types";
 import { createAccessModule } from "@/server/auth/access";
@@ -27,16 +30,29 @@ const COMMIT_B = "b".repeat(40);
 const COMMIT_C = "c".repeat(40);
 const execFileAsync = promisify(execFile);
 
+/**
+ * The operator registry both the queue and the worker read, as in production. Each
+ * test queues its fixture repository before running maintenance, so the latest
+ * entry for a key is the one the worker resolves.
+ */
+const repositories: Record<string, ConfiguredCodeRepository> = {};
+
 /** Queues one exact commit through the operator registry, as the public route does. */
 function enqueueConfiguredRevision(
   database: PostgresDatabase,
   actor: ActorContext,
   input: { repositoryKey: string; displayName: string; repositoryPath: string; commitOid: string },
 ) {
-  const queue = createCodeIndexQueueModule(database, {
-    [input.repositoryKey]: { displayName: input.displayName, repositoryPath: input.repositoryPath },
-  });
+  repositories[input.repositoryKey] = {
+    displayName: input.displayName,
+    repositoryPath: input.repositoryPath,
+  };
+  const queue = createCodeIndexQueueModule(database, repositories);
   return queue.enqueue(actor, { repositoryKey: input.repositoryKey, commitOid: input.commitOid });
+}
+
+function codeIndexMaintenance(database: PostgresDatabase) {
+  return createCodeIndexMaintenanceModule(database, { repositories });
 }
 
 /** Wraps a database so that the first statement matching `interrupts` fails like a crash. */
@@ -205,14 +221,14 @@ test("queues an exact Git revision without publishing partial search results", a
     CodeIndexAccessDeniedError,
   );
   await expect(
-    createCodeIndexMaintenanceModule(context.maintenanceDatabase).run(queued.id),
+    codeIndexMaintenance(context.maintenanceDatabase).run(queued.id),
   ).resolves.toEqual({ status: "idle" });
 });
 
 test("a leased maintenance job publishes one queued exact Git revision", async () => {
   const context = await createMemoryTestContext();
   const code = createCodeIndexModule(context.database);
-  const maintenance = createCodeIndexMaintenanceModule(context.maintenanceDatabase);
+  const maintenance = codeIndexMaintenance(context.maintenanceDatabase);
   const repositoryPath = await temporaryGitRepository();
   await writeRepositoryFile(
     repositoryPath,
@@ -279,7 +295,7 @@ test("a retried maintenance job resumes from fully persisted Git files", async (
     (sql, params) =>
       sql.includes("INSERT INTO code_artifacts") && Boolean(params?.includes("src/second.ts")),
   );
-  const interrupted = createCodeIndexMaintenanceModule(interruptedDatabase);
+  const interrupted = codeIndexMaintenance(interruptedDatabase);
   await expect(interrupted.run(queued.id)).resolves.toMatchObject({
     status: "retry",
     jobId: queued.id,
@@ -297,7 +313,7 @@ test("a retried maintenance job resumes from fully persisted Git files", async (
     ]);
   });
 
-  const resumed = createCodeIndexMaintenanceModule(context.maintenanceDatabase);
+  const resumed = codeIndexMaintenance(context.maintenanceDatabase);
   await expect(resumed.run(queued.id)).resolves.toMatchObject({
     status: "complete",
     jobId: queued.id,
@@ -340,7 +356,7 @@ test("a leased job commits small complete files together in one bounded checkpoi
       }),
   };
 
-  await expect(createCodeIndexMaintenanceModule(counted).run(queued.id)).resolves.toMatchObject({
+  await expect(codeIndexMaintenance(counted).run(queued.id)).resolves.toMatchObject({
     status: "complete",
     parsedFileCount: 3,
   });
@@ -373,7 +389,7 @@ test("an interrupted job's building generation resumes itself with its dependenc
     sql.includes("INSERT INTO code_dependency_edges"),
   );
   await expect(
-    createCodeIndexMaintenanceModule(crashBeforeReady).run(queued.id),
+    codeIndexMaintenance(crashBeforeReady).run(queued.id),
   ).resolves.toMatchObject({ status: "retry" });
   await context.adminDatabase.transaction(async (transaction) => {
     await expect(
@@ -393,7 +409,7 @@ test("an interrupted job's building generation resumes itself with its dependenc
 
   // The retry reuses its own checkpoints, reading dependencies from their immutable sets.
   await expect(
-    createCodeIndexMaintenanceModule(context.maintenanceDatabase).run(queued.id),
+    codeIndexMaintenance(context.maintenanceDatabase).run(queued.id),
   ).resolves.toMatchObject({ status: "complete", parsedFileCount: 0, reusedFileCount: 1 });
   await expect(
     graph.query(context.alice, {
@@ -442,7 +458,7 @@ test("another commit never reuses Artifacts from a building generation", async (
     sql.includes("INSERT INTO code_dependency_edges"),
   );
   await expect(
-    createCodeIndexMaintenanceModule(crashBeforeReady).run(queued.id),
+    codeIndexMaintenance(crashBeforeReady).run(queued.id),
   ).resolves.toMatchObject({ status: "retry" });
 
   // The unchanged blob's only prior Artifacts sit in the unready building generation.
@@ -493,7 +509,7 @@ test("whitespace-only, padded, and BOM-bearing Git files index, activate, and re
   });
 
   await expect(
-    createCodeIndexMaintenanceModule(context.maintenanceDatabase).run(queued.id),
+    codeIndexMaintenance(context.maintenanceDatabase).run(queued.id),
   ).resolves.toMatchObject({ status: "complete", parsedFileCount: 3, reusedFileCount: 0 });
   const manifest = await code.getGitRevisionManifest(context.alice, {
     repositoryKey,

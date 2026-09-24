@@ -38,13 +38,11 @@ export interface CodeIndexMaintenanceOptions {
   leaseSeconds?: number;
   logger?: (entry: CodeIndexMaintenanceLog) => void;
   /**
-   * The worker's own LORE_CODE_REPOSITORIES registry. When present, each claimed
-   * job resolves its repository path by key here and re-checks the Workspace
-   * binding, so the path the request role wrote into the job row is never read.
-   * The self-host worker always passes it; omitting it keeps the enqueue-time
-   * path and exists only for tests that queue a fixture repository directly.
+   * The worker's own LORE_CODE_REPOSITORIES registry. Each claimed job resolves
+   * its repository path by key here and re-checks the Workspace binding, so the
+   * path the request role wrote into the job row is never read.
    */
-  repositories?: ConfiguredCodeRepositories;
+  repositories: ConfiguredCodeRepositories;
 }
 
 interface ClaimedCodeIndexJobRow {
@@ -122,14 +120,13 @@ function codeIndexRetryDelay(attempt: number): number {
 
 export function createCodeIndexMaintenanceModule(
   database: PostgresDatabase,
-  options: CodeIndexMaintenanceOptions = {},
+  options: CodeIndexMaintenanceOptions,
 ) {
   const leaseSeconds = Math.max(30, Math.min(options.leaseSeconds ?? 900, 3_600));
   const logger = options.logger ?? (() => undefined);
   const repositories = options.repositories;
 
   function repositoryPathFor(claimed: ClaimedCodeIndexJobRow): string {
-    if (!repositories) return claimed.repository_path;
     const configured = configuredCodeRepositoryForWorkspace(
       repositories,
       claimed.repository_key,

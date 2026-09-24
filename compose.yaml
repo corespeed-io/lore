@@ -137,7 +137,9 @@ services:
     command: ["bun", "--no-env-file", ".worker/maintenance-worker.js"]
     environment:
       LORE_MAINTENANCE_DATABASE_URL: postgres://lore_maintenance_runtime:${LORE_DB_MAINTENANCE_PASSWORD:?Set LORE_DB_MAINTENANCE_PASSWORD in .env}@postgres:5432/lore
-      LORE_MAINTENANCE_POOL_SIZE: ${LORE_MAINTENANCE_POOL_SIZE:-2}
+      # Unset keeps the worker default: one connection per embedding lane plus the
+      # sweep and Code Index loops.
+      LORE_MAINTENANCE_POOL_SIZE: ${LORE_MAINTENANCE_POOL_SIZE:-}
       LORE_MAINTENANCE_CONCURRENCY: ${LORE_MAINTENANCE_CONCURRENCY:-1}
       LORE_MAINTENANCE_POLL_MS: ${LORE_MAINTENANCE_POLL_MS:-1000}
       LORE_MAINTENANCE_SWEEP_MS: ${LORE_MAINTENANCE_SWEEP_MS:-300000}
@@ -156,7 +158,11 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
       # Code Index jobs read Git in this worker; keep the registry, the optional
-      # safe.directory entry, and the mounts identical to the lore service.
+      # safe.directory entry, and the mounts identical to the lore service. The
+      # worker re-checks each entry's Workspace binding, and an entry without
+      # workspaceIds is served only when AUTH_MODE is password or none, so it needs
+      # the same AUTH_MODE as the lore service.
+      AUTH_MODE: ${AUTH_MODE:-}
       LORE_CODE_REPOSITORIES: ${LORE_CODE_REPOSITORIES:-}
       # GIT_CONFIG_COUNT: "1"
       # GIT_CONFIG_KEY_0: safe.directory

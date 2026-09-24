@@ -77,7 +77,18 @@ been removed. Lore now has a native implementation, split into two concepts
   FTS GIN indexes that the RLS request path can never use, and
   `0003_drop_memory_chunks_entity_aliases_index.sql` removes the entity-aliases
   GIN on the same proof (`arraycontains` is equally non-leakproof; the
-  generated column stays for the scan predicate). Every new migration
+  generated column stays for the scan predicate).
+  `0004_job_lifecycle_and_agent_provenance.sql` lets Agent deletion clear Code
+  Evidence provenance, retires exhausted Code Index leases as dead, re-arms
+  dead/cancelled/orphaned Code Index jobs through `lore.enqueue_code_index_job`,
+  cancels a disabled or deleted Agent's unfinished Code Index jobs, serializes
+  generation activation per revision instead of a table lock, indexes the
+  replay-scrub JSON paths, revokes maintenance UPDATE on `memory_chunks`, adds
+  `lore.requeue_dead_memory_embedding_jobs`, and evaluates the
+  Memory/chunk/embedding/link read check once per statement via
+  `(SELECT lore.can_read_workspace(lore.current_workspace_id()))`; its policy
+  rewrite briefly takes ACCESS EXCLUSIVE on those four tables under a 5s
+  `lock_timeout`, so a busy deploy may need a retry. Every new migration
   must update `lore_system_state.schema_revision` to its own version number —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
@@ -230,7 +241,16 @@ been removed. Lore now has a native implementation, split into two concepts
   accept only an operator-configured `repositoryKey` plus exact commit OID; never
   accept a model-supplied local path, credential, or Workspace override. Configure
   the self-host registry with `LORE_CODE_REPOSITORIES`; an empty registry disables
-  public enqueue. Keep native Git/AST parsing out of Cloudflare request bundles;
+  public enqueue. Entries may bind `workspaceIds`; an unbound entry is kept only
+  when `AUTH_MODE` is explicitly `password` or `none` (single operator), and a
+  Workspace outside a binding gets exactly the unconfigured-key 400 so the registry
+  cannot be enumerated. The maintenance worker resolves repository paths from its
+  own `LORE_CODE_REPOSITORIES`, never the job row's `repository_path`, re-checks
+  the binding at processing time, and does no Code Indexing with an empty
+  registry. Validation errors, OID/content conflicts, and incomplete generations
+  end a job `dead` on its first attempt; other failures retry. Re-enqueue re-arms
+  dead, cancelled, or orphaned jobs; disabling or deleting an Agent cancels its
+  Code Index jobs. Keep native Git/AST parsing out of Cloudflare request bundles;
   it runs only in the Bun/self-host maintenance worker. Parser, symbol, or chunking
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
@@ -334,9 +354,17 @@ been removed. Lore now has a native implementation, split into two concepts
   prior active generation to bounded rollback. Postgres is the durable job source;
   rollout maintenance drains both the serving and explicitly configured building
   provider/model generations, because request writes continue to enqueue serving
-  jobs until cutover. The self-host Bun worker polls both sequentially by default,
-  while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
-  database sweep as the delivery backstop;
+  jobs until cutover. The self-host Bun worker runs the sweep, Code Index jobs, and
+  embedding jobs as independent loops, draining both generations sequentially
+  within the embedding loop, while Cloudflare Queues are wake-up hints for both
+  with a scheduled two-generation database sweep as the delivery backstop.
+  Embedding and Code Index maintenance return `lost`, a normal outcome, when
+  another run took the lease or the Memory was deleted mid-embed; `--once` runs
+  one cycle for CI. Mutation primitives return a `jobId` only when an embedding
+  job row was inserted (`RETURNING true` needs no SELECT grant); hosts notify on
+  any non-null id, including a metadata-only update whose prior embedding is still
+  pending. `bun run db:embedding:requeue-dead` re-arms one generation's dead
+  embedding jobs after an outage (dry-run count unless `--apply`);
 - `src/server/api/idempotency.ts`, `src/modules/operations/maintenance.ts`,
   `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
   own OSS replay, expired replay/event cleanup, and operational integration.
@@ -511,8 +539,10 @@ adapters are configured once per deployment, and embedding failure is explicit (
 never blocks a Memory write. Local deployment defaults are Qwen3-Embedding 0.6B at
 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
 The self-host worker defaults to one leased embedding job at a time; optional
-`LORE_MAINTENANCE_CONCURRENCY` uses independent leases and must be sized with the
-database pool and provider capacity. Keep local Ollama at one unless measured.
+`LORE_MAINTENANCE_CONCURRENCY` uses independent leases, is a hard per-round bound on
+embedding leases, and must be sized with the database pool and provider capacity;
+`LORE_MAINTENANCE_POOL_SIZE` defaults to concurrency + 2 for the sweep and Code
+Index loops. Keep local Ollama at one unless measured.
 Invalid embedding configuration and provider request failures must warn server-side
 and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
 Lexical degradation quality is language-dependent: FTS carries English, while CJK
@@ -820,7 +850,12 @@ database invariant, not a UI convention.
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.
 - Credentials and secrets stay server-only, are stored hashed or encrypted as
-  appropriate, and never use `NEXT_PUBLIC_*` variables.
+  appropriate, and never use `NEXT_PUBLIC_*` variables. `create-runtime-role.ts`
+  sends only SCRAM-SHA-256 verifiers, never cleartext passwords, so runtime
+  passwords must be printable ASCII.
+- Readiness and restore verification derive RLS coverage from pg_catalog: every
+  public table except `lore_system_state` and `lore_schema_migrations` must enable
+  RLS, so a new table cannot be forgotten by a hand-kept list.
 - `AUTH_MODE=none` is only acceptable for explicit local development with
   `ALLOW_INSECURE=1`; production fails closed. Compose supplies no default for
   `AUTH_MODE` or `ALLOW_INSECURE`; the local no-auth opt-in lives only in `.env`,
@@ -1196,6 +1231,7 @@ bun run db:restore # restore into an explicitly named target database
 bun run db:pitr:check # verify PostgreSQL WAL/PITR prerequisites
 bun run db:embedding:report # report build-generation coverage
 bun run db:embedding:activate # atomically activate one complete generation
+bun run db:embedding:requeue-dead # count, or with --apply re-arm, one generation's dead embedding jobs
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
 bun run benchmark:longmemeval:fetch # download and verify the pinned cleaned S split

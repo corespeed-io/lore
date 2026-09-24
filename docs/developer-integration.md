@@ -273,8 +273,15 @@ assuming whitespace-normalized chunks or adding hidden overlap.
 Self-host operators enable indexing by setting a server-side registry, for example:
 
 ```bash
-export LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath":"/absolute/path/to/lore"}}'
+export LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath":"/absolute/path/to/lore","workspaceIds":["<workspace-uuid>"]}}'
 ```
+
+`workspaceIds` names the Workspaces whose Actors may index and read that
+repository. An entry without it is served only when `AUTH_MODE` is `password` or
+`none` (a single operator); in `proxy` mode it is ignored with a server-side
+warning, so a multi-user deployment must bind every repository. A Workspace outside
+the binding gets the same "not configured" error as an unknown key. The maintenance
+worker reads the same variable and resolves paths from it rather than from the job.
 
 The model supplies `repositoryKey` and a full 40/64-character commit OID. It cannot
 supply or discover `repositoryPath`; an empty registry disables enqueue. Native

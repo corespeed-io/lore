@@ -84,3 +84,17 @@ test("a dead job or sustained zero progress aborts the drain", async () => {
     }),
   ).rejects.toThrow("no progress across 2 throttled rounds");
 });
+
+test("a lost lease is neither a completion nor a reason to abort", async () => {
+  const backlog = [1, 0];
+  const completed = await drainEmbeddingMaintenance({
+    run: scripted([
+      { status: "lost", jobId: "job-1" },
+      { status: "complete", jobId: "job-2" },
+    ]),
+    concurrency: 1,
+    pendingJobCount: async () => backlog.shift() ?? 0,
+    sleep: async () => {},
+  });
+  expect(completed).toBe(1);
+});

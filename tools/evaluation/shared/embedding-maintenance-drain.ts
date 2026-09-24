@@ -46,7 +46,9 @@ export async function drainEmbeddingMaintenance(
     let roundCompleted = 0;
     let retryAfterSeconds = 0;
     for (const result of results) {
-      if (result.status === "idle") continue;
+      // `lost` means another run owns (or the Memory no longer needs) that lease:
+      // no completion to count, and nothing to back off from.
+      if (result.status === "idle" || result.status === "lost") continue;
       if (result.status === "dead") {
         throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as dead`);
       }
@@ -65,7 +67,7 @@ export async function drainEmbeddingMaintenance(
       options.onProgress?.(completedJobs, roundCompleted);
       continue;
     }
-    if (results.every((result) => result.status === "idle")) {
+    if (results.every((result) => result.status === "idle" || result.status === "lost")) {
       if ((await options.pendingJobCount()) === 0) break;
       retryAfterSeconds = Math.max(retryAfterSeconds, 15);
     }

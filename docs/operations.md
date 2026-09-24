@@ -49,11 +49,13 @@ Memory browse pagination accepts an opaque `cursor` and returns the next value i
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
 
-An archive is bounded to 10,000 visible Memories and 50,000 visible Links, matching
-the import contract. Export reads only a one-row sentinel beyond each bound, so a
-Worker never materializes an unbounded number of Workspace rows. If either bound
-is exceeded, export returns `workspace_export_limit_exceeded` (409) and does not
-emit a partial archive. The same limits are published by `/api/v1/capabilities`.
+An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
+48,000,000 serialized bytes, so every archive export produces fits the
+50,000,000-byte import request limit. Export keeps a running size sum and reads only
+a one-row sentinel beyond each bound, so a Worker never materializes an unbounded
+number of Workspace rows. If any bound is exceeded, export returns
+`workspace_export_limit_exceeded` (409) and does not emit a partial archive. The
+row limits are published by `/api/v1/capabilities`.
 
 It never includes another member's private Memory, credentials, Memberships,
 Agents, embeddings, jobs, evaluations, idempotency records, or mutation events.
@@ -63,8 +65,17 @@ conflictPolicy }`. Every source owner must be explicitly mapped to the importing
 User; Lore does not guess ownership. Always run with `dryRun: true` first. The
 default `remap` policy always creates fresh ids, `skip` omits visible colliding rows,
 and `error` rejects visible collisions. Checksum, counts, field limits, link endpoints, and
-owner mapping are validated before writes. A completed archive checksum is
-replay-safe for that importer and Workspace.
+owner mapping are validated before writes; metadata is checked with the same
+100,000-character rule as the Memory API, so anything export produced imports. An
+import request larger than 50,000,000 bytes is refused with 413
+`payload_too_large` before it is parsed, whether it declares `Content-Length` or
+streams. Imported Memories get embedding jobs in the import transaction, so dense
+retrieval does not wait for the sweep.
+
+A completed archive checksum is replay-safe for that importer and Workspace while
+every Memory it imported still exists. If some or all of them were deleted,
+importing the same archive again restores the missing Memories, reuses the
+survivors, and re-creates Links that touch a restored Memory, on the same receipt.
 
 Every imported Memory receives a fresh target id. `error` and `skip` apply only to
 source-id collisions the importing Actor can already see; Lore never probes or
