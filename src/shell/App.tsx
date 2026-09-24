@@ -1,13 +1,18 @@
 "use client";
 
-import type { Memory, MemoryProposalReviewResult, MemoryScope } from "@corespeed/lore-sdk";
+import type {
+  Memory,
+  MemoryProposalReviewResult,
+  MemoryScope,
+  WorkspaceSummary,
+} from "@corespeed/lore-sdk";
 import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "@/modules/agents/browser/AgentsView";
 import { useLoreGraph } from "@/modules/graph/browser/data";
 import { GraphView } from "@/modules/graph/browser/GraphView";
 import { LocalGraphModal } from "@/modules/graph/browser/LocalGraphModal";
-import type { GraphData } from "@/modules/graph/browser/types";
+import { type GraphData, isGraphCapped } from "@/modules/graph/browser/types";
 import {
   removeMemoryFromPages,
   upsertMemoryPages,
@@ -21,6 +26,8 @@ import { WorkspaceOperationsView } from "@/modules/operations/browser/WorkspaceO
 import { MemoryProposalsView } from "@/modules/proposals/browser/MemoryProposalsView";
 import { useLoreWorkspaces } from "@/modules/workspaces/browser/data";
 import { loreKeys } from "@/shared/browser/cache-keys";
+import { readLocalPreference, writeLocalPreference } from "@/shared/browser/local-preference";
+import { readState } from "@/shared/browser/read-state";
 import { Overview } from "@/shell/overview/Overview";
 import type { RouteState, Tab } from "@/shell/route";
 import { parseRoute, routeUrl } from "@/shell/route";
@@ -37,6 +44,8 @@ const TAB_LABELS: Record<Tab, string> = {
 };
 
 const EMPTY_GRAPH: GraphData = { nodes: [], links: [] };
+const EMPTY_WORKSPACES: readonly WorkspaceSummary[] = [];
+const WORKSPACE_PREFERENCE = "lore.workspace";
 
 interface GraphStore {
   byId: Record<string, GraphData["nodes"][number]>;
@@ -135,24 +144,29 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const needsSearch = routeReady && tab === "search" && !selectedMemoryId;
 
   const {
-    data: workspaces = [],
+    data: workspacesData,
     error: workspacesRequestError,
     isLoading: workspacesLoading,
+    isValidating: workspacesValidating,
     mutate: mutateWorkspaces,
   } = useLoreWorkspaces();
+  const workspaces = workspacesData ?? EMPTY_WORKSPACES;
   const {
+    data: memoryPages,
     memories,
     error: memoriesRequestError,
     isCapped: memoriesCapped,
+    isComplete: memoriesComplete,
     isLoading: memoriesLoading,
     mutate: mutateMemories,
   } = useLoreMemories(activeWorkspaceId, needsMemories);
   const {
-    data: graphData = EMPTY_GRAPH,
+    data: graphResponse,
     error: graphRequestError,
     isLoading: graphLoading,
     mutate: mutateGraph,
   } = useLoreGraph(activeWorkspaceId, needsGraph);
+  const graphData = graphResponse ?? EMPTY_GRAPH;
   const {
     data: searchResults = [],
     error: searchRequestError,
@@ -168,6 +182,16 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const graph = useMemo(() => buildGraph(graphData), [graphData]);
   const graphError = graphRequestError ? errorMessage(graphRequestError) : null;
   const graphLoaded = !activeWorkspaceId || !graphLoading;
+  // Unknown graph or browse state must never render as zero, "none", or "not found".
+  const graphState = readState({
+    hasData: graphResponse !== undefined,
+    hasError: Boolean(graphRequestError),
+  });
+  const memoriesState = readState({
+    hasData: memoryPages !== undefined,
+    hasError: Boolean(memoriesRequestError),
+  });
+  const memoriesErrorMessage = memoriesRequestError ? errorMessage(memoriesRequestError) : null;
   const workspaceRequestError =
     workspacesRequestError ?? (needsMemories ? memoriesRequestError : null);
   const workspaceErrorMessage = workspaceRequestError ? errorMessage(workspaceRequestError) : null;
@@ -185,16 +209,14 @@ export function App({ appTitle, appSubtitle }: AppProps) {
       return;
     }
     if (workspaces.some((workspace) => workspace.id === activeWorkspaceId)) return;
-    const remembered = window.localStorage.getItem("lore.workspace");
+    const remembered = readLocalPreference(WORKSPACE_PREFERENCE);
     const next =
       workspaces.find((workspace) => workspace.id === remembered)?.id ?? workspaces[0]?.id;
     setActiveWorkspaceId(next ?? "");
   }, [activeWorkspaceId, workspaces]);
 
   useEffect(() => {
-    if (activeWorkspaceId) {
-      window.localStorage.setItem("lore.workspace", activeWorkspaceId);
-    }
+    if (activeWorkspaceId) writeLocalPreference(WORKSPACE_PREFERENCE, activeWorkspaceId);
     searchCancelRef.current?.();
     setSelectedMemoryId(null);
     setLocalGraphId(null);
@@ -387,6 +409,18 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     }
   }
 
+  // A failed first read is not an empty account: offering first-run onboarding
+  // here would invite a duplicate Workspace.
+  if (!workspacesData && workspacesRequestError) {
+    return (
+      <WorkspaceLoadError
+        message={errorMessage(workspacesRequestError)}
+        retrying={workspacesValidating}
+        onRetry={() => void mutateWorkspaces()}
+      />
+    );
+  }
+
   if (workspacesLoading || (workspaces.length > 0 && !routeReady)) {
     return <main className="app-loading">Opening Lore…</main>;
   }
@@ -469,6 +503,9 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 memory={selectedMemory}
                 wikilinkTargets={graph.byReference}
                 related={graphNeighbors(graph, selectedMemory.id)}
+                graphState={graphState}
+                graphCapped={isGraphCapped(graphData)}
+                inGraph={Boolean(graph.byId[selectedMemory.id])}
                 backLabel={TAB_LABELS[tab]}
                 saving={saving}
                 error={mutationError}
@@ -512,8 +549,10 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                     appSubtitle={appSubtitle}
                     workspaceName={activeWorkspace?.name ?? "Workspace"}
                     graphData={graphData}
-                    graphError={graphError}
+                    graphState={graphState}
                     memories={memories}
+                    memoriesState={memoriesState}
+                    memoriesComplete={memoriesComplete}
                     onOpen={openMemory}
                     onType={drillType}
                     onNavigate={handleTabChange}
@@ -536,10 +575,12 @@ export function App({ appTitle, appSubtitle }: AppProps) {
 
                 {tab === "search" && (
                   <SearchResults
+                    workspaceId={activeWorkspaceId}
                     results={searchResults}
                     memories={memories}
                     capped={memoriesCapped}
                     loading={searchQuery ? searchLoading : memoriesLoading}
+                    browseError={memoriesErrorMessage}
                     error={searchRequestError ? errorMessage(searchRequestError) : null}
                     query={searchQuery}
                     typeFilter={memoryTypeFilter}
@@ -814,6 +855,27 @@ function WorkspaceDialog({
         </form>
       </dialog>
     </div>
+  );
+}
+
+function WorkspaceLoadError({
+  message,
+  retrying,
+  onRetry,
+}: {
+  message: string;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <main className="app-loading">
+      <div className="native-error" role="alert">
+        <span>Couldn&apos;t load your Workspaces — {message}.</span>
+        <button type="button" onClick={onRetry} disabled={retrying}>
+          {retrying ? "Retrying…" : "Retry"}
+        </button>
+      </div>
+    </main>
   );
 }
 

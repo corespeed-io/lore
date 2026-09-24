@@ -1,20 +1,25 @@
 "use client";
 
 import type { Memory, MemorySearchResult } from "@corespeed/lore-sdk";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { plain } from "@/modules/memories/browser/markdown";
 import {
+  memoryConfiguredType,
   memoryTitle,
   memoryType,
+  shortMemoryDate,
   typeLabel,
   typeSort,
 } from "@/modules/memories/browser/presentation";
 
 interface SearchResultsProps {
+  workspaceId: string;
   results: readonly MemorySearchResult[];
   memories: Memory[];
   capped: boolean;
   loading: boolean;
+  /** The browse read failed before any Memory arrived. */
+  browseError: string | null;
   error: string | null;
   query: string;
   typeFilter: string;
@@ -46,18 +51,24 @@ function highlight(text: string, terms: string[]): React.ReactNode {
   });
 }
 
-const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-
-function shortDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : DATE_FORMAT.format(date);
+/** Scope is explicit text on every Memory row; a type badge appears only when set. */
+function MemoryRowLabels({ memory }: { memory: Memory }) {
+  const type = memoryConfiguredType(memory);
+  return (
+    <>
+      {type && <span className="badge">{type}</span>}
+      <span className="memory-scope">{memory.scope}</span>
+    </>
+  );
 }
 
 export function SearchResults({
+  workspaceId,
   results,
   memories,
   capped,
   loading,
+  browseError,
   error,
   query,
   typeFilter,
@@ -66,15 +77,15 @@ export function SearchResults({
 }: SearchResultsProps) {
   const normalizedQuery = query.trim();
   const [rowLimit, setRowLimit] = useState(BROWSE_BATCH);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const listKey = `${typeFilter}|${memories.length}`;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: listKey is the intentional reset signal.
+  // Only a different list resets the window. Browse keeps filling pages into
+  // `memories`, and resetting on its length would snap the scroll back to 200 rows.
+  // listKey is the intentional reset signal.
+  const listKey = `${workspaceId}|${typeFilter}`;
   useEffect(() => setRowLimit(BROWSE_BATCH), [listKey]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: query/listKey determine whether the sentinel exists.
-  useEffect(() => {
-    const element = sentinelRef.current;
+  // A callback ref observes the sentinel whenever it mounts, including when a
+  // later browse page first makes the list longer than the current window.
+  const observeSentinel = useCallback((element: HTMLDivElement | null) => {
     if (!element) return;
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
@@ -83,7 +94,7 @@ export function SearchResults({
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [listKey, normalizedQuery]);
+  }, []);
 
   if (!normalizedQuery) {
     if (loading) {
@@ -96,7 +107,11 @@ export function SearchResults({
     if (!memories.length) {
       return (
         <div className="page-wrap">
-          <p className="muted-note">No Memories in this Workspace yet.</p>
+          <p className="muted-note">
+            {browseError
+              ? `Couldn't load this Workspace's Memories — ${browseError}.`
+              : "No Memories in this Workspace yet."}
+          </p>
         </div>
       );
     }
@@ -149,16 +164,16 @@ export function SearchResults({
             >
               <div className="search-row-title">
                 {memoryTitle(memory)}
-                <span className="badge">{memoryType(memory)}</span>
+                <MemoryRowLabels memory={memory} />
               </div>
               <div className="search-row-foot">
                 <span className="search-row-id">{memory.id}</span>
-                <span className="activity-date">{shortDate(memory.updatedAt)}</span>
+                <span className="activity-date">{shortMemoryDate(memory.updatedAt)}</span>
               </div>
             </button>
           ))}
           {shown.length < filtered.length && (
-            <div ref={sentinelRef} className="search-list-sentinel" aria-hidden="true" />
+            <div ref={observeSentinel} className="search-list-sentinel" aria-hidden="true" />
           )}
         </div>
       </div>
@@ -210,7 +225,7 @@ export function SearchResults({
             >
               <div className="search-row-title">
                 {highlight(memoryTitle(memory), terms)}
-                <span className="badge">{memoryType(memory)}</span>
+                <MemoryRowLabels memory={memory} />
               </div>
               <div className="search-row-id">{memory.id}</div>
               {snippet && <div className="search-row-snip">{highlight(snippet, terms)}</div>}

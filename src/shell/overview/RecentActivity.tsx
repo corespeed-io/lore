@@ -1,29 +1,32 @@
 "use client";
 
 import type { Memory } from "@corespeed/lore-sdk";
-import { memoryTitle, memoryType } from "@/modules/memories/browser/presentation";
+import {
+  memoryConfiguredType,
+  memoryTitle,
+  shortMemoryDate,
+} from "@/modules/memories/browser/presentation";
 
 interface RecentActivityProps {
   items: Memory[];
+  // Shown instead of the rows while the browse read is loading or failed, so an
+  // unknown list never reads as "Nothing recent."
+  notice?: string | null;
   onOpen: (memoryId: string) => void;
 }
 
-function shortDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-export function RecentActivity({ items, onOpen }: RecentActivityProps) {
+export function RecentActivity({ items, notice, onOpen }: RecentActivityProps) {
   return (
     <div className="panel-card">
       <p className="panel-card-title">Recent activity</p>
-      {items.length === 0 ? (
+      {notice ? (
+        <p className="panel-empty">{notice}</p>
+      ) : items.length === 0 ? (
         <p className="panel-empty">Nothing recent.</p>
       ) : (
         items.map((memory) => {
           const source = memory.metadata.source;
+          const type = memoryConfiguredType(memory);
           return (
             <button
               key={memory.id}
@@ -32,11 +35,12 @@ export function RecentActivity({ items, onOpen }: RecentActivityProps) {
               onClick={() => onOpen(memory.id)}
             >
               <span className="activity-title">{memoryTitle(memory)}</span>
-              <span className="badge">{memoryType(memory)}</span>
+              {type && <span className="badge">{type}</span>}
+              <span className="memory-scope">{memory.scope}</span>
               {typeof source === "string" && source.trim() && (
                 <span className="activity-src">{source}</span>
               )}
-              <span className="activity-date">{shortDate(memory.updatedAt)}</span>
+              <span className="activity-date">{shortMemoryDate(memory.updatedAt)}</span>
             </button>
           );
         })

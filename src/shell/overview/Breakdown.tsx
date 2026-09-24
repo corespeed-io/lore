@@ -5,10 +5,12 @@ import { typeColor } from "@/shared/ui/colors";
 
 interface BreakdownProps {
   byCounts: Record<string, number>;
+  // Shown instead of the bars while the browse read is loading or failed.
+  notice?: string | null;
   onType: (type: string) => void;
 }
 
-export function Breakdown({ byCounts, onType }: BreakdownProps) {
+export function Breakdown({ byCounts, notice, onType }: BreakdownProps) {
   const entries = Object.entries(byCounts)
     .filter(([, count]) => count > 0)
     .sort(([a, av], [b, bv]) => {
@@ -20,7 +22,8 @@ export function Breakdown({ byCounts, onType }: BreakdownProps) {
   return (
     <div className="panel-card">
       <p className="panel-card-title">By type</p>
-      {entries.length === 0 && <p className="panel-empty">No typed memories.</p>}
+      {notice && <p className="panel-empty">{notice}</p>}
+      {!notice && entries.length === 0 && <p className="panel-empty">No typed memories.</p>}
       {entries.map(([key, count]) => (
         <button
           key={key}

@@ -5,10 +5,10 @@ import useSWR from "swr";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { getBrowserClient } from "@/shared/browser/sdk";
 import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume";
-import type { GraphData } from "./types";
+import { GRAPH_NODE_LIMIT, type GraphData } from "./types";
 
 export async function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
-  const graph = await getBrowserClient().workspace(workspaceId).graph(5_000, signal);
+  const graph = await getBrowserClient().workspace(workspaceId).graph(GRAPH_NODE_LIMIT, signal);
   return { nodes: [...graph.nodes], links: [...graph.links] };
 }
 
