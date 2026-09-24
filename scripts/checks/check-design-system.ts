@@ -69,6 +69,96 @@ function finding(path: string, line: number, message: string) {
   return `${path}:${line} ${message}`;
 }
 
+interface StringSegment {
+  /** Literal text, without quotes or template `${…}` expressions. */
+  text: string;
+  /** Offset of `text` in the source. */
+  offset: number;
+}
+
+/**
+ * The text of every string and template literal in TS/TSX source, so a class
+ * token is found wherever a className can be assembled: plain and braced JSX
+ * attributes, template literals, ternaries, and cn()/clsx() arguments. Comments
+ * are skipped, and literals nested in `${…}` are yielded on their own. Regex
+ * literals and JSX text are not modeled; a stray quote there mis-scans only to
+ * the end of its line, because quoted strings cannot span lines.
+ */
+function stringSegments(source: string): StringSegment[] {
+  const segments: StringSegment[] = [];
+  // Brace depth at which each open template `${` expression began.
+  const templateDepths: number[] = [];
+  let braceDepth = 0;
+  // Scan template text from `start` to the closing backtick or the next `${`.
+  const scanTemplate = (start: number): number => {
+    let cursor = start;
+    while (cursor < source.length) {
+      const char = source[cursor];
+      if (char === "\\") {
+        cursor += 2;
+      } else if (char === "`") {
+        segments.push({ text: source.slice(start, cursor), offset: start });
+        return cursor + 1;
+      } else if (char === "$" && source[cursor + 1] === "{") {
+        segments.push({ text: source.slice(start, cursor), offset: start });
+        templateDepths.push(braceDepth);
+        braceDepth += 1;
+        return cursor + 2;
+      } else {
+        cursor += 1;
+      }
+    }
+    segments.push({ text: source.slice(start), offset: start });
+    return source.length;
+  };
+
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (char === "/" && next === "/") {
+      const end = source.indexOf("\n", index);
+      index = end === -1 ? source.length : end;
+    } else if (char === "/" && next === "*") {
+      const end = source.indexOf("*/", index + 2);
+      index = end === -1 ? source.length : end + 2;
+    } else if (char === '"' || char === "'") {
+      let cursor = index + 1;
+      while (cursor < source.length && source[cursor] !== char && source[cursor] !== "\n") {
+        cursor += source[cursor] === "\\" ? 2 : 1;
+      }
+      segments.push({ text: source.slice(index + 1, cursor), offset: index + 1 });
+      index = cursor + 1;
+    } else if (char === "`") {
+      index = scanTemplate(index + 1);
+    } else if (char === "{") {
+      braceDepth += 1;
+      index += 1;
+    } else if (char === "}") {
+      braceDepth -= 1;
+      if (templateDepths.at(-1) === braceDepth) {
+        templateDepths.pop();
+        index = scanTemplate(index + 1);
+      } else {
+        index += 1;
+      }
+    } else {
+      index += 1;
+    }
+  }
+  return segments;
+}
+
+/** Offset of the first whole class token (or `.token` selector) in any string literal. */
+function retiredClassOffset(segments: readonly StringSegment[], retiredClass: string) {
+  const token = new RegExp(`(?<![\\w-])${retiredClass}(?![\\w-])`);
+  for (const segment of segments) {
+    const match = token.exec(segment.text);
+    if (match) return segment.offset + match.index;
+  }
+  return null;
+}
+
 export function checkDesignSystem(projectRoot: string) {
   const root = resolve(projectRoot);
   const findings = [];
@@ -105,13 +195,14 @@ export function checkDesignSystem(projectRoot: string) {
   const sources = walk(root, "src", (path) => /\.(?:ts|tsx)$/.test(path));
   for (const path of sources) {
     const source = readFileSync(resolve(root, path), "utf8");
+    const segments = stringSegments(source);
     for (const retiredClass of RETIRED_CLASSES) {
-      const match = new RegExp(`(?:className=["'][^"']*|\\.)${retiredClass}\\b`).exec(source);
-      if (match) {
+      const offset = retiredClassOffset(segments, retiredClass);
+      if (offset !== null) {
         findings.push(
           finding(
             path,
-            lineNumber(source, match.index),
+            lineNumber(source, offset),
             `retired class ${retiredClass} must not return; compose the canonical Lore shell`,
           ),
         );

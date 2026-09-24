@@ -83,3 +83,60 @@ test("rejects retired classes", () => {
   const findings = checkDesignSystem(root);
   assert.ok(findings.some((item) => item.includes("memory-ledger")));
 });
+
+test.each([
+  ["braced string", 'export const A = () => <div className={"memory-rail"} />;\n'],
+  [
+    "template literal",
+    `export const A = (x: string) => <div className={\`card \${x} drawer-panel\`} />;\n`,
+  ],
+  ["ternary", 'export const A = (on: boolean) => <i className={on ? "scope-pill" : "pill"} />;\n'],
+  [
+    "cn() argument",
+    'declare const cn: (...v: unknown[]) => string;\nexport const c = cn("row", true && "ledger-heading");\n',
+  ],
+  [
+    "clsx() object key",
+    'declare const clsx: (v: object) => string;\nexport const c = clsx({ "memory-ledger": true });\n',
+  ],
+  [
+    "nested template",
+    `export const c = (x: boolean) => \`row \${x ? \`on \${"memory-rail"}\` : ""}\`;\n`,
+  ],
+  ["selector string", 'export const node = () => document.querySelector("aside.drawer-panel");\n'],
+])("rejects a retired class assembled through a %s", (_form, source) => {
+  const root = fixture();
+  write(root, "src/components/feature.tsx", source);
+  const findings = checkDesignSystem(root);
+  assert.equal(findings.length, 1, findings.join("\n"));
+  assert.match(findings[0] ?? "", /^src\/components\/feature\.tsx:\d+ retired class /);
+});
+
+test("reports the line of a retired class inside a multi-line template literal", () => {
+  const root = fixture();
+  write(
+    root,
+    "src/components/feature.tsx",
+    `export const c = (x: string) => \`\n  card\n  \${x}\n  memory-rail\n\`;\n`,
+  );
+  assert.deepEqual(
+    checkDesignSystem(root).map((item) => item.split(" ")[0]),
+    ["src/components/feature.tsx:4"],
+  );
+});
+
+test("ignores comments, identifiers, and longer class names that only contain a retired token", () => {
+  const root = fixture();
+  write(
+    root,
+    "src/components/feature.tsx",
+    [
+      "// memory-rail was retired in favour of the canonical shell.",
+      '/* className="drawer-panel" */',
+      "const memoryRail = 1;",
+      `export const c = ["memory-rail-v2", "scope-pills", "x-ledger-heading", \`\${memoryRail}\`];`,
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(checkDesignSystem(root), []);
+});
