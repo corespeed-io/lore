@@ -1,17 +1,38 @@
-import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
+import type {
+  MemoryMutationPrimitivesOptions,
+  PostgresDatabase,
+  PostgresTransaction,
+} from "@corespeed/lore-core";
 import {
   MEMORY_CHUNKING_REVISION,
   MemoryContentValidationError,
   prepareMemoryContent,
 } from "@corespeed/lore-core";
-import type { MemoryScope } from "@/modules/memories/schemas";
-import { canonicalJson, mutationRequestHash } from "@/server/api/idempotency";
+import { MemoryMetadataSchema, type MemoryScope } from "@/modules/memories/schemas";
+import { createMemoryMutationPrimitives } from "@/modules/memories/service";
+import { mutationRequestHash } from "@/server/api/idempotency";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 
 export const WORKSPACE_ARCHIVE_FORMAT = "lore-workspace-v1";
 export const MAX_WORKSPACE_ARCHIVE_MEMORIES = 10_000;
 export const MAX_WORKSPACE_ARCHIVE_LINKS = 50_000;
+/** The largest accepted import request body, in UTF-8 bytes. */
+export const MAX_WORKSPACE_IMPORT_BODY_BYTES = 50_000_000;
+/**
+ * Export budget for one compact archive, in UTF-8 bytes. An import body also carries
+ * the ownerMap (at most 10,000 entries of about 80 bytes) and its own envelope, so
+ * this margin keeps every archive that export produces importable.
+ */
+export const MAX_WORKSPACE_ARCHIVE_BYTES = 48_000_000;
+// Upper bounds for each serialized record beyond its measured JSON content (or kind)
+// and metadata: ids, timestamps, version or weight, property names, and separators.
+const ARCHIVE_MEMORY_OVERHEAD_BYTES = 256;
+const ARCHIVE_LINK_OVERHEAD_BYTES = 320;
+const ARCHIVE_MANIFEST_BYTES = 1_024;
+// Each import INSERT carries one bounded JSON array parameter.
+const IMPORT_BATCH_ROWS = 5_000;
+const IMPORT_BATCH_CHARACTERS = 4_000_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class PortabilityValidationError extends Error {
@@ -84,6 +105,11 @@ export interface WorkspaceImportResult {
   skippedMemories: number;
 }
 
+export interface PortabilityModuleOptions extends MemoryMutationPrimitivesOptions {
+  /** Export budget in UTF-8 bytes; defaults to {@link MAX_WORKSPACE_ARCHIVE_BYTES}. */
+  maximumArchiveBytes?: number;
+}
+
 interface ExportMemoryRow {
   id: string;
   owner_user_id: string;
@@ -93,6 +119,7 @@ interface ExportMemoryRow {
   version: number;
   created_at: string;
   updated_at: string;
+  running_bytes: number | string;
 }
 
 interface ExportLinkRow {
@@ -104,22 +131,56 @@ interface ExportLinkRow {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  running_bytes: number | string;
+}
+
+interface NormalizedArchiveMemory extends WorkspaceArchiveMemory {
+  chunks: readonly string[];
+}
+
+interface NormalizedArchive {
+  manifest: WorkspaceArchive["manifest"];
+  memories: NormalizedArchiveMemory[];
+  links: WorkspaceArchiveLink[];
+}
+
+interface ImportReceipt {
+  id: string;
+  summary: WorkspaceImportResult;
 }
 
 async function workspaceImportReceipt(
   transaction: PostgresTransaction,
   actor: ActorContext,
   checksum: string,
-): Promise<WorkspaceImportResult | null> {
-  const replay = await transaction.query<{ summary: WorkspaceImportResult }>(
-    `SELECT summary
+  lock: boolean,
+): Promise<ImportReceipt | null> {
+  // Locking serializes concurrent re-imports of one archive behind the receipt row.
+  const receipt = await transaction.query<ImportReceipt>(
+    `SELECT id, summary
      FROM workspace_imports
      WHERE workspace_id = $1
        AND imported_by_user_id = $2
-       AND archive_sha256 = $3`,
+       AND archive_sha256 = $3
+     ${lock ? "FOR UPDATE" : ""}`,
     [actor.workspaceId, actor.userId, checksum],
   );
-  return replay.rows[0]?.summary ?? null;
+  return receipt.rows[0] ?? null;
+}
+
+/** Source Memory id to imported Memory id, for every imported Memory that still exists. */
+async function survivingImportedMemories(
+  transaction: PostgresTransaction,
+  actor: ActorContext,
+  importId: string,
+): Promise<Map<string, string>> {
+  const provenance = await transaction.query<{ memory_id: string; source_memory_id: string }>(
+    `SELECT memory_id, source_memory_id
+     FROM memory_import_provenance
+     WHERE workspace_id = $1 AND import_id = $2`,
+    [actor.workspaceId, importId],
+  );
+  return new Map(provenance.rows.map((row) => [row.source_memory_id, row.memory_id]));
 }
 
 function timestamp(value: unknown, name: string): string {
@@ -136,50 +197,25 @@ function uuid(value: unknown, name: string): string {
   return value.toLowerCase();
 }
 
+// Archive metadata obeys the same wire contract as a direct Memory write, so an
+// exported Memory can always be imported again.
 function metadata(value: unknown, name: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new PortabilityValidationError(`${name} must be an object`);
-  }
-  const pending: Array<{ depth: number; path: string; value: unknown }> = [
-    { depth: 0, path: name, value },
-  ];
-  let scheduled = 1;
-  while (pending.length) {
-    const current = pending.pop();
-    if (!current) break;
-    if (current.depth > 32) {
-      throw new PortabilityValidationError(`${name} exceeds 32 levels`);
+  let parsed: ReturnType<typeof MemoryMetadataSchema.safeParse>;
+  try {
+    parsed = MemoryMetadataSchema.safeParse(value);
+  } catch (error) {
+    // Recursive JSON parsing can exhaust the runtime stack before Zod returns an issue.
+    if (error instanceof RangeError) {
+      throw new PortabilityValidationError(`${name} is too deeply nested`, { cause: error });
     }
-    if (typeof current.value === "string" && current.value.includes("\0")) {
-      throw new PortabilityValidationError(`${current.path} contains an invalid null character`);
-    }
-    if (Array.isArray(current.value)) {
-      for (const [index, item] of current.value.entries()) {
-        scheduled += 1;
-        if (scheduled > 10_000) {
-          throw new PortabilityValidationError(`${name} exceeds 10000 values`);
-        }
-        pending.push({ depth: current.depth + 1, path: `${current.path}[${index}]`, value: item });
-      }
-    } else if (current.value && typeof current.value === "object") {
-      for (const [key, item] of Object.entries(current.value)) {
-        if (key.includes("\0")) {
-          throw new PortabilityValidationError(
-            `${current.path} contains an invalid null character`,
-          );
-        }
-        scheduled += 1;
-        if (scheduled > 10_000) {
-          throw new PortabilityValidationError(`${name} exceeds 10000 values`);
-        }
-        pending.push({ depth: current.depth + 1, path: `${current.path}.${key}`, value: item });
-      }
-    }
+    throw error;
   }
-  if (canonicalJson(value).length > 100_000) {
-    throw new PortabilityValidationError(`${name} exceeds 100000 characters`);
+  if (!parsed.success) {
+    throw new PortabilityValidationError(
+      `${name}: ${parsed.error.issues[0]?.message ?? "metadata is invalid"}`,
+    );
   }
-  return value as Record<string, unknown>;
+  return parsed.data;
 }
 
 function archivePayload(archive: WorkspaceArchive): Omit<WorkspaceArchive, "manifest"> & {
@@ -193,7 +229,7 @@ async function archiveChecksum(archive: WorkspaceArchive): Promise<string> {
   return mutationRequestHash(archivePayload(archive));
 }
 
-function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
+function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
   if (!archive || typeof archive !== "object") {
     throw new PortabilityValidationError("archive is required");
   }
@@ -232,7 +268,7 @@ function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
     throw new PortabilityValidationError("archive manifest counts do not match its records");
   }
   const memoryIds = new Set<string>();
-  const normalizedMemories: WorkspaceArchiveMemory[] = [];
+  const normalizedMemories: NormalizedArchiveMemory[] = [];
   for (const [index, memory] of archive.memories.entries()) {
     if (!memory || typeof memory !== "object" || Array.isArray(memory)) {
       throw new PortabilityValidationError(`memories[${index}] must be an object`);
@@ -244,8 +280,9 @@ function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
     if (memory.scope !== "private" && memory.scope !== "shared") {
       throw new PortabilityValidationError(`memories[${index}].scope is invalid`);
     }
+    let chunks: readonly string[];
     try {
-      prepareMemoryContent(memory.content);
+      chunks = prepareMemoryContent(memory.content).chunks;
     } catch (error) {
       if (error instanceof MemoryContentValidationError) {
         throw new PortabilityValidationError(`memories[${index}].content: ${error.message}`, {
@@ -261,12 +298,15 @@ function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
       throw new PortabilityValidationError(`memories[${index}].version is invalid`);
     }
     normalizedMemories.push({
-      ...memory,
       id,
       ownerUserId,
+      scope: memory.scope,
+      content: memory.content,
       metadata: normalizedMetadata,
+      version: memory.version,
       createdAt,
       updatedAt,
+      chunks,
     });
   }
   const linkIds = new Set<string>();
@@ -298,10 +338,11 @@ function normalizedArchive(archive: WorkspaceArchive): WorkspaceArchive {
     const createdAt = timestamp(link.createdAt, `links[${index}].createdAt`);
     const updatedAt = timestamp(link.updatedAt, `links[${index}].updatedAt`);
     normalizedLinks.push({
-      ...link,
       id,
       sourceMemoryId: source,
       targetMemoryId: target,
+      kind: link.kind,
+      weight: link.weight,
       metadata: normalizedMetadata,
       createdAt,
       updatedAt,
@@ -341,24 +382,94 @@ function normalizedOwnerMap(value: Record<string, string>): Record<string, strin
   return normalized;
 }
 
-async function insertChunks(
-  transaction: PostgresTransaction,
-  workspaceId: string,
-  memoryId: string,
-  content: string,
-): Promise<void> {
-  const chunks = prepareMemoryContent(content).chunks;
-  for (const [ordinal, chunk] of chunks.entries()) {
-    await transaction.query(
-      `INSERT INTO memory_chunks (
-         id, workspace_id, memory_id, ordinal, content, chunking_revision
-       ) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [crypto.randomUUID(), workspaceId, memoryId, ordinal, chunk, MEMORY_CHUNKING_REVISION],
-    );
+/** Serialize records into bounded JSON arrays, one lazily built parameter per INSERT. */
+function* recordBatches(records: readonly object[]): Generator<string> {
+  let pending: string[] = [];
+  let characters = 0;
+  for (const record of records) {
+    const serialized = JSON.stringify(record);
+    if (
+      pending.length > 0 &&
+      (pending.length >= IMPORT_BATCH_ROWS ||
+        characters + serialized.length > IMPORT_BATCH_CHARACTERS)
+    ) {
+      yield `[${pending.join(",")}]`;
+      pending = [];
+      characters = 0;
+    }
+    pending.push(serialized);
+    characters += serialized.length + 1;
   }
+  if (pending.length > 0) yield `[${pending.join(",")}]`;
 }
 
-export function createPortabilityModule(database: PostgresDatabase) {
+/**
+ * Run one set-based INSERT per bounded batch. `sql` reads its rows from
+ * `jsonb_to_recordset($1::jsonb)`, so RLS WITH CHECK and row triggers still apply to
+ * every row exactly as they would to single-row inserts. Returns RETURNING row count.
+ */
+async function insertInBatches(
+  transaction: PostgresTransaction,
+  sql: string,
+  records: readonly object[],
+  parameters: readonly unknown[],
+): Promise<number> {
+  let returned = 0;
+  for (const batch of recordBatches(records)) {
+    const result = await transaction.query<{ id: string }>(sql, [batch, ...parameters]);
+    returned += result.rows.length;
+  }
+  return returned;
+}
+
+const INSERT_IMPORTED_MEMORIES = `INSERT INTO memories (
+     id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
+   )
+   SELECT record.id, $2::uuid, $3::uuid, NULL::uuid, record.scope, record.content,
+          record.metadata
+   FROM jsonb_to_recordset($1::jsonb) AS record(
+     id uuid, scope memory_scope, content text, metadata jsonb
+   )`;
+
+const INSERT_IMPORTED_CHUNKS = `INSERT INTO memory_chunks (
+     id, workspace_id, memory_id, ordinal, content, chunking_revision
+   )
+   SELECT gen_random_uuid(), $2::uuid, record.memory_id, record.ordinal, record.content,
+          $3::text
+   FROM jsonb_to_recordset($1::jsonb) AS record(
+     memory_id uuid, ordinal integer, content text
+   )`;
+
+const INSERT_IMPORT_PROVENANCE = `INSERT INTO memory_import_provenance (
+     workspace_id, memory_id, import_id, source_memory_id,
+     source_owner_user_id, source_created_at, source_updated_at
+   )
+   SELECT $2::uuid, record.memory_id, $3::uuid, record.source_memory_id,
+          record.source_owner_user_id, record.source_created_at, record.source_updated_at
+   FROM jsonb_to_recordset($1::jsonb) AS record(
+     memory_id uuid, source_memory_id uuid, source_owner_user_id uuid,
+     source_created_at timestamptz, source_updated_at timestamptz
+   )`;
+
+const INSERT_IMPORTED_LINKS = `INSERT INTO memory_links (
+     id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
+   )
+   SELECT gen_random_uuid(), $2::uuid, record.source_memory_id, record.target_memory_id,
+          record.kind, record.weight, record.metadata
+   FROM jsonb_to_recordset($1::jsonb) AS record(
+     source_memory_id uuid, target_memory_id uuid, kind text, weight real, metadata jsonb
+   )
+   ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
+   RETURNING id`;
+
+export function createPortabilityModule(
+  database: PostgresDatabase,
+  options: PortabilityModuleOptions = {},
+) {
+  const { maximumArchiveBytes = MAX_WORKSPACE_ARCHIVE_BYTES, ...mutationOptions } = options;
+  const { enqueueEmbeddingJobsInTransaction, notifyMaintenance } =
+    createMemoryMutationPrimitives(mutationOptions);
+
   return {
     async exportWorkspace(actor: ActorContext): Promise<WorkspaceArchive> {
       if (actor.agentId) throw new PortabilityAccessDeniedError("Workspace export requires a User");
@@ -369,36 +480,89 @@ export function createPortabilityModule(database: PostgresDatabase) {
         );
         const deploymentId = capabilities.rows[0]?.capabilities.deploymentId;
         if (typeof deploymentId !== "string") throw new Error("Deployment identity is unavailable");
+        const recordBudget = maximumArchiveBytes - ARCHIVE_MANIFEST_BYTES;
+        // Size every visible Memory before reading content, then fetch only rows that
+        // start inside the byte budget. The first row that crosses it is the sentinel.
         const memories = await transaction.query<ExportMemoryRow>(
-          `SELECT id, owner_user_id, scope, content, metadata, version, created_at, updated_at
-           FROM memories
-           WHERE workspace_id = $1
-           ORDER BY id
-           LIMIT $2`,
-          [actor.workspaceId, MAX_WORKSPACE_ARCHIVE_MEMORIES + 1],
+          `WITH sized AS (
+             SELECT id,
+                    octet_length(to_json(content)::text) + octet_length(metadata::text)
+                      + $4::integer AS record_bytes
+             FROM memories
+             WHERE workspace_id = $1
+             ORDER BY id
+             LIMIT $2
+           ), budgeted AS (
+             SELECT id, record_bytes, sum(record_bytes) OVER (ORDER BY id) AS running_bytes
+             FROM sized
+           )
+           SELECT memory.id, memory.owner_user_id, memory.scope, memory.content,
+                  memory.metadata, memory.version, memory.created_at, memory.updated_at,
+                  budgeted.running_bytes::float8 AS running_bytes
+           FROM budgeted
+           JOIN memories memory ON memory.workspace_id = $1 AND memory.id = budgeted.id
+           WHERE budgeted.running_bytes - budgeted.record_bytes <= $3::bigint
+           ORDER BY memory.id`,
+          [
+            actor.workspaceId,
+            MAX_WORKSPACE_ARCHIVE_MEMORIES + 1,
+            recordBudget,
+            ARCHIVE_MEMORY_OVERHEAD_BYTES,
+          ],
         );
         if (memories.rows.length > MAX_WORKSPACE_ARCHIVE_MEMORIES) {
           throw new WorkspaceExportLimitError(
             `Workspace export exceeds ${MAX_WORKSPACE_ARCHIVE_MEMORIES} visible Memories`,
           );
         }
+        const memoryBytes = Number(memories.rows.at(-1)?.running_bytes ?? 0);
+        if (memoryBytes > recordBudget) {
+          throw new WorkspaceExportLimitError(
+            `Workspace export exceeds ${maximumArchiveBytes} archive bytes`,
+          );
+        }
         const memoryIds = memories.rows.map((memory) => memory.id);
+        const linkBudget = recordBudget - memoryBytes;
         const links = memoryIds.length
           ? await transaction.query<ExportLinkRow>(
-              `SELECT id, source_memory_id, target_memory_id, kind, weight, metadata,
-                      created_at, updated_at
-               FROM memory_links
-               WHERE workspace_id = $1
-                 AND source_memory_id = ANY($2::uuid[])
-                 AND target_memory_id = ANY($2::uuid[])
-               ORDER BY id
-               LIMIT $3`,
-              [actor.workspaceId, memoryIds, MAX_WORKSPACE_ARCHIVE_LINKS + 1],
+              `WITH sized AS (
+                 SELECT id,
+                        octet_length(to_json(kind)::text) + octet_length(metadata::text)
+                          + $5::integer AS record_bytes
+                 FROM memory_links
+                 WHERE workspace_id = $1
+                   AND source_memory_id = ANY($2::uuid[])
+                   AND target_memory_id = ANY($2::uuid[])
+                 ORDER BY id
+                 LIMIT $3
+               ), budgeted AS (
+                 SELECT id, record_bytes, sum(record_bytes) OVER (ORDER BY id) AS running_bytes
+                 FROM sized
+               )
+               SELECT link.id, link.source_memory_id, link.target_memory_id, link.kind,
+                      link.weight, link.metadata, link.created_at, link.updated_at,
+                      budgeted.running_bytes::float8 AS running_bytes
+               FROM budgeted
+               JOIN memory_links link ON link.workspace_id = $1 AND link.id = budgeted.id
+               WHERE budgeted.running_bytes - budgeted.record_bytes <= $4::bigint
+               ORDER BY link.id`,
+              [
+                actor.workspaceId,
+                memoryIds,
+                MAX_WORKSPACE_ARCHIVE_LINKS + 1,
+                linkBudget,
+                ARCHIVE_LINK_OVERHEAD_BYTES,
+              ],
             )
           : { rows: [] as ExportLinkRow[] };
         if (links.rows.length > MAX_WORKSPACE_ARCHIVE_LINKS) {
           throw new WorkspaceExportLimitError(
             `Workspace export exceeds ${MAX_WORKSPACE_ARCHIVE_LINKS} visible Links`,
+          );
+        }
+        if (Number(links.rows.at(-1)?.running_bytes ?? 0) > linkBudget) {
+          throw new WorkspaceExportLimitError(
+            `Workspace export exceeds ${maximumArchiveBytes} archive bytes`,
           );
         }
         return { deploymentId, memories: memories.rows, links: links.rows };
@@ -463,7 +627,8 @@ export function createPortabilityModule(database: PostgresDatabase) {
       if (!(["error", "remap", "skip"] as const).includes(conflictPolicy)) {
         throw new PortabilityValidationError("conflictPolicy must be error, remap, or skip");
       }
-      return database.transaction(async (transaction) => {
+      const dryRun = input.dryRun === true;
+      const imported = await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const allowed = await transaction.query<{ allowed: boolean }>(
           "SELECT lore.can_write_memory($1, $2) AS allowed",
@@ -473,21 +638,32 @@ export function createPortabilityModule(database: PostgresDatabase) {
           throw new PortabilityAccessDeniedError("User cannot import into this Workspace");
         }
 
-        const previousReceipt = await workspaceImportReceipt(transaction, actor, checksum);
-        if (previousReceipt) {
+        // A receipt replays only while every Memory it imported still exists. After the
+        // importing User deletes some or all of them, importing the same archive again
+        // restores just the missing Memories and reconnects them to the survivors.
+        const receipt = await workspaceImportReceipt(transaction, actor, checksum, !dryRun);
+        const survivors = receipt
+          ? await survivingImportedMemories(transaction, actor, receipt.id)
+          : new Map<string, string>();
+        if (receipt && survivors.size === Object.keys(receipt.summary.memoryIdMap).length) {
           return {
-            ...previousReceipt,
-            dryRun: input.dryRun === true,
-            memoryIdMap: input.dryRun ? {} : previousReceipt.memoryIdMap,
-            replayed: true,
+            jobIds: [],
+            result: {
+              ...receipt.summary,
+              dryRun,
+              memoryIdMap: dryRun ? {} : receipt.summary.memoryIdMap,
+              replayed: true,
+            },
           };
         }
 
-        const sourceIds = archive.memories.map((memory) => memory.id);
-        const conflicts = await transaction.query<{ id: string }>(
-          "SELECT id FROM memories WHERE workspace_id = $1 AND id = ANY($2::uuid[])",
-          [actor.workspaceId, sourceIds],
-        );
+        const missingMemories = archive.memories.filter((memory) => !survivors.has(memory.id));
+        const conflicts = missingMemories.length
+          ? await transaction.query<{ id: string }>(
+              "SELECT id FROM memories WHERE workspace_id = $1 AND id = ANY($2::uuid[])",
+              [actor.workspaceId, missingMemories.map((memory) => memory.id)],
+            )
+          : { rows: [] };
         const conflictingIds = new Set(conflicts.rows.map((row) => row.id));
         if (conflictPolicy === "error" && conflictingIds.size) {
           throw new PortabilityValidationError(
@@ -495,123 +671,128 @@ export function createPortabilityModule(database: PostgresDatabase) {
           );
         }
         const skippedMemories = conflictPolicy === "skip" ? conflictingIds.size : 0;
-        const includedMemoryIds = new Set(
-          archive.memories
-            .filter((memory) => conflictPolicy !== "skip" || !conflictingIds.has(memory.id))
-            .map((memory) => memory.id),
+        const includedMemories = missingMemories.filter(
+          (memory) => conflictPolicy !== "skip" || !conflictingIds.has(memory.id),
         );
-        const expectedLinkCount = archive.links.filter(
+        const includedMemoryIds = new Set(includedMemories.map((memory) => memory.id));
+        const mapped = (id: string) => includedMemoryIds.has(id) || survivors.has(id);
+        // Links among surviving Memories are left as the User kept or removed them.
+        const includedLinks = archive.links.filter(
           (link) =>
-            includedMemoryIds.has(link.sourceMemoryId) &&
-            includedMemoryIds.has(link.targetMemoryId),
-        ).length;
-        if (input.dryRun) {
+            mapped(link.sourceMemoryId) &&
+            mapped(link.targetMemoryId) &&
+            (includedMemoryIds.has(link.sourceMemoryId) ||
+              includedMemoryIds.has(link.targetMemoryId)),
+        );
+        if (dryRun) {
           return {
-            archiveChecksum: checksum,
-            dryRun: true,
-            importedLinks: expectedLinkCount,
-            importedMemories: includedMemoryIds.size,
-            memoryIdMap: {},
-            replayed: false,
-            skippedMemories,
+            jobIds: [],
+            result: {
+              archiveChecksum: checksum,
+              dryRun: true,
+              importedLinks: includedLinks.length,
+              importedMemories: includedMemories.length,
+              memoryIdMap: {},
+              replayed: false,
+              skippedMemories,
+            },
           };
         }
 
-        const importId = crypto.randomUUID();
-        const claimed = await transaction.query<{ id: string }>(
-          `INSERT INTO workspace_imports (
-             id, workspace_id, imported_by_user_id, archive_sha256,
-             source_deployment_id, source_workspace_id, summary
-           ) VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)
-           ON CONFLICT (workspace_id, imported_by_user_id, archive_sha256) DO NOTHING
-           RETURNING id`,
-          [
-            importId,
-            actor.workspaceId,
-            actor.userId,
-            checksum,
-            archive.manifest.sourceDeploymentId,
-            archive.manifest.sourceWorkspaceId,
-          ],
-        );
-        if (!claimed.rows[0]) {
-          const result = await workspaceImportReceipt(transaction, actor, checksum);
-          if (!result) throw new Error("Import receipt became unavailable");
-          return { ...result, replayed: true };
-        }
-        await transaction.query("SELECT set_config('lore.request_id', $1, true)", [importId]);
-
-        const memoryIdMap: Record<string, string> = {};
-        for (const memory of archive.memories) {
-          if (conflictPolicy === "skip" && conflictingIds.has(memory.id)) {
-            continue;
-          }
-          // Always assign a fresh id. Trying to preserve an apparently unused
-          // source id would let a primary-key conflict reveal an RLS-hidden Memory.
-          const targetId = crypto.randomUUID();
-          memoryIdMap[memory.id] = targetId;
-          await transaction.query(
-            `INSERT INTO memories (
-               id, workspace_id, owner_user_id, created_by_agent_id,
-               scope, content, metadata
-             ) VALUES ($1, $2, $3, NULL, $4, $5, $6::jsonb)`,
-            [
-              targetId,
-              actor.workspaceId,
-              actor.userId,
-              memory.scope,
-              memory.content,
-              JSON.stringify(memory.metadata),
-            ],
-          );
-          await insertChunks(transaction, actor.workspaceId, targetId, memory.content);
-          await transaction.query(
-            `INSERT INTO memory_import_provenance (
-               workspace_id, memory_id, import_id, source_memory_id,
-               source_owner_user_id, source_created_at, source_updated_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              actor.workspaceId,
-              targetId,
-              importId,
-              memory.id,
-              memory.ownerUserId,
-              memory.createdAt,
-              memory.updatedAt,
-            ],
-          );
-        }
-
-        let importedLinks = 0;
-        for (const link of archive.links) {
-          const source = memoryIdMap[link.sourceMemoryId];
-          const target = memoryIdMap[link.targetMemoryId];
-          if (!source || !target) continue;
-          const inserted = await transaction.query<{ id: string }>(
-            `INSERT INTO memory_links (
-               id, workspace_id, source_memory_id, target_memory_id,
-               kind, weight, metadata
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-             ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
+        let importId = receipt?.id;
+        if (!importId) {
+          const claimed = await transaction.query<{ id: string }>(
+            `INSERT INTO workspace_imports (
+               id, workspace_id, imported_by_user_id, archive_sha256,
+               source_deployment_id, source_workspace_id, summary
+             ) VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)
+             ON CONFLICT (workspace_id, imported_by_user_id, archive_sha256) DO NOTHING
              RETURNING id`,
             [
               crypto.randomUUID(),
               actor.workspaceId,
-              source,
-              target,
-              link.kind,
-              link.weight,
-              JSON.stringify(link.metadata),
+              actor.userId,
+              checksum,
+              archive.manifest.sourceDeploymentId,
+              archive.manifest.sourceWorkspaceId,
             ],
           );
-          if (inserted.rows[0]) importedLinks += 1;
+          importId = claimed.rows[0]?.id;
+          if (!importId) {
+            const concurrent = await workspaceImportReceipt(transaction, actor, checksum, false);
+            if (!concurrent) throw new Error("Import receipt became unavailable");
+            return { jobIds: [], result: { ...concurrent.summary, replayed: true } };
+          }
         }
+        await transaction.query("SELECT set_config('lore.request_id', $1, true)", [importId]);
+
+        // Always assign fresh ids. Trying to preserve an apparently unused source id
+        // would let a primary-key conflict reveal an RLS-hidden Memory.
+        const memoryIdMap: Record<string, string> = Object.fromEntries(survivors);
+        const targets = includedMemories.map((memory) => {
+          const targetId = crypto.randomUUID();
+          memoryIdMap[memory.id] = targetId;
+          return { memory, targetId };
+        });
+        await insertInBatches(
+          transaction,
+          INSERT_IMPORTED_MEMORIES,
+          targets.map(({ memory, targetId }) => ({
+            id: targetId,
+            scope: memory.scope,
+            content: memory.content,
+            metadata: memory.metadata,
+          })),
+          [actor.workspaceId, actor.userId],
+        );
+        await insertInBatches(
+          transaction,
+          INSERT_IMPORTED_CHUNKS,
+          targets.flatMap(({ memory, targetId }) =>
+            memory.chunks.map((content, ordinal) => ({ memory_id: targetId, ordinal, content })),
+          ),
+          [actor.workspaceId, MEMORY_CHUNKING_REVISION],
+        );
+        await insertInBatches(
+          transaction,
+          INSERT_IMPORT_PROVENANCE,
+          targets.map(({ memory, targetId }) => ({
+            memory_id: targetId,
+            source_memory_id: memory.id,
+            source_owner_user_id: memory.ownerUserId,
+            source_created_at: memory.createdAt,
+            source_updated_at: memory.updatedAt,
+          })),
+          [actor.workspaceId, importId],
+        );
+        const jobIds = await enqueueEmbeddingJobsInTransaction(
+          transaction,
+          targets.map(({ memory, targetId }) => ({
+            id: targetId,
+            workspace_id: actor.workspaceId,
+            owner_user_id: actor.userId,
+            scope: memory.scope,
+            version: 1,
+          })),
+        );
+        const importedLinks = await insertInBatches(
+          transaction,
+          INSERT_IMPORTED_LINKS,
+          includedLinks.map((link) => ({
+            source_memory_id: memoryIdMap[link.sourceMemoryId],
+            target_memory_id: memoryIdMap[link.targetMemoryId],
+            kind: link.kind,
+            weight: link.weight,
+            metadata: link.metadata,
+          })),
+          [actor.workspaceId],
+        );
 
         const result: WorkspaceImportResult = {
           archiveChecksum: checksum,
           dryRun: false,
           importedLinks,
-          importedMemories: Object.keys(memoryIdMap).length,
+          importedMemories: targets.length,
           memoryIdMap,
           replayed: false,
           skippedMemories,
@@ -620,8 +801,11 @@ export function createPortabilityModule(database: PostgresDatabase) {
           importId,
           JSON.stringify(result),
         ]);
-        return result;
+        return { jobIds, result };
       });
+      // Queue hints are post-commit latency optimizations; the jobs are durable.
+      for (const jobId of imported.jobIds) notifyMaintenance(jobId);
+      return imported.result;
     },
   };
 }

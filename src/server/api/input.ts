@@ -56,6 +56,10 @@ export async function idempotencyRequest(
   };
 }
 
+export class PayloadTooLargeError extends Error {
+  readonly status = 413;
+}
+
 export async function jsonObject(request: Request): Promise<Record<string, unknown>> {
   let value: unknown;
   try {
@@ -63,6 +67,54 @@ export async function jsonObject(request: Request): Promise<Record<string, unkno
   } catch {
     throw new BadRequestError("Request body must be valid JSON");
   }
+  return objectBody(value);
+}
+
+/**
+ * Parse a JSON object body of at most `maximumBytes` UTF-8 bytes. A declared
+ * Content-Length is rejected before any byte is read; a chunked body is counted
+ * while it streams and abandoned as soon as it crosses the bound.
+ */
+export async function boundedJsonObject(
+  request: Request,
+  maximumBytes: number,
+): Promise<Record<string, unknown>> {
+  const tooLarge = () => new PayloadTooLargeError(`Request body exceeds ${maximumBytes} bytes`);
+  const declared = request.headers.get("content-length");
+  if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared) > maximumBytes) {
+    throw tooLarge();
+  }
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw tooLarge();
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new BadRequestError("Request body must be valid JSON");
+  }
+  return objectBody(value);
+}
+
+function objectBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new BadRequestError("Request body must be an object");
   }

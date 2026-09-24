@@ -50,6 +50,7 @@ export function memoryFromRow(row: MemoryRow): Memory {
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
   const primitives = createCoreMutationPrimitives(options);
   return {
+    enqueueEmbeddingJobsInTransaction: primitives.enqueueEmbeddingJobsInTransaction,
     notifyMaintenance: primitives.notifyMaintenance,
     async insertMemoryInTransaction(
       transaction: PostgresTransaction,

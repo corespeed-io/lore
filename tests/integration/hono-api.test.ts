@@ -10,6 +10,8 @@ import {
 import { ContextRetrievalValidationError } from "@/modules/context/retrieval";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi, isApiPath } from "@/server/api/app";
+import { errorResponse } from "@/server/api/errors";
+import { BadRequestError, boundedJsonObject, PayloadTooLargeError } from "@/server/api/input";
 import { createAccessModule } from "@/server/auth/access";
 import { loreOpenApiDocument } from "@/server/openapi/document";
 import { createMemoryTestContext } from "../support/memory-context";
@@ -47,6 +49,18 @@ test.each([
     400,
     "invalid_request",
     "Input contains an invalid text value",
+  ],
+  [
+    Object.assign(new Error("deadlock detected while locking private rows"), { code: "40P01" }),
+    409,
+    "transaction_conflict",
+    "The request conflicted with a concurrent change; retry it",
+  ],
+  [
+    Object.assign(new Error("could not serialize access"), { code: "40001" }),
+    409,
+    "transaction_conflict",
+    "The request conflicted with a concurrent change; retry it",
   ],
   [
     Object.assign(new Error("private upstream detail"), { status: 400, code: "invalid_request" }),
@@ -299,4 +313,75 @@ test("concurrent requests reuse their own database adapter without sharing Actor
   });
   expect(revoked.status).toBe(403);
   expect(database).toHaveBeenCalledTimes(3);
+});
+
+test("retryable transaction conflicts tell the caller when to retry", async () => {
+  const response = errorResponse(Object.assign(new Error("deadlock detected"), { code: "40P01" }));
+  expect(response.status).toBe(409);
+  expect(response.headers.get("retry-after")).toBe("1");
+});
+
+test("Workspace import rejects a declared oversized body before reading it", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "hono-import-user");
+  const context = await createMemoryTestContext();
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspaceResponse = await app.request("/api/v1/workspaces", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Import bound" }),
+  });
+  const workspace = (await workspaceResponse.json()) as { id: string };
+  const response = await app.request("/api/v1/workspaces/import", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "content-length": "50000001",
+      "x-lore-workspace-id": workspace.id,
+    },
+    body: "{}",
+  });
+  expect(response.status).toBe(413);
+  expect(await response.json()).toEqual({
+    code: "payload_too_large",
+    error: "Request body exceeds 50000000 bytes",
+  });
+});
+
+test("bounded JSON bodies stop reading a chunked stream once it crosses the byte bound", async () => {
+  const encoder = new TextEncoder();
+  let pulled = 0;
+  const chunked = (chunks: string[]) => {
+    pulled = 0;
+    return new Request("http://lore.local/api/v1/workspaces/import", {
+      method: "POST",
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const chunk = chunks[pulled];
+          pulled += 1;
+          if (chunk === undefined) controller.close();
+          else controller.enqueue(encoder.encode(chunk));
+        },
+      }),
+    });
+  };
+
+  // Exactly 14 UTF-8 bytes: the bound counts bytes, not UTF-16 code units.
+  await expect(boundedJsonObject(chunked(['{"a":', '"日本"}']), 14)).resolves.toEqual({
+    a: "日本",
+  });
+  await expect(
+    boundedJsonObject(chunked(['{"a":"', "x".repeat(8), "y".repeat(8), '"}']), 14),
+  ).rejects.toBeInstanceOf(PayloadTooLargeError);
+  // The reader stopped at the chunk that crossed the bound and never pulled the rest.
+  expect(pulled).toBeLessThan(4);
+  await expect(boundedJsonObject(chunked(["[1]"]), 14)).rejects.toBeInstanceOf(BadRequestError);
+  await expect(boundedJsonObject(chunked(["{"]), 14)).rejects.toThrow(
+    "Request body must be valid JSON",
+  );
 });

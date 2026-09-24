@@ -566,13 +566,13 @@ test("Workspace import normalizes UUID case before owner and Link mapping", asyn
   expect(Object.keys(imported.memoryIdMap).sort()).toEqual([source.id, target.id].sort());
 });
 
-test("Workspace import rejects oversized metadata before queueing every child", async () => {
+test("Workspace import rejects metadata over the wire serialized-size bound", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const portability = createPortabilityModule(testContext.database);
   await memories.remember(testContext.carol, { content: "Bound imported metadata." });
   const archive = await portability.exportWorkspace(testContext.carol);
-  archive.memories[0].metadata = { items: Array.from({ length: 10_001 }, () => null) };
+  archive.memories[0].metadata = { items: "x".repeat(100_000) };
   const { checksum: _checksum, ...manifest } = archive.manifest;
   archive.manifest.checksum = await mutationRequestHash({
     manifest,
@@ -585,7 +585,7 @@ test("Workspace import rejects oversized metadata before queueing every child", 
       archive,
       ownerMap: { [testContext.carol.userId]: testContext.alice.userId },
     }),
-  ).rejects.toThrow(/exceeds 10000 values/);
+  ).rejects.toThrow(/metadata exceeds 100000 characters/);
 });
 
 test("Workspace import dry-run rejects document-sized Memory content", async () => {

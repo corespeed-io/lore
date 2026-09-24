@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
-import { BadRequestError, jsonObject } from "@/server/api/input";
+import { BadRequestError, boundedJsonObject } from "@/server/api/input";
 import { observeOperation } from "@/server/telemetry/telemetry";
 import type { ImportWorkspaceArchive } from "./service";
-import { createPortabilityModule } from "./service";
+import { createPortabilityModule, MAX_WORKSPACE_IMPORT_BODY_BYTES } from "./service";
 
 export const portability = new Hono<ApiEnv>()
   .get("/export", async (c) => {
@@ -19,13 +19,10 @@ export const portability = new Hono<ApiEnv>()
     });
   })
   .post("/import", async (c) => {
-    const portability = createPortabilityModule(await c.var.database());
-    const request = c.req.raw;
+    const portability = createPortabilityModule(await c.var.database(), c.var.memoryOptions());
     const actor = await c.var.resolveActor();
-    const body = await jsonObject(request);
-    if (JSON.stringify(body).length > 50_000_000) {
-      throw new BadRequestError("Workspace archive exceeds 50000000 characters");
-    }
+    // The byte bound applies while the body streams, before JSON parsing allocates it.
+    const body = await boundedJsonObject(c.req.raw, MAX_WORKSPACE_IMPORT_BODY_BYTES);
     const archive = body.archive;
     const ownerMap = body.ownerMap;
     if (!archive || typeof archive !== "object" || Array.isArray(archive)) {

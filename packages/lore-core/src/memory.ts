@@ -66,6 +66,14 @@ interface PreparedChunk {
   content: string;
 }
 
+type EmbeddingJobMemory = Pick<
+  MemoryRow,
+  "id" | "owner_user_id" | "scope" | "version" | "workspace_id"
+>;
+
+// Bounds one bulk job INSERT's JSON parameter; each job row is a few hundred bytes.
+const EMBEDDING_JOB_BATCH_SIZE = 5_000;
+
 function prepareChunks(content: string): PreparedChunk[] {
   return prepareMemoryContent(content).chunks.map((chunk) => ({ content: chunk }));
 }
@@ -912,7 +920,71 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     return { memory: memoryFromRow(updated), jobId, chunksChanged: chunks !== null };
   }
 
-  return { insertMemoryInTransaction, notifyMaintenance, updateMemoryInTransaction };
+  /**
+   * Enqueue first-embedding jobs for Memories a host inserted, with their chunks,
+   * in this transaction without {@link insertMemoryInTransaction} (for example a
+   * bounded bulk import that batches its row inserts). Every listed Memory must be
+   * new, so each allocated job id is guaranteed to exist; pass them to
+   * `notifyMaintenance` after commit. Returns no ids without an embedding provider.
+   */
+  async function enqueueEmbeddingJobsInTransaction(
+    transaction: PostgresTransaction,
+    memories: readonly EmbeddingJobMemory[],
+  ): Promise<string[]> {
+    if (!embeddingProvider || memories.length === 0) return [];
+    const generation = await transaction.query<{ id: string }>(
+      `SELECT id
+       FROM lore.ensure_embedding_generation($1, $2, $3, $4)`,
+      [
+        embeddingProvider.provider,
+        embeddingProvider.model,
+        embeddingProvider.dimensions,
+        embeddingProvider.revision,
+      ],
+    );
+    const generationId = generation.rows[0]?.id;
+    if (!generationId) throw new Error("Embedding generation could not be resolved");
+    const jobIds: string[] = [];
+    for (let offset = 0; offset < memories.length; offset += EMBEDDING_JOB_BATCH_SIZE) {
+      const jobs = memories.slice(offset, offset + EMBEDDING_JOB_BATCH_SIZE).map((memory) => ({
+        id: crypto.randomUUID(),
+        workspace_id: memory.workspace_id,
+        memory_id: memory.id,
+        owner_user_id: memory.owner_user_id,
+        memory_scope: memory.scope,
+        memory_version: memory.version,
+      }));
+      await transaction.query(
+        `INSERT INTO memory_embedding_jobs (
+           id, workspace_id, memory_id, owner_user_id, memory_scope,
+           memory_version, embedding_provider, embedding_model, embedding_revision,
+           generation_id
+         )
+         SELECT job.id, job.workspace_id, job.memory_id, job.owner_user_id, job.memory_scope,
+                job.memory_version, $2, $3, $4, $5
+         FROM jsonb_to_recordset($1::jsonb) AS job(
+           id uuid, workspace_id uuid, memory_id uuid, owner_user_id uuid,
+           memory_scope memory_scope, memory_version integer
+         )`,
+        [
+          JSON.stringify(jobs),
+          embeddingProvider.provider,
+          embeddingProvider.model,
+          embeddingProvider.revision,
+          generationId,
+        ],
+      );
+      jobIds.push(...jobs.map((job) => job.id));
+    }
+    return jobIds;
+  }
+
+  return {
+    enqueueEmbeddingJobsInTransaction,
+    insertMemoryInTransaction,
+    notifyMaintenance,
+    updateMemoryInTransaction,
+  };
 }
 
 export function createMemoryModule(
