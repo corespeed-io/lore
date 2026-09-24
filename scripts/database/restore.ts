@@ -23,14 +23,74 @@ type RestoredDatabaseState = {
  */
 export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
 
+/**
+ * Tenant tables a restored database must contain, each with RLS enabled. Keep in
+ * step with REQUIRED_TENANT_TABLES in src/modules/operations/service.ts; a test
+ * pins both lists to the migrated schema's RLS tables.
+ */
+export const REQUIRED_TENANT_TABLES = [
+  "agent_credentials",
+  "agents",
+  "agent_workspace_grants",
+  "code_artifact_payloads",
+  "code_artifacts",
+  "code_dependency_edges",
+  "code_dependency_payloads",
+  "code_dependency_sets",
+  "code_index_generations",
+  "code_index_jobs",
+  "code_repositories",
+  "code_revision_files",
+  "code_revisions",
+  "code_symbol_payloads",
+  "code_symbol_sets",
+  "embedding_generations",
+  "episode_evidence_chunk_embeddings",
+  "episode_evidence_chunks",
+  "episodes",
+  "evaluation_cases",
+  "evaluation_results",
+  "evaluation_runs",
+  "evaluation_suites",
+  "identities",
+  "memberships",
+  "memories",
+  "memory_chunk_embeddings",
+  "memory_chunks",
+  "memory_code_evidence",
+  "memory_embedding_jobs",
+  "memory_events",
+  "memory_import_provenance",
+  "memory_links",
+  "memory_proposal_code_evidence",
+  "memory_proposal_evidence",
+  "memory_proposal_observation_evidence",
+  "memory_proposals",
+  "observations",
+  "request_idempotency_records",
+  "users",
+  "workspace_imports",
+  "workspaces",
+] as const;
+
 export async function verifyRestoredDatabase(
   query: (sql: string) => Promise<{ rows: RestoredDatabaseState[] }>,
 ): Promise<RestoredDatabaseState> {
   const nonTenantTables = NON_TENANT_PUBLIC_TABLES.map((name) => `'${name}'`).join(", ");
+  const requiredTables = REQUIRED_TENANT_TABLES.map((name) => `('${name}')`).join(", ");
   const result = await query(
-    `WITH rls_state AS (
-       -- memories must exist, so an empty or foreign database cannot pass.
-       SELECT to_regclass('public.memories') IS NOT NULL AND NOT EXISTS (
+    `WITH required_tenant_tables(table_name) AS (
+       VALUES ${requiredTables}
+     ), required_tenant_state AS (
+       -- Every tenant table must exist, so an empty, partial, or foreign database
+       -- cannot pass.
+       SELECT count(relation.oid) = count(*)
+         AND coalesce(bool_and(relation.relrowsecurity), false) AS present
+       FROM required_tenant_tables required
+       LEFT JOIN pg_class relation
+         ON relation.oid = to_regclass('public.' || required.table_name)
+     ), rls_state AS (
+       SELECT (SELECT present FROM required_tenant_state) AND NOT EXISTS (
          SELECT 1
          FROM pg_class relation
          JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace

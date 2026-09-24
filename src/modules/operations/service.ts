@@ -12,6 +12,58 @@ export const LORE_SCHEMA_REVISION = 4;
  */
 export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
 
+/**
+ * Tenant tables the application reads and writes. Each must exist and enable RLS:
+ * the catalog scan above cannot notice a table that a bad restore or manual change
+ * dropped, and a missing table would otherwise pass readiness until a request hit
+ * it. A test pins this list to the migrated schema's RLS tables, so a migration that
+ * adds a tenant table fails until it is listed here and in scripts/database/restore.ts.
+ */
+export const REQUIRED_TENANT_TABLES = [
+  "agent_credentials",
+  "agents",
+  "agent_workspace_grants",
+  "code_artifact_payloads",
+  "code_artifacts",
+  "code_dependency_edges",
+  "code_dependency_payloads",
+  "code_dependency_sets",
+  "code_index_generations",
+  "code_index_jobs",
+  "code_repositories",
+  "code_revision_files",
+  "code_revisions",
+  "code_symbol_payloads",
+  "code_symbol_sets",
+  "embedding_generations",
+  "episode_evidence_chunk_embeddings",
+  "episode_evidence_chunks",
+  "episodes",
+  "evaluation_cases",
+  "evaluation_results",
+  "evaluation_runs",
+  "evaluation_suites",
+  "identities",
+  "memberships",
+  "memories",
+  "memory_chunk_embeddings",
+  "memory_chunks",
+  "memory_code_evidence",
+  "memory_embedding_jobs",
+  "memory_events",
+  "memory_import_provenance",
+  "memory_links",
+  "memory_proposal_code_evidence",
+  "memory_proposal_evidence",
+  "memory_proposal_observation_evidence",
+  "memory_proposals",
+  "observations",
+  "request_idempotency_records",
+  "users",
+  "workspace_imports",
+  "workspaces",
+] as const;
+
 export interface DeploymentCapabilities {
   apiVersion: "v1";
   schemaRevision: number;
@@ -122,8 +174,14 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           database.transaction(async (transaction) => {
             await transaction.query("SELECT set_config('statement_timeout', '2000', true)");
             const result = await transaction.query<ReadinessRow>(
-              `WITH rls_state AS (
-                 SELECT NOT EXISTS (
+              `WITH required_tenant_state AS (
+                 SELECT count(relation.oid) = count(*)
+                   AND coalesce(bool_and(relation.relrowsecurity), false) AS present
+                 FROM unnest($6::text[]) AS required(table_name)
+                 LEFT JOIN pg_class relation
+                   ON relation.oid = to_regclass('public.' || required.table_name)
+               ), rls_state AS (
+                 SELECT (SELECT present FROM required_tenant_state) AND NOT EXISTS (
                    SELECT 1
                    FROM pg_class relation
                    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
@@ -167,6 +225,7 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                     ]
                   : [null, null, null, null]),
                 [...NON_TENANT_PUBLIC_TABLES],
+                [...REQUIRED_TENANT_TABLES],
               ],
             );
             const value = result.rows[0];

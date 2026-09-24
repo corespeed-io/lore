@@ -3,7 +3,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { verifyRestoredDatabase } from "../../scripts/database/restore.ts";
+import { REQUIRED_TENANT_TABLES as OPERATIONS_REQUIRED_TENANT_TABLES } from "@/modules/operations/service";
+import { REQUIRED_TENANT_TABLES, verifyRestoredDatabase } from "../../scripts/database/restore.ts";
 
 const postgres = new PGlite({ extensions: { pg_trgm, vector } });
 const migrations = new URL("../../db/migrations/", import.meta.url);
@@ -60,6 +61,32 @@ test("restore verification requires RLS on every tenant table, including tables 
     await expect(verify()).rejects.toThrow("Restored database failed Lore");
   } finally {
     await postgres.exec("ROLLBACK");
+  }
+  await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
+});
+
+test("restore verification requires every tenant table to exist", async () => {
+  const protectedTables = await postgres.query<{ relname: string }>(
+    `SELECT relname
+     FROM pg_class
+     WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND relrowsecurity
+     ORDER BY relname`,
+  );
+  const names = protectedTables.rows.map((table) => table.relname);
+  // Both hand-kept lists must name exactly the schema's tenant tables, so a new
+  // migration table cannot slip past readiness or restore verification.
+  expect([...REQUIRED_TENANT_TABLES].sort()).toEqual(names);
+  expect([...OPERATIONS_REQUIRED_TENANT_TABLES].sort()).toEqual(names);
+
+  for (const table of ["memory_links", "episode_evidence_chunks"]) {
+    await postgres.exec("BEGIN");
+    try {
+      // A renamed table keeps RLS, so only the existence check can catch it.
+      await postgres.exec(`ALTER TABLE public.${table} RENAME TO ${table}_missing`);
+      await expect(verify(), table).rejects.toThrow("Restored database failed Lore");
+    } finally {
+      await postgres.exec("ROLLBACK");
+    }
   }
   await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
 });

@@ -759,3 +759,23 @@ test("readiness requires RLS on every tenant table, including tables added later
     components: { rlsRole: "unavailable" },
   });
 });
+
+test("readiness requires every tenant table to exist", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+  for (const table of ["memory_links", "episode_evidence_chunks"]) {
+    // A renamed table keeps RLS, so only the existence check can catch it.
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table} RENAME TO ${table}_missing`),
+    );
+    await expect(operations.readiness(), table).resolves.toMatchObject({
+      status: "unready",
+      components: { rlsRole: "unavailable" },
+    });
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table}_missing RENAME TO ${table}`),
+    );
+  }
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+});
