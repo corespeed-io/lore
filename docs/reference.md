@@ -14,6 +14,11 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Compose pastes the three passwords unencoded into `postgres://` URLs, so the
+`migrate` job refuses any character outside `A-Z a-z 0-9 . _ ~ ! & ( ) * + , ; = : @ -`
+before it touches the database. Generate each with `openssl rand -hex 32`; a
+base64 value can contain `/` and is refused.
+
 Open [http://localhost:3000](http://localhost:3000). The Compose stack runs every
 plain-SQL migration through dbmate, provisions separate non-owner request and
 maintenance logins, and starts both Lore and its embedding worker under narrow RLS

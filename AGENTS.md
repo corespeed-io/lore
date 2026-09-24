@@ -89,10 +89,16 @@ been removed. Lore now has a native implementation, split into two concepts
   the Memory/chunk/embedding/link read check once per statement via
   `(SELECT lore.can_read_workspace(lore.current_workspace_id()))`; its policy
   rewrite briefly takes ACCESS EXCLUSIVE on those four tables under a 5s
-  `lock_timeout`, so a busy deploy may need a retry. Once, it also cancels
-  unfinished jobs of any indexer revision other than v7 and deletes never-ready
-  revisions that recorded a BOM-only blob as indexed and are cited by no Code
-  Evidence; that v7 literal must match `CODE_INDEX_REVISION` when 0004 ships.
+  `lock_timeout`, so a busy deploy may need a retry. Once, and before that policy
+  rewrite so its `code_revision_files` scan never extends the lock, it also
+  cancels unfinished jobs of any indexer revision other than v7 through
+  `lore.cancel_superseded_code_index_jobs` (a processing job only once its lease
+  is past the one-hour maximum) and deletes never-ready revisions that recorded a
+  BOM-only blob as indexed and are cited by no Code Evidence; that v7 literal must
+  match `CODE_INDEX_REVISION` when 0004 ships. The self-host maintenance sweep
+  calls the same function with its own `CODE_INDEX_REVISION` whenever Code
+  Indexing is enabled, so jobs an older app instance enqueues during a rolling
+  deploy are cancelled too.
   `0005_create_replay_indexes_concurrently.sql` builds the five
   `request_idempotency_records` replay-scrub partial expression indexes and
   `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
@@ -349,7 +355,10 @@ been removed. Lore now has a native implementation, split into two concepts
   page 0, plus any later page that is missing from the cache, no longer matches the
   list, or sits behind a page 0 that gained or lost a Memory; every page is re-read
   on resume once the last full read is 5 minutes old
-  (`MEMORY_RESUME_FULL_REFRESH_MS`). Unknown read state renders through
+  (`MEMORY_RESUME_FULL_REFRESH_MS`). Only a refresh in which every page was read
+  resets that age (`fullReadAfterResume`): SWR resolves `mutate()` with cached pages
+  even when a page failed, so a failed or navigation-cancelled page must keep the
+  previous record. Unknown read state renders through
   `src/shared/browser/read-state.ts`: "—" before data, "N+" for an incomplete or
   capped window, never 0 or "not found". Browser storage goes through
   `src/shared/browser/local-preference.ts`, which treats blocked storage as no
@@ -898,9 +907,12 @@ database invariant, not a UI convention.
   unpaired surrogates in content, Link kinds, or any metadata key or string; a
   metadata `__proto__` key (Zod drops it while the checksum covers it); non-RFC
   3339 or out-of-range timestamps; and archives too deeply nested to checksum. All
-  are 400 `invalid_archive`, never a SQLSTATE or 500. Export serializes timestamps
-  with `toISOString()` (milliseconds), and import stores the archive's timestamp
-  text as provenance unchanged.
+  are 400 `invalid_archive`, never a SQLSTATE or 500. Export serializes the driver's
+  `Date` timestamps with `toISOString()` (milliseconds); `exportedTimestamp` rewrites
+  a text timestamp (as a type-parser override would return it) to RFC 3339 at full
+  precision and validates it with import's rules, so export never emits a timestamp
+  its own import refuses. Import stores the archive's timestamp text as provenance
+  unchanged.
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.
@@ -1258,8 +1270,11 @@ Actors and install RLS. Every JSON request body goes through `jsonObject`
 (`src/server/api/input.ts`), which counts UTF-8 bytes as the body streams and
 returns 413 `payload_too_large`; a declared oversized `Content-Length` is refused
 before any byte is read. The default bound is `MAX_JSON_BODY_BYTES` (10 MiB, the
-cap Next's middleware body clone used to impose); Episodes pass a bound derived
-from their content/metadata limits, and Workspace import passes 50,000,000 bytes.
+cap Next's middleware body clone used to impose); Episodes and Evaluation Suites
+pass bounds derived from their field limits (a Suite at 1,000 cases, 10,000-character
+queries, and 100-id expected/forbidden lists must fit), and Workspace import passes
+50,000,000 bytes. A body stream that fails mid-upload is a client abort and maps
+to 400 `invalid_request`, never 500.
 Workspace import refuses an Agent before it reads the body.
 Next mounts Hono through its API catch-all via `hono/vercel`. Cloudflare uses
 request-local Hyperdrive adapters and `waitUntil` queue notifications, before

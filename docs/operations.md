@@ -49,9 +49,13 @@ Every JSON request body is bounded while it is read. The default bound is
 10,485,760 UTF-8 bytes (10 MiB), the cap Next's middleware body clone used to
 impose on self-host. `POST /api/v1/episodes` allows 13,048,576 bytes, enough for
 its full content and metadata limits even with every character `\uXXXX`-escaped,
-and Workspace import allows 50,000,000. A larger body is refused with 413
-`payload_too_large`: a declared `Content-Length` is refused before any byte is
-read, and a streamed body is counted as it arrives and abandoned at the bound.
+`POST /api/v1/evaluations/suites` allows 38,321,536 bytes, enough for 1,000 cases
+at the 10,000-character query limit with full 100-id `expectedMemoryIds` and
+`forbiddenMemoryIds` lists, and Workspace import allows 50,000,000. A larger body
+is refused with 413 `payload_too_large`: a declared `Content-Length` is refused
+before any byte is read, and a streamed body is counted as it arrives and
+abandoned at the bound. A body whose upload fails partway (the client aborts or the
+connection resets) is 400 `invalid_request`, not a server error.
 
 ## Workspace export and import
 
@@ -346,6 +350,13 @@ LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath"
   key the worker's registry lacks, or no longer binds to the job's Workspace,
   retries with `repositoryKey is not configured by this deployment`, so a rolling
   registry update or a worker with a different registry does not end it.
+- **Docker Compose.** Each `repositoryPath` is a path inside the containers, and
+  Compose mounts no repository by default. Mount every registered repository
+  read-only at the same absolute path in both the `lore` and `maintenance`
+  services (the commented `volumes` entries in `compose.yaml`). The image runs as
+  the `bun` user, so Git refuses a repository owned by another uid as "dubious
+  ownership"; trust exactly that path with the commented `GIT_CONFIG_*`
+  `safe.directory` entries in both services.
 - **Retries.** A job has five attempts, with backoff of 30, 60, 120, and 240
   seconds between them (about 7.5 minutes in all); the fifth failure ends it
   `dead`. Failures that the local clone or mount can outlive retry: a repository
@@ -382,10 +393,20 @@ Two jobs that finish different generations of the same revision serialize on the
 revision row during activation, and the one-active-generation-per-revision index
 remains the correctness backstop.
 
-Schema revision 4 also cleans up once, as it migrates. Pending or processing jobs of
-an older indexer revision, which no current worker claims, end `cancelled` with
-`Superseded by a newer Code Index revision`; re-enqueue the commits you still need.
-It also deletes each Code Revision that recorded a byte-order-mark-only blob
+Schema revision 4 also cleans up once, as it migrates. The cleanup runs before the
+migration rewrites the Memory read policies, which briefly take ACCESS EXCLUSIVE on
+`memories`, `memory_chunks`, `memory_chunk_embeddings`, and `memory_links` under a
+5-second `lock_timeout` (a busy deploy may need a retry), so it does not lengthen
+that lock. Pending jobs of an indexer revision other than the one this release
+ships, which no current worker claims, end `cancelled` with `Superseded by a newer
+Code Index revision`. A processing job of such a revision ends the same way only
+once its lease is more than an hour old, so a worker still running the older
+revision through a rolling deploy finishes the job it holds. Every maintenance
+sweep of a worker with Code Indexing enabled repeats that cancel for each revision
+other than its own, which also catches jobs an older application instance enqueues
+during the deploy; the sweep's log line reports the count as
+`supersededCodeIndexJobs`. Re-enqueue the commits you still need. The migration
+also deletes each Code Revision that recorded a byte-order-mark-only blob
 (`EF BB BF`) as indexed, has no ready, active, or retiring generation, and is cited
 by no Memory or Proposal Code Evidence. Such a revision could never finish, and
 the current indexer excludes that blob as `empty`, so re-enqueueing the commit

@@ -85,7 +85,7 @@ SDK retain portable module contracts for other hosts.
 | `src/shared/browser/` | Browser SDK configuration, SWR cache keys, request logs, and common hooks |
 | `src/shared/ui/` | Shared visual helpers |
 | `src/types/` | Generated and hand-written ambient declarations, including the Wrangler binding types |
-| `src/worker/` | Deployment entrypoints: `maintenance.ts` for Bun, `cloudflare.ts` for the Wrangler `main` |
+| `src/worker/` | Deployment entrypoints: `maintenance.ts` for Bun, `cloudflare.ts` for the Wrangler `main`; the Bun worker's independent sweep/Code Index/embedding loops (`maintenance-loops.ts`) and its Code Repository registry (`code-repositories.ts`) sit beside them |
 | `packages/` | Memory engine, TypeScript SDK, CLI, and external MCP adapter |
 | `db/` | Immutable applied migrations and database setup |
 | `tools/sdk-codegen/` | Isolated OpenAPI code-generation toolchain |
