@@ -16,6 +16,8 @@ export type EvaluationRunStatus = "running" | "completed" | "failed";
  */
 export const EVALUATION_RUN_TIMEOUT_SECONDS = 3_600;
 export const EVALUATION_RUN_EXPIRED_ERROR = "Evaluation run expired before it completed";
+/** Takes precedence over every other run error: an isolation leak is a hard failure. */
+export const EVALUATION_ISOLATION_FAILURE_ERROR = "Isolation failure: forbidden Memory retrieved";
 
 export class EvaluationSuiteNotFoundError extends Error {
   override name = "EvaluationSuiteNotFoundError";
@@ -284,6 +286,41 @@ export function createEvaluationModule(
     );
   }
 
+  /**
+   * Record a run's terminal state. A run a reader already expired keeps that state,
+   * unless this run retrieved a forbidden Memory: the leak metrics and the isolation
+   * error then replace the expiry, so a concurrent expiry can never hide a leak.
+   */
+  async function finishRun(
+    actor: ActorContext,
+    runId: string,
+    metrics: EvaluationRunMetrics,
+    error: string | null,
+  ): Promise<void> {
+    const status: EvaluationRunStatus = error === null ? "completed" : "failed";
+    await database.transaction(async (transaction) => {
+      await installActorContext(transaction, actor);
+      await transaction.query(
+        `UPDATE evaluation_runs
+         SET status = $3, metrics = $4::jsonb, error = $5,
+             completed_at = coalesce(completed_at, now())
+         WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $6
+           AND (status = 'running'
+             OR ($7::boolean AND status = 'failed' AND error = $8::text))`,
+        [
+          actor.workspaceId,
+          runId,
+          status,
+          JSON.stringify(metrics),
+          error,
+          actor.userId,
+          error === EVALUATION_ISOLATION_FAILURE_ERROR,
+          EVALUATION_RUN_EXPIRED_ERROR,
+        ],
+      );
+    });
+  }
+
   async function getSuite(actor: ActorContext, suiteId: string): Promise<EvaluationSuite | null> {
     return database.transaction(async (transaction) => {
       await installActorContext(transaction, actor);
@@ -542,31 +579,26 @@ export function createEvaluationModule(
         // The loop checks the deadline only before each case, so a final search that
         // ran past it must still end the run as expired rather than completed.
         if (!expired && now() - runStartedAt >= runTimeoutSeconds * 1_000) expired = true;
-        const status: EvaluationRunStatus =
-          metrics.isolationPassed && !expired ? "completed" : "failed";
-        const error = expired
-          ? EVALUATION_RUN_EXPIRED_ERROR
-          : metrics.isolationPassed
-            ? null
-            : "Isolation failure: forbidden Memory retrieved";
-        // A run a reader already expired keeps that terminal state.
-        await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          await transaction.query(
-            `UPDATE evaluation_runs
-             SET status = $3, metrics = $4::jsonb, error = $5, completed_at = now()
-             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $6
-               AND status = 'running'`,
-            [actor.workspaceId, runId, status, JSON.stringify(metrics), error, actor.userId],
-          );
-        });
+        await finishRun(
+          actor,
+          runId,
+          metrics,
+          !metrics.isolationPassed
+            ? EVALUATION_ISOLATION_FAILURE_ERROR
+            : expired
+              ? EVALUATION_RUN_EXPIRED_ERROR
+              : null,
+        );
       } catch (error) {
+        const leakedCount = completedResults.filter(
+          (result) => !result.metrics.isolationPassed,
+        ).length;
         const failedMetrics: EvaluationRunMetrics = {
           recallAtK: mean(completedResults.map((result) => result.metrics.recallAtK)),
           reciprocalRank: mean(completedResults.map((result) => result.metrics.reciprocalRank)),
           ndcgAtK: mean(completedResults.map((result) => result.metrics.ndcgAtK)),
           isolationPassed: false,
-          hardFailureCount: 1,
+          hardFailureCount: Math.max(1, leakedCount),
           caseCount: completedResults.length,
           averageLatencyMs: mean(completedResults.map((result) => result.latencyMs)),
           estimatedCostUsd: completedResults.reduce(
@@ -574,22 +606,16 @@ export function createEvaluationModule(
             0,
           ),
         };
-        await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          await transaction.query(
-            `UPDATE evaluation_runs
-             SET status = 'failed', metrics = $3::jsonb, error = $4, completed_at = now()
-             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $5
-               AND status = 'running'`,
-            [
-              actor.workspaceId,
-              runId,
-              JSON.stringify(failedMetrics),
-              error instanceof Error ? error.message : String(error),
-              actor.userId,
-            ],
-          );
-        });
+        await finishRun(
+          actor,
+          runId,
+          failedMetrics,
+          leakedCount > 0
+            ? EVALUATION_ISOLATION_FAILURE_ERROR
+            : error instanceof Error
+              ? error.message
+              : String(error),
+        );
         throw error;
       }
 

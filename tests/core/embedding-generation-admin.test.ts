@@ -1,5 +1,6 @@
 import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
+import { administeredGeneration } from "../../scripts/database/embedding-generation.ts";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import type { MemoryTestContext } from "../support/memory-context";
 import { createMemoryTestContext } from "../support/memory-context";
@@ -139,4 +140,57 @@ test("a coverage report for an unseeded generation creates nothing", async () =>
   );
   await expect(generations()).resolves.toBe(generationsBefore);
   await expect(jobStates(testContext)).resolves.toEqual([]);
+});
+
+test("report and activate refuse to fall back to a default embedding identity", () => {
+  const missing = /Name the embedding generation explicitly/;
+  // With --no-env-file an unset identity would silently mean the default Ollama model,
+  // and activating that could roll serving back to an old generation.
+  expect(() => administeredGeneration({})).toThrow(missing);
+  expect(() => administeredGeneration({ LORE_EMBEDDING_PROVIDER: "google" })).toThrow(missing);
+  expect(() => administeredGeneration({ LORE_EMBEDDING_MODEL: "gemini-embedding-2" })).toThrow(
+    missing,
+  );
+  expect(() =>
+    administeredGeneration({ LORE_EMBEDDING_PROVIDER: " ", LORE_EMBEDDING_MODEL: "model" }),
+  ).toThrow(missing);
+  expect(() => administeredGeneration({ LORE_EMBEDDING_BUILD_PROVIDER: "google" })).toThrow(
+    "LORE_EMBEDDING_BUILD_PROVIDER and LORE_EMBEDDING_BUILD_MODEL must be set together",
+  );
+});
+
+test("report and activate name the generation they act on, preferring the build pair", () => {
+  expect(
+    administeredGeneration({
+      LORE_EMBEDDING_PROVIDER: "ollama",
+      LORE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+    }),
+  ).toEqual({
+    provider: "ollama",
+    model: "qwen3-embedding:0.6b",
+    dimensions: 1024,
+    revision: "lore-embedding-v2",
+    source: "LORE_EMBEDDING_PROVIDER/MODEL",
+  });
+  expect(
+    administeredGeneration({
+      LORE_EMBEDDING_PROVIDER: "ollama",
+      LORE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+      LORE_EMBEDDING_BUILD_PROVIDER: "google",
+      LORE_EMBEDDING_BUILD_MODEL: "models/gemini-embedding-2",
+    }),
+  ).toEqual({
+    provider: "google",
+    model: "gemini-embedding-2",
+    dimensions: 1024,
+    revision: "lore-embedding-v1",
+    source: "LORE_EMBEDDING_BUILD_PROVIDER/MODEL",
+  });
+  expect(() =>
+    administeredGeneration({
+      LORE_EMBEDDING_PROVIDER: "ollama",
+      LORE_EMBEDDING_MODEL: "qwen3-embedding:0.6b",
+      LORE_EMBEDDING_DIMENSIONS: "1536",
+    }),
+  ).toThrow("LORE_EMBEDDING_DIMENSIONS is not configurable");
 });

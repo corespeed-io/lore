@@ -64,24 +64,22 @@ export class PayloadTooLargeError extends Error {
   readonly status = 413;
 }
 
-export async function jsonObject(request: Request): Promise<Record<string, unknown>> {
-  let value: unknown;
-  try {
-    value = await request.json();
-  } catch {
-    throw new BadRequestError("Request body must be valid JSON");
-  }
-  return objectBody(value);
-}
+/**
+ * The default JSON request body bound, in UTF-8 bytes: 10 MiB, the cap that Next's
+ * middleware body clone used to impose implicitly on self-host. A route whose own
+ * field limits can legitimately need more passes its own bound.
+ */
+export const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
 
 /**
  * Parse a JSON object body of at most `maximumBytes` UTF-8 bytes. A declared
  * Content-Length is rejected before any byte is read; a chunked body is counted
- * while it streams and abandoned as soon as it crosses the bound.
+ * while it streams and abandoned as soon as it crosses the bound. Every API JSON
+ * body goes through this reader, so none is buffered without a bound.
  */
-export async function boundedJsonObject(
+export async function jsonObject(
   request: Request,
-  maximumBytes: number,
+  maximumBytes: number = MAX_JSON_BODY_BYTES,
 ): Promise<Record<string, unknown>> {
   const tooLarge = () => new PayloadTooLargeError(`Request body exceeds ${maximumBytes} bytes`);
   const declared = request.headers.get("content-length");

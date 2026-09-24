@@ -8,7 +8,9 @@ export const LORE_SCHEMA_REVISION = 4;
  * The only public tables that hold no tenant data and so carry no RLS: the
  * deployment singleton and dbmate's migration ledger. Readiness requires RLS on
  * every other public table, so a table added by a later migration is covered
- * without editing a list. scripts/database/restore.ts keeps the same allowlist.
+ * without editing a list. A table an extension owns (PostGIS `spatial_ref_sys`,
+ * say) is the extension's, not Lore's, and is exempt too. scripts/database/restore.ts
+ * keeps the same allowlist and exemption.
  */
 export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
 
@@ -189,6 +191,14 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                      AND relation.relkind IN ('r', 'p')
                      AND NOT relation.relrowsecurity
                      AND NOT (relation.relname = ANY ($5::text[]))
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_depend dependency
+                       WHERE dependency.classid = 'pg_class'::regclass
+                         AND dependency.objid = relation.oid
+                         AND dependency.refclassid = 'pg_extension'::regclass
+                         AND dependency.deptype = 'e'
+                     )
                  ) AS enabled
                ), runtime_role AS (
                  SELECT NOT role.rolsuper AND NOT role.rolbypassrls AS safe

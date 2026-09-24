@@ -11,7 +11,12 @@ import { ContextRetrievalValidationError } from "@/modules/context/retrieval";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi, isApiPath } from "@/server/api/app";
 import { errorResponse } from "@/server/api/errors";
-import { BadRequestError, boundedJsonObject, PayloadTooLargeError } from "@/server/api/input";
+import {
+  BadRequestError,
+  jsonObject,
+  MAX_JSON_BODY_BYTES,
+  PayloadTooLargeError,
+} from "@/server/api/input";
 import { createAccessModule } from "@/server/auth/access";
 import { loreOpenApiDocument } from "@/server/openapi/document";
 import { createMemoryTestContext } from "../support/memory-context";
@@ -372,18 +377,122 @@ test("bounded JSON bodies stop reading a chunked stream once it crosses the byte
   };
 
   // Exactly 14 UTF-8 bytes: the bound counts bytes, not UTF-16 code units.
-  await expect(boundedJsonObject(chunked(['{"a":', '"日本"}']), 14)).resolves.toEqual({
+  await expect(jsonObject(chunked(['{"a":', '"日本"}']), 14)).resolves.toEqual({
     a: "日本",
   });
   await expect(
-    boundedJsonObject(chunked(['{"a":"', "x".repeat(8), "y".repeat(8), '"}']), 14),
+    jsonObject(chunked(['{"a":"', "x".repeat(8), "y".repeat(8), '"}']), 14),
   ).rejects.toBeInstanceOf(PayloadTooLargeError);
   // The reader stopped at the chunk that crossed the bound and never pulled the rest.
   expect(pulled).toBeLessThan(4);
-  await expect(boundedJsonObject(chunked(["[1]"]), 14)).rejects.toBeInstanceOf(BadRequestError);
-  await expect(boundedJsonObject(chunked(["{"]), 14)).rejects.toThrow(
-    "Request body must be valid JSON",
+  await expect(jsonObject(chunked(["[1]"]), 14)).rejects.toBeInstanceOf(BadRequestError);
+  await expect(jsonObject(chunked(["{"]), 14)).rejects.toThrow("Request body must be valid JSON");
+});
+
+test("ordinary JSON routes refuse a body over the default bound with 413", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "hono-body-bound-user");
+  const context = await createMemoryTestContext();
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspaceResponse = await app.request("/api/v1/workspaces", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Body bound" }),
+  });
+  const workspace = (await workspaceResponse.json()) as { id: string };
+  const headers = { "content-type": "application/json", "x-lore-workspace-id": workspace.id };
+  const tooLarge = {
+    code: "payload_too_large",
+    error: `Request body exceeds ${MAX_JSON_BODY_BYTES} bytes`,
+  };
+
+  const declared = await app.request("/api/v1/memories", {
+    method: "POST",
+    headers: { ...headers, "content-length": String(MAX_JSON_BODY_BYTES + 1) },
+    body: "{}",
+  });
+  expect(declared.status).toBe(413);
+  expect(await declared.json()).toEqual(tooLarge);
+
+  // A streamed body without a usable Content-Length is counted while it arrives.
+  const megabyte = new TextEncoder().encode("x".repeat(1024 * 1024));
+  let sent = 0;
+  const streamed = await app.request(
+    new Request("http://lore.local/api/v1/memories", {
+      method: "POST",
+      headers,
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent === 0) controller.enqueue(new TextEncoder().encode('{"content":"'));
+          sent += 1;
+          if (sent > 64) controller.close();
+          else controller.enqueue(megabyte);
+        },
+      }),
+    }),
   );
+  expect(streamed.status).toBe(413);
+  expect(await streamed.json()).toEqual(tooLarge);
+  expect(sent).toBeLessThan(16);
+
+  // Episodes derive a larger bound from their own content and metadata limits.
+  const episode = await app.request("/api/v1/episodes", {
+    method: "POST",
+    headers: { ...headers, "content-length": String(MAX_JSON_BODY_BYTES + 1) },
+    body: "{}",
+  });
+  expect(episode.status).toBe(400);
+});
+
+test("Workspace import refuses an Agent before it reads the request body", async () => {
+  vi.stubEnv("AUTH_MODE", "password");
+  vi.stubEnv("UI_PASSWORD", "test-password");
+  const context = await createMemoryTestContext();
+  const access = createAccessModule(context.database);
+  const agent = await access.createAgentForWorkspace(context.alice, {
+    name: "Import refusal",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(context.alice, agent.id);
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  let pulls = 0;
+  const request = new Request("http://lore.local/api/v1/workspaces/import", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${credential.token}`,
+      "content-type": "application/json",
+      "x-lore-workspace-id": context.alice.workspaceId,
+    },
+    body: new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(new TextEncoder().encode('{"archive":{},"ownerMap":{}}'));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+  });
+
+  const response = await app.request(request);
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({
+    code: "access_denied",
+    error: "Workspace import requires a User",
+  });
+  expect(pulls).toBe(0);
+  expect(request.bodyUsed).toBe(false);
 });
 
 test("shared admission rejects cross-site unsafe requests on both API prefixes", async () => {

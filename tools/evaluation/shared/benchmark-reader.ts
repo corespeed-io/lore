@@ -55,7 +55,11 @@ export interface BenchmarkReaderProvider {
   provider: string;
   model: string;
   revision: string;
-  profile: "lore-portable-deterministic-v2";
+  /**
+   * The built-in reader profile. v3 separates LongMemEval-V2 trajectories with a
+   * budgeted blank line; v2 reports concatenated them and are not comparable.
+   */
+  profile: "lore-portable-deterministic-v3";
   transport: "google-interactions-v1beta" | "ollama-chat-v1" | "openai-chat-completions";
   instruction: string;
   maximumContextCharacters: number;
@@ -323,7 +327,7 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
     provider: options.provider,
     model,
     revision: FIXED_READER_REVISION,
-    profile: "lore-portable-deterministic-v2",
+    profile: "lore-portable-deterministic-v3",
     transport: "openai-chat-completions",
     instruction,
     maximumContextCharacters,
@@ -409,7 +413,7 @@ function createGoogleReader(options: ReaderOptions): BenchmarkReaderProvider {
     provider: "google",
     model,
     revision: FIXED_READER_REVISION,
-    profile: "lore-portable-deterministic-v2",
+    profile: "lore-portable-deterministic-v3",
     transport: "google-interactions-v1beta",
     instruction,
     maximumContextCharacters,
@@ -526,7 +530,7 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
     model,
     // v2: LongMemEval-V2 trajectories are separated rather than concatenated.
     revision: "lore-ollama-reader-v2",
-    profile: "lore-portable-deterministic-v2",
+    profile: "lore-portable-deterministic-v3",
     transport: "ollama-chat-v1",
     instruction,
     maximumContextCharacters,

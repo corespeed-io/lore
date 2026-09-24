@@ -113,7 +113,7 @@ The mapped implementation is primarily in
   [`tools/evaluation/shared/benchmark-reader.ts`](../../tools/evaluation/shared/benchmark-reader.ts), and
   [`tools/evaluation/shared/benchmark-judge.ts`](../../tools/evaluation/shared/benchmark-judge.ts) pin the
   data, reader/judge prompts, images, RLS tripwires, timing, and usage metadata.
-- **Deviations and limits:** `lore-portable-deterministic-v2` uses a character
+- **Deviations and limits:** `lore-portable-deterministic-v3` uses a character
   budget and temperature zero; it is not the paper's sampled Qwen-token-budgeted
   reader. Retrieval-only literal-anchor Recall/MRR leaves answer accuracy null and
   is a diagnostic. Alternate readers, partial subsets, changed context budgets, or
