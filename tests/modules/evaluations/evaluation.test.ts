@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import type { EvaluationSearchProvider } from "@/modules/evaluations/service";
 import {
   createEvaluationModule,
+  EVALUATION_ISOLATION_FAILURE_ERROR,
   EVALUATION_RUN_EXPIRED_ERROR,
   evaluateRanking,
 } from "@/modules/evaluations/service";
@@ -364,5 +365,136 @@ test("An Evaluation run whose last search passes the deadline ends expired, not 
   await expect(evaluations.getRun(testContext.alice, run.id)).resolves.toMatchObject({
     status: "failed",
     error: EVALUATION_RUN_EXPIRED_ERROR,
+  });
+});
+
+const forbiddenId = "40000000-0000-4000-8000-000000000006";
+const expectedId = "40000000-0000-4000-8000-000000000007";
+const tripwireCase = {
+  query: "tripwire",
+  expectedMemoryIds: [expectedId],
+  forbiddenMemoryIds: [forbiddenId],
+  limit: 2,
+};
+
+test("An isolation leak outranks the run deadline in the recorded error", async () => {
+  const testContext = await createMemoryTestContext();
+  let clock = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    // The only search leaks and also runs past the 1-second budget.
+    searchProvider: {
+      search: async () => {
+        clock += 1_100;
+        return [{ memory: { id: forbiddenId } }];
+      },
+    },
+    now: () => clock,
+    runTimeoutSeconds: 1,
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Leak past the deadline",
+    cases: [tripwireCase],
+  });
+
+  const run = await evaluations.runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_ISOLATION_FAILURE_ERROR,
+    metrics: { isolationPassed: false, hardFailureCount: 1, caseCount: 1 },
+  });
+});
+
+test("A run that leaks and then crashes records the leak, not the crash", async () => {
+  const testContext = await createMemoryTestContext();
+  let calls = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: {
+      async search() {
+        calls += 1;
+        if (calls > 1) throw new Error("provider unavailable");
+        return [{ memory: { id: forbiddenId } }];
+      },
+    },
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Leak then crash",
+    cases: [tripwireCase, { ...tripwireCase, query: "second" }],
+  });
+
+  await expect(evaluations.runSuite(testContext.alice, suite.id)).rejects.toThrow(
+    "provider unavailable",
+  );
+  const runs = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ status: string; error: string; metrics: Record<string, unknown> }>(
+      "SELECT status::text, error, metrics FROM evaluation_runs WHERE suite_id = $1",
+      [suite.id],
+    ),
+  );
+  expect(runs.rows).toEqual([
+    {
+      status: "failed",
+      error: EVALUATION_ISOLATION_FAILURE_ERROR,
+      metrics: expect.objectContaining({ isolationPassed: false, hardFailureCount: 1 }),
+    },
+  ]);
+});
+
+/** A search that lets a concurrent reader expire the run before it returns `ids`. */
+function searchExpiringItsRun(testContext: Awaited<ReturnType<typeof createMemoryTestContext>>) {
+  let ids: string[] = [];
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: {
+      async search() {
+        const runs = await testContext.adminDatabase.transaction((transaction) =>
+          transaction.query<{ id: string }>(
+            `UPDATE evaluation_runs SET started_at = now() - interval '2 hours'
+             WHERE status = 'running' RETURNING id`,
+          ),
+        );
+        const runId = runs.rows[0]?.id;
+        if (!runId) throw new Error("The run must still be running during its search");
+        await expect(evaluations.getRun(testContext.alice, runId)).resolves.toMatchObject({
+          status: "failed",
+          error: EVALUATION_RUN_EXPIRED_ERROR,
+          metrics: { caseCount: 0 },
+        });
+        return ids.map((id) => ({ memory: { id } }));
+      },
+    },
+  });
+  return {
+    evaluations,
+    returning(next: string[]) {
+      ids = next;
+      return evaluations;
+    },
+  };
+}
+
+test("A leak is recorded even after a concurrent reader expired the run", async () => {
+  const testContext = await createMemoryTestContext();
+  const { evaluations, returning } = searchExpiringItsRun(testContext);
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Leak after expiry",
+    cases: [tripwireCase],
+  });
+
+  const run = await returning([forbiddenId, expectedId]).runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_ISOLATION_FAILURE_ERROR,
+    metrics: { isolationPassed: false, hardFailureCount: 1, caseCount: 1 },
+    completedAt: expect.anything(),
+  });
+  expect(run.results[0]?.metrics.forbiddenRetrievedIds).toEqual([forbiddenId]);
+
+  // Without a leak, the reader's expiry stands and the late metrics are discarded.
+  const clean = await returning([expectedId]).runSuite(testContext.alice, suite.id);
+  expect(clean).toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    metrics: { caseCount: 0, hardFailureCount: 0 },
   });
 });
