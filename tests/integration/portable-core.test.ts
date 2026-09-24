@@ -2,7 +2,7 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import { MemoryVersionConflictError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createOperationsModule } from "@/modules/operations/service";
+import { createOperationsModule, NON_TENANT_PUBLIC_TABLES } from "@/modules/operations/service";
 import {
   createPortabilityModule,
   MAX_WORKSPACE_ARCHIVE_LINKS,
@@ -617,7 +617,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 3,
+    schemaRevision: 4,
     memoryChunking: {
       revision: "lore-memory-chunking-v2",
       maximumCharacters: 1_200,
@@ -695,18 +695,64 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 4 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 5 WHERE singleton"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 3 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 4 WHERE singleton"),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
     transaction.query("ALTER TABLE memories DISABLE ROW LEVEL SECURITY"),
+  );
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
+});
+
+test("readiness requires RLS on every tenant table, including tables added later", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  const publicTables = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ relname: string; relrowsecurity: boolean }>(
+      `SELECT relname, relrowsecurity
+       FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')
+       ORDER BY relname`,
+    ),
+  );
+  const protectedTables = publicTables.rows
+    .filter((table) => table.relrowsecurity)
+    .map((table) => table.relname);
+  // The hand-kept list this replaced had drifted from both of these tables.
+  expect(protectedTables).toEqual(
+    expect.arrayContaining(["episode_evidence_chunk_embeddings", "episode_evidence_chunks"]),
+  );
+  for (const table of publicTables.rows.filter((candidate) => !candidate.relrowsecurity)) {
+    expect(NON_TENANT_PUBLIC_TABLES).toContain(table.relname);
+  }
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  for (const table of protectedTables) {
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table} DISABLE ROW LEVEL SECURITY`),
+    );
+    await expect(operations.readiness(), table).resolves.toMatchObject({
+      status: "unready",
+      components: { rlsRole: "unavailable" },
+    });
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY`),
+    );
+  }
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("CREATE TABLE public.future_tenant_records (id uuid PRIMARY KEY)"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
