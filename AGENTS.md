@@ -620,10 +620,12 @@ Memory search/list may constrain `scope`, `updatedAfter`, and exclusive
 every lexical and dense candidate source before top-k and keep them in the Actor/RLS
 transaction; reranking must never restore a filtered result. Keep the GIN metadata
 index when changing benchmark or application filter paths.
-Every Memory serialization renders `createdAt`/`updatedAt` as RFC 3339 UTC with
+Every Memory API response (create, read, update, list, search, context packets,
+and Proposal acceptance) renders `createdAt`/`updatedAt` as RFC 3339 UTC with
 microsecond precision through lore-core's `memorySelectColumns`; a `SELECT *`
 row's driver `Date` drops microseconds, so host code returning Memories must
-select through it. Any Memory's `updatedAt` is an exact list cursor.
+select through it, and any such `updatedAt` is an exact list cursor. Workspace
+archive and Graph node timestamps stay millisecond and are not cursors.
 Retrieval knobs are read once per process beside the cached providers; changing
 them requires a restart.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate

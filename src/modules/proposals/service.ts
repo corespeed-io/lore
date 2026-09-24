@@ -677,7 +677,6 @@ export function createMemoryProposalsModule(
               proposal,
               memory: accepted?.rows[0] ? memoryFromRow(accepted.rows[0]) : null,
               jobId: null,
-              chunksChanged: false,
             };
           }
 
@@ -697,7 +696,6 @@ export function createMemoryProposalsModule(
               proposal,
               memory: null,
               jobId: null,
-              chunksChanged: false,
             };
           }
 
@@ -714,11 +712,7 @@ export function createMemoryProposalsModule(
             }
           }
 
-          let applied: {
-            chunksChanged: boolean;
-            jobId: string | null;
-            memory: Memory;
-          } | null;
+          let applied: { jobId: string | null; memory: Memory } | null;
           if (current.kind === "create") {
             applied = {
               ...(await insertMemoryInTransaction(
@@ -731,7 +725,6 @@ export function createMemoryProposalsModule(
                 },
                 null,
               )),
-              chunksChanged: true,
             };
           } else {
             if (current.target_memory_id === null || current.base_memory_version === null) {
@@ -793,7 +786,6 @@ export function createMemoryProposalsModule(
             proposal,
             memory: applied.memory,
             jobId: applied.jobId,
-            chunksChanged: applied.chunksChanged,
           };
         });
         notifyMaintenance(reviewed?.jobId ?? null);

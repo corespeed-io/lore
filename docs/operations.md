@@ -36,6 +36,12 @@ scoped by Workspace, Actor, and operation, expire after 24 hours, and store only
 request hash plus the bounded response. Reusing a key with a different request
 returns `idempotency_conflict` (409).
 
+A 409 carries more than one `code`, so clients must branch on `code`, not status:
+`idempotency_conflict` must not be retried with the same key, while
+`transaction_conflict` (a deadlock or serialization failure the database resolved
+by aborting this request) is safe to retry after its `Retry-After` delay with the
+same `Idempotency-Key`.
+
 Memory browse pagination accepts an opaque `cursor` and returns the next value in
 `x-lore-next-cursor`. Do not parse or persist assumptions about the cursor format.
 
@@ -76,6 +82,11 @@ A completed archive checksum is replay-safe for that importer and Workspace whil
 every Memory it imported still exists. If some or all of them were deleted,
 importing the same archive again restores the missing Memories, reuses the
 survivors, and re-creates Links that touch a restored Memory, on the same receipt.
+
+The import limit counts UTF-8 bytes of the request body. Archives exported before
+the 48,000,000-byte export bound existed can exceed it, especially CJK or other
+non-ASCII-heavy Workspaces; re-export them from an upgraded deployment, or split
+the Workspace, rather than raising the limit.
 
 Every imported Memory receives a fresh target id. `error` and `skip` apply only to
 source-id collisions the importing Actor can already see; Lore never probes or

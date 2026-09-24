@@ -179,7 +179,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           options.idempotency,
         );
         if (claim.replay) {
-          return { memory: claim.replay.body.memory, jobId: null, chunksChanged: false };
+          return { memory: claim.replay.body.memory, jobId: null };
         }
         const updated = await updateMemoryInTransaction(
           transaction,
@@ -196,7 +196,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             { memory: null },
             Boolean(options.idempotency),
           );
-          return { memory: null, jobId: null, chunksChanged: false };
+          return { memory: null, jobId: null };
         }
         await completeMutation(
           transaction,

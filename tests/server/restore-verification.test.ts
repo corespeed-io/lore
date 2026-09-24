@@ -3,8 +3,15 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { REQUIRED_TENANT_TABLES as OPERATIONS_REQUIRED_TENANT_TABLES } from "@/modules/operations/service";
-import { REQUIRED_TENANT_TABLES, verifyRestoredDatabase } from "../../scripts/database/restore.ts";
+import {
+  NON_TENANT_PUBLIC_TABLES as OPERATIONS_NON_TENANT_PUBLIC_TABLES,
+  REQUIRED_TENANT_TABLES as OPERATIONS_REQUIRED_TENANT_TABLES,
+} from "@/modules/operations/service";
+import {
+  NON_TENANT_PUBLIC_TABLES,
+  REQUIRED_TENANT_TABLES,
+  verifyRestoredDatabase,
+} from "../../scripts/database/restore.ts";
 
 const postgres = new PGlite({ extensions: { pg_trgm, vector } });
 const migrations = new URL("../../db/migrations/", import.meta.url);
@@ -77,6 +84,10 @@ test("restore verification requires every tenant table to exist", async () => {
   // migration table cannot slip past readiness or restore verification.
   expect([...REQUIRED_TENANT_TABLES].sort()).toEqual(names);
   expect([...OPERATIONS_REQUIRED_TENANT_TABLES].sort()).toEqual(names);
+  // Readiness and restore must agree on which public tables may lack RLS.
+  expect([...NON_TENANT_PUBLIC_TABLES].sort()).toEqual(
+    [...OPERATIONS_NON_TENANT_PUBLIC_TABLES].sort(),
+  );
 
   for (const table of ["memory_links", "episode_evidence_chunks"]) {
     await postgres.exec("BEGIN");

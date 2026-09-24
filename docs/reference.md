@@ -571,7 +571,9 @@ accepted only while both the credential and Workspace grant remain active.
 - `/api/memories` and `/api/memories/:id`
 - `/api/v1/episodes`, `/api/v1/episodes/:id`, and bounded Observation evidence reads
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
-- `/api/evaluations/suites`, suite runs, and run results
+- `/api/evaluations/suites`, suite runs, and run results. The Suite list is paged:
+  50 per page by default (`limit` up to 100), with the next page's opaque `cursor`
+  in `x-lore-next-cursor`; a v1 client that ignores the header sees only the first page
 - `/api/v1/workspaces/export` and `/api/v1/workspaces/import`
 - stable aliases under `/api/v1`, with `/openapi.json` and
   `/api/v1/capabilities` (verified Actor plus `x-lore-workspace-id`); human clients

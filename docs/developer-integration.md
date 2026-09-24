@@ -139,7 +139,10 @@ and copied transactionally onto the accepted Memory without re-resolution. All t
 evidence categories share one 50-item limit.
 Episode recording, Proposal submission, and direct Memory mutation methods create
 a replay-safe idempotency key unless the caller supplies one; a supplied key must be
-1 to 128 visible ASCII characters, as the API requires. Direct update/forget and update
+1 to 128 visible ASCII characters, as the API requires. A `LoreApiError` with status
+409 is either `idempotency_conflict` (do not retry with that key) or
+`transaction_conflict` (retry after `Retry-After` with the same key); branch on its
+`code`, not the status. Direct update/forget and update
 proposals require the current positive Memory version. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
