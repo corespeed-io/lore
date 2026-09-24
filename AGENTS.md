@@ -95,10 +95,13 @@ been removed. Lore now has a native implementation, split into two concepts
   `lore.cancel_superseded_code_index_jobs` (a processing job only once its lease
   is past the one-hour maximum) and deletes never-ready revisions that recorded a
   BOM-only blob as indexed and are cited by no Code Evidence; that v7 literal must
-  match `CODE_INDEX_REVISION` when 0004 ships. The self-host maintenance sweep
-  calls the same function with its own `CODE_INDEX_REVISION` whenever Code
-  Indexing is enabled, so jobs an older app instance enqueues during a rolling
-  deploy are cancelled too.
+  match `CODE_INDEX_REVISION` when 0004 ships. The function takes the retired
+  revisions explicitly. The self-host maintenance sweep calls it with
+  `SUPERSEDED_CODE_INDEX_REVISIONS` (`src/modules/code/indexing/protocol.ts`)
+  whenever Code Indexing is enabled, so jobs an older app instance enqueues during
+  a rolling deploy are cancelled too, while a revision the worker does not know,
+  such as a newer release's, is never cancelled. Append the previous value to that
+  list whenever `CODE_INDEX_REVISION` is bumped.
   `0005_create_replay_indexes_concurrently.sql` builds the five
   `request_idempotency_records` replay-scrub partial expression indexes and
   `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so

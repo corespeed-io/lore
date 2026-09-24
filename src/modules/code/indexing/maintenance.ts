@@ -6,7 +6,7 @@ import {
   CodeRepositoryUnavailableError,
   CodeRevisionConflictError,
 } from "./errors";
-import { CODE_INDEX_REVISION } from "./protocol";
+import { CODE_INDEX_REVISION, SUPERSEDED_CODE_INDEX_REVISIONS } from "./protocol";
 import type { ConfiguredCodeRepositories } from "./queue";
 import { CODE_REPOSITORY_NOT_CONFIGURED, configuredCodeRepositoryForWorkspace } from "./queue";
 import { createCodeIndexModule } from "./service";
@@ -137,16 +137,16 @@ function codeIndexRetryDelay(attempt: number): number {
 }
 
 /**
- * Cancels unfinished jobs of any indexer revision other than this code's, which no
- * worker of this revision can claim: jobs an older app instance enqueued during a
- * rolling deploy, and leases an older worker left past the one-hour maximum.
- * Returns how many jobs were cancelled.
+ * Cancels unfinished jobs of the retired indexer revisions, which no worker of this
+ * revision can claim: jobs an older app instance enqueued during a rolling deploy,
+ * and leases an older worker left past the one-hour maximum. A revision newer than
+ * this code's is unknown to it and left alone. Returns how many jobs were cancelled.
  */
 export async function cancelSupersededCodeIndexJobs(database: PostgresDatabase): Promise<number> {
   return database.transaction(async (transaction) => {
     const result = await transaction.query<{ cancelled: number | string }>(
-      "SELECT lore.cancel_superseded_code_index_jobs($1) AS cancelled",
-      [CODE_INDEX_REVISION],
+      "SELECT lore.cancel_superseded_code_index_jobs($1::text[]) AS cancelled",
+      [[...SUPERSEDED_CODE_INDEX_REVISIONS]],
     );
     return Number(result.rows[0]?.cancelled ?? 0);
   });

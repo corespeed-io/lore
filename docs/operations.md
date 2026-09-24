@@ -402,10 +402,12 @@ ships, which no current worker claims, end `cancelled` with `Superseded by a new
 Code Index revision`. A processing job of such a revision ends the same way only
 once its lease is more than an hour old, so a worker still running the older
 revision through a rolling deploy finishes the job it holds. Every maintenance
-sweep of a worker with Code Indexing enabled repeats that cancel for each revision
-other than its own, which also catches jobs an older application instance enqueues
-during the deploy; the sweep's log line reports the count as
-`supersededCodeIndexJobs`. Re-enqueue the commits you still need. The migration
+sweep of a worker with Code Indexing enabled repeats that cancel for the revisions
+its release lists as retired, which also catches jobs an older application instance
+enqueues during the deploy. A revision the worker does not know, such as the one a
+newer release ships, is left alone, so an old worker still sweeping during a later
+rollout cannot cancel the new release's jobs. The sweep's log line reports the count
+as `supersededCodeIndexJobs`. Re-enqueue the commits you still need. The migration
 also deletes each Code Revision that recorded a byte-order-mark-only blob
 (`EF BB BF`) as indexed, has no ready, active, or retiring generation, and is cited
 by no Memory or Proposal Code Evidence. Such a revision could never finish, and

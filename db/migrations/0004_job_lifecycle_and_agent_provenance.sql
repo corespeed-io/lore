@@ -13,14 +13,16 @@ SET LOCAL lock_timeout = '5s';
 -- code_revision_files must not extend how long Memory traffic is blocked.
 --
 -- A worker claims only jobs of its own CODE_INDEX_REVISION, so an unfinished job
--- of any other indexer revision would stay pending, or leased, forever. Cancel it
+-- of a retired indexer revision would stay pending, or leased, forever. Cancel it
 -- with a content-free reason; enqueueing the commit again creates a job for the
 -- current revision. A processing job is cancelled only once its lease is past the
 -- one-hour maximum any claim can take, so a worker of the older revision that is
--- still running through a rolling deploy finishes its job. The maintenance sweep
--- calls this with its own CODE_INDEX_REVISION, so jobs that app instances of the
--- older revision enqueue during the deploy are cancelled as well.
-CREATE FUNCTION lore.cancel_superseded_code_index_jobs(current_indexer_revision text) RETURNS integer
+-- still running through a rolling deploy finishes its job. The caller names the
+-- retired revisions: the maintenance sweep passes SUPERSEDED_CODE_INDEX_REVISIONS,
+-- so jobs that app instances of an older revision enqueue during a deploy are
+-- cancelled, while an old worker still sweeping during a later rollout never
+-- cancels jobs of the newer revision it does not know.
+CREATE FUNCTION lore.cancel_superseded_code_index_jobs(superseded_indexer_revisions text[]) RETURNS integer
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'public'
     AS $$
@@ -29,7 +31,7 @@ CREATE FUNCTION lore.cancel_superseded_code_index_jobs(current_indexer_revision 
     SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
         completed_at = now(), updated_at = now(),
         last_error = 'Superseded by a newer Code Index revision'
-    WHERE job.indexer_revision <> current_indexer_revision
+    WHERE job.indexer_revision = ANY (superseded_indexer_revisions)
       AND (
         job.status = 'pending'
         OR (job.status = 'processing' AND job.leased_at <= now() - interval '1 hour')
@@ -38,12 +40,14 @@ CREATE FUNCTION lore.cancel_superseded_code_index_jobs(current_indexer_revision 
   )
   SELECT count(*)::integer FROM cancelled
 $$;
--- The literal must equal CODE_INDEX_REVISION in
+-- Every revision other than v7 is older than this migration, so all of them are
+-- retired here. The literal must equal CODE_INDEX_REVISION in
 -- src/modules/code/indexing/protocol.ts at the time 0004 ships. It stays fixed
 -- afterwards, because an applied migration is frozen.
-SELECT lore.cancel_superseded_code_index_jobs(
-  'ast-grep-0.45.3-web-structural-graph-v7-exact-root-partition'
-);
+SELECT lore.cancel_superseded_code_index_jobs(ARRAY(
+  SELECT DISTINCT indexer_revision FROM public.code_index_jobs
+  WHERE indexer_revision <> 'ast-grep-0.45.3-web-structural-graph-v7-exact-root-partition'
+));
 
 -- Before indexer revision v7, a blob holding only a UTF-8 byte-order mark (the
 -- three bytes EF BB BF) decoded to no text but was recorded as an indexed
@@ -602,7 +606,7 @@ REVOKE ALL ON FUNCTION
   lore.enqueue_code_index_job(uuid, text, text, text, text),
   lore.cancel_agent_code_index_jobs(),
   lore.requeue_dead_memory_embedding_jobs(uuid, boolean),
-  lore.cancel_superseded_code_index_jobs(text)
+  lore.cancel_superseded_code_index_jobs(text[])
 FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
   lore.can_read_workspace(uuid),
@@ -611,7 +615,7 @@ TO lore_app;
 GRANT EXECUTE ON FUNCTION
   lore.fail_code_index_job(uuid, uuid, text),
   lore.requeue_dead_memory_embedding_jobs(uuid, boolean),
-  lore.cancel_superseded_code_index_jobs(text)
+  lore.cancel_superseded_code_index_jobs(text[])
 TO lore_maintenance;
 
 UPDATE public.lore_system_state
