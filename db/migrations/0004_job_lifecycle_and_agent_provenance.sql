@@ -51,6 +51,43 @@ END
 $$;
 COMMENT ON FUNCTION lore.protect_memory_code_evidence_anchor() IS 'Keeps Memory Code Evidence anchors immutable while allowing an Agent foreign-key deletion to clear its provenance reference.';
 
+-- Whether a Code Index job's requester still holds the authority to run it: an
+-- active member for a human request, or an active write-granted Agent whose owner
+-- is still an active member. Claim and re-enqueue both decide with this one
+-- predicate. It runs only inside their SECURITY DEFINER bodies (as the owner, so
+-- RLS never hides a row) and is not executable by application roles, because it
+-- would otherwise reveal Membership and grant state for arbitrary identifiers.
+CREATE FUNCTION lore.code_index_requester_can_run(target_workspace_id uuid, requester_user_id uuid, requester_agent_id uuid) RETURNS boolean
+    LANGUAGE sql STABLE
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+  SELECT CASE
+    WHEN requester_agent_id IS NULL THEN EXISTS (
+      SELECT 1 FROM memberships membership
+      WHERE membership.workspace_id = target_workspace_id
+        AND membership.user_id = requester_user_id
+        AND membership.status = 'active'
+    )
+    ELSE EXISTS (
+      SELECT 1
+      FROM agents agent
+      JOIN agent_workspace_grants grant_row
+        ON grant_row.agent_id = agent.id
+       AND grant_row.workspace_id = target_workspace_id
+      JOIN memberships owner_membership
+        ON owner_membership.workspace_id = target_workspace_id
+       AND owner_membership.user_id = agent.owner_user_id
+      WHERE agent.id = requester_agent_id
+        AND agent.owner_user_id = requester_user_id
+        AND agent.status = 'active'
+        AND grant_row.status = 'active'
+        AND grant_row.permission = 'write'
+        AND owner_membership.status = 'active'
+    )
+  END
+$$;
+REVOKE ALL ON FUNCTION lore.code_index_requester_can_run(uuid, uuid, uuid) FROM PUBLIC;
+
 -- A worker that dies during a job's final attempt leaves an expired lease that no
 -- claim can take, because attempt_count has already reached max_attempts. Retire
 -- such leases as dead, mirroring claim_memory_embedding_job, so the job reaches a
@@ -83,29 +120,8 @@ BEGIN
         (job.status = 'pending' AND job.available_at <= now())
         OR (job.status = 'processing' AND job.leased_at < now() - make_interval(secs => lease_timeout_seconds))
       )
-      AND (
-        (job.requested_by_agent_id IS NULL AND EXISTS (
-          SELECT 1 FROM memberships membership
-          WHERE membership.workspace_id = job.workspace_id
-            AND membership.user_id = job.requested_by_user_id
-            AND membership.status = 'active'
-        ))
-        OR (job.requested_by_agent_id IS NOT NULL AND EXISTS (
-          SELECT 1
-          FROM agents agent
-          JOIN agent_workspace_grants grant_row
-            ON grant_row.agent_id = agent.id
-           AND grant_row.workspace_id = job.workspace_id
-          JOIN memberships owner_membership
-            ON owner_membership.workspace_id = job.workspace_id
-           AND owner_membership.user_id = agent.owner_user_id
-          WHERE agent.id = job.requested_by_agent_id
-            AND agent.owner_user_id = job.requested_by_user_id
-            AND agent.status = 'active'
-            AND grant_row.status = 'active'
-            AND grant_row.permission = 'write'
-            AND owner_membership.status = 'active'
-        ))
+      AND lore.code_index_requester_can_run(
+        job.workspace_id, job.requested_by_user_id, job.requested_by_agent_id
       )
     ORDER BY job.available_at, job.created_at, job.id
     FOR UPDATE SKIP LOCKED
@@ -212,31 +228,12 @@ BEGIN
     RAISE EXCEPTION 'Index job is not visible to this Actor'
       USING ERRCODE = '42501';
   END IF;
-  -- Mirrors the requester predicate of claim_code_index_job.
-  requester_can_run := CASE
-    WHEN existing_job.requested_by_agent_id IS NULL THEN EXISTS (
-      SELECT 1 FROM memberships membership
-      WHERE membership.workspace_id = existing_job.workspace_id
-        AND membership.user_id = existing_job.requested_by_user_id
-        AND membership.status = 'active'
-    )
-    ELSE EXISTS (
-      SELECT 1
-      FROM agents agent
-      JOIN agent_workspace_grants grant_row
-        ON grant_row.agent_id = agent.id
-       AND grant_row.workspace_id = existing_job.workspace_id
-      JOIN memberships owner_membership
-        ON owner_membership.workspace_id = existing_job.workspace_id
-       AND owner_membership.user_id = agent.owner_user_id
-      WHERE agent.id = existing_job.requested_by_agent_id
-        AND agent.owner_user_id = existing_job.requested_by_user_id
-        AND agent.status = 'active'
-        AND grant_row.status = 'active'
-        AND grant_row.permission = 'write'
-        AND owner_membership.status = 'active'
-    )
-  END;
+  -- The same authority claim_code_index_job requires, so re-arm and claim can
+  -- never disagree about whether a job's requester may still run it.
+  requester_can_run := lore.code_index_requester_can_run(
+    existing_job.workspace_id, existing_job.requested_by_user_id,
+    existing_job.requested_by_agent_id
+  );
   -- A processing lease is honoured for the one-hour maximum lease any claim can
   -- request, so an orphaned job is never taken from a worker still inside it.
   IF existing_job.status IN ('dead', 'cancelled')

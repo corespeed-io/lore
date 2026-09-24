@@ -429,6 +429,17 @@ test("only a write-authorized Actor of the repository's Workspace can enqueue or
     requested_by_agent_id: null,
     repository_path: repositoryPath,
   });
+  // The shared requester predicate would reveal Membership and grant state, so the
+  // request role cannot call it directly.
+  await expect(
+    context.database.transaction(async (transaction) => {
+      await installActorContext(transaction, context.alice);
+      return transaction.query("SELECT lore.code_index_requester_can_run($1, $2, NULL)", [
+        context.carol.workspaceId,
+        context.carol.userId,
+      ]);
+    }),
+  ).rejects.toMatchObject({ code: "42501" });
 });
 
 test("re-enqueue honours an orphaned job's live lease for up to an hour", async () => {
