@@ -539,6 +539,9 @@ export function createEvaluationModule(
             0,
           ),
         };
+        // The loop checks the deadline only before each case, so a final search that
+        // ran past it must still end the run as expired rather than completed.
+        if (!expired && now() - runStartedAt >= runTimeoutSeconds * 1_000) expired = true;
         const status: EvaluationRunStatus =
           metrics.isolationPassed && !expired ? "completed" : "failed";
         const error = expired

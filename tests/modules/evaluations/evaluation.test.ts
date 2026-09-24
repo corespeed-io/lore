@@ -309,3 +309,35 @@ test("A live Evaluation run stops at its deadline instead of running unbounded",
   });
   expect(run.results).toHaveLength(1);
 });
+
+test("An Evaluation run whose last search passes the deadline ends expired, not completed", async () => {
+  const testContext = await createMemoryTestContext();
+  let clock = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    // The only search takes 1.1 seconds of a 1-second budget.
+    searchProvider: {
+      search: async () => {
+        clock += 1_100;
+        return [];
+      },
+    },
+    now: () => clock,
+    runTimeoutSeconds: 1,
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Late final case",
+    cases: [{ query: "only", expectedMemoryIds: ["40000000-0000-4000-8000-000000000005"] }],
+  });
+
+  const run = await evaluations.runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    metrics: { caseCount: 1 },
+  });
+  await expect(evaluations.getRun(testContext.alice, run.id)).resolves.toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+  });
+});
