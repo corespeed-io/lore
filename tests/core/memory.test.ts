@@ -34,6 +34,49 @@ function exactLineChunks(content: string): string[] {
   return content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
+function oneHotVector(index: number): number[] {
+  return Array.from({ length: 1024 }, (_, vectorIndex) => (vectorIndex === index ? 1 : 0));
+}
+
+/** Documents and queries about cats share one direction; nothing else overlaps it. */
+function felineEmbeddingProvider() {
+  return {
+    provider: "fixture",
+    model: "fixture-feline-v1",
+    dimensions: 1024 as const,
+    revision: "fixture-v1",
+    async embed(texts: string[]) {
+      return texts.map((text) => oneHotVector(/\bcat\b|feline/i.test(text) ? 0 : 1));
+    },
+  };
+}
+
+async function drainEmbeddings(
+  testContext: MemoryTestContext,
+  embeddingProvider: ReturnType<typeof felineEmbeddingProvider>,
+): Promise<void> {
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider,
+  });
+  while ((await maintenance.run()).status === "complete") {
+    // Drain every deterministic document job before dense retrieval.
+  }
+}
+
+async function stampUpdatedAt(
+  testContext: MemoryTestContext,
+  stamps: Array<[memoryId: string, updatedAt: string]>,
+): Promise<void> {
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    for (const [memoryId, updatedAt] of stamps) {
+      await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+        memoryId,
+        updatedAt,
+      ]);
+    }
+  });
+}
+
 test("Memory owner can remember and retrieve a private Memory", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -827,6 +870,9 @@ test("Scope and time filters constrain candidates before ranking", async () => {
     content: "Atlas deployment status has a private rollback credential.",
     scope: "private",
   });
+  const boundaryShared = await memories.remember(testContext.alice, {
+    content: "Atlas deployment status turned amber at the report boundary.",
+  });
   await testContext.adminDatabase.transaction(async (transaction) => {
     await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
       oldShared.id,
@@ -838,6 +884,11 @@ test("Scope and time filters constrain candidates before ranking", async () => {
     ]);
     await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
       currentPrivate.id,
+      "2026-01-02T00:00:00.000Z",
+    ]);
+    // Matches every other filter, so only the exclusive updatedBefore bound drops it.
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      boundaryShared.id,
       "2026-01-02T00:00:00.000Z",
     ]);
   });
@@ -893,6 +944,133 @@ test("Metadata containment filters candidates before ranking without weakening R
   expect(searchResults.map((result) => result.memory.id)).toEqual([expected.id]);
   expect(listResults.map((memory) => memory.id)).toEqual([expected.id]);
   expect(searchResults.map((result) => result.memory.id)).not.toContain(forbidden.id);
+  await testContext.close();
+});
+
+// The dense tests below query "cat" against Memories that only say "feline": no
+// lexical channel matches, so every result proves the dense channel's filters.
+// Equal distances rank the newest Memory first, and limit 1 means a filter
+// applied after top-k would return nothing instead of the expected Memory.
+
+test("Dense candidates apply the scope filter before top-k", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const privateFeline = await memories.remember(testContext.alice, {
+    content: "Alice's private feline prefers the north window.",
+    scope: "private",
+  });
+  const sharedFeline = await memories.remember(testContext.alice, {
+    content: "The shared feline sleeps beside the radiator.",
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+  await stampUpdatedAt(testContext, [
+    [privateFeline.id, "2026-01-01T00:00:00.000Z"],
+    [sharedFeline.id, "2026-01-02T00:00:00.000Z"],
+  ]);
+
+  const lexicalOnly = await createMemoryModule(testContext.database).search(testContext.alice, {
+    query: "cat",
+  });
+  const privateResults = await memories.search(testContext.alice, {
+    query: "cat",
+    scope: "private",
+    limit: 1,
+  });
+  const sharedResults = await memories.search(testContext.alice, {
+    query: "cat",
+    scope: "shared",
+    limit: 1,
+  });
+
+  expect(lexicalOnly).toEqual([]);
+  expect(privateResults.map((result) => result.memory.id)).toEqual([privateFeline.id]);
+  expect(sharedResults.map((result) => result.memory.id)).toEqual([sharedFeline.id]);
+  await testContext.close();
+});
+
+test("Dense candidates apply time bounds before top-k with an exclusive updatedBefore", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const tooOld = await memories.remember(testContext.alice, {
+    content: "An archived feline census from the old report.",
+  });
+  const inside = await memories.remember(testContext.alice, {
+    content: "The feline census for the current report.",
+  });
+  const boundary = await memories.remember(testContext.alice, {
+    content: "A feline census stamped at the report boundary.",
+  });
+  const tooNew = await memories.remember(testContext.alice, {
+    content: "A feline census from after the report.",
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+  await stampUpdatedAt(testContext, [
+    [tooOld.id, "2025-01-01T00:00:00.000Z"],
+    [inside.id, "2026-01-01T00:00:00.000Z"],
+    [boundary.id, "2026-01-02T00:00:00.000Z"],
+    [tooNew.id, "2026-01-03T00:00:00.000Z"],
+  ]);
+
+  const lexicalOnly = await createMemoryModule(testContext.database).search(testContext.alice, {
+    query: "cat",
+  });
+  const results = await memories.search(testContext.alice, {
+    query: "cat",
+    updatedAfter: "2025-12-01T00:00:00.000Z",
+    updatedBefore: "2026-01-02T00:00:00.000Z",
+    limit: 1,
+  });
+  const fromBoundary = await memories.search(testContext.alice, {
+    query: "cat",
+    updatedAfter: "2026-01-02T00:00:00.000Z",
+    updatedBefore: "2026-01-03T00:00:00.000Z",
+    limit: 10,
+  });
+
+  expect(lexicalOnly).toEqual([]);
+  expect(results.map((result) => result.memory.id)).toEqual([inside.id]);
+  // updatedAfter is inclusive, so the boundary Memory opens the next window.
+  expect(fromBoundary.map((result) => result.memory.id)).toEqual([boundary.id]);
+  await testContext.close();
+});
+
+test("Dense candidates apply metadata containment before top-k without weakening RLS", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const expected = await memories.remember(testContext.alice, {
+    content: "The feline observation for question one.",
+    metadata: { benchmark: "dense-filter", questionIds: ["q1", "q2"] },
+  });
+  const otherQuestion = await memories.remember(testContext.alice, {
+    content: "The feline observation for another question.",
+    metadata: { benchmark: "dense-filter", questionIds: ["q3"] },
+  });
+  const forbidden = await memories.remember(testContext.bob, {
+    content: "Bob's private feline tripwire for question one.",
+    scope: "private",
+    metadata: { benchmark: "dense-filter", questionIds: ["q1"] },
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+  await stampUpdatedAt(testContext, [
+    [expected.id, "2026-01-01T00:00:00.000Z"],
+    [otherQuestion.id, "2026-01-02T00:00:00.000Z"],
+    [forbidden.id, "2026-01-03T00:00:00.000Z"],
+  ]);
+  const metadataFilter = { benchmark: "dense-filter", questionIds: ["q1"] };
+
+  const lexicalOnly = await createMemoryModule(testContext.database).search(testContext.alice, {
+    query: "cat",
+    metadataFilter,
+  });
+  const top = await memories.search(testContext.alice, { query: "cat", metadataFilter, limit: 1 });
+  const all = await memories.search(testContext.alice, { query: "cat", metadataFilter });
+
+  expect(lexicalOnly).toEqual([]);
+  expect(top.map((result) => result.memory.id)).toEqual([expected.id]);
+  expect(all.map((result) => result.memory.id)).toEqual([expected.id]);
   await testContext.close();
 });
 
@@ -1049,6 +1227,53 @@ test("Context-group expansion preserves metadata filters before candidate select
 
   expect(results.map((result) => result.memory.id)).toEqual([seed.id, expected.id]);
   expect(results.map((result) => result.memory.id)).not.toContain(otherPartition.id);
+  await testContext.close();
+});
+
+test("Context-group expansion reranks a compact anchor passage but returns wider evidence", async () => {
+  const testContext = await createMemoryTestContext();
+  const writer = createMemoryModule(testContext.database);
+  await writer.remember(testContext.alice, {
+    content: "The orchid launch review starts on Tuesday.",
+    metadata: { sourceSession: "session-a", sourceOrdinal: 1 },
+  });
+  const relatedContent = [
+    "0. Priya owns the cobalt contingency.",
+    "1. Lin reviews the fallback runbook.",
+    "2. Ada signs the vendor waiver.",
+    "3. Omar archives the drill notes.",
+  ].join("\n");
+  const related = await writer.remember(testContext.alice, {
+    content: relatedContent,
+    metadata: { sourceSession: "session-a", sourceOrdinal: 2 },
+  });
+  const chunks = exactLineChunks(relatedContent);
+  await replaceMemoryChunks(testContext, testContext.alice, related.id, chunks);
+  const rerankedText = new Map<string, string>();
+
+  const results = await createMemoryModule(testContext.database, {
+    contextGroupExpansion: {
+      groupMetadataKey: "sourceSession",
+      ordinalMetadataKey: "sourceOrdinal",
+      baseCandidateLimit: 1,
+      maximumGroups: 1,
+    },
+    evidenceNeighborChunks: 1,
+    evidenceTopChunks: 3,
+    rerankCandidateLimit: 2,
+    rerankingProvider: {
+      async rerank(input) {
+        for (const document of input.documents) rerankedText.set(document.id, document.text);
+        return input.documents.map((document) => ({ documentId: document.id, score: 0.5 }));
+      },
+    },
+  }).search(testContext.alice, { query: "orchid launch Tuesday", limit: 2 });
+
+  // The anchor chunk plus one configured neighbor, not the three-chunk answer evidence.
+  expect(rerankedText.get(related.id)).toBe(chunks.slice(0, 2).join(""));
+  expect(results.find((result) => result.memory.id === related.id)?.evidence).toBe(
+    chunks.slice(0, 3).join(""),
+  );
   await testContext.close();
 });
 
@@ -1216,6 +1441,46 @@ test("Reranking scores compact anchor evidence while returning bounded expanded 
   );
   expect(results).toMatchObject([{ memory: { id: memory.id }, evidence: content }]);
   expect(JSON.stringify(results)).not.toContain("rerankEvidence");
+  await testContext.close();
+});
+
+test("Reranking ranks by validated score whatever order the provider returns", async () => {
+  const testContext = await createMemoryTestContext();
+  const basic = createMemoryModule(testContext.database);
+  const alpha = await basic.remember(testContext.alice, {
+    content: "Juniper launch schedule alpha.",
+  });
+  const beta = await basic.remember(testContext.alice, {
+    content: "Juniper launch schedule beta.",
+  });
+  const gamma = await basic.remember(testContext.alice, {
+    content: "Juniper launch schedule gamma.",
+  });
+  const scores = new Map([
+    [alpha.id, 0.2],
+    [beta.id, 0.9],
+    [gamma.id, 0.5],
+  ]);
+  const scored = (ids: string[]) =>
+    ids.map((documentId) => ({ documentId, score: scores.get(documentId) ?? 0 }));
+  const search = (ordering: (ids: string[]) => string[]) =>
+    createMemoryModule(testContext.database, {
+      rerankingProvider: {
+        async rerank(input) {
+          return scored(ordering(input.documents.map((document) => document.id)));
+        },
+      },
+    }).search(testContext.alice, { query: "juniper launch schedule", limit: 3 });
+  const bySortedScore = (ids: string[]) =>
+    [...ids].sort((left, right) => (scores.get(right) ?? 0) - (scores.get(left) ?? 0));
+  const byAscendingScore = (ids: string[]) => bySortedScore(ids).reverse();
+
+  const unsorted = await search(byAscendingScore);
+  const sorted = await search(bySortedScore);
+
+  expect(unsorted.map((result) => result.memory.id)).toEqual([beta.id, gamma.id, alpha.id]);
+  expect(unsorted.map((result) => result.rerankScore)).toEqual([0.9, 0.5, 0.2]);
+  expect(sorted).toEqual(unsorted);
   await testContext.close();
 });
 
@@ -1523,6 +1788,49 @@ test("Bounded retrieval feedback can follow an iterative three-hop chain", async
   await testContext.close();
 });
 
+test("Deeper retrieval feedback keeps earlier bridge Memories when the candidate pool is full", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const firstHop = await memories.remember(testContext.alice, {
+    content: "Alicevra's spouse is Bobnix.",
+  });
+  // Nine weaker first-pass matches fill the ten-candidate pool, so the feedback
+  // reserve is its trailing two slots.
+  for (let index = 1; index <= 9; index += 1) {
+    await memories.remember(testContext.alice, {
+      content: `The spouse's employer filed note ${index}.`,
+    });
+  }
+  const secondHop = await memories.remember(testContext.alice, {
+    content: "Bobnix's employer is Acmequill.",
+  });
+  await memories.remember(testContext.alice, {
+    content: "Acmequill's headquarters moved twice.",
+  });
+  const thirdHop = await memories.remember(testContext.alice, {
+    content: "Acmequill's headquarters are in Berlinora.",
+  });
+  const query = "Where is Alicevra's spouse's employer headquartered?";
+  const search = (retrievalFeedbackQueries: number) =>
+    createMemoryModule(testContext.database, { retrievalFeedbackQueries }).search(
+      testContext.alice,
+      { query, limit: 10 },
+    );
+
+  const firstPass = (await search(0)).map((result) => result.memory.id);
+  const depthOne = (await search(1)).map((result) => result.memory.id);
+  const depthTwo = (await search(2)).map((result) => result.memory.id);
+
+  expect(firstPass).toHaveLength(10);
+  expect(firstPass[0]).toBe(firstHop.id);
+  expect(firstPass).not.toContain(secondHop.id);
+  expect(depthOne).toEqual([...firstPass.slice(0, 9), secondHop.id]);
+  // Round two finds two novel Memories; it fills the reserve's free slot and
+  // must not evict round one's bridge to make room for both.
+  expect(depthTwo).toEqual([...firstPass.slice(0, 8), secondHop.id, thirdHop.id]);
+  await testContext.close();
+});
+
 test("Memory list contains shared and owner-private Memories but no private neighbors", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -1553,5 +1861,115 @@ test("Memory list supports stable offset paging inside the authorized result set
   const page = await memories.list(testContext.alice, { limit: 1, offset: 1 });
 
   expect(page).toEqual(full.slice(1, 2));
+  await testContext.close();
+});
+
+const canonicalMemoryTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+test("Every Memory read serializes one row's timestamps identically at microsecond precision", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const created = await memories.remember(testContext.alice, {
+    content: "Timestamp precision marker note.",
+  });
+  expect(created.createdAt).toMatch(canonicalMemoryTimestamp);
+  expect(created.updatedAt).toMatch(canonicalMemoryTimestamp);
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE memories SET created_at = $2, updated_at = $3 WHERE id = $1", [
+      created.id,
+      "2026-01-02T03:04:05.123456Z",
+      "2026-01-02T03:04:05.654321Z",
+    ]),
+  );
+
+  const detail = await memories.retrieve(testContext.alice, created.id);
+  const [listed] = await memories.list(testContext.alice, { limit: 1 });
+  const [found] = await memories.search(testContext.alice, {
+    query: "precision marker",
+    limit: 1,
+  });
+
+  expect(detail).toMatchObject({
+    id: created.id,
+    createdAt: "2026-01-02T03:04:05.123456Z",
+    updatedAt: "2026-01-02T03:04:05.654321Z",
+  });
+  expect(listed).toEqual(detail);
+  expect(found?.memory).toEqual(detail);
+
+  const updated = await memories.update(testContext.alice, created.id, {
+    metadata: { reviewed: true },
+  });
+  expect(updated?.createdAt).toBe("2026-01-02T03:04:05.123456Z");
+  expect(updated?.updatedAt).toMatch(canonicalMemoryTimestamp);
+  await expect(memories.retrieve(testContext.alice, created.id)).resolves.toEqual(updated);
+  await expect(memories.list(testContext.alice, { limit: 1 })).resolves.toEqual([updated]);
+  await testContext.close();
+});
+
+test("A Memory's serialized updatedAt is an exact list cursor within one millisecond", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const later = await memories.remember(testContext.alice, { content: "Later cursor note." });
+  const earlier = await memories.remember(testContext.alice, { content: "Earlier cursor note." });
+  await stampUpdatedAt(testContext, [
+    [later.id, "2026-01-02T03:04:05.123900Z"],
+    [earlier.id, "2026-01-02T03:04:05.123100Z"],
+  ]);
+
+  const [first] = await memories.list(testContext.alice, { limit: 1 });
+  const detail = await memories.retrieve(testContext.alice, later.id);
+  if (!first || !detail) throw new Error("Cursor fixture Memory is missing");
+  const afterList = await memories.list(testContext.alice, {
+    limit: 1,
+    cursor: { id: first.id, updatedAt: first.updatedAt },
+  });
+  const afterDetail = await memories.list(testContext.alice, {
+    limit: 1,
+    cursor: { id: detail.id, updatedAt: detail.updatedAt },
+  });
+
+  expect(first.id).toBe(later.id);
+  expect(afterList.map((memory) => memory.id)).toEqual([earlier.id]);
+  // A millisecond serialization would place this cursor after both Memories.
+  expect(afterDetail).toEqual(afterList);
+  await testContext.close();
+});
+
+test("A metadata-only update notifies maintenance for the job it enqueues while embedding is pending", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const notifications: string[] = [];
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  const created = await memories.remember(testContext.alice, {
+    content: "The feline embedding is still pending.",
+  });
+  expect(notifications).toHaveLength(1);
+
+  // The creation job has not run, so the new version still lacks vectors.
+  await memories.update(testContext.alice, created.id, { metadata: { reviewed: true } });
+  expect(notifications).toHaveLength(2);
+  const [creationJob, updateJob] = notifications;
+  expect(updateJob).not.toBe(creationJob);
+
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider,
+  });
+  // The superseded version's job is cancelled; the notified job embeds the Memory.
+  await expect(maintenance.run(creationJob)).resolves.toMatchObject({ status: "idle" });
+  await expect(maintenance.run(updateJob)).resolves.toMatchObject({
+    status: "complete",
+    jobId: updateJob,
+  });
+  await expect(memories.search(testContext.alice, { query: "cat" })).resolves.toMatchObject([
+    { memory: { id: created.id } },
+  ]);
+
+  // Once embedded, a metadata-only update inserts no job and sends no wake-up.
+  await memories.update(testContext.alice, created.id, { metadata: { reviewed: false } });
+  expect(notifications).toHaveLength(2);
   await testContext.close();
 });

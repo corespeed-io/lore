@@ -562,7 +562,7 @@ async function rerankResults(input: {
     input.results.map((result, rank) => [result.sourceKey, { result, rank }]),
   );
   const seen = new Set<string>();
-  const scored = reranked.map((candidate, rerankRank) => {
+  const validated = reranked.map((candidate) => {
     const original = originalById.get(candidate.documentId);
     if (
       !original ||
@@ -574,12 +574,16 @@ async function rerankResults(input: {
       throw new Error("Reranking provider returned an invalid result");
     }
     seen.add(candidate.documentId);
-    return {
-      ...original.result,
-      score: (1 - input.weight) / (60 + original.rank + 1) + input.weight / (60 + rerankRank + 1),
-      rerankScore: candidate.score,
-    };
+    return { original, score: candidate.score };
   });
+  // Rerank rank comes from the validated scores, not the provider's array
+  // order. The sort is stable, so an already sorted response is unchanged.
+  validated.sort((left, right) => right.score - left.score);
+  const scored = validated.map(({ original, score }, rerankRank) => ({
+    ...original.result,
+    score: (1 - input.weight) / (60 + original.rank + 1) + input.weight / (60 + rerankRank + 1),
+    rerankScore: score,
+  }));
   return scored
     .filter((result) => (result.rerankScore ?? 0) >= input.minimumScore)
     .sort(

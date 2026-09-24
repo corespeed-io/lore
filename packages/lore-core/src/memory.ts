@@ -140,6 +140,7 @@ async function expandContextGroupResults(input: {
   results: InternalMemorySearchResult[];
   targetLimit: number;
   expansion: NormalizedContextGroupExpansion;
+  evidenceNeighborChunks: number;
   evidenceTopChunks: number;
   scope: MemoryScope | null;
   updatedAfter: string | null;
@@ -181,26 +182,28 @@ async function expandContextGroupResults(input: {
     RETRIEVAL_CONTEXT_GROUP_POLICY.maximumFetchedMemories,
     Math.max(input.targetLimit * 4, input.targetLimit * groups.size),
   );
+  // An expanded row has no retrieval anchor, so its leading chunk anchors both
+  // passages. Answer evidence keeps the first evidenceTopChunks chunks; the
+  // reranker sees only that anchor plus up to evidenceNeighborChunks following
+  // chunks, matching an ordinary candidate's compact passage and never wider
+  // than the returned evidence.
   const expanded = await input.transaction.query<SearchRow>(
     `SELECT
-       memory.id,
-       memory.workspace_id,
-       memory.owner_user_id,
-       memory.created_by_agent_id,
-       memory.scope,
-       memory.content,
-       memory.metadata,
-       memory.version,
-       memory.created_at,
-       memory.updated_at,
+       ${memorySelectColumns("memory")},
        0::double precision AS score,
        evidence.content AS evidence,
-       evidence.content AS rerank_evidence
+       evidence.rerank_content AS rerank_evidence
      FROM memories memory
      JOIN LATERAL (
-       SELECT string_agg(selected.content, '' ORDER BY selected.ordinal) AS content
+       SELECT
+         string_agg(selected.content, '' ORDER BY selected.ordinal) AS content,
+         string_agg(selected.content, '' ORDER BY selected.ordinal)
+           FILTER (WHERE selected.position <= $11::integer + 1) AS rerank_content
        FROM (
-         SELECT chunk.content, chunk.ordinal
+         SELECT
+           chunk.content,
+           chunk.ordinal,
+           row_number() OVER (ORDER BY chunk.ordinal) AS position
          FROM memory_chunks chunk
          WHERE chunk.workspace_id = $1
            AND chunk.memory_id = memory.id
@@ -231,6 +234,7 @@ async function expandContextGroupResults(input: {
       excludedMemoryIds,
       fetchLimit,
       input.evidenceTopChunks,
+      input.evidenceNeighborChunks,
     ],
   );
   const rankedExpanded = expanded.rows
@@ -293,6 +297,43 @@ async function expandContextGroupResults(input: {
 export function serializedTimestamp(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+/**
+ * The canonical Memory timestamp: RFC 3339 UTC text with the column's full
+ * microsecond precision, for example `2026-01-02T03:04:05.123456Z`. A driver
+ * `Date` keeps only milliseconds, so a Memory serialized from one would not
+ * match the same row's list cursor, and a millisecond cursor would skip rows
+ * that share a millisecond. The fixed-width text sorts chronologically and
+ * round-trips through `::timestamptz` exactly.
+ */
+function memoryTimestampSql(column: string): string {
+  return `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/**
+ * SQL select list for one `memories` row with canonical timestamps. Every
+ * engine path that returns a Memory selects its row through it, so list,
+ * detail, write, and search responses serialize the same row identically.
+ * Host extensions should use it with {@link memoryFromRow}; a row selected
+ * with `*` keeps the driver's millisecond `Date` values instead.
+ */
+export function memorySelectColumns(alias?: string): string {
+  const column = (name: string) => (alias ? `${alias}.${name}` : name);
+  return [
+    ...[
+      "id",
+      "workspace_id",
+      "owner_user_id",
+      "created_by_agent_id",
+      "scope",
+      "content",
+      "metadata",
+      "version",
+    ].map(column),
+    `${memoryTimestampSql(column("created_at"))} AS created_at`,
+    `${memoryTimestampSql(column("updated_at"))} AS updated_at`,
+  ].join(", ");
 }
 
 async function embedRetrievalQueries(
@@ -607,16 +648,7 @@ async function searchOneQuery(input: {
        LIMIT $6
      )
      SELECT
-       memory.id,
-       memory.workspace_id,
-       memory.owner_user_id,
-       memory.created_by_agent_id,
-       memory.scope,
-       memory.content,
-       memory.metadata,
-       memory.version,
-       memory.created_at,
-       memory.updated_at,
+       ${memorySelectColumns("memory")},
        ranked_memories.score,
        evidence.content AS evidence,
        rerank_evidence.content AS rerank_evidence
@@ -705,24 +737,24 @@ async function insertChunks(
   memoryId: string,
   chunks: PreparedChunk[],
 ): Promise<void> {
-  for (const [ordinal, chunk] of chunks.entries()) {
-    await transaction.query(
-      `INSERT INTO memory_chunks (
-         id, workspace_id, memory_id, ordinal, content, chunking_revision, embedding,
-         embedding_provider, embedding_model, embedding_revision, embedded_at
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, NULL, NULL
-       )`,
-      [
-        crypto.randomUUID(),
-        workspaceId,
-        memoryId,
-        ordinal,
-        chunk.content,
-        MEMORY_CHUNKING_REVISION,
-      ],
-    );
-  }
+  if (chunks.length === 0) return;
+  // One round trip while the caller holds the Memory row lock. Ordinals follow
+  // the prepared chunk order. Vectors live in generation-scoped
+  // memory_chunk_embeddings, so no per-chunk embedding columns are written.
+  await transaction.query(
+    `INSERT INTO memory_chunks (
+       id, workspace_id, memory_id, ordinal, content, chunking_revision
+     )
+     SELECT chunk.id, $1::uuid, $2::uuid, (chunk.position - 1)::integer, chunk.content, $5
+     FROM unnest($3::uuid[], $4::text[]) WITH ORDINALITY AS chunk(id, content, position)`,
+    [
+      workspaceId,
+      memoryId,
+      chunks.map(() => crypto.randomUUID()),
+      chunks.map((chunk) => chunk.content),
+      MEMORY_CHUNKING_REVISION,
+    ],
+  );
 }
 
 async function enqueueEmbeddingJob(
@@ -744,7 +776,7 @@ async function enqueueEmbeddingJob(
   const generationId = generation.rows[0]?.id;
   if (!generationId) throw new Error("Embedding generation could not be resolved");
   const jobId = crypto.randomUUID();
-  await transaction.query(
+  const inserted = await transaction.query<{ inserted: boolean }>(
     `INSERT INTO memory_embedding_jobs (
        id, workspace_id, memory_id, owner_user_id, memory_scope,
        memory_version, embedding_provider, embedding_model, embedding_revision,
@@ -764,7 +796,7 @@ async function enqueueEmbeddingJob(
                 AND embedded.chunk_id = chunk.id
             )
         )
-    `,
+     RETURNING true AS inserted`,
     [
       jobId,
       memory.workspace_id,
@@ -779,12 +811,19 @@ async function enqueueEmbeddingJob(
       generationId,
     ],
   );
-  // The request role deliberately cannot SELECT this private table, so callers
-  // use the allocated id only when the write guarantees that a job was inserted.
-  return jobId;
+  // The request role deliberately holds INSERT but not SELECT on this private
+  // table. A RETURNING list that names no column needs no SELECT privilege and
+  // applies no SELECT policy, so it reports exactly the row this INSERT wrote
+  // without reading the table. Return the id only for an inserted job: a stale
+  // check that inserted nothing yields null, and every non-null id is a real
+  // job worth a maintenance notification.
+  return inserted.rows.length > 0 ? jobId : null;
 }
 
-/** Map a raw `memories` row to the public {@link Memory} shape. */
+/**
+ * Map a raw `memories` row to the public {@link Memory} shape. Select the row
+ * with {@link memorySelectColumns} so its timestamps use the canonical form.
+ */
 export function memoryFromRow(row: MemoryRow): Memory {
   return {
     id: row.id,
@@ -840,7 +879,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       `INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-       RETURNING *`,
+       RETURNING ${memorySelectColumns()}`,
       [
         id,
         storageScope.partitionId,
@@ -893,7 +932,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
        WHERE id = $1
          AND workspace_id = $2
          AND version = $6
-       RETURNING *`,
+       RETURNING ${memorySelectColumns()}`,
       [
         id,
         storageScope.partitionId,
@@ -1050,7 +1089,7 @@ export function createMemoryModule(
     async retrieve(id: string): Promise<Memory | null> {
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryRow>(
-          "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
+          `SELECT ${memorySelectColumns()} FROM memories WHERE id = $1 AND workspace_id = $2`,
           [id, storageScope.partitionId],
         );
         return result.rows[0] ? memoryFromRow(result.rows[0]) : null;
@@ -1072,7 +1111,9 @@ export function createMemoryModule(
       const updated = await database.transaction((transaction) =>
         updateMemoryInTransaction(transaction, storageScope, id, input, options.expectedVersion),
       );
-      notifyMaintenance(updated?.chunksChanged ? updated.jobId : null);
+      // A job id is non-null only when this update inserted a job, including a
+      // metadata-only update whose chunks still lack current-generation vectors.
+      notifyMaintenance(updated?.jobId ?? null);
       return updated?.memory ?? null;
     },
 
@@ -1102,27 +1143,24 @@ export function createMemoryModule(
       const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryRow>(
-          `SELECT id, workspace_id, owner_user_id, created_by_agent_id, scope,
-                  content, metadata, version, created_at,
-                  to_char(
-                    updated_at AT TIME ZONE 'UTC',
-                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-                  ) AS updated_at
-           FROM memories
-           WHERE workspace_id = $1
-             AND ($4::memory_scope IS NULL OR scope = $4::memory_scope)
-             AND ($5::timestamptz IS NULL OR updated_at >= $5::timestamptz)
-             AND ($6::timestamptz IS NULL OR updated_at < $6::timestamptz)
-             AND ($7::jsonb IS NULL OR metadata @> $7::jsonb)
+          // ORDER BY is qualified: a bare updated_at would name the text output
+          // column, sorting strings instead of reading memories_workspace_updated_idx.
+          `SELECT ${memorySelectColumns("memory")}
+           FROM memories memory
+           WHERE memory.workspace_id = $1
+             AND ($4::memory_scope IS NULL OR memory.scope = $4::memory_scope)
+             AND ($5::timestamptz IS NULL OR memory.updated_at >= $5::timestamptz)
+             AND ($6::timestamptz IS NULL OR memory.updated_at < $6::timestamptz)
+             AND ($7::jsonb IS NULL OR memory.metadata @> $7::jsonb)
              AND (
                $8::timestamptz IS NULL
-               OR updated_at < $8::timestamptz
+               OR memory.updated_at < $8::timestamptz
                OR (
-                 updated_at = $8::timestamptz
-                 AND id > $9::uuid
+                 memory.updated_at = $8::timestamptz
+                 AND memory.id > $9::uuid
                )
              )
-           ORDER BY updated_at DESC, id
+           ORDER BY memory.updated_at DESC, memory.id
            LIMIT $2
            OFFSET $3`,
           [
@@ -1202,6 +1240,7 @@ export function createMemoryModule(
               results: fused,
               targetLimit: resultLimit,
               expansion: contextGroupExpansion,
+              evidenceNeighborChunks,
               evidenceTopChunks,
               scope,
               updatedAfter,
@@ -1213,6 +1252,11 @@ export function createMemoryModule(
       let feedbackSeedQuery = query;
       let feedbackSources = fusionResults;
       const feedbackSourceIds = new Set<string>();
+      // The first pass stays fixed across rounds; every round's candidates join
+      // one shared feedback reserve in discovery order, so a later round never
+      // evicts an earlier round's bridge Memory.
+      let firstPassResults = fusionResults;
+      let feedbackPool: MemorySearchResult[] = [];
       for (let round = 0; round < retrievalFeedbackQueries; round += 1) {
         const feedback = feedbackRetrievalQueries(feedbackSeedQuery, feedbackSources, 1)[0];
         if (!feedback) break;
@@ -1234,7 +1278,7 @@ export function createMemoryModule(
                AND ($6::jsonb IS NULL OR metadata @> $6::jsonb)`,
             [
               storageScope.partitionId,
-              fusionResults.map((result) => result.memory.id),
+              [...firstPassResults, ...feedbackPool].map((result) => result.memory.id),
               scope,
               updatedAfter,
               updatedBefore,
@@ -1265,11 +1309,11 @@ export function createMemoryModule(
             visibleMemoryIds: new Set(stillVisible.rows.map((row) => row.id)),
           };
         });
-        fusionResults = appendFeedbackResults(
-          fusionResults.filter((result) => feedbackRead.visibleMemoryIds.has(result.memory.id)),
-          feedbackRead.results,
-          resultLimit,
-        );
+        const isStillVisible = (result: MemorySearchResult) =>
+          feedbackRead.visibleMemoryIds.has(result.memory.id);
+        firstPassResults = firstPassResults.filter(isStillVisible);
+        feedbackPool = [...feedbackPool.filter(isStillVisible), ...feedbackRead.results];
+        fusionResults = appendFeedbackResults(firstPassResults, feedbackPool, resultLimit);
         if (!feedbackRead.results.length) break;
         feedbackSeedQuery = feedback.query;
         feedbackSources = feedbackRead.results;
@@ -1308,6 +1352,10 @@ export function createMemoryModule(
         if (results.length !== fusionResults.length) {
           throw new Error("Reranking provider returned the wrong number of results");
         }
+        // Rank by the validated scores, not the provider's array order. The sort
+        // is stable, so equal scores keep the provider's order and an already
+        // sorted response is unchanged.
+        results.sort((left, right) => right.rerankScore - left.rerankScore);
         return diversifyRerankedResults(
           fuseRerankedResults(
             fusionResults,

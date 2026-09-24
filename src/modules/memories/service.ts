@@ -206,9 +206,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         );
         return updated;
       });
-      // Metadata-only updates can leave an existing stale job for the scheduled
-      // sweep without billing a Queue message for an already-embedded Memory.
-      notifyMaintenance(updatedResult.chunksChanged ? updatedResult.jobId : null);
+      // The engine returns a job id only when this update inserted a job, so an
+      // already-embedded metadata-only update sends no Queue message.
+      notifyMaintenance(updatedResult.jobId);
       return updatedResult.memory;
     },
 
