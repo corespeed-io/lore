@@ -165,9 +165,10 @@ is signed off. The canonical procedure is PostgreSQL's
 
 The native Ollama SDK has no non-streaming request deadline. A connected server
 that stops answering can leave `provider.embed()` pending indefinitely. The
-self-host worker waits for its current batch before polling again, so this can
-also delay other embedding generations, Code Index jobs, and discovery sweeps.
-This is an accepted consequence of using the SDK's default transport.
+self-host worker's embedding loop waits for its current round before polling again,
+so this can delay other embedding generations. Code Index jobs and the discovery and
+retention sweep run in their own loops and keep making progress. This is an accepted
+consequence of using the SDK's default transport.
 
 The embedding lease is an ownership/reclaim window, not a watchdog. Ollama uses
 the default seven-minute window regardless of `LORE_EMBEDDING_TIMEOUT_MS`;
@@ -181,8 +182,11 @@ progress, and verify that Ollama itself responds. Restore or restart Ollama with
 the service manager used by the deployment, then restart a stuck maintenance
 worker through its supervisor (native development: `bun run service:restart`).
 The existing expired-lease claim path recovers the job while its retry budget
-remains; inspect the report's dead-job count for exhausted jobs. Do not clear lease
-tokens manually or mark unfinished jobs successful. `/livez` and `/readyz` are not worker
+remains; inspect the report's dead-job count for exhausted jobs and re-arm them with
+`bun run db:embedding:requeue-dead` (see [dead embedding jobs](#dead-embedding-jobs)).
+When the stalled run finally returns, its late write is fenced by the replacement
+lease and it logs `job_lost`, a normal outcome rather than an infrastructure error.
+Do not clear lease tokens manually or mark unfinished jobs successful. `/livez` and `/readyz` are not worker
 liveness checks and do not prove this polling loop is progressing. Deployments
 that require bounded provider waits should use an SDK with native deadlines.
 
@@ -214,7 +218,10 @@ bounded cleanup/candidate Memory rows in UUID order. It reconciles at most one
 configured batch each of terminal jobs, stale jobs, and new candidates. Embedding
 HTTP work runs after that transaction and holds none of those locks.
 
-Inspect exact coverage with:
+Inspect exact coverage with the read-only report. It never creates a generation
+or seeds jobs; before the worker's first sweep for that identity it prints
+`not initialized`. The `db:embedding:*` commands run with `--no-env-file`, so pass
+every variable explicitly:
 
 ```bash
 LORE_MAINTENANCE_DATABASE_URL=postgres://... \
@@ -238,11 +245,85 @@ provider/model as the build target and running the same activation command.
 maintenance sweep prunes an idle retiring generation and its vectors. Canonical
 Memory chunks are not rewritten during a model switch.
 
+### Dead embedding jobs
+
+A job that fails eight times stays `dead`, and a dead job blocks activation of its
+generation. After fixing the cause, count and then re-arm one generation's dead jobs
+with the maintenance login; take the id from `db:embedding:report`:
+
+```bash
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id>
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id> --apply
+```
+
+The first form is a dry run that only counts. `--apply` resets every dead job of
+that building or active generation whose Memory still matches the job's version,
+owner, and scope to `pending` with `attempt_count` 0, in one transaction that takes
+the generation lock first, as retention and activation do. Jobs for a Memory that has
+changed since stay dead for the sweep to cancel. The command refuses a retiring,
+failed, or unknown generation.
+
+## Code Index jobs
+
+Code Index jobs index one exact commit of an operator-configured repository.
+`LORE_CODE_REPOSITORIES` maps each repository key to a display name, a local path,
+and optionally the Workspaces allowed to index it:
+
+```bash
+LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath":"/srv/lore","workspaceIds":["<workspace-uuid>"]}}'
+```
+
+- **Workspace binding.** With `workspaceIds`, only Actors in those Workspaces can
+  enqueue or index the repository. An entry without `workspaceIds` is served to
+  every Workspace, so Lore keeps it only when `AUTH_MODE` is explicitly `password`
+  or `none` (single-operator deployments). With `AUTH_MODE=proxy`, or when
+  `AUTH_MODE` is unset, such an entry is ignored with a warning. A Workspace
+  outside the binding receives exactly the same `400` as an unconfigured key, so
+  the response cannot enumerate the registry.
+- **The worker needs the registry too.** The maintenance worker resolves each job's
+  repository path from its own `LORE_CODE_REPOSITORIES` by key and re-checks the
+  Workspace binding when it processes the job. It never reads the path stored in
+  the job row. Give the worker the same `LORE_CODE_REPOSITORIES` and `AUTH_MODE`
+  as the application. A worker with an empty registry logs
+  `code-index-maintenance disabled` and leaves jobs pending; a job whose key was
+  removed, or is no longer bound to its Workspace, ends `dead` with
+  `repositoryKey is not configured by this deployment`.
+- **Terminal failures.** Invalid input (for example a commit that is not in the
+  local clone), an OID whose source conflicts with an earlier index, and an
+  incomplete generation fail identically on every attempt, so the job ends `dead`
+  on its first attempt with that message. Messages never contain the repository
+  path. Any other failure keeps the five-attempt retry budget with exponential
+  backoff and the generic `Code Index processing failed`. Logs carry the error
+  class and SQLSTATE, never the message.
+- **Expired final attempts.** A worker that dies during a job's last attempt leaves
+  an expired lease; the next claim marks that job `dead` with
+  `Code Index job lease expired during its final attempt`.
+- **Re-enqueue re-arms.** Enqueueing the same repository and commit again re-arms
+  a `dead` or `cancelled` job for the new requester with a fresh retry budget. It
+  also takes over a job whose requester can no longer run it (a revoked grant, a
+  disabled Agent, or a suspended Membership). A job that can still run is left
+  as it is.
+- **Agent lifecycle.** Disabling or deleting an Agent cancels its pending and
+  processing Code Index jobs, so a job requested by an Agent never runs under
+  the human owner's authority after the Agent is deleted. A worker holding such a
+  job's lease logs `job_lost`. Re-enqueue the commit to index it under a current
+  Actor.
+
+Two jobs that finish different generations of the same revision serialize on the
+revision row during activation, and the one-active-generation-per-revision index
+remains the correctness backstop.
+
 ## Probes and telemetry
 
 - `GET /livez` is process-only and never checks external dependencies.
 - `GET /readyz` verifies database access, the `lore_app` runtime role, schema/app
-  compatibility, pgvector, and a fail-closed RLS probe.
+  compatibility, pgvector, and a fail-closed RLS probe. The RLS check reads
+  `pg_catalog`: every public table except the non-tenant `lore_system_state` and
+  `lore_schema_migrations` must enable RLS, so a table added by a later migration
+  is covered without editing a list. `db:restore` verifies restored databases the
+  same way.
 - An embedding-provider failure produces `status: degraded` but HTTP 200 because
   lexical retrieval remains available. Database, role, schema, vector, or RLS
   failure produces `status: unready` and HTTP 503.
