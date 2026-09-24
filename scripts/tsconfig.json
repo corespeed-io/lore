@@ -1,6 +1,7 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "tsBuildInfoFile": "../.next/cache/scripts.tsbuildinfo",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022"],

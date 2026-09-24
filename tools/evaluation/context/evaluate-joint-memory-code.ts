@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { evaluationFailed } from "../shared/evaluation-exit-status";
 import type { JointPrototypeCaseResult, JointPrototypeVariantId } from "./fixture";
 import { createJointMemoryCodePrototypeSession } from "./fixture";
 
@@ -103,9 +104,14 @@ try {
     lowerHarmThanAlwaysOn:
       (finalMetrics.retrievalHarmRate ?? 1) < (alwaysOnMetrics.retrievalHarmRate ?? 1),
   };
+  // A cross-Workspace leak in any variant, not only the gated one, is a hard failure.
+  const hardFailureCount = [...resultsByVariant.values()]
+    .flat()
+    .filter((result) => !result.checks.noLeakage).length;
   const report = {
     revision: "joint-memory-code-v2",
-    decision: Object.values(gates).every(Boolean) ? "pass" : "fail",
+    decision: Object.values(gates).every(Boolean) && hardFailureCount === 0 ? "pass" : "fail",
+    hardFailureCount,
     question:
       "Can selective typed orchestration beat independent/always-on retrieval while preserving provenance, freshness, exact revision, and RLS?",
     environment: {
@@ -130,7 +136,9 @@ try {
     await mkdir(dirname(absoluteOutputPath), { recursive: true });
     await writeFile(absoluteOutputPath, serialized, "utf8");
   }
-  if (strict && report.decision !== "pass") process.exitCode = 1;
+  if (evaluationFailed({ strict, decision: report.decision, hardFailureCount })) {
+    process.exitCode = 1;
+  }
 } finally {
   await session.close();
 }

@@ -40,6 +40,8 @@ export interface RetrievalPolicyToolCall {
 export interface RetrievalPolicyTrace {
   assistantOutcome: "answered" | "clarified" | "abstained" | "error";
   answer?: string;
+  /** Why the trial could not run to a scored model outcome (`assistantOutcome=error`). */
+  error?: string;
   latencyMs: number;
   toolCalls: readonly RetrievalPolicyToolCall[];
   inputTokens?: number | null;
@@ -48,6 +50,8 @@ export interface RetrievalPolicyTrace {
 
 export interface RetrievalPolicyTrialScore {
   passed: boolean;
+  /** The trial failed before a model outcome existed; it carries no behavior signal. */
+  errored: boolean;
   invocationCorrect: boolean;
   routeCorrect: boolean | null;
   exactRevisionCorrect: boolean | null;
@@ -62,6 +66,8 @@ export interface RetrievalPolicyTrialScore {
 
 export interface RetrievalPolicyAggregate {
   caseCount: number;
+  /** Trials that errored; they fail passRate and are excluded from behavior metrics. */
+  errorCount: number;
   passRate: number;
   requiredRetrievalRecall: number | null;
   unnecessaryRetrievalRate: number | null;
@@ -296,9 +302,11 @@ export function scoreRetrievalPolicyTrial(input: {
     outcomeCorrect,
     answerEvidenceCorrect,
   ].filter((value): value is boolean => value !== null);
+  const errored = input.trace.assistantOutcome === "error";
 
   return {
-    passed: checks.every(Boolean),
+    passed: !errored && checks.every(Boolean),
+    errored,
     invocationCorrect,
     routeCorrect,
     exactRevisionCorrect,
@@ -323,31 +331,58 @@ function present(values: readonly (boolean | null)[]): boolean[] {
 export function aggregateRetrievalPolicyTrials(
   scores: readonly RetrievalPolicyTrialScore[],
 ): RetrievalPolicyAggregate {
-  const required = scores.filter((score) => score.routeCorrect !== null);
-  const mustNotCall = scores.filter(
+  // An errored trial fails passRate, but it has no model behavior to measure: it
+  // must not count as, say, a correctly avoided call or a fast answer.
+  const observed = scores.filter((score) => !score.errored);
+  const required = observed.filter((score) => score.routeCorrect !== null);
+  const mustNotCall = observed.filter(
     (score) =>
       score.routeCorrect === null &&
       score.clarificationCorrect === null &&
       score.drillDownCorrect === null,
   );
-  const latencies = scores.map((score) => score.latencyMs).sort((left, right) => left - right);
+  const latencies = observed.map((score) => score.latencyMs).sort((left, right) => left - right);
   const p95Index = Math.max(0, Math.ceil(latencies.length * 0.95) - 1);
 
   return {
     caseCount: scores.length,
+    errorCount: scores.length - observed.length,
     passRate: rate(scores.map((score) => score.passed)) ?? 0,
     requiredRetrievalRecall: rate(required.map((score) => !score.retrievalMiss)),
     unnecessaryRetrievalRate: rate(mustNotCall.map((score) => score.unnecessaryRetrieval)),
-    routeAccuracy: rate(present(scores.map((score) => score.routeCorrect))),
-    exactRevisionAccuracy: rate(present(scores.map((score) => score.exactRevisionCorrect))),
-    clarificationAccuracy: rate(present(scores.map((score) => score.clarificationCorrect))),
-    drillDownAccuracy: rate(present(scores.map((score) => score.drillDownCorrect))),
-    outcomeAccuracy: rate(present(scores.map((score) => score.outcomeCorrect))),
-    answerEvidenceAccuracy: rate(present(scores.map((score) => score.answerEvidenceCorrect))),
+    routeAccuracy: rate(present(observed.map((score) => score.routeCorrect))),
+    exactRevisionAccuracy: rate(present(observed.map((score) => score.exactRevisionCorrect))),
+    clarificationAccuracy: rate(present(observed.map((score) => score.clarificationCorrect))),
+    drillDownAccuracy: rate(present(observed.map((score) => score.drillDownCorrect))),
+    outcomeAccuracy: rate(present(observed.map((score) => score.outcomeCorrect))),
+    answerEvidenceAccuracy: rate(present(observed.map((score) => score.answerEvidenceCorrect))),
     averageLatencyMs:
-      scores.length === 0
+      observed.length === 0
         ? 0
-        : scores.reduce((total, score) => total + score.latencyMs, 0) / scores.length,
+        : observed.reduce((total, score) => total + score.latencyMs, 0) / observed.length,
     p95LatencyMs: latencies[p95Index] ?? 0,
   };
+}
+
+/**
+ * Run one live trial, turning any failure (a CLI timeout, nonzero exit, or output
+ * that fails its schema) into a scored `error` trace, so one bad trial cannot
+ * discard every trial the run has already recorded.
+ */
+export async function traceRetrievalPolicyTrial(
+  run: () => Promise<RetrievalPolicyTrace>,
+  now: () => number = () => performance.now(),
+): Promise<RetrievalPolicyTrace> {
+  const startedAt = now();
+  try {
+    return await run();
+  } catch (error) {
+    return {
+      assistantOutcome: "error",
+      answer: "",
+      error: error instanceof Error ? error.message : String(error),
+      latencyMs: now() - startedAt,
+      toolCalls: [],
+    };
+  }
 }

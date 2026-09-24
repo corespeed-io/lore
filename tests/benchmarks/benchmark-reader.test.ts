@@ -40,6 +40,81 @@ test("LongMemEval-V2 reader protocol keeps memory before the question and domain
   );
 });
 
+test("LongMemEval-V2 reader input separates trajectories and budgets the separator", () => {
+  const header = "### Memory context:\n";
+  const questionBlock = "\n\n### Question to answer:\nQ?";
+  const evidence = [
+    { id: "t-1", text: "  first trajectory ends here.  " },
+    { id: "t-2", text: "## Trajectory 2\nsecond starts" },
+  ];
+  expect(renderLongMemEvalV2ReaderInput("Q?", evidence, 1_000)).toBe(
+    `${header}first trajectory ends here.\n\n## Trajectory 2\nsecond starts${questionBlock}`,
+  );
+
+  // The separator consumes budget: two characters remain for the second trajectory.
+  const fixed = header.length + questionBlock.length;
+  const tight = [
+    { id: "t-1", text: "aaaa" },
+    { id: "t-2", text: "bbbb" },
+  ];
+  const truncated = renderLongMemEvalV2ReaderInput("Q?", tight, fixed + 4 + 2 + 2);
+  expect(truncated).toBe(`${header}aaaa\n\nbb${questionBlock}`);
+  expect(truncated.length).toBe(fixed + 8);
+  // With no room beyond the separator, the second trajectory and its separator drop.
+  expect(renderLongMemEvalV2ReaderInput("Q?", tight, fixed + 4 + 2)).toBe(
+    `${header}aaaa${questionBlock}`,
+  );
+});
+
+test("a self-hosted vLLM reader never borrows the OpenAI deployment key", async () => {
+  const originalFetch = globalThis.fetch;
+  let authorization: string | null = "unset";
+  const fetchMock = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    authorization = new Headers(init?.headers).get("authorization");
+    return Response.json({ choices: [{ message: { content: "ok" } }] });
+  };
+  globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
+  try {
+    const reader = createBenchmarkReaderFromEnvironment({
+      LORE_BENCHMARK_READER_PROVIDER: "vllm",
+      LORE_BENCHMARK_READER_MODEL: "Qwen/reader",
+      LORE_BENCHMARK_READER_BASE_URL: "http://reader.test/v1",
+      OPENAI_API_KEY: "sk-openai-deployment-key",
+    });
+    await reader?.answer({ question: "Q?", evidence: [{ id: "m", text: "fact" }] });
+    expect(authorization).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a reader key is never sent to a plaintext endpoint outside loopback", () => {
+  for (const [provider, key] of [
+    ["vllm", "LORE_BENCHMARK_READER_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["google", "GEMINI_API_KEY"],
+  ] as const) {
+    expect(() =>
+      createBenchmarkReaderFromEnvironment({
+        LORE_BENCHMARK_READER_PROVIDER: provider,
+        LORE_BENCHMARK_READER_MODEL: "reader-model",
+        LORE_BENCHMARK_READER_BASE_URL: "http://reader.test/v1",
+        [key]: "secret",
+      }),
+    ).toThrow("must use https outside loopback when it sends an API key");
+  }
+  for (const baseUrl of ["http://127.0.0.1:8002/v1", "http://localhost:8002/v1"]) {
+    expect(
+      createBenchmarkReaderFromEnvironment({
+        LORE_BENCHMARK_READER_PROVIDER: "vllm",
+        LORE_BENCHMARK_READER_MODEL: "reader-model",
+        LORE_BENCHMARK_READER_BASE_URL: baseUrl,
+        LORE_BENCHMARK_READER_API_KEY: "secret",
+      })?.provider,
+    ).toBe("vllm");
+  }
+});
+
 test("vLLM fixed reader sends multimodal deterministic chat input and records usage", async () => {
   const originalFetch = globalThis.fetch;
   const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {

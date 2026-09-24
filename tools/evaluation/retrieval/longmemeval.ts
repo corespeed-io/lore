@@ -38,6 +38,24 @@ export const LONGMEMEVAL_QUESTION_TYPES = [
   "knowledge-update",
 ] as const;
 
+/**
+ * LongMemEval marks its 30 false-premise abstention questions with an `_abs`
+ * question-id suffix. Their answer_session_ids point at the sessions that discuss
+ * the false premise, not at an answer, so the official retrieval comparison skips
+ * them. Lore keeps them out of positive Recall/MRR/nDCG and scores them as
+ * no-answer cases in their own category; reports record this policy.
+ */
+export const LONGMEMEVAL_ABSTENTION_POLICY = {
+  questionIdSuffix: "_abs",
+  category: "abstention",
+  scoring: "no-answer",
+  positiveRetrievalMetrics: "excluded",
+} as const;
+
+export function isLongMemEvalAbstention(record: Pick<LongMemEvalRecord, "question_id">): boolean {
+  return record.question_id.endsWith(LONGMEMEVAL_ABSTENTION_POLICY.questionIdSuffix);
+}
+
 function object(value: unknown, path: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${path} must be an object`);
@@ -234,14 +252,23 @@ export function toLongMemEvalPartition(
       },
     ],
     cases: [
-      {
-        key: record.question_id,
-        category: record.question_type,
-        query: record.question,
-        expectedKeys: record.answer_session_ids,
-        forbiddenKeys: [tripwireKey],
-        limit: options.limit ?? 5,
-      },
+      isLongMemEvalAbstention(record)
+        ? {
+            key: record.question_id,
+            category: LONGMEMEVAL_ABSTENTION_POLICY.category,
+            query: record.question,
+            expectedKeys: [],
+            forbiddenKeys: [tripwireKey],
+            limit: options.limit ?? 5,
+          }
+        : {
+            key: record.question_id,
+            category: record.question_type,
+            query: record.question,
+            expectedKeys: record.answer_session_ids,
+            forbiddenKeys: [tripwireKey],
+            limit: options.limit ?? 5,
+          },
     ],
   };
 }

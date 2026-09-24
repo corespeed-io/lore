@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import suiteSource from "../../../evaluation/suites/retrieval-policy-v1.json";
 import type { RetrievalGroundingPlan } from "../../../src/modules/context/policy";
@@ -16,6 +16,7 @@ import {
   aggregateRetrievalPolicyTrials,
   parseRetrievalPolicySuite,
   scoreRetrievalPolicyTrial,
+  traceRetrievalPolicyTrial,
 } from "./retrieval-policy";
 import { runClaudeRetrievalPolicyTurn } from "./retrieval-policy-claude";
 import { runCodexRetrievalPolicyTurn } from "./retrieval-policy-codex";
@@ -44,6 +45,8 @@ interface TrialRecord {
   score: RetrievalPolicyTrialScore;
   outcome: RetrievalPolicyTrace["assistantOutcome"];
   answer: string;
+  /** Present when the trial errored instead of producing a model outcome. */
+  error: string | null;
   toolCalls: Array<{
     name: string;
     arguments: Record<string, unknown>;
@@ -294,13 +297,13 @@ function markdownReport(report: {
     "",
     "## Variant metrics",
     "",
-    "| Variant | Pass | Required-call recall | Unnecessary-call rate | Route | Exact revision | Clarify | Drill-down | Outcome | Answer evidence | Calls | p95 ms | Input tokens |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Variant | Pass | Errors | Required-call recall | Unnecessary-call rate | Route | Exact revision | Clarify | Drill-down | Outcome | Answer evidence | Calls | p95 ms | Input tokens |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const [id, result] of Object.entries(report.variants)) {
     const metrics = result.metrics;
     lines.push(
-      `| ${id} | ${percent(metrics.passRate)} | ${percent(metrics.requiredRetrievalRecall)} | ${percent(metrics.unnecessaryRetrievalRate)} | ${percent(metrics.routeAccuracy)} | ${percent(metrics.exactRevisionAccuracy)} | ${percent(metrics.clarificationAccuracy)} | ${percent(metrics.drillDownAccuracy)} | ${percent(metrics.outcomeAccuracy)} | ${percent(metrics.answerEvidenceAccuracy)} | ${result.toolCalls} (${result.averageToolCalls.toFixed(2)}/case) | ${metrics.p95LatencyMs.toFixed(0)} | ${result.inputTokens} |`,
+      `| ${id} | ${percent(metrics.passRate)} | ${metrics.errorCount} | ${percent(metrics.requiredRetrievalRecall)} | ${percent(metrics.unnecessaryRetrievalRate)} | ${percent(metrics.routeAccuracy)} | ${percent(metrics.exactRevisionAccuracy)} | ${percent(metrics.clarificationAccuracy)} | ${percent(metrics.drillDownAccuracy)} | ${percent(metrics.outcomeAccuracy)} | ${percent(metrics.answerEvidenceAccuracy)} | ${result.toolCalls} (${result.averageToolCalls.toFixed(2)}/case) | ${metrics.p95LatencyMs.toFixed(0)} | ${result.inputTokens} |`,
     );
   }
   lines.push(
@@ -321,11 +324,21 @@ function markdownReport(report: {
       `| ${entry.variant} | ${entry.caseId} | ${entry.trial} | ${entry.score.passed ? "yes" : "no"} | ${entry.outcome} | ${calls} | ${route} | ${entry.score.latencyMs.toFixed(0)} |`,
     );
   }
+  const errored = report.records.filter((entry) => entry.error !== null);
+  if (errored.length > 0) {
+    lines.push("", "## Errored trials", "");
+    for (const entry of errored) {
+      lines.push(
+        `- ${entry.variant} / ${entry.caseId} / trial ${entry.trial}: ${entry.error?.replaceAll("\n", " ")}`,
+      );
+    }
+  }
   lines.push(
     "",
     "## Notes",
     "",
     "- The model saw schemas emitted by Lore's real MCP adapter. Tool results came from deterministic authorized benchmark fixtures.",
+    "- An errored trial (CLI timeout, nonzero exit, or schema-invalid output) fails Pass and is excluded from every behavior and latency metric.",
     "- `primitive-auto`, `compound-auto`, and `compound-guided` measure model-selected invocation. `host-policy` applies the production required/auto/off gate and, since `retrieval-grounding-v2`, returns the gate's clarification deterministically without a model turn when exact revision context is missing; the oracle and always-on variants remain controls.",
     `- ${report.provider} includes its CLI agent harness context, so token counts are useful for comparing these variants but are not representative of a lean direct-API integration.`,
     "",
@@ -352,7 +365,22 @@ const selectedCases = (
 ).slice(0, maximumCases);
 if (selectedCases.length === 0) throw new Error(`Unknown --case ${JSON.stringify(caseFilter)}`);
 
+const output = optionalArgument("output");
+const jsonPath = output ? resolve(output.endsWith(".json") ? output : `${output}.json`) : null;
+// Live runs are long and billable: each trial is appended as it completes so an
+// interrupted run keeps every trial it already paid for.
+const trialLogPath = jsonPath ? jsonPath.replace(/\.json$/i, ".trials.jsonl") : null;
+if (trialLogPath) {
+  await mkdir(dirname(trialLogPath), { recursive: true });
+  await writeFile(trialLogPath, "", "utf8");
+}
+
 const records: TrialRecord[] = [];
+async function recordTrial(entry: TrialRecord): Promise<void> {
+  records.push(entry);
+  if (trialLogPath) await appendFile(trialLogPath, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
 for (const variant of variants) {
   for (const evaluationCase of selectedCases) {
     for (let trial = 1; trial <= trialsPerCase; trial += 1) {
@@ -368,13 +396,14 @@ for (const variant of variants) {
           latencyMs: performance.now() - startedAt,
           toolCalls: [],
         };
-        records.push({
+        await recordTrial({
           variant: variant.id,
           caseId: evaluationCase.id,
           trial,
           score: scoreRetrievalPolicyTrial({ case: evaluationCase, trace }),
           outcome: trace.assistantOutcome,
           answer: groundingPlan.clarification ?? "",
+          error: null,
           toolCalls: [],
           inputTokens: null,
           outputTokens: null,
@@ -382,28 +411,36 @@ for (const variant of variants) {
         });
         continue;
       }
-      const hostCall = hostShouldRetrieve(variant, evaluationCase, groundingPlan)
-        ? await hostRetrieval(evaluationCase)
-        : null;
-      const runTurn =
-        runner === "claude" ? runClaudeRetrievalPolicyTurn : runCodexRetrievalPolicyTurn;
-      const modelTrace = await runTurn({
-        model,
-        toolNames: toolNamesFor(variant, groundingPlan),
-        prompt: promptFor({ evaluationCase, variant, hostCall }),
+      const trace = await traceRetrievalPolicyTrial(async () => {
+        const hostCall = hostShouldRetrieve(variant, evaluationCase, groundingPlan)
+          ? await hostRetrieval(evaluationCase)
+          : null;
+        const runTurn =
+          runner === "claude" ? runClaudeRetrievalPolicyTurn : runCodexRetrievalPolicyTurn;
+        const modelTrace = await runTurn({
+          model,
+          toolNames: toolNamesFor(variant, groundingPlan),
+          prompt: promptFor({ evaluationCase, variant, hostCall }),
+        });
+        return {
+          ...modelTrace,
+          latencyMs: performance.now() - startedAt,
+          toolCalls: [...(hostCall ? [hostCall] : []), ...modelTrace.toolCalls],
+        };
       });
-      const trace: RetrievalPolicyTrace = {
-        ...modelTrace,
-        latencyMs: performance.now() - startedAt,
-        toolCalls: [...(hostCall ? [hostCall] : []), ...modelTrace.toolCalls],
-      };
-      records.push({
+      if (trace.error) {
+        console.error(
+          `[${variant.id}] ${evaluationCase.id} trial ${trial} errored: ${trace.error}`,
+        );
+      }
+      await recordTrial({
         variant: variant.id,
         caseId: evaluationCase.id,
         trial,
         score: scoreRetrievalPolicyTrial({ case: evaluationCase, trace }),
         outcome: trace.assistantOutcome,
-        answer: modelTrace.answer,
+        answer: trace.answer ?? "",
+        error: trace.error ?? null,
         toolCalls: compactToolCalls(trace.toolCalls),
         inputTokens: trace.inputTokens ?? null,
         outputTokens: trace.outputTokens ?? null,
@@ -442,9 +479,7 @@ const report = {
   records,
 };
 
-const output = optionalArgument("output");
-if (output) {
-  const jsonPath = resolve(output.endsWith(".json") ? output : `${output}.json`);
+if (jsonPath) {
   const markdownPath = jsonPath.replace(/\.json$/i, ".md");
   await mkdir(dirname(jsonPath), { recursive: true });
   await Promise.all([
@@ -455,3 +490,8 @@ if (output) {
   console.error(`Wrote ${markdownPath}`);
 }
 console.log(JSON.stringify(report, null, 2));
+const erroredTrials = records.filter((entry) => entry.error !== null).length;
+if (erroredTrials > 0) {
+  console.error(`${erroredTrials}/${records.length} trials errored; the report is incomplete.`);
+  process.exitCode = 1;
+}

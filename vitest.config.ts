@@ -1,23 +1,22 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+
+// fileURLToPath decodes the URL; URL.pathname would keep spaces and non-ASCII
+// characters percent-encoded and break every alias under such a checkout path.
+function repositoryPath(path: string): string {
+  return fileURLToPath(new URL(path, import.meta.url));
+}
 
 export default defineConfig({
   resolve: {
     alias: {
-      "@": new URL("./src", import.meta.url).pathname,
-      "@corespeed/lore-core/postgres": new URL(
-        "./packages/lore-core/src/postgres.ts",
-        import.meta.url,
-      ).pathname,
-      "@corespeed/lore-core/episodes": new URL(
-        "./packages/lore-core/src/episodes/index.ts",
-        import.meta.url,
-      ).pathname,
-      "@corespeed/lore-core": new URL("./packages/lore-core/src/index.ts", import.meta.url)
-        .pathname,
-      "@corespeed/lore-sdk": new URL("./packages/typescript-sdk/src/index.ts", import.meta.url)
-        .pathname,
-      "@corespeed/lore-cli": new URL("./packages/cli/src/index.ts", import.meta.url).pathname,
-      "@corespeed/lore-mcp": new URL("./packages/mcp/src/index.ts", import.meta.url).pathname,
+      "@": repositoryPath("./src"),
+      "@corespeed/lore-core/postgres": repositoryPath("./packages/lore-core/src/postgres.ts"),
+      "@corespeed/lore-core/episodes": repositoryPath("./packages/lore-core/src/episodes/index.ts"),
+      "@corespeed/lore-core": repositoryPath("./packages/lore-core/src/index.ts"),
+      "@corespeed/lore-sdk": repositoryPath("./packages/typescript-sdk/src/index.ts"),
+      "@corespeed/lore-cli": repositoryPath("./packages/cli/src/index.ts"),
+      "@corespeed/lore-mcp": repositoryPath("./packages/mcp/src/index.ts"),
     },
   },
   test: {

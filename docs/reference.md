@@ -744,6 +744,10 @@ changing the production worker setting.
 `LORE_BENCHMARK_RERANK_DIVERSITY_LAMBDAS=1,0.9,0.8` run a rerank/abstention/diversity
 ablation over the same indexed corpus instead of paying the embedding cost again;
 add `LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS=10,20,50` to sweep candidate depth too.
+Candidate depths accept 1-200, the same bound as `LORE_RERANK_CANDIDATE_LIMIT`,
+whose value is the default sweep and is validated only when a reranker or context
+expansion consumes it. The `hybrid-candidates` diagnostic records the depth it
+actually scores, which Memory search caps at 100 results.
 `LORE_BENCHMARK_RERANK_WEIGHTS=0,0.25,0.5,0.75,1` sweeps first-stage/reranker rank
 fusion while memoizing identical reranker requests within that local run.
 The memoization key is SHA-256 hashed and the LRU is bounded to 2,000 entries by
@@ -772,7 +776,12 @@ Use `LORE_BENCHMARK_OUTPUT=evaluation/results/retrieval.json` for the synthetic
 suite or `--output evaluation/results/longmemeval-s.json` for LongMemEval to retain
 the complete local report; the results directory is intentionally gitignored.
 Set `LORE_BENCHMARK_REUSE_INDEXED=1` for the exact same synthetic suite after its
-first run; LongMemEval uses the explicit `--reuse-indexed` flag.
+first run; LongMemEval uses the explicit `--reuse-indexed` flag. Reuse requires each
+persisted Memory's content, owner, scope, and complete metadata (including its
+`benchmarkKey` and `benchmarkPartition`) to equal the fixture's.
+`noAnswerAccuracy` is `null`, not zero, for a suite or category with no no-answer
+cases. Embedding indexing tolerates provider retries and honors their backoff; only a
+dead job or sustained zero progress aborts a run.
 
 ### LongMemEval locally
 
@@ -817,7 +826,11 @@ rewriting Memories or regenerating embeddings.
 The official LongMemEval retrieval comparison excludes its 30 abstention questions.
 Lore keeps positive-case Recall/MRR/nDCG separate from no-answer accuracy, so the
 positive metrics remain comparable while abstention still receives an explicit
-quality gate instead of disappearing from the report.
+quality gate instead of disappearing from the report. Every `_abs` question becomes
+a no-answer case in the `abstention` category: its `answer_session_ids` name the
+sessions that discuss the false premise, not an answer, so they never count as
+positive retrieval hits. The report's `suite.provenance.abstentionPolicy` records
+this policy.
 
 ### LongMemEval-V2 preparation
 
@@ -906,7 +919,10 @@ score; `reader` is `null`, answer accuracy is `null`, and `scoreComplete` remain
 false so it cannot be mistaken for an end-to-end result.
 
 The built-in reader is explicitly reported as `lore-portable-deterministic-v2`:
-temperature 0, a character context budget, and provider-default image detail. It is
+temperature 0, a character context budget, and provider-default image detail.
+Retrieved trajectories are separated by a blank line that counts against that
+budget (reader revisions `lore-fixed-reader-v3` and `lore-ollama-reader-v2`; earlier
+revisions concatenated trajectories with no boundary). It is
 useful for controlled Lore ablations, but it is not mislabeled as the paper's exact
 Qwen3.5-9B profile, which samples at temperature 0.6/top-p 0.95/top-k 20 and truncates
 memory with the Qwen processor at 200,000 tokens. Reports include the actual decoding
@@ -933,6 +949,11 @@ The reader and judge also accept `LORE_BENCHMARK_READER_PROVIDER=vercel` and
 `LORE_BENCHMARK_JUDGE_PROVIDER=vercel` with a `creator/model` id and
 `AI_GATEWAY_API_KEY`, which is one way to reach a vision-capable model for the 29
 screenshot-backed questions without a second provider account.
+
+A self-hosted vLLM reader or judge authenticates only with its explicit
+`LORE_BENCHMARK_READER_API_KEY` or `LORE_BENCHMARK_JUDGE_API_KEY`; it never falls
+back to `OPENAI_API_KEY`. Any reader or judge request that carries a key must use an
+`https` base URL unless the host is loopback.
 
 For example, an OpenAI-compatible local judge can be added to the command above:
 
@@ -989,6 +1010,12 @@ BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_locomo_benchmark \
   bun run benchmark:locomo --max-cases 20 --limit 10 --reuse-indexed \
     --output evaluation/results/locomo-positive-4b.json
 ```
+
+The setup retrieval diagnostic is written beside the QA report as
+`<output>.retrieval.json` (replacing a `.json` suffix), so the two reports never
+share a path. Each QA question searches with its original text, exactly as the
+setup diagnostic and upstream do; the category-2 date instruction is added only to
+the reader prompt.
 
 When an exact, immutable retrieval diagnostic for the same selection and provider
 profile already exists, `--skip-retrieval-diagnostic` avoids repeating that setup
@@ -1112,7 +1139,9 @@ questions (3,214 fact Memories at the default 16 facts per Memory), or `--source
 for one exact source. `--facts-per-memory` exposes the chunk-granularity ablation
 when conflict assembly is off; assembly requires one fact per Memory.
 `LORE_MEMORYAGENTBENCH_RETRIEVAL_LIMIT` controls evidence depth. The runner uses the
-official normalized `substring_exact_match`, records per-source accuracy/latency/
+official normalized `substring_exact_match` (upstream `normalize_answer`: lowercase,
+strip only ASCII `string.punctuation`, drop articles, collapse whitespace; curly
+quotes and other non-ASCII punctuation survive), records per-source accuracy/latency/
 tokens, validates the exact corpus before `--reuse-indexed`, and treats any access
 to Bob-private answer tripwires as a hard failure. Tripwires retain exact chunks for
 that RLS assertion but skip embedding; only visible fact Memories consume document-

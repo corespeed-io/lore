@@ -29,6 +29,10 @@ import {
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
 import type { BenchmarkReaderRuntimeSnapshot } from "../shared/benchmark-reader";
 import { createBenchmarkReaderFromEnvironment } from "../shared/benchmark-reader";
+import {
+  drainEmbeddingMaintenance,
+  pendingEmbeddingJobCount,
+} from "../shared/embedding-maintenance-drain";
 import { verifyFile } from "../shared/file-integrity";
 import { summarizeTokenUsage } from "../shared/token-usage";
 import { requireExactIndexedMemory } from "./indexed-memory-validation";
@@ -487,21 +491,16 @@ try {
     }
     const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, { embeddingProvider });
     const indexingStartedAt = performance.now();
-    completedJobs = 0;
-    while (true) {
-      const maintenanceResults = await Promise.all(
-        Array.from({ length: embeddingConcurrency }, () => maintenance.run()),
-      );
-      if (maintenanceResults.every((result) => result.status === "idle")) break;
-      for (const result of maintenanceResults) {
-        if (result.status === "idle") continue;
-        if (result.status !== "complete") {
-          throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as ${result.status}`);
-        }
-        completedJobs += 1;
-      }
-      if (completedJobs % 100 === 0) console.error(`Embedded ${completedJobs} Memories...`);
-    }
+    // Tolerates provider retries and backoff; only a dead job or sustained zero
+    // progress aborts the run.
+    completedJobs = await drainEmbeddingMaintenance({
+      run: () => maintenance.run(),
+      concurrency: embeddingConcurrency,
+      pendingJobCount: () => pendingEmbeddingJobCount(admin),
+      onProgress: (completed, roundCompleted) => {
+        if (completed % 100 < roundCompleted) console.error(`Embedded ${completed} Memories...`);
+      },
+    });
     if (completedJobs !== expectedFactMemoryCount) {
       throw new Error(
         `Expected ${expectedFactMemoryCount} fact embedding jobs, completed ${completedJobs}`,

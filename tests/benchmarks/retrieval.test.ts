@@ -4,6 +4,7 @@ import {
   aggregateRetrievalBenchmark,
   evaluateRetrievalBenchmarkCase,
 } from "../../tools/evaluation/retrieval/retrieval";
+import { candidateLimitSweep } from "../../tools/evaluation/retrieval/retrieval-suite";
 
 test("positive retrieval cases report ranking quality and latency", () => {
   const metrics = evaluateRetrievalBenchmarkCase({
@@ -111,4 +112,32 @@ test("aggregate metrics separate positive and no-answer cases", () => {
     p50LatencyMs: 2,
     p95LatencyMs: 100,
   });
+});
+
+test("no-answer accuracy is absent, not zero, when a suite has no no-answer cases", () => {
+  const metrics = aggregateRetrievalBenchmark([
+    evaluateRetrievalBenchmarkCase({
+      retrievedMemoryIds: ["expected"],
+      expectedMemoryIds: ["expected"],
+      limit: 1,
+      latencyMs: 1,
+    }),
+  ]);
+  expect(metrics).toMatchObject({ positiveCaseCount: 1, noAnswerCaseCount: 0 });
+  expect(metrics.noAnswerAccuracy).toBeNull();
+});
+
+test("candidate-depth sweeps accept the full deployment bound and name the right setting", () => {
+  expect(candidateLimitSweep(150, {})).toEqual([150]);
+  expect(candidateLimitSweep(50, { LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS: "20,200,20" })).toEqual([
+    20, 200,
+  ]);
+  expect(() => candidateLimitSweep(201, {})).toThrow(
+    "The rerank candidate limit (LORE_RERANK_CANDIDATE_LIMIT) must be an integer from 1 to 200",
+  );
+  expect(() =>
+    candidateLimitSweep(50, { LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS: "20,250" }),
+  ).toThrow(
+    "LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS must contain comma-separated integers from 1 to 200",
+  );
 });

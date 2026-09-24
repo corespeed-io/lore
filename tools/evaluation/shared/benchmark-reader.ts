@@ -6,6 +6,7 @@ import {
   assertVercelAIGatewayModel,
   VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
 } from "../../../src/server/providers/vercel-ai-gateway";
+import { benchmarkEndpoint } from "./benchmark-endpoint";
 
 export interface BenchmarkReaderEvidence {
   id: string;
@@ -143,14 +144,6 @@ function boundedInteger(
     : fallback;
 }
 
-function httpEndpoint(baseUrl: string, path: string, label: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${label} base URL must use http or https`);
-  }
-  return new URL(path, `${url.toString().replace(/\/$/, "")}/`).toString();
-}
-
 export function renderBenchmarkReaderInput(
   question: string,
   evidence: BenchmarkReaderEvidence[],
@@ -187,17 +180,21 @@ export function renderLongMemEvalV2ReaderInput(
 ): string {
   const header = "### Memory context:\n";
   const questionBlock = `\n\n### Question to answer:\n${question.trim()}`;
+  // Trimmed trajectories need an explicit boundary, or one trajectory's tail runs
+  // straight into the next one's header. The separator counts against the budget.
+  const separator = "\n\n";
   const fixed = `${header}${questionBlock}`;
   let remaining = Math.max(0, maximumCharacters - fixed.length);
   const blocks: string[] = [];
   for (const item of evidence) {
-    if (remaining <= 0) break;
-    const value = item.text.trim().slice(0, remaining);
+    const separatorLength = blocks.length === 0 ? 0 : separator.length;
+    if (remaining <= separatorLength) break;
+    const value = item.text.trim().slice(0, remaining - separatorLength);
     if (!value) continue;
     blocks.push(value);
-    remaining -= value.length;
+    remaining -= separatorLength + value.length;
   }
-  return `${header}${blocks.join("")}${questionBlock}`.slice(0, maximumCharacters);
+  return `${header}${blocks.join(separator)}${questionBlock}`.slice(0, maximumCharacters);
 }
 
 function readerInput(
@@ -267,14 +264,25 @@ function openAICompatibleBaseUrl(provider: ReaderOptions["provider"]): string {
   return "http://127.0.0.1:8002/v1";
 }
 
-/** Deployment credential each reader provider falls back to. */
+/**
+ * Deployment credential each reader provider falls back to. Self-hosted surfaces
+ * (Ollama, vLLM) take only the explicit LORE_BENCHMARK_READER_API_KEY, so a
+ * managed provider's key is never sent to an operator-run endpoint.
+ */
 const READER_CREDENTIAL_VARIABLES: Record<ReaderOptions["provider"], string | undefined> = {
   google: "GEMINI_API_KEY",
   ollama: undefined,
   openai: "OPENAI_API_KEY",
   vercel: "AI_GATEWAY_API_KEY",
-  vllm: "OPENAI_API_KEY",
+  vllm: undefined,
 };
+
+/**
+ * Bumped when the rendered reader input changes, so reports from before and after
+ * a prompt-layout change never read as the same fixed reader. v3 separates
+ * LongMemEval-V2 trajectories instead of concatenating them.
+ */
+const FIXED_READER_REVISION = "lore-fixed-reader-v3";
 
 function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderProvider {
   const model = options.model.trim();
@@ -307,14 +315,14 @@ function createOpenAICompatibleReader(options: ReaderOptions): BenchmarkReaderPr
     organization: null,
     project: null,
     defaultHeaders: { Authorization: apiKey ? `Bearer ${apiKey}` : null },
-    baseURL: httpEndpoint(baseUrl, "", "benchmark reader"),
+    baseURL: benchmarkEndpoint(baseUrl, "benchmark reader", apiKey),
     maxRetries: 0,
     timeout: timeoutMs,
   });
   return {
     provider: options.provider,
     model,
-    revision: "lore-fixed-reader-v2",
+    revision: FIXED_READER_REVISION,
     profile: "lore-portable-deterministic-v2",
     transport: "openai-chat-completions",
     instruction,
@@ -392,12 +400,15 @@ function createGoogleReader(options: ReaderOptions): BenchmarkReaderProvider {
   const client = new GoogleGenAI({
     apiKey,
     vertexai: false,
-    httpOptions: { baseUrl: httpEndpoint(baseUrl, "", "Google benchmark reader"), apiVersion: "" },
+    httpOptions: {
+      baseUrl: benchmarkEndpoint(baseUrl, "Google benchmark reader", apiKey),
+      apiVersion: "",
+    },
   });
   return {
     provider: "google",
     model,
-    revision: "lore-fixed-reader-v2",
+    revision: FIXED_READER_REVISION,
     profile: "lore-portable-deterministic-v2",
     transport: "google-interactions-v1beta",
     instruction,
@@ -497,7 +508,7 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
     throw new Error("Ollama benchmark reader requires a loopback-only base URL");
   }
   const client = new Ollama({
-    host: httpEndpoint(baseUrl, "", "Ollama benchmark reader"),
+    host: benchmarkEndpoint(baseUrl, "Ollama benchmark reader", options.apiKey),
     ...(options.apiKey?.trim()
       ? { headers: { authorization: `Bearer ${options.apiKey.trim()}` } }
       : {}),
@@ -513,7 +524,8 @@ function createOllamaReader(options: ReaderOptions): BenchmarkReaderProvider {
   return {
     provider: "ollama",
     model,
-    revision: "lore-ollama-reader-v1",
+    // v2: LongMemEval-V2 trajectories are separated rather than concatenated.
+    revision: "lore-ollama-reader-v2",
     profile: "lore-portable-deterministic-v2",
     transport: "ollama-chat-v1",
     instruction,

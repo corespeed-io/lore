@@ -5,6 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import type { ActorContext } from "../../../src/server/auth/actor-context";
+import { evaluationFailed } from "../shared/evaluation-exit-status";
 import { runCodeAwareMemoryDependencyStressEvaluation } from "./code-aware-memory-dependency-stress-evaluation";
 import { runCodeAwareMemoryFoundationEvaluation } from "./code-aware-memory-foundation-evaluation";
 
@@ -123,7 +124,15 @@ try {
     await mkdir(dirname(absoluteOutputPath), { recursive: true });
     await writeFile(absoluteOutputPath, serialized, "utf8");
   }
-  if (strict && report.decision !== "pass") process.exitCode = 1;
+  if (
+    evaluationFailed({
+      strict,
+      decision: report.decision,
+      hardFailureCount: report.summary.hardFailureCount,
+    })
+  ) {
+    process.exitCode = 1;
+  }
 } finally {
   await postgres.close();
 }

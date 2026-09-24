@@ -9,9 +9,12 @@ import { endpointIsHealthy, readOllamaModels } from "./lib/health-check.ts";
 import {
   buildMaintenanceEnvironment,
   buildRerankerArguments,
+  buildRerankerEnvironment,
   buildRuntimeEnvironment,
   extendLocalEnvironment,
+  isDatabaseCredentialSetting,
   localServiceConfiguration,
+  nextDevelopmentEnvironmentNames,
   renderLocalEnvironment,
   targetDatabaseUrl,
 } from "./local-service.ts";
@@ -224,6 +227,101 @@ test("Bun maintenance subprocesses do not reload credentials from dotenv files",
   assert.deepEqual(environment, {
     LORE_MAINTENANCE_DATABASE_URL: databaseEnvironment.LORE_MAINTENANCE_DATABASE_URL,
   });
+});
+
+// Credentials other tools read from the same .env or shell; none belongs to a child.
+const foreignCredentials = {
+  BENCHMARK_DATABASE_URL: "postgresql://owner:benchmark@127.0.0.1:5432/lore_benchmark",
+  CODE_SEARCH_BENCHMARK_DATABASE_URL: "postgresql://owner:code@127.0.0.1:5432/lore_bench",
+  LORE_BASIC_PASSWORD: "operator",
+  LORE_DBMATE_DATABASE_URL: "postgresql://owner:dbmate@127.0.0.1:5432/lore",
+  LORE_RESTORE_DATABASE_URL: "postgresql://owner:restore@127.0.0.1:5432/lore_restore",
+  LORE_SMOKE_DATABASE_URL: "postgresql://owner:smoke@127.0.0.1:5432/lore_smoke",
+  PGHOST: "127.0.0.1",
+  PGPASSWORD: "libpq-owner",
+  PGUSER: "postgres",
+};
+const childSettings = {
+  OPENAI_API_KEY: "provider-key",
+  PATH: "/usr/bin",
+  UI_PASSWORD: "ui-password",
+};
+
+test("credential classification covers tool URLs and libpq defaults but not app settings", () => {
+  for (const name of Object.keys(foreignCredentials)) {
+    assert.equal(isDatabaseCredentialSetting(name), true, name);
+  }
+  for (const name of [...Object.keys(childSettings), "LORE_EMBEDDING_PROVIDER", "PORT"]) {
+    assert.equal(isDatabaseCredentialSetting(name), false, name);
+  }
+});
+
+test("every managed child receives only its own database credential", () => {
+  const source = { ...databaseEnvironment, ...foreignCredentials, ...childSettings };
+  const configuration = localServiceConfiguration(source);
+
+  const app = buildRuntimeEnvironment(source, configuration);
+  assert.equal(app.DATABASE_URL, configuration.database.requestUrl);
+  for (const name of [...Object.keys(foreignCredentials), "LORE_MAINTENANCE_DATABASE_URL"]) {
+    assert.equal(app[name], "", name);
+  }
+
+  const maintenance = buildMaintenanceEnvironment(source, configuration);
+  assert.equal(maintenance.LORE_MAINTENANCE_DATABASE_URL, configuration.database.maintenanceUrl);
+  for (const name of [...Object.keys(foreignCredentials), "DATABASE_URL"]) {
+    assert.equal(Object.hasOwn(maintenance, name), false, name);
+  }
+
+  const reranker = buildRerankerEnvironment(source);
+  for (const name of [...Object.keys(foreignCredentials), ...Object.keys(databaseEnvironment)]) {
+    assert.equal(Object.hasOwn(reranker, name), false, name);
+  }
+
+  for (const child of [app, maintenance, reranker]) {
+    for (const [name, value] of Object.entries(childSettings)) assert.equal(child[name], value);
+  }
+});
+
+test("Next dev dotenv files cannot restore credentials absent from the service environment", () => {
+  const directory = mkdtempSync(join(tmpdir(), "lore-app-dotenv-"));
+  temporaryDirectories.push(directory);
+  // Present only in files Next reloads for `next dev`, never in the manager's .env.
+  writeFileSync(join(directory, ".env.local"), "LORE_SMOKE_DATABASE_URL=privileged\n");
+  writeFileSync(join(directory, ".env.development"), "PGPASSWORD=privileged\nAPP_TITLE=Lore\n");
+  const reloadableNames = nextDevelopmentEnvironmentNames(directory);
+  assert.deepEqual(reloadableNames.sort(), ["APP_TITLE", "LORE_SMOKE_DATABASE_URL", "PGPASSWORD"]);
+
+  const require = createRequire(import.meta.url);
+  const nextEnvironmentPath = require.resolve("@next/env", { paths: [require.resolve("next")] });
+  const configuration = localServiceConfiguration(databaseEnvironment);
+  const loadInNextDev = (names: string[]) => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--no-env-file",
+        "--eval",
+        `
+      require(${JSON.stringify(nextEnvironmentPath)}).loadEnvConfig(process.cwd(), true);
+      process.stdout.write(JSON.stringify([
+        process.env.LORE_SMOKE_DATABASE_URL,
+        process.env.PGPASSWORD,
+        process.env.APP_TITLE,
+      ]));
+    `,
+      ],
+      {
+        cwd: directory,
+        encoding: "utf8",
+        env: buildRuntimeEnvironment(databaseEnvironment, configuration, names),
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  // Control: without the reloadable names, Next restores both credentials.
+  assert.deepEqual(loadInNextDev([]), ["privileged", "privileged", "Lore"]);
+  assert.deepEqual(loadInNextDev(reloadableNames), ["", "", "Lore"]);
 });
 
 test("reranking remains an explicit deployment-level mode", () => {

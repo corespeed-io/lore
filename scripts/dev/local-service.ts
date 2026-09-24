@@ -88,6 +88,52 @@ const bootstrapSecretSettings = [
   "LORE_DB_MAINTENANCE_PASSWORD",
   "LORE_DB_RUNTIME_PASSWORD",
 ];
+// Credentials a managed child must never hold unless the setting is its own
+// database URL. Named settings are always cleared; the patterns also catch every
+// other tool's database URL (dbmate, restore, smoke, benchmark) and libpq's PG*
+// connection defaults, which `pg` would otherwise apply to a child's connection.
+const credentialSettings = [
+  ...bootstrapSecretSettings,
+  "DATABASE_URL",
+  "LORE_LOCAL_POSTGRES_ADMIN_URL",
+  "LORE_MAINTENANCE_DATABASE_URL",
+  "LORE_MAINTENANCE_PASSWORD",
+  "LORE_RUNTIME_PASSWORD",
+];
+// Next.js reloads these files for `next dev`, restoring any name the app's
+// environment leaves undefined.
+const nextDevelopmentEnvironmentFiles = [
+  ".env.development.local",
+  ".env.local",
+  ".env.development",
+  ".env",
+];
+
+export function isDatabaseCredentialSetting(name: string): boolean {
+  return (
+    credentialSettings.includes(name) ||
+    name.endsWith("_DATABASE_URL") ||
+    /^LORE_\w*_PASSWORD$/.test(name) ||
+    /^PG[A-Z]/.test(name)
+  );
+}
+
+function foreignCredentialSettings(
+  names: Iterable<string>,
+  ownSetting: string | undefined,
+): string[] {
+  return [...new Set([...credentialSettings, ...names])].filter(
+    (name) => name !== ownSetting && isDatabaseCredentialSetting(name),
+  );
+}
+
+/** Every setting name Next's development dotenv loading could restore. */
+export function nextDevelopmentEnvironmentNames(directory: string = repositoryRoot): string[] {
+  return nextDevelopmentEnvironmentFiles.flatMap((file) => {
+    const path = join(directory, file);
+    return existsSync(path) ? Object.keys(parseEnv(readFileSync(path, "utf8"))) : [];
+  });
+}
 
 function configuredValue(environment: Environment, name: string, fallback: string): string {
   const value = environment[name]?.trim();
@@ -279,6 +325,7 @@ export function buildRerankerArguments(
 export function buildRuntimeEnvironment(
   environment: Environment,
   configuration: LocalServiceConfiguration,
+  reloadableNames: Iterable<string> = [],
 ): Environment {
   const runtime: Environment = {
     ...environment,
@@ -298,15 +345,12 @@ export function buildRuntimeEnvironment(
     ),
     PORT: String(configuration.appPort),
   };
-  for (const name of [
-    ...bootstrapSecretSettings,
-    "LORE_LOCAL_POSTGRES_ADMIN_URL",
-    "LORE_MAINTENANCE_DATABASE_URL",
-    "LORE_MAINTENANCE_PASSWORD",
-    "LORE_RUNTIME_PASSWORD",
-  ]) {
-    // Next also loads .env: explicit empty values keep filtered credentials
-    // from being restored in the application or its development subprocesses.
+  for (const name of foreignCredentialSettings(
+    [...Object.keys(runtime), ...reloadableNames],
+    "DATABASE_URL",
+  )) {
+    // Next also loads its dotenv files: explicit empty values keep filtered
+    // credentials from being restored in the application or its subprocesses.
     runtime[name] = "";
   }
   return runtime;
@@ -320,28 +364,19 @@ export function buildMaintenanceEnvironment(
     ...environment,
     LORE_MAINTENANCE_DATABASE_URL: configuration.database.maintenanceUrl,
   };
-  for (const name of [
-    ...bootstrapSecretSettings,
-    "DATABASE_URL",
-    "LORE_LOCAL_POSTGRES_ADMIN_URL",
-    "LORE_MAINTENANCE_PASSWORD",
-    "LORE_RUNTIME_PASSWORD",
-  ]) {
+  // The worker runs with --no-env-file, so deletion is final.
+  for (const name of foreignCredentialSettings(
+    Object.keys(runtime),
+    "LORE_MAINTENANCE_DATABASE_URL",
+  )) {
     delete runtime[name];
   }
   return runtime;
 }
 
-function buildRerankerEnvironment(environment: Environment): Environment {
+export function buildRerankerEnvironment(environment: Environment): Environment {
   const runtime: Environment = { ...environment };
-  for (const name of [
-    ...bootstrapSecretSettings,
-    "DATABASE_URL",
-    "LORE_LOCAL_POSTGRES_ADMIN_URL",
-    "LORE_MAINTENANCE_DATABASE_URL",
-    "LORE_MAINTENANCE_PASSWORD",
-    "LORE_RUNTIME_PASSWORD",
-  ]) {
+  for (const name of foreignCredentialSettings(Object.keys(runtime), undefined)) {
     delete runtime[name];
   }
   return runtime;
@@ -779,7 +814,11 @@ async function up(): Promise<void> {
   await ensureDatabase(configuration, environment);
   await run(process.execPath, ["--no-env-file", "run", "build:maintenance"], { env: environment });
 
-  const runtimeEnvironment = buildRuntimeEnvironment(environment, configuration);
+  const runtimeEnvironment = buildRuntimeEnvironment(
+    environment,
+    configuration,
+    nextDevelopmentEnvironmentNames(),
+  );
   const maintenanceEnvironment = buildMaintenanceEnvironment(environment, configuration);
   const rerankerEnvironment = buildRerankerEnvironment(environment);
   const started: ManagedProcessName[] = [];

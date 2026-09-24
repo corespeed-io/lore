@@ -1,11 +1,21 @@
 import { expect, test } from "vitest";
 import retrievalPolicySuite from "../../evaluation/suites/retrieval-policy-v1.json";
+import type {
+  RetrievalPolicyCase,
+  RetrievalPolicyTrace,
+} from "../../tools/evaluation/policy/retrieval-policy";
 import {
   aggregateRetrievalPolicyTrials,
   parseRetrievalPolicySuite,
   scoreRetrievalPolicyTrial,
+  traceRetrievalPolicyTrial,
 } from "../../tools/evaluation/policy/retrieval-policy";
-import { parseClaudeRetrievalPolicyArtifacts } from "../../tools/evaluation/policy/retrieval-policy-claude";
+import {
+  claudeRetrievalPolicyArguments,
+  claudeRetrievalPolicyEnvironment,
+  isClaudeRetrievalPolicyEnvironmentName,
+  parseClaudeRetrievalPolicyArtifacts,
+} from "../../tools/evaluation/policy/retrieval-policy-claude";
 import {
   codexRetrievalPolicyToolFilter,
   parseCodexRetrievalPolicyArtifacts,
@@ -50,6 +60,7 @@ test("a compound exact-revision Code retrieval satisfies a must-call policy case
 
   expect(score).toEqual({
     passed: true,
+    errored: false,
     invocationCorrect: true,
     routeCorrect: true,
     exactRevisionCorrect: true,
@@ -230,6 +241,7 @@ test("aggregate metrics expose required retrieval misses separately from unneces
 
   expect(aggregateRetrievalPolicyTrials(scores)).toEqual({
     caseCount: 3,
+    errorCount: 0,
     passRate: 1 / 3,
     requiredRetrievalRecall: 0.5,
     unnecessaryRetrievalRate: 1,
@@ -242,6 +254,120 @@ test("aggregate metrics expose required retrieval misses separately from unneces
     averageLatencyMs: 40,
     p95LatencyMs: 60,
   });
+});
+
+test("a failed live trial becomes a scored error and later trials still run", async () => {
+  const mustNotCall: RetrievalPolicyCase = {
+    id: "general/rewrite",
+    prompt: "Rewrite the supplied sentence.",
+    expectation: { invocation: "must-not-call", route: "abstain" },
+  };
+  // Stub runner: the first trial times out like a killed CLI, the second answers.
+  const runs: Array<() => Promise<RetrievalPolicyTrace>> = [
+    async () => {
+      throw new Error("Claude retrieval-policy turn failed (null): timed out");
+    },
+    async () => ({
+      assistantOutcome: "answered",
+      answer: "Rewritten.",
+      latencyMs: 30,
+      toolCalls: [],
+    }),
+  ];
+  let clock = 0;
+  const traces: RetrievalPolicyTrace[] = [];
+  for (const run of runs) {
+    traces.push(
+      await traceRetrievalPolicyTrial(run, () => {
+        clock += 5;
+        return clock;
+      }),
+    );
+  }
+
+  expect(traces[0]).toEqual({
+    assistantOutcome: "error",
+    answer: "",
+    error: "Claude retrieval-policy turn failed (null): timed out",
+    latencyMs: 5,
+    toolCalls: [],
+  });
+  expect(traces[1]).toMatchObject({ assistantOutcome: "answered", answer: "Rewritten." });
+
+  const scores = traces.map((trace) => scoreRetrievalPolicyTrial({ case: mustNotCall, trace }));
+  // Making no tool call is not a pass when the model never ran.
+  expect(scores[0]).toMatchObject({ passed: false, errored: true });
+  expect(scores[1]).toMatchObject({ passed: true, errored: false });
+  expect(aggregateRetrievalPolicyTrials(scores)).toMatchObject({
+    caseCount: 2,
+    errorCount: 1,
+    passRate: 0.5,
+    unnecessaryRetrievalRate: 0,
+    averageLatencyMs: 30,
+    p95LatencyMs: 30,
+  });
+});
+
+test("the Claude runner isolates operator settings, tools, and environment", () => {
+  const args = claudeRetrievalPolicyArguments({
+    model: "claude-sonnet-5",
+    toolNames: ["lore_retrieve_context", "lore_search"],
+    mcpConfig: { mcpServers: {} },
+    outputSchema: { type: "object" },
+  });
+  const flagValue = (flag: string) => args[args.indexOf(flag) + 1];
+  expect(flagValue("--setting-sources")).toBe("");
+  expect(flagValue("--tools")).toBe("");
+  expect(flagValue("--permission-mode")).toBe("dontAsk");
+  expect(flagValue("--allowedTools")).toBe(
+    "mcp__lore__lore_retrieve_context,mcp__lore__lore_search",
+  );
+  expect(args).toEqual(
+    expect.arrayContaining([
+      "--strict-mcp-config",
+      "--disable-slash-commands",
+      "--no-session-persistence",
+    ]),
+  );
+  expect(args).not.toContain("--disallowedTools");
+  expect(
+    claudeRetrievalPolicyArguments({
+      model: "claude-sonnet-5",
+      toolNames: [],
+      mcpConfig: {},
+      outputSchema: {},
+    }),
+  ).not.toContain("--allowedTools");
+
+  const authentication = {
+    PATH: "/usr/bin",
+    HOME: "/home/operator",
+    ANTHROPIC_API_KEY: "sk-ant",
+    CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+    CLAUDE_CONFIG_DIR: "/home/operator/.claude-work",
+    HTTPS_PROXY: "http://proxy:3128",
+    AWS_REGION: "us-east-1",
+  };
+  // Everything here belongs to Lore, the test process, or the operator's shell.
+  const foreign = {
+    CLAUDECODE: "1",
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "1",
+    DATABASE_URL: "postgres://lore_runtime:secret@db/lore",
+    BENCHMARK_DATABASE_URL: "postgres://owner:secret@db/lore_bench",
+    OPENAI_API_KEY: "sk-openai",
+    LORE_BENCHMARK_READER_API_KEY: "reader",
+    NODE_ENV: "test",
+  } as const;
+  const environment = claudeRetrievalPolicyEnvironment({
+    ...process.env,
+    ...authentication,
+    ...foreign,
+  });
+  expect(environment).toMatchObject(authentication);
+  for (const name of Object.keys(foreign)) expect(Object.hasOwn(environment, name)).toBe(false);
+  expect(
+    Object.keys(environment).filter((name) => !isClaudeRetrievalPolicyEnvironmentName(name)),
+  ).toEqual([]);
 });
 
 test("answer-quality expectations fail abstentions and unsupported answers", () => {

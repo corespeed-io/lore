@@ -41,7 +41,7 @@ import { summarizeTokenUsage } from "../shared/token-usage";
 import type { LongMemEvalV2Question } from "./longmemeval-v2";
 import {
   LONGMEMEVAL_V2_EPISODE_PLAN_REVISION,
-  longMemEvalV2ContainsLiteralAnswer,
+  longMemEvalV2LiteralAnswerMatcher,
   longMemEvalV2Manifest,
   longMemEvalV2QuestionScreenshot,
   mapLongMemEvalV2TrajectoryQuestions,
@@ -426,10 +426,11 @@ try {
   const recordLiteralAnswerAnchors = (trajectoryId: string, content: string) => {
     const questionIds = trajectoryQuestions.get(trajectoryId);
     if (!questionIds) throw new Error(`Unexpected selected trajectory ${trajectoryId}`);
+    const containsLiteralAnswer = longMemEvalV2LiteralAnswerMatcher(content);
     for (const questionId of questionIds) {
       const question = questionById.get(questionId);
       if (!question) throw new Error(`Unknown selected question ${questionId}`);
-      if (!longMemEvalV2ContainsLiteralAnswer(content, question.answer)) continue;
+      if (!containsLiteralAnswer(question.answer)) continue;
       const anchors = literalAnswerTrajectoryIds.get(questionId) ?? new Set<string>();
       anchors.add(trajectoryId);
       literalAnswerTrajectoryIds.set(questionId, anchors);
