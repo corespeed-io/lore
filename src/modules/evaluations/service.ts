@@ -1,9 +1,21 @@
-import type { MemoryModuleOptions, PostgresDatabase } from "@corespeed/lore-core";
+import type {
+  MemoryModuleOptions,
+  PostgresDatabase,
+  PostgresTransaction,
+} from "@corespeed/lore-core";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 
 export type EvaluationRunStatus = "running" | "completed" | "failed";
+
+/**
+ * A run executes inside its request. One still `running` this long after it started
+ * was abandoned by a killed request or process, so reads fail it; a live run stops
+ * itself at the same bound.
+ */
+export const EVALUATION_RUN_TIMEOUT_SECONDS = 3_600;
+export const EVALUATION_RUN_EXPIRED_ERROR = "Evaluation run expired before it completed";
 
 export class EvaluationSuiteNotFoundError extends Error {
   override name = "EvaluationSuiteNotFoundError";
@@ -83,8 +95,27 @@ export interface EvaluationSearchProvider {
 export interface EvaluationModuleOptions {
   searchProvider?: EvaluationSearchProvider;
   memoryOptions?: MemoryModuleOptions;
+  /** Millisecond clock for case latency and the live run deadline. */
   now?: () => number;
   estimateCostUsd?: (input: { query: string; retrievedCount: number }) => number;
+  /** Defaults to {@link EVALUATION_RUN_TIMEOUT_SECONDS}. */
+  runTimeoutSeconds?: number;
+}
+
+export interface EvaluationSuiteCursor {
+  id: string;
+  updatedAt: string;
+}
+
+export interface ListEvaluationSuites {
+  cursor?: EvaluationSuiteCursor;
+  limit?: number;
+}
+
+export interface EvaluationSuitePage {
+  suites: EvaluationSuite[];
+  /** Present when more Suites follow this page. */
+  nextCursor: EvaluationSuiteCursor | null;
 }
 
 interface SuiteRow {
@@ -96,6 +127,10 @@ interface SuiteRow {
   description: string;
   created_at: string;
   updated_at: string;
+}
+
+interface SuitePageRow extends SuiteRow {
+  cursor_updated_at: string;
 }
 
 interface CaseRow {
@@ -229,6 +264,25 @@ export function createEvaluationModule(
     options.searchProvider ?? createMemoryModule(database, options.memoryOptions);
   const now = options.now ?? (() => performance.now());
   const estimateCostUsd = options.estimateCostUsd ?? (() => 0);
+  const runTimeoutSeconds = options.runTimeoutSeconds ?? EVALUATION_RUN_TIMEOUT_SECONDS;
+
+  /** Fail this User's abandoned runs (or just `runId`) with a content-free reason. */
+  async function expireAbandonedRuns(
+    transaction: PostgresTransaction,
+    actor: ActorContext,
+    runId: string | null,
+  ): Promise<void> {
+    await transaction.query(
+      `UPDATE evaluation_runs
+       SET status = 'failed', error = $4, completed_at = now()
+       WHERE workspace_id = $1
+         AND created_by_user_id = $2
+         AND ($3::uuid IS NULL OR id = $3::uuid)
+         AND status = 'running'
+         AND started_at < now() - make_interval(secs => $5::double precision)`,
+      [actor.workspaceId, actor.userId, runId, EVALUATION_RUN_EXPIRED_ERROR, runTimeoutSeconds],
+    );
+  }
 
   async function getSuite(actor: ActorContext, suiteId: string): Promise<EvaluationSuite | null> {
     return database.transaction(async (transaction) => {
@@ -254,6 +308,7 @@ export function createEvaluationModule(
   async function getRun(actor: ActorContext, runId: string): Promise<EvaluationRun | null> {
     return database.transaction(async (transaction) => {
       await installActorContext(transaction, actor);
+      await expireAbandonedRuns(transaction, actor, runId);
       const runResult = await transaction.query<RunRow>(
         `SELECT * FROM evaluation_runs
          WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $3`,
@@ -333,20 +388,63 @@ export function createEvaluationModule(
 
     getSuite,
 
-    async listSuites(actor: ActorContext): Promise<EvaluationSuite[]> {
-      const suiteIds = await database.transaction(async (transaction) => {
+    async listSuites(
+      actor: ActorContext,
+      input: ListEvaluationSuites = {},
+    ): Promise<EvaluationSuitePage> {
+      const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? 50), 100));
+      return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
-        const result = await transaction.query<{ id: string }>(
-          `SELECT id
+        // Microsecond cursor text keeps pages exact across equal millisecond updates.
+        const suiteResult = await transaction.query<SuitePageRow>(
+          `SELECT *,
+                  to_char(
+                    updated_at AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+                  ) AS cursor_updated_at
            FROM evaluation_suites
-           WHERE workspace_id = $1 AND created_by_user_id = $2
-           ORDER BY updated_at DESC, id`,
-          [actor.workspaceId, actor.userId],
+           WHERE workspace_id = $1
+             AND created_by_user_id = $2
+             AND (
+               $4::timestamptz IS NULL
+               OR updated_at < $4::timestamptz
+               OR (updated_at = $4::timestamptz AND id > $5::uuid)
+             )
+           ORDER BY updated_at DESC, id
+           LIMIT $3`,
+          [
+            actor.workspaceId,
+            actor.userId,
+            limit + 1,
+            input.cursor?.updatedAt ?? null,
+            input.cursor?.id ?? null,
+          ],
         );
-        return result.rows.map((row) => row.id);
+        const page = suiteResult.rows.slice(0, limit);
+        const caseResult = page.length
+          ? await transaction.query<CaseRow & { suite_id: string }>(
+              `SELECT suite_id, id, ordinal, query, expected_memory_ids, forbidden_memory_ids,
+                      result_limit
+               FROM evaluation_cases
+               WHERE workspace_id = $1
+                 AND created_by_user_id = $2
+                 AND suite_id = ANY($3::uuid[])
+               ORDER BY suite_id, ordinal, id`,
+              [actor.workspaceId, actor.userId, page.map((suite) => suite.id)],
+            )
+          : { rows: [] };
+        const casesBySuite = new Map<string, EvaluationCase[]>();
+        for (const row of caseResult.rows) {
+          const cases = casesBySuite.get(row.suite_id) ?? [];
+          cases.push(toCase(row));
+          casesBySuite.set(row.suite_id, cases);
+        }
+        const last = suiteResult.rows.length > limit ? page.at(-1) : undefined;
+        return {
+          suites: page.map((suite) => toSuite(suite, casesBySuite.get(suite.id) ?? [])),
+          nextCursor: last ? { id: last.id, updatedAt: last.cursor_updated_at } : null,
+        };
       });
-      const suites = await Promise.all(suiteIds.map((suiteId) => getSuite(actor, suiteId)));
-      return suites.filter((suite): suite is EvaluationSuite => suite !== null);
     },
 
     getRun,
@@ -357,6 +455,7 @@ export function createEvaluationModule(
       const runId = crypto.randomUUID();
       await database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
+        await expireAbandonedRuns(transaction, actor, null);
         await transaction.query(
           `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id)
            VALUES ($1, $2, $3, $4)`,
@@ -365,8 +464,14 @@ export function createEvaluationModule(
       });
 
       const completedResults: EvaluationResult[] = [];
+      const runStartedAt = now();
+      let expired = false;
       try {
         for (const evaluationCase of suite.cases) {
+          if (now() - runStartedAt >= runTimeoutSeconds * 1_000) {
+            expired = true;
+            break;
+          }
           const startedAt = now();
           const searchResults = await searchProvider.search(actor, {
             query: evaluationCase.query,
@@ -434,16 +539,21 @@ export function createEvaluationModule(
             0,
           ),
         };
-        const status: EvaluationRunStatus = metrics.isolationPassed ? "completed" : "failed";
-        const error = metrics.isolationPassed
-          ? null
-          : "Isolation failure: forbidden Memory retrieved";
+        const status: EvaluationRunStatus =
+          metrics.isolationPassed && !expired ? "completed" : "failed";
+        const error = expired
+          ? EVALUATION_RUN_EXPIRED_ERROR
+          : metrics.isolationPassed
+            ? null
+            : "Isolation failure: forbidden Memory retrieved";
+        // A run a reader already expired keeps that terminal state.
         await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           await transaction.query(
             `UPDATE evaluation_runs
              SET status = $3, metrics = $4::jsonb, error = $5, completed_at = now()
-             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $6`,
+             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $6
+               AND status = 'running'`,
             [actor.workspaceId, runId, status, JSON.stringify(metrics), error, actor.userId],
           );
         });
@@ -466,7 +576,8 @@ export function createEvaluationModule(
           await transaction.query(
             `UPDATE evaluation_runs
              SET status = 'failed', metrics = $3::jsonb, error = $4, completed_at = now()
-             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $5`,
+             WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $5
+               AND status = 'running'`,
             [
               actor.workspaceId,
               runId,

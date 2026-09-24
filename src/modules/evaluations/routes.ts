@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
   BadRequestError,
+  decodeCursor,
+  encodeCursor,
   jsonObject,
+  queryInteger,
   requiredString,
   requireHumanActor,
   uuidArray,
@@ -49,7 +52,14 @@ export const evaluations = new Hono<ApiEnv>()
   .get("/suites", async (c) => {
     const evaluations = createEvaluationModule(await c.var.database());
     const actor = requireHumanActor(await c.var.resolveActor());
-    return c.json(await evaluations.listSuites(actor));
+    const url = new URL(c.req.url);
+    const page = await evaluations.listSuites(actor, {
+      cursor: decodeCursor(url.searchParams.get("cursor")),
+      limit: queryInteger(url, "limit", 50, 1, 100),
+    });
+    const headers = new Headers({ "cache-control": "private, no-store" });
+    if (page.nextCursor) headers.set("x-lore-next-cursor", encodeCursor(page.nextCursor));
+    return c.json(page.suites, { headers });
   })
   .post("/suites", async (c) => {
     const evaluations = createEvaluationModule(await c.var.database());

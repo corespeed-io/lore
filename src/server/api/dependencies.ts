@@ -1,5 +1,6 @@
 import type { MemoryModuleOptions, PostgresDatabase } from "@corespeed/lore-core";
 import type { ConfiguredCodeRepositories } from "@/modules/code/indexing/queue";
+import type { AuthPrincipal } from "@/server/auth/auth";
 import { createRequestContextResolver } from "@/server/auth/request-context";
 
 /** Hosts own database/provider lifetimes; routes resolve dependencies only when needed. */
@@ -9,8 +10,15 @@ export interface ApiDependencies {
   codeRepositories(): ConfiguredCodeRepositories;
 }
 
-/** Cache the host adapter within one request; identity is resolved only where handlers ask. */
-export function createRequestDependencies(dependencies: ApiDependencies, request: Request) {
+/**
+ * Cache the host adapter within one request; identity is resolved only where handlers ask.
+ * `principal` is the human credential admission already verified for this request.
+ */
+export function createRequestDependencies(
+  dependencies: ApiDependencies,
+  request: Request,
+  principal?: AuthPrincipal,
+) {
   let database: Promise<PostgresDatabase> | undefined;
   let resolver: ReturnType<typeof createRequestContextResolver> | undefined;
   function getDatabase() {
@@ -26,8 +34,8 @@ export function createRequestDependencies(dependencies: ApiDependencies, request
     database: getDatabase,
     memoryOptions: () => dependencies.memoryOptions(),
     codeRepositories: () => dependencies.codeRepositories(),
-    resolveActor: async () => (await getResolver()).resolveActor(request),
-    resolveUser: async () => (await getResolver()).resolveUser(request),
+    resolveActor: async () => (await getResolver()).resolveActor(request, principal),
+    resolveUser: async () => (await getResolver()).resolveUser(request, principal),
   };
 }
 

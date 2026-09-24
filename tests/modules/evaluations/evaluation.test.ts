@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { EvaluationSearchProvider } from "@/modules/evaluations/service";
-import { createEvaluationModule, evaluateRanking } from "@/modules/evaluations/service";
+import {
+  createEvaluationModule,
+  EVALUATION_RUN_EXPIRED_ERROR,
+  evaluateRanking,
+} from "@/modules/evaluations/service";
 import syntheticSuite from "../../../evaluation/suites/synthetic-v1.json";
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import { installActorContext } from "../../../src/server/auth/actor-context";
@@ -92,7 +96,10 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
   });
   await expect(evaluations.getSuite(testContext.carol, suite.id)).resolves.toBeNull();
   await expect(evaluations.getSuite(testContext.bob, suite.id)).resolves.toBeNull();
-  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual([]);
+  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual({
+    suites: [],
+    nextCursor: null,
+  });
   await expect(evaluations.getRun(testContext.bob, run.id)).resolves.toBeNull();
   await expect(evaluations.runSuite(testContext.bob, suite.id)).rejects.toBeInstanceOf(Error);
   for (const table of [
@@ -197,4 +204,108 @@ test("A crashed Evaluation run records fail-closed isolation metrics", async () 
     status: "failed",
     metrics: { isolationPassed: false, hardFailureCount: 1 },
   });
+});
+
+test("Evaluation Suites list in bounded pages with their cases loaded together", async () => {
+  const testContext = await createMemoryTestContext();
+  const evaluations = createEvaluationModule(testContext.database);
+  const expectedMemoryIds = ["40000000-0000-4000-8000-000000000009"];
+  const created = [];
+  for (let index = 0; index < 5; index += 1) {
+    created.push(
+      await evaluations.createSuite(testContext.alice, {
+        name: `Paged suite ${index}`,
+        cases: [
+          { query: `first ${index}`, expectedMemoryIds },
+          { query: `second ${index}`, expectedMemoryIds },
+        ],
+      }),
+    );
+  }
+
+  const listed = [];
+  let cursor: { id: string; updatedAt: string } | undefined;
+  for (let page = 0; page < 3; page += 1) {
+    const result = await evaluations.listSuites(testContext.alice, { cursor, limit: 2 });
+    expect(result.suites.length).toBeLessThanOrEqual(2);
+    listed.push(...result.suites);
+    if (!result.nextCursor) break;
+    cursor = result.nextCursor;
+  }
+
+  expect(listed.map((suite) => suite.id)).toEqual(created.map((suite) => suite.id).reverse());
+  for (const suite of listed) {
+    expect(suite.cases.map((evaluationCase) => evaluationCase.query)).toEqual(
+      created.find((candidate) => candidate.id === suite.id)?.cases.map((item) => item.query),
+    );
+  }
+  await expect(evaluations.listSuites(testContext.alice, { limit: 5 })).resolves.toMatchObject({
+    nextCursor: null,
+  });
+  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual({
+    suites: [],
+    nextCursor: null,
+  });
+});
+
+test("An abandoned running Evaluation run fails with a content-free reason on read", async () => {
+  const testContext = await createMemoryTestContext();
+  const evaluations = createEvaluationModule(testContext.database);
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Abandoned runs",
+    cases: [{ query: "abandoned", expectedMemoryIds: ["40000000-0000-4000-8000-000000000004"] }],
+  });
+  const [abandonedId, liveId] = [crypto.randomUUID(), crypto.randomUUID()];
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await transaction.query(
+      `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id, started_at)
+       VALUES ($1, $3, $4, $5, now() - interval '2 hours'),
+              ($2, $3, $4, $5, now() - interval '5 minutes')`,
+      [abandonedId, liveId, testContext.alice.workspaceId, suite.id, testContext.alice.userId],
+    );
+  });
+
+  await expect(evaluations.getRun(testContext.bob, abandonedId)).resolves.toBeNull();
+  await expect(evaluations.getRun(testContext.alice, abandonedId)).resolves.toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    completedAt: expect.anything(),
+  });
+  await expect(evaluations.getRun(testContext.alice, liveId)).resolves.toMatchObject({
+    status: "running",
+    error: null,
+    completedAt: null,
+  });
+});
+
+test("A live Evaluation run stops at its deadline instead of running unbounded", async () => {
+  const testContext = await createMemoryTestContext();
+  let clock = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: { search: async () => [] },
+    now: () => {
+      clock += 5;
+      return clock;
+    },
+    runTimeoutSeconds: 0.01,
+  });
+  const expectedMemoryIds = ["40000000-0000-4000-8000-000000000005"];
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Deadline",
+    cases: [
+      { query: "first", expectedMemoryIds },
+      { query: "second", expectedMemoryIds },
+      { query: "third", expectedMemoryIds },
+    ],
+  });
+
+  const run = await evaluations.runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    metrics: { caseCount: 1 },
+  });
+  expect(run.results).toHaveLength(1);
 });

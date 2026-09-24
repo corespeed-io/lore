@@ -32,6 +32,7 @@ export const portabilityPaths = {
         "200": jsonResponse("Dry-run or completed import", {
           $ref: "#/components/schemas/WorkspaceImportResult",
         }),
+        "413": { $ref: "#/components/responses/Error" },
       },
     },
   },

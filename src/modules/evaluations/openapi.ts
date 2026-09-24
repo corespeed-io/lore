@@ -11,12 +11,34 @@ export const evaluationsPaths = {
     get: {
       operationId: "listEvaluationSuites",
       security: humanSecurity,
-      parameters: [workspaceHeader],
+      parameters: [
+        workspaceHeader,
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+        },
+        {
+          name: "cursor",
+          in: "query",
+          description: "Opaque x-lore-next-cursor value from the previous page.",
+          schema: { type: "string", maxLength: 512 },
+        },
+      ],
       responses: {
-        "200": jsonResponse("Workspace Evaluation Suites", {
-          type: "array",
-          items: { $ref: "#/components/schemas/EvaluationSuite" },
-        }),
+        "200": jsonResponse(
+          "One page of this User's Workspace Evaluation Suites, newest first",
+          {
+            type: "array",
+            items: { $ref: "#/components/schemas/EvaluationSuite" },
+          },
+          {
+            "x-lore-next-cursor": {
+              description: "Present when more Suites follow; opaque to clients.",
+              schema: { type: "string" },
+            },
+          },
+        ),
       },
     },
     post: {

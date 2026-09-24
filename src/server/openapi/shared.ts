@@ -12,10 +12,13 @@ export const errorSchema = {
         "internal_error",
         "invalid_archive",
         "invalid_request",
+        "method_not_allowed",
         "not_found",
+        "payload_too_large",
         "precondition_required",
         "proposal_capacity_exceeded",
         "proposal_review_conflict",
+        "transaction_conflict",
         "version_conflict",
         "workspace_export_limit_exceeded",
       ],
@@ -36,11 +39,14 @@ export const workspaceHeader = {
   schema: { type: "string", format: "uuid" },
 } as const;
 
+// Mirrors the server check in src/server/api/input.ts: 1-128 visible ASCII characters.
+export const IDEMPOTENCY_KEY_PATTERN = "^[\\x21-\\x7e]{1,128}$";
+
 export const idempotencyHeader = {
   name: "Idempotency-Key",
   in: "header",
   required: false,
-  schema: { type: "string", minLength: 1, maxLength: 128 },
+  schema: { type: "string", minLength: 1, maxLength: 128, pattern: IDEMPOTENCY_KEY_PATTERN },
 } as const;
 
 export const ifMatchHeader = {

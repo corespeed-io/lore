@@ -232,59 +232,6 @@ export function createMemoryProposalsModule(
   const { insertMemoryInTransaction, notifyMaintenance, updateMemoryInTransaction } =
     createMemoryMutationPrimitives(options);
 
-  async function proposalEvidenceIds(
-    transaction: PostgresTransaction,
-    proposalId: string,
-  ): Promise<{
-    memoryIds: string[];
-    observationIds: string[];
-    codeEvidence: MemoryProposalCodeEvidence[];
-  }> {
-    const memoryEvidence = await transaction.query<MemoryProposalEvidenceRow>(
-      `SELECT proposal_id, memory_id
-       FROM memory_proposal_evidence
-       WHERE proposal_id = $1
-       ORDER BY ordinal`,
-      [proposalId],
-    );
-    const observationEvidence = await transaction.query<MemoryProposalObservationEvidenceRow>(
-      `SELECT proposal_id, observation_reference_id AS observation_id
-       FROM memory_proposal_observation_evidence
-       WHERE proposal_id = $1
-       ORDER BY ordinal`,
-      [proposalId],
-    );
-    const codeEvidence = await transaction.query<MemoryProposalCodeEvidenceRow>(
-      `SELECT proposal_id, ordinal, repository_id, cited_revision_id,
-         cited_generation_id, cited_artifact_id, cited_commit_oid, relationship,
-         cited_path, cited_symbol_key, cited_declaration_key,
-         cited_declaration_chunk_ordinal, cited_declaration_context_sha256,
-         cited_content_sha256
-       FROM memory_proposal_code_evidence
-       WHERE proposal_id = $1
-       ORDER BY ordinal`,
-      [proposalId],
-    );
-    return {
-      memoryIds: memoryEvidence.rows.map((row) => row.memory_id),
-      observationIds: observationEvidence.rows.map((row) => row.observation_id),
-      codeEvidence: codeEvidence.rows.map(toMemoryProposalCodeEvidence),
-    };
-  }
-
-  async function proposalFromRow(
-    transaction: PostgresTransaction,
-    row: MemoryProposalRow,
-  ): Promise<MemoryProposal> {
-    const evidence = await proposalEvidenceIds(transaction, row.id);
-    return toMemoryProposal(
-      row,
-      evidence.memoryIds,
-      evidence.observationIds,
-      evidence.codeEvidence,
-    );
-  }
-
   async function proposalsFromRows(
     transaction: PostgresTransaction,
     rows: readonly MemoryProposalRow[],
@@ -669,6 +616,33 @@ export function createMemoryProposalsModule(
       try {
         const reviewed = await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
+          if (decision === "accept") {
+            // Forgetting a Memory locks the Memory row and then, through its BEFORE
+            // DELETE trigger, its Proposals. Accepting an update takes the same order —
+            // target Memory first, Proposal second — so the two cannot deadlock.
+            const peeked = await transaction.query<{ target_memory_id: string | null }>(
+              `SELECT target_memory_id
+               FROM memory_proposals
+               WHERE id = $1
+                 AND workspace_id = $2
+                 AND owner_user_id = $3
+                 AND expires_at > now()`,
+              [id, actor.workspaceId, actor.userId],
+            );
+            const targetMemoryId = peeked.rows[0]?.target_memory_id;
+            if (targetMemoryId) {
+              await transaction.query(
+                `SELECT id
+                 FROM memories
+                 WHERE id = $1
+                   AND workspace_id = $2
+                   AND lore.can_write_memory(workspace_id, owner_user_id)
+                 FOR UPDATE`,
+                [targetMemoryId, actor.workspaceId],
+              );
+            }
+          }
+          // Lock and recheck the Proposal; a concurrent forget may have removed it.
           const selected = await transaction.query<MemoryProposalRow>(
             `SELECT *
              FROM memory_proposals
@@ -697,8 +671,9 @@ export function createMemoryProposalsModule(
                   [current.accepted_memory_id, actor.workspaceId],
                 )
               : null;
+            const [proposal] = await proposalsFromRows(transaction, [current]);
             return {
-              proposal: await proposalFromRow(transaction, current),
+              proposal,
               memory: accepted?.rows[0] ? memoryFromRow(accepted.rows[0]) : null,
               jobId: null,
               chunksChanged: false,
@@ -716,21 +691,22 @@ export function createMemoryProposalsModule(
                RETURNING *`,
               [id, actor.workspaceId, actor.userId],
             );
+            const [proposal] = await proposalsFromRows(transaction, rejected.rows);
             return {
-              proposal: await proposalFromRow(transaction, rejected.rows[0]),
+              proposal,
               memory: null,
               jobId: null,
               chunksChanged: false,
             };
           }
 
-          const evidence = await proposalEvidenceIds(transaction, current.id);
-          if (evidence.observationIds.length) {
+          const [pending] = await proposalsFromRows(transaction, [current]);
+          if (pending.evidenceObservationIds.length) {
             const visibleObservations = await transaction.query<{ id: string }>(
               `SELECT lore.lock_reviewable_proposal_observations($1, $2) AS id`,
               [actor.workspaceId, current.id],
             );
-            if (visibleObservations.rows.length !== evidence.observationIds.length) {
+            if (visibleObservations.rows.length !== pending.evidenceObservationIds.length) {
               throw new MemoryProposalReviewConflictError(
                 "Observation evidence is no longer available for review",
               );
@@ -811,8 +787,9 @@ export function createMemoryProposalsModule(
              ON CONFLICT (memory_id, cited_artifact_id, relationship) DO NOTHING`,
             [actor.workspaceId, id, applied.memory.id, actor.userId],
           );
+          const [proposal] = await proposalsFromRows(transaction, accepted.rows);
           return {
-            proposal: await proposalFromRow(transaction, accepted.rows[0]),
+            proposal,
             memory: applied.memory,
             jobId: applied.jobId,
             chunksChanged: applied.chunksChanged,
