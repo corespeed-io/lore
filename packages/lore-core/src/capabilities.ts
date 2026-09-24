@@ -36,7 +36,15 @@ export interface RerankResult {
   score: number;
 }
 
-/** Score only the authorized evidence passages selected by the engine. */
+/**
+ * Score only the authorized evidence passages selected by the engine.
+ *
+ * Return exactly one result per document, each with a finite relevance score
+ * in `[0, 1]`; a missing, duplicate, foreign, or out-of-range result makes the
+ * engine fall back to its deterministic first-stage order. Array order carries
+ * no meaning: the engine ranks by score with a stable sort, so equal scores
+ * keep the order the provider returned them in.
+ */
 export interface RerankingProvider {
   rerank(input: {
     query: string;

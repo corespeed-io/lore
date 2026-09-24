@@ -1236,6 +1236,10 @@ export function createMemoryModule(
         if (results.length !== fusionResults.length) {
           throw new Error("Reranking provider returned the wrong number of results");
         }
+        // Rank by the validated scores, not the provider's array order. The sort
+        // is stable, so equal scores keep the provider's order and an already
+        // sorted response is unchanged.
+        results.sort((left, right) => right.rerankScore - left.rerankScore);
         return diversifyRerankedResults(
           fuseRerankedResults(
             fusionResults,

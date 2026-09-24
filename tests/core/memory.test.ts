@@ -1219,6 +1219,46 @@ test("Reranking scores compact anchor evidence while returning bounded expanded 
   await testContext.close();
 });
 
+test("Reranking ranks by validated score whatever order the provider returns", async () => {
+  const testContext = await createMemoryTestContext();
+  const basic = createMemoryModule(testContext.database);
+  const alpha = await basic.remember(testContext.alice, {
+    content: "Juniper launch schedule alpha.",
+  });
+  const beta = await basic.remember(testContext.alice, {
+    content: "Juniper launch schedule beta.",
+  });
+  const gamma = await basic.remember(testContext.alice, {
+    content: "Juniper launch schedule gamma.",
+  });
+  const scores = new Map([
+    [alpha.id, 0.2],
+    [beta.id, 0.9],
+    [gamma.id, 0.5],
+  ]);
+  const scored = (ids: string[]) =>
+    ids.map((documentId) => ({ documentId, score: scores.get(documentId) ?? 0 }));
+  const search = (ordering: (ids: string[]) => string[]) =>
+    createMemoryModule(testContext.database, {
+      rerankingProvider: {
+        async rerank(input) {
+          return scored(ordering(input.documents.map((document) => document.id)));
+        },
+      },
+    }).search(testContext.alice, { query: "juniper launch schedule", limit: 3 });
+  const bySortedScore = (ids: string[]) =>
+    [...ids].sort((left, right) => (scores.get(right) ?? 0) - (scores.get(left) ?? 0));
+  const byAscendingScore = (ids: string[]) => bySortedScore(ids).reverse();
+
+  const unsorted = await search(byAscendingScore);
+  const sorted = await search(bySortedScore);
+
+  expect(unsorted.map((result) => result.memory.id)).toEqual([beta.id, gamma.id, alpha.id]);
+  expect(unsorted.map((result) => result.rerankScore)).toEqual([0.9, 0.5, 0.2]);
+  expect(sorted).toEqual(unsorted);
+  await testContext.close();
+});
+
 test("Reranking failures fall back to deterministic fused retrieval", async () => {
   const testContext = await createMemoryTestContext();
   const basic = createMemoryModule(testContext.database);

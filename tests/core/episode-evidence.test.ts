@@ -136,6 +136,56 @@ test("Episode evidence applies source scope and RLS before semantic top-k", asyn
   await testContext.close();
 });
 
+test("Episode evidence reranking ranks by validated score whatever order the provider returns", async () => {
+  const testContext = await createMemoryTestContext();
+  const observations = createObservationModule(testContext.database);
+  const scores = new Map([
+    ["trajectory-alpha", 0.2],
+    ["trajectory-beta", 0.9],
+    ["trajectory-gamma", 0.5],
+  ]);
+  const episode = await observations.record(testContext.alice, {
+    kind: "workflow",
+    observations: [...scores.keys()].map((trajectoryId) => ({
+      kind: "event" as const,
+      content: `The orbital burn report for ${trajectoryId}.`,
+      metadata: { trajectoryId },
+    })),
+  });
+  await createEpisodeEvidenceModule(testContext.database).index(testContext.alice, {
+    episodeId: episode.id,
+  });
+  const search = (ordering: "ascending" | "descending") =>
+    createEpisodeEvidenceModule(testContext.database, {
+      rerankingProvider: {
+        async rerank(input) {
+          const scored = input.documents.map((document) => ({
+            documentId: document.id,
+            score: scores.get(document.id) ?? 0,
+          }));
+          const direction = ordering === "ascending" ? 1 : -1;
+          return scored.sort((left, right) => direction * (left.score - right.score));
+        },
+      },
+    }).search(testContext.alice, {
+      query: "orbital burn report",
+      groupMetadataKey: "trajectoryId",
+      limit: 3,
+    });
+
+  const unsorted = await search("ascending");
+  const sorted = await search("descending");
+
+  expect(unsorted.map((result) => result.sourceKey)).toEqual([
+    "trajectory-beta",
+    "trajectory-gamma",
+    "trajectory-alpha",
+  ]);
+  expect(unsorted.map((result) => result.rerankScore)).toEqual([0.9, 0.5, 0.2]);
+  expect(sorted).toEqual(unsorted);
+  await testContext.close();
+});
+
 test("Episode evidence verification rejects a corrupted derived index", async () => {
   const testContext = await createMemoryTestContext();
   const observations = createObservationModule(testContext.database);
