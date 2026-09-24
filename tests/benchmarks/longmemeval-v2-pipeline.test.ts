@@ -80,7 +80,7 @@ test("LongMemEval-V2 fixed-reader pipeline keeps haystack filtering and RLS befo
     provider: "fixture",
     model: "fixture-reader",
     revision: "fixture-v1",
-    profile: "lore-portable-deterministic-v2",
+    profile: "lore-portable-deterministic-v3",
     transport: "openai-chat-completions",
     instruction: "Answer from evidence",
     maximumContextCharacters: 10_000,

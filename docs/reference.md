@@ -937,11 +937,12 @@ is a local candidate-quality diagnostic, not the official LongMemEval-V2 answer
 score; `reader` is `null`, answer accuracy is `null`, and `scoreComplete` remains
 false so it cannot be mistaken for an end-to-end result.
 
-The built-in reader is explicitly reported as `lore-portable-deterministic-v2`:
+The built-in reader is explicitly reported as `lore-portable-deterministic-v3`:
 temperature 0, a character context budget, and provider-default image detail.
 Retrieved trajectories are separated by a blank line that counts against that
 budget (reader revisions `lore-fixed-reader-v3` and `lore-ollama-reader-v2`; earlier
-revisions concatenated trajectories with no boundary). It is
+revisions, and the `lore-portable-deterministic-v2` profile, concatenated
+trajectories with no boundary, so their reports are not comparable). It is
 useful for controlled Lore ablations, but it is not mislabeled as the paper's exact
 Qwen3.5-9B profile, which samples at temperature 0.6/top-p 0.95/top-k 20 and truncates
 memory with the Qwen processor at 200,000 tokens. Reports include the actual decoding

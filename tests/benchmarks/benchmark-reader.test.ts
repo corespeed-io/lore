@@ -255,6 +255,7 @@ test("Ollama fixed reader bounds residency and records native accounting", async
     });
     expect(reader).toMatchObject({
       provider: "ollama",
+      profile: "lore-portable-deterministic-v3",
       transport: "ollama-chat-v1",
       keepAlive: "5m",
       decoding: {
@@ -423,7 +424,12 @@ test("Vercel AI Gateway fixed reader sends images through the gateway with its o
       LORE_BENCHMARK_READER_MODEL: "openai/gpt-6-astra",
       AI_GATEWAY_API_KEY: "test-gateway-key",
     });
-    expect(reader).toMatchObject({ provider: "vercel", supportsQuestionImages: true });
+    // Bumped with the trajectory separator, so new reports never read as v2 reports.
+    expect(reader).toMatchObject({
+      provider: "vercel",
+      profile: "lore-portable-deterministic-v3",
+      supportsQuestionImages: true,
+    });
     await expect(
       reader?.answer({
         question: "Which module?",
