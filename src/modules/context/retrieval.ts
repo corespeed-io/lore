@@ -117,15 +117,17 @@ export class ContextRetrievalValidationError extends Error {
 
 type DependencySubject = { path: string } | { symbol: string };
 
+/**
+ * The cited declaration at `path`. A symbol key is its path, `#`, and a path-free suffix;
+ * a repository path may itself contain `#`, so the suffix follows the known cited-path
+ * prefix rather than the first `#`.
+ */
 function dependencySubject(citation: MemoryCodeEvidence, path: string): DependencySubject {
-  if (!citation.citedSymbolKey) return { path };
-  const separator = citation.citedSymbolKey.indexOf("#");
-  return {
-    symbol:
-      separator < 0
-        ? citation.citedSymbolKey
-        : `${path}${citation.citedSymbolKey.slice(separator)}`,
-  };
+  const symbolKey = citation.citedSymbolKey;
+  if (!symbolKey) return { path };
+  const citedPrefix = `${citation.citedPath}#`;
+  if (!symbolKey.startsWith(citedPrefix)) return { symbol: symbolKey };
+  return { symbol: `${path}#${symbolKey.slice(citedPrefix.length)}` };
 }
 
 async function dependencyFingerprints(input: {
@@ -283,6 +285,8 @@ export function createContextRetrievalModule(
       ]);
 
       const anchors: RetrievedAnchorContext[] = [];
+      // More citations existed than one packet carries, so some were never assessed.
+      let anchorsTruncated = false;
       const anchoredArtifactIds: string[] = [];
       const contextualSubjects: Array<{
         anchorId: string;
@@ -298,14 +302,16 @@ export function createContextRetrievalModule(
         memoryResults.length > 0
       ) {
         // One read-only transaction lists and assesses the citations of every result Memory,
-        // in result order. Retrieval never persists revalidation.
+        // in result order. Retrieval never persists revalidation. One citation past the cap
+        // proves that the packet is incomplete; it is dropped, never delivered.
         const assessed = await evidence.assessMemoryCitations(actor, {
           memoryIds: memoryResults.map((result) => result.memory.id),
           repositoryKey,
           commitOid: requestedCommitOid,
-          limit: MAXIMUM_CONTEXT_ANCHORS,
+          limit: MAXIMUM_CONTEXT_ANCHORS + 1,
         });
-        for (const { citation, assessment } of assessed) {
+        anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
+        for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
           anchors.push({
             id: citation.id,
             memoryId: citation.memoryId,
@@ -398,8 +404,10 @@ export function createContextRetrievalModule(
         // With no cited declaration to compare, there is nothing to assess:
         // reporting `unknown` here would brand every dependency question with
         // a permanent conflict that describes the absence of anchors, not the
-        // code. Truncated or unresolved traversal still reports `unknown`.
-        contextualSubjects.length > 0 &&
+        // code. Truncated or unresolved traversal still reports `unknown`, and so
+        // does a citation list cut at the packet cap, whose unassessed rest may
+        // hold a declaration.
+        (contextualSubjects.length > 0 || anchorsTruncated) &&
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
       ) {
@@ -432,7 +440,7 @@ export function createContextRetrievalModule(
         }
         contextualImpact = aggregateContextualImpact(
           assessments,
-          contextualSubjects.length > selectedSubjects.length,
+          anchorsTruncated || contextualSubjects.length > selectedSubjects.length,
         );
       }
       if (contextualImpact && contextualImpact.state !== "unaffected") {

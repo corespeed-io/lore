@@ -295,8 +295,9 @@ export function assessContextualImpact(
 }
 
 /**
- * Combines per-anchor assessments into one packet verdict. `truncated` means more cited
- * declarations existed than `CONTEXTUAL_ANCHOR_LIMIT` allowed to compare.
+ * Combines per-anchor assessments into one packet verdict. `truncated` means some cited
+ * declaration went uncompared: more existed than `CONTEXTUAL_ANCHOR_LIMIT` allows, or the
+ * packet's citations were cut at `MAXIMUM_CONTEXT_ANCHORS`.
  */
 export function aggregateContextualImpact(
   assessments: readonly { anchorId: string; assessment: ContextualImpactAssessment }[],
