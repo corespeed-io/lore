@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   evaluateLocomoAnswer,
+  locomoReaderQuestion,
+  locomoRetrievalReportPath,
+  locomoSearchQuery,
   normalizeLocomoAnswer,
   parseLocomoSample,
   readLocomoPartitions,
@@ -80,6 +83,24 @@ test("LoCoMo preserves and repairs the release's compound evidence-id form", () 
   });
   expect(sample.questions[0].rawEvidence).toEqual(["D1:1; D2:1"]);
   expect(sample.questions[0].evidence).toEqual(["D1:1", "D2:1"]);
+});
+
+test("LoCoMo QA searches with the original question and augments only the reader prompt", () => {
+  const sample = parseLocomoSample(fixture);
+  const temporal = sample.questions.find((question) => question.category === 2);
+  if (!temporal) throw new Error("fixture needs a category-2 question");
+  expect(locomoSearchQuery(temporal)).toBe("When did Alice adopt the cats?");
+  expect(locomoReaderQuestion(temporal)).toContain("Use the DATE of the conversation");
+  // The QA search matches the setup diagnostic's retrieval query.
+  const [, setupCase] = toLocomoPartition(sample, sample.questions.slice(0, 2)).cases;
+  expect(setupCase?.query).toBe(locomoSearchQuery(temporal));
+});
+
+test("the LoCoMo setup report never shares the QA report's path", () => {
+  expect(locomoRetrievalReportPath("results/locomo.json")).toBe("results/locomo.retrieval.json");
+  expect(locomoRetrievalReportPath("results/locomo.JSON")).toBe("results/locomo.retrieval.json");
+  expect(locomoRetrievalReportPath("results/locomo")).toBe("results/locomo.retrieval.json");
+  expect(locomoRetrievalReportPath("results/locomo.txt")).toBe("results/locomo.txt.retrieval.json");
 });
 
 test("LoCoMo becomes a dialog-granularity isolated retrieval partition", () => {

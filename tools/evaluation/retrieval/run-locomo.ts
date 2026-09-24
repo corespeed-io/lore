@@ -31,6 +31,8 @@ import {
   LOCOMO_SCORER_REVISION,
   locomoManifest,
   locomoReaderQuestion,
+  locomoRetrievalReportPath,
+  locomoSearchQuery,
   readLocomoPartitions,
   readSelectedLocomoSamples,
   toLocomoPartition,
@@ -256,7 +258,7 @@ const contextGroupExpansion: ContextGroupExpansionOptions | undefined = contextG
 
 const retrievalOutputPath =
   !options.skipRetrievalDiagnostic && options.outputPath
-    ? options.outputPath.replace(/\.json$/i, ".retrieval.json")
+    ? locomoRetrievalReportPath(options.outputPath)
     : undefined;
 const retrievalReport = options.skipRetrievalDiagnostic
   ? null
@@ -428,7 +430,7 @@ try {
       const readerQuestion = locomoReaderQuestion(question);
       const searchStartedAt = performance.now();
       const retrieved = await searchModule.search(actor, {
-        query: readerQuestion,
+        query: locomoSearchQuery(question),
         limit: options.limit,
         metadataFilter: { benchmarkPartition: selection.sample.id },
       });
