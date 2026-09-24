@@ -6,8 +6,14 @@ import {
 import {
   MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
+  MEMORY_RESUME_FULL_REFRESH_MS,
+  memoryPageIndex,
   removeMemoryFromPages,
+  sameMemoryPage,
+  sameMemoryPageMembership,
+  shouldFullyRevalidateOnResume,
   shouldLoadNextMemoryPage,
+  shouldRevalidateMemoryPageOnResume,
   upsertMemoryPages,
 } from "@/modules/memories/browser/data";
 import type { Memory } from "@/modules/memories/schemas";
@@ -143,6 +149,101 @@ test("Memory pagination advances only from a settled full page inside the browse
       pageCount: MAX_MEMORY_PAGES,
     }),
   ).toBe(false);
+});
+
+function fullPage(first: number): Memory[] {
+  return Array.from({ length: MEMORY_PAGE_SIZE }, (_, index) => memory(first + index));
+}
+
+test("resuming browse re-reads page 0 and leaves unchanged later pages cached", () => {
+  const firstPage = fullPage(0);
+  const secondPage = fullPage(MEMORY_PAGE_SIZE);
+  const resume = {
+    pageIndex: 1,
+    cachedPage: secondPage,
+    listedPage: [...secondPage],
+    firstPageBefore: firstPage,
+    firstPageAfter: [...firstPage].reverse(),
+  };
+
+  expect(memoryPageIndex(loreKeys.memories(workspaceId, 7))).toBe(7);
+  expect(memoryPageIndex(loreKeys.graph(workspaceId))).toBeNull();
+
+  // Page 0 is always re-read, before any later page is considered.
+  expect(
+    shouldRevalidateMemoryPageOnResume({ ...resume, pageIndex: 0, firstPageAfter: undefined }),
+  ).toBe(true);
+  // An unchanged (or merely reordered) newest page keeps every boundary behind it.
+  expect(shouldRevalidateMemoryPageOnResume(resume)).toBe(false);
+  expect(shouldRevalidateMemoryPageOnResume({ ...resume, pageIndex: MAX_MEMORY_PAGES - 1 })).toBe(
+    false,
+  );
+  // A missing page cache, or an unrecognised key, is always fetched.
+  expect(shouldRevalidateMemoryPageOnResume({ ...resume, cachedPage: undefined })).toBe(true);
+  expect(shouldRevalidateMemoryPageOnResume({ ...resume, pageIndex: null })).toBe(true);
+});
+
+test("resuming browse re-reads a page whose list copy diverged from its page cache", () => {
+  const secondPage = fullPage(MEMORY_PAGE_SIZE);
+  // A local forget compacted the list, but the refresh that would have synced
+  // the page cache never finished: skipping it would resurrect the Memory.
+  const compacted = [...secondPage.slice(1), memory(2 * MEMORY_PAGE_SIZE)];
+  const edited = secondPage.map((item, index) => (index === 5 ? { ...item, version: 2 } : item));
+  const resume = {
+    pageIndex: 1,
+    cachedPage: secondPage,
+    listedPage: secondPage,
+    firstPageBefore: fullPage(0),
+    firstPageAfter: fullPage(0),
+  };
+
+  expect(sameMemoryPage(secondPage, [...secondPage])).toBe(true);
+  expect(sameMemoryPage(secondPage, edited)).toBe(false);
+  expect(sameMemoryPage(secondPage, [...secondPage].reverse())).toBe(false);
+  expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: compacted })).toBe(true);
+  expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: edited })).toBe(true);
+  expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: undefined })).toBe(true);
+});
+
+test("a write elsewhere that shifts page 0 re-reads every later page on resume", () => {
+  const firstPage = fullPage(0);
+  const created = [memory(10_000), ...firstPage.slice(0, -1)];
+  const forgotten = [...firstPage.slice(1), memory(MEMORY_PAGE_SIZE)];
+
+  expect(sameMemoryPageMembership(firstPage, [...firstPage].reverse())).toBe(true);
+  expect(sameMemoryPageMembership(firstPage, created)).toBe(false);
+  expect(sameMemoryPageMembership(firstPage, forgotten)).toBe(false);
+  expect(sameMemoryPageMembership(firstPage, firstPage.slice(0, 40))).toBe(false);
+  expect(sameMemoryPageMembership(undefined, firstPage)).toBe(false);
+
+  const secondPage = fullPage(MEMORY_PAGE_SIZE);
+  for (const firstPageAfter of [created, forgotten]) {
+    expect(
+      shouldRevalidateMemoryPageOnResume({
+        pageIndex: 1,
+        cachedPage: secondPage,
+        listedPage: secondPage,
+        firstPageBefore: firstPage,
+        firstPageAfter,
+      }),
+    ).toBe(true);
+  }
+});
+
+test("a resume long after the last full read re-reads every page", () => {
+  const lastFullReadAt = 1_000_000;
+
+  expect(shouldFullyRevalidateOnResume({ now: lastFullReadAt + 1_000, lastFullReadAt })).toBe(
+    false,
+  );
+  expect(
+    shouldFullyRevalidateOnResume({
+      now: lastFullReadAt + MEMORY_RESUME_FULL_REFRESH_MS,
+      lastFullReadAt,
+    }),
+  ).toBe(true);
+  // No full read recorded for this Workspace yet.
+  expect(shouldFullyRevalidateOnResume({ now: lastFullReadAt, lastFullReadAt: null })).toBe(true);
 });
 
 test("code cache keys isolate the Memory, Workspace, and requested job depth", () => {

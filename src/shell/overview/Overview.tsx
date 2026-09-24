@@ -3,11 +3,13 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import { GraphHealth } from "@/modules/graph/browser/GraphHealth";
 import { TopHubs } from "@/modules/graph/browser/TopHubs";
-import type { GraphData } from "@/modules/graph/browser/types";
+import { type GraphData, isGraphCapped } from "@/modules/graph/browser/types";
 import { memoryType } from "@/modules/memories/browser/presentation";
+import type { ReadState } from "@/shared/browser/read-state";
 import { ActivityChart } from "@/shell/overview/ActivityChart";
 import { Breakdown } from "@/shell/overview/Breakdown";
 import { ConnectionHealth } from "@/shell/overview/ConnectionHealth";
+import { memoryPanelNotice, overviewStats } from "@/shell/overview/presentation";
 import { RecentActivity } from "@/shell/overview/RecentActivity";
 import { RecentRequests } from "@/shell/overview/RecentRequests";
 import { type MemorySourceSummary, Sources } from "@/shell/overview/Sources";
@@ -18,8 +20,11 @@ interface OverviewProps {
   appSubtitle: string;
   workspaceName: string;
   graphData: GraphData;
-  graphError?: string | null;
+  graphState: ReadState;
   memories: Memory[];
+  memoriesState: ReadState;
+  /** False while browse is still filling pages or has stopped at its 5,000 cap. */
+  memoriesComplete: boolean;
   onOpen: (memoryId: string) => void;
   onType: (type: string) => void;
   onNavigate: (tab: "overview" | "graph" | "search") => void;
@@ -54,14 +59,25 @@ export function Overview({
   appSubtitle,
   workspaceName,
   graphData,
-  graphError,
+  graphState,
   memories,
+  memoriesState,
+  memoriesComplete,
   onOpen,
   onType,
   onNavigate,
 }: OverviewProps) {
-  const linksUnknown = Boolean(graphError) && graphData.links.length === 0;
   const sources = memorySources(memories);
+  const stats = overviewStats({
+    memoryCount: memories.length,
+    sourceCount: sources.length,
+    memoriesState,
+    memoriesComplete,
+    linkCount: graphData.links.length,
+    graphState,
+    graphCapped: isGraphCapped(graphData),
+  });
+  const memoryNotice = memoryPanelNotice(memoriesState);
 
   return (
     <div className="page-wrap">
@@ -77,9 +93,9 @@ export function Overview({
       <div className="overview-summary">
         <div className="stat-row">
           <StatCards
-            memoryCount={memories.length}
-            linkCount={linksUnknown ? "—" : graphData.links.length}
-            sourceCount={sources.length}
+            memoryCount={stats.memories}
+            linkCount={stats.links}
+            sourceCount={stats.sources}
             onNavigate={onNavigate}
           />
         </div>
@@ -88,16 +104,16 @@ export function Overview({
       <ActivityChart memories={memories} />
 
       <div className="panel-grid">
-        <Breakdown byCounts={countByType(memories)} onType={onType} />
+        <Breakdown byCounts={countByType(memories)} notice={memoryNotice} onType={onType} />
         <TopHubs
           nodes={graphData.nodes}
           links={graphData.links}
-          unavailable={linksUnknown}
+          state={graphState}
           onOpen={onOpen}
         />
-        <Sources sources={sources} />
-        <RecentActivity items={memories.slice(0, 5)} onOpen={onOpen} />
-        <GraphHealth data={graphData} onOpen={onOpen} />
+        <Sources sources={sources} notice={memoryNotice} />
+        <RecentActivity items={memories.slice(0, 5)} notice={memoryNotice} onOpen={onOpen} />
+        {graphState === "ready" && <GraphHealth data={graphData} onOpen={onOpen} />}
       </div>
 
       <p className="section-eyebrow">Observability</p>

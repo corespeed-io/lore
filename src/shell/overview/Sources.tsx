@@ -8,15 +8,19 @@ export interface MemorySourceSummary {
 
 interface SourcesProps {
   sources: MemorySourceSummary[];
+  // Shown instead of the bars while the browse read is loading or failed.
+  notice?: string | null;
 }
 
-export function Sources({ sources }: SourcesProps) {
+export function Sources({ sources, notice }: SourcesProps) {
   const max = Math.max(...sources.map((source) => source.memoryCount), 1);
 
   return (
     <div className="panel-card">
       <p className="panel-card-title">Sources</p>
-      {sources.length === 0 ? (
+      {notice ? (
+        <p className="panel-empty">{notice}</p>
+      ) : sources.length === 0 ? (
         <p className="panel-empty">No source metadata yet.</p>
       ) : (
         sources.map((source) => (

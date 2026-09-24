@@ -2,12 +2,17 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  type GraphLegendFilter,
+  graphLegend,
+  graphNodeConfiguredType,
+  isGraphLegendFilter,
+  matchesGraphLegendFilter,
+} from "@/modules/graph/browser/legend";
 import type { GraphInstance } from "@/modules/graph/browser/rendering/graph";
 import type { GraphData, GraphNode } from "@/modules/graph/browser/types";
 import { WorkerCanvasGraph } from "@/modules/graph/browser/WorkerCanvasGraph";
 import { useLoreSearch } from "@/modules/memories/browser/data";
-import { typeSort } from "@/modules/memories/browser/presentation";
-import { typeColor } from "@/shared/ui/colors";
 
 interface GraphViewProps {
   workspaceId: string;
@@ -113,17 +118,11 @@ export function GraphView({
   const instanceRef = useRef<GraphInstance | null>(null);
   const [q, setQ] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [legendFilter, setLegendFilter] = useState<GraphLegendFilter | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const localFocus = useMemo(() => focusSet(data, focusId), [data, focusId]);
-  const legendTypes = useMemo(
-    () =>
-      [...new Set(data.nodes.map((node) => node.type || "other"))]
-        .sort(typeSort)
-        .map((type) => ({ type, color: typeColor(type) })),
-    [data.nodes],
-  );
+  const legend = useMemo(() => graphLegend(data.nodes), [data.nodes]);
   const selectedNode = useMemo(
     () => data.nodes.find((node) => node.id === selectedId) ?? null,
     [data.nodes, selectedId],
@@ -132,6 +131,7 @@ export function GraphView({
     () => (selectedNode ? selectedNodeSummary(data, selectedNode) : null),
     [data, selectedNode],
   );
+  const selectedType = selectedNode ? graphNodeConfiguredType(selectedNode) : null;
   const normalizedQuery = q.trim();
   const { data: contentResults = [] } = useLoreSearch(
     active && normalizedQuery === debouncedQuery ? workspaceId : "",
@@ -148,7 +148,7 @@ export function GraphView({
   const hasQuery = normalizedQuery.length > 0;
   const hasResettableFocus = Boolean(localFocus && onResetFilter);
   const hasActiveFilter =
-    hasQuery || hasResettableFocus || Boolean(selectedNode) || Boolean(typeFilter);
+    hasQuery || hasResettableFocus || Boolean(selectedNode) || Boolean(legendFilter);
   const handleSelect = useCallback((memoryId: string | null) => setSelectedId(memoryId), []);
   const registerGraphInstance = useCallback((instance: GraphInstance | null) => {
     instanceRef.current = instance;
@@ -196,8 +196,8 @@ export function GraphView({
     return () => window.clearTimeout(timeout);
   }, [active, normalizedQuery]);
 
-  // Highlight set = (title ∪ content search, or focus) ∩ the legend type filter.
-  // null means "everything lit". Search/focus/type-filter all feed one highlight.
+  // Highlight set = (title ∪ content search, or focus) ∩ the legend type/scope
+  // filter. null means "everything lit". Search/focus/legend all feed one highlight.
   useEffect(() => {
     const query = q.trim().toLowerCase();
     let base: Set<string> | null;
@@ -207,12 +207,14 @@ export function GraphView({
     } else {
       base = localFocus;
     }
-    if (typeFilter) {
-      const ofType = data.nodes.filter((n) => n.type === typeFilter).map((n) => n.id);
-      base = base ? new Set(ofType.filter((id) => base?.has(id))) : new Set(ofType);
+    if (legendFilter) {
+      const matching = data.nodes
+        .filter((n) => matchesGraphLegendFilter(n, legendFilter))
+        .map((n) => n.id);
+      base = base ? new Set(matching.filter((id) => base?.has(id))) : new Set(matching);
     }
     instanceRef.current?.highlight(base);
-  }, [q, contentIds, data.nodes, localFocus, typeFilter]);
+  }, [q, contentIds, data.nodes, localFocus, legendFilter]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -221,7 +223,7 @@ export function GraphView({
 
   function resetFilter() {
     setQ("");
-    setTypeFilter(null);
+    setLegendFilter(null);
     setSelectedId(null);
     onResetFilter?.();
   }
@@ -235,20 +237,41 @@ export function GraphView({
         production
         showMetrics={false}
       />
-      <div className={`glegend${typeFilter ? " glegend-filtering" : ""}`}>
-        {legendTypes.map(({ type, color }) => (
-          <button
-            key={type}
-            type="button"
-            className="glegend-item"
-            aria-pressed={typeFilter === type}
-            title={typeFilter === type ? `Show all (clear ${type} filter)` : `Filter to ${type}`}
-            onClick={() => setTypeFilter((cur) => (cur === type ? null : type))}
-          >
-            <span className="dot" style={{ background: color }} />
-            {type}
-          </button>
-        ))}
+      <div className={`glegend${legendFilter ? " glegend-filtering" : ""}`}>
+        {legend.types.map(({ type, color }) => {
+          const pressed = isGraphLegendFilter(legendFilter, "type", type);
+          return (
+            <button
+              key={`type:${type}`}
+              type="button"
+              className="glegend-item"
+              aria-pressed={pressed}
+              title={pressed ? `Show all (clear ${type} filter)` : `Filter to ${type}`}
+              onClick={() => setLegendFilter(pressed ? null : { kind: "type", value: type })}
+            >
+              <span className="dot" style={{ background: color }} />
+              {type}
+            </button>
+          );
+        })}
+        {legend.scopes.length > 0 && <span className="glegend-label">scope</span>}
+        {legend.scopes.map(({ scope, count }) => {
+          const pressed = isGraphLegendFilter(legendFilter, "scope", scope);
+          return (
+            <button
+              key={`scope:${scope}`}
+              type="button"
+              className="glegend-item"
+              aria-pressed={pressed}
+              title={
+                pressed ? `Show all (clear ${scope} scope filter)` : `Filter to ${scope} Memories`
+              }
+              onClick={() => setLegendFilter(pressed ? null : { kind: "scope", value: scope })}
+            >
+              {scope} {count}
+            </button>
+          );
+        })}
       </div>
       <input
         className="graph-search"
@@ -285,8 +308,10 @@ export function GraphView({
       {selectedNode && selectedSummary && (
         <aside key={selectedNode.id} className="graph-node-preview" aria-live="polite">
           <div className="graph-node-preview-head">
-            <span className="type-badge">{selectedNode.type}</span>
-            <span className="graph-node-preview-count">{selectedSummary.links.length} links</span>
+            {selectedType && <span className="type-badge">{selectedType}</span>}
+            <span className="graph-node-preview-count">
+              {selectedNode.scope} · {selectedSummary.links.length} links
+            </span>
           </div>
           <h2 className="graph-node-preview-title">{selectedNode.label}</h2>
           <div className="graph-node-preview-id">{selectedNode.id}</div>

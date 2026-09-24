@@ -28,6 +28,18 @@ test("renderMarkdown keeps unresolved wikilinks inert and XSS-safe", () => {
   expect(html).not.toContain("<a");
 });
 
+test("renderMarkdown lets the caller explain an unresolved wikilink", () => {
+  const pending = renderMarkdown("[[topic/retrieval/specs]]", {}, 'Resolving "reference"…');
+
+  expect(pending).toContain('class="wl-unresolved"');
+  expect(pending).toContain('title="Resolving &quot;reference&quot;…"');
+  expect(pending).not.toContain("not found");
+  expect(pending).not.toContain("<a");
+  expect(renderMarkdown("[[topic/retrieval/specs]]", {})).toContain(
+    'title="Memory reference not found"',
+  );
+});
+
 test("renderMarkdown never resolves inherited object properties as Memory ids", () => {
   expect(() => renderMarkdown("[[constructor]] [[__proto__]]", {})).not.toThrow();
   const html = renderMarkdown("[[constructor]] [[__proto__]]", {});

@@ -251,6 +251,9 @@ function AgentCard({
     try {
       const issued = await mutations.issueCredential.trigger({ agentId: agent.id });
       onIssued(issued);
+      // The reveal dialog now owns the only copy of the secret. SWR mutation
+      // state would otherwise keep the token for as long as this card is mounted.
+      mutations.issueCredential.reset();
       await credentials.mutate();
     } catch (cause) {
       setMutationError(errorMessage(cause));

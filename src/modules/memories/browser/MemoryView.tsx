@@ -13,7 +13,12 @@ import {
   summarizeCodeEvidence,
 } from "@/modules/code/browser/evidence-presentation";
 import { renderMarkdown } from "@/modules/memories/browser/markdown";
-import { memoryTitle, memoryType } from "@/modules/memories/browser/presentation";
+import {
+  memoryGraphContext,
+  memoryTitle,
+  memoryType,
+} from "@/modules/memories/browser/presentation";
+import type { ReadState } from "@/shared/browser/read-state";
 
 interface MemoryLink {
   id: string;
@@ -25,6 +30,11 @@ interface MemoryViewProps {
   memory: Memory;
   wikilinkTargets: Readonly<Record<string, string>>;
   related: MemoryLink[];
+  /** The Workspace Graph read that resolves wikilinks, Related, and Connections. */
+  graphState: ReadState;
+  graphCapped: boolean;
+  /** Whether this Memory is a node of the loaded Graph. */
+  inGraph: boolean;
   backLabel: string;
   saving: boolean;
   error: string | null;
@@ -49,18 +59,24 @@ function displayDate(value: string): string {
 
 function RelatedMemories({
   memories,
+  count,
+  notice,
   onOpen,
 }: {
   memories: MemoryLink[];
+  count: string;
+  notice: string | null;
   onOpen: (memoryId: string) => void;
 }) {
   return (
     <section className="context-section">
       <div className="context-heading">
         <h3>Related</h3>
-        <span>{memories.length}</span>
+        <span>{count}</span>
       </div>
-      {memories.length ? (
+      {notice ? (
+        <p className="context-empty">{notice}</p>
+      ) : memories.length ? (
         <div className="context-link-list">
           {memories.map((memory) => (
             <button
@@ -167,6 +183,9 @@ export function MemoryView({
   memory,
   wikilinkTargets,
   related,
+  graphState,
+  graphCapped,
+  inGraph,
   backLabel,
   saving,
   error,
@@ -188,9 +207,17 @@ export function MemoryView({
   } = memory;
   const title = memoryTitle(memory);
   const type = memoryType(memory);
+  const graphContext = memoryGraphContext({
+    state: graphState,
+    capped: graphCapped,
+    inGraph,
+    relatedCount: related.length,
+  });
+  const { unresolvedWikilinkTitle } = graphContext;
   const bodyHtml = useMemo(
-    () => renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""), wikilinkTargets),
-    [body, wikilinkTargets],
+    () =>
+      renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""), wikilinkTargets, unresolvedWikilinkTitle),
+    [body, wikilinkTargets, unresolvedWikilinkTitle],
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
@@ -260,7 +287,7 @@ export function MemoryView({
               </div>
               <div className="property-row">
                 <dt>Connections</dt>
-                <dd>{related.length}</dd>
+                <dd>{graphContext.connections}</dd>
               </div>
               <div className="property-row">
                 <dt>Version</dt>
@@ -314,7 +341,12 @@ export function MemoryView({
 
           <CodeCitations summary={codeEvidenceSummary} hasError={Boolean(codeEvidence.error)} />
 
-          <RelatedMemories memories={related} onOpen={onOpen} />
+          <RelatedMemories
+            memories={related}
+            count={graphContext.connections}
+            notice={graphContext.relatedNotice}
+            onOpen={onOpen}
+          />
         </aside>
       </div>
     </div>
