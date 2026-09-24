@@ -100,6 +100,14 @@ const SUMMARY_METADATA_BUDGET = 900;
 const DETAIL_CONTENT_BUDGET = 96_000;
 const DETAIL_METADATA_BUDGET = 16_000;
 const CODE_ARTIFACT_CONTENT_BUDGET = 8_000;
+/**
+ * The smallest excerpt worth returning when a Code or context response shares the
+ * output ceiling: below it, trailing items are dropped and reported as truncated.
+ */
+const MINIMUM_CODE_ARTIFACT_CONTENT_BUDGET = 1_000;
+const MINIMUM_CONTEXT_EVIDENCE_BUDGET = 500;
+/** The server's Idempotency-Key rule, checked before the request leaves the adapter. */
+const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
 
 const metadataSchema = z
   .record(z.string(), z.json())
@@ -114,7 +122,10 @@ const memoryContentSchema = z
   .refine((content) => Array.from(content).length <= MEMORY_CONTENT_LIMITS.maximumCharacters, {
     message: `Memory content may contain at most ${MEMORY_CONTENT_LIMITS.maximumCharacters} Unicode characters`,
   });
-const idempotencyKeySchema = z.string().min(1).max(128).optional();
+const idempotencyKeySchema = z
+  .string()
+  .regex(IDEMPOTENCY_KEY_PATTERN, "idempotencyKey must contain 1 to 128 visible ASCII characters")
+  .optional();
 const memoryIdentitySchema = z.object({
   id: z.string().uuid(),
   scope: scopeSchema,
@@ -243,6 +254,55 @@ function mcpMemory(memory: Memory, contentBudget: number, metadataBudget: number
     contentTruncated: content.truncated,
   };
 }
+
+interface FittedItems<Output> {
+  items: Output[];
+  /** JSON characters the returned items occupy inside their array. */
+  characters: number;
+  truncated: boolean;
+}
+
+/**
+ * Fit a list into the characters left in one tool response, so a valid request
+ * returns fewer or shorter items instead of failing at the output ceiling. Each
+ * item's bounded field gets an equal share of what remains, between
+ * `budgets.minimum` and `budgets.maximum` JSON characters; once an item no longer
+ * fits even at the minimum, it and every later item are dropped and reported as
+ * truncated. `render` receives the field budget and may ignore it for items
+ * without a bounded field.
+ */
+function fitItems<Item, Output>(
+  items: readonly Item[],
+  availableCharacters: number,
+  render: (item: Item, budget: number) => Output,
+  budgets: { maximum: number; minimum: number } = { maximum: 0, minimum: 0 },
+): FittedItems<Output> {
+  const fitted: Output[] = [];
+  let remaining = availableCharacters;
+  for (const [index, item] of items.entries()) {
+    const separator = fitted.length > 0 ? 1 : 0;
+    const share = Math.floor(remaining / (items.length - index));
+    const fixed = JSON.stringify(render(item, 0)).length + separator;
+    const budget = Math.min(budgets.maximum, Math.max(budgets.minimum, share - fixed));
+    const output = render(item, budget);
+    const characters = JSON.stringify(output).length + separator;
+    if (characters > remaining) {
+      return { items: fitted, characters: availableCharacters - remaining, truncated: true };
+    }
+    fitted.push(output);
+    remaining -= characters;
+  }
+  return { items: fitted, characters: availableCharacters - remaining, truncated: false };
+}
+
+function remainingOutputCharacters(envelope: Record<string, unknown>): number {
+  return MAX_MCP_OUTPUT_CHARACTERS - JSON.stringify(envelope).length;
+}
+
+const CODE_ARTIFACT_BUDGETS = {
+  maximum: CODE_ARTIFACT_CONTENT_BUDGET,
+  minimum: MINIMUM_CODE_ARTIFACT_CONTENT_BUDGET,
+};
 
 function success(structuredContent: Record<string, unknown>) {
   const serialized = JSON.stringify(structuredContent);
@@ -413,7 +473,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     {
       title: "Remember in Lore",
       description:
-        "Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. Reuse idempotencyKey when retrying an unknown outcome.",
+        "Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
       inputSchema: z.object({
         content: memoryContentSchema,
         scope: scopeSchema.default("shared"),
@@ -444,7 +504,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     {
       title: "Record a Lore Episode",
       description:
-        "Record an ordered Episode of durable, immutable Observation evidence. This does not create searchable Memory. Reuse idempotencyKey when retrying an unknown outcome.",
+        "Record an ordered Episode of durable, immutable Observation evidence. This does not create searchable Memory. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
       inputSchema: z
         .object({
           kind: z.enum(["conversation", "workflow", "document", "event"]),
@@ -514,7 +574,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     {
       title: "Propose a Lore Memory",
       description:
-        "Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. Reuse idempotencyKey when retrying an unknown outcome.",
+        "Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
       inputSchema: z.discriminatedUnion("kind", [
         z
           .object({
@@ -596,7 +656,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     {
       title: "Update a Lore Memory",
       description:
-        "Replace fields on one owned Memory using its current version. This may overwrite content, metadata, or visibility. Reuse idempotencyKey when retrying an unknown outcome.",
+        "Replace fields on one owned Memory using its current version. This may overwrite content, metadata, or visibility. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
       inputSchema: z
         .object({
           memoryId: z.string().uuid(),
@@ -640,7 +700,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     {
       title: "Forget a Lore Memory",
       description:
-        "Permanently delete one owned Memory using its current version. This is destructive and cannot be undone. Reuse idempotencyKey when retrying an unknown outcome.",
+        "Permanently delete one owned Memory using its current version. This is destructive and cannot be undone. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
       inputSchema: z.object({
         memoryId: z.string().uuid(),
         version: z.number().int().positive(),
@@ -705,7 +765,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
     {
       title: "Search Lore Code Index",
       description:
-        "Search RLS-visible Code Artifacts from one configured repository and exact full commit OID. Code Evidence is separate from canonical Memory.",
+        "Search RLS-visible Code Artifacts from one configured repository and exact full commit OID. Code Evidence is separate from canonical Memory. Content is a bounded excerpt marked by contentTruncated; truncated means trailing results were omitted to fit the output limit.",
       inputSchema: z.object({
         repositoryKey: z.string().trim().min(1).max(512),
         commitOid: commitOidSchema,
@@ -730,15 +790,17 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
             contentTruncated: z.boolean(),
           }),
         ),
+        truncated: z.boolean(),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (input) => {
       try {
-        const artifacts = await code.searchCode(input);
-        return success({
-          artifacts: artifacts.map((artifact) => {
-            const content = boundedString(artifact.content, CODE_ARTIFACT_CONTENT_BUDGET);
+        const artifacts = fitItems(
+          await code.searchCode(input),
+          remainingOutputCharacters({ artifacts: [], truncated: false }),
+          (artifact, budget) => {
+            const content = boundedString(artifact.content, budget);
             return {
               id: artifact.id,
               commitOid: artifact.commitOid,
@@ -753,8 +815,10 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
               content: content.value,
               contentTruncated: content.truncated,
             };
-          }),
-        });
+          },
+          CODE_ARTIFACT_BUDGETS,
+        );
+        return success({ artifacts: artifacts.items, truncated: artifacts.truncated });
       } catch (error) {
         return failure(error);
       }
@@ -766,7 +830,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
     {
       title: "Query Lore Code Dependencies",
       description:
-        "Return bounded callers or callees for exactly one symbol or path from an RLS-visible repository and exact full commit OID. Ambiguous and unresolved static-analysis targets remain explicit.",
+        "Return bounded callers or callees for exactly one symbol or path from an RLS-visible repository and exact full commit OID. Ambiguous and unresolved static-analysis targets remain explicit. truncated means more edges or candidates exist than were returned, either past the limit or past the output limit.",
       inputSchema: z
         .object({
           repositoryKey: z.string().trim().min(1).max(512),
@@ -794,7 +858,28 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
     async (input) => {
       try {
         const result = await code.queryCodeDependencies(input);
-        return success({ ...result });
+        if (result.status === "ok") {
+          const edges = fitItems(
+            result.edges,
+            remainingOutputCharacters({ ...result, edges: [], truncated: false }),
+            (edge) => edge,
+          );
+          return success({
+            ...result,
+            edges: edges.items,
+            truncated: result.truncated || edges.truncated,
+          });
+        }
+        const candidates = fitItems(
+          result.candidates,
+          remainingOutputCharacters({ ...result, candidates: [], truncated: false }),
+          (candidate) => candidate,
+        );
+        return success({
+          ...result,
+          candidates: candidates.items,
+          truncated: (result.status === "ambiguous" && result.truncated) || candidates.truncated,
+        });
       } catch (error) {
         return failure(error);
       }
@@ -1001,7 +1086,7 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
     {
       title: "Retrieve Lore Context",
       description:
-        "Use this tool before answering when correctness depends on prior Workspace decisions, user-specific facts, current repository behavior, or exact-revision Code Index evidence. For a historical-decision versus current-Code question, retrieve both evidence families. Code requires an operator-configured repository key plus a full commit OID; if that exact revision is unavailable, ask for it instead of guessing or searching Memory as a substitute. Do not use it for transformations fully supported by supplied text, general knowledge, or unconstrained brainstorming. Returns one bounded, provenance-bearing packet from independently authorized Memory and Code evidence; Code Evidence assessment is side-effect-free.",
+        "Use this tool before answering when correctness depends on prior Workspace decisions, user-specific facts, current repository behavior, or exact-revision Code Index evidence. For a historical-decision versus current-Code question, retrieve both evidence families. Code requires an operator-configured repository key plus a full commit OID; if that exact revision is unavailable, ask for it instead of guessing or searching Memory as a substitute. Do not use it for transformations fully supported by supplied text, general knowledge, or unconstrained brainstorming. Returns one bounded, provenance-bearing packet from independently authorized Memory and Code evidence; Code Evidence assessment is side-effect-free. evidenceTruncated and contentTruncated mark shortened excerpts, and truncated means trailing items were omitted to fit the output limit.",
       inputSchema: z
         .object({
           query: z.string().trim().min(1).max(10_000),
@@ -1116,30 +1201,49 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
             })
             .nullable(),
         }),
+        truncated: z.boolean(),
       }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (input) => {
       try {
         const packet = await context.retrieveContext(input);
+        // Anchors and Memory evidence are small and capped on their own; Code
+        // excerpts share whatever the packet leaves under the output ceiling.
+        let remaining = remainingOutputCharacters({
+          ...packet,
+          memories: [],
+          code: [],
+          anchors: [],
+          truncated: false,
+        });
+        const anchors = fitItems(packet.anchors, remaining, (anchor) => anchor);
+        remaining -= anchors.characters;
+        const memories = fitItems(
+          packet.memories,
+          remaining,
+          (memory, budget) => {
+            const evidence = boundedString(memory.evidence, budget);
+            return { ...memory, evidence: evidence.value, evidenceTruncated: evidence.truncated };
+          },
+          { maximum: SEARCH_EVIDENCE_BUDGET, minimum: MINIMUM_CONTEXT_EVIDENCE_BUDGET },
+        );
+        remaining -= memories.characters;
+        const code = fitItems(
+          packet.code,
+          remaining,
+          (artifact, budget) => {
+            const content = boundedString(artifact.content, budget);
+            return { ...artifact, content: content.value, contentTruncated: content.truncated };
+          },
+          CODE_ARTIFACT_BUDGETS,
+        );
         return success({
           ...packet,
-          memories: packet.memories.map((memory) => {
-            const evidence = boundedString(memory.evidence, SEARCH_EVIDENCE_BUDGET);
-            return {
-              ...memory,
-              evidence: evidence.value,
-              evidenceTruncated: evidence.truncated,
-            };
-          }),
-          code: packet.code.map((artifact) => {
-            const content = boundedString(artifact.content, CODE_ARTIFACT_CONTENT_BUDGET);
-            return {
-              ...artifact,
-              content: content.value,
-              contentTruncated: content.truncated,
-            };
-          }),
+          memories: memories.items,
+          code: code.items,
+          anchors: anchors.items,
+          truncated: anchors.truncated || memories.truncated || code.truncated,
         });
       } catch (error) {
         return failure(error);
