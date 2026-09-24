@@ -6,7 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { Ollama } from "ollama/browser";
+import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
 import type {
   CodeEvidenceAssessment,
   MemoryCodeEvidence,
@@ -48,7 +49,6 @@ const BASE_COMMIT = "f6a248c50730e5af99e8901dc3382e0a8218fedd";
 const TARGET_COMMIT = "2e3dbf00a1c7a2eccccb0ea6cbdcf710e15fefc2";
 // This evidence path belongs to the pinned commits, not the current working tree.
 const HISTORICAL_PROPOSALS_VIEW_PATH = "src/components/MemoryProposalsView.tsx";
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
 
 type RealVariantId = "always-on-union" | "code-only" | "selective-final";
 
@@ -202,12 +202,7 @@ async function createDatabase(dataDir: string | null): Promise<{
     "SELECT to_regclass('public.users')::text AS users",
   );
   if (!schema.rows[0]?.users) {
-    const migrationIds = (await readdir(migrationsUrl))
-      .filter((name) => /^\d+.*\.sql$/.test(name))
-      .sort();
-    for (const migrationId of migrationIds) {
-      await postgres.exec(await readFile(new URL(migrationId, migrationsUrl), "utf8"));
-    }
+    await applyMigrationChain((sql) => postgres.exec(sql));
     await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2)", [
       USER_ID,
       "Real Temporal Evaluation",

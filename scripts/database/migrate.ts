@@ -1,12 +1,18 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import {
+  appliedMigrationVersions,
+  applyDirectMigration,
   DBMATE_MIGRATIONS_TABLE,
   MIGRATION_LOCK_ID,
+  type MigrationFile,
   migrationFiles,
+  pendingMigrationSteps,
   prepareDbmateHistory,
   recordDbmateChecksums,
   runMigrationPreflight,
@@ -55,13 +61,13 @@ function dbmateDatabaseUrl(value: string) {
   return parsed.toString();
 }
 
-async function runDbmate(databaseUrl: string) {
+async function runDbmate(databaseUrl: string, directory: string) {
   const binary = await executableDbmate();
   const child = spawn(
     binary,
     [
       "--migrations-dir",
-      migrationsDirectory,
+      directory,
       "--migrations-table",
       DBMATE_MIGRATIONS_TABLE,
       "--no-dump-schema",
@@ -76,6 +82,27 @@ async function runDbmate(databaseUrl: string) {
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
+}
+
+// dbmate applies every pending file it can see and cannot stop at a version. When
+// a transaction:false migration must follow this run, dbmate sees a temporary copy
+// of only the prefix it may apply, written from the bytes that were checksummed.
+async function runDbmateThrough(
+  databaseUrl: string,
+  migrations: readonly MigrationFile[],
+  through: MigrationFile,
+) {
+  const visible = migrations.slice(0, migrations.indexOf(through) + 1);
+  if (visible.length === migrations.length) return runDbmate(databaseUrl, migrationsDirectory);
+  const directory = await mkdtemp(join(tmpdir(), "lore-migrations-"));
+  try {
+    for (const migration of visible) {
+      await writeFile(join(directory, migration.id), migration.sql);
+    }
+    return await runDbmate(databaseUrl, directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 const client = new pg.Client({ connectionString: databaseUrl });
@@ -95,14 +122,26 @@ try {
   const migrations = await migrationFiles();
   await prepareDbmateHistory(client, migrations);
 
-  const result = await runDbmate(databaseUrl);
-  // dbmate owns SQL parsing and application. Lore adds immutable-file checksums
-  // after every successfully recorded version so later deployments fail closed.
-  await recordDbmateChecksums(client, migrations);
-  if (result.code !== 0) {
-    throw new Error(
-      `dbmate exited ${result.signal ? `after signal ${result.signal}` : `with status ${result.code}`}`,
-    );
+  const steps = pendingMigrationSteps(await appliedMigrationVersions(client), migrations);
+  for (const step of steps) {
+    if (step.kind === "direct") {
+      // This session holds only a session-level advisory lock and never an open
+      // transaction here, so each concurrent index build runs on its own.
+      console.log(`Applying: ${step.migration.id} (transaction:false, one statement at a time)`);
+      await applyDirectMigration(client, step.migration);
+      console.log(`Applied: ${step.migration.id}`);
+      continue;
+    }
+    const result = await runDbmateThrough(databaseUrl, migrations, step.through);
+    // dbmate owns transactional SQL parsing and application. Lore adds
+    // immutable-file checksums after every successfully recorded version so later
+    // deployments fail closed.
+    await recordDbmateChecksums(client, migrations);
+    if (result.code !== 0) {
+      throw new Error(
+        `dbmate exited ${result.signal ? `after signal ${result.signal}` : `with status ${result.code}`}`,
+      );
+    }
   }
 
   const postflight = await runMigrationPreflight(client);

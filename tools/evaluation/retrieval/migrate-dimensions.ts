@@ -13,8 +13,12 @@
 //   DATABASE_URL=postgres://…/lore_bench_1536 \
 //     bun tools/evaluation/retrieval/migrate-dimensions.ts 1536
 
-import { readdir, readFile } from "node:fs/promises";
 import pg from "pg";
+import { migrationFiles } from "../../../scripts/database/lib/migration-preflight.ts";
+import {
+  parseMigration,
+  splitMigrationStatements,
+} from "../../../scripts/database/lib/migration-statements.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -26,17 +30,6 @@ if (!/(^|_)bench(mark)?($|_)/i.test(databaseName)) {
 const dimensions = Number(process.argv[2]);
 if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 16_000) {
   throw new Error("Pass the embedding dimensions as an integer argument from 1 to 16000");
-}
-
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
-
-function upSection(sql: string, name: string): string {
-  const upIndex = sql.indexOf("-- migrate:up");
-  const downIndex = sql.indexOf("-- migrate:down");
-  if (upIndex === -1 || downIndex === -1 || downIndex < upIndex) {
-    throw new Error(`${name} is not a dbmate migration`);
-  }
-  return sql.slice(upIndex + "-- migrate:up".length, downIndex);
 }
 
 // The audited transformation: every 1024 in the baseline is embedding-space
@@ -62,16 +55,15 @@ function assertNoResidualWidth(sql: string, name: string): void {
 const client = new pg.Client({ connectionString: databaseUrl });
 await client.connect();
 try {
-  const migrationIds = (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  for (const migrationId of migrationIds) {
-    const raw = await readFile(new URL(migrationId, migrationsUrl), "utf8");
-    const sql =
-      dimensions === 1024 ? upSection(raw, migrationId) : transform(upSection(raw, migrationId));
-    if (dimensions !== 1024) assertNoResidualWidth(sql, migrationId);
-    process.stderr.write(`Applying ${migrationId} at ${dimensions} dimensions...\n`);
-    await client.query(sql);
+  for (const migration of await migrationFiles()) {
+    const parsed = parseMigration(migration.sql, migration.id);
+    const sql = dimensions === 1024 ? parsed.up : transform(parsed.up);
+    if (dimensions !== 1024) assertNoResidualWidth(sql, migration.id);
+    process.stderr.write(`Applying ${migration.id} at ${dimensions} dimensions...\n`);
+    // A transaction:false migration (CREATE INDEX CONCURRENTLY) cannot run as one
+    // multi-statement query, which PostgreSQL treats as a transaction block.
+    const queries = parsed.transaction ? [sql] : splitMigrationStatements(sql, migration.id);
+    for (const query of queries) await client.query(query);
   }
   process.stderr.write(`Benchmark schema ready at ${dimensions} dimensions.\n`);
 } finally {

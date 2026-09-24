@@ -390,12 +390,26 @@ on Bun. CoreSpeed Cloud uses Cloudflare Workers native observability from
 ## Migration preflight
 
 `bun run db:migrate` runs the same preflight as `bun run db:preflight` before taking
-the migration lock. dbmate owns SQL parsing and application; Lore owns the advisory
-lock, schema compatibility checks, and SHA-256 values stored beside dbmate versions
-in `lore_schema_migrations`. An existing Lore schema without a recognized ledger,
+the migration lock. dbmate parses and applies transactional migrations; Lore owns the
+advisory lock, schema compatibility checks, and SHA-256 values stored beside dbmate
+versions in `lore_schema_migrations`. An existing Lore schema without a recognized ledger,
 or with missing or changed checksums, is rejected. Investigate the ledger mismatch
 against the deployed release and backup before proceeding; do not edit applied
 migrations or replace a production database to bypass preflight.
+
+A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
+statement at a time. dbmate would send the whole file as one query, and PostgreSQL
+runs a multi-statement query as one transaction block, which `CREATE INDEX
+CONCURRENTLY` refuses. `0005` is such a migration: it builds the replay-scrub and
+import-provenance indexes concurrently so writes keep flowing during the build.
+While it is pending, dbmate sees a temporary copy of only the migrations before it.
+The wrapper commits the migration's closing `schema_revision` update in one
+transaction with its ledger row. A run that stops earlier leaves the previous
+revision and no ledger row, so the next `bun run db:migrate` repeats the whole file;
+each index is dropped and rebuilt, which replaces any `INVALID` index a cancelled
+build left behind. A concurrent build also waits for transactions that were already
+open when it started, so a long-running transaction delays the migration, not
+application writes.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

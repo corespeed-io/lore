@@ -1,9 +1,10 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
+import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
 import type { ActorContext } from "../../../src/server/auth/actor-context";
 import { evaluationFailed } from "../shared/evaluation-exit-status";
 import { runCodeAwareMemoryDependencyStressEvaluation } from "./code-aware-memory-dependency-stress-evaluation";
@@ -14,7 +15,6 @@ const BOB_USER_ID = "10000000-0000-4000-8000-000000000072";
 const CAROL_USER_ID = "10000000-0000-4000-8000-000000000073";
 const VISIBLE_WORKSPACE_ID = "20000000-0000-4000-8000-000000000071";
 const FORBIDDEN_WORKSPACE_ID = "20000000-0000-4000-8000-000000000072";
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
 
 function optionalArgument(name: string): string | null {
   const index = process.argv.indexOf(`--${name}`);
@@ -36,12 +36,7 @@ const postgres = new PGlite({ extensions: { pg_trgm, vector } });
 await postgres.waitReady;
 
 try {
-  const migrationIds = (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  for (const migrationId of migrationIds) {
-    await postgres.exec(await readFile(new URL(migrationId, migrationsUrl), "utf8"));
-  }
+  await applyMigrationChain((sql) => postgres.exec(sql));
   await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)", [
     ALICE_USER_ID,
     "Evaluation Alice",
