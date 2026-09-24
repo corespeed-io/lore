@@ -141,8 +141,6 @@ export interface CodeArtifactSymbol {
 }
 
 export interface CodeIndexModule {
-  /** Durably queues one authenticated exact local-Git commit without publishing partial output. */
-  enqueueGitRevision(actor: ActorContext, input: IndexGitRevisionInput): Promise<CodeIndexJob>;
   /** Returns RLS-visible status without exposing the repository's local filesystem path. */
   getIndexJob(actor: ActorContext, input: CodeIndexJobSelector): Promise<CodeIndexJob>;
   /** Stores one immutable Git snapshot and the current versioned index generation atomically. */

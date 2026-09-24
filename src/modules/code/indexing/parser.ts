@@ -14,10 +14,34 @@ import type {
 } from "./types";
 import { hasControlCharacters, sha256 } from "./validation";
 
+interface IdentifiedSymbol {
+  node: SgNode;
+  symbols: string[];
+  kind: string;
+}
+
 interface ArtifactSpan {
   start: number;
   end: number;
   anchor: SgNode;
+  /**
+   * The declaration this span belongs to, resolved once from the node that produced it. A
+   * merged run keeps its members' shared identity: its anchor becomes their parent, whose
+   * subtree may declare symbols outside the run, so the parent must never name the run.
+   */
+  identity: IdentifiedSymbol | null;
+  /** Whether the producing node declares its own single symbol; such spans never merge. */
+  declaresSymbol: boolean;
+  /**
+   * Non-null for a merged run of adjacent symbol-free siblings: the members' shared kind, or
+   * the parent's kind when they differ.
+   */
+  mergedKind: string | null;
+}
+
+interface SpanBounds {
+  start: number;
+  end: number;
 }
 
 interface LanguageSelection {
@@ -149,14 +173,22 @@ function codePointBoundary(content: string, boundary: number, end: number): numb
     : boundary;
 }
 
-function hardSplitSpan(
-  content: string,
-  start: number,
-  end: number,
-  anchor: SgNode,
-): ArtifactSpan[] {
+/** The span one node produces before any merging, with its identity resolved once. */
+function nodeSpan(node: SgNode, start: number, end: number): ArtifactSpan {
+  return {
+    start,
+    end,
+    anchor: node,
+    identity: symbolForNode(node),
+    declaresSymbol: firstNamedSymbol(node) !== null,
+    mergedKind: null,
+  };
+}
+
+function hardSplitSpan(content: string, template: ArtifactSpan): ArtifactSpan[] {
   const spans: ArtifactSpan[] = [];
-  let cursor = start;
+  const end = template.end;
+  let cursor = template.start;
   while (cursor < end) {
     let boundary = Math.min(end, cursor + CODE_INDEX_LIMITS.maximumArtifactCodeUnits);
     if (boundary < end) {
@@ -167,24 +199,35 @@ function hardSplitSpan(
       boundary = Math.min(end, cursor + CODE_INDEX_LIMITS.maximumArtifactCodeUnits);
     }
     boundary = codePointBoundary(content, boundary, end);
-    spans.push({ start: cursor, end: boundary, anchor });
+    spans.push({ ...template, start: cursor, end: boundary });
     cursor = boundary;
   }
   return spans;
+}
+
+function spanKind(span: ArtifactSpan): string {
+  return span.mergedKind ?? nodeKind(span.anchor);
+}
+
+/** Only symbol-free neighbours that belong to the same declaration, or to none, may merge. */
+function canMerge(previous: ArtifactSpan, span: ArtifactSpan): boolean {
+  return (
+    !previous.declaresSymbol &&
+    !span.declaresSymbol &&
+    previous.identity?.node.id() === span.identity?.node.id() &&
+    span.end - previous.start <= CODE_INDEX_LIMITS.maximumArtifactCodeUnits
+  );
 }
 
 function mergeSpans(spans: readonly ArtifactSpan[], parent: SgNode): ArtifactSpan[] {
   const merged: ArtifactSpan[] = [];
   for (const span of spans) {
     const previous = merged.at(-1);
-    if (
-      previous &&
-      !firstNamedSymbol(previous.anchor) &&
-      !firstNamedSymbol(span.anchor) &&
-      span.end - previous.start <= CODE_INDEX_LIMITS.maximumArtifactCodeUnits
-    ) {
+    if (previous && canMerge(previous, span)) {
+      const kind = spanKind(previous) === spanKind(span) ? spanKind(span) : nodeKind(parent);
       previous.end = span.end;
       previous.anchor = parent;
+      previous.mergedKind = kind;
     } else {
       merged.push({ ...span });
     }
@@ -196,7 +239,7 @@ function attachLeadingComments(content: string, spans: readonly ArtifactSpan[]):
   const attached: ArtifactSpan[] = [];
   for (const original of spans) {
     const span = { ...original };
-    if (symbolForSpan(span.anchor)) {
+    if (span.identity) {
       while (attached.length > 0) {
         const previous = attached.at(-1);
         if (!previous) break;
@@ -242,29 +285,37 @@ function partitionSpanRange(
   return partitioned;
 }
 
-function structuralSpans(content: string, node: SgNode): ArtifactSpan[] {
+function nodeBounds(node: SgNode): SpanBounds {
   const range = node.range();
-  const start = range.start.index;
-  const end = range.end.index;
+  return { start: range.start.index, end: range.end.index };
+}
+
+/** Partitions exactly `bounds`, which defaults to the node's own range. */
+function structuralSpans(
+  content: string,
+  node: SgNode,
+  bounds: SpanBounds = nodeBounds(node),
+): ArtifactSpan[] {
+  const { start, end } = bounds;
   const forceChildren = FORCE_CHILDREN_KINDS.has(nodeKind(node));
   if (end - start <= CODE_INDEX_LIMITS.maximumArtifactCodeUnits && !forceChildren) {
-    return [{ start, end, anchor: node }];
+    return [nodeSpan(node, start, end)];
   }
 
   const namedChildren = node
     .children()
     .filter((child) => child.isNamed() && child.range().end.index > child.range().start.index);
-  if (namedChildren.length === 0) return hardSplitSpan(content, start, end, node);
+  if (namedChildren.length === 0) return hardSplitSpan(content, nodeSpan(node, start, end));
 
   const childSpans = attachLeadingComments(
     content,
     namedChildren.flatMap((child) => structuralSpans(content, child)),
   );
-  if (childSpans.length === 0) return hardSplitSpan(content, start, end, node);
+  if (childSpans.length === 0) return hardSplitSpan(content, nodeSpan(node, start, end));
   const partitioned = partitionSpanRange(content, childSpans, start, end);
   return mergeSpans(partitioned, node).flatMap((span) =>
     span.end - span.start > CODE_INDEX_LIMITS.maximumArtifactCodeUnits
-      ? hardSplitSpan(content, span.start, span.end, span.anchor)
+      ? hardSplitSpan(content, span)
       : [span],
   );
 }
@@ -322,7 +373,8 @@ function bindingNames(node: SgNode | null): string[] {
   return [...new Set(namedChildren.flatMap(bindingNames))];
 }
 
-function symbolForSpan(anchor: SgNode): { node: SgNode; symbols: string[]; kind: string } | null {
+/** Names a node by its nearest symbol lineage, or else by the single symbol it declares. */
+function symbolForNode(anchor: SgNode): IdentifiedSymbol | null {
   const lineage = [anchor, ...anchor.ancestors()];
   const nearestAncestor = lineage.find(isSymbolNode);
   const selected = nearestAncestor ?? firstNamedSymbol(anchor);
@@ -398,10 +450,11 @@ function artifactsFromSpans(
   const declarationOccurrences = new Map<string, number>();
   const declarationChunkOrdinals = new Map<number, number>();
   const starts = lineStarts(content);
-  return spans.flatMap((span, ordinal) => {
+  // Ordinals number only non-empty spans so that reuse can require a contiguous sequence.
+  const nonEmptySpans = spans.filter((span) => span.end > span.start);
+  return nonEmptySpans.map((span, ordinal) => {
     const selectedContent = content.slice(span.start, span.end);
-    if (!selectedContent) return [];
-    const identified = symbolForSpan(span.anchor);
+    const identified = span.identity;
     const symbols: CodeArtifactSymbol[] = [];
     const declarationChunkOrdinal = identified
       ? (declarationChunkOrdinals.get(identified.node.id()) ?? 0)
@@ -423,26 +476,24 @@ function artifactsFromSpans(
     }
     const primarySymbol = symbols[0] ?? null;
     const lines = lineRange(starts, span.start, span.end);
-    return [
-      {
-        path,
-        language,
-        parser: "tree_sitter" as const,
-        parseStatus,
-        kind: identified?.kind ?? nodeKind(span.anchor),
-        symbol: primarySymbol?.symbol ?? null,
-        symbolKey: primarySymbol?.symbolKey ?? null,
-        declarationKey: primarySymbol?.declarationKey ?? null,
-        declarationChunkOrdinal,
-        symbols,
-        ordinal,
-        startIndex: span.start,
-        endIndex: span.end,
-        ...lines,
-        content: selectedContent,
-        contentSha256: sha256(selectedContent),
-      },
-    ];
+    return {
+      path,
+      language,
+      parser: "tree_sitter" as const,
+      parseStatus,
+      kind: identified?.kind ?? spanKind(span),
+      symbol: primarySymbol?.symbol ?? null,
+      symbolKey: primarySymbol?.symbolKey ?? null,
+      declarationKey: primarySymbol?.declarationKey ?? null,
+      declarationChunkOrdinal,
+      symbols,
+      ordinal,
+      startIndex: span.start,
+      endIndex: span.end,
+      ...lines,
+      content: selectedContent,
+      contentSha256: sha256(selectedContent),
+    };
   });
 }
 
@@ -566,7 +617,7 @@ function dependencyEdgesFromTree(
       path,
       fromArtifactOrdinal: fromArtifact.ordinal,
       fromSymbolKey: (() => {
-        const identified = symbolForSpan(node);
+        const identified = symbolForNode(node);
         const symbol = identified?.symbols[0];
         if (!identified || !symbol) return null;
         const symbolKey = `${path}#${identified.kind}:${symbol}`;
@@ -635,11 +686,15 @@ export async function prepareFile(file: CodeSourceFile): Promise<PreparedFileInd
         dependencies: [],
       };
     }
+    // Tree-sitter starts the root at its first token, so leading whitespace and a BOM belong
+    // to no node. The root partition still covers the whole file: Artifacts must reconstruct
+    // the source exactly, and a whitespace-only file must yield the Artifact its manifest
+    // entry promises.
     const artifacts = artifactsFromSpans(
       file.path,
       file.content,
       selection.language,
-      structuralSpans(file.content, root),
+      structuralSpans(file.content, root, { start: 0, end: file.content.length }),
       errorCoverage > 0 ? "recovered" : "parsed",
     );
     return {

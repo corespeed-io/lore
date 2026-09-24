@@ -1,6 +1,11 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { CodeIndexValidationError } from "@/modules/code/indexing/errors";
 import type { CodeDependencyKind } from "@/modules/code/indexing/types";
+import {
+  validateCommitOid,
+  validatePath,
+  validatePlainText,
+} from "@/modules/code/indexing/validation";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 
@@ -94,45 +99,6 @@ interface DependencyEdgeRow {
   site_start_column: number;
   site_end_line: number;
   site_end_column: number;
-}
-
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || codePoint === 127;
-  });
-}
-
-function validatePlainText(value: string, name: string, maximumLength: number): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized)) {
-    throw new CodeIndexValidationError(`${name} is invalid`);
-  }
-  return normalized;
-}
-
-function validateCommitOid(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
-    throw new CodeIndexValidationError("commitOid must be a full 40- or 64-character Git OID");
-  }
-  return normalized;
-}
-
-function validatePath(value: string): string {
-  const path = value.trim();
-  if (
-    path !== value ||
-    !path ||
-    path.length > 1_024 ||
-    path.startsWith("/") ||
-    path.includes("\\") ||
-    hasControlCharacters(path) ||
-    path.split("/").some((part) => !part || part === "." || part === "..")
-  ) {
-    throw new CodeIndexValidationError("path is invalid");
-  }
-  return path;
 }
 
 function locator(row: SymbolCandidateRow): CodeGraphLocator {
