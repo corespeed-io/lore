@@ -760,6 +760,30 @@ test("readiness requires RLS on every tenant table, including tables added later
   });
 });
 
+test("readiness exempts an extension's own table, but never a tenant table", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  const admin = (sql: string) =>
+    testContext.adminDatabase.transaction((transaction) => transaction.query(sql));
+  await admin("CREATE TABLE public.extension_reference_records (id integer)");
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
+
+  // As PostGIS owns spatial_ref_sys: the table belongs to the extension, not to Lore.
+  await admin("ALTER EXTENSION vector ADD TABLE public.extension_reference_records");
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  // Extension ownership cannot excuse a tenant table from RLS.
+  await admin("ALTER EXTENSION vector ADD TABLE public.memories");
+  await admin("ALTER TABLE public.memories DISABLE ROW LEVEL SECURITY");
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
+});
+
 test("readiness requires every tenant table to exist", async () => {
   const testContext = await createMemoryTestContext();
   const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });

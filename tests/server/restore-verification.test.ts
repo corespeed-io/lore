@@ -72,6 +72,23 @@ test("restore verification requires RLS on every tenant table, including tables 
   await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
 });
 
+test("restore verification exempts an extension's own table, but never a tenant table", async () => {
+  await postgres.exec("BEGIN");
+  try {
+    await postgres.exec("CREATE TABLE public.extension_reference_records (id integer)");
+    await expect(verify()).rejects.toThrow("Restored database failed Lore");
+    // As PostGIS owns spatial_ref_sys: the table belongs to the extension, not to Lore.
+    await postgres.exec("ALTER EXTENSION vector ADD TABLE public.extension_reference_records");
+    await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
+    // Extension ownership cannot excuse a tenant table from RLS.
+    await postgres.exec("ALTER EXTENSION vector ADD TABLE public.memories");
+    await postgres.exec("ALTER TABLE public.memories DISABLE ROW LEVEL SECURITY");
+    await expect(verify()).rejects.toThrow("Restored database failed Lore");
+  } finally {
+    await postgres.exec("ROLLBACK");
+  }
+});
+
 test("restore verification requires every tenant table to exist", async () => {
   const protectedTables = await postgres.query<{ relname: string }>(
     `SELECT relname

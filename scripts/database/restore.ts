@@ -19,7 +19,8 @@ type RestoredDatabaseState = {
 /**
  * Public tables without tenant data, the only ones allowed to lack RLS. Keep in
  * step with NON_TENANT_PUBLIC_TABLES in src/modules/operations/service.ts; every
- * other public table, including one added by a later migration, must enable RLS.
+ * other public table, including one added by a later migration, must enable RLS,
+ * except a table an extension owns (PostGIS `spatial_ref_sys`, say).
  */
 export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
 
@@ -98,6 +99,15 @@ export async function verifyRestoredDatabase(
            AND relation.relkind IN ('r', 'p')
            AND NOT relation.relrowsecurity
            AND relation.relname NOT IN (${nonTenantTables})
+           -- An extension's own table belongs to the extension, not to Lore.
+           AND NOT EXISTS (
+             SELECT 1
+             FROM pg_depend dependency
+             WHERE dependency.classid = 'pg_class'::regclass
+               AND dependency.objid = relation.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
+               AND dependency.deptype = 'e'
+           )
        ) AS enabled
      ), required_maintenance_functions(signature) AS (
        VALUES
