@@ -80,25 +80,52 @@ been removed. Lore now has a native implementation, split into two concepts
   generated column stays for the scan predicate).
   `0004_job_lifecycle_and_agent_provenance.sql` lets Agent deletion clear Code
   Evidence provenance, retires exhausted Code Index leases as dead, re-arms
-  dead/cancelled/orphaned Code Index jobs through `lore.enqueue_code_index_job`,
-  cancels a disabled or deleted Agent's unfinished Code Index jobs, serializes
-  generation activation per revision instead of a table lock, indexes the
-  replay-scrub JSON paths, revokes maintenance UPDATE on `memory_chunks`, adds
-  `lore.requeue_dead_memory_embedding_jobs`, and evaluates the
-  Memory/chunk/embedding/link read check once per statement via
+  dead/cancelled/orphaned Code Index jobs through `lore.enqueue_code_index_job`
+  (a dead job only 15 minutes after it died), decides requester authority for
+  both claim and re-arm with one `lore.code_index_requester_can_run`, cancels a
+  disabled or deleted Agent's unfinished Code Index jobs, serializes generation
+  activation per revision instead of a table lock, revokes maintenance UPDATE on
+  `memory_chunks`, adds `lore.requeue_dead_memory_embedding_jobs`, and evaluates
+  the Memory/chunk/embedding/link read check once per statement via
   `(SELECT lore.can_read_workspace(lore.current_workspace_id()))`; its policy
   rewrite briefly takes ACCESS EXCLUSIVE on those four tables under a 5s
-  `lock_timeout`, so a busy deploy may need a retry. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number —
+  `lock_timeout`, so a busy deploy may need a retry. Once, it also cancels
+  unfinished jobs of any indexer revision other than v7 and deletes never-ready
+  revisions that recorded a BOM-only blob as indexed and are cited by no Code
+  Evidence; that v7 literal must match `CODE_INDEX_REVISION` when 0004 ships.
+  `0005_create_replay_indexes_concurrently.sql` builds the five
+  `request_idempotency_records` replay-scrub partial expression indexes and
+  `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
+  idempotent writes never wait on the build. Each index is dropped (`DROP INDEX
+  CONCURRENTLY IF EXISTS`) and then built, so a rerun after a stopped build
+  replaces any `INVALID` leftover. Every new migration
+  must update `lore_system_state.schema_revision` to its own version number (currently 5) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
   `tests/integration/api.test.ts`, and `scripts/checks/smoke-memory-core.ts` pin the current
-  revision;
-- dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
-  not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
+  revision (5);
+- dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
+  not Lore's runtime ORM. A statement that refuses a transaction block
+  (`CREATE`/`DROP INDEX CONCURRENTLY`) goes in its own `-- migrate:up
+  transaction:false` migration, never in a transactional one: a plain `CREATE
+  INDEX` holds SHARE and blocks every write to its table until the migration
+  commits. dbmate still sends such a file as one multi-statement query, which
+  PostgreSQL runs as an implicit transaction block, so `scripts/database/migrate.ts`
+  applies it itself, one statement at a time, after running dbmate over a
+  temporary copy of only the earlier files; running `dbmate migrate` directly
+  therefore stops (safely, recording nothing) at such a migration.
+  `scripts/database/lib/migration-statements.ts` splits only at a semicolon that
+  ends a non-comment line and rejects dollar-quoted bodies. The file must end with
+  its `schema_revision` UPDATE, which the wrapper commits in one transaction with
+  the ledger row; a stopped run records nothing and the next run repeats the whole
+  file, so every such index must be dropped before it is built. PGlite harnesses
+  (`tests/support/memory-context.ts`, restore verification, the lore-core contract
+  test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
+  `applyMigrationChain`/`migrationQueries`; never apply a migration file with one
+  `exec(fileContents)`. `pg` remains the runtime adapter behind the narrow
   transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
   versions in `lore_schema_migrations`. The schema is live in production
@@ -202,7 +229,9 @@ been removed. Lore now has a native implementation, split into two concepts
   pruning must not delete citation anchors. Joint retrieval assesses all result
   Memories' citations in one read-only transaction (`assessMemoryCitations`);
   identity matching goes through the path-free Symbol Set payload index, not a
-  suffix scan.
+  suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
+  cut list marks contextual impact `anchors:truncated`, so it is never
+  `unaffected`.
   `src/modules/context/policy.ts` owns the pure versioned route/packet policy and
   `src/modules/context/retrieval.ts` owns its production read-only orchestration.
   `POST /api/v1/context/retrieve`, the TypeScript SDK, and `lore_retrieve_context`
@@ -241,16 +270,29 @@ been removed. Lore now has a native implementation, split into two concepts
   accept only an operator-configured `repositoryKey` plus exact commit OID; never
   accept a model-supplied local path, credential, or Workspace override. Configure
   the self-host registry with `LORE_CODE_REPOSITORIES`; an empty registry disables
-  public enqueue. Entries may bind `workspaceIds`; an unbound entry is kept only
+  public enqueue. Entries may bind `workspaceIds`, which gates enqueue and indexing,
+  not reads (docs/operations.md documents finding and manually removing Code
+  Repositories indexed outside a new binding; the delete cascades, and Code Evidence
+  anchors survive as permanently `unverifiable`). An unbound entry is kept only
   when `AUTH_MODE` is explicitly `password` or `none` (single operator), and a
   Workspace outside a binding gets exactly the unconfigured-key 400 so the registry
   cannot be enumerated. The maintenance worker resolves repository paths from its
-  own `LORE_CODE_REPOSITORIES`, never the job row's `repository_path`, re-checks
-  the binding at processing time, and does no Code Indexing with an empty
-  registry. Validation errors, OID/content conflicts, and incomplete generations
-  end a job `dead` on its first attempt; other failures retry. Re-enqueue re-arms
-  dead, cancelled, or orphaned jobs; disabling or deleting an Agent cancels its
-  Code Index jobs. Keep native Git/AST parsing out of Cloudflare request bundles;
+  own `LORE_CODE_REPOSITORIES`, never the job row's `repository_path`, and
+  re-checks the binding at processing time. It does no Code Indexing with an empty
+  registry, and an invalid registry disables only its Code Indexing
+  (`codeRepositoriesForWorker`, content-free warning), never the sweep or
+  embeddings. Failures a later attempt can outlive are `CodeIndexRetryableError`
+  and keep the five-attempt retry budget with backoff: a key the worker's registry
+  does not serve to the job's Workspace, a repository path that does not resolve
+  yet, a commit not fetched yet, and transient Git errnos or signals. Only failures
+  that repeat identically end a job `dead` on its first attempt: input validation,
+  OID/content conflicts, incomplete generations, malformed trees/blobs, and the
+  output bound. Persisted `last_error` replaces C0/C1 controls with U+FFFD within
+  1,000 characters. Git tree paths are read from the verbatim `ls-tree -l -z`
+  record, never a C-quoted `--format` `%(path)`. Re-enqueue re-arms a cancelled or
+  orphaned job at once and a dead job only 15 minutes after it died
+  (`dead_job_rearm_cooldown`), returning it unchanged inside the cooldown;
+  disabling or deleting an Agent cancels its Code Index jobs. Keep native Git/AST parsing out of Cloudflare request bundles;
   it runs only in the Bun/self-host maintenance worker. Parser, symbol, or chunking
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
@@ -364,7 +406,11 @@ been removed. Lore now has a native implementation, split into two concepts
   job row was inserted (`RETURNING true` needs no SELECT grant); hosts notify on
   any non-null id, including a metadata-only update whose prior embedding is still
   pending. `bun run db:embedding:requeue-dead` re-arms one generation's dead
-  embedding jobs after an outage (dry-run count unless `--apply`);
+  embedding jobs after an outage (dry-run count unless `--apply`).
+  `db:embedding:report` and `db:embedding:activate` require
+  `LORE_EMBEDDING_BUILD_PROVIDER`/`MODEL` or `LORE_EMBEDDING_PROVIDER`/`MODEL`
+  explicitly (they run with `--no-env-file` and never fall back to the default
+  model), and print the provider/model/revision they acted on;
 - `src/server/api/idempotency.ts`, `src/modules/operations/maintenance.ts`,
   `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
   own OSS replay, expired replay/event cleanup, and operational integration.
@@ -847,7 +893,14 @@ database invariant, not a UI convention.
   set-based `jsonb_to_recordset` batches, enqueues embedding jobs in its
   transaction, and notifies maintenance after commit. A receipt replays only while
   every Memory it imported still exists; otherwise the same archive restores the
-  missing Memories and reconnects them to the survivors.
+  missing Memories and reconnects them to the survivors. Archive validation, which
+  dry-run also runs, refuses what PostgreSQL would reject at write time: NUL or
+  unpaired surrogates in content, Link kinds, or any metadata key or string; a
+  metadata `__proto__` key (Zod drops it while the checksum covers it); non-RFC
+  3339 or out-of-range timestamps; and archives too deeply nested to checksum. All
+  are 400 `invalid_archive`, never a SQLSTATE or 500. Export serializes timestamps
+  with `toISOString()` (milliseconds), and import stores the archive's timestamp
+  text as provenance unchanged.
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.
@@ -856,8 +909,11 @@ database invariant, not a UI convention.
   sends only SCRAM-SHA-256 verifiers, never cleartext passwords, so runtime
   passwords must be printable ASCII.
 - Readiness and restore verification derive RLS coverage from pg_catalog: every
-  public table except `lore_system_state` and `lore_schema_migrations` must enable
-  RLS, so a new table cannot be forgotten by a hand-kept list.
+  public table except `lore_system_state`, `lore_schema_migrations`, and tables
+  owned by an extension (`pg_depend` `deptype = 'e'`, e.g. PostGIS
+  `spatial_ref_sys`) must enable RLS, so a new table cannot be forgotten by a
+  hand-kept list; every `REQUIRED_TENANT_TABLES` entry must still exist with RLS
+  whoever owns it.
 - `AUTH_MODE=none` is only acceptable for explicit local development with
   `ALLOW_INSECURE=1`; production fails closed. Compose supplies no default for
   `AUTH_MODE` or `ALLOW_INSECURE`; the local no-auth opt-in lives only in `.env`,
@@ -1061,9 +1117,10 @@ Benchmark is part of the product quality system even without AutoDream.
   and records its model, latency, reasons, and tokens. Fixed-reader adapters send
   verified question images inline to vision-capable OpenAI-compatible or Google
   models; without a judge, judge cases remain unresolved and `scoreComplete` is false.
-  The built-in `lore-portable-deterministic-v2` reader profile uses a character
+  The built-in `lore-portable-deterministic-v3` reader profile uses a character
   budget and temperature 0, so reports must not label it as the paper's sampled,
-  Qwen-token-budgeted official reader. Record prompt hashes, decoding, transport,
+  Qwen-token-budgeted official reader. v3 separates retrieved trajectories with a
+  budgeted blank line; v2 reports concatenated them and are not comparable. Record prompt hashes, decoding, transport,
   image routing, and context-budget units in every result. The runner preserves
   each rendered trajectory exactly across bounded workflow Episodes/Observations,
   indexes them through the separate revisioned Episode-evidence module, groups
@@ -1123,7 +1180,9 @@ Benchmark is part of the product quality system even without AutoDream.
   an isolated evaluation Workspace or disposable database. Runs execute in their
   request. A run still `running` after `EVALUATION_RUN_TIMEOUT_SECONDS` (1 hour)
   fails with a content-free reason when it is read or before the User's next run,
-  and a live run stops itself at that deadline. `GET /evaluations/suites` returns
+  and a live run stops itself at that deadline. An isolation leak outranks expiry:
+  its metrics and isolation error are recorded even if a reader already expired
+  the run. `GET /evaluations/suites` returns
   pages of at most 100 with `x-lore-next-cursor`.
 - Benchmark-only readers support native Ollama. Pin its model digest and deterministic
   request controls in the report, require loopback plus a locally listed non-cloud
@@ -1149,7 +1208,7 @@ The existing application uses:
 
 - Next.js 16 (App Router), React 19, Hono, Bun 1.4.2+ for self-host runtimes,
   package management, tooling, and tests; TypeScript 7;
-- dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
+- dbmate 2.35 for transactional migration parsing/application and `pg` for runtime
   PostgreSQL transactions; Lore has no runtime ORM;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
@@ -1195,7 +1254,13 @@ passes even behind a Host-rewriting proxy, and clients that send neither header
 are unaffected. SQLSTATE 40P01/40001 map to a retryable 409
 `transaction_conflict`. The OpenAPI Error `code` enum is closed and
 `openapi.test.ts` asserts the exact emitted set. Domain handlers still authorize
-Actors and install RLS.
+Actors and install RLS. Every JSON request body goes through `jsonObject`
+(`src/server/api/input.ts`), which counts UTF-8 bytes as the body streams and
+returns 413 `payload_too_large`; a declared oversized `Content-Length` is refused
+before any byte is read. The default bound is `MAX_JSON_BODY_BYTES` (10 MiB, the
+cap Next's middleware body clone used to impose); Episodes pass a bound derived
+from their content/metadata limits, and Workspace import passes 50,000,000 bytes.
+Workspace import refuses an Agent before it reads the body.
 Next mounts Hono through its API catch-all via `hono/vercel`. Cloudflare uses
 request-local Hyperdrive adapters and `waitUntil` queue notifications, before
 OpenNext routing. Default dev/start/local-service commands remain single-service
