@@ -379,6 +379,29 @@ describe("Lore TypeScript SDK", () => {
     ).not.toThrow();
   });
 
+  test("reads custom headers from any iterable, such as another realm's Headers", () => {
+    // Undici, node-fetch, and polyfill Headers keep entries in internal slots, so
+    // Object.entries sees nothing; the SDK must iterate them like HeadersInit does.
+    class ForeignHeaders {
+      readonly #entries: Array<[string, string]>;
+      constructor(entries: Array<[string, string]>) {
+        this.#entries = entries;
+      }
+      *[Symbol.iterator](): IterableIterator<[string, string]> {
+        yield* this.#entries;
+      }
+    }
+    expect(
+      () =>
+        new LoreClient({
+          baseUrl: "https://lore.example.test",
+          headers: new ForeignHeaders([
+            ["authorization", "Bearer bypass"],
+          ]) as unknown as HeadersInit,
+        }),
+    ).toThrow(/typed Lore client options/);
+  });
+
   test("does not allow custom headers to bypass authentication transport policy", () => {
     expect(
       () =>

@@ -348,15 +348,24 @@ function gatewayHeaders(auth: LoreGatewayAuthentication | undefined): Headers {
 }
 
 function customHeaderEntries(input: HeadersInit): Array<readonly [string, string]> {
-  if (input instanceof Headers) return [...input];
-  if (!Array.isArray(input)) return Object.entries(input);
-  return input.map((entry) => {
+  // Any iterable of pairs, not only this realm's Headers: undici, node-fetch, and
+  // polyfill Headers keep entries in internal slots that Object.entries cannot see.
+  const pairs: ReadonlyArray<readonly string[]> = Array.isArray(input)
+    ? input
+    : isIterable(input)
+      ? [...input]
+      : Object.entries(input);
+  return pairs.map((entry) => {
     const [name, value] = entry;
     if (entry.length !== 2 || name === undefined || value === undefined) {
       throw new TypeError("Lore custom headers must be name/value pairs");
     }
     return [name, value] as const;
   });
+}
+
+function isIterable(value: object): value is Iterable<readonly string[]> {
+  return Symbol.iterator in value;
 }
 
 function normalizedCustomHeaders(input: HeadersInit | undefined): Headers {
