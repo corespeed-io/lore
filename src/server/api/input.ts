@@ -94,7 +94,15 @@ export async function jsonObject(
   if (request.body) {
     const reader = request.body.getReader();
     for (;;) {
-      const { done, value } = await reader.read();
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        chunk = await reader.read();
+      } catch {
+        // The client aborted or the connection reset mid-upload: a bad request, not a
+        // server fault, as request.json() used to report it.
+        throw new BadRequestError("Request body could not be read");
+      }
+      const { done, value } = chunk;
       if (done) break;
       received += value.byteLength;
       if (received > maximumBytes) {
@@ -225,9 +233,17 @@ export function uuidString(value: unknown, name: string): string {
   return normalized;
 }
 
-export function uuidArray(value: unknown, name: string, allowEmpty: boolean): string[] {
+export function uuidArray(
+  value: unknown,
+  name: string,
+  allowEmpty: boolean,
+  maximumItems?: number,
+): string[] {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
     throw new BadRequestError(`${name} must be ${allowEmpty ? "an" : "a non-empty"} array`);
+  }
+  if (maximumItems !== undefined && value.length > maximumItems) {
+    throw new BadRequestError(`${name} exceeds ${maximumItems} items`);
   }
   return value.map((item, index) => uuidString(item, `${name}[${index}]`));
 }

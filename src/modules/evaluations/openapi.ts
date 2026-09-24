@@ -105,10 +105,12 @@ export const evaluationsSchemas = {
       expectedMemoryIds: {
         type: "array",
         minItems: 1,
+        maxItems: 100,
         items: { type: "string", format: "uuid" },
       },
       forbiddenMemoryIds: {
         type: "array",
+        maxItems: 100,
         items: { type: "string", format: "uuid" },
       },
       limit: { type: "integer", minimum: 1, maximum: 100 },

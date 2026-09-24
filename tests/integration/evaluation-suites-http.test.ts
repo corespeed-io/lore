@@ -70,3 +70,51 @@ test("Evaluation Suites list over HTTP in cursor pages and reject bad page contr
     await expect(response.json(), query).resolves.toMatchObject({ code: "invalid_request" });
   }
 });
+
+test("an Evaluation Suite at its field limits fits its body bound, and id lists are capped", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "http-evaluation-bounds");
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request("/api/v1/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "Evaluation bounds" }),
+    })
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const id = (index: number) => `40000000-0000-4000-8000-${index.toString().padStart(12, "0")}`;
+  const ids = (count: number) => Array.from({ length: count }, (_, index) => id(index + 1));
+
+  // Over the shared 10 MiB default in UTF-8, yet within every field limit.
+  const cjkQuery = "記".repeat(10_000);
+  const body = JSON.stringify({
+    name: "Field limits",
+    cases: Array.from({ length: 400 }, () => ({ query: cjkQuery, expectedMemoryIds: ids(1) })),
+  });
+  expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(10 * 1024 * 1024);
+  const accepted = await app.request("/api/v1/evaluations/suites", {
+    method: "POST",
+    headers,
+    body,
+  });
+  expect(accepted.status).toBe(201);
+
+  const tooMany = await app.request("/api/v1/evaluations/suites", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "Too many ids",
+      cases: [{ query: "question", expectedMemoryIds: ids(101) }],
+    }),
+  });
+  expect(tooMany.status).toBe(400);
+  await expect(tooMany.json()).resolves.toMatchObject({
+    error: "cases[0].expectedMemoryIds exceeds 100 items",
+  });
+});

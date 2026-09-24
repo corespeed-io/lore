@@ -389,6 +389,34 @@ test("bounded JSON bodies stop reading a chunked stream once it crosses the byte
   await expect(jsonObject(chunked(["{"]), 14)).rejects.toThrow("Request body must be valid JSON");
 });
 
+test("a body stream that fails mid-upload is a bad request, not a server fault", async () => {
+  let sent = false;
+  const aborted = new Request("http://lore.local/api/v1/memories", {
+    method: "POST",
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode('{"content":"'));
+        } else controller.error(new Error("connection reset by peer"));
+      },
+    }),
+  });
+  await expect(jsonObject(aborted)).rejects.toThrow("Request body could not be read");
+  await expect(
+    jsonObject(
+      new Request("http://lore.local/api/v1/memories", {
+        method: "POST",
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.error(new Error("aborted"));
+          },
+        }),
+      }),
+    ),
+  ).rejects.toBeInstanceOf(BadRequestError);
+});
+
 test("ordinary JSON routes refuse a body over the default bound with 413", async () => {
   vi.stubEnv("AUTH_MODE", "none");
   vi.stubEnv("ALLOW_INSECURE", "1");
