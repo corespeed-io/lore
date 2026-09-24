@@ -166,6 +166,40 @@ test("indexes the exact committed Git tree instead of dirty working-tree bytes",
   ).rejects.toBeInstanceOf(CodeRevisionConflictError);
 });
 
+test("indexes paths that Git would C-quote, such as non-ASCII names and quotes", async () => {
+  const context = await createMemoryTestContext();
+  const code = createCodeIndexModule(context.database);
+  const repositoryPath = await temporaryGitRepository();
+  // Backslashes and control characters stay refused by validatePath by design.
+  const paths = ["src/中文.ts", 'src/q"uote.ts', "docs/naïve café.md"];
+  for (const [index, path] of paths.entries()) {
+    await writeRepositoryFile(
+      repositoryPath,
+      path,
+      `export const quotedMarker${index} = ${index};\n`,
+    );
+  }
+  const commitOid = await commitGitRepository(repositoryPath);
+
+  await code.indexGitRevision(context.alice, {
+    repositoryKey: "corespeed/quoted-paths",
+    displayName: "Quoted paths",
+    repositoryPath,
+    commitOid,
+  });
+
+  for (const [index, path] of paths.entries()) {
+    await expect(
+      code.search(context.alice, {
+        repositoryKey: "corespeed/quoted-paths",
+        commitOid,
+        query: `quotedMarker${index}`,
+      }),
+      path,
+    ).resolves.toMatchObject([{ path }]);
+  }
+});
+
 test("rejects a well-formed Git OID that is not in the repository as retryable", async () => {
   const context = await createMemoryTestContext();
   const code = createCodeIndexModule(context.database);

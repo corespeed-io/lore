@@ -138,11 +138,15 @@ export async function readGitRevisionFiles(
   canonicalPath: string,
   commitOid: string,
 ): Promise<{ files: CodeSourceFile[]; manifest: GitRevisionManifest }> {
+  // The default `-l -z` record is "<mode> <type> <oid> <padded size>\t<path>" with the
+  // path verbatim. A --format %(path) is C-quoted even under -z, which turned every
+  // non-ASCII or quote-containing path into a terminal "invalid path" failure.
   const tree = await gitOutput(canonicalPath, [
     "ls-tree",
-    "-rz",
+    "-r",
+    "-l",
+    "-z",
     "--full-tree",
-    "--format=%(objectmode)%x09%(objecttype)%x09%(objectname)%x09%(objectsize)%x09%(path)",
     commitOid,
   ]);
   let treeText: string;
@@ -164,8 +168,11 @@ export async function readGitRevisionFiles(
   };
   const parsedEntries: ParsedTreeEntry[] = [];
   for (const entry of entries) {
-    const [mode, objectType, objectOid, sizeText, ...pathParts] = entry.split("\t");
-    const path = validatePath(pathParts.join("\t"));
+    // The metadata never contains a tab; the path after the first one may.
+    const tab = entry.indexOf("\t");
+    const [mode, objectType, objectOid, sizeText] =
+      tab < 0 ? [] : entry.slice(0, tab).trim().split(/ +/);
+    const path = validatePath(tab < 0 ? "" : entry.slice(tab + 1));
     if (!mode || !objectType || !objectOid || !sizeText) {
       throw new CodeIndexValidationError(`Malformed Git tree entry: ${path}`);
     }
