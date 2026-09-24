@@ -1816,3 +1816,113 @@ test("Memory list supports stable offset paging inside the authorized result set
   expect(page).toEqual(full.slice(1, 2));
   await testContext.close();
 });
+
+const canonicalMemoryTimestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+test("Every Memory read serializes one row's timestamps identically at microsecond precision", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const created = await memories.remember(testContext.alice, {
+    content: "Timestamp precision marker note.",
+  });
+  expect(created.createdAt).toMatch(canonicalMemoryTimestamp);
+  expect(created.updatedAt).toMatch(canonicalMemoryTimestamp);
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE memories SET created_at = $2, updated_at = $3 WHERE id = $1", [
+      created.id,
+      "2026-01-02T03:04:05.123456Z",
+      "2026-01-02T03:04:05.654321Z",
+    ]),
+  );
+
+  const detail = await memories.retrieve(testContext.alice, created.id);
+  const [listed] = await memories.list(testContext.alice, { limit: 1 });
+  const [found] = await memories.search(testContext.alice, {
+    query: "precision marker",
+    limit: 1,
+  });
+
+  expect(detail).toMatchObject({
+    id: created.id,
+    createdAt: "2026-01-02T03:04:05.123456Z",
+    updatedAt: "2026-01-02T03:04:05.654321Z",
+  });
+  expect(listed).toEqual(detail);
+  expect(found?.memory).toEqual(detail);
+
+  const updated = await memories.update(testContext.alice, created.id, {
+    metadata: { reviewed: true },
+  });
+  expect(updated?.createdAt).toBe("2026-01-02T03:04:05.123456Z");
+  expect(updated?.updatedAt).toMatch(canonicalMemoryTimestamp);
+  await expect(memories.retrieve(testContext.alice, created.id)).resolves.toEqual(updated);
+  await expect(memories.list(testContext.alice, { limit: 1 })).resolves.toEqual([updated]);
+  await testContext.close();
+});
+
+test("A Memory's serialized updatedAt is an exact list cursor within one millisecond", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const later = await memories.remember(testContext.alice, { content: "Later cursor note." });
+  const earlier = await memories.remember(testContext.alice, { content: "Earlier cursor note." });
+  await stampUpdatedAt(testContext, [
+    [later.id, "2026-01-02T03:04:05.123900Z"],
+    [earlier.id, "2026-01-02T03:04:05.123100Z"],
+  ]);
+
+  const [first] = await memories.list(testContext.alice, { limit: 1 });
+  const detail = await memories.retrieve(testContext.alice, later.id);
+  if (!first || !detail) throw new Error("Cursor fixture Memory is missing");
+  const afterList = await memories.list(testContext.alice, {
+    limit: 1,
+    cursor: { id: first.id, updatedAt: first.updatedAt },
+  });
+  const afterDetail = await memories.list(testContext.alice, {
+    limit: 1,
+    cursor: { id: detail.id, updatedAt: detail.updatedAt },
+  });
+
+  expect(first.id).toBe(later.id);
+  expect(afterList.map((memory) => memory.id)).toEqual([earlier.id]);
+  // A millisecond serialization would place this cursor after both Memories.
+  expect(afterDetail).toEqual(afterList);
+  await testContext.close();
+});
+
+test("A metadata-only update notifies maintenance for the job it enqueues while embedding is pending", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const notifications: string[] = [];
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  const created = await memories.remember(testContext.alice, {
+    content: "The feline embedding is still pending.",
+  });
+  expect(notifications).toHaveLength(1);
+
+  // The creation job has not run, so the new version still lacks vectors.
+  await memories.update(testContext.alice, created.id, { metadata: { reviewed: true } });
+  expect(notifications).toHaveLength(2);
+  const [creationJob, updateJob] = notifications;
+  expect(updateJob).not.toBe(creationJob);
+
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider,
+  });
+  // The superseded version's job is cancelled; the notified job embeds the Memory.
+  await expect(maintenance.run(creationJob)).resolves.toMatchObject({ status: "idle" });
+  await expect(maintenance.run(updateJob)).resolves.toMatchObject({
+    status: "complete",
+    jobId: updateJob,
+  });
+  await expect(memories.search(testContext.alice, { query: "cat" })).resolves.toMatchObject([
+    { memory: { id: created.id } },
+  ]);
+
+  // Once embedded, a metadata-only update inserts no job and sends no wake-up.
+  await memories.update(testContext.alice, created.id, { metadata: { reviewed: false } });
+  expect(notifications).toHaveLength(2);
+  await testContext.close();
+});

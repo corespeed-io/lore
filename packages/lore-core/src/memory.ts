@@ -175,16 +175,7 @@ async function expandContextGroupResults(input: {
   );
   const expanded = await input.transaction.query<SearchRow>(
     `SELECT
-       memory.id,
-       memory.workspace_id,
-       memory.owner_user_id,
-       memory.created_by_agent_id,
-       memory.scope,
-       memory.content,
-       memory.metadata,
-       memory.version,
-       memory.created_at,
-       memory.updated_at,
+       ${memorySelectColumns("memory")},
        0::double precision AS score,
        evidence.content AS evidence,
        evidence.content AS rerank_evidence
@@ -285,6 +276,43 @@ async function expandContextGroupResults(input: {
 export function serializedTimestamp(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+/**
+ * The canonical Memory timestamp: RFC 3339 UTC text with the column's full
+ * microsecond precision, for example `2026-01-02T03:04:05.123456Z`. A driver
+ * `Date` keeps only milliseconds, so a Memory serialized from one would not
+ * match the same row's list cursor, and a millisecond cursor would skip rows
+ * that share a millisecond. The fixed-width text sorts chronologically and
+ * round-trips through `::timestamptz` exactly.
+ */
+function memoryTimestampSql(column: string): string {
+  return `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+/**
+ * SQL select list for one `memories` row with canonical timestamps. Every
+ * engine path that returns a Memory selects its row through it, so list,
+ * detail, write, and search responses serialize the same row identically.
+ * Host extensions should use it with {@link memoryFromRow}; a row selected
+ * with `*` keeps the driver's millisecond `Date` values instead.
+ */
+export function memorySelectColumns(alias?: string): string {
+  const column = (name: string) => (alias ? `${alias}.${name}` : name);
+  return [
+    ...[
+      "id",
+      "workspace_id",
+      "owner_user_id",
+      "created_by_agent_id",
+      "scope",
+      "content",
+      "metadata",
+      "version",
+    ].map(column),
+    `${memoryTimestampSql(column("created_at"))} AS created_at`,
+    `${memoryTimestampSql(column("updated_at"))} AS updated_at`,
+  ].join(", ");
 }
 
 async function embedRetrievalQueries(
@@ -599,16 +627,7 @@ async function searchOneQuery(input: {
        LIMIT $6
      )
      SELECT
-       memory.id,
-       memory.workspace_id,
-       memory.owner_user_id,
-       memory.created_by_agent_id,
-       memory.scope,
-       memory.content,
-       memory.metadata,
-       memory.version,
-       memory.created_at,
-       memory.updated_at,
+       ${memorySelectColumns("memory")},
        ranked_memories.score,
        evidence.content AS evidence,
        rerank_evidence.content AS rerank_evidence
@@ -780,7 +799,10 @@ async function enqueueEmbeddingJob(
   return inserted.rows.length > 0 ? jobId : null;
 }
 
-/** Map a raw `memories` row to the public {@link Memory} shape. */
+/**
+ * Map a raw `memories` row to the public {@link Memory} shape. Select the row
+ * with {@link memorySelectColumns} so its timestamps use the canonical form.
+ */
 export function memoryFromRow(row: MemoryRow): Memory {
   return {
     id: row.id,
@@ -836,7 +858,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       `INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-       RETURNING *`,
+       RETURNING ${memorySelectColumns()}`,
       [
         id,
         storageScope.partitionId,
@@ -889,7 +911,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
        WHERE id = $1
          AND workspace_id = $2
          AND version = $6
-       RETURNING *`,
+       RETURNING ${memorySelectColumns()}`,
       [
         id,
         storageScope.partitionId,
@@ -982,7 +1004,7 @@ export function createMemoryModule(
     async retrieve(id: string): Promise<Memory | null> {
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryRow>(
-          "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
+          `SELECT ${memorySelectColumns()} FROM memories WHERE id = $1 AND workspace_id = $2`,
           [id, storageScope.partitionId],
         );
         return result.rows[0] ? memoryFromRow(result.rows[0]) : null;
@@ -1036,27 +1058,24 @@ export function createMemoryModule(
       const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryRow>(
-          `SELECT id, workspace_id, owner_user_id, created_by_agent_id, scope,
-                  content, metadata, version, created_at,
-                  to_char(
-                    updated_at AT TIME ZONE 'UTC',
-                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-                  ) AS updated_at
-           FROM memories
-           WHERE workspace_id = $1
-             AND ($4::memory_scope IS NULL OR scope = $4::memory_scope)
-             AND ($5::timestamptz IS NULL OR updated_at >= $5::timestamptz)
-             AND ($6::timestamptz IS NULL OR updated_at < $6::timestamptz)
-             AND ($7::jsonb IS NULL OR metadata @> $7::jsonb)
+          // ORDER BY is qualified: a bare updated_at would name the text output
+          // column, sorting strings instead of reading memories_workspace_updated_idx.
+          `SELECT ${memorySelectColumns("memory")}
+           FROM memories memory
+           WHERE memory.workspace_id = $1
+             AND ($4::memory_scope IS NULL OR memory.scope = $4::memory_scope)
+             AND ($5::timestamptz IS NULL OR memory.updated_at >= $5::timestamptz)
+             AND ($6::timestamptz IS NULL OR memory.updated_at < $6::timestamptz)
+             AND ($7::jsonb IS NULL OR memory.metadata @> $7::jsonb)
              AND (
                $8::timestamptz IS NULL
-               OR updated_at < $8::timestamptz
+               OR memory.updated_at < $8::timestamptz
                OR (
-                 updated_at = $8::timestamptz
-                 AND id > $9::uuid
+                 memory.updated_at = $8::timestamptz
+                 AND memory.id > $9::uuid
                )
              )
-           ORDER BY updated_at DESC, id
+           ORDER BY memory.updated_at DESC, memory.id
            LIMIT $2
            OFFSET $3`,
           [

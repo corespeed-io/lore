@@ -9,6 +9,7 @@ import type {
 import {
   isPostgresAccessDenied,
   MemoryVersionConflictError,
+  memorySelectColumns,
   prepareMemoryContent,
   serializedTimestamp,
 } from "@corespeed/lore-core";
@@ -693,7 +694,7 @@ export function createMemoryProposalsModule(
             }
             const accepted = current.accepted_memory_id
               ? await transaction.query<MemoryRow>(
-                  "SELECT * FROM memories WHERE id = $1 AND workspace_id = $2",
+                  `SELECT ${memorySelectColumns()} FROM memories WHERE id = $1 AND workspace_id = $2`,
                   [current.accepted_memory_id, actor.workspaceId],
                 )
               : null;
