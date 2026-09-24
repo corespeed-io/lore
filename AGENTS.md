@@ -1174,6 +1174,10 @@ those rules with mocks that merely repeat their implementation.
   replace test execution. CI's stable `check` gate requires every validation
   job to succeed; cache hits must not skip their checks.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
+- A `vi.fn()` fetch stub accepts any receiver, but browsers reject `window.fetch` called
+  with one ("Illegal invocation"), and Bun's fetch accepts it too, so neither the stub nor
+  the CLI/MCP can catch a transport that calls `this.fetch(...)`. The SDK therefore calls
+  its fetch detached; `tests/ui/sdk.test.ts` pins that with a receiver-checking stub.
 - `tests/modules/code/code-index.test.ts` builds real Git fixtures with `git add`, so a
   user-level global gitignore (`~/.config/git/ignore` or `core.excludesfile`)
   that excludes fixture paths like `dist/` silently drops files from the
@@ -1255,6 +1259,25 @@ those rules with mocks that merely repeat their implementation.
   `build`, and the aggregate `check` gate that requires the other five. Run
   `design:check`, `typecheck`, `lint`, `test`, `build`, `packages:smoke`, and the
   deployment dry runs locally first rather than discovering failures in CI.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
 
 <!-- BEGIN:nextjs-agent-rules -->
 
