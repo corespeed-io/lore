@@ -376,6 +376,12 @@ CREATE INDEX request_idempotency_records_proposal_target_idx ON public.request_i
 CREATE INDEX request_idempotency_records_proposal_accepted_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{proposal,acceptedMemoryId}'::text[]))) WHERE ((response_body #>> '{proposal,acceptedMemoryId}'::text[]) IS NOT NULL);
 CREATE INDEX request_idempotency_records_episode_id_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{episode,id}'::text[]))) WHERE ((response_body #>> '{episode,id}'::text[]) IS NOT NULL);
 
+-- An import receipt replays only while its imported Memories still exist, which the
+-- import checks by import_id on every re-import of the same archive. Only the
+-- (workspace_id, memory_id) key existed, so that check (and the cascade when a
+-- receipt is deleted) scanned every provenance row in the Workspace.
+CREATE INDEX memory_import_provenance_import_idx ON public.memory_import_provenance USING btree (workspace_id, import_id);
+
 -- Maintenance writes generation-scoped vectors into memory_chunk_embeddings and
 -- never changes canonical chunk rows. The baseline still granted it UPDATE on
 -- memory_chunks (including canonical content) behind a lease-scoped policy that no
