@@ -1,8 +1,9 @@
 -- migrate:up
 -- Schema revision 4: Code Index job lifecycle, Agent provenance on Code
--- Evidence, per-revision Code Index activation, an
--- operator path for dead embedding jobs, and a once-per-statement Workspace read
--- check in the Memory read policies. Every change is forward-only.
+-- Evidence, per-revision Code Index activation, a one-time cleanup of Code Index
+-- jobs and revisions that could never finish, an operator path for dead
+-- embedding jobs, and a once-per-statement Workspace read check in the Memory
+-- read policies. Every change is forward-only.
 SET LOCAL lock_timeout = '5s';
 
 -- Deleting an Agent runs memory_code_evidence_created_by_agent_id_fkey's

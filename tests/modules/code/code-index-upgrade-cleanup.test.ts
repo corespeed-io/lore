@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -13,12 +13,13 @@ import type { ConfiguredCodeRepositories } from "@/modules/code/indexing/queue";
 import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { migrationFiles } from "../../../scripts/database/lib/migration-preflight.ts";
+import { migrationQueries } from "../../../scripts/database/lib/migration-statements.ts";
 
 // Migration 0004 cleans up Code Index state written before it. This test applies
 // 0001-0003, seeds that state, then applies every later migration, as an upgrade does.
 
 const execFileAsync = promisify(execFile);
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
 const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
@@ -37,17 +38,11 @@ const generation = (index: number) =>
 const job = (index: number) => `60000000-0000-4000-8000-${index.toString().padStart(12, "0")}`;
 const oid = (character: string) => character.repeat(40);
 
-async function migrationFiles(): Promise<Array<{ number: number; name: string }>> {
-  return (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort()
-    .map((name) => ({ number: Number.parseInt(name, 10), name }));
-}
-
+/** Applies the selected migrations as the wrapper does, one statement at a time where needed. */
 async function applyMigrations(postgres: PGlite, include: (number: number) => boolean) {
   for (const migration of await migrationFiles()) {
-    if (!include(migration.number)) continue;
-    await postgres.exec(await readFile(new URL(migration.name, migrationsUrl), "utf8"));
+    if (!include(Number.parseInt(migration.id, 10))) continue;
+    for (const query of migrationQueries(migration.sql, migration.id)) await postgres.exec(query);
   }
 }
 
