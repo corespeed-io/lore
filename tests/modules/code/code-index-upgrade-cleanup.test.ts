@@ -121,11 +121,18 @@ function seedSql(bomCommitOid: string): string {
     index: number,
     commitOid: string,
     indexerRevision: string,
-    status: "dead" | "pending" | "processing",
+    status: "dead" | "pending" | "processing" | "stale-processing",
   ) =>
     `('${job(index)}', '${WORKSPACE_ID}', '${REPOSITORY_ID}', '/srv/operator/repository',
-      '${commitOid}', '${indexerRevision}', '${USER_ID}', '${status}', 2,
-      ${status === "processing" ? "gen_random_uuid(), now()" : "NULL, NULL"},
+      '${commitOid}', '${indexerRevision}', '${USER_ID}',
+      '${status === "stale-processing" ? "processing" : status}', 2,
+      ${
+        status === "processing"
+          ? "gen_random_uuid(), now()"
+          : status === "stale-processing"
+            ? "gen_random_uuid(), now() - interval '2 hours'"
+            : "NULL, NULL"
+      },
       ${status === "dead" ? "now()" : "NULL"},
       ${status === "dead" ? "'earlier failure'" : "NULL"})`;
   return `
@@ -211,7 +218,8 @@ function seedSql(bomCommitOid: string): string {
       ${jobRow(2, oid("b"), V6_REVISION, "processing")},
       ${jobRow(3, oid("c"), V7_REVISION, "pending")},
       ${jobRow(4, oid("d"), V6_REVISION, "dead")},
-      ${jobRow(5, oid("f"), V7_REVISION, "processing")};
+      ${jobRow(5, oid("f"), V7_REVISION, "processing")},
+      ${jobRow(6, oid("e"), V6_REVISION, "stale-processing")};
   `;
 }
 
@@ -224,7 +232,8 @@ test("upgrading to 0004 cancels superseded jobs and removes never-activated BOM-
   await postgres.exec(seedSql(commitOid));
   await applyMigrations(postgres, (number) => number > 3);
 
-  // Unfinished jobs of another indexer revision are cancelled; everything else is untouched.
+  // Unfinished jobs of another indexer revision are cancelled, except one whose lease an
+  // older worker may still hold; everything else is untouched.
   const jobs = await postgres.query<{
     id: string;
     status: string;
@@ -245,17 +254,18 @@ test("upgrading to 0004 cancels superseded jobs and removes never-activated BOM-
       completed_at: expect.any(Date),
       last_error: "Superseded by a newer Code Index revision",
     },
+    expect.objectContaining({ id: job(2), status: "processing", lease_token: expect.any(String) }),
+    expect.objectContaining({ id: job(3), status: "pending", last_error: null }),
+    expect.objectContaining({ id: job(4), status: "dead", last_error: "earlier failure" }),
+    expect.objectContaining({ id: job(5), status: "processing", lease_token: expect.any(String) }),
     {
-      id: job(2),
+      id: job(6),
       status: "cancelled",
       lease_token: null,
       leased_at: null,
       completed_at: expect.any(Date),
       last_error: "Superseded by a newer Code Index revision",
     },
-    expect.objectContaining({ id: job(3), status: "pending", last_error: null }),
-    expect.objectContaining({ id: job(4), status: "dead", last_error: "earlier failure" }),
-    expect.objectContaining({ id: job(5), status: "processing", lease_token: expect.any(String) }),
   ]);
 
   // Only revision 1 qualified. Revision 2 is cited by Memory Code Evidence, 3 has an active

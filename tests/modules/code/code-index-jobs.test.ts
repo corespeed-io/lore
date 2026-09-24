@@ -13,6 +13,7 @@ import {
 import { gitFailure, resolveGitCommit } from "@/modules/code/indexing/git";
 import type { CodeIndexMaintenanceLog } from "@/modules/code/indexing/maintenance";
 import {
+  cancelSupersededCodeIndexJobs,
   classifyCodeIndexFailure,
   createCodeIndexMaintenanceModule,
 } from "@/modules/code/indexing/maintenance";
@@ -519,6 +520,46 @@ test("only a write-authorized Actor of the repository's Workspace can enqueue or
         context.carol.workspaceId,
         context.carol.userId,
       ]);
+    }),
+  ).rejects.toMatchObject({ code: "42501" });
+});
+
+test("the sweep cancels jobs an older app instance enqueued for a superseded indexer", async () => {
+  const context = await createMemoryTestContext();
+  const { repositoryPath, commitOid } = await committedRepository({
+    "src/superseded.ts": "export const superseded = true;\n",
+  });
+  const queue = createCodeIndexQueueModule(context.database, registry(repositoryPath));
+  const current = await queue.enqueue(context.alice, { repositoryKey: REPOSITORY_KEY, commitOid });
+  // What an app instance still running the previous CODE_INDEX_REVISION writes during
+  // a rolling deploy: a pending job no worker of this revision will ever claim.
+  const older = await context.adminDatabase.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string }>(
+      `INSERT INTO code_index_jobs (
+         id, workspace_id, repository_id, repository_path, commit_oid, indexer_revision,
+         requested_by_user_id
+       )
+       SELECT gen_random_uuid(), workspace_id, repository_id, repository_path, commit_oid,
+              'previous-indexer-revision', requested_by_user_id
+       FROM code_index_jobs WHERE id = $1
+       RETURNING id`,
+      [current.id],
+    );
+    return result.rows[0]?.id;
+  });
+  if (!older) throw new Error("Expected the superseded job to be inserted");
+
+  await expect(cancelSupersededCodeIndexJobs(context.maintenanceDatabase)).resolves.toBe(1);
+  await expect(jobRow(context, older)).resolves.toMatchObject({
+    status: "cancelled",
+    last_error: "Superseded by a newer Code Index revision",
+  });
+  await expect(jobRow(context, current.id)).resolves.toMatchObject({ status: "pending" });
+  // The request role cannot run it.
+  await expect(
+    context.database.transaction(async (transaction) => {
+      await installActorContext(transaction, context.alice);
+      return transaction.query("SELECT lore.cancel_superseded_code_index_jobs('x')");
     }),
   ).rejects.toMatchObject({ code: "42501" });
 });

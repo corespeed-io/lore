@@ -4,7 +4,10 @@ import {
   embeddingMaintenanceLeaseSeconds,
   pruneRetiringEmbeddingGenerations,
 } from "@corespeed/lore-core";
-import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
+import {
+  cancelSupersededCodeIndexJobs,
+  createCodeIndexMaintenanceModule,
+} from "@/modules/code/indexing/maintenance";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createPostgresDatabase } from "@/server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
@@ -122,7 +125,10 @@ async function sweep(): Promise<void> {
     );
     const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
     const generations = maintenance ? await maintenance.generationReports() : [];
-    return { generations, prunedEmbeddingGenerations, purged, seeded };
+    const supersededCodeIndexJobs = codeIndexMaintenance
+      ? await cancelSupersededCodeIndexJobs(database)
+      : 0;
+    return { generations, prunedEmbeddingGenerations, purged, seeded, supersededCodeIndexJobs };
   });
   console.log(
     JSON.stringify({
@@ -132,6 +138,7 @@ async function sweep(): Promise<void> {
       purgedIdempotencyRecords: result.purged.idempotencyRecords,
       purgedMemoryEvents: result.purged.memoryEvents,
       prunedEmbeddingGenerations: result.prunedEmbeddingGenerations,
+      supersededCodeIndexJobs: result.supersededCodeIndexJobs,
       embeddingStatus: result.generations.length > 0 ? "configured" : "disabled",
       embeddingGenerations: result.generations,
     }),

@@ -136,6 +136,22 @@ function codeIndexRetryDelay(attempt: number): number {
   return Math.min(3_600, 30 * 2 ** Math.max(0, attempt - 1));
 }
 
+/**
+ * Cancels unfinished jobs of any indexer revision other than this code's, which no
+ * worker of this revision can claim: jobs an older app instance enqueued during a
+ * rolling deploy, and leases an older worker left past the one-hour maximum.
+ * Returns how many jobs were cancelled.
+ */
+export async function cancelSupersededCodeIndexJobs(database: PostgresDatabase): Promise<number> {
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{ cancelled: number | string }>(
+      "SELECT lore.cancel_superseded_code_index_jobs($1) AS cancelled",
+      [CODE_INDEX_REVISION],
+    );
+    return Number(result.rows[0]?.cancelled ?? 0);
+  });
+}
+
 export function createCodeIndexMaintenanceModule(
   database: PostgresDatabase,
   options: CodeIndexMaintenanceOptions,

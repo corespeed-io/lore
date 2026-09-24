@@ -6,6 +6,89 @@
 -- read policies. Every change is forward-only.
 SET LOCAL lock_timeout = '5s';
 
+-- One-time cleanup of Code Index state that the code shipping with this revision
+-- can never finish.
+-- It runs first, before the Memory read policies below take ACCESS EXCLUSIVE on
+-- memories, memory_chunks, memory_chunk_embeddings, and memory_links: its scan of
+-- code_revision_files must not extend how long Memory traffic is blocked.
+--
+-- A worker claims only jobs of its own CODE_INDEX_REVISION, so an unfinished job
+-- of any other indexer revision would stay pending, or leased, forever. Cancel it
+-- with a content-free reason; enqueueing the commit again creates a job for the
+-- current revision. A processing job is cancelled only once its lease is past the
+-- one-hour maximum any claim can take, so a worker of the older revision that is
+-- still running through a rolling deploy finishes its job. The maintenance sweep
+-- calls this with its own CODE_INDEX_REVISION, so jobs that app instances of the
+-- older revision enqueue during the deploy are cancelled as well.
+CREATE FUNCTION lore.cancel_superseded_code_index_jobs(current_indexer_revision text) RETURNS integer
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+  WITH cancelled AS (
+    UPDATE code_index_jobs job
+    SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
+        completed_at = now(), updated_at = now(),
+        last_error = 'Superseded by a newer Code Index revision'
+    WHERE job.indexer_revision <> current_indexer_revision
+      AND (
+        job.status = 'pending'
+        OR (job.status = 'processing' AND job.leased_at <= now() - interval '1 hour')
+      )
+    RETURNING 1
+  )
+  SELECT count(*)::integer FROM cancelled
+$$;
+-- The literal must equal CODE_INDEX_REVISION in
+-- src/modules/code/indexing/protocol.ts at the time 0004 ships. It stays fixed
+-- afterwards, because an applied migration is frozen.
+SELECT lore.cancel_superseded_code_index_jobs(
+  'ast-grep-0.45.3-web-structural-graph-v7-exact-root-partition'
+);
+
+-- Before indexer revision v7, a blob holding only a UTF-8 byte-order mark (the
+-- three bytes EF BB BF) decoded to no text but was recorded as an indexed
+-- manifest entry. No parser can produce an Artifact for it, so the revision's
+-- generation could never become ready. Current code excludes such a blob as
+-- `empty`, so its manifest and source digests now disagree with the immutable
+-- revision row, and every later index of that commit fails as an OID/content
+-- conflict. Delete exactly the revisions that hold such an entry, have no ready,
+-- active, or retiring generation, and are cited by no Memory or Proposal Code
+-- Evidence; indexing the commit again then records it afresh.
+-- The delete cannot fail or orphan a row: code_revision_files and
+-- code_index_generations cascade from the revision, code_artifacts from the
+-- generation, and code_dependency_edges from both of their Artifacts. The
+-- Artifact delete trigger then prunes payloads and Symbol/Dependency Sets that no
+-- remaining Artifact references (their payload rows cascade from the sets). No
+-- other table references these rows by foreign key, no trigger on them rejects a
+-- delete, and Code Evidence anchors carry no foreign key to Code Index rows.
+DELETE FROM public.code_revisions revision
+WHERE EXISTS (
+    SELECT 1
+    FROM public.code_revision_files file
+    WHERE file.revision_id = revision.id
+      AND file.index_status = 'indexed'
+      AND file.byte_size = 3
+      -- SHA-256 of the three bytes EF BB BF.
+      AND file.content_sha256 = 'f1945cd6c19e56b3c1c78943ef5ec18116907a4ca1efc40a57d48ab1db7adfc5'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.code_index_generations generation
+    WHERE generation.revision_id = revision.id
+      AND generation.status IN ('ready', 'active', 'retiring')
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.memory_code_evidence evidence
+    WHERE evidence.cited_revision_id = revision.id
+       OR evidence.validated_revision_id = revision.id
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM public.memory_proposal_code_evidence evidence
+    WHERE evidence.cited_revision_id = revision.id
+  );
+
 -- Deleting an Agent runs memory_code_evidence_created_by_agent_id_fkey's
 -- ON DELETE SET NULL, which the anchor trigger used to reject, so any Agent that
 -- had ever cited Code Evidence could not be deleted. Allow exactly that one
@@ -88,6 +171,22 @@ CREATE FUNCTION lore.code_index_requester_can_run(target_workspace_id uuid, requ
   END
 $$;
 REVOKE ALL ON FUNCTION lore.code_index_requester_can_run(uuid, uuid, uuid) FROM PUBLIC;
+-- claim_code_index_job is replaced below with CREATE OR REPLACE, so it keeps the
+-- owner that created it in 0001, which may not be the role applying 0004. Its body
+-- runs as that owner, so grant the helper to it explicitly.
+DO $$
+DECLARE
+  claim_owner name;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(function.proowner) INTO claim_owner
+  FROM pg_catalog.pg_proc function
+  WHERE function.oid = 'lore.claim_code_index_job(uuid,text,uuid,integer)'::regprocedure;
+  EXECUTE format(
+    'GRANT EXECUTE ON FUNCTION lore.code_index_requester_can_run(uuid, uuid, uuid) TO %I',
+    claim_owner
+  );
+END
+$$;
 
 -- A worker that dies during a job's final attempt leaves an expired lease that no
 -- claim can take, because attempt_count has already reached max_attempts. Retire
@@ -497,72 +596,13 @@ ALTER POLICY memory_links_select ON public.memory_links USING (
   ))
 );
 
--- One-time cleanup of Code Index state that the code shipping with this revision
--- can never finish.
---
--- A worker claims only jobs of its own CODE_INDEX_REVISION, so an unfinished job
--- of any other indexer revision would stay pending, or leased, forever. Cancel it
--- with a content-free reason; enqueueing the commit again creates a job for the
--- current revision. The literal must equal CODE_INDEX_REVISION in
--- src/modules/code/indexing/protocol.ts at the time 0004 ships. It stays fixed
--- afterwards, because an applied migration is frozen.
-UPDATE public.code_index_jobs job
-SET status = 'cancelled', lease_token = NULL, leased_at = NULL,
-    completed_at = now(), updated_at = now(),
-    last_error = 'Superseded by a newer Code Index revision'
-WHERE job.status IN ('pending', 'processing')
-  AND job.indexer_revision <> 'ast-grep-0.45.3-web-structural-graph-v7-exact-root-partition';
-
--- Before indexer revision v7, a blob holding only a UTF-8 byte-order mark (the
--- three bytes EF BB BF) decoded to no text but was recorded as an indexed
--- manifest entry. No parser can produce an Artifact for it, so the revision's
--- generation could never become ready. Current code excludes such a blob as
--- `empty`, so its manifest and source digests now disagree with the immutable
--- revision row, and every later index of that commit fails as an OID/content
--- conflict. Delete exactly the revisions that hold such an entry, have no ready,
--- active, or retiring generation, and are cited by no Memory or Proposal Code
--- Evidence; indexing the commit again then records it afresh.
--- The delete cannot fail or orphan a row: code_revision_files and
--- code_index_generations cascade from the revision, code_artifacts from the
--- generation, and code_dependency_edges from both of their Artifacts. The
--- Artifact delete trigger then prunes payloads and Symbol/Dependency Sets that no
--- remaining Artifact references (their payload rows cascade from the sets). No
--- other table references these rows by foreign key, no trigger on them rejects a
--- delete, and Code Evidence anchors carry no foreign key to Code Index rows.
-DELETE FROM public.code_revisions revision
-WHERE EXISTS (
-    SELECT 1
-    FROM public.code_revision_files file
-    WHERE file.revision_id = revision.id
-      AND file.index_status = 'indexed'
-      AND file.byte_size = 3
-      -- SHA-256 of the three bytes EF BB BF.
-      AND file.content_sha256 = 'f1945cd6c19e56b3c1c78943ef5ec18116907a4ca1efc40a57d48ab1db7adfc5'
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM public.code_index_generations generation
-    WHERE generation.revision_id = revision.id
-      AND generation.status IN ('ready', 'active', 'retiring')
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM public.memory_code_evidence evidence
-    WHERE evidence.cited_revision_id = revision.id
-       OR evidence.validated_revision_id = revision.id
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM public.memory_proposal_code_evidence evidence
-    WHERE evidence.cited_revision_id = revision.id
-  );
-
 REVOKE ALL ON FUNCTION
   lore.can_read_workspace(uuid),
   lore.fail_code_index_job(uuid, uuid, text),
   lore.enqueue_code_index_job(uuid, text, text, text, text),
   lore.cancel_agent_code_index_jobs(),
-  lore.requeue_dead_memory_embedding_jobs(uuid, boolean)
+  lore.requeue_dead_memory_embedding_jobs(uuid, boolean),
+  lore.cancel_superseded_code_index_jobs(text)
 FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
   lore.can_read_workspace(uuid),
@@ -570,7 +610,8 @@ GRANT EXECUTE ON FUNCTION
 TO lore_app;
 GRANT EXECUTE ON FUNCTION
   lore.fail_code_index_job(uuid, uuid, text),
-  lore.requeue_dead_memory_embedding_jobs(uuid, boolean)
+  lore.requeue_dead_memory_embedding_jobs(uuid, boolean),
+  lore.cancel_superseded_code_index_jobs(text)
 TO lore_maintenance;
 
 UPDATE public.lore_system_state
