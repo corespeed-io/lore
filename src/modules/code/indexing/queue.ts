@@ -4,8 +4,9 @@ import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
-import type { CodeIndexJob, CodeIndexJobStatus } from "./types";
-import { validateCommitOid, validatePlainText } from "./validation";
+import { type CodeIndexJobRow, toCodeIndexJob } from "./read";
+import type { CodeIndexJob } from "./types";
+import { isUuid, validateCommitOid, validatePlainText, validateRepositoryKey } from "./validation";
 
 export interface ConfiguredCodeRepository {
   displayName: string;
@@ -36,48 +37,6 @@ export interface EnqueueConfiguredCodeRevisionInput {
 
 interface RepositoryRow {
   id: string;
-}
-
-interface CodeIndexJobRow {
-  id: string;
-  repository_id: string;
-  repository_key: string;
-  commit_oid: string;
-  source_ref: string | null;
-  indexer_revision: string;
-  status: CodeIndexJobStatus;
-  attempt_count: number;
-  max_attempts: number;
-  available_at: Date | string;
-  completed_at: Date | string | null;
-  last_error: string | null;
-  created_at: Date | string;
-  updated_at: Date | string;
-}
-
-const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-function timestamp(value: Date | string): string {
-  return new Date(value).toISOString();
-}
-
-function toCodeIndexJob(row: CodeIndexJobRow): CodeIndexJob {
-  return {
-    id: row.id,
-    repositoryId: row.repository_id,
-    repositoryKey: row.repository_key,
-    commitOid: row.commit_oid,
-    sourceRef: row.source_ref,
-    indexerRevision: row.indexer_revision,
-    status: row.status,
-    attemptCount: Number(row.attempt_count),
-    maximumAttempts: Number(row.max_attempts),
-    availableAt: timestamp(row.available_at),
-    completedAt: row.completed_at ? timestamp(row.completed_at) : null,
-    lastError: row.last_error,
-    createdAt: timestamp(row.created_at),
-    updatedAt: timestamp(row.updated_at),
-  };
 }
 
 /**
@@ -112,7 +71,7 @@ export function createCodeIndexQueueModule(
       actor: ActorContext,
       input: EnqueueConfiguredCodeRevisionInput,
     ): Promise<CodeIndexJob> {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const configured = configuredCodeRepositoryForWorkspace(
         repositories,
         repositoryKey,
@@ -223,7 +182,7 @@ function workspaceIdList(value: unknown, key: string): readonly string[] {
   const workspaceIds = new Set<string>();
   for (const candidate of value) {
     const normalized = typeof candidate === "string" ? candidate.trim().toLowerCase() : "";
-    if (!WORKSPACE_ID_PATTERN.test(normalized)) {
+    if (!isUuid(normalized)) {
       throw new CodeIndexValidationError(
         `Configured Code Repository ${key} workspaceIds must contain only Workspace UUIDs`,
       );
@@ -264,7 +223,7 @@ export function configuredCodeRepositoriesFromEnvironment(
     if (typeof item.displayName !== "string" || typeof item.repositoryPath !== "string") {
       throw new CodeIndexValidationError(`Configured Code Repository ${key} is invalid`);
     }
-    const repositoryKey = validatePlainText(key, "repositoryKey", 512);
+    const repositoryKey = validateRepositoryKey(key);
     const repository: ConfiguredCodeRepository = {
       displayName: validatePlainText(item.displayName, "displayName", 200),
       repositoryPath: validatePlainText(item.repositoryPath, "repositoryPath", 4_096),

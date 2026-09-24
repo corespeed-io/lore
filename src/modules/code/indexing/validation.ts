@@ -32,17 +32,18 @@ export function validateCommitOid(
   return normalized;
 }
 
+/** A lowercase RFC 9562 UUID, the same form request Workspace headers must carry. */
+export function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
 export function validateUuid(
   value: string,
   name: string,
   ErrorClass: ValidationErrorClass = CodeIndexValidationError,
 ): string {
   const normalized = value.trim().toLowerCase();
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
-  ) {
-    throw new ErrorClass(`${name} must be a UUID`);
-  }
+  if (!isUuid(normalized)) throw new ErrorClass(`${name} must be a UUID`);
   return normalized;
 }
 
@@ -58,6 +59,17 @@ export function validatePlainText(
     throw new ErrorClass(`${name} is invalid`);
   }
   return normalized;
+}
+
+/** The longest operator-configured Code Repository key any surface accepts. */
+export const REPOSITORY_KEY_MAXIMUM_LENGTH = 512;
+
+/** An operator-configured Code Repository key, bounded like every other surface. */
+export function validateRepositoryKey(
+  value: string,
+  ErrorClass: ValidationErrorClass = CodeIndexValidationError,
+): string {
+  return validatePlainText(value, "repositoryKey", REPOSITORY_KEY_MAXIMUM_LENGTH, ErrorClass);
 }
 
 /**

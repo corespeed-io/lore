@@ -20,8 +20,8 @@ import type {
 import {
   hasControlCharacters,
   validateCommitOid,
-  validatePlainText,
   validateQueryText,
+  validateRepositoryKey,
   validateUuid,
 } from "./validation";
 
@@ -56,7 +56,8 @@ export interface CodeArtifactLogicalDigest {
   fingerprintSha256: string;
 }
 
-interface CodeIndexJobRow {
+/** A `code_index_jobs` row as the job queue and the status/list reads select it. */
+export interface CodeIndexJobRow {
   id: string;
   repository_id: string;
   repository_key: string;
@@ -152,7 +153,7 @@ function timestamp(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
-function toCodeIndexJob(row: CodeIndexJobRow): CodeIndexJob {
+export function toCodeIndexJob(row: CodeIndexJobRow): CodeIndexJob {
   return {
     id: row.id,
     repositoryId: row.repository_id,
@@ -223,7 +224,7 @@ function toCodeArtifact(row: ArtifactRow): CodeArtifact {
 export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndexReadModule {
   return {
     async getArtifacts(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       const selectedArtifactIds = artifactIds(input.artifactIds);
       return database.transaction(async (transaction) => {
@@ -281,7 +282,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     },
 
     async getArtifactLogicalDigests(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       const selectedArtifactIds = artifactIds(input.artifactIds);
       return database.transaction(async (transaction) => {
@@ -390,7 +391,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     },
 
     async getGitRevisionManifest(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
@@ -425,7 +426,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     },
 
     async search(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       const query = validateQueryText(input.query, "query", 2_000);
       const literalPattern = exactLikePattern(query);

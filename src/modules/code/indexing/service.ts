@@ -33,6 +33,7 @@ import {
   validateAndSortFiles,
   validateCommitOid,
   validatePlainText,
+  validateRepositoryKey,
 } from "./validation";
 
 interface CodeIndexMaintenanceLeaseContext {
@@ -149,7 +150,7 @@ export function createCodeIndexModule(
     if (!maintenanceLease) {
       throw new Error("Resumable Code Index persistence requires a maintenance lease");
     }
-    const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+    const repositoryKey = validateRepositoryKey(input.repositoryKey);
     const commitOid = validateCommitOid(input.commitOid);
     const sourceRef = input.sourceRef ? validatePlainText(input.sourceRef, "sourceRef", 512) : null;
     const files = validateAndSortFiles(input.files);
@@ -339,7 +340,7 @@ export function createCodeIndexModule(
     getIndexJob: reader.getIndexJob,
 
     async indexRevision(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const displayName = validatePlainText(input.displayName, "displayName", 200);
       const commitOid = validateCommitOid(input.commitOid);
       const sourceRef = input.sourceRef
@@ -573,7 +574,7 @@ export function createCodeIndexModule(
     },
 
     async indexGitRevision(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       const canonicalPath = await resolveGitCommit(input.repositoryPath, commitOid);
       const treeOid = await resolveGitTreeOid(canonicalPath, commitOid);

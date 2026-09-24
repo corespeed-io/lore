@@ -5,6 +5,7 @@ import {
   validateCommitOid,
   validatePath,
   validatePlainText,
+  validateRepositoryKey,
 } from "@/modules/code/indexing/validation";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
@@ -143,7 +144,7 @@ export function createCodeDependencyGraphModule(
 ): CodeDependencyGraphModule {
   return {
     async query(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       if (input.direction !== "callers" && input.direction !== "callees") {
         throw new CodeIndexValidationError("direction must be callers or callees");

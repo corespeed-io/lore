@@ -9,8 +9,8 @@ import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
 import {
   validateCommitOid,
-  validatePlainText,
   validateQueryText,
+  validateRepositoryKey,
 } from "@/modules/code/indexing/validation";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
@@ -222,12 +222,7 @@ export function createContextRetrievalModule(
       const repositoryKey =
         input.repositoryKey === undefined
           ? undefined
-          : validatePlainText(
-              input.repositoryKey,
-              "repositoryKey",
-              512,
-              ContextRetrievalValidationError,
-            );
+          : validateRepositoryKey(input.repositoryKey, ContextRetrievalValidationError);
       const requestedCommitOid =
         input.commitOid === undefined
           ? undefined

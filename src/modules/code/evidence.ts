@@ -2,7 +2,7 @@ import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core
 import { isPostgresAccessDenied } from "@corespeed/lore-core";
 import {
   validateCommitOid,
-  validatePlainText,
+  validateRepositoryKey,
   validateUuid,
 } from "@/modules/code/indexing/validation";
 import type { ActorContext } from "@/server/auth/actor-context";
@@ -495,12 +495,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
   return {
     async assess(actor, input) {
       const evidenceId = validateUuid(input.evidenceId, "evidenceId", CodeEvidenceValidationError);
-      const repositoryKey = validatePlainText(
-        input.repositoryKey,
-        "repositoryKey",
-        512,
-        CodeEvidenceValidationError,
-      );
+      const repositoryKey = validateRepositoryKey(input.repositoryKey, CodeEvidenceValidationError);
       const commitOid = validateCommitOid(input.commitOid, CodeEvidenceValidationError);
       try {
         return await database.transaction(async (transaction) => {
@@ -548,12 +543,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
           `memoryIds may contain at most ${MAXIMUM_ASSESSED_CITATION_MEMORIES} UUIDs`,
         );
       }
-      const repositoryKey = validatePlainText(
-        input.repositoryKey,
-        "repositoryKey",
-        512,
-        CodeEvidenceValidationError,
-      );
+      const repositoryKey = validateRepositoryKey(input.repositoryKey, CodeEvidenceValidationError);
       const commitOid = validateCommitOid(input.commitOid, CodeEvidenceValidationError);
       if (
         !Number.isInteger(input.limit) ||
@@ -736,12 +726,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
 
     async revalidate(actor, input) {
       const evidenceId = validateUuid(input.evidenceId, "evidenceId", CodeEvidenceValidationError);
-      const repositoryKey = validatePlainText(
-        input.repositoryKey,
-        "repositoryKey",
-        512,
-        CodeEvidenceValidationError,
-      );
+      const repositoryKey = validateRepositoryKey(input.repositoryKey, CodeEvidenceValidationError);
       const commitOid = validateCommitOid(input.commitOid, CodeEvidenceValidationError);
       try {
         return await database.transaction(async (transaction) => {
