@@ -34,6 +34,49 @@ function exactLineChunks(content: string): string[] {
   return content.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
+function oneHotVector(index: number): number[] {
+  return Array.from({ length: 1024 }, (_, vectorIndex) => (vectorIndex === index ? 1 : 0));
+}
+
+/** Documents and queries about cats share one direction; nothing else overlaps it. */
+function felineEmbeddingProvider() {
+  return {
+    provider: "fixture",
+    model: "fixture-feline-v1",
+    dimensions: 1024 as const,
+    revision: "fixture-v1",
+    async embed(texts: string[]) {
+      return texts.map((text) => oneHotVector(/\bcat\b|feline/i.test(text) ? 0 : 1));
+    },
+  };
+}
+
+async function drainEmbeddings(
+  testContext: MemoryTestContext,
+  embeddingProvider: ReturnType<typeof felineEmbeddingProvider>,
+): Promise<void> {
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider,
+  });
+  while ((await maintenance.run()).status === "complete") {
+    // Drain every deterministic document job before dense retrieval.
+  }
+}
+
+async function stampUpdatedAt(
+  testContext: MemoryTestContext,
+  stamps: Array<[memoryId: string, updatedAt: string]>,
+): Promise<void> {
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    for (const [memoryId, updatedAt] of stamps) {
+      await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+        memoryId,
+        updatedAt,
+      ]);
+    }
+  });
+}
+
 test("Memory owner can remember and retrieve a private Memory", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -827,6 +870,9 @@ test("Scope and time filters constrain candidates before ranking", async () => {
     content: "Atlas deployment status has a private rollback credential.",
     scope: "private",
   });
+  const boundaryShared = await memories.remember(testContext.alice, {
+    content: "Atlas deployment status turned amber at the report boundary.",
+  });
   await testContext.adminDatabase.transaction(async (transaction) => {
     await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
       oldShared.id,
@@ -838,6 +884,11 @@ test("Scope and time filters constrain candidates before ranking", async () => {
     ]);
     await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
       currentPrivate.id,
+      "2026-01-02T00:00:00.000Z",
+    ]);
+    // Matches every other filter, so only the exclusive updatedBefore bound drops it.
+    await transaction.query("UPDATE memories SET updated_at = $2 WHERE id = $1", [
+      boundaryShared.id,
       "2026-01-02T00:00:00.000Z",
     ]);
   });
@@ -893,6 +944,133 @@ test("Metadata containment filters candidates before ranking without weakening R
   expect(searchResults.map((result) => result.memory.id)).toEqual([expected.id]);
   expect(listResults.map((memory) => memory.id)).toEqual([expected.id]);
   expect(searchResults.map((result) => result.memory.id)).not.toContain(forbidden.id);
+  await testContext.close();
+});
+
+// The dense tests below query "cat" against Memories that only say "feline": no
+// lexical channel matches, so every result proves the dense channel's filters.
+// Equal distances rank the newest Memory first, and limit 1 means a filter
+// applied after top-k would return nothing instead of the expected Memory.
+
+test("Dense candidates apply the scope filter before top-k", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const privateFeline = await memories.remember(testContext.alice, {
+    content: "Alice's private feline prefers the north window.",
+    scope: "private",
+  });
+  const sharedFeline = await memories.remember(testContext.alice, {
+    content: "The shared feline sleeps beside the radiator.",
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+  await stampUpdatedAt(testContext, [
+    [privateFeline.id, "2026-01-01T00:00:00.000Z"],
+    [sharedFeline.id, "2026-01-02T00:00:00.000Z"],
+  ]);
+
+  const lexicalOnly = await createMemoryModule(testContext.database).search(testContext.alice, {
+    query: "cat",
+  });
+  const privateResults = await memories.search(testContext.alice, {
+    query: "cat",
+    scope: "private",
+    limit: 1,
+  });
+  const sharedResults = await memories.search(testContext.alice, {
+    query: "cat",
+    scope: "shared",
+    limit: 1,
+  });
+
+  expect(lexicalOnly).toEqual([]);
+  expect(privateResults.map((result) => result.memory.id)).toEqual([privateFeline.id]);
+  expect(sharedResults.map((result) => result.memory.id)).toEqual([sharedFeline.id]);
+  await testContext.close();
+});
+
+test("Dense candidates apply time bounds before top-k with an exclusive updatedBefore", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const tooOld = await memories.remember(testContext.alice, {
+    content: "An archived feline census from the old report.",
+  });
+  const inside = await memories.remember(testContext.alice, {
+    content: "The feline census for the current report.",
+  });
+  const boundary = await memories.remember(testContext.alice, {
+    content: "A feline census stamped at the report boundary.",
+  });
+  const tooNew = await memories.remember(testContext.alice, {
+    content: "A feline census from after the report.",
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+  await stampUpdatedAt(testContext, [
+    [tooOld.id, "2025-01-01T00:00:00.000Z"],
+    [inside.id, "2026-01-01T00:00:00.000Z"],
+    [boundary.id, "2026-01-02T00:00:00.000Z"],
+    [tooNew.id, "2026-01-03T00:00:00.000Z"],
+  ]);
+
+  const lexicalOnly = await createMemoryModule(testContext.database).search(testContext.alice, {
+    query: "cat",
+  });
+  const results = await memories.search(testContext.alice, {
+    query: "cat",
+    updatedAfter: "2025-12-01T00:00:00.000Z",
+    updatedBefore: "2026-01-02T00:00:00.000Z",
+    limit: 1,
+  });
+  const fromBoundary = await memories.search(testContext.alice, {
+    query: "cat",
+    updatedAfter: "2026-01-02T00:00:00.000Z",
+    updatedBefore: "2026-01-03T00:00:00.000Z",
+    limit: 10,
+  });
+
+  expect(lexicalOnly).toEqual([]);
+  expect(results.map((result) => result.memory.id)).toEqual([inside.id]);
+  // updatedAfter is inclusive, so the boundary Memory opens the next window.
+  expect(fromBoundary.map((result) => result.memory.id)).toEqual([boundary.id]);
+  await testContext.close();
+});
+
+test("Dense candidates apply metadata containment before top-k without weakening RLS", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const expected = await memories.remember(testContext.alice, {
+    content: "The feline observation for question one.",
+    metadata: { benchmark: "dense-filter", questionIds: ["q1", "q2"] },
+  });
+  const otherQuestion = await memories.remember(testContext.alice, {
+    content: "The feline observation for another question.",
+    metadata: { benchmark: "dense-filter", questionIds: ["q3"] },
+  });
+  const forbidden = await memories.remember(testContext.bob, {
+    content: "Bob's private feline tripwire for question one.",
+    scope: "private",
+    metadata: { benchmark: "dense-filter", questionIds: ["q1"] },
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+  await stampUpdatedAt(testContext, [
+    [expected.id, "2026-01-01T00:00:00.000Z"],
+    [otherQuestion.id, "2026-01-02T00:00:00.000Z"],
+    [forbidden.id, "2026-01-03T00:00:00.000Z"],
+  ]);
+  const metadataFilter = { benchmark: "dense-filter", questionIds: ["q1"] };
+
+  const lexicalOnly = await createMemoryModule(testContext.database).search(testContext.alice, {
+    query: "cat",
+    metadataFilter,
+  });
+  const top = await memories.search(testContext.alice, { query: "cat", metadataFilter, limit: 1 });
+  const all = await memories.search(testContext.alice, { query: "cat", metadataFilter });
+
+  expect(lexicalOnly).toEqual([]);
+  expect(top.map((result) => result.memory.id)).toEqual([expected.id]);
+  expect(all.map((result) => result.memory.id)).toEqual([expected.id]);
   await testContext.close();
 });
 
