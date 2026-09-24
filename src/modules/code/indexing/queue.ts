@@ -5,6 +5,7 @@ import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
 import type { CodeIndexJob, CodeIndexJobStatus } from "./types";
+import { validateCommitOid, validatePlainText } from "./validation";
 
 export interface ConfiguredCodeRepository {
   displayName: string;
@@ -55,29 +56,6 @@ interface CodeIndexJobRow {
 }
 
 const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-function plainText(value: string, name: string, maximumLength: number): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized)) {
-    throw new CodeIndexValidationError(`${name} is invalid`);
-  }
-  return normalized;
-}
-
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || codePoint === 127;
-  });
-}
-
-function commitOid(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
-    throw new CodeIndexValidationError("commitOid must be a full 40- or 64-character Git OID");
-  }
-  return normalized;
-}
 
 function timestamp(value: Date | string): string {
   return new Date(value).toISOString();
@@ -134,17 +112,19 @@ export function createCodeIndexQueueModule(
       actor: ActorContext,
       input: EnqueueConfiguredCodeRevisionInput,
     ): Promise<CodeIndexJob> {
-      const repositoryKey = plainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
       const configured = configuredCodeRepositoryForWorkspace(
         repositories,
         repositoryKey,
         actor.workspaceId,
       );
       if (!configured) throw new CodeIndexValidationError(CODE_REPOSITORY_NOT_CONFIGURED);
-      const displayName = plainText(configured.displayName, "displayName", 200);
-      const repositoryPath = plainText(configured.repositoryPath, "repositoryPath", 4_096);
-      const normalizedCommitOid = commitOid(input.commitOid);
-      const sourceRef = input.sourceRef ? plainText(input.sourceRef, "sourceRef", 512) : null;
+      const displayName = validatePlainText(configured.displayName, "displayName", 200);
+      const repositoryPath = validatePlainText(configured.repositoryPath, "repositoryPath", 4_096);
+      const normalizedCommitOid = validateCommitOid(input.commitOid);
+      const sourceRef = input.sourceRef
+        ? validatePlainText(input.sourceRef, "sourceRef", 512)
+        : null;
       try {
         return await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
@@ -284,10 +264,10 @@ export function configuredCodeRepositoriesFromEnvironment(
     if (typeof item.displayName !== "string" || typeof item.repositoryPath !== "string") {
       throw new CodeIndexValidationError(`Configured Code Repository ${key} is invalid`);
     }
-    const repositoryKey = plainText(key, "repositoryKey", 512);
+    const repositoryKey = validatePlainText(key, "repositoryKey", 512);
     const repository: ConfiguredCodeRepository = {
-      displayName: plainText(item.displayName, "displayName", 200),
-      repositoryPath: plainText(item.repositoryPath, "repositoryPath", 4_096),
+      displayName: validatePlainText(item.displayName, "displayName", 200),
+      repositoryPath: validatePlainText(item.repositoryPath, "repositoryPath", 4_096),
     };
     if (item.workspaceIds !== undefined) {
       result[repositoryKey] = {
