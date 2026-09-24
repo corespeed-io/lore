@@ -736,7 +736,7 @@ async function enqueueEmbeddingJob(
   const generationId = generation.rows[0]?.id;
   if (!generationId) throw new Error("Embedding generation could not be resolved");
   const jobId = crypto.randomUUID();
-  await transaction.query(
+  const inserted = await transaction.query<{ inserted: boolean }>(
     `INSERT INTO memory_embedding_jobs (
        id, workspace_id, memory_id, owner_user_id, memory_scope,
        memory_version, embedding_provider, embedding_model, embedding_revision,
@@ -756,7 +756,7 @@ async function enqueueEmbeddingJob(
                 AND embedded.chunk_id = chunk.id
             )
         )
-    `,
+     RETURNING true AS inserted`,
     [
       jobId,
       memory.workspace_id,
@@ -771,9 +771,13 @@ async function enqueueEmbeddingJob(
       generationId,
     ],
   );
-  // The request role deliberately cannot SELECT this private table, so callers
-  // use the allocated id only when the write guarantees that a job was inserted.
-  return jobId;
+  // The request role deliberately holds INSERT but not SELECT on this private
+  // table. A RETURNING list that names no column needs no SELECT privilege and
+  // applies no SELECT policy, so it reports exactly the row this INSERT wrote
+  // without reading the table. Return the id only for an inserted job: a stale
+  // check that inserted nothing yields null, and every non-null id is a real
+  // job worth a maintenance notification.
+  return inserted.rows.length > 0 ? jobId : null;
 }
 
 /** Map a raw `memories` row to the public {@link Memory} shape. */
@@ -1000,7 +1004,9 @@ export function createMemoryModule(
       const updated = await database.transaction((transaction) =>
         updateMemoryInTransaction(transaction, storageScope, id, input, options.expectedVersion),
       );
-      notifyMaintenance(updated?.chunksChanged ? updated.jobId : null);
+      // A job id is non-null only when this update inserted a job, including a
+      // metadata-only update whose chunks still lack current-generation vectors.
+      notifyMaintenance(updated?.jobId ?? null);
       return updated?.memory ?? null;
     },
 
