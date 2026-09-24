@@ -1230,6 +1230,53 @@ test("Context-group expansion preserves metadata filters before candidate select
   await testContext.close();
 });
 
+test("Context-group expansion reranks a compact anchor passage but returns wider evidence", async () => {
+  const testContext = await createMemoryTestContext();
+  const writer = createMemoryModule(testContext.database);
+  await writer.remember(testContext.alice, {
+    content: "The orchid launch review starts on Tuesday.",
+    metadata: { sourceSession: "session-a", sourceOrdinal: 1 },
+  });
+  const relatedContent = [
+    "0. Priya owns the cobalt contingency.",
+    "1. Lin reviews the fallback runbook.",
+    "2. Ada signs the vendor waiver.",
+    "3. Omar archives the drill notes.",
+  ].join("\n");
+  const related = await writer.remember(testContext.alice, {
+    content: relatedContent,
+    metadata: { sourceSession: "session-a", sourceOrdinal: 2 },
+  });
+  const chunks = exactLineChunks(relatedContent);
+  await replaceMemoryChunks(testContext, testContext.alice, related.id, chunks);
+  const rerankedText = new Map<string, string>();
+
+  const results = await createMemoryModule(testContext.database, {
+    contextGroupExpansion: {
+      groupMetadataKey: "sourceSession",
+      ordinalMetadataKey: "sourceOrdinal",
+      baseCandidateLimit: 1,
+      maximumGroups: 1,
+    },
+    evidenceNeighborChunks: 1,
+    evidenceTopChunks: 3,
+    rerankCandidateLimit: 2,
+    rerankingProvider: {
+      async rerank(input) {
+        for (const document of input.documents) rerankedText.set(document.id, document.text);
+        return input.documents.map((document) => ({ documentId: document.id, score: 0.5 }));
+      },
+    },
+  }).search(testContext.alice, { query: "orchid launch Tuesday", limit: 2 });
+
+  // The anchor chunk plus one configured neighbor, not the three-chunk answer evidence.
+  expect(rerankedText.get(related.id)).toBe(chunks.slice(0, 2).join(""));
+  expect(results.find((result) => result.memory.id === related.id)?.evidence).toBe(
+    chunks.slice(0, 3).join(""),
+  );
+  await testContext.close();
+});
+
 test("Query planning retrieves distinct evidence with vocabulary absent from the original query", async () => {
   const testContext = await createMemoryTestContext();
   const basic = createMemoryModule(testContext.database);

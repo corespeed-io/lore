@@ -28,7 +28,7 @@ export const RETRIEVAL_CJK_LEXICAL_POLICY = {
 } as const;
 
 export const RETRIEVAL_CONTEXT_GROUP_POLICY = {
-  revision: "explicit-natural-boundary-append-v2",
+  revision: "explicit-natural-boundary-append-v3",
   defaultBaseCandidateLimit: 20,
   defaultMaximumGroups: 3,
   maximumFetchedMemories: 800,

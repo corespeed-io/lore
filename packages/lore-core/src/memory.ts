@@ -132,6 +132,7 @@ async function expandContextGroupResults(input: {
   results: InternalMemorySearchResult[];
   targetLimit: number;
   expansion: NormalizedContextGroupExpansion;
+  evidenceNeighborChunks: number;
   evidenceTopChunks: number;
   scope: MemoryScope | null;
   updatedAfter: string | null;
@@ -173,17 +174,28 @@ async function expandContextGroupResults(input: {
     RETRIEVAL_CONTEXT_GROUP_POLICY.maximumFetchedMemories,
     Math.max(input.targetLimit * 4, input.targetLimit * groups.size),
   );
+  // An expanded row has no retrieval anchor, so its leading chunk anchors both
+  // passages. Answer evidence keeps the first evidenceTopChunks chunks; the
+  // reranker sees only that anchor plus up to evidenceNeighborChunks following
+  // chunks, matching an ordinary candidate's compact passage and never wider
+  // than the returned evidence.
   const expanded = await input.transaction.query<SearchRow>(
     `SELECT
        ${memorySelectColumns("memory")},
        0::double precision AS score,
        evidence.content AS evidence,
-       evidence.content AS rerank_evidence
+       evidence.rerank_content AS rerank_evidence
      FROM memories memory
      JOIN LATERAL (
-       SELECT string_agg(selected.content, '' ORDER BY selected.ordinal) AS content
+       SELECT
+         string_agg(selected.content, '' ORDER BY selected.ordinal) AS content,
+         string_agg(selected.content, '' ORDER BY selected.ordinal)
+           FILTER (WHERE selected.position <= $11::integer + 1) AS rerank_content
        FROM (
-         SELECT chunk.content, chunk.ordinal
+         SELECT
+           chunk.content,
+           chunk.ordinal,
+           row_number() OVER (ORDER BY chunk.ordinal) AS position
          FROM memory_chunks chunk
          WHERE chunk.workspace_id = $1
            AND chunk.memory_id = memory.id
@@ -214,6 +226,7 @@ async function expandContextGroupResults(input: {
       excludedMemoryIds,
       fetchLimit,
       input.evidenceTopChunks,
+      input.evidenceNeighborChunks,
     ],
   );
   const rankedExpanded = expanded.rows
@@ -1155,6 +1168,7 @@ export function createMemoryModule(
               results: fused,
               targetLimit: resultLimit,
               expansion: contextGroupExpansion,
+              evidenceNeighborChunks,
               evidenceTopChunks,
               scope,
               updatedAfter,
