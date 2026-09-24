@@ -433,13 +433,82 @@ END
 $$;
 COMMENT ON FUNCTION lore.requeue_dead_memory_embedding_jobs(uuid, boolean) IS 'Counts, or re-arms as pending with a fresh retry budget, the current dead embedding jobs of one building or active generation.';
 
+-- The Memory, chunk, embedding, and link SELECT policies inlined
+-- can_read_memory(row.workspace_id, ...), which calls the SECURITY DEFINER
+-- is_active_member (or agent_has_access) with a row column, so it ran once per
+-- row, and twice per chunk through the nested memories policy. Every policy already
+-- requires workspace_id = current_workspace_id(), so the membership or grant check
+-- depends only on the session and can run once as an InitPlan, the form the Code
+-- Index policies use. Semantics are unchanged: shared rows need an active
+-- Membership or an active read grant of an active Agent whose owner is an active
+-- member; private rows additionally need the owner User (a human or that User's
+-- permitted Agent); revoked Memberships and grants deny.
+CREATE FUNCTION lore.can_read_workspace(target_workspace_id uuid) RETURNS boolean
+    LANGUAGE sql STABLE PARALLEL SAFE
+    AS $$
+  SELECT target_workspace_id = lore.current_workspace_id()
+    AND CASE
+      WHEN lore.current_agent_id() IS NULL THEN lore.is_active_member(target_workspace_id)
+      ELSE lore.agent_has_access(target_workspace_id, 'read')
+    END
+$$;
+COMMENT ON FUNCTION lore.can_read_workspace(uuid) IS 'Workspace read authority of the current Actor; policies call it as (SELECT lore.can_read_workspace(lore.current_workspace_id())) so it is evaluated once per statement.';
+ALTER POLICY memories_select ON public.memories USING (
+  (workspace_id = lore.current_workspace_id())
+  AND (SELECT lore.can_read_workspace(lore.current_workspace_id()))
+  AND ((scope = 'shared'::public.memory_scope) OR (owner_user_id = lore.current_user_id()))
+);
+ALTER POLICY memory_chunks_select ON public.memory_chunks USING (
+  (workspace_id = lore.current_workspace_id())
+  AND (SELECT lore.can_read_workspace(lore.current_workspace_id()))
+  AND (EXISTS (
+    SELECT 1
+    FROM public.memories memory
+    WHERE memory.id = memory_chunks.memory_id
+      AND memory.workspace_id = memory_chunks.workspace_id
+      AND ((memory.scope = 'shared'::public.memory_scope) OR (memory.owner_user_id = lore.current_user_id()))
+  ))
+);
+ALTER POLICY memory_chunk_embeddings_select ON public.memory_chunk_embeddings USING (
+  (workspace_id = lore.current_workspace_id())
+  AND (SELECT lore.can_read_workspace(lore.current_workspace_id()))
+  AND (EXISTS (
+    SELECT 1
+    FROM public.embedding_generations generation
+    JOIN public.memories memory
+      ON memory.workspace_id = memory_chunk_embeddings.workspace_id
+     AND memory.id = memory_chunk_embeddings.memory_id
+    WHERE generation.id = memory_chunk_embeddings.generation_id
+      AND generation.status = ANY (ARRAY['active'::public.embedding_generation_status, 'retiring'::public.embedding_generation_status])
+      AND ((memory.scope = 'shared'::public.memory_scope) OR (memory.owner_user_id = lore.current_user_id()))
+  ))
+);
+ALTER POLICY memory_links_select ON public.memory_links USING (
+  (workspace_id = lore.current_workspace_id())
+  AND (SELECT lore.can_read_workspace(lore.current_workspace_id()))
+  AND (EXISTS (
+    SELECT 1
+    FROM public.memories source
+    JOIN public.memories target ON target.workspace_id = source.workspace_id
+    WHERE source.workspace_id = memory_links.workspace_id
+      AND source.id = memory_links.source_memory_id
+      AND target.id = memory_links.target_memory_id
+      AND ((source.scope = 'shared'::public.memory_scope) OR (source.owner_user_id = lore.current_user_id()))
+      AND ((target.scope = 'shared'::public.memory_scope) OR (target.owner_user_id = lore.current_user_id()))
+  ))
+);
+
 REVOKE ALL ON FUNCTION
+  lore.can_read_workspace(uuid),
   lore.fail_code_index_job(uuid, uuid, text),
   lore.enqueue_code_index_job(uuid, text, text, text, text),
   lore.cancel_agent_code_index_jobs(),
   lore.requeue_dead_memory_embedding_jobs(uuid, boolean)
 FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION lore.enqueue_code_index_job(uuid, text, text, text, text) TO lore_app;
+GRANT EXECUTE ON FUNCTION
+  lore.can_read_workspace(uuid),
+  lore.enqueue_code_index_job(uuid, text, text, text, text)
+TO lore_app;
 GRANT EXECUTE ON FUNCTION
   lore.fail_code_index_job(uuid, uuid, text),
   lore.requeue_dead_memory_embedding_jobs(uuid, boolean)
