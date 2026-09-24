@@ -1,6 +1,6 @@
 -- migrate:up
 -- Schema revision 4: Code Index job lifecycle, Agent provenance on Code
--- Evidence, per-revision Code Index activation, index-backed replay scrubs, an
+-- Evidence, per-revision Code Index activation, an
 -- operator path for dead embedding jobs, and a once-per-statement Workspace read
 -- check in the Memory read policies. Every change is forward-only.
 SET LOCAL lock_timeout = '5s';
@@ -361,23 +361,6 @@ BEGIN
   RETURN target_generation_id;
 END
 $$;
-
--- Hard-deleting a Memory, Proposal, or Episode scrubs replay bodies that mention
--- it. Those triggers compared an unindexed JSON path, so every delete scanned and
--- detoasted the Workspace's whole 24-hour replay ledger. Each partial expression
--- index matches one trigger predicate exactly; the triggers run as their owner,
--- so RLS never keeps the planner off them.
-CREATE INDEX request_idempotency_records_memory_id_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{memory,id}'::text[]))) WHERE ((response_body #>> '{memory,id}'::text[]) IS NOT NULL);
-CREATE INDEX request_idempotency_records_proposal_id_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{proposal,id}'::text[]))) WHERE ((response_body #>> '{proposal,id}'::text[]) IS NOT NULL);
-CREATE INDEX request_idempotency_records_proposal_target_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{proposal,targetMemoryId}'::text[]))) WHERE ((response_body #>> '{proposal,targetMemoryId}'::text[]) IS NOT NULL);
-CREATE INDEX request_idempotency_records_proposal_accepted_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{proposal,acceptedMemoryId}'::text[]))) WHERE ((response_body #>> '{proposal,acceptedMemoryId}'::text[]) IS NOT NULL);
-CREATE INDEX request_idempotency_records_episode_id_idx ON public.request_idempotency_records USING btree (workspace_id, ((response_body #>> '{episode,id}'::text[]))) WHERE ((response_body #>> '{episode,id}'::text[]) IS NOT NULL);
-
--- An import receipt replays only while its imported Memories still exist, which the
--- import checks by import_id on every re-import of the same archive. Only the
--- (workspace_id, memory_id) key existed, so that check (and the cascade when a
--- receipt is deleted) scanned every provenance row in the Workspace.
-CREATE INDEX memory_import_provenance_import_idx ON public.memory_import_provenance USING btree (workspace_id, import_id);
 
 -- Maintenance writes generation-scoped vectors into memory_chunk_embeddings and
 -- never changes canonical chunk rows. The baseline still granted it UPDATE on

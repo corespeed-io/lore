@@ -2,7 +2,7 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/telemetry";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 4;
+export const LORE_SCHEMA_REVISION = 5;
 
 /**
  * The only public tables that hold no tenant data and so carry no RLS: the

@@ -1,8 +1,8 @@
-import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, test } from "vitest";
+import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
 import {
   createMemoryMaintenanceModule,
   createMemoryModule,
@@ -32,17 +32,12 @@ const CAROL = "10000000-0000-4000-8000-000000000003";
 const OPERATIONS = "20000000-0000-4000-8000-000000000001";
 const RESEARCH = "20000000-0000-4000-8000-000000000002";
 
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
-
 async function createLoreFixture(): Promise<MemoryCoreContractFixture> {
   const postgres = new PGlite({ extensions: { pg_trgm, vector } });
   await postgres.waitReady;
-  const migrationIds = (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  for (const migrationId of migrationIds) {
-    await postgres.exec(await readFile(new URL(migrationId, migrationsUrl), "utf8"));
-  }
+  // lore oss's own chain applier: it sends a transaction:false migration one
+  // statement at a time, which a single multi-statement exec cannot do.
+  await applyMigrationChain((sql) => postgres.exec(sql));
   await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)", [
     ALICE,
     "Alice",

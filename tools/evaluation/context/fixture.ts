@@ -1,10 +1,10 @@
 /** Scratch-PGlite fixture for the versioned joint Memory + Code evaluation. */
 
-import { readdir, readFile } from "node:fs/promises";
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
+import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
 import type {
   CodeEvidenceAssessment,
   MemoryCodeEvidence,
@@ -39,7 +39,6 @@ const COMMIT_A = "1".repeat(40);
 const COMMIT_B = "2".repeat(40);
 const COMMIT_C = "3".repeat(40);
 const REPOSITORY_KEY = "evaluation/joint-memory-code-v1";
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
 
 export type JointPrototypeVariantId =
   | "always-on-union"
@@ -290,12 +289,7 @@ async function bootstrapDatabase(): Promise<{
 }> {
   const postgres = new PGlite({ extensions: { pg_trgm, vector } });
   await postgres.waitReady;
-  const migrationIds = (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  for (const migrationId of migrationIds) {
-    await postgres.exec(await readFile(new URL(migrationId, migrationsUrl), "utf8"));
-  }
+  await applyMigrationChain((sql) => postgres.exec(sql));
   await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4)", [
     OWNER_USER_ID,
     "Joint Evaluation Owner",

@@ -1,4 +1,3 @@
-import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -7,6 +6,7 @@ import {
   NON_TENANT_PUBLIC_TABLES as OPERATIONS_NON_TENANT_PUBLIC_TABLES,
   REQUIRED_TENANT_TABLES as OPERATIONS_REQUIRED_TENANT_TABLES,
 } from "@/modules/operations/service";
+import { applyMigrationChain } from "../../scripts/database/lib/migration-preflight.ts";
 import {
   NON_TENANT_PUBLIC_TABLES,
   REQUIRED_TENANT_TABLES,
@@ -14,14 +14,11 @@ import {
 } from "../../scripts/database/restore.ts";
 
 const postgres = new PGlite({ extensions: { pg_trgm, vector } });
-const migrations = new URL("../../db/migrations/", import.meta.url);
 const verify = () => verifyRestoredDatabase((sql) => postgres.query(sql));
 
 beforeAll(async () => {
   await postgres.waitReady;
-  for (const file of (await readdir(migrations)).filter((name) => name.endsWith(".sql")).sort()) {
-    await postgres.exec(await readFile(new URL(file, migrations), "utf8"));
-  }
+  await applyMigrationChain((sql) => postgres.exec(sql));
 });
 
 afterAll(() => postgres.close());
