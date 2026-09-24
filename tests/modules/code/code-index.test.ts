@@ -220,9 +220,9 @@ test("queues an exact Git revision without publishing partial search results", a
   await expect(code.getIndexJob(context.alice, { jobId: queued.id })).rejects.toBeInstanceOf(
     CodeIndexAccessDeniedError,
   );
-  await expect(
-    codeIndexMaintenance(context.maintenanceDatabase).run(queued.id),
-  ).resolves.toEqual({ status: "idle" });
+  await expect(codeIndexMaintenance(context.maintenanceDatabase).run(queued.id)).resolves.toEqual({
+    status: "idle",
+  });
 });
 
 test("a leased maintenance job publishes one queued exact Git revision", async () => {
@@ -388,9 +388,9 @@ test("an interrupted job's building generation resumes itself with its dependenc
   const crashBeforeReady = interruptingDatabase(context.maintenanceDatabase, (sql) =>
     sql.includes("INSERT INTO code_dependency_edges"),
   );
-  await expect(
-    codeIndexMaintenance(crashBeforeReady).run(queued.id),
-  ).resolves.toMatchObject({ status: "retry" });
+  await expect(codeIndexMaintenance(crashBeforeReady).run(queued.id)).resolves.toMatchObject({
+    status: "retry",
+  });
   await context.adminDatabase.transaction(async (transaction) => {
     await expect(
       transaction.query(
@@ -457,9 +457,9 @@ test("another commit never reuses Artifacts from a building generation", async (
   const crashBeforeReady = interruptingDatabase(context.maintenanceDatabase, (sql) =>
     sql.includes("INSERT INTO code_dependency_edges"),
   );
-  await expect(
-    codeIndexMaintenance(crashBeforeReady).run(queued.id),
-  ).resolves.toMatchObject({ status: "retry" });
+  await expect(codeIndexMaintenance(crashBeforeReady).run(queued.id)).resolves.toMatchObject({
+    status: "retry",
+  });
 
   // The unchanged blob's only prior Artifacts sit in the unready building generation.
   await expect(
