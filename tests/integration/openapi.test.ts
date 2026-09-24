@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
+import { domainErrorCodes } from "@/server/api/errors";
 import { loreOpenApiDocument } from "@/server/openapi/document";
+import { idempotencyHeader } from "@/server/openapi/shared";
 
 test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   const document = loreOpenApiDocument() as {
@@ -102,16 +104,38 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/readyz",
     ].sort(),
   );
-  expect(document.components.schemas.Error.properties.code.enum).toEqual(
-    expect.arrayContaining([
-      "idempotency_conflict",
-      "precondition_required",
-      "proposal_capacity_exceeded",
-      "proposal_review_conflict",
-      "version_conflict",
-      "workspace_export_limit_exceeded",
-    ]),
+  // The Error code enum is closed: it lists exactly the codes Lore emits. Besides the
+  // domain error table these are route/admission literals and the SQLSTATE mappings.
+  const emittedCodes = [
+    ...domainErrorCodes,
+    "access_denied",
+    "authentication_required",
+    "internal_error",
+    "invalid_request",
+    "method_not_allowed",
+    "not_found",
+    "transaction_conflict",
+  ];
+  expect([...document.components.schemas.Error.properties.code.enum].sort()).toEqual(
+    [...new Set(emittedCodes)].sort(),
   );
+  expect([...document.components.schemas.Error.properties.code.enum].sort()).toEqual([
+    "access_denied",
+    "authentication_required",
+    "idempotency_conflict",
+    "internal_error",
+    "invalid_archive",
+    "invalid_request",
+    "method_not_allowed",
+    "not_found",
+    "payload_too_large",
+    "precondition_required",
+    "proposal_capacity_exceeded",
+    "proposal_review_conflict",
+    "transaction_conflict",
+    "version_conflict",
+    "workspace_export_limit_exceeded",
+  ]);
   expect(document.paths["/api/v1/workspaces/export"].get.responses).toHaveProperty("409");
   expect(document.paths["/api/v1/code/dependencies"].get).toMatchObject({
     operationId: "queryCodeDependencies",
@@ -309,4 +333,14 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   expect(document.paths["/api/v1/evaluations/suites"].post.requestBody).toMatchObject({
     required: true,
   });
+});
+
+test("OpenAPI publishes the Idempotency-Key pattern the server enforces", () => {
+  const pattern = new RegExp(idempotencyHeader.schema.pattern);
+  for (const accepted of ["a", "retry-1", "!~", "x".repeat(128)]) {
+    expect(pattern.test(accepted), accepted).toBe(true);
+  }
+  for (const rejected of ["", "with space", "tab\t", "é", "x".repeat(129)]) {
+    expect(pattern.test(rejected), rejected).toBe(false);
+  }
 });

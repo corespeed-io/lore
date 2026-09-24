@@ -4,6 +4,10 @@ import { mutationRequestHash } from "@/server/api/idempotency";
 import { AccessDeniedError } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
+import { IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
+
+// One source for the check and the published OpenAPI header pattern.
+const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 
 export class BadRequestError extends Error {
   readonly status = 400;
@@ -46,7 +50,7 @@ export async function idempotencyRequest(
 ): Promise<IdempotencyRequest | undefined> {
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key) return undefined;
-  if (!/^[\x21-\x7e]{1,128}$/.test(key)) {
+  if (!IDEMPOTENCY_KEY.test(key)) {
     throw new BadRequestError("Idempotency-Key must contain 1 to 128 visible ASCII characters");
   }
   return {
