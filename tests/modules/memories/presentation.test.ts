@@ -1,5 +1,5 @@
 import type { Memory } from "@corespeed/lore-sdk";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   memoryConfiguredType,
   memoryGraphContext,
@@ -35,15 +35,32 @@ test("a typed Memory keeps its scope separate from its type badge", () => {
   expect(memoryType(untyped)).toBe("private");
 });
 
-test("row dates are the UTC calendar day in every viewer time zone", () => {
-  const utcDay = (day: number) =>
-    new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" }).format(
-      Date.UTC(2026, 7, day, 12),
-    );
-  // Either side of UTC midnight: a local-time formatter gets one of these wrong
-  // in every time zone that is not UTC.
-  expect(shortMemoryDate("2026-08-05T23:30:00.000Z")).toBe(utcDay(5));
-  expect(shortMemoryDate("2026-08-06T00:30:00.000Z")).toBe(utcDay(6));
+// CI and most dev boxes run in UTC, where a local-time formatter also passes, so the
+// module is reloaded under zones on each side of the date line to prove the UTC pin.
+test.each(["Pacific/Kiritimati", "Pacific/Pago_Pago"])(
+  "row dates are the UTC calendar day for a viewer in %s",
+  async (zone) => {
+    vi.stubEnv("TZ", zone);
+    vi.resetModules();
+    try {
+      const { shortMemoryDate: formatInZone } = await import(
+        "@/modules/memories/browser/presentation"
+      );
+      const utcDay = (day: number) =>
+        new Intl.DateTimeFormat(undefined, {
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC",
+        }).format(Date.UTC(2026, 7, day, 12));
+      expect(formatInZone("2026-08-05T23:30:00.000Z")).toBe(utcDay(5));
+      expect(formatInZone("2026-08-06T00:30:00.000Z")).toBe(utcDay(6));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+test("an unparseable row date renders nothing", () => {
   expect(shortMemoryDate("not a date")).toBe("");
 });
 

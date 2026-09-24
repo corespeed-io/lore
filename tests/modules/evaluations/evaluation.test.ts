@@ -210,7 +210,7 @@ test("Evaluation Suites list in bounded pages with their cases loaded together",
   const testContext = await createMemoryTestContext();
   const evaluations = createEvaluationModule(testContext.database);
   const expectedMemoryIds = ["40000000-0000-4000-8000-000000000009"];
-  const created = [];
+  const created: Awaited<ReturnType<typeof evaluations.createSuite>>[] = [];
   for (let index = 0; index < 5; index += 1) {
     created.push(
       await evaluations.createSuite(testContext.alice, {
@@ -223,16 +223,30 @@ test("Evaluation Suites list in bounded pages with their cases loaded together",
     );
   }
 
-  const listed = [];
-  let cursor: { id: string; updatedAt: string } | undefined;
-  for (let page = 0; page < 3; page += 1) {
-    const result = await evaluations.listSuites(testContext.alice, { cursor, limit: 2 });
-    expect(result.suites.length).toBeLessThanOrEqual(2);
-    listed.push(...result.suites);
-    if (!result.nextCursor) break;
-    cursor = result.nextCursor;
-  }
+  // Suites created back to back can share a clock tick, so stamp distinct times
+  // rather than relying on insert timing for the expected order.
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    for (const [index, suite] of created.entries()) {
+      await transaction.query(
+        "UPDATE evaluation_suites SET updated_at = $2::timestamptz WHERE id = $1",
+        [suite.id, `2026-01-01T00:00:0${index}Z`],
+      );
+    }
+  });
+  const pageThrough = async () => {
+    const listed = [];
+    let cursor: { id: string; updatedAt: string } | undefined;
+    for (let page = 0; page < 5; page += 1) {
+      const result = await evaluations.listSuites(testContext.alice, { cursor, limit: 2 });
+      expect(result.suites.length).toBeLessThanOrEqual(2);
+      listed.push(...result.suites);
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    return listed;
+  };
 
+  const listed = await pageThrough();
   expect(listed.map((suite) => suite.id)).toEqual(created.map((suite) => suite.id).reverse());
   for (const suite of listed) {
     expect(suite.cases.map((evaluationCase) => evaluationCase.query)).toEqual(
@@ -242,6 +256,17 @@ test("Evaluation Suites list in bounded pages with their cases loaded together",
   await expect(evaluations.listSuites(testContext.alice, { limit: 5 })).resolves.toMatchObject({
     nextCursor: null,
   });
+
+  // With every updated_at equal, the id tie-break alone must page without gaps or repeats.
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE evaluation_suites SET updated_at = '2026-01-02T00:00:00Z' WHERE workspace_id = $1",
+      [testContext.alice.workspaceId],
+    ),
+  );
+  expect((await pageThrough()).map((suite) => suite.id)).toEqual(
+    created.map((suite) => suite.id).sort(),
+  );
   await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual({
     suites: [],
     nextCursor: null,
