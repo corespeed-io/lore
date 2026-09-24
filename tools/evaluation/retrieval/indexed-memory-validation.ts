@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "@corespeed/lore-core";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import type pg from "pg";
+import { canonicalJson } from "../../../src/server/api/idempotency";
 
 export interface IndexedMemoryChunk {
   content: string;
@@ -11,15 +12,6 @@ export interface IndexedMemoryChunk {
   embedding_provider: string | null;
   embedding_revision: string | null;
   ordinal: number;
-}
-
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  return `{${Object.entries(value)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-    .join(",")}}`;
 }
 
 /**

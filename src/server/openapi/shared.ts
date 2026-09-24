@@ -39,7 +39,8 @@ export const workspaceHeader = {
   schema: { type: "string", format: "uuid" },
 } as const;
 
-// Mirrors the server check in src/server/api/input.ts: 1-128 visible ASCII characters.
+// The single Idempotency-Key rule (1-128 visible ASCII characters): the published
+// OpenAPI header pattern and the runtime check in src/server/api/input.ts both use it.
 export const IDEMPOTENCY_KEY_PATTERN = "^[\\x21-\\x7e]{1,128}$";
 
 export const idempotencyHeader = {

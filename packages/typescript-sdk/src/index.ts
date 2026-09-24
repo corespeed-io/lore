@@ -203,8 +203,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_REQUEST_TIMEOUT_MS = 300_000;
 const AGENT_TOKEN_PATTERN = /^lore_agent_[0-9a-f]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-/** The server's Idempotency-Key rule, checked here so callers see it before a 400. */
-const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
+/**
+ * The server's Idempotency-Key rule (1-128 visible ASCII characters), checked here so
+ * callers see it before a 400. Adapters built on the SDK reuse it rather than copying it.
+ */
+export const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
 const VISIBLE_ASCII_PATTERN = /^[\x21-\x7e]+$/;
 /** RFC 9110 `token`: the grammar of a header name. */
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;

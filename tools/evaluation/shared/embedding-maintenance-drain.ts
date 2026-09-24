@@ -14,7 +14,7 @@ export interface EmbeddingMaintenanceDrainOptions {
   run: () => Promise<MemoryMaintenanceResult>;
   /** Independent leases attempted per round. */
   concurrency: number;
-  /** Jobs still waiting, including ones backed off until a later `run_at`. */
+  /** Jobs still waiting, including ones backed off until a later `available_at`. */
   pendingJobCount: () => Promise<number>;
   /** Called after each round that completed jobs. */
   onProgress?: (completedJobs: number, roundCompleted: number) => void;
@@ -26,7 +26,7 @@ export interface EmbeddingMaintenanceDrainOptions {
 /**
  * Drain a benchmark's embedding jobs to completion. Provider throttling (429
  * bursts) exhausts an adapter's inline retries and parks jobs with a durable
- * backoff; a backed-off job also makes `run` report idle until its `run_at`
+ * backoff; a backed-off job also makes `run` report idle until its `available_at`
  * arrives. Waiting is safe, so a retry never aborts the run: only a dead job or
  * sustained zero progress does. Returns the number of completed jobs.
  */

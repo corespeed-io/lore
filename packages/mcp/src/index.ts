@@ -9,6 +9,7 @@ import {
   type CreateMemoryProposalInput,
   type EnqueueCodeIndexInput,
   type Episode,
+  IDEMPOTENCY_KEY_PATTERN,
   LoreApiError,
   LoreClient,
   type LoreClientOptions,
@@ -106,9 +107,6 @@ const CODE_ARTIFACT_CONTENT_BUDGET = 8_000;
  */
 const MINIMUM_CODE_ARTIFACT_CONTENT_BUDGET = 1_000;
 const MINIMUM_CONTEXT_EVIDENCE_BUDGET = 500;
-/** The server's Idempotency-Key rule, checked before the request leaves the adapter. */
-const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
-
 const metadataSchema = z
   .record(z.string(), z.json())
   .refine((value) => JSON.stringify(value).length <= MAX_METADATA_CHARACTERS, {
