@@ -1,4 +1,5 @@
 import { jsonResponse, requestBody, workspaceHeader } from "@/server/openapi/shared";
+import { MAXIMUM_CONTEXT_ANCHORS, MAXIMUM_CONTEXTUAL_IMPACT_CHANGES } from "./policy";
 
 export const contextPaths = {
   "/api/v1/context/retrieve": {
@@ -157,7 +158,7 @@ export const contextSchemas = {
       },
       changes: {
         type: "array",
-        maxItems: 251,
+        maxItems: MAXIMUM_CONTEXTUAL_IMPACT_CHANGES,
         items: { type: "string", maxLength: 2_500 },
       },
     },
@@ -177,7 +178,7 @@ export const contextSchemas = {
     properties: {
       memoryCandidates: { type: "integer", minimum: 0, maximum: 10 },
       codeCandidates: { type: "integer", minimum: 0, maximum: 20 },
-      anchorCandidates: { type: "integer", minimum: 0, maximum: 25 },
+      anchorCandidates: { type: "integer", minimum: 0, maximum: MAXIMUM_CONTEXT_ANCHORS },
       requestedCommitOid: {
         oneOf: [{ type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" }, { type: "null" }],
       },
@@ -222,7 +223,7 @@ export const contextSchemas = {
       },
       anchors: {
         type: "array",
-        maxItems: 25,
+        maxItems: MAXIMUM_CONTEXT_ANCHORS,
         items: { $ref: "#/components/schemas/RetrievedAnchorContext" },
       },
       conflicts: { type: "array", items: { type: "string" } },

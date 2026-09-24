@@ -202,6 +202,13 @@ export async function readGitRevisionFiles(
         } catch {
           exclusionReason = "invalid_utf8";
         }
+        // The decoder consumes a leading BOM, so a BOM-only blob decodes to no text. Marking
+        // it indexed would promise an Artifact that no parser can produce, and the generation
+        // could never become ready.
+        if (content === "") {
+          content = null;
+          exclusionReason = "empty";
+        }
       }
       if (content !== null) {
         sourceBytes += contentBytes.length;

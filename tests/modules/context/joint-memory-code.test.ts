@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
+import { contextSchemas } from "@/modules/context/openapi";
 import {
+  aggregateContextualImpact,
   assessContextualImpact,
+  CONTEXTUAL_ANCHOR_LIMIT,
+  CONTEXTUAL_EDGE_LIMIT,
+  MAXIMUM_CONTEXTUAL_IMPACT_CHANGES,
   planJointEvidenceRoute,
   planRetrievalGrounding,
 } from "@/modules/context/policy";
@@ -268,6 +273,35 @@ test("contextual impact records unchanged unresolved dependencies as uncertainty
     state: "unknown",
     changes: ["uncertain:calls:externalPolicyCheck"],
   });
+});
+
+test("contextual impact at its largest still fits the published changes bound", () => {
+  const side = (prefix: string) =>
+    Array.from({ length: CONTEXTUAL_EDGE_LIMIT }, (_, index) => ({
+      kind: "calls",
+      resolution: "resolved" as const,
+      targetKey: `src/${prefix}.ts#function_declaration:target${index}`,
+      contentSha256: "a".repeat(64),
+    }));
+  // Disjoint, truncated sides give every key its own change plus both truncation markers.
+  const perAnchor = assessContextualImpact(side("before"), side("after"), {
+    beforeTruncated: true,
+    afterTruncated: true,
+  });
+  expect(perAnchor.changes).toHaveLength(2 + 2 * CONTEXTUAL_EDGE_LIMIT);
+  const aggregate = aggregateContextualImpact(
+    Array.from({ length: CONTEXTUAL_ANCHOR_LIMIT }, (_, index) => ({
+      anchorId: `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`,
+      assessment: perAnchor,
+    })),
+    true,
+  );
+
+  expect(aggregate.changes).toHaveLength(MAXIMUM_CONTEXTUAL_IMPACT_CHANGES);
+  expect(contextSchemas.ContextualImpactAssessment.properties.changes.maxItems).toBe(
+    MAXIMUM_CONTEXTUAL_IMPACT_CHANGES,
+  );
+  expect(MAXIMUM_CONTEXTUAL_IMPACT_CHANGES).toBe(261);
 });
 
 test("team-framed questions using code vocabulary retrieve Memory instead of demanding a revision", () => {

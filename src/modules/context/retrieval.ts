@@ -7,6 +7,11 @@ import type {
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
+import {
+  validateCommitOid,
+  validatePlainText,
+  validateQueryText,
+} from "@/modules/code/indexing/validation";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
 import type {
@@ -15,7 +20,14 @@ import type {
   JointEvidenceIntent,
   JointEvidenceRoute,
 } from "./policy";
-import { assessContextualImpact, planJointEvidenceRoute } from "./policy";
+import {
+  aggregateContextualImpact,
+  assessContextualImpact,
+  CONTEXTUAL_ANCHOR_LIMIT,
+  CONTEXTUAL_EDGE_LIMIT,
+  MAXIMUM_CONTEXT_ANCHORS,
+  planJointEvidenceRoute,
+} from "./policy";
 
 export const CONTEXT_RETRIEVAL_REVISION = "joint-memory-code-v2";
 
@@ -103,9 +115,6 @@ export class ContextRetrievalValidationError extends Error {
   readonly status = 400;
 }
 
-const CONTEXTUAL_ANCHOR_LIMIT = 5;
-const CONTEXTUAL_EDGE_LIMIT = 25;
-
 type DependencySubject = { path: string } | { symbol: string };
 
 function dependencySubject(citation: MemoryCodeEvidence, path: string): DependencySubject {
@@ -178,54 +187,8 @@ async function dependencyFingerprints(input: {
   };
 }
 
-function aggregateContextualImpact(
-  assessments: readonly { anchorId: string; assessment: ContextualImpactAssessment }[],
-  truncated: boolean,
-): ContextualImpactAssessment {
-  const changes = assessments.flatMap(({ anchorId, assessment }) =>
-    assessment.changes.map((change) => `anchor:${anchorId}:${change}`),
-  );
-  if (truncated) changes.push("anchors:truncated");
-  const states = new Set(assessments.map(({ assessment }) => assessment.state));
-  if (states.has("affected")) return { state: "affected", changes };
-  if (states.has("possibly_affected")) return { state: "possibly_affected", changes };
-  if (truncated || states.has("unknown") || assessments.length === 0) {
-    return {
-      state: "unknown",
-      changes:
-        changes.length > 0
-          ? changes
-          : assessments.length === 0
-            ? ["not_assessed:no_resolvable_anchor_subject"]
-            : ["assessment:unknown"],
-    };
-  }
-  return { state: "unaffected", changes };
-}
-
-function text(value: string, name: string, maximumLength: number): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized)) {
-    throw new ContextRetrievalValidationError(`${name} is invalid`);
-  }
-  return normalized;
-}
-
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || codePoint === 127;
-  });
-}
-
-function commitOid(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
-    throw new ContextRetrievalValidationError(
-      "commitOid must be a full 40- or 64-character Git OID",
-    );
-  }
-  return normalized;
+function queryText(value: string, name: string, maximumLength: number): string {
+  return validateQueryText(value, name, maximumLength, ContextRetrievalValidationError);
 }
 
 function limit(value: number | undefined, fallback: number, maximum: number, name: string): number {
@@ -255,13 +218,20 @@ export function createContextRetrievalModule(
 
   return {
     async retrieve(actor, input) {
-      const query = text(input.query, "query", 10_000);
+      const query = queryText(input.query, "query", 10_000);
       const repositoryKey =
         input.repositoryKey === undefined
           ? undefined
-          : text(input.repositoryKey, "repositoryKey", 512);
+          : validatePlainText(
+              input.repositoryKey,
+              "repositoryKey",
+              512,
+              ContextRetrievalValidationError,
+            );
       const requestedCommitOid =
-        input.commitOid === undefined ? undefined : commitOid(input.commitOid);
+        input.commitOid === undefined
+          ? undefined
+          : validateCommitOid(input.commitOid, ContextRetrievalValidationError);
       if ((repositoryKey === undefined) !== (requestedCommitOid === undefined)) {
         throw new ContextRetrievalValidationError(
           "repositoryKey and commitOid must be provided together",
@@ -291,11 +261,11 @@ export function createContextRetrievalModule(
       });
       const memoryQuery =
         plan.route === "memory-only" || plan.route === "both"
-          ? text(input.memoryQuery ?? query, "memoryQuery", 10_000)
+          ? queryText(input.memoryQuery ?? query, "memoryQuery", 10_000)
           : null;
       const codeQuery =
         plan.route === "code-only" || plan.route === "both"
-          ? text(input.codeQuery ?? query, "codeQuery", 2_000)
+          ? queryText(input.codeQuery ?? query, "codeQuery", 2_000)
           : null;
       const [memoryResults, codeResults] = await Promise.all([
         memoryQuery !== null
@@ -329,46 +299,45 @@ export function createContextRetrievalModule(
         plan.needsAnchorExpansion &&
         plan.needsLocalAssessment &&
         repositoryKey !== undefined &&
-        requestedCommitOid !== undefined
+        requestedCommitOid !== undefined &&
+        memoryResults.length > 0
       ) {
-        for (const result of memoryResults) {
-          const citations = await evidence.list(actor, { memoryId: result.memory.id });
-          for (const citation of citations) {
-            if (anchors.length >= 25) break;
-            const assessment = await evidence.assess(actor, {
-              evidenceId: citation.id,
-              repositoryKey,
-              commitOid: requestedCommitOid,
-            });
-            anchors.push({
-              id: citation.id,
-              memoryId: citation.memoryId,
-              relationship: citation.relationship,
-              localState: assessment.validationState,
-              citedCommitOid: citation.citedCommitOid,
-              citedPath: citation.citedPath,
-              validatedCommitOid: assessment.validatedCommitOid,
-              validatedPath: assessment.validatedPath,
-            });
-            if (
-              assessment.validatedArtifactId &&
-              !anchoredArtifactIds.includes(assessment.validatedArtifactId)
-            ) {
-              anchoredArtifactIds.push(assessment.validatedArtifactId);
-            }
-            if (assessment.validatedRevisionId) {
-              contextualSubjects.push({
-                anchorId: citation.id,
-                baseCommitOid: citation.citedCommitOid,
-                beforeSubject: dependencySubject(citation, citation.citedPath),
-                afterSubject: dependencySubject(
-                  citation,
-                  assessment.validatedPath ?? citation.citedPath,
-                ),
-              });
-            }
+        // One read-only transaction lists and assesses the citations of every result Memory,
+        // in result order. Retrieval never persists revalidation.
+        const assessed = await evidence.assessMemoryCitations(actor, {
+          memoryIds: memoryResults.map((result) => result.memory.id),
+          repositoryKey,
+          commitOid: requestedCommitOid,
+          limit: MAXIMUM_CONTEXT_ANCHORS,
+        });
+        for (const { citation, assessment } of assessed) {
+          anchors.push({
+            id: citation.id,
+            memoryId: citation.memoryId,
+            relationship: citation.relationship,
+            localState: assessment.validationState,
+            citedCommitOid: citation.citedCommitOid,
+            citedPath: citation.citedPath,
+            validatedCommitOid: assessment.validatedCommitOid,
+            validatedPath: assessment.validatedPath,
+          });
+          if (
+            assessment.validatedArtifactId &&
+            !anchoredArtifactIds.includes(assessment.validatedArtifactId)
+          ) {
+            anchoredArtifactIds.push(assessment.validatedArtifactId);
           }
-          if (anchors.length >= 25) break;
+          if (assessment.validatedRevisionId) {
+            contextualSubjects.push({
+              anchorId: citation.id,
+              baseCommitOid: citation.citedCommitOid,
+              beforeSubject: dependencySubject(citation, citation.citedPath),
+              afterSubject: dependencySubject(
+                citation,
+                assessment.validatedPath ?? citation.citedPath,
+              ),
+            });
+          }
         }
       }
 
