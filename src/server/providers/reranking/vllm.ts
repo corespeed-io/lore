@@ -1,4 +1,5 @@
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
+import { providerBaseUrl } from "@/server/providers/environment";
 import type { ConfiguredRerankingProvider } from "../metadata";
 import { type ProviderRequestOptions, requestProviderJson } from "../request";
 
@@ -35,19 +36,7 @@ interface VllmScoreResponse {
 }
 
 function endpoint(baseUrl: string, provider: LocalRerankingProvider): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${provider} reranking base URL must use http or https`);
-  }
-  if (
-    url.protocol !== "https:" &&
-    url.hostname !== "127.0.0.1" &&
-    url.hostname !== "localhost" &&
-    url.hostname !== "[::1]" &&
-    url.hostname !== "host.docker.internal"
-  ) {
-    throw new Error(`${provider} reranking base URL must use https outside localhost`);
-  }
+  const url = providerBaseUrl(baseUrl, `${provider} reranking base URL`);
   const base = `${url.toString().replace(/\/$/, "")}/`;
   return new URL("v1/rerank", base).toString();
 }
@@ -205,19 +194,11 @@ export function createVllmScoreRerankingProvider(
   const instruction = options.instruction?.trim() || DEFAULT_INSTRUCTION;
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
-  const url = new URL("score", `${(options.baseUrl ?? DEFAULT_VLLM_BASE_URL).replace(/\/$/, "")}/`);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("vllm-score reranking base URL must use http or https");
-  }
-  if (
-    url.protocol !== "https:" &&
-    url.hostname !== "127.0.0.1" &&
-    url.hostname !== "localhost" &&
-    url.hostname !== "[::1]" &&
-    url.hostname !== "host.docker.internal"
-  ) {
-    throw new Error("vllm-score reranking base URL must use https outside localhost");
-  }
+  const base = providerBaseUrl(
+    options.baseUrl ?? DEFAULT_VLLM_BASE_URL,
+    "vllm-score reranking base URL",
+  );
+  const url = new URL("score", `${base.toString().replace(/\/$/, "")}/`);
   const apiKey = options.apiKey?.trim();
 
   return {

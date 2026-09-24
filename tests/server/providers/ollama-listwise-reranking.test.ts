@@ -148,7 +148,7 @@ test("Ollama listwise adapter rejects insecure remote endpoints and cloud respon
       model: "qwen3.5:4b",
       baseUrl: "http://reranker.example.com",
     }),
-  ).toThrow("must use https outside localhost");
+  ).toThrow("must use https outside loopback or host.docker.internal");
 
   const provider = createOllamaListwiseRerankingProvider({
     model: "qwen3.5:4b",

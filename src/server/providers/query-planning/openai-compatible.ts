@@ -1,4 +1,5 @@
 import OpenAI, { type ClientOptions } from "openai";
+import { providerBaseUrl } from "@/server/providers/environment";
 import {
   assertVercelAIGatewayModel,
   VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
@@ -42,8 +43,9 @@ interface ChatCompletionResponse {
 
 /**
  * What differs between the OpenAI-compatible planner surfaces. `selfHosted`
- * covers the two policies an operator-run endpoint relaxes together: it may be
- * plaintext loopback, and it needs no deployment credential.
+ * covers the two policies an operator-run endpoint relaxes together: it needs no
+ * credential, and without one it may use plain HTTP on any host. A configured
+ * credential still requires HTTPS outside loopback, as every other surface does.
  */
 interface PlannerSurface {
   label: string;
@@ -81,19 +83,10 @@ const PLANNER_SURFACES: Record<OpenAICompatibleQueryPlanningProviderName, Planne
   },
 };
 
-function apiBaseUrl(baseUrl: string, surface: PlannerSurface): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("query planner base URL must use http or https");
-  }
-  if (
-    !surface.selfHosted &&
-    url.protocol !== "https:" &&
-    url.hostname !== "127.0.0.1" &&
-    url.hostname !== "localhost"
-  ) {
-    throw new Error(`${surface.label} query planner base URL must use https outside localhost`);
-  }
+function apiBaseUrl(baseUrl: string, surface: PlannerSurface, sendsCredential: boolean): string {
+  const url = providerBaseUrl(baseUrl, `${surface.label} query planner base URL`, {
+    requireHttps: sendsCredential || !surface.selfHosted,
+  });
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");
@@ -126,8 +119,8 @@ export function createOpenAICompatibleQueryPlanningProvider(
   const instruction = `${configuredInstruction}\n${JSON_OUTPUT_INSTRUCTION}`;
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
   const surface = PLANNER_SURFACES[options.provider];
-  const baseURL = apiBaseUrl(options.baseUrl ?? surface.defaultBaseUrl, surface);
   const apiKey = options.apiKey?.trim();
+  const baseURL = apiBaseUrl(options.baseUrl ?? surface.defaultBaseUrl, surface, Boolean(apiKey));
   if (!surface.selfHosted && !apiKey) {
     throw new Error(`LORE_QUERY_PLANNER_API_KEY is required for ${surface.label}`);
   }

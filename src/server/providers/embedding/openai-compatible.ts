@@ -1,5 +1,6 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
 import OpenAI, { type ClientOptions } from "openai";
+import { providerBaseUrl } from "@/server/providers/environment";
 import {
   assertVercelAIGatewayModel,
   VERCEL_AI_GATEWAY_HOST,
@@ -33,10 +34,7 @@ interface OpenAIEmbeddingResponse {
 }
 
 function apiBaseUrl(baseUrl: string, label: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${label} embedding base URL must use http or https`);
-  }
+  const url = providerBaseUrl(baseUrl, `${label} embedding base URL`);
   const base = `${url.toString().replace(/\/$/, "")}/`;
   return new URL("v1", base).toString();
 }
