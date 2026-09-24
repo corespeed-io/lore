@@ -35,9 +35,13 @@ const STATUS_PRESENTATION: Record<CodeIndexJob["status"], CodeIndexJobStatusPres
   succeeded: { tone: "ok", description: "The revision is indexed and its generation is active." },
   dead: {
     tone: "failed",
-    description: "Every attempt failed. Lore stopped retrying this revision.",
+    description: "Lore stopped retrying this revision. Queue the same commit again to retry it.",
   },
-  cancelled: { tone: "neutral", description: "Superseded before it ran." },
+  cancelled: {
+    tone: "neutral",
+    description:
+      "Cancelled before it finished, because its requesting Agent was disabled or deleted. Queue the same commit again to run it.",
+  },
 };
 
 const TONE_ORDER: Record<CodeIndexJobTone, number> = {
@@ -55,6 +59,13 @@ const TONE_ORDER: Record<CodeIndexJobTone, number> = {
 function statusDescription(job: CodeIndexJob): string {
   if (job.status === "pending" && job.attemptCount > 0) {
     return `Attempt ${job.attemptCount} failed. Lore is waiting to retry this revision.`;
+  }
+  if (job.status === "dead" && job.attemptCount < job.maximumAttempts) {
+    // A deterministic failure (validation, conflict) ends the job without retries.
+    return `The revision cannot be indexed as submitted, so Lore did not retry it. ${STATUS_PRESENTATION.dead.description}`;
+  }
+  if (job.status === "dead") {
+    return `Every attempt failed. ${STATUS_PRESENTATION.dead.description}`;
   }
   return STATUS_PRESENTATION[job.status].description;
 }
