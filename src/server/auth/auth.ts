@@ -233,11 +233,14 @@ export interface Admission {
 export async function admitRequest(request: Request): Promise<Admission> {
   const path = new URL(request.url).pathname;
   if (isOperationalProbePath(path)) return {};
-  if (isCrossSiteRequest(request)) return { denied: denial(403, "Cross-site request rejected") };
   const authorization = request.headers.get("authorization") ?? "";
+  // A browser never attaches a bearer header on its own, so an explicit Agent token
+  // cannot be forged cross-site; extensions and desktop shells send one with a
+  // foreign or opaque Origin. Only ambient credentials need the cross-site check.
   if (path.startsWith("/api/") && /^Bearer lore_agent_[0-9a-f]{64}$/.test(authorization)) {
     return {};
   }
+  if (isCrossSiteRequest(request)) return { denied: denial(403, "Cross-site request rejected") };
   const result = await checkAuth(request.headers);
   if (result.ok) return { principal: result.principal };
   return { denied: denial(result.status ?? 403, result.detail, result.wwwAuthenticate) };

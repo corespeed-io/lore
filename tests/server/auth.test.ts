@@ -309,6 +309,29 @@ test.each([
   }
 });
 
+test("an explicit Agent bearer token is not subject to the cross-site check", async () => {
+  process.env.AUTH_MODE = "password";
+  process.env.UI_PASSWORD = "secret";
+  const agentToken = `Bearer lore_agent_${"a".repeat(64)}`;
+  for (const origin of ["chrome-extension://abcdefghijklmnop", "null", "tauri://localhost"]) {
+    const request = new Request("https://lore.test/api/v1/memories", {
+      method: "POST",
+      headers: { origin, "sec-fetch-site": "cross-site", authorization: agentToken },
+    });
+    // Admission defers to the Agent credential check in the handler.
+    await expect(admitRequest(request), origin).resolves.toEqual({});
+  }
+  // Ambient Basic credentials from the same origins are still rejected.
+  const ambient = new Request("https://lore.test/api/v1/memories", {
+    method: "POST",
+    headers: {
+      origin: "chrome-extension://abcdefghijklmnop",
+      authorization: `Basic ${btoa("user:secret")}`,
+    },
+  });
+  expect((await authorizeRequest(ambient))?.status).toBe(403);
+});
+
 test("same-origin browsers, proxied origins, safe methods, and non-browser clients pass", () => {
   const unsafe = (url: string, headers: Record<string, string>) =>
     new Request(url, { method: "POST", headers });
