@@ -313,6 +313,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Initial loading uses the plain `Opening Lore…` status.
 - Empty collection invites the first Memory; empty search suggests changing the phrase.
 - Recoverable request errors appear inline with a Dismiss action and `role=alert`.
+- A failed Workspace-list read renders an error with Retry (`role=alert`), never
+  first-run onboarding: the User may already belong to Workspaces.
+- Unknown counts render `—` before data and `N+` for an incomplete or capped
+  window; they are never shown as `0`, and an unresolved reference is never called
+  "not found" before the Graph has loaded.
 - Disabled actions remain readable and do not use spinners as their only label.
 
 ## 12. Accessibility and interaction requirements
