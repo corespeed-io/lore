@@ -3,6 +3,7 @@ import type { AssessedMemoryCitation } from "@/modules/code/evidence";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import { MAXIMUM_CONTEXT_ANCHORS } from "@/modules/context/policy";
 import {
   ContextRetrievalValidationError,
   createContextRetrievalModule,
@@ -540,4 +541,136 @@ test("context queries keep tabs and line breaks but reject other control charact
     );
   expect((await post(input)).status).toBe(200);
   expect((await post({ ...input, query: "Why\u0000 does it hold?" })).status).toBe(400);
+}, 90_000);
+
+test("a citation list cut at the packet cap never reports contextual impact as unaffected", async () => {
+  const context = await createMemoryTestContext();
+  const memories = createMemoryModule(context.database);
+  const code = createCodeIndexModule(context.database);
+  const codeRead = createCodeIndexReadModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+  const retrieval = createContextRetrievalModule(context.database);
+  const repositoryKey = "corespeed/anchor-cap";
+  const otherKey = "corespeed/anchor-cap-other";
+  const stable = "export function capStable() { return 1; }\n";
+  const late = (value: string) => `export function capLate() { return "${value}"; }\n`;
+  for (const [commitOid, lateValue] of [
+    [BASE_COMMIT, "before"],
+    [CURRENT_COMMIT, "after"],
+  ] as const) {
+    await code.indexRevision(context.alice, {
+      repositoryKey,
+      displayName: "Anchor cap",
+      commitOid,
+      files: [
+        { path: "src/late.ts", content: late(lateValue) },
+        { path: "src/stable.ts", content: stable },
+      ],
+    });
+  }
+  const otherFiles = Array.from({ length: MAXIMUM_CONTEXT_ANCHORS - 1 }, (_, index) => ({
+    path: `src/other-${index.toString().padStart(2, "0")}.ts`,
+    content: `export function capOther${index}() { return ${index}; }\n`,
+  }));
+  await code.indexRevision(context.alice, {
+    repositoryKey: otherKey,
+    displayName: "Anchor cap other",
+    commitOid: BASE_COMMIT,
+    files: otherFiles,
+  });
+  const memory = await memories.remember(context.alice, {
+    content: "The anchor cap rationale explains why capStable never changes.",
+  });
+  const cite = async (key: string, query: string) => {
+    const [artifact] = await codeRead.search(context.alice, {
+      repositoryKey: key,
+      commitOid: BASE_COMMIT,
+      query,
+    });
+    if (!artifact) throw new Error(`Expected the ${query} Artifact`);
+    return evidence.cite(context.alice, {
+      memoryId: memory.id,
+      artifactId: artifact.id,
+      relationship: "rationale",
+    });
+  };
+  // One comparable declaration, then citations of another repository: unverifiable at the
+  // requested commit, so they carry no contextual subject.
+  await cite(repositoryKey, "capStable");
+  for (let index = 0; index < otherFiles.length; index += 1) {
+    await cite(otherKey, `capOther${index}`);
+  }
+  const retrieve = () =>
+    retrieval.retrieve(context.alice, {
+      query: "What changed about the anchor cap rationale?",
+      memoryQuery: "anchor cap rationale",
+      repositoryKey,
+      commitOid: CURRENT_COMMIT,
+    });
+
+  // Exactly at the cap every citation is assessed, and the one comparison is unaffected.
+  const complete = await retrieve();
+  expect(complete.anchors).toHaveLength(MAXIMUM_CONTEXT_ANCHORS);
+  expect(complete.receipt.contextualImpact).toEqual({ state: "unaffected", changes: [] });
+
+  // One more citation, whose code did change, falls past the cap and is never assessed.
+  const dropped = await cite(repositoryKey, "capLate");
+  const truncated = await retrieve();
+  expect(truncated.anchors).toHaveLength(MAXIMUM_CONTEXT_ANCHORS);
+  expect(truncated.receipt.anchorCandidates).toBe(MAXIMUM_CONTEXT_ANCHORS);
+  expect(truncated.anchors.map((anchor) => anchor.id)).not.toContain(dropped.id);
+  expect(truncated.receipt.contextualImpact).toMatchObject({ state: "unknown" });
+  expect(truncated.receipt.contextualImpact?.changes).toContain("anchors:truncated");
+  expect(truncated.conflicts).toContain("contextual-impact:unknown");
+}, 90_000);
+
+test("a cited path containing # still resolves its declaration for contextual impact", async () => {
+  const context = await createMemoryTestContext();
+  const memories = createMemoryModule(context.database);
+  const code = createCodeIndexModule(context.database);
+  const codeRead = createCodeIndexReadModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+  const retrieval = createContextRetrievalModule(context.database);
+  const repositoryKey = "corespeed/hash-paths";
+  const source = "export function hashPathEntry() { return 1; }\n";
+  // The same declaration moves from one `#`-bearing directory to another.
+  for (const [commitOid, path] of [
+    [BASE_COMMIT, "src/c#/lib.ts"],
+    [CURRENT_COMMIT, "src/f#/lib.ts"],
+  ] as const) {
+    await code.indexRevision(context.alice, {
+      repositoryKey,
+      displayName: "Hash paths",
+      commitOid,
+      files: [{ path, content: source }],
+    });
+  }
+  const [artifact] = await codeRead.search(context.alice, {
+    repositoryKey,
+    commitOid: BASE_COMMIT,
+    query: "hashPathEntry",
+  });
+  if (!artifact) throw new Error("Expected the hashPathEntry Artifact");
+  const memory = await memories.remember(context.alice, {
+    content: "The hash path rationale keeps hashPathEntry trivial.",
+  });
+  const citation = await evidence.cite(context.alice, {
+    memoryId: memory.id,
+    artifactId: artifact.id,
+    relationship: "rationale",
+  });
+  expect(citation.citedSymbolKey).toBe("src/c#/lib.ts#function_declaration:hashPathEntry");
+
+  const packet = await retrieval.retrieve(context.alice, {
+    query: "What changed about the hash path rationale?",
+    memoryQuery: "hash path rationale",
+    repositoryKey,
+    commitOid: CURRENT_COMMIT,
+  });
+  expect(packet.anchors).toMatchObject([
+    { id: citation.id, localState: "moved", validatedPath: "src/f#/lib.ts" },
+  ]);
+  // Splitting the key at its first `#` would ask for `src/c#/lib.ts#/lib.ts#...`, an
+  // unresolvable subject that reports `unknown`.
+  expect(packet.receipt.contextualImpact).toEqual({ state: "unaffected", changes: [] });
 }, 90_000);

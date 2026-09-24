@@ -5,12 +5,12 @@ import {
   pruneRetiringEmbeddingGenerations,
 } from "@corespeed/lore-core";
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
-import { configuredCodeRepositoriesFromEnvironment } from "@/modules/code/indexing/queue";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createPostgresDatabase } from "@/server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
 import { registerLoreTelemetry } from "@/server/telemetry/register";
 import { observeOperation } from "@/server/telemetry/telemetry";
+import { codeRepositoriesForWorker } from "./code-repositories";
 import type { MaintenanceLoopName, MaintenanceLoopOptions } from "./maintenance-loops";
 import { runMaintenanceCycle, runMaintenanceLoops } from "./maintenance-loops";
 
@@ -37,10 +37,9 @@ const embeddingProviders = createMaintenanceEmbeddingProvidersFromEnvironment(
 );
 // The worker resolves repository paths from its own registry rather than the
 // path stored in a job row, and an empty registry disables Code Indexing here
-// (jobs stay pending for a worker that has one), matching the request path.
-const codeRepositories = configuredCodeRepositoriesFromEnvironment(process.env, (message) =>
-  console.warn(message),
-);
+// (jobs stay pending for a worker that has one), matching the request path. An
+// invalid registry disables Code Indexing too, never the sweep or embeddings.
+const codeRepositories = codeRepositoriesForWorker(process.env, (message) => console.warn(message));
 const workerConcurrency = Math.min(
   positiveInteger(process.env.LORE_MAINTENANCE_CONCURRENCY, 1),
   32,

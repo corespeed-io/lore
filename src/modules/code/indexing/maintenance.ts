@@ -1,6 +1,11 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
-import { CodeIndexValidationError, CodeRevisionConflictError } from "./errors";
+import {
+  CodeIndexRetryableError,
+  CodeIndexValidationError,
+  CodeRepositoryUnavailableError,
+  CodeRevisionConflictError,
+} from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
 import type { ConfiguredCodeRepositories } from "./queue";
 import { CODE_REPOSITORY_NOT_CONFIGURED, configuredCodeRepositoryForWorkspace } from "./queue";
@@ -60,8 +65,11 @@ interface ClaimedCodeIndexJobRow {
   attempt_count: number;
 }
 
-/** Persisted for every transient failure; the retry budget absorbs these. */
+/** Persisted for every unrecognized transient failure; the retry budget absorbs these. */
 const TRANSIENT_FAILURE_DETAIL = "Code Index processing failed";
+
+/** The bound of code_index_jobs.last_error, in characters. */
+const MAXIMUM_FAILURE_DETAIL_LENGTH = 1_000;
 
 export interface CodeIndexFailure {
   /** A deterministic failure repeats on every retry of the same job. */
@@ -79,11 +87,28 @@ function isIncompleteGenerationError(error: unknown): boolean {
 }
 
 /**
+ * Makes a persisted detail inert for every reader of job status. A terminal message
+ * can quote a committer-chosen repository-relative path, which may carry tabs, line
+ * breaks, or terminal escapes, so each C0 control, DEL, and C1 control becomes U+FFFD.
+ * The result keeps at most the column's 1,000 characters, counted as SQL counts them.
+ */
+function inertFailureDetail(message: string): string {
+  return Array.from(message, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? "\uFFFD" : character;
+  })
+    .slice(0, MAXIMUM_FAILURE_DETAIL_LENGTH)
+    .join("");
+}
+
+/**
  * Separates failures that cannot succeed on retry from transient ones.
  * Validation and conflict messages name only repository-relative paths, OIDs,
  * and counts, never the operator's repository path, and the incomplete-generation
- * raise carries only counts. A message that nonetheless contains any value in
- * `serverOnly` falls back to the generic detail.
+ * raise carries only counts. A recognized retryable failure (a Git revision or a
+ * registry entry this worker cannot read yet) keeps its fixed message; any other
+ * transient failure persists the generic detail. A message that nonetheless
+ * contains any value in `serverOnly` falls back to the generic detail.
  */
 export function classifyCodeIndexFailure(
   error: unknown,
@@ -96,19 +121,12 @@ export function classifyCodeIndexFailure(
     error instanceof CodeIndexValidationError ||
     error instanceof CodeRevisionConflictError ||
     isIncompleteGenerationError(error);
-  if (!terminal || !(error instanceof Error)) {
-    return {
-      terminal: false,
-      detail: TRANSIENT_FAILURE_DETAIL,
-      errorClass,
-      ...(sqlState ? { sqlState } : {}),
-    };
-  }
-  const message = error.message.trim();
+  const keepsMessage = terminal || error instanceof CodeIndexRetryableError;
+  const message = keepsMessage && error instanceof Error ? error.message.trim() : "";
   const revealsServerData = serverOnly.some((value) => value !== "" && message.includes(value));
   return {
-    terminal: true,
-    detail: message && !revealsServerData ? message.slice(0, 1_000) : TRANSIENT_FAILURE_DETAIL,
+    terminal,
+    detail: message && !revealsServerData ? inertFailureDetail(message) : TRANSIENT_FAILURE_DETAIL,
     errorClass,
     ...(sqlState ? { sqlState } : {}),
   };
@@ -132,7 +150,9 @@ export function createCodeIndexMaintenanceModule(
       claimed.repository_key,
       claimed.workspace_id,
     );
-    if (!configured) throw new CodeIndexValidationError(CODE_REPOSITORY_NOT_CONFIGURED);
+    // Retryable: a rolling registry update, or another worker whose registry serves
+    // this key to the job's Workspace, can still run it.
+    if (!configured) throw new CodeRepositoryUnavailableError(CODE_REPOSITORY_NOT_CONFIGURED);
     return configured.repositoryPath;
   }
 

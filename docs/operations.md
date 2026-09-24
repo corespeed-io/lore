@@ -339,24 +339,39 @@ LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath"
   Workspace binding when it processes the job. It never reads the path stored in
   the job row. Give the worker the same `LORE_CODE_REPOSITORIES` and `AUTH_MODE`
   as the application. A worker with an empty registry logs
-  `code-index-maintenance disabled` and leaves jobs pending; a job whose key was
-  removed, or is no longer bound to its Workspace, ends `dead` with
-  `repositoryKey is not configured by this deployment`.
-- **Terminal failures.** Invalid input (for example a commit that is not in the
-  local clone), an OID whose source conflicts with an earlier index, and an
-  incomplete generation fail identically on every attempt, so the job ends `dead`
-  on its first attempt with that message. Messages never contain the repository
-  path. Any other failure keeps the five-attempt retry budget with exponential
-  backoff and the generic `Code Index processing failed`. Logs carry the error
+  `code-index-maintenance disabled` and leaves jobs pending. An invalid registry
+  (malformed JSON, an entry with an empty or non-UUID `workspaceIds`) also
+  disables Code Indexing in that worker, with a warning that names only the error
+  class; the retention sweep and embedding maintenance keep running. A job whose
+  key the worker's registry lacks, or no longer binds to the job's Workspace,
+  retries with `repositoryKey is not configured by this deployment`, so a rolling
+  registry update or a worker with a different registry does not end it.
+- **Retries.** A job has five attempts, with backoff of 30, 60, 120, and 240
+  seconds between them (about 7.5 minutes in all); the fifth failure ends it
+  `dead`. Failures that the local clone or mount can outlive retry: a repository
+  path that does not resolve yet (`The configured repository is not available`),
+  a commit that is not fetched yet (`Unable to read the requested Git revision`),
+  a registry miss as above, resource exhaustion, or a killed Git process. Any
+  other transient failure retries with the generic `Code Index processing
+  failed`. Fetch the commit, or bring the mount up, before the budget runs out,
+  or re-enqueue once the job is dead and its cooldown has passed.
+- **Terminal failures.** Invalid input (a malformed tree entry or path, a
+  revision over its bounds), an OID whose source conflicts with an earlier index,
+  and an incomplete generation fail identically on every attempt, so the job ends
+  `dead` on its first attempt with that message. Messages never contain the
+  repository path, and every control character in a stored message, which may
+  quote a committer-chosen path, is replaced with U+FFFD. Logs carry the error
   class and SQLSTATE, never the message.
 - **Expired final attempts.** A worker that dies during a job's last attempt leaves
   an expired lease; the next claim marks that job `dead` with
   `Code Index job lease expired during its final attempt`.
 - **Re-enqueue re-arms.** Enqueueing the same repository and commit again re-arms
-  a `dead` or `cancelled` job for the new requester with a fresh retry budget. It
-  also takes over a job whose requester can no longer run it (a revoked grant, a
-  disabled Agent, or a suspended Membership). A job that can still run is left
-  as it is.
+  a `cancelled` job at once, and a `dead` job once it has been dead for 15
+  minutes, for the new requester with a fresh retry budget. Inside that cooldown
+  the enqueue returns the dead job unchanged, so repeated requests cannot restart
+  a failing run in a loop. Re-enqueue also takes over a job whose requester can no
+  longer run it (a revoked grant, a disabled Agent, or a suspended Membership). A
+  job that can still run is left as it is.
 - **Agent lifecycle.** Disabling or deleting an Agent cancels its pending and
   processing Code Index jobs, so a job requested by an Agent never runs under
   the human owner's authority after the Agent is deleted. A worker holding such a
@@ -366,6 +381,62 @@ LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath"
 Two jobs that finish different generations of the same revision serialize on the
 revision row during activation, and the one-active-generation-per-revision index
 remains the correctness backstop.
+
+Schema revision 4 also cleans up once, as it migrates. Pending or processing jobs of
+an older indexer revision, which no current worker claims, end `cancelled` with
+`Superseded by a newer Code Index revision`; re-enqueue the commits you still need.
+It also deletes each Code Revision that recorded a byte-order-mark-only blob
+(`EF BB BF`) as indexed, has no ready, active, or retiring generation, and is cited
+by no Memory or Proposal Code Evidence. Such a revision could never finish, and
+the current indexer excludes that blob as `empty`, so re-enqueueing the commit
+now indexes it instead of failing as an OID/content conflict.
+
+### Binding existing repositories after a proxy-mode upgrade
+
+`workspaceIds` controls who may enqueue and index a repository. It does not gate
+reads: Code Repositories, Revisions, and Artifacts that a Workspace indexed earlier
+stay searchable by that Workspace's Actors. A proxy-mode deployment whose entries
+had no `workspaceIds` before this release served every Workspace, so after binding
+each entry, look for Workspaces that indexed a repository outside its new binding.
+Run this over a trusted migration-owner connection, once per repository key, with
+that key's bound Workspace ids:
+
+```sql
+SELECT repository.workspace_id, workspace.name, repository.id AS repository_id,
+       count(DISTINCT revision.id) AS revisions,
+       (SELECT count(*) FROM memory_code_evidence evidence
+        WHERE evidence.repository_id = repository.id) AS memory_citations,
+       (SELECT count(*) FROM memory_proposal_code_evidence evidence
+        WHERE evidence.repository_id = repository.id) AS proposal_citations
+FROM code_repositories repository
+JOIN workspaces workspace ON workspace.id = repository.workspace_id
+LEFT JOIN code_revisions revision ON revision.repository_id = repository.id
+WHERE repository.repository_key = 'corespeed/lore'
+  AND repository.workspace_id <> ALL ('{<bound-workspace-uuid>}'::uuid[])
+GROUP BY repository.workspace_id, workspace.name, repository.id;
+```
+
+Lore does not delete these rows for you: whether another Workspace may keep what it
+indexed is your decision. To remove one, delete its Code Repository row over the
+same connection (neither runtime role can):
+
+```sql
+BEGIN;
+DELETE FROM code_repositories
+WHERE id = '<repository-id>' AND workspace_id = '<workspace-id>';
+COMMIT;
+```
+
+The delete cascades to the repository's Code Index jobs, Code Revisions and their
+manifests, Index Generations, Artifacts, and dependency edges, and the Artifact
+delete trigger prunes payloads and Symbol/Dependency Sets that nothing else
+references, so a large repository can take a while. Memory Code Evidence and
+Proposal Code Evidence anchors have no foreign key to Code Index rows, so they
+survive with their immutable cited commit, path, and digests, and a Proposal can
+still be accepted with its anchors. Their assessment becomes `unverifiable` for
+good: anchors match their repository by id, and indexing the same key again in
+that Workspace creates a Code Repository with a new id. The query's citation
+counts show how many anchors you would affect.
 
 ## Probes and telemetry
 
