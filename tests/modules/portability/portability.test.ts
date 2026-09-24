@@ -5,6 +5,7 @@ import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
 import {
   createPortabilityModule,
+  exportedTimestamp,
   PortabilityValidationError,
   type WorkspaceArchive,
   WorkspaceExportLimitError,
@@ -579,4 +580,30 @@ test("export keeps millisecond timestamps and import provenance records them exa
   expect(provenance.rows).toEqual([
     { created: "2026-01-02T03:04:05.678", updated: "2026-01-02T03:04:06.789" },
   ]);
+});
+
+test("a timestamp a driver returns as PostgreSQL text exports in the form import accepts", async () => {
+  const testContext = await createMemoryTestContext();
+  const text = await testContext.adminDatabase.transaction(async (transaction) => {
+    const zones: Record<string, string> = {};
+    for (const zone of ["UTC", "Asia/Kolkata", "America/St_Johns"]) {
+      await transaction.query(`SELECT set_config('TimeZone', $1, true)`, [zone]);
+      const result = await transaction.query<{ value: string }>(
+        "SELECT '2026-01-02T03:04:05.678901Z'::timestamptz::text AS value",
+      );
+      zones[zone] = result.rows[0]?.value ?? "";
+    }
+    return zones;
+  });
+
+  expect(text.UTC).toBe("2026-01-02 03:04:05.678901+00");
+  expect(exportedTimestamp(text.UTC ?? "")).toBe("2026-01-02T03:04:05.678901+00:00");
+  expect(exportedTimestamp(text["Asia/Kolkata"] ?? "")).toBe("2026-01-02T08:34:05.678901+05:30");
+  expect(exportedTimestamp(text["America/St_Johns"] ?? "")).toBe(
+    "2026-01-01T23:34:05.678901-03:30",
+  );
+  expect(exportedTimestamp(new Date("2026-01-02T03:04:05.678Z"))).toBe("2026-01-02T03:04:05.678Z");
+  expect(() => exportedTimestamp("2026-02-30 00:00:00+00")).toThrow(
+    "Database returned a timestamp outside the archive format",
+  );
 });

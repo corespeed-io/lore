@@ -185,13 +185,30 @@ async function survivingImportedMemories(
   return new Map(provenance.rows.map((row) => [row.source_memory_id, row.memory_id]));
 }
 
+// PostgreSQL's ISO text form of a timestamptz: `2026-09-24 12:34:56.123456+00`.
+const POSTGRES_TIMESTAMP =
+  /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)(Z|[+-]\d{2}(?::\d{2})?)$/;
+
 /**
  * A database timestamp as archive text. The `pg` and PGlite drivers return a Date,
- * whose ISO form keeps its milliseconds (`String(Date)` would drop them); text is
- * already exact and is kept as it is.
+ * whose ISO form keeps its milliseconds (`String(Date)` would drop them). Text, as
+ * a type-parser override would return it, keeps its full precision but is rewritten
+ * to RFC 3339 and validated, so an archive never carries a timestamp its own
+ * import would refuse.
  */
-function exportedTimestamp(value: Date | string): string {
-  return value instanceof Date ? value.toISOString() : value;
+export function exportedTimestamp(value: Date | string): string {
+  if (value instanceof Date) return value.toISOString();
+  const match = POSTGRES_TIMESTAMP.exec(value);
+  const [date, time, offset] = match?.slice(1) ?? [];
+  const text =
+    date && time && offset
+      ? `${date}T${time}${offset.length === 3 ? `${offset}:00` : offset}`
+      : value;
+  try {
+    return importedTimestamp(text, "timestamp");
+  } catch {
+    throw new Error(`Database returned a timestamp outside the archive format: ${value}`);
+  }
 }
 
 // RFC 3339 `date-time`, as the archive schema publishes it, to PostgreSQL's
