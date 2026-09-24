@@ -1,6 +1,7 @@
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
 import { CohereClientV2 } from "cohere-ai";
 import { VoyageAIClient } from "voyageai";
+import { providerBaseUrl } from "@/server/providers/environment";
 import {
   assertVercelAIGatewayModel,
   VERCEL_AI_GATEWAY_HOST,
@@ -39,14 +40,9 @@ const HOSTED_RERANK_BASE_URLS: Record<HostedRerankingProvider, string> = {
   voyage: "https://api.voyageai.com",
 };
 
-function providerBaseUrl(provider: HostedRerankingProvider, baseUrl?: string): string {
-  const url = new URL(baseUrl ?? HOSTED_RERANK_BASE_URLS[provider]);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${provider} reranking base URL must use http or https`);
-  }
-  if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
-    throw new Error(`${provider} reranking base URL must use https outside localhost`);
-  }
+function hostedBaseUrl(provider: HostedRerankingProvider, baseUrl?: string): string {
+  const subject = `${provider} reranking base URL`;
+  const url = providerBaseUrl(baseUrl ?? HOSTED_RERANK_BASE_URLS[provider], subject);
   return url.toString().replace(/\/$/, "");
 }
 
@@ -139,7 +135,7 @@ export function createHostedRerankingProvider(
   if (!apiKey) throw new Error(`LORE_RERANK_API_KEY is required for ${options.provider}`);
   if (options.provider === "vercel") assertVercelAIGatewayModel(model, "cohere/rerank-v3.5");
   const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
-  const baseUrl = providerBaseUrl(options.provider, options.baseUrl);
+  const baseUrl = hostedBaseUrl(options.provider, options.baseUrl);
   const sdkOptions = {
     timeoutInSeconds: timeoutMs / 1_000,
     maxRetries: 0,

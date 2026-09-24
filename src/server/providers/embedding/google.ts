@@ -1,5 +1,6 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
 import { ApiError, GoogleGenAI } from "@google/genai/web";
+import { providerBaseUrl } from "@/server/providers/environment";
 import type { EmbeddingConfiguration } from "./config";
 
 const GOOGLE_EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com";
@@ -25,11 +26,7 @@ function modelResource(model: string): string {
 }
 
 function apiBaseUrl(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Google embedding base URL must use http or https");
-  }
-  return url.toString().replace(/\/$/, "");
+  return providerBaseUrl(baseUrl, "Google embedding base URL").toString().replace(/\/$/, "");
 }
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {

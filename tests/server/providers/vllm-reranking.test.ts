@@ -48,19 +48,19 @@ test("vLLM adapter sends the official rerank request and restores document ids",
   ]);
 });
 
-test("vLLM adapters require HTTPS outside localhost", () => {
+test("vLLM adapters require HTTPS outside loopback", () => {
   expect(() =>
     createVllmRerankingProvider({
       model: "Qwen/Qwen3-Reranker-0.6B",
       baseUrl: "http://reranker.example.com",
     }),
-  ).toThrow("must use https outside localhost");
+  ).toThrow("must use https outside loopback or host.docker.internal");
   expect(() =>
     createVllmScoreRerankingProvider({
       model: "Qwen/Qwen3-Reranker-0.6B",
       baseUrl: "http://reranker.example.com",
     }),
-  ).toThrow("must use https outside localhost");
+  ).toThrow("must use https outside loopback or host.docker.internal");
 });
 
 test("vLLM adapter rejects malformed or duplicate result indexes", async () => {

@@ -78,8 +78,9 @@ pair. A service token passes the Access gateway; it does not establish a Lore Ac
 Authenticated plain HTTP is refused
 outside loopback unless `LORE_ALLOW_INSECURE` is explicit. Prefer HTTPS; the escape
 hatch is for a trusted development network only. A service token requires both id
-and secret. The origin-only `cf-access-jwt-assertion` header is intentionally not a
-client option. This follows Cloudflare's documented
+and secret. Access credentials must be visible ASCII, and a malformed one is reported
+by its variable name without echoing the value. The origin-only
+`cf-access-jwt-assertion` header is intentionally not a client option. This follows Cloudflare's documented
 [client-token header](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
 and [service-token headers](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
 
@@ -137,7 +138,8 @@ Evidence is instead frozen as an exact commit/path/symbol/digest anchor at submi
 and copied transactionally onto the accepted Memory without re-resolution. All three
 evidence categories share one 50-item limit.
 Episode recording, Proposal submission, and direct Memory mutation methods create
-a replay-safe idempotency key unless the caller supplies one. Direct update/forget and update
+a replay-safe idempotency key unless the caller supplies one; a supplied key must be
+1 to 128 visible ASCII characters, as the API requires. Direct update/forget and update
 proposals require the current positive Memory version. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
@@ -152,7 +154,7 @@ the SDK does not add human administration commands to the CLI or tools to MCP.
 ## Host retrieval policy
 
 The TypeScript SDK exports the pure `retrieval-grounding-v5` gate as
-`planRetrievalGrounding`. Call it with the original question and trusted repository
+`planRetrievalGrounding`, with its `RetrievalGroundingReasonCode` union. Call it with the original question and trusted repository
 context: `exact` for a selected repository and
 full commit OID, `configured` when the repository has no selected commit, or
 `none` when no repository is registered.
@@ -287,14 +289,19 @@ must not treat an unresolved target as proof that no runtime dependency exists.
 MCP output has an independent 128,000-character structured-output ceiling. List
 uses bounded content previews, search returns bounded evidence without duplicating
 full Memory content, and detail/mutation responses mark `contentTruncated` or
-`metadataTruncated` when a value cannot safely fit. The MCP adapter bounds metadata
-inputs to 100,000 serialized characters, 32 levels, and 10,000 values. The HTTP
-Memory schemas use Zod JSON validation with the 100,000-character limit; depth and
-value-count limits are specific to the MCP adapter.
+`metadataTruncated` when a value cannot safely fit. `lore_code_search`,
+`lore_retrieve_context`, and `lore_code_dependencies` share the ceiling across the
+items one call returns: each excerpt gets an equal share of the characters left,
+and items that still cannot fit are dropped from the end and reported with
+`truncated: true`, so a request within the tool limits is never rejected for size.
+Metadata inputs have one bound, the same 100,000 serialized characters the HTTP
+Memory schemas enforce with Zod JSON validation; neither surface limits nesting
+depth or value count separately.
 
-All five mutation tools accept an optional `idempotencyKey`. A caller retrying an
-operation after losing the response must reuse the same key; omitting it creates a
-fresh operation.
+All five mutation tools accept an optional `idempotencyKey` of 1 to 128 visible
+ASCII characters, the HTTP `Idempotency-Key` rule; the adapter and SDK reject any
+other key before sending the request. A caller retrying an operation after losing
+the response must reuse the same key; omitting it creates a fresh operation.
 
 AutoDream is not part of this adapter. A future AutoDream process must remain an
 explicit opt-in extension outside Portable Core; it may record Observations and

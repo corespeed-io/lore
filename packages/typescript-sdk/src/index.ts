@@ -6,6 +6,7 @@ export type {
   RetrievalGroundingMode,
   RetrievalGroundingPlan,
   RetrievalGroundingQuery,
+  RetrievalGroundingReasonCode,
 } from "./generated/grounding.ts";
 export {
   planRetrievalGrounding,
@@ -202,6 +203,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_REQUEST_TIMEOUT_MS = 300_000;
 const AGENT_TOKEN_PATTERN = /^lore_agent_[0-9a-f]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** The server's Idempotency-Key rule, checked here so callers see it before a 400. */
+const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
+const VISIBLE_ASCII_PATTERN = /^[\x21-\x7e]+$/;
+/** RFC 9110 `token`: the grammar of a header name. */
+const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/**
+ * RFC 9110 `field-value` characters: visible ASCII, spaces, tabs, and obs-text,
+ * never CR, LF, NUL, or another control. Header values are checked against these
+ * rules before they reach `Headers`, whose TypeError quotes the rejected value
+ * (Bun's does), because the CLI and MCP adapter print that message to stderr.
+ */
+const HTTP_FIELD_VALUE_PATTERN = /^[\t\x20-\x7e\x80-\xff]*$/;
 const LORE_ERROR_CODE_SET = new Set<string>(LORE_ERROR_CODES);
 const RESERVED_CUSTOM_HEADERS = new Set([
   "authorization",
@@ -237,7 +250,13 @@ function normalizedTimeoutMs(value: number | null | undefined): number | null {
 }
 
 function normalizedBaseUrl(value: string | URL): URL {
-  const url = new URL(value);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    // The parser's own message quotes the input, which may embed credentials.
+    throw new TypeError("Lore baseUrl must be an absolute http or https URL");
+  }
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new TypeError("Lore baseUrl must use http or https");
   }
@@ -281,41 +300,84 @@ function actorHeaders(auth: LoreAuthentication | undefined): Headers {
   return headers;
 }
 
+/**
+ * A gateway credential without the outer whitespace `Headers` would strip. The
+ * error names the setting, never the value, which is a secret.
+ */
+function gatewayCredential(value: string, maximumLength: number, name: string): string {
+  const credential = value.trim();
+  if (credential.length > maximumLength || !VISIBLE_ASCII_PATTERN.test(credential)) {
+    throw new TypeError(`${name} must contain 1 to ${maximumLength} visible ASCII characters`);
+  }
+  return credential;
+}
+
+const ACCESS_TOKEN_MAXIMUM_LENGTH = 16_384;
+const ACCESS_SERVICE_CREDENTIAL_MAXIMUM_LENGTH = 4_096;
+
 function gatewayHeaders(auth: LoreGatewayAuthentication | undefined): Headers {
   const headers = new Headers();
   if (!auth) return headers;
   if (auth.type === "cloudflare-access-token") {
-    if (!auth.token.trim() || auth.token.length > 16_384) {
-      throw new TypeError("Cloudflare Access token is invalid");
-    }
-    headers.set("cf-access-token", auth.token);
+    headers.set(
+      "cf-access-token",
+      gatewayCredential(auth.token, ACCESS_TOKEN_MAXIMUM_LENGTH, "Cloudflare Access token"),
+    );
   } else {
-    if (!auth.clientId.trim() || auth.clientId.length > 4_096) {
-      throw new TypeError("Cloudflare Access client id is invalid");
-    }
-    if (!auth.clientSecret.trim() || auth.clientSecret.length > 4_096) {
-      throw new TypeError("Cloudflare Access client secret is invalid");
-    }
-    headers.set("cf-access-client-id", auth.clientId);
-    headers.set("cf-access-client-secret", auth.clientSecret);
+    headers.set(
+      "cf-access-client-id",
+      gatewayCredential(
+        auth.clientId,
+        ACCESS_SERVICE_CREDENTIAL_MAXIMUM_LENGTH,
+        "Cloudflare Access client id",
+      ),
+    );
+    headers.set(
+      "cf-access-client-secret",
+      gatewayCredential(
+        auth.clientSecret,
+        ACCESS_SERVICE_CREDENTIAL_MAXIMUM_LENGTH,
+        "Cloudflare Access client secret",
+      ),
+    );
   }
   return headers;
 }
 
+function customHeaderEntries(input: HeadersInit): Array<readonly [string, string]> {
+  if (input instanceof Headers) return [...input];
+  if (!Array.isArray(input)) return Object.entries(input);
+  return input.map((entry) => {
+    const [name, value] = entry;
+    if (entry.length !== 2 || name === undefined || value === undefined) {
+      throw new TypeError("Lore custom headers must be name/value pairs");
+    }
+    return [name, value] as const;
+  });
+}
+
 function normalizedCustomHeaders(input: HeadersInit | undefined): Headers {
-  const headers = new Headers(input);
-  for (const name of headers.keys()) {
+  const headers = new Headers();
+  if (input === undefined) return headers;
+  for (const [name, value] of customHeaderEntries(input)) {
+    if (!HTTP_TOKEN_PATTERN.test(name)) {
+      throw new TypeError("Lore custom header names must be HTTP tokens");
+    }
     if (RESERVED_CUSTOM_HEADERS.has(name.toLowerCase())) {
       throw new TypeError(`${name} must be configured through typed Lore client options`);
     }
+    if (!HTTP_FIELD_VALUE_PATTERN.test(value)) {
+      throw new TypeError(`Lore custom header ${name} must have a valid HTTP field value`);
+    }
+    headers.append(name, value);
   }
   return headers;
 }
 
 function normalizedIdempotencyKey(value: string | undefined): string {
   if (value === undefined) return crypto.randomUUID();
-  if (!value || value.length > 128 || value.trim() !== value) {
-    throw new TypeError("idempotencyKey must contain 1 to 128 characters without outer whitespace");
+  if (!IDEMPOTENCY_KEY_PATTERN.test(value)) {
+    throw new TypeError("idempotencyKey must contain 1 to 128 visible ASCII characters");
   }
   return value;
 }
@@ -1198,17 +1260,31 @@ export function loreConfigurationFromEnvironment(
             password: environment.LORE_BASIC_PASSWORD ?? "",
           } as const)
         : undefined;
+  // Validate gateway secrets here so a malformed value is reported by its
+  // variable name, before the client ever builds a header from it.
   const gateway =
     configuredGatewayAuth[0] === "cloudflare-access-token"
       ? ({
           type: "cloudflare-access-token",
-          token: environment.LORE_ACCESS_TOKEN ?? "",
+          token: gatewayCredential(
+            environment.LORE_ACCESS_TOKEN ?? "",
+            ACCESS_TOKEN_MAXIMUM_LENGTH,
+            "LORE_ACCESS_TOKEN",
+          ),
         } as const)
       : configuredGatewayAuth[0] === "cloudflare-service-token"
         ? ({
             type: "cloudflare-service-token",
-            clientId: environment.LORE_ACCESS_CLIENT_ID ?? "",
-            clientSecret: environment.LORE_ACCESS_CLIENT_SECRET ?? "",
+            clientId: gatewayCredential(
+              environment.LORE_ACCESS_CLIENT_ID ?? "",
+              ACCESS_SERVICE_CREDENTIAL_MAXIMUM_LENGTH,
+              "LORE_ACCESS_CLIENT_ID",
+            ),
+            clientSecret: gatewayCredential(
+              environment.LORE_ACCESS_CLIENT_SECRET ?? "",
+              ACCESS_SERVICE_CREDENTIAL_MAXIMUM_LENGTH,
+              "LORE_ACCESS_CLIENT_SECRET",
+            ),
           } as const)
         : undefined;
   const allowInsecureValue = environment.LORE_ALLOW_INSECURE?.trim().toLowerCase();
