@@ -35,7 +35,9 @@ test("the verifier authenticates the RFC 7677 SCRAM-SHA-256 example exchange", (
 
   expect(iterations).toBe(4_096);
   const clientSignature = createHmac("sha256", storedKey).update(authMessage).digest();
-  const clientKey = Buffer.from(clientProof.map((byte, index) => byte ^ (clientSignature[index] ?? 0)));
+  const clientKey = Buffer.from(
+    clientProof.map((byte, index) => byte ^ (clientSignature[index] ?? 0)),
+  );
   expect(createHash("sha256").update(clientKey).digest().equals(storedKey)).toBe(true);
   expect(createHmac("sha256", serverKey).update(authMessage).digest("base64")).toBe(
     "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=",
