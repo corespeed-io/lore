@@ -108,8 +108,9 @@ export function SearchResults({
       return (
         <div className="page-wrap">
           <p className="muted-note">
+            {/* The shell's alert banner already carries the error detail. */}
             {browseError
-              ? `Couldn't load this Workspace's Memories — ${browseError}.`
+              ? "This Workspace's Memories couldn't be loaded."
               : "No Memories in this Workspace yet."}
           </p>
         </div>

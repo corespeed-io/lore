@@ -4878,6 +4878,11 @@ a.ext {
   font-size: 13px;
 }
 
+/* Loading screens set mono type; an alert inside one keeps prose in sans. */
+.app-loading .native-error {
+  font-family: var(--font-sans);
+}
+
 .native-error button {
   min-height: 34px;
   border: 0;

@@ -11,8 +11,10 @@ import {
 } from "@/modules/graph/browser/legend";
 import type { GraphInstance } from "@/modules/graph/browser/rendering/graph";
 import type { GraphData, GraphNode } from "@/modules/graph/browser/types";
+import { isGraphCapped } from "@/modules/graph/browser/types";
 import { WorkerCanvasGraph } from "@/modules/graph/browser/WorkerCanvasGraph";
 import { useLoreSearch } from "@/modules/memories/browser/data";
+import { displayCount } from "@/shared/browser/read-state";
 
 interface GraphViewProps {
   workspaceId: string;
@@ -268,7 +270,7 @@ export function GraphView({
               }
               onClick={() => setLegendFilter(pressed ? null : { kind: "scope", value: scope })}
             >
-              {scope} {count}
+              {scope} {displayCount(count, "ready", isGraphCapped(data))}
             </button>
           );
         })}
@@ -310,7 +312,8 @@ export function GraphView({
           <div className="graph-node-preview-head">
             {selectedType && <span className="type-badge">{selectedType}</span>}
             <span className="graph-node-preview-count">
-              {selectedNode.scope} · {selectedSummary.links.length} links
+              {selectedNode.scope} ·{" "}
+              {displayCount(selectedSummary.links.length, "ready", isGraphCapped(data))} links
             </span>
           </div>
           <h2 className="graph-node-preview-title">{selectedNode.label}</h2>

@@ -104,14 +104,19 @@ export function Overview({
       <ActivityChart memories={memories} />
 
       <div className="panel-grid">
-        <Breakdown byCounts={countByType(memories)} notice={memoryNotice} onType={onType} />
+        <Breakdown
+          byCounts={countByType(memories)}
+          notice={memoryNotice}
+          lowerBound={!memoriesComplete}
+          onType={onType}
+        />
         <TopHubs
           nodes={graphData.nodes}
           links={graphData.links}
           state={graphState}
           onOpen={onOpen}
         />
-        <Sources sources={sources} notice={memoryNotice} />
+        <Sources sources={sources} notice={memoryNotice} lowerBound={!memoriesComplete} />
         <RecentActivity items={memories.slice(0, 5)} notice={memoryNotice} onOpen={onOpen} />
         {graphState === "ready" && <GraphHealth data={graphData} onOpen={onOpen} />}
       </div>
