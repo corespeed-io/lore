@@ -70,6 +70,20 @@ test("a browser caller can still cancel a request after a long wait", async () =
   expect(getRequestLog()).toEqual([]);
 });
 
+test("the browser client calls fetch without rebinding it, as window.fetch requires", async () => {
+  // Browsers throw "Illegal invocation" when window.fetch runs with any receiver but window.
+  const fetcher = vi.fn(function (this: unknown) {
+    if (this !== undefined && this !== globalThis) {
+      throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+    }
+    return Promise.resolve(Response.json([]));
+  });
+  vi.stubGlobal("fetch", fetcher);
+
+  await expect(getBrowserClient().listWorkspaces()).resolves.toEqual([]);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
 test("invalid JSON is recorded as a failure after consuming the body", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>Not JSON</html>")));
 

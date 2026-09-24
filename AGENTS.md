@@ -1174,6 +1174,10 @@ those rules with mocks that merely repeat their implementation.
   replace test execution. CI's stable `check` gate requires every validation
   job to succeed; cache hits must not skip their checks.
 - Date strings are UTC; render date labels with `timeZone: "UTC"`.
+- A `vi.fn()` fetch stub accepts any receiver, but browsers reject `window.fetch` called
+  with one ("Illegal invocation"), and Bun's fetch accepts it too, so neither the stub nor
+  the CLI/MCP can catch a transport that calls `this.fetch(...)`. The SDK therefore calls
+  its fetch detached; `tests/ui/sdk.test.ts` pins that with a receiver-checking stub.
 - `tests/modules/code/code-index.test.ts` builds real Git fixtures with `git add`, so a
   user-level global gitignore (`~/.config/git/ignore` or `core.excludesfile`)
   that excludes fixture paths like `dist/` silently drops files from the

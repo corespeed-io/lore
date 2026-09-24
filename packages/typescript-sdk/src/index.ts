@@ -443,8 +443,11 @@ class LoreTransport {
         "Lore authentication requires HTTPS outside loopback; set allowInsecure only for a trusted development network",
       );
     }
-    this.fetch = options.fetch ?? globalThis.fetch;
-    if (typeof this.fetch !== "function") throw new TypeError("A Fetch implementation is required");
+    const fetchImpl = options.fetch ?? globalThis.fetch;
+    if (typeof fetchImpl !== "function") throw new TypeError("A Fetch implementation is required");
+    // Call it detached: browsers reject window.fetch invoked with any other receiver
+    // ("Illegal invocation"), and this.fetch(...) would make the transport the receiver.
+    this.fetch = (input, init) => fetchImpl(input, init);
     this.headers = customHeaders;
     this.timeoutMs = normalizedTimeoutMs(options.timeoutMs);
     this.credentials = options.credentials;
