@@ -339,6 +339,20 @@ test("same-origin browsers, proxied origins, safe methods, and non-browser clien
       }),
     ),
   ).toBe(false);
+  // A proxy that rewrites Host hides the public origin; the browser's Fetch Metadata
+  // still vouches for a same-origin request, but a bare mismatched Origin does not.
+  const rewrittenHost = { host: "127.0.0.1:3000", origin: "https://lore.example.com" };
+  expect(
+    isCrossSiteRequest(
+      unsafe("http://127.0.0.1:3000/api/v1/workspaces", {
+        ...rewrittenHost,
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+  ).toBe(false);
+  expect(isCrossSiteRequest(unsafe("http://127.0.0.1:3000/api/v1/workspaces", rewrittenHost))).toBe(
+    true,
+  );
   expect(
     isCrossSiteRequest(
       new Request("https://lore.test/api/v1/memories", {

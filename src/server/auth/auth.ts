@@ -182,12 +182,18 @@ function requestHosts(request: Request): Set<string> {
  * Browser CSRF defense for unsafe methods. A cross-site Fetch Metadata request, or one
  * whose Origin is not this request's own host, is rejected before authentication, so
  * ambient Basic credentials or an Access cookie cannot be replayed by another site.
- * Non-browser clients (SDK, CLI, MCP) send neither header and are unaffected. Hosts
- * compare without the scheme: a TLS-terminating proxy may present plain HTTP here.
+ * Non-browser clients (SDK, CLI, MCP) send neither header and are unaffected.
+ *
+ * Only a browser can set Sec-Fetch-Site, so `same-origin` is trusted even when a
+ * reverse proxy rewrote Host; other requests fall back to comparing Origin with the
+ * request's hosts. Hosts compare without the scheme because a TLS-terminating proxy
+ * may present plain HTTP here.
  */
 export function isCrossSiteRequest(request: Request): boolean {
   if (SAFE_METHODS.has(request.method.toUpperCase())) return false;
-  if (request.headers.get("sec-fetch-site")?.trim().toLowerCase() === "cross-site") return true;
+  const site = request.headers.get("sec-fetch-site")?.trim().toLowerCase();
+  if (site === "cross-site") return true;
+  if (site === "same-origin") return false;
   const origin = request.headers.get("origin");
   if (origin === null) return false;
   let originHost: string;
