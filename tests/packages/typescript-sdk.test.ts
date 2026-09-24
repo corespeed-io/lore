@@ -1,4 +1,9 @@
-import type { Episode, Memory, MemoryProposal } from "@corespeed/lore-sdk";
+import type {
+  Episode,
+  Memory,
+  MemoryProposal,
+  RetrievalGroundingReasonCode,
+} from "@corespeed/lore-sdk";
 import {
   LoreApiError,
   LoreClient,
@@ -19,6 +24,8 @@ test("the SDK exports the same grounding gate hosts and the app share", () => {
     repositoryContext: "configured",
   } as const;
   expect(planRetrievalGrounding(query)).toEqual(appPlanRetrievalGrounding(query));
+  const reasonCode: RetrievalGroundingReasonCode = planRetrievalGrounding(query).reasonCode;
+  expect(reasonCode).toBe(appPlanRetrievalGrounding(query).reasonCode);
 });
 
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000001";
@@ -372,6 +379,29 @@ describe("Lore TypeScript SDK", () => {
     ).not.toThrow();
   });
 
+  test("reads custom headers from any iterable, such as another realm's Headers", () => {
+    // Undici, node-fetch, and polyfill Headers keep entries in internal slots, so
+    // Object.entries sees nothing; the SDK must iterate them like HeadersInit does.
+    class ForeignHeaders {
+      readonly #entries: Array<[string, string]>;
+      constructor(entries: Array<[string, string]>) {
+        this.#entries = entries;
+      }
+      *[Symbol.iterator](): IterableIterator<[string, string]> {
+        yield* this.#entries;
+      }
+    }
+    expect(
+      () =>
+        new LoreClient({
+          baseUrl: "https://lore.example.test",
+          headers: new ForeignHeaders([
+            ["authorization", "Bearer bypass"],
+          ]) as unknown as HeadersInit,
+        }),
+    ).toThrow(/typed Lore client options/);
+  });
+
   test("does not allow custom headers to bypass authentication transport policy", () => {
     expect(
       () =>
@@ -387,6 +417,135 @@ describe("Lore TypeScript SDK", () => {
           headers: { "x-trusted-proxy": "signed" },
         }),
     ).toThrow(/requires HTTPS/);
+  });
+
+  test.each([
+    ["a newline", "leaked-secret\ninjected: 1"],
+    ["U+2028", "leaked-secret\u2028tail"],
+    ["a NUL", "leaked-secret\u0000tail"],
+  ])(
+    "rejects gateway and custom header values containing %s without echoing them",
+    (_label, value) => {
+      const baseUrl = "https://lore.example.test";
+      const attempts: Array<[() => unknown, string]> = [
+        [
+          () =>
+            new LoreClient({ baseUrl, gateway: { type: "cloudflare-access-token", token: value } }),
+          "Cloudflare Access token must contain 1 to 16384 visible ASCII characters",
+        ],
+        [
+          () =>
+            new LoreClient({
+              baseUrl,
+              gateway: {
+                type: "cloudflare-service-token",
+                clientId: value,
+                clientSecret: "secret",
+              },
+            }),
+          "Cloudflare Access client id must contain 1 to 4096 visible ASCII characters",
+        ],
+        [
+          () =>
+            new LoreClient({
+              baseUrl,
+              gateway: {
+                type: "cloudflare-service-token",
+                clientId: "id.access",
+                clientSecret: value,
+              },
+            }),
+          "Cloudflare Access client secret must contain 1 to 4096 visible ASCII characters",
+        ],
+        [
+          () => new LoreClient({ baseUrl, headers: { "x-trusted-proxy": value } }),
+          "Lore custom header x-trusted-proxy must have a valid HTTP field value",
+        ],
+        [
+          () => new LoreClient({ baseUrl, headers: [["x-trusted-proxy", value]] }),
+          "Lore custom header x-trusted-proxy must have a valid HTTP field value",
+        ],
+        [
+          () => loreConfigurationFromEnvironment({ LORE_ACCESS_TOKEN: value }),
+          "LORE_ACCESS_TOKEN must contain 1 to 16384 visible ASCII characters",
+        ],
+        [
+          () =>
+            loreConfigurationFromEnvironment({
+              LORE_ACCESS_CLIENT_ID: "id.access",
+              LORE_ACCESS_CLIENT_SECRET: value,
+            }),
+          "LORE_ACCESS_CLIENT_SECRET must contain 1 to 4096 visible ASCII characters",
+        ],
+      ];
+      for (const [attempt, message] of attempts) {
+        expect(attempt).toThrow(new TypeError(message));
+      }
+      expect(() => new LoreClient({ baseUrl, headers: { [value]: "signed" } })).toThrow(
+        /^Lore custom header names must be HTTP tokens$/,
+      );
+    },
+  );
+
+  test("trims outer whitespace from gateway credentials and keeps valid custom headers", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+    const client = new LoreClient({
+      baseUrl: "https://lore.example.test",
+      gateway: { type: "cloudflare-access-token", token: " access-jwt\n" },
+      headers: [
+        ["x-trusted-proxy", "signed\tvalue"],
+        ["x-trusted-proxy", "second"],
+      ],
+      fetch: fetchMock,
+    });
+    await client.listWorkspaces();
+    const headers = new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers);
+    expect(headers.get("cf-access-token")).toBe("access-jwt");
+    expect(headers.get("x-trusted-proxy")).toBe("signed\tvalue, second");
+  });
+
+  test("reports an unparseable base URL without echoing it", () => {
+    expect(() => new LoreClient({ baseUrl: "https://user:leaked-secret@[bad" })).toThrow(
+      /^Lore baseUrl must be an absolute http or https URL$/,
+    );
+  });
+
+  test.each(["", " key", "key ", "two words", "café", "line\nbreak", "k".repeat(129)])(
+    "rejects idempotency key %j before sending a request",
+    async (idempotencyKey) => {
+      const fetchMock = vi.fn();
+      const workspace = new LoreClient({
+        baseUrl: "https://lore.example.test",
+        auth: { type: "agent", token: AGENT_TOKEN },
+        fetch: fetchMock,
+      }).workspace(WORKSPACE_ID);
+
+      await expect(workspace.remember({ content: "fact" }, { idempotencyKey })).rejects.toThrow(
+        /^idempotencyKey must contain 1 to 128 visible ASCII characters$/,
+      );
+      await expect(
+        workspace.forgetMemory(MEMORY_ID, { expectedVersion: 1, idempotencyKey }),
+      ).rejects.toThrow(/visible ASCII/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  test("accepts every visible ASCII idempotency key up to 128 characters", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(memory()));
+    const workspace = new LoreClient({
+      baseUrl: "https://lore.example.test",
+      auth: { type: "agent", token: AGENT_TOKEN },
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    const visibleAscii = Array.from({ length: 0x7e - 0x21 + 1 }, (_, offset) =>
+      String.fromCharCode(0x21 + offset),
+    ).join("");
+
+    for (const idempotencyKey of [visibleAscii, "k".repeat(128)]) {
+      await workspace.remember({ content: "fact" }, { idempotencyKey });
+      const init = fetchMock.mock.lastCall?.[1] as RequestInit | undefined;
+      expect(new Headers(init?.headers).get("idempotency-key")).toBe(idempotencyKey);
+    }
   });
 
   test("uses Cloudflare client and service-token headers instead of the origin assertion", async () => {

@@ -1,19 +1,24 @@
-import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { verifyRestoredDatabase } from "../../scripts/database/restore.ts";
+import {
+  NON_TENANT_PUBLIC_TABLES as OPERATIONS_NON_TENANT_PUBLIC_TABLES,
+  REQUIRED_TENANT_TABLES as OPERATIONS_REQUIRED_TENANT_TABLES,
+} from "@/modules/operations/service";
+import { applyMigrationChain } from "../../scripts/database/lib/migration-preflight.ts";
+import {
+  NON_TENANT_PUBLIC_TABLES,
+  REQUIRED_TENANT_TABLES,
+  verifyRestoredDatabase,
+} from "../../scripts/database/restore.ts";
 
 const postgres = new PGlite({ extensions: { pg_trgm, vector } });
-const migrations = new URL("../../db/migrations/", import.meta.url);
 const verify = () => verifyRestoredDatabase((sql) => postgres.query(sql));
 
 beforeAll(async () => {
   await postgres.waitReady;
-  for (const file of (await readdir(migrations)).filter((name) => name.endsWith(".sql")).sort()) {
-    await postgres.exec(await readFile(new URL(file, migrations), "utf8"));
-  }
+  await applyMigrationChain((sql) => postgres.exec(sql));
 });
 
 afterAll(() => postgres.close());
@@ -26,6 +31,89 @@ test("restore verification accepts the real leased-job grants without direct que
     `),
   ).resolves.toMatchObject({ rows: [{ direct_queue_read: false }] });
   await expect(verify()).resolves.toMatchObject({ runtime_roles_safe: true, tenant_rls: true });
+});
+
+test("restore verification requires RLS on every tenant table, including tables added later", async () => {
+  const protectedTables = await postgres.query<{ relname: string }>(
+    `SELECT relname
+     FROM pg_class
+     WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND relrowsecurity
+     ORDER BY relname`,
+  );
+  const names = protectedTables.rows.map((table) => table.relname);
+  // The hand-kept list this replaced covered 21 tables and missed the rest.
+  expect(names).toEqual(
+    expect.arrayContaining([
+      "code_index_jobs",
+      "episode_evidence_chunk_embeddings",
+      "memory_code_evidence",
+      "memory_proposals",
+    ]),
+  );
+  for (const table of names) {
+    await postgres.exec("BEGIN");
+    try {
+      await postgres.exec(`ALTER TABLE public.${table} DISABLE ROW LEVEL SECURITY`);
+      await expect(verify(), table).rejects.toThrow("Restored database failed Lore");
+    } finally {
+      await postgres.exec("ROLLBACK");
+    }
+  }
+  await postgres.exec("BEGIN");
+  try {
+    await postgres.exec("CREATE TABLE public.future_tenant_records (id uuid PRIMARY KEY)");
+    await expect(verify()).rejects.toThrow("Restored database failed Lore");
+  } finally {
+    await postgres.exec("ROLLBACK");
+  }
+  await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
+});
+
+test("restore verification exempts an extension's own table, but never a tenant table", async () => {
+  await postgres.exec("BEGIN");
+  try {
+    await postgres.exec("CREATE TABLE public.extension_reference_records (id integer)");
+    await expect(verify()).rejects.toThrow("Restored database failed Lore");
+    // As PostGIS owns spatial_ref_sys: the table belongs to the extension, not to Lore.
+    await postgres.exec("ALTER EXTENSION vector ADD TABLE public.extension_reference_records");
+    await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
+    // Extension ownership cannot excuse a tenant table from RLS.
+    await postgres.exec("ALTER EXTENSION vector ADD TABLE public.memories");
+    await postgres.exec("ALTER TABLE public.memories DISABLE ROW LEVEL SECURITY");
+    await expect(verify()).rejects.toThrow("Restored database failed Lore");
+  } finally {
+    await postgres.exec("ROLLBACK");
+  }
+});
+
+test("restore verification requires every tenant table to exist", async () => {
+  const protectedTables = await postgres.query<{ relname: string }>(
+    `SELECT relname
+     FROM pg_class
+     WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND relrowsecurity
+     ORDER BY relname`,
+  );
+  const names = protectedTables.rows.map((table) => table.relname);
+  // Both hand-kept lists must name exactly the schema's tenant tables, so a new
+  // migration table cannot slip past readiness or restore verification.
+  expect([...REQUIRED_TENANT_TABLES].sort()).toEqual(names);
+  expect([...OPERATIONS_REQUIRED_TENANT_TABLES].sort()).toEqual(names);
+  // Readiness and restore must agree on which public tables may lack RLS.
+  expect([...NON_TENANT_PUBLIC_TABLES].sort()).toEqual(
+    [...OPERATIONS_NON_TENANT_PUBLIC_TABLES].sort(),
+  );
+
+  for (const table of ["memory_links", "episode_evidence_chunks"]) {
+    await postgres.exec("BEGIN");
+    try {
+      // A renamed table keeps RLS, so only the existence check can catch it.
+      await postgres.exec(`ALTER TABLE public.${table} RENAME TO ${table}_missing`);
+      await expect(verify(), table).rejects.toThrow("Restored database failed Lore");
+    } finally {
+      await postgres.exec("ROLLBACK");
+    }
+  }
+  await expect(verify()).resolves.toMatchObject({ tenant_rls: true });
 });
 
 test.each([

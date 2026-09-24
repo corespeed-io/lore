@@ -6,11 +6,14 @@ import { createOpenAICompatibleQueryPlanningProvider } from "./openai-compatible
 
 export type QueryPlanningConfigurationWarning = (message: string) => void;
 
-/** Deployment credential each OpenAI-compatible planner falls back to. */
-const PLANNER_CREDENTIAL_VARIABLES: Record<"openai" | "vercel" | "vllm", string> = {
+/**
+ * Deployment credential each managed OpenAI-compatible planner falls back to.
+ * vLLM has none: it is an operator-run endpoint, and handing it the deployment's
+ * OpenAI key would send that credential to a different service.
+ */
+const PLANNER_CREDENTIAL_VARIABLES: Record<"openai" | "vercel", string> = {
   openai: "OPENAI_API_KEY",
   vercel: "AI_GATEWAY_API_KEY",
-  vllm: "OPENAI_API_KEY",
 };
 
 function warnOnPlanningFailure(
@@ -75,14 +78,15 @@ export function createQueryPlanningProviderFromEnvironment(
         warn,
       );
     }
+    const fallbackCredential =
+      provider === "vllm" ? undefined : env[PLANNER_CREDENTIAL_VARIABLES[provider]];
     return warnOnPlanningFailure(
       createOpenAICompatibleQueryPlanningProvider({
         provider,
         model: env.LORE_QUERY_PLANNER_MODEL ?? "",
         baseUrl: optionalString(env.LORE_QUERY_PLANNER_BASE_URL),
         apiKey:
-          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ??
-          optionalString(env[PLANNER_CREDENTIAL_VARIABLES[provider]]),
+          optionalString(env.LORE_QUERY_PLANNER_API_KEY) ?? optionalString(fallbackCredential),
         instruction: env.LORE_QUERY_PLANNER_INSTRUCTION,
         timeoutMs: positiveInteger(env.LORE_QUERY_PLANNER_TIMEOUT_MS, 30_000),
       }),

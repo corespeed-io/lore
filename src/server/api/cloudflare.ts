@@ -22,6 +22,18 @@ export function fetchCloudflareApi(
               }),
             );
           },
+          notifyMany(messages) {
+            // Queues accept at most 100 messages per sendBatch, as the sweep sends them.
+            for (let offset = 0; offset < messages.length; offset += 100) {
+              context.waitUntil(
+                env.MEMORY_MAINTENANCE_QUEUE.sendBatch(
+                  messages.slice(offset, offset + 100).map((body) => ({ body })),
+                ).catch(() => {
+                  console.warn("Lore maintenance queue notification failed; sweep will retry");
+                }),
+              );
+            }
+          },
         },
       }),
     // Workers do not run local Git ingestion. Public enqueue is self-host only.

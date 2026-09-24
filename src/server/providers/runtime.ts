@@ -4,9 +4,14 @@ import { createEmbeddingProviderFromEnvironment } from "./embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "./query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "./reranking/factory";
 
-let runtimeProviders:
-  | Pick<MemoryModuleOptions, "embeddingProvider" | "queryPlanningProvider" | "rerankingProvider">
-  | undefined;
+/**
+ * Every deployment-wide option except the request-scoped maintenance notifier.
+ * The environment is read once per process, next to the providers it configures,
+ * so an invalid knob warns once instead of on every request.
+ */
+type RuntimeDeploymentOptions = Omit<MemoryModuleOptions, "maintenanceNotifier">;
+
+let runtimeDeploymentOptions: RuntimeDeploymentOptions | undefined;
 
 const warn = (message: string) => console.warn(message);
 
@@ -44,16 +49,11 @@ function rerankCandidateLimitFromEnvironment(): number {
   return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 200) : 50;
 }
 
-export function getRuntimeMemoryModuleOptions(
-  options: { maintenanceNotifier?: MemoryMaintenanceNotifier } = {},
-): MemoryModuleOptions {
-  runtimeProviders ??= {
+function runtimeDeploymentOptionsFromEnvironment(): RuntimeDeploymentOptions {
+  return {
     embeddingProvider: createEmbeddingProviderFromEnvironment(process.env, warn),
     queryPlanningProvider: createQueryPlanningProviderFromEnvironment(process.env, warn),
     rerankingProvider: createRerankingProviderFromEnvironment(process.env, warn),
-  };
-  return {
-    ...runtimeProviders,
     // Lore v1 protocol invariant: the baseline schema is built for 1024.
     embeddingDimensions: EMBEDDING_DIMENSIONS,
     entityAliasRecall: entityAliasRecallFromEnvironment(),
@@ -65,7 +65,6 @@ export function getRuntimeMemoryModuleOptions(
       integer: true,
       emptyIsZero: true,
     }),
-    maintenanceNotifier: options.maintenanceNotifier,
     queryPlannerMaxQueries: numberFromEnvironment("LORE_QUERY_PLANNER_MAX_QUERIES", 3, [1, 5], {
       integer: true,
     }),
@@ -84,4 +83,11 @@ export function getRuntimeMemoryModuleOptions(
       [0, 2],
     ),
   };
+}
+
+export function getRuntimeMemoryModuleOptions(
+  options: { maintenanceNotifier?: MemoryMaintenanceNotifier } = {},
+): MemoryModuleOptions {
+  runtimeDeploymentOptions ??= runtimeDeploymentOptionsFromEnvironment();
+  return { ...runtimeDeploymentOptions, maintenanceNotifier: options.maintenanceNotifier };
 }

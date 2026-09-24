@@ -36,8 +36,26 @@ scoped by Workspace, Actor, and operation, expire after 24 hours, and store only
 request hash plus the bounded response. Reusing a key with a different request
 returns `idempotency_conflict` (409).
 
+A 409 carries more than one `code`, so clients must branch on `code`, not status:
+`idempotency_conflict` must not be retried with the same key, while
+`transaction_conflict` (a deadlock or serialization failure the database resolved
+by aborting this request) is safe to retry after its `Retry-After` delay with the
+same `Idempotency-Key`.
+
 Memory browse pagination accepts an opaque `cursor` and returns the next value in
 `x-lore-next-cursor`. Do not parse or persist assumptions about the cursor format.
+
+Every JSON request body is bounded while it is read. The default bound is
+10,485,760 UTF-8 bytes (10 MiB), the cap Next's middleware body clone used to
+impose on self-host. `POST /api/v1/episodes` allows 13,048,576 bytes, enough for
+its full content and metadata limits even with every character `\uXXXX`-escaped,
+`POST /api/v1/evaluations/suites` allows 38,321,536 bytes, enough for 1,000 cases
+at the 10,000-character query limit with full 100-id `expectedMemoryIds` and
+`forbiddenMemoryIds` lists, and Workspace import allows 50,000,000. A larger body
+is refused with 413 `payload_too_large`: a declared `Content-Length` is refused
+before any byte is read, and a streamed body is counted as it arrives and
+abandoned at the bound. A body whose upload fails partway (the client aborts or the
+connection resets) is 400 `invalid_request`, not a server error.
 
 ## Workspace export and import
 
@@ -49,11 +67,13 @@ Memory browse pagination accepts an opaque `cursor` and returns the next value i
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
 
-An archive is bounded to 10,000 visible Memories and 50,000 visible Links, matching
-the import contract. Export reads only a one-row sentinel beyond each bound, so a
-Worker never materializes an unbounded number of Workspace rows. If either bound
-is exceeded, export returns `workspace_export_limit_exceeded` (409) and does not
-emit a partial archive. The same limits are published by `/api/v1/capabilities`.
+An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
+48,000,000 serialized bytes, so every archive export produces fits the
+50,000,000-byte import request limit. Export keeps a running size sum and reads only
+a one-row sentinel beyond each bound, so a Worker never materializes an unbounded
+number of Workspace rows. If any bound is exceeded, export returns
+`workspace_export_limit_exceeded` (409) and does not emit a partial archive. The
+row limits are published by `/api/v1/capabilities`.
 
 It never includes another member's private Memory, credentials, Memberships,
 Agents, embeddings, jobs, evaluations, idempotency records, or mutation events.
@@ -63,8 +83,34 @@ conflictPolicy }`. Every source owner must be explicitly mapped to the importing
 User; Lore does not guess ownership. Always run with `dryRun: true` first. The
 default `remap` policy always creates fresh ids, `skip` omits visible colliding rows,
 and `error` rejects visible collisions. Checksum, counts, field limits, link endpoints, and
-owner mapping are validated before writes. A completed archive checksum is
-replay-safe for that importer and Workspace.
+owner mapping are validated before writes; metadata is checked with the same
+100,000-character rule as the Memory API, so anything export produced imports.
+A dry run runs the same validation as the real import, so it also refuses, with
+400 `invalid_archive`, text PostgreSQL would reject at write time: a NUL character
+or an unpaired UTF-16 surrogate in content, a Link kind, or any metadata key or
+string; a metadata object with its own `__proto__` key (the metadata schema drops
+it, so the stored metadata would differ from what the checksum covers); a
+timestamp that is not RFC 3339 `date-time` within PostgreSQL's range (years 0001
+to 9999, a real calendar day, offsets up to ±15:59); and an archive nested too
+deeply to checksum. Only a human Actor may import: an Agent is refused with 403
+before its request body is read. An import request larger than 50,000,000 bytes is
+refused with 413 `payload_too_large` before it is parsed, whether it declares
+`Content-Length` or streams. Imported Memories get embedding jobs in the import
+transaction, so dense retrieval does not wait for the sweep.
+
+Archive timestamps carry millisecond precision, the precision of the driver's
+`Date`. Import records the archive's timestamp text as source provenance exactly as
+given, up to PostgreSQL's microseconds.
+
+A completed archive checksum is replay-safe for that importer and Workspace while
+every Memory it imported still exists. If some or all of them were deleted,
+importing the same archive again restores the missing Memories, reuses the
+survivors, and re-creates Links that touch a restored Memory, on the same receipt.
+
+The import limit counts UTF-8 bytes of the request body. Archives exported before
+the 48,000,000-byte export bound existed can exceed it, especially CJK or other
+non-ASCII-heavy Workspaces; re-export them from an upgraded deployment, or split
+the Workspace, rather than raising the limit.
 
 Every imported Memory receives a fresh target id. `error` and `skip` apply only to
 source-id collisions the importing Actor can already see; Lore never probes or
@@ -165,9 +211,10 @@ is signed off. The canonical procedure is PostgreSQL's
 
 The native Ollama SDK has no non-streaming request deadline. A connected server
 that stops answering can leave `provider.embed()` pending indefinitely. The
-self-host worker waits for its current batch before polling again, so this can
-also delay other embedding generations, Code Index jobs, and discovery sweeps.
-This is an accepted consequence of using the SDK's default transport.
+self-host worker's embedding loop waits for its current round before polling again,
+so this can delay other embedding generations. Code Index jobs and the discovery and
+retention sweep run in their own loops and keep making progress. This is an accepted
+consequence of using the SDK's default transport.
 
 The embedding lease is an ownership/reclaim window, not a watchdog. Ollama uses
 the default seven-minute window regardless of `LORE_EMBEDDING_TIMEOUT_MS`;
@@ -181,8 +228,11 @@ progress, and verify that Ollama itself responds. Restore or restart Ollama with
 the service manager used by the deployment, then restart a stuck maintenance
 worker through its supervisor (native development: `bun run service:restart`).
 The existing expired-lease claim path recovers the job while its retry budget
-remains; inspect the report's dead-job count for exhausted jobs. Do not clear lease
-tokens manually or mark unfinished jobs successful. `/livez` and `/readyz` are not worker
+remains; inspect the report's dead-job count for exhausted jobs and re-arm them with
+`bun run db:embedding:requeue-dead` (see [dead embedding jobs](#dead-embedding-jobs)).
+When the stalled run finally returns, its late write is fenced by the replacement
+lease and it logs `job_lost`, a normal outcome rather than an infrastructure error.
+Do not clear lease tokens manually or mark unfinished jobs successful. `/livez` and `/readyz` are not worker
 liveness checks and do not prove this polling loop is progressing. Deployments
 that require bounded provider waits should use an SDK with native deadlines.
 
@@ -214,7 +264,17 @@ bounded cleanup/candidate Memory rows in UUID order. It reconciles at most one
 configured batch each of terminal jobs, stale jobs, and new candidates. Embedding
 HTTP work runs after that transaction and holds none of those locks.
 
-Inspect exact coverage with:
+Inspect exact coverage with the read-only report. It never creates a generation
+or seeds jobs; before the worker's first sweep for that identity it prints
+`not initialized`. The `db:embedding:*` commands run with `--no-env-file`, so pass
+every variable explicitly. `report` and `activate` require the generation to be
+named: either `LORE_EMBEDDING_BUILD_PROVIDER` and `LORE_EMBEDDING_BUILD_MODEL`
+(which take precedence), or `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`.
+With neither pair they exit with an error before connecting, rather than fall back
+to the default Ollama model, which could activate an old generation and roll
+serving back to it. Both print the provider, model, dimensions, revision, and the
+variable pair they acted on under `generation`; check it before relying on the
+result:
 
 ```bash
 LORE_MAINTENANCE_DATABASE_URL=postgres://... \
@@ -224,25 +284,195 @@ LORE_EMBEDDING_BUILD_MODEL=gemini-embedding-2 \
 ```
 
 Activation refuses any missing chunk, unfinished job, or dead job. Once the report
-is complete, activate in one database transaction, then deploy the request process
-with the new provider/model:
+is complete, activate in one database transaction with the same variables, then
+deploy the request process with the new provider/model:
 
 ```bash
-bun run db:embedding:activate
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+LORE_EMBEDDING_BUILD_PROVIDER=google \
+LORE_EMBEDDING_BUILD_MODEL=gemini-embedding-2 \
+  bun run db:embedding:activate
 ```
 
 The former generation becomes `retiring` and remains queryable by the previous app
-configuration during a rolling deploy. Roll back by selecting the former
+configuration during a rolling deploy. Roll back by naming the former
 provider/model as the build target and running the same activation command.
 `LORE_EMBEDDING_ROLLBACK_SECONDS` defaults to seven days; after that window the
 maintenance sweep prunes an idle retiring generation and its vectors. Canonical
 Memory chunks are not rewritten during a model switch.
 
+### Dead embedding jobs
+
+A job that fails eight times stays `dead`, and a dead job blocks activation of its
+generation. After fixing the cause, count and then re-arm one generation's dead jobs
+with the maintenance login; take the id from `db:embedding:report`:
+
+```bash
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id>
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id> --apply
+```
+
+The first form is a dry run that only counts. `--apply` resets every dead job of
+that building or active generation whose Memory still matches the job's version,
+owner, and scope to `pending` with `attempt_count` 0, in one transaction that takes
+the generation lock first, as retention and activation do. Jobs for a Memory that has
+changed since stay dead for the sweep to cancel. The command refuses a retiring,
+failed, or unknown generation.
+
+## Code Index jobs
+
+Code Index jobs index one exact commit of an operator-configured repository.
+`LORE_CODE_REPOSITORIES` maps each repository key to a display name, a local path,
+and optionally the Workspaces allowed to index it:
+
+```bash
+LORE_CODE_REPOSITORIES='{"corespeed/lore":{"displayName":"Lore","repositoryPath":"/srv/lore","workspaceIds":["<workspace-uuid>"]}}'
+```
+
+- **Workspace binding.** With `workspaceIds`, only Actors in those Workspaces can
+  enqueue or index the repository. An entry without `workspaceIds` is served to
+  every Workspace, so Lore keeps it only when `AUTH_MODE` is explicitly `password`
+  or `none` (single-operator deployments). With `AUTH_MODE=proxy`, or when
+  `AUTH_MODE` is unset, such an entry is ignored with a warning. A Workspace
+  outside the binding receives exactly the same `400` as an unconfigured key, so
+  the response cannot enumerate the registry.
+- **The worker needs the registry too.** The maintenance worker resolves each job's
+  repository path from its own `LORE_CODE_REPOSITORIES` by key and re-checks the
+  Workspace binding when it processes the job. It never reads the path stored in
+  the job row. Give the worker the same `LORE_CODE_REPOSITORIES` and `AUTH_MODE`
+  as the application. A worker with an empty registry logs
+  `code-index-maintenance disabled` and leaves jobs pending. An invalid registry
+  (malformed JSON, an entry with an empty or non-UUID `workspaceIds`) also
+  disables Code Indexing in that worker, with a warning that names only the error
+  class; the retention sweep and embedding maintenance keep running. A job whose
+  key the worker's registry lacks, or no longer binds to the job's Workspace,
+  retries with `repositoryKey is not configured by this deployment`, so a rolling
+  registry update or a worker with a different registry does not end it.
+- **Docker Compose.** Each `repositoryPath` is a path inside the containers, and
+  Compose mounts no repository by default. Mount every registered repository
+  read-only at the same absolute path in both the `lore` and `maintenance`
+  services (the commented `volumes` entries in `compose.yaml`). The image runs as
+  the `bun` user, so Git refuses a repository owned by another uid as "dubious
+  ownership"; trust exactly that path with the commented `GIT_CONFIG_*`
+  `safe.directory` entries in both services.
+- **Retries.** A job has five attempts, with backoff of 30, 60, 120, and 240
+  seconds between them (about 7.5 minutes in all); the fifth failure ends it
+  `dead`. Failures that the local clone or mount can outlive retry: a repository
+  path that does not resolve yet (`The configured repository is not available`),
+  a commit that is not fetched yet (`Unable to read the requested Git revision`),
+  a registry miss as above, resource exhaustion, or a killed Git process. Any
+  other transient failure retries with the generic `Code Index processing
+  failed`. Fetch the commit, or bring the mount up, before the budget runs out,
+  or re-enqueue once the job is dead and its cooldown has passed.
+- **Terminal failures.** Invalid input (a malformed tree entry or path, a
+  revision over its bounds), an OID whose source conflicts with an earlier index,
+  and an incomplete generation fail identically on every attempt, so the job ends
+  `dead` on its first attempt with that message. Messages never contain the
+  repository path, and every control character in a stored message, which may
+  quote a committer-chosen path, is replaced with U+FFFD. Logs carry the error
+  class and SQLSTATE, never the message.
+- **Expired final attempts.** A worker that dies during a job's last attempt leaves
+  an expired lease; the next claim marks that job `dead` with
+  `Code Index job lease expired during its final attempt`.
+- **Re-enqueue re-arms.** Enqueueing the same repository and commit again re-arms
+  a `cancelled` job at once, and a `dead` job once it has been dead for 15
+  minutes, for the new requester with a fresh retry budget. Inside that cooldown
+  the enqueue returns the dead job unchanged, so repeated requests cannot restart
+  a failing run in a loop. Re-enqueue also takes over a job whose requester can no
+  longer run it (a revoked grant, a disabled Agent, or a suspended Membership). A
+  job that can still run is left as it is.
+- **Agent lifecycle.** Disabling or deleting an Agent cancels its pending and
+  processing Code Index jobs, so a job requested by an Agent never runs under
+  the human owner's authority after the Agent is deleted. A worker holding such a
+  job's lease logs `job_lost`. Re-enqueue the commit to index it under a current
+  Actor.
+
+Two jobs that finish different generations of the same revision serialize on the
+revision row during activation, and the one-active-generation-per-revision index
+remains the correctness backstop.
+
+Schema revision 4 also cleans up once, as it migrates. The cleanup runs before the
+migration rewrites the Memory read policies, which briefly take ACCESS EXCLUSIVE on
+`memories`, `memory_chunks`, `memory_chunk_embeddings`, and `memory_links` under a
+5-second `lock_timeout` (a busy deploy may need a retry), so it does not lengthen
+that lock. Pending jobs of an indexer revision other than the one this release
+ships, which no current worker claims, end `cancelled` with `Superseded by a newer
+Code Index revision`. A processing job of such a revision ends the same way only
+once its lease is more than an hour old, so a worker still running the older
+revision through a rolling deploy finishes the job it holds. Every maintenance
+sweep of a worker with Code Indexing enabled repeats that cancel for the revisions
+its release lists as retired, which also catches jobs an older application instance
+enqueues during the deploy. A revision the worker does not know, such as the one a
+newer release ships, is left alone, so an old worker still sweeping during a later
+rollout cannot cancel the new release's jobs. The sweep's log line reports the count
+as `supersededCodeIndexJobs`. Re-enqueue the commits you still need. The migration
+also deletes each Code Revision that recorded a byte-order-mark-only blob
+(`EF BB BF`) as indexed, has no ready, active, or retiring generation, and is cited
+by no Memory or Proposal Code Evidence. Such a revision could never finish, and
+the current indexer excludes that blob as `empty`, so re-enqueueing the commit
+now indexes it instead of failing as an OID/content conflict.
+
+### Binding existing repositories after a proxy-mode upgrade
+
+`workspaceIds` controls who may enqueue and index a repository. It does not gate
+reads: Code Repositories, Revisions, and Artifacts that a Workspace indexed earlier
+stay searchable by that Workspace's Actors. A proxy-mode deployment whose entries
+had no `workspaceIds` before this release served every Workspace, so after binding
+each entry, look for Workspaces that indexed a repository outside its new binding.
+Run this over a trusted migration-owner connection, once per repository key, with
+that key's bound Workspace ids:
+
+```sql
+SELECT repository.workspace_id, workspace.name, repository.id AS repository_id,
+       count(DISTINCT revision.id) AS revisions,
+       (SELECT count(*) FROM memory_code_evidence evidence
+        WHERE evidence.repository_id = repository.id) AS memory_citations,
+       (SELECT count(*) FROM memory_proposal_code_evidence evidence
+        WHERE evidence.repository_id = repository.id) AS proposal_citations
+FROM code_repositories repository
+JOIN workspaces workspace ON workspace.id = repository.workspace_id
+LEFT JOIN code_revisions revision ON revision.repository_id = repository.id
+WHERE repository.repository_key = 'corespeed/lore'
+  AND repository.workspace_id <> ALL ('{<bound-workspace-uuid>}'::uuid[])
+GROUP BY repository.workspace_id, workspace.name, repository.id;
+```
+
+Lore does not delete these rows for you: whether another Workspace may keep what it
+indexed is your decision. To remove one, delete its Code Repository row over the
+same connection (neither runtime role can):
+
+```sql
+BEGIN;
+DELETE FROM code_repositories
+WHERE id = '<repository-id>' AND workspace_id = '<workspace-id>';
+COMMIT;
+```
+
+The delete cascades to the repository's Code Index jobs, Code Revisions and their
+manifests, Index Generations, Artifacts, and dependency edges, and the Artifact
+delete trigger prunes payloads and Symbol/Dependency Sets that nothing else
+references, so a large repository can take a while. Memory Code Evidence and
+Proposal Code Evidence anchors have no foreign key to Code Index rows, so they
+survive with their immutable cited commit, path, and digests, and a Proposal can
+still be accepted with its anchors. Their assessment becomes `unverifiable` for
+good: anchors match their repository by id, and indexing the same key again in
+that Workspace creates a Code Repository with a new id. The query's citation
+counts show how many anchors you would affect.
+
 ## Probes and telemetry
 
 - `GET /livez` is process-only and never checks external dependencies.
 - `GET /readyz` verifies database access, the `lore_app` runtime role, schema/app
-  compatibility, pgvector, and a fail-closed RLS probe.
+  compatibility, pgvector, and a fail-closed RLS probe. The RLS check reads
+  `pg_catalog`: every public table except the non-tenant `lore_system_state` and
+  `lore_schema_migrations` must enable RLS, so a table added by a later migration
+  is covered without editing a list. A table an extension owns (a `pg_depend` row
+  with `deptype = 'e'` on `pg_extension`, such as PostGIS `spatial_ref_sys`) is
+  exempt, so installing such an extension in `public` does not fail readiness.
+  Every tenant table Lore uses must still exist and enable RLS, whoever owns it.
+  `db:restore` verifies restored databases the same way.
 - An embedding-provider failure produces `status: degraded` but HTTP 200 because
   lexical retrieval remains available. Database, role, schema, vector, or RLS
   failure produces `status: unready` and HTTP 503.
@@ -287,12 +517,26 @@ on Bun. CoreSpeed Cloud uses Cloudflare Workers native observability from
 ## Migration preflight
 
 `bun run db:migrate` runs the same preflight as `bun run db:preflight` before taking
-the migration lock. dbmate owns SQL parsing and application; Lore owns the advisory
-lock, schema compatibility checks, and SHA-256 values stored beside dbmate versions
-in `lore_schema_migrations`. An existing Lore schema without a recognized ledger,
+the migration lock. dbmate parses and applies transactional migrations; Lore owns the
+advisory lock, schema compatibility checks, and SHA-256 values stored beside dbmate
+versions in `lore_schema_migrations`. An existing Lore schema without a recognized ledger,
 or with missing or changed checksums, is rejected. Investigate the ledger mismatch
 against the deployed release and backup before proceeding; do not edit applied
 migrations or replace a production database to bypass preflight.
+
+A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
+statement at a time. dbmate would send the whole file as one query, and PostgreSQL
+runs a multi-statement query as one transaction block, which `CREATE INDEX
+CONCURRENTLY` refuses. `0005` is such a migration: it builds the replay-scrub and
+import-provenance indexes concurrently so writes keep flowing during the build.
+While it is pending, dbmate sees a temporary copy of only the migrations before it.
+The wrapper commits the migration's closing `schema_revision` update in one
+transaction with its ledger row. A run that stops earlier leaves the previous
+revision and no ledger row, so the next `bun run db:migrate` repeats the whole file;
+each index is dropped and rebuilt, which replaces any `INVALID` index a cancelled
+build left behind. A concurrent build also waits for transactions that were already
+open when it started, so a long-running transaction delays the migration, not
+application writes.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

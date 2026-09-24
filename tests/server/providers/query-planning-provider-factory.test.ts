@@ -33,6 +33,15 @@ test.each([
       LORE_QUERY_PLANNER_BASE_URL: "http://openai.internal/v1",
     },
   ],
+  [
+    "a vLLM planner key sent over plain HTTP outside loopback",
+    {
+      LORE_QUERY_PLANNER_PROVIDER: "vllm",
+      LORE_QUERY_PLANNER_MODEL: "Qwen/Qwen3-4B-Instruct",
+      LORE_QUERY_PLANNER_API_KEY: "secret",
+      LORE_QUERY_PLANNER_BASE_URL: "http://planner.internal:8000/v1",
+    },
+  ],
 ])("query planning degrades safely for %s", (_case, env) => {
   const warnings: string[] = [];
 
@@ -106,6 +115,39 @@ test("query planning reports runtime failures without blocking search fallback",
     expect(warnings).toEqual([
       "Lore vllm/Qwen/Qwen3-4B-Instruct query planning failed; using the original query",
     ]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("a vLLM planner never sends the deployment OpenAI key", async () => {
+  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    Response.json({ choices: [{ message: { content: '{"queries":["planned"]}' } }] }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const warnings: string[] = [];
+    const provider = createQueryPlanningProviderFromEnvironment(
+      {
+        LORE_QUERY_PLANNER_PROVIDER: "vllm",
+        LORE_QUERY_PLANNER_MODEL: "Qwen/Qwen3-4B-Instruct",
+        LORE_QUERY_PLANNER_BASE_URL: "http://planner.internal:8000/v1",
+        LORE_QUERY_PLANNER_API_KEY: " ",
+        OPENAI_API_KEY: "sk-deployment-openai-key",
+      },
+      (message) => warnings.push(message),
+    );
+
+    await expect(provider?.plan({ query: "question", maxQueries: 2 })).resolves.toEqual([
+      "planned",
+    ]);
+    expect(warnings).toEqual([]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [input, init] = fetch.mock.calls[0] ?? [];
+    expect(String(input)).toBe("http://planner.internal:8000/v1/chat/completions");
+    const headers = new Headers(init?.headers);
+    expect(headers.has("authorization")).toBe(false);
+    expect(JSON.stringify([...headers])).not.toContain("sk-deployment-openai-key");
   } finally {
     vi.unstubAllGlobals();
   }

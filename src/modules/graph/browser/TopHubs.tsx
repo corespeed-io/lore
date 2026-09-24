@@ -2,21 +2,30 @@
 
 import { degrees } from "@/modules/graph/browser/rendering/graph";
 import type { GraphData } from "@/modules/graph/browser/types";
+import type { ReadState } from "@/shared/browser/read-state";
 
 interface TopHubsProps {
   nodes: GraphData["nodes"];
   links: GraphData["links"];
-  // The graph read failed: "no hubs" is unknown, not empty.
-  unavailable?: boolean;
+  // Until the graph read succeeds, "no hubs" is unknown, not empty.
+  state: ReadState;
   onOpen: (memoryId: string) => void;
 }
 
-export function TopHubs({ nodes, links, unavailable, onOpen }: TopHubsProps) {
+const UNKNOWN_HUBS: Record<Exclude<ReadState, "ready">, string> = {
+  loading: "Loading graph…",
+  error: "Affinity data is currently unavailable.",
+};
+
+export function TopHubs({ nodes, links, state, onOpen }: TopHubsProps) {
   const deg = degrees(links);
-  const hubs = [...nodes]
-    .filter((n) => (deg[n.id] ?? 0) > 0)
-    .sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0))
-    .slice(0, 5);
+  const hubs =
+    state === "ready"
+      ? [...nodes]
+          .filter((n) => (deg[n.id] ?? 0) > 0)
+          .sort((a, b) => (deg[b.id] ?? 0) - (deg[a.id] ?? 0))
+          .slice(0, 5)
+      : [];
 
   return (
     <div className="panel-card">
@@ -29,7 +38,7 @@ export function TopHubs({ nodes, links, unavailable, onOpen }: TopHubsProps) {
       ))}
       {hubs.length === 0 && (
         <p className="panel-empty">
-          {unavailable ? "Affinity data is currently unavailable." : "No connected nodes yet."}
+          {state === "ready" ? "No connected nodes yet." : UNKNOWN_HUBS[state]}
         </p>
       )}
     </div>

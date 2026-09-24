@@ -1,9 +1,10 @@
-import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, test } from "vitest";
+import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
 import {
+  createMemoryMaintenanceModule,
   createMemoryModule,
   type EmbeddingProvider,
   type MemoryStorageContext,
@@ -31,17 +32,12 @@ const CAROL = "10000000-0000-4000-8000-000000000003";
 const OPERATIONS = "20000000-0000-4000-8000-000000000001";
 const RESEARCH = "20000000-0000-4000-8000-000000000002";
 
-const migrationsUrl = new URL("../../../db/migrations/", import.meta.url);
-
 async function createLoreFixture(): Promise<MemoryCoreContractFixture> {
   const postgres = new PGlite({ extensions: { pg_trgm, vector } });
   await postgres.waitReady;
-  const migrationIds = (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  for (const migrationId of migrationIds) {
-    await postgres.exec(await readFile(new URL(migrationId, migrationsUrl), "utf8"));
-  }
+  // lore oss's own chain applier: it sends a transaction:false migration one
+  // statement at a time, which a single multi-statement exec cannot do.
+  await applyMigrationChain((sql) => postgres.exec(sql));
   await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4), ($5, $6)", [
     ALICE,
     "Alice",
@@ -158,6 +154,35 @@ test("host-defined embedding and method-only planning/reranking drive real retri
     expect(rerankingCalls[0]?.documents).toHaveLength(2);
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ memory: { id: observatory.id }, rerankScore: 0.9 });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a metadata-only update notifies maintenance exactly when it enqueues a job", async () => {
+  const fixture = await createLoreFixture();
+  try {
+    const embeddingProvider = createDeterministicTestEmbeddingProvider(1024);
+    const notifications: string[] = [];
+    const memories = createMemoryModule(fixture.alice, {
+      embeddingProvider,
+      maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+    });
+    const memory = await memories.remember({ content: "The harbor embedding is pending." });
+
+    // The creation job has not run, so the new version still needs vectors.
+    await memories.update(memory.id, { metadata: { reviewed: true } });
+    expect(notifications).toHaveLength(2);
+    const maintenance = createMemoryMaintenanceModule(fixture.maintenanceDatabase, {
+      embeddingProvider,
+    });
+    await expect(maintenance.run(notifications[1])).resolves.toMatchObject({
+      status: "complete",
+    });
+
+    // Every chunk now has a current vector, so no job and no wake-up follow.
+    await memories.update(memory.id, { metadata: { reviewed: false } });
+    expect(notifications).toHaveLength(2);
   } finally {
     await fixture.close();
   }

@@ -6,10 +6,12 @@ import type {
 import { createLoreMcpServer } from "@corespeed/lore-mcp";
 import type {
   CodeArtifact,
+  CodeDependencyEdge,
   CodeDependencyQueryResult,
   Episode,
   Memory,
   MemoryProposal,
+  RetrievedContext,
 } from "@corespeed/lore-sdk";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -200,6 +202,135 @@ function fakeContext(): LoreMcpContextClient {
       },
     }),
   };
+}
+
+const MAX_MCP_OUTPUT_CHARACTERS = 128_000;
+/** The longest values the Code Index schema stores for each field. */
+const LONGEST_PATH = `src/${"p".repeat(1_017)}.ts`;
+const LONGEST_SYMBOL = "s".repeat(1_000);
+const LONGEST_SYMBOL_KEY = "k".repeat(1_600);
+const LONGEST_TARGET_TEXT = "t".repeat(1_600);
+
+function uuid(prefix: string, ordinal: number): string {
+  return `${prefix}-0000-4000-8000-${String(ordinal).padStart(12, "0")}`;
+}
+
+function codeArtifact(ordinal: number, overrides: Partial<CodeArtifact> = {}): CodeArtifact {
+  return {
+    id: uuid("82000000", ordinal),
+    repositoryId: "80000000-0000-4000-8000-000000000002",
+    revisionId: "80000000-0000-4000-8000-000000000003",
+    generationId: "80000000-0000-4000-8000-000000000004",
+    commitOid: "a".repeat(64),
+    path: LONGEST_PATH,
+    language: "typescript",
+    parser: "tree_sitter",
+    parseStatus: "parsed",
+    kind: "function_declaration",
+    symbol: LONGEST_SYMBOL,
+    symbolKey: LONGEST_SYMBOL_KEY,
+    declarationKey: LONGEST_SYMBOL_KEY,
+    declarationChunkOrdinal: 0,
+    symbols: [],
+    ordinal,
+    startLine: 1,
+    endLine: 400,
+    content: "authorized-code-".repeat(1_250),
+    contentSha256: "b".repeat(64),
+    matchedChannels: ["symbol", "literal", "lexical", "path"],
+    score: 0.1,
+    ...overrides,
+  };
+}
+
+function dependencyEdge(ordinal: number, longest: boolean): CodeDependencyEdge {
+  const path = longest ? LONGEST_PATH : "src/guard.ts";
+  const locator = {
+    artifactId: uuid("83000000", ordinal),
+    path,
+    symbol: longest ? LONGEST_SYMBOL : "guard",
+    symbolKey: longest ? LONGEST_SYMBOL_KEY : "src/guard.ts#function_declaration:guard",
+  };
+  return {
+    id: uuid("84000000", ordinal),
+    kind: "calls",
+    resolution: "resolved",
+    targetText: longest ? LONGEST_TARGET_TEXT : "guard",
+    from: locator,
+    to: locator,
+    site: { path, startLine: 1, startColumn: 0, endLine: 1, endColumn: 5 },
+  };
+}
+
+function maximalContext(options: { pathologicalEnvelope: boolean }): RetrievedContext {
+  const query = options.pathologicalEnvelope ? "q".repeat(10_000) : "Why did the guard change?";
+  return {
+    revision: "joint-memory-code-v2",
+    query,
+    plan: {
+      intent: "change",
+      route: "both",
+      needsAnchorExpansion: true,
+      needsContextualImpact: true,
+      needsLocalAssessment: true,
+      reasons: ["change questions require historical claims and current evidence"],
+    },
+    deliveredRoute: "both",
+    memories: Array.from({ length: 10 }, (_, ordinal) => ({
+      id: uuid("85000000", ordinal),
+      scope: "shared" as const,
+      updatedAt: "2026-08-09T00:00:00.000Z",
+      score: 0.9,
+      evidence: "authorized-evidence-".repeat(1_000),
+    })),
+    code: Array.from({ length: 20 }, (_, ordinal) => {
+      const artifact = codeArtifact(ordinal);
+      return {
+        artifactId: artifact.id,
+        commitOid: artifact.commitOid,
+        path: artifact.path,
+        symbol: artifact.symbol,
+        startLine: artifact.startLine,
+        endLine: artifact.endLine,
+        score: artifact.score,
+        matchedChannels: artifact.matchedChannels,
+        content: artifact.content,
+      };
+    }),
+    anchors: Array.from({ length: options.pathologicalEnvelope ? 25 : 1 }, (_, ordinal) => ({
+      id: uuid("86000000", ordinal),
+      memoryId: uuid("85000000", 0),
+      relationship: "rationale" as const,
+      localState: "changed" as const,
+      citedCommitOid: "b".repeat(64),
+      citedPath: LONGEST_PATH,
+      validatedCommitOid: "a".repeat(64),
+      validatedPath: LONGEST_PATH,
+    })),
+    conflicts: [`anchor:${uuid("86000000", 0)}:changed`],
+    receipt: {
+      memoryCandidates: 10,
+      codeCandidates: 20,
+      anchorCandidates: 1,
+      requestedCommitOid: "a".repeat(64),
+      memoryQuery: options.pathologicalEnvelope ? "m".repeat(10_000) : "guard decision",
+      codeQuery: options.pathologicalEnvelope ? "c".repeat(2_000) : "guard",
+      contextualImpact: null,
+    },
+  };
+}
+
+function structuredLength(result: { structuredContent?: unknown }): number {
+  return JSON.stringify(result.structuredContent).length;
+}
+
+function structuredArray(result: { structuredContent?: unknown }, name: string): unknown[] {
+  const value =
+    typeof result.structuredContent === "object" && result.structuredContent !== null
+      ? Reflect.get(result.structuredContent, name)
+      : undefined;
+  if (!Array.isArray(value)) throw new Error(`Expected a structured ${name} array`);
+  return value;
 }
 
 const connected: Array<{ client: Client; server: ReturnType<typeof createLoreMcpServer> }> = [];
@@ -646,6 +777,174 @@ describe("Lore external MCP adapter", () => {
     expect(searched.structuredContent).toHaveProperty("results.0.memory.metadataTruncated", true);
     expect(JSON.stringify(searched.structuredContent)).not.toContain("private-memory-");
     expect(JSON.stringify(searched.content)).not.toContain("authorized-evidence-");
+  });
+
+  test("fits a maximal Code search into the output limit without dropping results", async () => {
+    const code = fakeCode();
+    vi.mocked(code.searchCode).mockResolvedValueOnce(
+      Array.from({ length: 25 }, (_, ordinal) => codeArtifact(ordinal)),
+    );
+    const client = await connect(fakeMemories(), code);
+
+    const result = await client.callTool({
+      name: "lore_code_search",
+      arguments: {
+        repositoryKey: "corespeed/lore",
+        commitOid: "a".repeat(64),
+        query: "q",
+        limit: 25,
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(structuredLength(result)).toBeLessThanOrEqual(MAX_MCP_OUTPUT_CHARACTERS);
+    expect(result.structuredContent).toHaveProperty("truncated", false);
+    expect(structuredArray(result, "artifacts")).toEqual(
+      Array.from({ length: 25 }, () =>
+        expect.objectContaining({
+          contentTruncated: true,
+          content: expect.stringMatching(/^(?:authorized-code-){62}/),
+        }),
+      ),
+    );
+  });
+
+  test("fits a maximal context packet and marks trailing items it has to omit", async () => {
+    const context = fakeContext();
+    vi.mocked(context.retrieveContext)
+      .mockResolvedValueOnce(maximalContext({ pathologicalEnvelope: false }))
+      .mockResolvedValueOnce(maximalContext({ pathologicalEnvelope: true }));
+    const client = await connect(fakeMemories(), fakeCode(), context);
+    const arguments_ = {
+      query: "q".repeat(10_000),
+      memoryQuery: "m".repeat(10_000),
+      codeQuery: "c".repeat(2_000),
+      repositoryKey: "corespeed/lore",
+      commitOid: "a".repeat(64),
+      route: "both",
+      memoryLimit: 10,
+      codeLimit: 20,
+    };
+
+    const maximal = await client.callTool({ name: "lore_retrieve_context", arguments: arguments_ });
+    expect(maximal.isError).not.toBe(true);
+    expect(structuredLength(maximal)).toBeLessThanOrEqual(MAX_MCP_OUTPUT_CHARACTERS);
+    expect(maximal.structuredContent).toHaveProperty("truncated", false);
+    expect(structuredArray(maximal, "memories")).toEqual(
+      Array.from({ length: 10 }, () => expect.objectContaining({ evidenceTruncated: true })),
+    );
+    expect(structuredArray(maximal, "code")).toEqual(
+      Array.from({ length: 20 }, () =>
+        expect.objectContaining({
+          contentTruncated: true,
+          content: expect.stringMatching(/^(?:authorized-code-){62}/),
+        }),
+      ),
+    );
+
+    const crowded = await client.callTool({ name: "lore_retrieve_context", arguments: arguments_ });
+    expect(crowded.isError).not.toBe(true);
+    expect(structuredLength(crowded)).toBeLessThanOrEqual(MAX_MCP_OUTPUT_CHARACTERS);
+    expect(crowded.structuredContent).toHaveProperty("truncated", true);
+    expect(structuredArray(crowded, "anchors")).toHaveLength(25);
+    expect(structuredArray(crowded, "memories")).toHaveLength(10);
+    const crowdedCode = structuredArray(crowded, "code");
+    expect(crowdedCode.length).toBeGreaterThan(0);
+    expect(crowdedCode.length).toBeLessThan(20);
+    expect(crowdedCode).toEqual(
+      crowdedCode.map(() =>
+        expect.objectContaining({ content: expect.stringMatching(/^(?:authorized-code-){62}/) }),
+      ),
+    );
+  });
+
+  test("fits maximal dependency edges and candidates, marking omitted ones as truncated", async () => {
+    const code = fakeCode();
+    const subject = { artifactId: null, path: LONGEST_PATH, symbol: null, symbolKey: null };
+    vi.mocked(code.queryCodeDependencies)
+      .mockResolvedValueOnce({
+        status: "ok",
+        repositoryKey: "corespeed/lore",
+        commitOid: "a".repeat(64),
+        direction: "callers",
+        subject,
+        edges: Array.from({ length: 200 }, (_, ordinal) => dependencyEdge(ordinal, false)),
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        status: "ok",
+        repositoryKey: "corespeed/lore",
+        commitOid: "a".repeat(64),
+        direction: "callers",
+        subject,
+        edges: Array.from({ length: 200 }, (_, ordinal) => dependencyEdge(ordinal, true)),
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        status: "ambiguous",
+        repositoryKey: "corespeed/lore",
+        commitOid: "a".repeat(64),
+        direction: "callers",
+        candidates: Array.from({ length: 200 }, (_, ordinal) => dependencyEdge(ordinal, true).to),
+        truncated: false,
+      });
+    const client = await connect(fakeMemories(), code);
+    const call = () =>
+      client.callTool({
+        name: "lore_code_dependencies",
+        arguments: {
+          repositoryKey: "corespeed/lore",
+          commitOid: "a".repeat(64),
+          direction: "callers",
+          symbol: LONGEST_SYMBOL,
+          limit: 200,
+        },
+      });
+
+    const compact = await call();
+    expect(compact.isError).not.toBe(true);
+    expect(compact.structuredContent).toHaveProperty("truncated", false);
+    expect(structuredArray(compact, "edges")).toHaveLength(200);
+
+    for (const [result, field] of [
+      [await call(), "edges"],
+      [await call(), "candidates"],
+    ] as const) {
+      expect(result.isError).not.toBe(true);
+      expect(structuredLength(result)).toBeLessThanOrEqual(MAX_MCP_OUTPUT_CHARACTERS);
+      expect(result.structuredContent).toHaveProperty("truncated", true);
+      const items = structuredArray(result, field);
+      expect(items.length).toBeGreaterThan(0);
+      expect(items.length).toBeLessThan(200);
+    }
+  });
+
+  test("rejects idempotency keys the server would refuse before calling Lore", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+
+    for (const idempotencyKey of ["", "two words", " padded", "café", "k".repeat(129)]) {
+      const result = await client.callTool({
+        name: "lore_remember",
+        arguments: { content: "bounded", idempotencyKey },
+      });
+      expect(result.isError, JSON.stringify(idempotencyKey)).toBe(true);
+    }
+    expect(memories.remember).not.toHaveBeenCalled();
+
+    const accepted = await client.callTool({
+      name: "lore_remember",
+      arguments: { content: "bounded", idempotencyKey: `!~${"k".repeat(126)}` },
+    });
+    expect(accepted.isError).not.toBe(true);
+    expect(memories.remember).toHaveBeenCalledWith(
+      { content: "bounded", scope: "shared" },
+      { idempotencyKey: `!~${"k".repeat(126)}` },
+    );
+    const { tools } = await client.listTools();
+    const remember = tools.find((tool) => tool.name === "lore_remember");
+    expect(remember?.description).toContain("1 to 128 visible ASCII characters");
+    expect(JSON.stringify(remember?.inputSchema)).toContain("x21-\\\\x7e");
   });
 
   test("passes deeply nested JSON metadata to the SDK", async () => {

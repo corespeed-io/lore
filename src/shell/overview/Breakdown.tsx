@@ -1,14 +1,19 @@
 "use client";
 
 import { typeLabel, typeSort } from "@/modules/memories/browser/presentation";
+import { displayCount } from "@/shared/browser/read-state";
 import { typeColor } from "@/shared/ui/colors";
 
 interface BreakdownProps {
   byCounts: Record<string, number>;
+  // Shown instead of the bars while the browse read is loading or failed.
+  notice?: string | null;
+  // The browse window is still filling or stopped at its cap: counts are lower bounds.
+  lowerBound?: boolean;
   onType: (type: string) => void;
 }
 
-export function Breakdown({ byCounts, onType }: BreakdownProps) {
+export function Breakdown({ byCounts, notice, lowerBound = false, onType }: BreakdownProps) {
   const entries = Object.entries(byCounts)
     .filter(([, count]) => count > 0)
     .sort(([a, av], [b, bv]) => {
@@ -20,7 +25,8 @@ export function Breakdown({ byCounts, onType }: BreakdownProps) {
   return (
     <div className="panel-card">
       <p className="panel-card-title">By type</p>
-      {entries.length === 0 && <p className="panel-empty">No typed memories.</p>}
+      {notice && <p className="panel-empty">{notice}</p>}
+      {!notice && entries.length === 0 && <p className="panel-empty">No typed memories.</p>}
       {entries.map(([key, count]) => (
         <button
           key={key}
@@ -34,7 +40,7 @@ export function Breakdown({ byCounts, onType }: BreakdownProps) {
           <div className="type-bar-track">
             <div className="type-bar-fill" style={{ width: `${(count / max) * 100}%` }} />
           </div>
-          <span className="type-bar-count">{count}</span>
+          <span className="type-bar-count">{displayCount(count, "ready", lowerBound)}</span>
         </button>
       ))}
     </div>

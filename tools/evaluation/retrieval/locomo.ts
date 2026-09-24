@@ -30,6 +30,21 @@ export function locomoReaderQuestion(question: LocomoQuestion): string {
     : question.question;
 }
 
+/**
+ * Retrieval uses the original question, as upstream and Lore's setup diagnostic
+ * do; the category-2 date instruction is a reader prompt, not a search query.
+ */
+export function locomoSearchQuery(question: LocomoQuestion): string {
+  return question.question;
+}
+
+/** The setup retrieval report sits beside the QA report and never shares its path. */
+export function locomoRetrievalReportPath(outputPath: string): string {
+  return /\.json$/i.test(outputPath)
+    ? outputPath.replace(/\.json$/i, ".retrieval.json")
+    : `${outputPath}.retrieval.json`;
+}
+
 export interface LocomoDialog {
   id: string;
   speaker: string;

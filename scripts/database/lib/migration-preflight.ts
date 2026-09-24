@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import {
+  migrationQueries,
+  parseMigration,
+  splitMigrationStatements,
+  statementSql,
+} from "./migration-statements.ts";
 export const MINIMUM_POSTGRES_VERSION = 150000;
-export const LATEST_SCHEMA_REVISION = 3;
+export const LATEST_SCHEMA_REVISION = 5;
 export const MIGRATION_LOCK_ID = 1_280_263_749;
 export const DBMATE_MIGRATIONS_TABLE = "lore_schema_migrations";
 
@@ -13,7 +19,7 @@ interface MigrationDatabase {
   ): Promise<{ rows: Row[] }>;
 }
 
-interface MigrationFile {
+export interface MigrationFile {
   id: string;
   version: string;
   sql: string;
@@ -76,6 +82,17 @@ export async function migrationFiles(): Promise<MigrationFile[]> {
     versions.add(migration.version);
   }
   return migrations;
+}
+
+/**
+ * Replays the whole chain on a disposable database with no migration ledger (the
+ * PGlite test and evaluation harnesses), sending each transaction:false migration
+ * one statement at a time as the deployment wrapper does.
+ */
+export async function applyMigrationChain(execute: (sql: string) => Promise<unknown>) {
+  for (const migration of await migrationFiles()) {
+    for (const query of migrationQueries(migration.sql, migration.id)) await execute(query);
+  }
 }
 
 export function dbmateHistoryStatus(
@@ -252,6 +269,80 @@ export async function recordDbmateChecksums(
         );
       }
     }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
+export async function appliedMigrationVersions(client: MigrationDatabase) {
+  const result = await client.query<{ version: string }>(
+    `SELECT version FROM ${DBMATE_MIGRATIONS_TABLE} ORDER BY version`,
+  );
+  return result.rows.map(({ version }) => version);
+}
+
+/**
+ * One step of `bun run db:migrate`. dbmate applies each run of consecutive
+ * pending transactional migrations, through the run's last file; the wrapper
+ * applies each transaction:false migration itself, because dbmate would send it
+ * as one multi-statement query and PostgreSQL runs that as an implicit
+ * transaction block.
+ */
+export type MigrationStep =
+  | { kind: "dbmate"; through: MigrationFile }
+  | { kind: "direct"; migration: MigrationFile };
+
+export function pendingMigrationSteps(
+  appliedVersions: Iterable<string>,
+  migrations: readonly MigrationFile[],
+): MigrationStep[] {
+  const applied = new Set(appliedVersions);
+  const steps: MigrationStep[] = [];
+  for (const migration of migrations) {
+    if (applied.has(migration.version)) continue;
+    const transactional = parseMigration(migration.sql, migration.id).transaction;
+    const previous = steps.at(-1);
+    if (!transactional) steps.push({ kind: "direct", migration });
+    else if (previous?.kind === "dbmate") previous.through = migration;
+    else steps.push({ kind: "dbmate", through: migration });
+  }
+  return steps;
+}
+
+const SCHEMA_REVISION_UPDATE =
+  /^UPDATE\s+(?:public\.)?lore_system_state\s+SET\s+schema_revision\s*=\s*(\d+)\b/i;
+
+/**
+ * Applies one transaction:false migration: every statement but the last runs on
+ * its own, outside any transaction, so CREATE INDEX CONCURRENTLY can build without
+ * blocking writes. The last statement must set schema_revision to the migration's
+ * version, and it commits in one transaction with the ledger row: a failure at any
+ * earlier point leaves the previous revision and no ledger row, so the next run
+ * repeats the whole file (which is why such files drop before they build).
+ */
+export async function applyDirectMigration(client: MigrationDatabase, migration: MigrationFile) {
+  const parsed = parseMigration(migration.sql, migration.id);
+  if (parsed.transaction) throw new Error(`${migration.id} is transactional; dbmate applies it`);
+  const statements = splitMigrationStatements(parsed.up, migration.id);
+  const revisionUpdate = statements.at(-1);
+  const revision = revisionUpdate
+    ? SCHEMA_REVISION_UPDATE.exec(statementSql(revisionUpdate))
+    : null;
+  if (!revisionUpdate || Number(revision?.[1]) !== Number(migration.version)) {
+    throw new Error(
+      `${migration.id} must end with UPDATE public.lore_system_state SET schema_revision = ${Number(migration.version)}`,
+    );
+  }
+  for (const statement of statements.slice(0, -1)) await client.query(statement);
+  await client.query("BEGIN");
+  try {
+    await client.query(revisionUpdate);
+    await client.query(
+      `INSERT INTO ${DBMATE_MIGRATIONS_TABLE} (version, checksum) VALUES ($1, $2)`,
+      [migration.version, migration.checksum],
+    );
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

@@ -8,15 +8,21 @@ import { expect, onTestFinished, test } from "vitest";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import {
   CodeIndexAccessDeniedError,
+  CodeIndexRetryableError,
   CodeIndexValidationError,
   CodeRevisionConflictError,
 } from "@/modules/code/indexing/errors";
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
 import { prepareFile } from "@/modules/code/indexing/parser";
 import { CODE_INDEX_LIMITS, CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
+import {
+  type ConfiguredCodeRepository,
+  createCodeIndexQueueModule,
+} from "@/modules/code/indexing/queue";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import type { PreparedArtifact } from "@/modules/code/indexing/types";
 import { createAccessModule } from "@/server/auth/access";
+import type { ActorContext } from "../../../src/server/auth/actor-context";
 import { installActorContext } from "../../../src/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
@@ -24,6 +30,49 @@ const COMMIT_A = "a".repeat(40);
 const COMMIT_B = "b".repeat(40);
 const COMMIT_C = "c".repeat(40);
 const execFileAsync = promisify(execFile);
+
+/**
+ * The operator registry both the queue and the worker read, as in production. Each
+ * test queues its fixture repository before running maintenance, so the latest
+ * entry for a key is the one the worker resolves.
+ */
+const repositories: Record<string, ConfiguredCodeRepository> = {};
+
+/** Queues one exact commit through the operator registry, as the public route does. */
+function enqueueConfiguredRevision(
+  database: PostgresDatabase,
+  actor: ActorContext,
+  input: { repositoryKey: string; displayName: string; repositoryPath: string; commitOid: string },
+) {
+  repositories[input.repositoryKey] = {
+    displayName: input.displayName,
+    repositoryPath: input.repositoryPath,
+  };
+  const queue = createCodeIndexQueueModule(database, repositories);
+  return queue.enqueue(actor, { repositoryKey: input.repositoryKey, commitOid: input.commitOid });
+}
+
+function codeIndexMaintenance(database: PostgresDatabase) {
+  return createCodeIndexMaintenanceModule(database, { repositories });
+}
+
+/** Wraps a database so that the first statement matching `interrupts` fails like a crash. */
+function interruptingDatabase(
+  database: PostgresDatabase,
+  interrupts: (sql: string, params: unknown[] | undefined) => boolean,
+): PostgresDatabase {
+  return {
+    transaction: (use) =>
+      database.transaction((transaction) =>
+        use({
+          query: (sql, params) => {
+            if (interrupts(sql, params)) throw new Error("simulated worker interruption");
+            return transaction.query(sql, params);
+          },
+        }),
+      ),
+  };
+}
 
 async function temporaryGitRepository(objectFormat: "sha1" | "sha256" = "sha1") {
   const repositoryPath = await mkdtemp(join(tmpdir(), "lore-code-index-git-"));
@@ -117,21 +166,61 @@ test("indexes the exact committed Git tree instead of dirty working-tree bytes",
   ).rejects.toBeInstanceOf(CodeRevisionConflictError);
 });
 
-test("rejects a well-formed Git OID that does not exist in the repository", async () => {
+test("indexes paths that Git would C-quote, such as non-ASCII names and quotes", async () => {
+  const context = await createMemoryTestContext();
+  const code = createCodeIndexModule(context.database);
+  const repositoryPath = await temporaryGitRepository();
+  // Backslashes and control characters stay refused by validatePath by design.
+  const paths = ["src/中文.ts", 'src/q"uote.ts', "docs/naïve café.md"];
+  for (const [index, path] of paths.entries()) {
+    await writeRepositoryFile(
+      repositoryPath,
+      path,
+      `export const quotedMarker${index} = ${index};\n`,
+    );
+  }
+  const commitOid = await commitGitRepository(repositoryPath);
+
+  await code.indexGitRevision(context.alice, {
+    repositoryKey: "corespeed/quoted-paths",
+    displayName: "Quoted paths",
+    repositoryPath,
+    commitOid,
+  });
+
+  for (const [index, path] of paths.entries()) {
+    await expect(
+      code.search(context.alice, {
+        repositoryKey: "corespeed/quoted-paths",
+        commitOid,
+        query: `quotedMarker${index}`,
+      }),
+      path,
+    ).resolves.toMatchObject([{ path }]);
+  }
+});
+
+test("rejects a well-formed Git OID that is not in the repository as retryable", async () => {
   const context = await createMemoryTestContext();
   const code = createCodeIndexModule(context.database);
   const repositoryPath = await temporaryGitRepository();
   await writeRepositoryFile(repositoryPath, "index.ts", "export const value = 1;\n");
   await commitGitRepository(repositoryPath);
 
-  await expect(
-    code.indexGitRevision(context.alice, {
+  // The commit may simply not be fetched yet, so a job keeps its retry budget.
+  const failure = await code
+    .indexGitRevision(context.alice, {
       repositoryKey: "corespeed/missing-commit",
       displayName: "Missing commit",
       repositoryPath,
       commitOid: "f".repeat(40),
-    }),
-  ).rejects.toBeInstanceOf(CodeIndexValidationError);
+    })
+    .then(
+      () => new Error("Expected indexing to fail"),
+      (error: unknown) => error,
+    );
+  expect(failure).toBeInstanceOf(CodeIndexRetryableError);
+  expect(failure).toMatchObject({ message: "Unable to read the requested Git revision" });
 });
 
 test("queues an exact Git revision without publishing partial search results", async () => {
@@ -145,7 +234,7 @@ test("queues an exact Git revision without publishing partial search results", a
   );
   const commitOid = await commitGitRepository(repositoryPath);
 
-  const queued = await code.enqueueGitRevision(context.alice, {
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
     repositoryKey: "corespeed/queued-index",
     displayName: "Queued Index",
     repositoryPath,
@@ -172,15 +261,15 @@ test("queues an exact Git revision without publishing partial search results", a
   await expect(code.getIndexJob(context.alice, { jobId: queued.id })).rejects.toBeInstanceOf(
     CodeIndexAccessDeniedError,
   );
-  await expect(
-    createCodeIndexMaintenanceModule(context.maintenanceDatabase).run(queued.id),
-  ).resolves.toEqual({ status: "idle" });
+  await expect(codeIndexMaintenance(context.maintenanceDatabase).run(queued.id)).resolves.toEqual({
+    status: "idle",
+  });
 });
 
 test("a leased maintenance job publishes one queued exact Git revision", async () => {
   const context = await createMemoryTestContext();
   const code = createCodeIndexModule(context.database);
-  const maintenance = createCodeIndexMaintenanceModule(context.maintenanceDatabase);
+  const maintenance = codeIndexMaintenance(context.maintenanceDatabase);
   const repositoryPath = await temporaryGitRepository();
   await writeRepositoryFile(
     repositoryPath,
@@ -188,7 +277,7 @@ test("a leased maintenance job publishes one queued exact Git revision", async (
     'export const maintenanceMarker = "published-by-lease";\n',
   );
   const commitOid = await commitGitRepository(repositoryPath);
-  const queued = await code.enqueueGitRevision(context.alice, {
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
     repositoryKey: "corespeed/maintenance-index",
     displayName: "Maintenance Index",
     repositoryPath,
@@ -221,10 +310,14 @@ test("a retried maintenance job resumes from fully persisted Git files", async (
   const context = await createMemoryTestContext();
   const code = createCodeIndexModule(context.database);
   const repositoryPath = await temporaryGitRepository();
+  // The first file alone fills one checkpoint, so the second file commits separately.
   await writeRepositoryFile(
     repositoryPath,
     "src/first.ts",
-    'export const firstCheckpoint = "persisted";\n',
+    Array.from(
+      { length: CODE_INDEX_LIMITS.checkpointArtifacts },
+      (_, index) => `export function firstCheckpoint${index}() { return "persisted"; }\n`,
+    ).join(""),
   );
   await writeRepositoryFile(
     repositoryPath,
@@ -232,28 +325,18 @@ test("a retried maintenance job resumes from fully persisted Git files", async (
     'export const secondCheckpoint = "retried";\n',
   );
   const commitOid = await commitGitRepository(repositoryPath);
-  const queued = await code.enqueueGitRevision(context.alice, {
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
     repositoryKey: "corespeed/resumable-index",
     displayName: "Resumable Index",
     repositoryPath,
     commitOid,
   });
-  let artifactInsertCount = 0;
-  const interruptedDatabase: PostgresDatabase = {
-    transaction: (use) =>
-      context.maintenanceDatabase.transaction((transaction) =>
-        use({
-          query: (sql, params) => {
-            if (sql.includes("INSERT INTO code_artifacts")) {
-              artifactInsertCount += 1;
-              if (artifactInsertCount === 2) throw new Error("simulated worker interruption");
-            }
-            return transaction.query(sql, params);
-          },
-        }),
-      ),
-  };
-  const interrupted = createCodeIndexMaintenanceModule(interruptedDatabase);
+  const interruptedDatabase = interruptingDatabase(
+    context.maintenanceDatabase,
+    (sql, params) =>
+      sql.includes("INSERT INTO code_artifacts") && Boolean(params?.includes("src/second.ts")),
+  );
+  const interrupted = codeIndexMaintenance(interruptedDatabase);
   await expect(interrupted.run(queued.id)).resolves.toMatchObject({
     status: "retry",
     jobId: queued.id,
@@ -271,13 +354,229 @@ test("a retried maintenance job resumes from fully persisted Git files", async (
     ]);
   });
 
-  const resumed = createCodeIndexMaintenanceModule(context.maintenanceDatabase);
+  const resumed = codeIndexMaintenance(context.maintenanceDatabase);
   await expect(resumed.run(queued.id)).resolves.toMatchObject({
     status: "complete",
     jobId: queued.id,
     parsedFileCount: 1,
     reusedFileCount: 1,
   });
+});
+
+test("a leased job commits small complete files together in one bounded checkpoint", async () => {
+  const context = await createMemoryTestContext();
+  const repositoryPath = await temporaryGitRepository();
+  for (const name of ["alpha", "beta", "gamma"]) {
+    await writeRepositoryFile(
+      repositoryPath,
+      `src/${name}.ts`,
+      `export function ${name}Checkpoint() { return "${name}"; }\n`,
+    );
+  }
+  const commitOid = await commitGitRepository(repositoryPath);
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
+    repositoryKey: "corespeed/grouped-checkpoints",
+    displayName: "Grouped checkpoints",
+    repositoryPath,
+    commitOid,
+  });
+  let checkpointTransactions = 0;
+  const counted: PostgresDatabase = {
+    transaction: (use) =>
+      context.maintenanceDatabase.transaction((transaction) => {
+        let insertsArtifacts = false;
+        return use({
+          query: (sql, params) => {
+            if (!insertsArtifacts && sql.includes("INSERT INTO code_artifacts")) {
+              insertsArtifacts = true;
+              checkpointTransactions += 1;
+            }
+            return transaction.query(sql, params);
+          },
+        });
+      }),
+  };
+
+  await expect(codeIndexMaintenance(counted).run(queued.id)).resolves.toMatchObject({
+    status: "complete",
+    parsedFileCount: 3,
+  });
+  expect(checkpointTransactions).toBe(1);
+});
+
+test("an interrupted job's building generation resumes itself with its dependencies intact", async () => {
+  const context = await createMemoryTestContext();
+  const graph = createCodeDependencyGraphModule(context.database);
+  const repositoryKey = "corespeed/building-resume";
+  const repositoryPath = await temporaryGitRepository();
+  await writeRepositoryFile(
+    repositoryPath,
+    "src/calls.ts",
+    [
+      "export function resumeCaller() { return resumeCallee(); }",
+      "export function resumeCallee() { return 'resumed'; }",
+      "",
+    ].join("\n"),
+  );
+  const commitOid = await commitGitRepository(repositoryPath);
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
+    repositoryKey,
+    displayName: "Building resume",
+    repositoryPath,
+    commitOid,
+  });
+  // Every file checkpoint commits; the worker dies before edges, readiness, and activation.
+  const crashBeforeReady = interruptingDatabase(context.maintenanceDatabase, (sql) =>
+    sql.includes("INSERT INTO code_dependency_edges"),
+  );
+  await expect(codeIndexMaintenance(crashBeforeReady).run(queued.id)).resolves.toMatchObject({
+    status: "retry",
+  });
+  await context.adminDatabase.transaction(async (transaction) => {
+    await expect(
+      transaction.query(
+        `SELECT generation.status,
+           (SELECT count(*)::integer FROM code_artifacts artifact
+            WHERE artifact.generation_id = generation.id) AS artifacts,
+           (SELECT count(*)::integer FROM code_dependency_edges edge
+            WHERE edge.generation_id = generation.id) AS edges
+         FROM code_index_generations generation`,
+      ),
+    ).resolves.toMatchObject({ rows: [{ status: "building", artifacts: 2, edges: 0 }] });
+    await transaction.query("UPDATE code_index_jobs SET available_at = now() WHERE id = $1", [
+      queued.id,
+    ]);
+  });
+
+  // The retry reuses its own checkpoints, reading dependencies from their immutable sets.
+  await expect(
+    codeIndexMaintenance(context.maintenanceDatabase).run(queued.id),
+  ).resolves.toMatchObject({ status: "complete", parsedFileCount: 0, reusedFileCount: 1 });
+  await expect(
+    graph.query(context.alice, {
+      repositoryKey,
+      commitOid,
+      direction: "callees",
+      symbol: "resumeCaller",
+    }),
+  ).resolves.toMatchObject({
+    status: "ok",
+    edges: [
+      {
+        kind: "calls",
+        resolution: "resolved",
+        to: { symbolKey: "src/calls.ts#function_declaration:resumeCallee" },
+      },
+    ],
+  });
+});
+
+test("another commit never reuses Artifacts from a building generation", async () => {
+  const context = await createMemoryTestContext();
+  const code = createCodeIndexModule(context.database);
+  const graph = createCodeDependencyGraphModule(context.database);
+  const repositoryKey = "corespeed/building-donor";
+  const repositoryPath = await temporaryGitRepository();
+  await writeRepositoryFile(
+    repositoryPath,
+    "src/calls.ts",
+    [
+      "export function donorCaller() { return donorCallee(); }",
+      "export function donorCallee() { return 'donor'; }",
+      "",
+    ].join("\n"),
+  );
+  const firstCommit = await commitGitRepository(repositoryPath);
+  await writeRepositoryFile(repositoryPath, "src/other.ts", "export const otherMarker = 1;\n");
+  const secondCommit = await commitGitRepository(repositoryPath);
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
+    repositoryKey,
+    displayName: "Building donor",
+    repositoryPath,
+    commitOid: firstCommit,
+  });
+  const crashBeforeReady = interruptingDatabase(context.maintenanceDatabase, (sql) =>
+    sql.includes("INSERT INTO code_dependency_edges"),
+  );
+  await expect(codeIndexMaintenance(crashBeforeReady).run(queued.id)).resolves.toMatchObject({
+    status: "retry",
+  });
+
+  // The unchanged blob's only prior Artifacts sit in the unready building generation.
+  await expect(
+    code.indexGitRevision(context.alice, {
+      repositoryKey,
+      displayName: "Building donor",
+      repositoryPath,
+      commitOid: secondCommit,
+    }),
+  ).resolves.toMatchObject({ parsedFileCount: 2, reusedFileCount: 0 });
+  await expect(
+    graph.query(context.alice, {
+      repositoryKey,
+      commitOid: secondCommit,
+      direction: "callees",
+      symbol: "donorCaller",
+    }),
+  ).resolves.toMatchObject({
+    status: "ok",
+    edges: [
+      {
+        kind: "calls",
+        resolution: "resolved",
+        to: { symbolKey: "src/calls.ts#function_declaration:donorCallee" },
+      },
+    ],
+  });
+});
+
+test("whitespace-only, padded, and BOM-bearing Git files index, activate, and reuse exactly", async () => {
+  const context = await createMemoryTestContext();
+  const code = createCodeIndexModule(context.database);
+  const repositoryKey = "corespeed/padded-sources";
+  const padded =
+    "\n\n  // Leading padding belongs to the first Artifact.\nexport function paddedMarker() {\n  return 1;\n}\n";
+  const repositoryPath = await temporaryGitRepository();
+  await writeRepositoryFile(repositoryPath, "src/blank.ts", "  \n\t\n");
+  await writeRepositoryFile(repositoryPath, "src/bom-only.ts", new Uint8Array([0xef, 0xbb, 0xbf]));
+  await writeRepositoryFile(repositoryPath, "src/bom.ts", "﻿export const bomMarker = 1;\n");
+  await writeRepositoryFile(repositoryPath, "src/padded.ts", padded);
+  const firstCommit = await commitGitRepository(repositoryPath);
+  const queued = await enqueueConfiguredRevision(context.database, context.alice, {
+    repositoryKey,
+    displayName: "Padded sources",
+    repositoryPath,
+    commitOid: firstCommit,
+  });
+
+  await expect(
+    codeIndexMaintenance(context.maintenanceDatabase).run(queued.id),
+  ).resolves.toMatchObject({ status: "complete", parsedFileCount: 3, reusedFileCount: 0 });
+  const manifest = await code.getGitRevisionManifest(context.alice, {
+    repositoryKey,
+    commitOid: firstCommit,
+  });
+  expect(manifest.entries).toMatchObject([
+    { path: "src/blank.ts", status: "indexed", exclusionReason: null },
+    { path: "src/bom-only.ts", status: "excluded", exclusionReason: "empty" },
+    { path: "src/bom.ts", status: "indexed", exclusionReason: null },
+    { path: "src/padded.ts", status: "indexed", exclusionReason: null },
+  ]);
+  await expect(
+    code.search(context.alice, { repositoryKey, commitOid: firstCommit, query: "paddedMarker" }),
+  ).resolves.toMatchObject([{ path: "src/padded.ts", ordinal: 0, content: padded }]);
+
+  // Reuse requires exact reconstruction, so every unchanged indexed file must qualify.
+  await writeRepositoryFile(repositoryPath, "src/changed.ts", "export const changedMarker = 1;\n");
+  const secondCommit = await commitGitRepository(repositoryPath);
+  await expect(
+    code.indexGitRevision(context.alice, {
+      repositoryKey,
+      displayName: "Padded sources",
+      repositoryPath,
+      commitOid: secondCommit,
+    }),
+  ).resolves.toMatchObject({ parsedFileCount: 1, reusedFileCount: 3 });
 });
 
 test("indexes an exact SHA-256-format Git commit", async () => {
@@ -1134,6 +1433,83 @@ test("preserves a whitespace-only fallback chunk needed to reconstruct the sourc
   expectExactCodePartition(content, artifacts);
 });
 
+test("partitions leading padding, a BOM, and whitespace-only files exactly in every built-in language", async () => {
+  const whitespaceOnly = "  \n\t\r\n";
+  for (const path of [
+    "src/blank.ts",
+    "src/blank.tsx",
+    "src/blank.js",
+    "src/blank.jsx",
+    "src/blank.css",
+    "public/blank.html",
+  ]) {
+    const { artifacts } = await prepareFile({ path, content: whitespaceOnly });
+    expect(artifacts, path).toMatchObject([
+      { parser: "tree_sitter", parseStatus: "parsed", symbol: null, startLine: 1 },
+    ]);
+    expectExactCodePartition(whitespaceOnly, artifacts);
+  }
+  for (const file of [
+    { path: "src/leading-blank.ts", content: "\n\n\nexport const leadingBlank = 1;\n" },
+    {
+      path: "src/leading-comment.ts",
+      content: "   // Indented first comment.\nexport function commented() { return 1; }\n",
+    },
+    { path: "src/bom.ts", content: "﻿export const bomPrefixed = 1;\n" },
+    { path: "src/bom-only.ts", content: "﻿" },
+    { path: "src/leading.css", content: "\n\n.memory { color: rebeccapurple; }\n" },
+    { path: "public/leading.html", content: "\n  <main>Code-aware memory</main>\n" },
+  ]) {
+    const { artifacts } = await prepareFile(file);
+    expect(artifacts.length, file.path).toBeGreaterThan(0);
+    expect(artifacts[0]?.startIndex, file.path).toBe(0);
+    expectExactCodePartition(file.content, artifacts);
+  }
+  const { artifacts: commented } = await prepareFile({
+    path: "src/leading-comment.ts",
+    content: "   // Indented first comment.\nexport function commented() { return 1; }\n",
+  });
+  expect(commented).toMatchObject([
+    {
+      symbol: "commented",
+      declarationChunkOrdinal: 0,
+      content: expect.stringMatching(/^ {3}\/\//),
+    },
+  ]);
+});
+
+test("an import block never claims the file's only declaration", async () => {
+  const content = [
+    "import alpha from './alpha';",
+    "import beta from './beta';",
+    "export default function Button() { return alpha(beta); }",
+    "",
+  ].join("\n");
+  const { artifacts, dependencies } = await prepareFile({ path: "src/Button.ts", content });
+
+  expect(artifacts).toMatchObject([
+    {
+      kind: "import_statement",
+      symbol: null,
+      symbolKey: null,
+      declarationKey: null,
+      declarationChunkOrdinal: null,
+      symbols: [],
+    },
+    {
+      kind: "function_declaration",
+      symbol: "Button",
+      declarationKey: "src/Button.ts#function_declaration:Button",
+      declarationChunkOrdinal: 0,
+    },
+  ]);
+  expectExactCodePartition(content, artifacts);
+  expect(dependencies.filter((dependency) => dependency.kind === "imports")).toMatchObject([
+    { fromArtifactOrdinal: 0, fromSymbolKey: null, targetText: "./alpha" },
+    { fromArtifactOrdinal: 0, fromSymbolKey: null, targetText: "./beta" },
+  ]);
+});
+
 test("falls back safely when syntax errors consume the parsed tree", async () => {
   const { artifacts } = await prepareFile({
     path: "src/broken.ts",
@@ -1241,6 +1617,42 @@ test("preserves punctuation-only literal search when no trigram can be extracted
     query: "=>",
   });
   expect(results.map((result) => result.path)).toEqual(["src/arrow.ts"]);
+});
+
+test("searches multi-line code queries while rejecting other control characters", async () => {
+  const context = await createMemoryTestContext();
+  const code = createCodeIndexModule(context.database);
+  await code.indexRevision(context.alice, {
+    repositoryKey: "corespeed/multi-line-search",
+    displayName: "Multi-line search",
+    commitOid: COMMIT_A,
+    files: [
+      {
+        path: "src/guard.ts",
+        content: "export function multiLineGuard() {\n\treturn true;\r\n}\n",
+      },
+      { path: "src/other.ts", content: "export function multiLineGuard2() { return false; }\n" },
+    ],
+  });
+
+  const results = await code.search(context.alice, {
+    repositoryKey: "corespeed/multi-line-search",
+    commitOid: COMMIT_A,
+    query: "multiLineGuard() {\n\treturn true;\r\n}",
+  });
+  expect(results[0]).toMatchObject({
+    path: "src/guard.ts",
+    matchedChannels: expect.arrayContaining(["literal"]),
+  });
+  for (const query of ["multiLineGuard\0", "multiLine\u000bGuard", "multiLine\u001bGuard"]) {
+    await expect(
+      code.search(context.alice, {
+        repositoryKey: "corespeed/multi-line-search",
+        commitOid: COMMIT_A,
+        query,
+      }),
+    ).rejects.toBeInstanceOf(CodeIndexValidationError);
+  }
 });
 
 test("treats SQL wildcard characters as exact code-search literals", async () => {

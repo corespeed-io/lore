@@ -1,4 +1,5 @@
 import pg from "pg";
+import { scramSha256Verifier } from "./lib/scram.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const requestRole = process.env.LORE_RUNTIME_ROLE ?? "lore_runtime";
@@ -23,18 +24,22 @@ try {
     if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) {
       throw new Error(`${role} is not a safe lowercase Postgres identifier`);
     }
-    const passwordLiteral = password.replaceAll("'", "''");
+    // Send only a SCRAM-SHA-256 verifier. A cleartext PASSWORD literal would
+    // reach the server log (log_statement, auto_explain) and pg_stat_statements;
+    // the server stores a pre-hashed verifier as given. It contains only base64,
+    // `$`, and `:`, so it needs no quoting beyond the literal delimiters.
+    const verifier = scramSha256Verifier(password);
     const existing = await client.query<Record<string, unknown>>(
       "SELECT 1 FROM pg_roles WHERE rolname = $1",
       [role],
     );
     if (existing.rowCount) {
       await client.query(
-        `ALTER ROLE "${role}" LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${passwordLiteral}'`,
+        `ALTER ROLE "${role}" LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${verifier}'`,
       );
     } else {
       await client.query(
-        `CREATE ROLE "${role}" LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${passwordLiteral}'`,
+        `CREATE ROLE "${role}" LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '${verifier}'`,
       );
     }
     await client.query(`GRANT ${grantedRole} TO "${role}"`);

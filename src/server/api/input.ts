@@ -4,6 +4,10 @@ import { mutationRequestHash } from "@/server/api/idempotency";
 import { AccessDeniedError } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
+import { IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
+
+// One source for the check and the published OpenAPI header pattern.
+const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 
 export class BadRequestError extends Error {
   readonly status = 400;
@@ -46,7 +50,7 @@ export async function idempotencyRequest(
 ): Promise<IdempotencyRequest | undefined> {
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key) return undefined;
-  if (!/^[\x21-\x7e]{1,128}$/.test(key)) {
+  if (!IDEMPOTENCY_KEY.test(key)) {
     throw new BadRequestError("Idempotency-Key must contain 1 to 128 visible ASCII characters");
   }
   return {
@@ -56,13 +60,69 @@ export async function idempotencyRequest(
   };
 }
 
-export async function jsonObject(request: Request): Promise<Record<string, unknown>> {
+export class PayloadTooLargeError extends Error {
+  readonly status = 413;
+}
+
+/**
+ * The default JSON request body bound, in UTF-8 bytes: 10 MiB, the cap that Next's
+ * middleware body clone used to impose implicitly on self-host. A route whose own
+ * field limits can legitimately need more passes its own bound.
+ */
+export const MAX_JSON_BODY_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Parse a JSON object body of at most `maximumBytes` UTF-8 bytes. A declared
+ * Content-Length is rejected before any byte is read; a chunked body is counted
+ * while it streams and abandoned as soon as it crosses the bound. Every API JSON
+ * body goes through this reader, so none is buffered without a bound.
+ */
+export async function jsonObject(
+  request: Request,
+  maximumBytes: number = MAX_JSON_BODY_BYTES,
+): Promise<Record<string, unknown>> {
+  const tooLarge = () => new PayloadTooLargeError(`Request body exceeds ${maximumBytes} bytes`);
+  const declared = request.headers.get("content-length");
+  if (declared !== null && /^\d+$/.test(declared.trim()) && Number(declared) > maximumBytes) {
+    throw tooLarge();
+  }
+  // Decode as the body streams so each raw chunk is released once counted: a body
+  // near the bound is never held as chunks, a copied buffer, and a string at once.
+  const decoder = new TextDecoder();
+  const text: string[] = [];
+  let received = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (;;) {
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        chunk = await reader.read();
+      } catch {
+        // The client aborted or the connection reset mid-upload: a bad request, not a
+        // server fault, as request.json() used to report it.
+        throw new BadRequestError("Request body could not be read");
+      }
+      const { done, value } = chunk;
+      if (done) break;
+      received += value.byteLength;
+      if (received > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw tooLarge();
+      }
+      text.push(decoder.decode(value, { stream: true }));
+    }
+  }
+  text.push(decoder.decode());
   let value: unknown;
   try {
-    value = await request.json();
+    value = JSON.parse(text.join(""));
   } catch {
     throw new BadRequestError("Request body must be valid JSON");
   }
+  return objectBody(value);
+}
+
+function objectBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new BadRequestError("Request body must be an object");
   }
@@ -173,9 +233,17 @@ export function uuidString(value: unknown, name: string): string {
   return normalized;
 }
 
-export function uuidArray(value: unknown, name: string, allowEmpty: boolean): string[] {
+export function uuidArray(
+  value: unknown,
+  name: string,
+  allowEmpty: boolean,
+  maximumItems?: number,
+): string[] {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
     throw new BadRequestError(`${name} must be ${allowEmpty ? "an" : "a non-empty"} array`);
+  }
+  if (maximumItems !== undefined && value.length > maximumItems) {
+    throw new BadRequestError(`${name} exceeds ${maximumItems} items`);
   }
   return value.map((item, index) => uuidString(item, `${name}[${index}]`));
 }

@@ -1,9 +1,9 @@
-import { readdir, readFile } from "node:fs/promises";
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { onTestFinished } from "vitest";
+import { applyMigrationChain } from "../../scripts/database/lib/migration-preflight.ts";
 import type { ActorContext } from "../../src/server/auth/actor-context";
 
 const ALICE_USER_ID = "10000000-0000-4000-8000-000000000001";
@@ -12,16 +12,10 @@ const CAROL_USER_ID = "10000000-0000-4000-8000-000000000003";
 const OPERATIONS_WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
 const RESEARCH_WORKSPACE_ID = "20000000-0000-4000-8000-000000000002";
 
-const migrationsUrl = new URL("../../db/migrations/", import.meta.url);
-
-async function migrate(postgres: PGlite): Promise<void> {
-  const migrationIds = (await readdir(migrationsUrl))
-    .filter((name) => /^\d+.*\.sql$/.test(name))
-    .sort();
-  for (const migrationId of migrationIds) {
-    const migrationUrl = new URL(migrationId, migrationsUrl);
-    await postgres.exec(await readFile(migrationUrl, "utf8"));
-  }
+// A transaction:false migration (CREATE INDEX CONCURRENTLY) must reach PGlite one
+// statement at a time; one multi-statement exec is an implicit transaction block.
+function migrate(postgres: PGlite): Promise<void> {
+  return applyMigrationChain((sql) => postgres.exec(sql));
 }
 
 export interface MemoryTestContext {

@@ -10,7 +10,7 @@ function readerReturning(text: string): BenchmarkReaderProvider {
     provider: "test",
     model: "deterministic",
     revision: "test-v1",
-    profile: "lore-portable-deterministic-v2",
+    profile: "lore-portable-deterministic-v3",
     transport: "openai-chat-completions",
     instruction: "test",
     maximumContextCharacters: 10_000,

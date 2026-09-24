@@ -17,6 +17,13 @@ import type {
   GitTreeEntryExclusionReason,
   SearchCodeIndexInput,
 } from "./types";
+import {
+  hasControlCharacters,
+  validateCommitOid,
+  validateQueryText,
+  validateRepositoryKey,
+  validateUuid,
+} from "./validation";
 
 export interface CodeIndexReadModule {
   getIndexJob(actor: ActorContext, input: CodeIndexJobSelector): Promise<CodeIndexJob>;
@@ -49,7 +56,8 @@ export interface CodeArtifactLogicalDigest {
   fingerprintSha256: string;
 }
 
-interface CodeIndexJobRow {
+/** A `code_index_jobs` row as the job queue and the status/list reads select it. */
+export interface CodeIndexJobRow {
   id: string;
   repository_id: string;
   repository_key: string;
@@ -115,33 +123,8 @@ function artifactIds(values: readonly string[]): string[] {
   return normalized;
 }
 
-function validateUuid(value: string, name: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
-  ) {
-    throw new CodeIndexValidationError(`${name} must be a UUID`);
-  }
-  return normalized;
-}
-
-function validateCommitOid(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
-    throw new CodeIndexValidationError("commitOid must be a full 40- or 64-character Git OID");
-  }
-  return normalized;
-}
-
-function validatePlainText(value: string, name: string, maximumLength: number): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized)) {
-    throw new CodeIndexValidationError(`${name} is invalid`);
-  }
-  return normalized;
-}
-
-function validatePath(path: string): string {
+/** Unlike an indexed path, a search prefix may end with a slash naming its directory. */
+function validatePathPrefix(path: string): string {
   const trimmed = path.trim();
   const normalized = trimmed.replace(/\/+$/, "");
   if (
@@ -158,13 +141,6 @@ function validatePath(path: string): string {
   return normalized;
 }
 
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || codePoint === 127;
-  });
-}
-
 function exactLikePattern(query: string): string {
   return `%${query.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
 }
@@ -177,7 +153,7 @@ function timestamp(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
-function toCodeIndexJob(row: CodeIndexJobRow): CodeIndexJob {
+export function toCodeIndexJob(row: CodeIndexJobRow): CodeIndexJob {
   return {
     id: row.id,
     repositoryId: row.repository_id,
@@ -248,7 +224,7 @@ function toCodeArtifact(row: ArtifactRow): CodeArtifact {
 export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndexReadModule {
   return {
     async getArtifacts(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       const selectedArtifactIds = artifactIds(input.artifactIds);
       return database.transaction(async (transaction) => {
@@ -306,7 +282,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     },
 
     async getArtifactLogicalDigests(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       const selectedArtifactIds = artifactIds(input.artifactIds);
       return database.transaction(async (transaction) => {
@@ -415,7 +391,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     },
 
     async getGitRevisionManifest(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
@@ -450,9 +426,9 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     },
 
     async search(actor, input) {
-      const repositoryKey = validatePlainText(input.repositoryKey, "repositoryKey", 512);
+      const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
-      const query = validatePlainText(input.query, "query", 2_000);
+      const query = validateQueryText(input.query, "query", 2_000);
       const literalPattern = exactLikePattern(query);
       const contentLiteralPredicate = hasTrigramWord(query)
         ? `lower(payload.content) LIKE lower($8) ESCAPE chr(92)`
@@ -467,7 +443,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
         throw new CodeIndexValidationError("limit must be an integer from 1 through 100");
       }
-      const pathPrefix = input.pathPrefix ? validatePath(input.pathPrefix) : null;
+      const pathPrefix = input.pathPrefix ? validatePathPrefix(input.pathPrefix) : null;
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<ArtifactRow>(

@@ -2,7 +2,69 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/telemetry";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 3;
+export const LORE_SCHEMA_REVISION = 5;
+
+/**
+ * The only public tables that hold no tenant data and so carry no RLS: the
+ * deployment singleton and dbmate's migration ledger. Readiness requires RLS on
+ * every other public table, so a table added by a later migration is covered
+ * without editing a list. A table an extension owns (PostGIS `spatial_ref_sys`,
+ * say) is the extension's, not Lore's, and is exempt too. scripts/database/restore.ts
+ * keeps the same allowlist and exemption.
+ */
+export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
+
+/**
+ * Tenant tables the application reads and writes. Each must exist and enable RLS:
+ * the catalog scan above cannot notice a table that a bad restore or manual change
+ * dropped, and a missing table would otherwise pass readiness until a request hit
+ * it. A test pins this list to the migrated schema's RLS tables, so a migration that
+ * adds a tenant table fails until it is listed here and in scripts/database/restore.ts.
+ */
+export const REQUIRED_TENANT_TABLES = [
+  "agent_credentials",
+  "agents",
+  "agent_workspace_grants",
+  "code_artifact_payloads",
+  "code_artifacts",
+  "code_dependency_edges",
+  "code_dependency_payloads",
+  "code_dependency_sets",
+  "code_index_generations",
+  "code_index_jobs",
+  "code_repositories",
+  "code_revision_files",
+  "code_revisions",
+  "code_symbol_payloads",
+  "code_symbol_sets",
+  "embedding_generations",
+  "episode_evidence_chunk_embeddings",
+  "episode_evidence_chunks",
+  "episodes",
+  "evaluation_cases",
+  "evaluation_results",
+  "evaluation_runs",
+  "evaluation_suites",
+  "identities",
+  "memberships",
+  "memories",
+  "memory_chunk_embeddings",
+  "memory_chunks",
+  "memory_code_evidence",
+  "memory_embedding_jobs",
+  "memory_events",
+  "memory_import_provenance",
+  "memory_links",
+  "memory_proposal_code_evidence",
+  "memory_proposal_evidence",
+  "memory_proposal_observation_evidence",
+  "memory_proposals",
+  "observations",
+  "request_idempotency_records",
+  "users",
+  "workspace_imports",
+  "workspaces",
+] as const;
 
 export interface DeploymentCapabilities {
   apiVersion: "v1";
@@ -114,34 +176,30 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           database.transaction(async (transaction) => {
             await transaction.query("SELECT set_config('statement_timeout', '2000', true)");
             const result = await transaction.query<ReadinessRow>(
-              `WITH required_rls_tables(table_name) AS (
-                 VALUES
-                   ('users'), ('workspaces'), ('memberships'), ('agents'),
-                   ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
-                   ('memories'), ('memory_chunks'), ('memory_links'),
-                   ('evaluation_suites'), ('evaluation_cases'), ('evaluation_runs'),
-                   ('evaluation_results'), ('memory_embedding_jobs'),
-                   ('request_idempotency_records'), ('memory_events'),
-                   ('embedding_generations'), ('memory_chunk_embeddings'),
-                   ('workspace_imports'), ('memory_import_provenance'),
-                   ('memory_proposals'), ('memory_proposal_evidence'),
-                   ('episodes'), ('observations'),
-                   ('memory_proposal_observation_evidence'),
-                   ('memory_proposal_code_evidence'),
-                   ('code_repositories'), ('code_revisions'),
-                   ('code_revision_files'), ('code_index_generations'),
-                   ('code_index_jobs'), ('code_artifact_payloads'), ('code_artifacts'),
-                   ('code_symbol_sets'), ('code_symbol_payloads'),
-                   ('code_dependency_sets'), ('code_dependency_payloads'),
-                   ('code_dependency_edges'),
-                   ('memory_code_evidence')
-               ), rls_state AS (
-                 SELECT
-                   count(relation.oid) = count(*)
-                     AND bool_and(relation.relrowsecurity) AS enabled
-                 FROM required_rls_tables required
+              `WITH required_tenant_state AS (
+                 SELECT count(relation.oid) = count(*)
+                   AND coalesce(bool_and(relation.relrowsecurity), false) AS present
+                 FROM unnest($6::text[]) AS required(table_name)
                  LEFT JOIN pg_class relation
                    ON relation.oid = to_regclass('public.' || required.table_name)
+               ), rls_state AS (
+                 SELECT (SELECT present FROM required_tenant_state) AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_class relation
+                   JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+                   WHERE namespace.nspname = 'public'
+                     AND relation.relkind IN ('r', 'p')
+                     AND NOT relation.relrowsecurity
+                     AND NOT (relation.relname = ANY ($5::text[]))
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_depend dependency
+                       WHERE dependency.classid = 'pg_class'::regclass
+                         AND dependency.objid = relation.oid
+                         AND dependency.refclassid = 'pg_extension'::regclass
+                         AND dependency.deptype = 'e'
+                     )
+                 ) AS enabled
                ), runtime_role AS (
                  SELECT NOT role.rolsuper AND NOT role.rolbypassrls AS safe
                  FROM pg_roles role
@@ -167,14 +225,18 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                    AND NULLIF(current_setting('lore.user_id', true), '') IS NULL
                    AND NULLIF(current_setting('lore.agent_id', true), '') IS NULL
                    AND NOT EXISTS (SELECT 1 FROM memories LIMIT 1) AS rls_probe`,
-              options.embeddingIdentity
-                ? [
-                    options.embeddingIdentity.provider,
-                    options.embeddingIdentity.model,
-                    options.embeddingIdentity.dimensions,
-                    options.embeddingIdentity.revision,
-                  ]
-                : [null, null, null, null],
+              [
+                ...(options.embeddingIdentity
+                  ? [
+                      options.embeddingIdentity.provider,
+                      options.embeddingIdentity.model,
+                      options.embeddingIdentity.dimensions,
+                      options.embeddingIdentity.revision,
+                    ]
+                  : [null, null, null, null]),
+                [...NON_TENANT_PUBLIC_TABLES],
+                [...REQUIRED_TENANT_TABLES],
+              ],
             );
             const value = result.rows[0];
             if (!value) throw new Error("Readiness query returned no result");

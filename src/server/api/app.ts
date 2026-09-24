@@ -12,7 +12,7 @@ import { portability } from "@/modules/portability/routes";
 import { proposals } from "@/modules/proposals/routes";
 import { actor, workspaces } from "@/modules/workspaces/routes";
 import { errorResponse } from "@/server/api/errors";
-import { authorizeRequest } from "@/server/auth/auth";
+import { admitRequest } from "@/server/auth/auth";
 import { securityHeaders } from "@/server/security-headers";
 import { type ApiDependencies, type ApiEnv, createRequestDependencies } from "./dependencies";
 
@@ -27,14 +27,15 @@ export function createApi(dependencies: ApiDependencies) {
     for (const { key, value } of headers) c.header(key, value);
   });
   app.use(async (c, next) => {
-    const request = createRequestDependencies(dependencies, c.req.raw);
+    // Admission verifies the credential once; handlers reuse its principal.
+    const admission = await admitRequest(c.req.raw);
+    const request = createRequestDependencies(dependencies, c.req.raw, admission.principal);
     c.set("database", request.database);
     c.set("memoryOptions", request.memoryOptions);
     c.set("codeRepositories", request.codeRepositories);
     c.set("resolveActor", request.resolveActor);
     c.set("resolveUser", request.resolveUser);
-    const denied = await authorizeRequest(c.req.raw);
-    if (denied) c.res = denied;
+    if (admission.denied) c.res = admission.denied;
     else await next();
     if (!c.res.headers.has("cache-control")) c.header("Cache-Control", "private, no-store");
   });

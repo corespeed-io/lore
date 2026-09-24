@@ -93,11 +93,36 @@ export function parseConflictResolutionFacts(context: string): string[] {
   return facts;
 }
 
+/**
+ * Broad normalization for Lore's literal-anchor diagnostics: all Unicode
+ * punctuation and symbols are dropped so a curly-quoted fact still anchors.
+ */
 function normalizeAnswer(value: string): string {
   return value
     .toLocaleLowerCase("en-US")
     .replace(/[\p{P}\p{S}]/gu, "")
     .replace(/\b(?:a|an|the)\b/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Python's string.punctuation: exactly the 32 ASCII punctuation characters.
+const asciiPunctuation = /[!-/:-@[-`{-~]/g;
+// Python 3 str-pattern \b is Unicode-aware: word characters are letters, digits,
+// and underscore in any script, not only ASCII.
+const officialArticle = /(?<![\p{L}\p{N}_])(?:a|an|the)(?![\p{L}\p{N}_])/gu;
+
+/**
+ * Upstream MemoryAgentBench `normalize_answer` (SQuAD style) for the official
+ * `substring_exact_match`: lowercase, strip only ASCII punctuation, drop
+ * articles, collapse whitespace. Curly quotes and other non-ASCII punctuation
+ * survive, exactly as they do upstream.
+ */
+function normalizeOfficialAnswer(value: string): string {
+  return value
+    .toLocaleLowerCase("en-US")
+    .replace(asciiPunctuation, "")
+    .replace(officialArticle, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -230,10 +255,13 @@ export function memoryAgentBenchLiteralAnswerFactIndexes(
   });
 }
 
+/** The official metric: any normalized reference is a substring of the normalized prediction. */
 export function memoryAgentBenchSubstringExactMatch(
   prediction: string,
   references: string[],
 ): boolean {
-  const normalizedPrediction = normalizeAnswer(prediction);
-  return references.some((reference) => normalizedPrediction.includes(normalizeAnswer(reference)));
+  const normalizedPrediction = normalizeOfficialAnswer(prediction);
+  return references.some((reference) =>
+    normalizedPrediction.includes(normalizeOfficialAnswer(reference)),
+  );
 }

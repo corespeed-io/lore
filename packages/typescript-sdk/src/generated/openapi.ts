@@ -831,7 +831,7 @@ export interface components {
         };
         readonly Error: {
             /** @enum {string} */
-            readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "not_found" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
+            readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
             readonly error: string;
         };
         readonly EvaluationCase: {
@@ -2006,7 +2006,11 @@ export interface operations {
     };
     readonly listEvaluationSuites: {
         readonly parameters: {
-            readonly query?: never;
+            readonly query?: {
+                /** @description Opaque x-lore-next-cursor value from the previous page. */
+                readonly cursor?: string;
+                readonly limit?: number;
+            };
             readonly header: {
                 readonly "x-lore-workspace-id": string;
             };
@@ -2015,9 +2019,11 @@ export interface operations {
         };
         readonly requestBody?: never;
         readonly responses: {
-            /** @description Workspace Evaluation Suites */
+            /** @description One page of this User's Workspace Evaluation Suites, newest first */
             readonly 200: {
                 headers: {
+                    /** @description Present when more Suites follow; opaque to clients. */
+                    readonly "x-lore-next-cursor"?: string;
                     readonly [name: string]: unknown;
                 };
                 content: {
@@ -2513,6 +2519,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["WorkspaceImportResult"];
                 };
             };
+            readonly 413: components["responses"]["Error"];
         };
     };
     readonly getLiveness: {

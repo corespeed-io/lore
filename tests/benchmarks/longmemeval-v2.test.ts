@@ -7,6 +7,7 @@ import {
 import { expect, test } from "vitest";
 import {
   longMemEvalV2ContainsLiteralAnswer,
+  longMemEvalV2LiteralAnswerMatcher,
   longMemEvalV2QuestionScreenshot,
   mapLongMemEvalV2TrajectoryQuestions,
   parseLongMemEvalV2Question,
@@ -73,6 +74,17 @@ test("LongMemEval-V2 trajectories render textual state, action, and observation 
   expect(longMemEvalV2ContainsLiteralAnswer(renderLongMemEvalV2Trajectory(trajectory), "A")).toBe(
     false,
   );
+});
+
+test("a prepared LongMemEval-V2 matcher answers exactly like the one-shot check", () => {
+  const text = "Goal: Buy the Red-Notebook!\n\nObservation:\nbutton “Checkout” (2 items)";
+  const matches = longMemEvalV2LiteralAnswerMatcher(text);
+  for (const answer of ["red notebook", "Red Notebook", "checkout", "2 items", "A", "Blue pen"]) {
+    expect(matches(answer), answer).toBe(longMemEvalV2ContainsLiteralAnswer(text, answer));
+  }
+  expect(matches("red notebook")).toBe(true);
+  expect(matches("A")).toBe(false);
+  expect(matches("Blue pen")).toBe(false);
 });
 
 test("LongMemEval-V2 trajectories cannot bypass the canonical Memory content boundary", () => {

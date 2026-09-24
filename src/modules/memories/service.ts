@@ -50,7 +50,9 @@ export function memoryFromRow(row: MemoryRow): Memory {
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
   const primitives = createCoreMutationPrimitives(options);
   return {
+    enqueueEmbeddingJobsInTransaction: primitives.enqueueEmbeddingJobsInTransaction,
     notifyMaintenance: primitives.notifyMaintenance,
+    notifyMaintenanceMany: primitives.notifyMaintenanceMany,
     async insertMemoryInTransaction(
       transaction: PostgresTransaction,
       actor: ActorContext,
@@ -177,7 +179,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           options.idempotency,
         );
         if (claim.replay) {
-          return { memory: claim.replay.body.memory, jobId: null, chunksChanged: false };
+          return { memory: claim.replay.body.memory, jobId: null };
         }
         const updated = await updateMemoryInTransaction(
           transaction,
@@ -194,7 +196,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             { memory: null },
             Boolean(options.idempotency),
           );
-          return { memory: null, jobId: null, chunksChanged: false };
+          return { memory: null, jobId: null };
         }
         await completeMutation(
           transaction,
@@ -205,9 +207,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         );
         return updated;
       });
-      // Metadata-only updates can leave an existing stale job for the scheduled
-      // sweep without billing a Queue message for an already-embedded Memory.
-      notifyMaintenance(updatedResult.chunksChanged ? updatedResult.jobId : null);
+      // The engine returns a job id only when this update inserted a job, so an
+      // already-embedded metadata-only update sends no Queue message.
+      notifyMaintenance(updatedResult.jobId);
       return updatedResult.memory;
     },
 

@@ -63,7 +63,7 @@ maintenance worker.
 ```bash
 git clone https://github.com/corespeed-io/lore.git
 cd lore
-cp .env.example .env  # replace the example passwords
+cp .env.example .env  # replace the example passwords (URL-safe: openssl rand -hex 32)
 docker compose up --build
 ```
 

@@ -7,6 +7,11 @@ import type {
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
+import {
+  validateCommitOid,
+  validateQueryText,
+  validateRepositoryKey,
+} from "@/modules/code/indexing/validation";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
 import type {
@@ -15,7 +20,14 @@ import type {
   JointEvidenceIntent,
   JointEvidenceRoute,
 } from "./policy";
-import { assessContextualImpact, planJointEvidenceRoute } from "./policy";
+import {
+  aggregateContextualImpact,
+  assessContextualImpact,
+  CONTEXTUAL_ANCHOR_LIMIT,
+  CONTEXTUAL_EDGE_LIMIT,
+  MAXIMUM_CONTEXT_ANCHORS,
+  planJointEvidenceRoute,
+} from "./policy";
 
 export const CONTEXT_RETRIEVAL_REVISION = "joint-memory-code-v2";
 
@@ -103,20 +115,19 @@ export class ContextRetrievalValidationError extends Error {
   readonly status = 400;
 }
 
-const CONTEXTUAL_ANCHOR_LIMIT = 5;
-const CONTEXTUAL_EDGE_LIMIT = 25;
-
 type DependencySubject = { path: string } | { symbol: string };
 
+/**
+ * The cited declaration at `path`. A symbol key is its path, `#`, and a path-free suffix;
+ * a repository path may itself contain `#`, so the suffix follows the known cited-path
+ * prefix rather than the first `#`.
+ */
 function dependencySubject(citation: MemoryCodeEvidence, path: string): DependencySubject {
-  if (!citation.citedSymbolKey) return { path };
-  const separator = citation.citedSymbolKey.indexOf("#");
-  return {
-    symbol:
-      separator < 0
-        ? citation.citedSymbolKey
-        : `${path}${citation.citedSymbolKey.slice(separator)}`,
-  };
+  const symbolKey = citation.citedSymbolKey;
+  if (!symbolKey) return { path };
+  const citedPrefix = `${citation.citedPath}#`;
+  if (!symbolKey.startsWith(citedPrefix)) return { symbol: symbolKey };
+  return { symbol: `${path}#${symbolKey.slice(citedPrefix.length)}` };
 }
 
 async function dependencyFingerprints(input: {
@@ -178,54 +189,8 @@ async function dependencyFingerprints(input: {
   };
 }
 
-function aggregateContextualImpact(
-  assessments: readonly { anchorId: string; assessment: ContextualImpactAssessment }[],
-  truncated: boolean,
-): ContextualImpactAssessment {
-  const changes = assessments.flatMap(({ anchorId, assessment }) =>
-    assessment.changes.map((change) => `anchor:${anchorId}:${change}`),
-  );
-  if (truncated) changes.push("anchors:truncated");
-  const states = new Set(assessments.map(({ assessment }) => assessment.state));
-  if (states.has("affected")) return { state: "affected", changes };
-  if (states.has("possibly_affected")) return { state: "possibly_affected", changes };
-  if (truncated || states.has("unknown") || assessments.length === 0) {
-    return {
-      state: "unknown",
-      changes:
-        changes.length > 0
-          ? changes
-          : assessments.length === 0
-            ? ["not_assessed:no_resolvable_anchor_subject"]
-            : ["assessment:unknown"],
-    };
-  }
-  return { state: "unaffected", changes };
-}
-
-function text(value: string, name: string, maximumLength: number): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized)) {
-    throw new ContextRetrievalValidationError(`${name} is invalid`);
-  }
-  return normalized;
-}
-
-function hasControlCharacters(value: string): boolean {
-  return Array.from(value).some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 31 || codePoint === 127;
-  });
-}
-
-function commitOid(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
-    throw new ContextRetrievalValidationError(
-      "commitOid must be a full 40- or 64-character Git OID",
-    );
-  }
-  return normalized;
+function queryText(value: string, name: string, maximumLength: number): string {
+  return validateQueryText(value, name, maximumLength, ContextRetrievalValidationError);
 }
 
 function limit(value: number | undefined, fallback: number, maximum: number, name: string): number {
@@ -255,13 +220,15 @@ export function createContextRetrievalModule(
 
   return {
     async retrieve(actor, input) {
-      const query = text(input.query, "query", 10_000);
+      const query = queryText(input.query, "query", 10_000);
       const repositoryKey =
         input.repositoryKey === undefined
           ? undefined
-          : text(input.repositoryKey, "repositoryKey", 512);
+          : validateRepositoryKey(input.repositoryKey, ContextRetrievalValidationError);
       const requestedCommitOid =
-        input.commitOid === undefined ? undefined : commitOid(input.commitOid);
+        input.commitOid === undefined
+          ? undefined
+          : validateCommitOid(input.commitOid, ContextRetrievalValidationError);
       if ((repositoryKey === undefined) !== (requestedCommitOid === undefined)) {
         throw new ContextRetrievalValidationError(
           "repositoryKey and commitOid must be provided together",
@@ -291,11 +258,11 @@ export function createContextRetrievalModule(
       });
       const memoryQuery =
         plan.route === "memory-only" || plan.route === "both"
-          ? text(input.memoryQuery ?? query, "memoryQuery", 10_000)
+          ? queryText(input.memoryQuery ?? query, "memoryQuery", 10_000)
           : null;
       const codeQuery =
         plan.route === "code-only" || plan.route === "both"
-          ? text(input.codeQuery ?? query, "codeQuery", 2_000)
+          ? queryText(input.codeQuery ?? query, "codeQuery", 2_000)
           : null;
       const [memoryResults, codeResults] = await Promise.all([
         memoryQuery !== null
@@ -318,6 +285,8 @@ export function createContextRetrievalModule(
       ]);
 
       const anchors: RetrievedAnchorContext[] = [];
+      // More citations existed than one packet carries, so some were never assessed.
+      let anchorsTruncated = false;
       const anchoredArtifactIds: string[] = [];
       const contextualSubjects: Array<{
         anchorId: string;
@@ -329,46 +298,47 @@ export function createContextRetrievalModule(
         plan.needsAnchorExpansion &&
         plan.needsLocalAssessment &&
         repositoryKey !== undefined &&
-        requestedCommitOid !== undefined
+        requestedCommitOid !== undefined &&
+        memoryResults.length > 0
       ) {
-        for (const result of memoryResults) {
-          const citations = await evidence.list(actor, { memoryId: result.memory.id });
-          for (const citation of citations) {
-            if (anchors.length >= 25) break;
-            const assessment = await evidence.assess(actor, {
-              evidenceId: citation.id,
-              repositoryKey,
-              commitOid: requestedCommitOid,
-            });
-            anchors.push({
-              id: citation.id,
-              memoryId: citation.memoryId,
-              relationship: citation.relationship,
-              localState: assessment.validationState,
-              citedCommitOid: citation.citedCommitOid,
-              citedPath: citation.citedPath,
-              validatedCommitOid: assessment.validatedCommitOid,
-              validatedPath: assessment.validatedPath,
-            });
-            if (
-              assessment.validatedArtifactId &&
-              !anchoredArtifactIds.includes(assessment.validatedArtifactId)
-            ) {
-              anchoredArtifactIds.push(assessment.validatedArtifactId);
-            }
-            if (assessment.validatedRevisionId) {
-              contextualSubjects.push({
-                anchorId: citation.id,
-                baseCommitOid: citation.citedCommitOid,
-                beforeSubject: dependencySubject(citation, citation.citedPath),
-                afterSubject: dependencySubject(
-                  citation,
-                  assessment.validatedPath ?? citation.citedPath,
-                ),
-              });
-            }
+        // One read-only transaction lists and assesses the citations of every result Memory,
+        // in result order. Retrieval never persists revalidation. One citation past the cap
+        // proves that the packet is incomplete; it is dropped, never delivered.
+        const assessed = await evidence.assessMemoryCitations(actor, {
+          memoryIds: memoryResults.map((result) => result.memory.id),
+          repositoryKey,
+          commitOid: requestedCommitOid,
+          limit: MAXIMUM_CONTEXT_ANCHORS + 1,
+        });
+        anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
+        for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
+          anchors.push({
+            id: citation.id,
+            memoryId: citation.memoryId,
+            relationship: citation.relationship,
+            localState: assessment.validationState,
+            citedCommitOid: citation.citedCommitOid,
+            citedPath: citation.citedPath,
+            validatedCommitOid: assessment.validatedCommitOid,
+            validatedPath: assessment.validatedPath,
+          });
+          if (
+            assessment.validatedArtifactId &&
+            !anchoredArtifactIds.includes(assessment.validatedArtifactId)
+          ) {
+            anchoredArtifactIds.push(assessment.validatedArtifactId);
           }
-          if (anchors.length >= 25) break;
+          if (assessment.validatedRevisionId) {
+            contextualSubjects.push({
+              anchorId: citation.id,
+              baseCommitOid: citation.citedCommitOid,
+              beforeSubject: dependencySubject(citation, citation.citedPath),
+              afterSubject: dependencySubject(
+                citation,
+                assessment.validatedPath ?? citation.citedPath,
+              ),
+            });
+          }
         }
       }
 
@@ -434,8 +404,10 @@ export function createContextRetrievalModule(
         // With no cited declaration to compare, there is nothing to assess:
         // reporting `unknown` here would brand every dependency question with
         // a permanent conflict that describes the absence of anchors, not the
-        // code. Truncated or unresolved traversal still reports `unknown`.
-        contextualSubjects.length > 0 &&
+        // code. Truncated or unresolved traversal still reports `unknown`, and so
+        // does a citation list cut at the packet cap, whose unassessed rest may
+        // hold a declaration.
+        (contextualSubjects.length > 0 || anchorsTruncated) &&
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
       ) {
@@ -468,7 +440,7 @@ export function createContextRetrievalModule(
         }
         contextualImpact = aggregateContextualImpact(
           assessments,
-          contextualSubjects.length > selectedSubjects.length,
+          anchorsTruncated || contextualSubjects.length > selectedSubjects.length,
         );
       }
       if (contextualImpact && contextualImpact.state !== "unaffected") {

@@ -1,6 +1,7 @@
 import type { EmbeddingProvider } from "@corespeed/lore-core";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import type pg from "pg";
+import { canonicalJson } from "../../../src/server/api/idempotency";
 
 export interface IndexedMemoryChunk {
   content: string;
@@ -11,6 +12,19 @@ export interface IndexedMemoryChunk {
   embedding_provider: string | null;
   embedding_revision: string | null;
   ordinal: number;
+}
+
+/**
+ * Whether persisted JSONB metadata is exactly the metadata a fixture would write.
+ * The expected value takes the same JSON round trip PostgreSQL applies (undefined
+ * members vanish), and key order is irrelevant because JSONB does not keep it.
+ */
+export function benchmarkMetadataMatches(
+  actual: unknown,
+  expected: Readonly<Record<string, unknown>>,
+): boolean {
+  const stored: unknown = JSON.parse(JSON.stringify(expected));
+  return canonicalJson(actual) === canonicalJson(stored);
 }
 
 export function validateExactIndexedMemory(input: {

@@ -16,25 +16,99 @@ type RestoredDatabaseState = {
   maintenance_queue_restricted: boolean;
 };
 
+/**
+ * Public tables without tenant data, the only ones allowed to lack RLS. Keep in
+ * step with NON_TENANT_PUBLIC_TABLES in src/modules/operations/service.ts; every
+ * other public table, including one added by a later migration, must enable RLS,
+ * except a table an extension owns (PostGIS `spatial_ref_sys`, say).
+ */
+export const NON_TENANT_PUBLIC_TABLES = ["lore_schema_migrations", "lore_system_state"] as const;
+
+/**
+ * Tenant tables a restored database must contain, each with RLS enabled. Keep in
+ * step with REQUIRED_TENANT_TABLES in src/modules/operations/service.ts; a test
+ * pins both lists to the migrated schema's RLS tables.
+ */
+export const REQUIRED_TENANT_TABLES = [
+  "agent_credentials",
+  "agents",
+  "agent_workspace_grants",
+  "code_artifact_payloads",
+  "code_artifacts",
+  "code_dependency_edges",
+  "code_dependency_payloads",
+  "code_dependency_sets",
+  "code_index_generations",
+  "code_index_jobs",
+  "code_repositories",
+  "code_revision_files",
+  "code_revisions",
+  "code_symbol_payloads",
+  "code_symbol_sets",
+  "embedding_generations",
+  "episode_evidence_chunk_embeddings",
+  "episode_evidence_chunks",
+  "episodes",
+  "evaluation_cases",
+  "evaluation_results",
+  "evaluation_runs",
+  "evaluation_suites",
+  "identities",
+  "memberships",
+  "memories",
+  "memory_chunk_embeddings",
+  "memory_chunks",
+  "memory_code_evidence",
+  "memory_embedding_jobs",
+  "memory_events",
+  "memory_import_provenance",
+  "memory_links",
+  "memory_proposal_code_evidence",
+  "memory_proposal_evidence",
+  "memory_proposal_observation_evidence",
+  "memory_proposals",
+  "observations",
+  "request_idempotency_records",
+  "users",
+  "workspace_imports",
+  "workspaces",
+] as const;
+
 export async function verifyRestoredDatabase(
   query: (sql: string) => Promise<{ rows: RestoredDatabaseState[] }>,
 ): Promise<RestoredDatabaseState> {
+  const nonTenantTables = NON_TENANT_PUBLIC_TABLES.map((name) => `'${name}'`).join(", ");
+  const requiredTables = REQUIRED_TENANT_TABLES.map((name) => `('${name}')`).join(", ");
   const result = await query(
-    `WITH required_rls_tables(table_name) AS (
-       VALUES
-         ('users'), ('workspaces'), ('memberships'), ('agents'),
-         ('agent_workspace_grants'), ('agent_credentials'), ('identities'),
-         ('memories'), ('memory_chunks'), ('memory_links'),
-         ('evaluation_suites'), ('evaluation_cases'), ('evaluation_runs'),
-         ('evaluation_results'), ('memory_embedding_jobs'),
-         ('request_idempotency_records'), ('memory_events'),
-         ('embedding_generations'), ('memory_chunk_embeddings'),
-         ('workspace_imports'), ('memory_import_provenance')
-     ), rls_state AS (
-       SELECT count(relation.oid) = count(*) AND bool_and(relation.relrowsecurity) AS enabled
-       FROM required_rls_tables required
+    `WITH required_tenant_tables(table_name) AS (
+       VALUES ${requiredTables}
+     ), required_tenant_state AS (
+       -- Every tenant table must exist, so an empty, partial, or foreign database
+       -- cannot pass.
+       SELECT count(relation.oid) = count(*)
+         AND coalesce(bool_and(relation.relrowsecurity), false) AS present
+       FROM required_tenant_tables required
        LEFT JOIN pg_class relation
          ON relation.oid = to_regclass('public.' || required.table_name)
+     ), rls_state AS (
+       SELECT (SELECT present FROM required_tenant_state) AND NOT EXISTS (
+         SELECT 1
+         FROM pg_class relation
+         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = 'public'
+           AND relation.relkind IN ('r', 'p')
+           AND NOT relation.relrowsecurity
+           AND relation.relname NOT IN (${nonTenantTables})
+           -- An extension's own table belongs to the extension, not to Lore.
+           AND NOT EXISTS (
+             SELECT 1
+             FROM pg_depend dependency
+             WHERE dependency.classid = 'pg_class'::regclass
+               AND dependency.objid = relation.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
+               AND dependency.deptype = 'e'
+           )
+       ) AS enabled
      ), required_maintenance_functions(signature) AS (
        VALUES
          ('lore.enqueue_stale_memory_embedding_jobs(text,text,text,integer)'),

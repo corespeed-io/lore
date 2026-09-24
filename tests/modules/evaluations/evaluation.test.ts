@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import type { EvaluationSearchProvider } from "@/modules/evaluations/service";
-import { createEvaluationModule, evaluateRanking } from "@/modules/evaluations/service";
+import {
+  createEvaluationModule,
+  EVALUATION_ISOLATION_FAILURE_ERROR,
+  EVALUATION_RUN_EXPIRED_ERROR,
+  evaluateRanking,
+} from "@/modules/evaluations/service";
 import syntheticSuite from "../../../evaluation/suites/synthetic-v1.json";
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import { installActorContext } from "../../../src/server/auth/actor-context";
@@ -92,7 +97,10 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
   });
   await expect(evaluations.getSuite(testContext.carol, suite.id)).resolves.toBeNull();
   await expect(evaluations.getSuite(testContext.bob, suite.id)).resolves.toBeNull();
-  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual([]);
+  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual({
+    suites: [],
+    nextCursor: null,
+  });
   await expect(evaluations.getRun(testContext.bob, run.id)).resolves.toBeNull();
   await expect(evaluations.runSuite(testContext.bob, suite.id)).rejects.toBeInstanceOf(Error);
   for (const table of [
@@ -196,5 +204,297 @@ test("A crashed Evaluation run records fail-closed isolation metrics", async () 
   await expect(evaluations.getRun(testContext.alice, runId)).resolves.toMatchObject({
     status: "failed",
     metrics: { isolationPassed: false, hardFailureCount: 1 },
+  });
+});
+
+test("Evaluation Suites list in bounded pages with their cases loaded together", async () => {
+  const testContext = await createMemoryTestContext();
+  const evaluations = createEvaluationModule(testContext.database);
+  const expectedMemoryIds = ["40000000-0000-4000-8000-000000000009"];
+  const created: Awaited<ReturnType<typeof evaluations.createSuite>>[] = [];
+  for (let index = 0; index < 5; index += 1) {
+    created.push(
+      await evaluations.createSuite(testContext.alice, {
+        name: `Paged suite ${index}`,
+        cases: [
+          { query: `first ${index}`, expectedMemoryIds },
+          { query: `second ${index}`, expectedMemoryIds },
+        ],
+      }),
+    );
+  }
+
+  // Suites created back to back can share a clock tick, so stamp distinct times
+  // rather than relying on insert timing for the expected order.
+  await testContext.adminDatabase.transaction(async (transaction) => {
+    for (const [index, suite] of created.entries()) {
+      await transaction.query(
+        "UPDATE evaluation_suites SET updated_at = $2::timestamptz WHERE id = $1",
+        [suite.id, `2026-01-01T00:00:0${index}Z`],
+      );
+    }
+  });
+  const pageThrough = async () => {
+    const listed = [];
+    let cursor: { id: string; updatedAt: string } | undefined;
+    for (let page = 0; page < 5; page += 1) {
+      const result = await evaluations.listSuites(testContext.alice, { cursor, limit: 2 });
+      expect(result.suites.length).toBeLessThanOrEqual(2);
+      listed.push(...result.suites);
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+    }
+    return listed;
+  };
+
+  const listed = await pageThrough();
+  expect(listed.map((suite) => suite.id)).toEqual(created.map((suite) => suite.id).reverse());
+  for (const suite of listed) {
+    expect(suite.cases.map((evaluationCase) => evaluationCase.query)).toEqual(
+      created.find((candidate) => candidate.id === suite.id)?.cases.map((item) => item.query),
+    );
+  }
+  await expect(evaluations.listSuites(testContext.alice, { limit: 5 })).resolves.toMatchObject({
+    nextCursor: null,
+  });
+
+  // With every updated_at equal, the id tie-break alone must page without gaps or repeats.
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE evaluation_suites SET updated_at = '2026-01-02T00:00:00Z' WHERE workspace_id = $1",
+      [testContext.alice.workspaceId],
+    ),
+  );
+  expect((await pageThrough()).map((suite) => suite.id)).toEqual(
+    created.map((suite) => suite.id).sort(),
+  );
+  await expect(evaluations.listSuites(testContext.bob)).resolves.toEqual({
+    suites: [],
+    nextCursor: null,
+  });
+});
+
+test("An abandoned running Evaluation run fails with a content-free reason on read", async () => {
+  const testContext = await createMemoryTestContext();
+  const evaluations = createEvaluationModule(testContext.database);
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Abandoned runs",
+    cases: [{ query: "abandoned", expectedMemoryIds: ["40000000-0000-4000-8000-000000000004"] }],
+  });
+  const [abandonedId, liveId] = [crypto.randomUUID(), crypto.randomUUID()];
+  await testContext.database.transaction(async (transaction) => {
+    await installActorContext(transaction, testContext.alice);
+    await transaction.query(
+      `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id, started_at)
+       VALUES ($1, $3, $4, $5, now() - interval '2 hours'),
+              ($2, $3, $4, $5, now() - interval '5 minutes')`,
+      [abandonedId, liveId, testContext.alice.workspaceId, suite.id, testContext.alice.userId],
+    );
+  });
+
+  await expect(evaluations.getRun(testContext.bob, abandonedId)).resolves.toBeNull();
+  await expect(evaluations.getRun(testContext.alice, abandonedId)).resolves.toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    completedAt: expect.anything(),
+  });
+  await expect(evaluations.getRun(testContext.alice, liveId)).resolves.toMatchObject({
+    status: "running",
+    error: null,
+    completedAt: null,
+  });
+});
+
+test("A live Evaluation run stops at its deadline instead of running unbounded", async () => {
+  const testContext = await createMemoryTestContext();
+  let clock = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: { search: async () => [] },
+    now: () => {
+      clock += 5;
+      return clock;
+    },
+    runTimeoutSeconds: 0.01,
+  });
+  const expectedMemoryIds = ["40000000-0000-4000-8000-000000000005"];
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Deadline",
+    cases: [
+      { query: "first", expectedMemoryIds },
+      { query: "second", expectedMemoryIds },
+      { query: "third", expectedMemoryIds },
+    ],
+  });
+
+  const run = await evaluations.runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    metrics: { caseCount: 1 },
+  });
+  expect(run.results).toHaveLength(1);
+});
+
+test("An Evaluation run whose last search passes the deadline ends expired, not completed", async () => {
+  const testContext = await createMemoryTestContext();
+  let clock = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    // The only search takes 1.1 seconds of a 1-second budget.
+    searchProvider: {
+      search: async () => {
+        clock += 1_100;
+        return [];
+      },
+    },
+    now: () => clock,
+    runTimeoutSeconds: 1,
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Late final case",
+    cases: [{ query: "only", expectedMemoryIds: ["40000000-0000-4000-8000-000000000005"] }],
+  });
+
+  const run = await evaluations.runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    metrics: { caseCount: 1 },
+  });
+  await expect(evaluations.getRun(testContext.alice, run.id)).resolves.toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+  });
+});
+
+const forbiddenId = "40000000-0000-4000-8000-000000000006";
+const expectedId = "40000000-0000-4000-8000-000000000007";
+const tripwireCase = {
+  query: "tripwire",
+  expectedMemoryIds: [expectedId],
+  forbiddenMemoryIds: [forbiddenId],
+  limit: 2,
+};
+
+test("An isolation leak outranks the run deadline in the recorded error", async () => {
+  const testContext = await createMemoryTestContext();
+  let clock = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    // The only search leaks and also runs past the 1-second budget.
+    searchProvider: {
+      search: async () => {
+        clock += 1_100;
+        return [{ memory: { id: forbiddenId } }];
+      },
+    },
+    now: () => clock,
+    runTimeoutSeconds: 1,
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Leak past the deadline",
+    cases: [tripwireCase],
+  });
+
+  const run = await evaluations.runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_ISOLATION_FAILURE_ERROR,
+    metrics: { isolationPassed: false, hardFailureCount: 1, caseCount: 1 },
+  });
+});
+
+test("A run that leaks and then crashes records the leak, not the crash", async () => {
+  const testContext = await createMemoryTestContext();
+  let calls = 0;
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: {
+      async search() {
+        calls += 1;
+        if (calls > 1) throw new Error("provider unavailable");
+        return [{ memory: { id: forbiddenId } }];
+      },
+    },
+  });
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Leak then crash",
+    cases: [tripwireCase, { ...tripwireCase, query: "second" }],
+  });
+
+  await expect(evaluations.runSuite(testContext.alice, suite.id)).rejects.toThrow(
+    "provider unavailable",
+  );
+  const runs = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ status: string; error: string; metrics: Record<string, unknown> }>(
+      "SELECT status::text, error, metrics FROM evaluation_runs WHERE suite_id = $1",
+      [suite.id],
+    ),
+  );
+  expect(runs.rows).toEqual([
+    {
+      status: "failed",
+      error: EVALUATION_ISOLATION_FAILURE_ERROR,
+      metrics: expect.objectContaining({ isolationPassed: false, hardFailureCount: 1 }),
+    },
+  ]);
+});
+
+/** A search that lets a concurrent reader expire the run before it returns `ids`. */
+function searchExpiringItsRun(testContext: Awaited<ReturnType<typeof createMemoryTestContext>>) {
+  let ids: string[] = [];
+  const evaluations = createEvaluationModule(testContext.database, {
+    searchProvider: {
+      async search() {
+        const runs = await testContext.adminDatabase.transaction((transaction) =>
+          transaction.query<{ id: string }>(
+            `UPDATE evaluation_runs SET started_at = now() - interval '2 hours'
+             WHERE status = 'running' RETURNING id`,
+          ),
+        );
+        const runId = runs.rows[0]?.id;
+        if (!runId) throw new Error("The run must still be running during its search");
+        await expect(evaluations.getRun(testContext.alice, runId)).resolves.toMatchObject({
+          status: "failed",
+          error: EVALUATION_RUN_EXPIRED_ERROR,
+          metrics: { caseCount: 0 },
+        });
+        return ids.map((id) => ({ memory: { id } }));
+      },
+    },
+  });
+  return {
+    evaluations,
+    returning(next: string[]) {
+      ids = next;
+      return evaluations;
+    },
+  };
+}
+
+test("A leak is recorded even after a concurrent reader expired the run", async () => {
+  const testContext = await createMemoryTestContext();
+  const { evaluations, returning } = searchExpiringItsRun(testContext);
+  const suite = await evaluations.createSuite(testContext.alice, {
+    name: "Leak after expiry",
+    cases: [tripwireCase],
+  });
+
+  const run = await returning([forbiddenId, expectedId]).runSuite(testContext.alice, suite.id);
+
+  expect(run).toMatchObject({
+    status: "failed",
+    error: EVALUATION_ISOLATION_FAILURE_ERROR,
+    metrics: { isolationPassed: false, hardFailureCount: 1, caseCount: 1 },
+    completedAt: expect.anything(),
+  });
+  expect(run.results[0]?.metrics.forbiddenRetrievedIds).toEqual([forbiddenId]);
+
+  // Without a leak, the reader's expiry stands and the late metrics are discarded.
+  const clean = await returning([expectedId]).runSuite(testContext.alice, suite.id);
+  expect(clean).toMatchObject({
+    status: "failed",
+    error: EVALUATION_RUN_EXPIRED_ERROR,
+    metrics: { caseCount: 0, hardFailureCount: 0 },
   });
 });

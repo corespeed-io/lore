@@ -31,7 +31,7 @@ import {
   RequestInputError,
   WorkspaceAccessError,
 } from "@/server/auth/request-context";
-import { BadRequestError, PreconditionRequiredError } from "./input";
+import { BadRequestError, PayloadTooLargeError, PreconditionRequiredError } from "./input";
 
 // Only known domain failures may expose their message to callers.
 const errorResponses = [
@@ -56,9 +56,23 @@ const errorResponses = [
   [IdempotencyConflictError, 409, "idempotency_conflict"],
   [WorkspaceExportLimitError, 409, "workspace_export_limit_exceeded"],
   [MemoryVersionConflictError, 412, "version_conflict"],
+  [PayloadTooLargeError, 413, "payload_too_large"],
   [PreconditionRequiredError, 428, "precondition_required"],
   [PortabilityValidationError, 400, "invalid_archive"],
 ] as const;
+
+/** Every code this mapping can emit; the OpenAPI Error enum must contain each one. */
+export const domainErrorCodes: readonly string[] = [
+  ...new Set(errorResponses.map(([, , code]) => code)),
+];
+
+// Deadlock and serialization failures roll the whole transaction back, so the
+// request had no effect and the caller may safely retry it.
+const RETRYABLE_TRANSACTION_SQLSTATES = new Set(["40001", "40P01"]);
+
+function sqlState(error: unknown): unknown {
+  return error instanceof Error && "code" in error ? error.code : undefined;
+}
 
 export function errorResponse(error: unknown): Response {
   for (const [ErrorType, status, code] of errorResponses) {
@@ -69,12 +83,18 @@ export function errorResponse(error: unknown): Response {
       );
     }
   }
+  const state = sqlState(error);
+  if (RETRYABLE_TRANSACTION_SQLSTATES.has(String(state))) {
+    return Response.json(
+      {
+        code: "transaction_conflict",
+        error: "The request conflicted with a concurrent change; retry it",
+      },
+      { status: 409, headers: { "cache-control": "private, no-store", "retry-after": "1" } },
+    );
+  }
   // PostgreSQL enforces its text encoding restrictions for JSONB as well as text.
-  if (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "22P05" || error.code === "22021" || error.code === "22P02")
-  ) {
+  if (state === "22P05" || state === "22021" || state === "22P02") {
     return Response.json(
       { code: "invalid_request", error: "Input contains an invalid text value" },
       { status: 400, headers: { "cache-control": "private, no-store" } },

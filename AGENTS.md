@@ -77,17 +77,64 @@ been removed. Lore now has a native implementation, split into two concepts
   FTS GIN indexes that the RLS request path can never use, and
   `0003_drop_memory_chunks_entity_aliases_index.sql` removes the entity-aliases
   GIN on the same proof (`arraycontains` is equally non-leakproof; the
-  generated column stays for the scan predicate). Every new migration
-  must update `lore_system_state.schema_revision` to its own version number —
+  generated column stays for the scan predicate).
+  `0004_job_lifecycle_and_agent_provenance.sql` lets Agent deletion clear Code
+  Evidence provenance, retires exhausted Code Index leases as dead, re-arms
+  dead/cancelled/orphaned Code Index jobs through `lore.enqueue_code_index_job`
+  (a dead job only 15 minutes after it died), decides requester authority for
+  both claim and re-arm with one `lore.code_index_requester_can_run`, cancels a
+  disabled or deleted Agent's unfinished Code Index jobs, serializes generation
+  activation per revision instead of a table lock, revokes maintenance UPDATE on
+  `memory_chunks`, adds `lore.requeue_dead_memory_embedding_jobs`, and evaluates
+  the Memory/chunk/embedding/link read check once per statement via
+  `(SELECT lore.can_read_workspace(lore.current_workspace_id()))`; its policy
+  rewrite briefly takes ACCESS EXCLUSIVE on those four tables under a 5s
+  `lock_timeout`, so a busy deploy may need a retry. Once, and before that policy
+  rewrite so its `code_revision_files` scan never extends the lock, it also
+  cancels unfinished jobs of any indexer revision other than v7 through
+  `lore.cancel_superseded_code_index_jobs` (a processing job only once its lease
+  is past the one-hour maximum) and deletes never-ready revisions that recorded a
+  BOM-only blob as indexed and are cited by no Code Evidence; that v7 literal must
+  match `CODE_INDEX_REVISION` when 0004 ships. The function takes the retired
+  revisions explicitly. The self-host maintenance sweep calls it with
+  `SUPERSEDED_CODE_INDEX_REVISIONS` (`src/modules/code/indexing/protocol.ts`)
+  whenever Code Indexing is enabled, so jobs an older app instance enqueues during
+  a rolling deploy are cancelled too, while a revision the worker does not know,
+  such as a newer release's, is never cancelled. Append the previous value to that
+  list whenever `CODE_INDEX_REVISION` is bumped.
+  `0005_create_replay_indexes_concurrently.sql` builds the five
+  `request_idempotency_records` replay-scrub partial expression indexes and
+  `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
+  idempotent writes never wait on the build. Each index is dropped (`DROP INDEX
+  CONCURRENTLY IF EXISTS`) and then built, so a rerun after a stopped build
+  replaces any `INVALID` leftover. Every new migration
+  must update `lore_system_state.schema_revision` to its own version number (currently 5) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
   `tests/integration/api.test.ts`, and `scripts/checks/smoke-memory-core.ts` pin the current
-  revision;
-- dbmate 2.35 parses and applies those plain-SQL migrations; it is migration tooling,
-  not Lore's runtime ORM. `pg` remains the runtime adapter behind the narrow
+  revision (5);
+- dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
+  not Lore's runtime ORM. A statement that refuses a transaction block
+  (`CREATE`/`DROP INDEX CONCURRENTLY`) goes in its own `-- migrate:up
+  transaction:false` migration, never in a transactional one: a plain `CREATE
+  INDEX` holds SHARE and blocks every write to its table until the migration
+  commits. dbmate still sends such a file as one multi-statement query, which
+  PostgreSQL runs as an implicit transaction block, so `scripts/database/migrate.ts`
+  applies it itself, one statement at a time, after running dbmate over a
+  temporary copy of only the earlier files; running `dbmate migrate` directly
+  therefore stops (safely, recording nothing) at such a migration.
+  `scripts/database/lib/migration-statements.ts` splits only at a semicolon that
+  ends a non-comment line and rejects dollar-quoted bodies. The file must end with
+  its `schema_revision` UPDATE, which the wrapper commits in one transaction with
+  the ledger row; a stopped run records nothing and the next run repeats the whole
+  file, so every such index must be dropped before it is built. PGlite harnesses
+  (`tests/support/memory-context.ts`, restore verification, the lore-core contract
+  test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
+  `applyMigrationChain`/`migrationQueries`; never apply a migration file with one
+  `exec(fileContents)`. `pg` remains the runtime adapter behind the narrow
   transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
   versions in `lore_schema_migrations`. The schema is live in production
@@ -123,9 +170,12 @@ been removed. Lore now has a native implementation, split into two concepts
   surface or silently share one repository/OID identity with authenticated input.
   Git ingestion reuses immutable parse/chunk/dependency outputs from any RLS-visible prior
   Artifact in the same Workspace only when Git object OID, full content SHA-256,
-  and `CODE_INDEX_REVISION` all match. Reuse must revalidate exact source
-  reconstruction, remap path-qualified symbol/declaration identities on rename,
-  and report parsed/reused file counts. A parser/indexer revision mismatch must
+  and `CODE_INDEX_REVISION` all match. Donors must be `ready`/`active`/`retiring`,
+  or the leased job's own `building` generation. Reused dependencies come from
+  each Artifact's immutable Dependency Set, never from a generation's edge overlay.
+  A BOM-only blob decodes to no text and is excluded as `empty`. Reuse must
+  revalidate exact source reconstruction, remap path-qualified symbol/declaration
+  identities on rename, and report parsed/reused file counts. A parser/indexer revision mismatch must
   parse again. Artifact text and its content-only FTS/trigram indexes are stored
   once per Workspace, `CODE_INDEX_REVISION`, and SHA-256 in immutable
   `code_artifact_payloads`; the database verifies each text digest and each
@@ -159,11 +209,15 @@ been removed. Lore now has a native implementation, split into two concepts
   in any latency claim. Search bounds symbol, literal, simple-FTS, and path
   channels independently under the same active generation before weighted RRF.
   Durable leased jobs are replay-safe and atomically activate a completed generation
-  while retaining the prior generation as `retiring`. The current maintenance path
+  while retaining the prior generation as `retiring`. The leased maintenance path
   still assembles a complete revision's source, Artifacts, and dependency arrays in
-  memory before one generation transaction; it does not yet checkpoint complete
-  files into `building`. Do not call jobs resumable until file-level checkpoints,
-  exact manifest-coverage validation, and bounded-memory resume are implemented.
+  memory. It commits complete files into the `building` generation in checkpoint
+  transactions of at most `CODE_INDEX_LIMITS.checkpointArtifacts` Artifacts; a
+  larger single file commits alone and whole. One final transaction writes every
+  dependency edge, readies, and activates the generation. A retried job reuses the
+  complete files its own `building` generation already holds; no other job's
+  `building` generation ever donates Artifacts. Do not call jobs bounded-memory
+  resumable: resume still re-reads and re-assembles the whole revision.
   `src/modules/code/graph.ts` owns bounded exact-revision
   callers/callees reads over immutable `calls`/`imports`/`references` edges.
   It keeps file-level imports separate from symbol-level dependencies and returns
@@ -181,7 +235,12 @@ been removed. Lore now has a native implementation, split into two concepts
   of the ordered declaration chunk sequence with the cited chunk masked out. A
   changed chunk may follow its ordinal only when that surrounding sequence still
   matches; equal-count reorder/replacement must abstain as `ambiguous`. Artifact
-  pruning must not delete citation anchors.
+  pruning must not delete citation anchors. Joint retrieval assesses all result
+  Memories' citations in one read-only transaction (`assessMemoryCitations`);
+  identity matching goes through the path-free Symbol Set payload index, not a
+  suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
+  cut list marks contextual impact `anchors:truncated`, so it is never
+  `unaffected`.
   `src/modules/context/policy.ts` owns the pure versioned route/packet policy and
   `src/modules/context/retrieval.ts` owns its production read-only orchestration.
   `POST /api/v1/context/retrieve`, the TypeScript SDK, and `lore_retrieve_context`
@@ -220,7 +279,29 @@ been removed. Lore now has a native implementation, split into two concepts
   accept only an operator-configured `repositoryKey` plus exact commit OID; never
   accept a model-supplied local path, credential, or Workspace override. Configure
   the self-host registry with `LORE_CODE_REPOSITORIES`; an empty registry disables
-  public enqueue. Keep native Git/AST parsing out of Cloudflare request bundles;
+  public enqueue. Entries may bind `workspaceIds`, which gates enqueue and indexing,
+  not reads (docs/operations.md documents finding and manually removing Code
+  Repositories indexed outside a new binding; the delete cascades, and Code Evidence
+  anchors survive as permanently `unverifiable`). An unbound entry is kept only
+  when `AUTH_MODE` is explicitly `password` or `none` (single operator), and a
+  Workspace outside a binding gets exactly the unconfigured-key 400 so the registry
+  cannot be enumerated. The maintenance worker resolves repository paths from its
+  own `LORE_CODE_REPOSITORIES`, never the job row's `repository_path`, and
+  re-checks the binding at processing time. It does no Code Indexing with an empty
+  registry, and an invalid registry disables only its Code Indexing
+  (`codeRepositoriesForWorker`, content-free warning), never the sweep or
+  embeddings. Failures a later attempt can outlive are `CodeIndexRetryableError`
+  and keep the five-attempt retry budget with backoff: a key the worker's registry
+  does not serve to the job's Workspace, a repository path that does not resolve
+  yet, a commit not fetched yet, and transient Git errnos or signals. Only failures
+  that repeat identically end a job `dead` on its first attempt: input validation,
+  OID/content conflicts, incomplete generations, malformed trees/blobs, and the
+  output bound. Persisted `last_error` replaces C0/C1 controls with U+FFFD within
+  1,000 characters. Git tree paths are read from the verbatim `ls-tree -l -z`
+  record, never a C-quoted `--format` `%(path)`. Re-enqueue re-arms a cancelled or
+  orphaned job at once and a dead job only 15 minutes after it died
+  (`dead_job_rearm_cooldown`), returning it unchanged inside the cooldown;
+  disabling or deleting an Agent cancels its Code Index jobs. Keep native Git/AST parsing out of Cloudflare request bundles;
   it runs only in the Bun/self-host maintenance worker. Parser, symbol, or chunking
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
@@ -273,9 +354,20 @@ been removed. Lore now has a native implementation, split into two concepts
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
-  paged list plus active search and graph keys. Browse eagerly fills at most 5,000
-  Memories (50 × 100-row pages), aligned with the Graph read budget; ranked search
-  is the access path beyond that browse window;
+  paged list plus active search and graph keys. Returning to browse re-reads only
+  page 0, plus any later page that is missing from the cache, no longer matches the
+  list, or sits behind a page 0 that gained or lost a Memory; every page is re-read
+  on resume once the last full read is 5 minutes old
+  (`MEMORY_RESUME_FULL_REFRESH_MS`). Only a refresh in which every page was read
+  resets that age (`fullReadAfterResume`): SWR resolves `mutate()` with cached pages
+  even when a page failed, so a failed or navigation-cancelled page must keep the
+  previous record. Unknown read state renders through
+  `src/shared/browser/read-state.ts`: "—" before data, "N+" for an incomplete or
+  capped window, never 0 or "not found". Browser storage goes through
+  `src/shared/browser/local-preference.ts`, which treats blocked storage as no
+  preference. Browse eagerly fills at most 5,000 Memories (50 × 100-row pages),
+  aligned with the Graph read budget; ranked search is the access path beyond
+  that browse window;
 - code-aware Memory has exactly two human surfaces, both read-only. `MemoryView.tsx`
   renders a Memory's Code citations from `GET /api/v1/memories/{id}/code-evidence`
   and `WorkspaceOperationsView.tsx` renders this Workspace's Code Index queue from
@@ -316,9 +408,21 @@ been removed. Lore now has a native implementation, split into two concepts
   prior active generation to bounded rollback. Postgres is the durable job source;
   rollout maintenance drains both the serving and explicitly configured building
   provider/model generations, because request writes continue to enqueue serving
-  jobs until cutover. The self-host Bun worker polls both sequentially by default,
-  while Cloudflare Queues are wake-up hints for both with a scheduled two-generation
-  database sweep as the delivery backstop;
+  jobs until cutover. The self-host Bun worker runs the sweep, Code Index jobs, and
+  embedding jobs as independent loops, draining both generations sequentially
+  within the embedding loop, while Cloudflare Queues are wake-up hints for both
+  with a scheduled two-generation database sweep as the delivery backstop.
+  Embedding and Code Index maintenance return `lost`, a normal outcome, when
+  another run took the lease or the Memory was deleted mid-embed; `--once` runs
+  one cycle for CI. Mutation primitives return a `jobId` only when an embedding
+  job row was inserted (`RETURNING true` needs no SELECT grant); hosts notify on
+  any non-null id, including a metadata-only update whose prior embedding is still
+  pending. `bun run db:embedding:requeue-dead` re-arms one generation's dead
+  embedding jobs after an outage (dry-run count unless `--apply`).
+  `db:embedding:report` and `db:embedding:activate` require
+  `LORE_EMBEDDING_BUILD_PROVIDER`/`MODEL` or `LORE_EMBEDDING_PROVIDER`/`MODEL`
+  explicitly (they run with `--no-env-file` and never fall back to the default
+  model), and print the provider/model/revision they acted on;
 - `src/server/api/idempotency.ts`, `src/modules/operations/maintenance.ts`,
   `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
   own OSS replay, expired replay/event cleanup, and operational integration.
@@ -339,7 +443,9 @@ been removed. Lore now has a native implementation, split into two concepts
   acceptance is exact-version and never silently rebases; future opt-in AutoDream
   work must use this boundary instead of silently persisting generated content.
   Proposal content expires after 30 days, and hard-deleting a target or accepted
-  Memory removes its associated proposals and replay bodies immediately;
+  Memory removes its associated proposals and replay bodies immediately.
+  Accepting an update locks the target Memory before the Proposal, the same order
+  as forget's BEFORE DELETE trigger; keep it;
 - Episodes are bounded, ordered evidence envelopes; their immutable Observations
   preserve message, tool, document-fragment, or event content until the owner User
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
@@ -357,6 +463,10 @@ been removed. Lore now has a native implementation, split into two concepts
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
   scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
   MCP outside Portable Core and never accept a model-supplied Workspace override.
+  `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
+  their items under the 128,000-character MCP output ceiling and report omitted
+  trailing items with `truncated: true`. The SDK and MCP enforce the server's
+  visible-ASCII Idempotency-Key rule client-side.
   Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;
@@ -439,6 +549,13 @@ been removed. Lore now has a native implementation, split into two concepts
   environment credential use. Keep application-level embedding/result/score validation. MemOS and
   vLLM/llama.cpp reranking retain exact-contract HTTP adapters through
   `src/server/providers/request.ts` with status handling and bounded reads.
+  Every adapter validates its base URL through `providerBaseUrl`
+  (`src/server/providers/environment.ts`): http(s) only, and HTTPS outside
+  `127.0.0.1`, `localhost`, `[::1]`, or the Compose `host.docker.internal` bridge.
+  Only a self-hosted surface that is sent no credential may opt out. The vLLM
+  planner, benchmark reader, and benchmark judge never fall back to
+  `OPENAI_API_KEY`; they send only their own explicit key, and any keyed
+  benchmark reader/judge request requires HTTPS outside loopback.
   `tools/evaluation/shared/dataset-download.ts` owns streaming, checksum-verified
   downloads and atomic promotion. MemoryAgentBench's row-to-JSONL adapter lives in
   `memoryagentbench-download.ts`. Local service probes live in `scripts/dev/lib/health-check.ts`;
@@ -453,13 +570,20 @@ been removed. Lore now has a native implementation, split into two concepts
   `bun run service:test` and CI. It may idempotently extend an existing `.env` only
   when the complete native database block is absent, provisions distinct request and
   maintenance Postgres roles, and gives each managed process only its own database
-  credential. The app and an optional managed llama.cpp reranker bind to
+  credential: every other `*_DATABASE_URL`, `LORE_*_PASSWORD`, `PG*`, and bootstrap
+  secret is blanked for the Next app (including names from Next's development
+  dotenv files) and deleted for the worker and reranker. The app and an optional
+  managed llama.cpp reranker bind to
   `127.0.0.1` regardless of `LORE_BIND_ADDRESS`; use Docker or a manual deployment
   for network-reachable service. Keep native overrides under
   `LORE_LOCAL_POSTGRES_*`, `LORE_LOCAL_RERANK_*`, `LORE_LOCAL_SEARCH_MODE`, and
   `LORE_PORT`.
 
-Still incomplete: full Evaluation management UI. Workspace-scoped Agent creation,
+Still incomplete: full Evaluation management UI, and Workspace member management.
+`lore.create_workspace` makes its creator the only member, and although
+`addMember` and the Membership RLS policies exist, no route, SDK method, CLI
+command, or UI adds, re-roles, or suspends a member, so a second User can join a
+Workspace only through direct SQL. Workspace-scoped Agent creation,
 grant and credential lifecycle management, plus global rename/disable/delete
 controls are available in the native `/agents` surface. Agent deletion requires a
 disabled Agent, removes every grant and credential, and preserves Memories while
@@ -473,8 +597,10 @@ adapters are configured once per deployment, and embedding failure is explicit (
 never blocks a Memory write. Local deployment defaults are Qwen3-Embedding 0.6B at
 1024 dimensions with `OLLAMA_KEEP_ALIVE=0`.
 The self-host worker defaults to one leased embedding job at a time; optional
-`LORE_MAINTENANCE_CONCURRENCY` uses independent leases and must be sized with the
-database pool and provider capacity. Keep local Ollama at one unless measured.
+`LORE_MAINTENANCE_CONCURRENCY` uses independent leases, is a hard per-round bound on
+embedding leases, and must be sized with the database pool and provider capacity;
+`LORE_MAINTENANCE_POOL_SIZE` defaults to concurrency + 2 for the sweep and Code
+Index loops. Keep local Ollama at one unless measured.
 Invalid embedding configuration and provider request failures must warn server-side
 and degrade to lexical/`NULL` behavior; they must not block Memory reads or writes.
 Lexical degradation quality is language-dependent: FTS carries English, while CJK
@@ -497,8 +623,13 @@ default to behavior-neutral values and must be justified by versioned evaluation
 Require exactly one finite `[0,1]` score for every authorized rerank candidate;
 duplicate, missing, foreign, or unnormalized results must fail open to the
 deterministic first-stage order rather than enter calibration or rank fusion.
+Rank by those validated scores with a stable sort, never by the provider's array
+order.
 Rerank only the compact best authorized chunk plus configured neighbors; returned
 answer evidence may be wider, but must not inflate the cross-encoder input.
+Context-group-expanded rows, which have no retrieval anchor, rerank their leading
+chunk plus up to `evidenceNeighborChunks` following chunks, never wider than their
+returned evidence.
 Pin `RETRIEVAL_EVIDENCE_POLICY` in every benchmark report when either behavior
 changes, so historical quality and latency remain comparable.
 Treat provider, model, reranking revision, instruction, candidate budget, minimum
@@ -530,7 +661,10 @@ from one newly retrieved RLS-visible passage, excludes every prior anchor Memory
 and reapplies Actor context, Workspace, scope, time, metadata, and RLS filters.
 Append only novel candidates without disturbing retained first-pass order. Keep the
 leading 80% when the candidate pool is full, reserve at most the trailing 20% for
-feedback, and never exceed the configured candidate budget; an explicitly configured
+feedback, and never exceed the configured candidate budget. The first pass stays
+fixed across rounds and all rounds share that one reserve in discovery order, so
+later rounds only fill free reserve slots and never evict an earlier round's
+bridge Memory (`iterative-tail-reserve-v3`). An explicitly configured
 reranker may then reorder the expanded pool. It defaults to zero because
 pseudo-relevance feedback can drift; benchmark each depth as a separate variant.
 Optional query planning is configured once per deployment and defaults off. Keep the
@@ -544,6 +678,14 @@ Memory search/list may constrain `scope`, `updatedAfter`, and exclusive
 every lexical and dense candidate source before top-k and keep them in the Actor/RLS
 transaction; reranking must never restore a filtered result. Keep the GIN metadata
 index when changing benchmark or application filter paths.
+Every Memory API response (create, read, update, list, search, context packets,
+and Proposal acceptance) renders `createdAt`/`updatedAt` as RFC 3339 UTC with
+microsecond precision through lore-core's `memorySelectColumns`; a `SELECT *`
+row's driver `Date` drops microseconds, so host code returning Memories must
+select through it, and any such `updatedAt` is an exact list cursor. Workspace
+archive and Graph node timestamps stay millisecond and are not cursors.
+Retrieval knobs are read once per process beside the cached providers; changing
+them requires a restart.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the
@@ -587,7 +729,11 @@ generic upstream adapter to support the historical component structure.
 
 The native Graph endpoint caps reads at 5,000 visible Memories. It returns all
 RLS-visible Memory Links whose endpoints are in that node set, then derives at most
-three affinities per Memory among the first 500 otherwise isolated nodes. The
+three affinities per Memory among the first 500 otherwise isolated nodes. Each
+node reads only a 1,000-code-point content prefix; complete content is fetched
+only for the ≤500 isolated affinity candidates and for a node whose prefix cannot
+decide its preview or label, and a version mismatch between those statements
+rereads the graph in full. The
 Worker + Canvas renderer is measured against the migrated ~1,000-node / ~2,200-link
 graph. Preserve D3 as the layout engine without moving the simulation or links back
 onto the main-thread SVG DOM. The `/prototype/graph-scale` benchmark shell reuses
@@ -751,14 +897,42 @@ database invariant, not a UI convention.
   write, chunk/job changes, replay record, and mutation event in one transaction.
 - Workspace export is always a human Actor/RLS-visible logical archive. Import must
   validate its checksum and limits, dry-run cleanly, require explicit owner remap,
-  and record source provenance. It is not a PostgreSQL backup.
+  and record source provenance. It is not a PostgreSQL backup. Export is bounded
+  to 48,000,000 serialized bytes (a running size sum with a sentinel row) so every
+  archive fits the 50,000,000-byte import body limit. Import returns 413 before
+  parsing (a declared Content-Length, or bytes counted while the body streams),
+  validates archive metadata with `MemoryMetadataSchema`, writes in bounded
+  set-based `jsonb_to_recordset` batches, enqueues embedding jobs in its
+  transaction, and notifies maintenance after commit. A receipt replays only while
+  every Memory it imported still exists; otherwise the same archive restores the
+  missing Memories and reconnects them to the survivors. Archive validation, which
+  dry-run also runs, refuses what PostgreSQL would reject at write time: NUL or
+  unpaired surrogates in content, Link kinds, or any metadata key or string; a
+  metadata `__proto__` key (Zod drops it while the checksum covers it); non-RFC
+  3339 or out-of-range timestamps; and archives too deeply nested to checksum. All
+  are 400 `invalid_archive`, never a SQLSTATE or 500. Export serializes the driver's
+  `Date` timestamps with `toISOString()` (milliseconds); `exportedTimestamp` rewrites
+  a text timestamp (as a type-parser override would return it) to RFC 3339 at full
+  precision and validates it with import's rules, so export never emits a timestamp
+  its own import refuses. Import stores the archive's timestamp text as provenance
+  unchanged.
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.
 - Credentials and secrets stay server-only, are stored hashed or encrypted as
-  appropriate, and never use `NEXT_PUBLIC_*` variables.
+  appropriate, and never use `NEXT_PUBLIC_*` variables. `create-runtime-role.ts`
+  sends only SCRAM-SHA-256 verifiers, never cleartext passwords, so runtime
+  passwords must be printable ASCII.
+- Readiness and restore verification derive RLS coverage from pg_catalog: every
+  public table except `lore_system_state`, `lore_schema_migrations`, and tables
+  owned by an extension (`pg_depend` `deptype = 'e'`, e.g. PostGIS
+  `spatial_ref_sys`) must enable RLS, so a new table cannot be forgotten by a
+  hand-kept list; every `REQUIRED_TENANT_TABLES` entry must still exist with RLS
+  whoever owns it.
 - `AUTH_MODE=none` is only acceptable for explicit local development with
-  `ALLOW_INSECURE=1`; production fails closed.
+  `ALLOW_INSECURE=1`; production fails closed. Compose supplies no default for
+  `AUTH_MODE` or `ALLOW_INSECURE`; the local no-auth opt-in lives only in `.env`,
+  and removing it fails closed.
 - `AUTH_MODE=password` is single-operator protection. A valid password always maps
   to `LORE_LOCAL_SUBJECT`; never turn the Basic username into an internal User id.
 
@@ -867,7 +1041,11 @@ Benchmark is part of the product quality system even without AutoDream.
   deterministic clarification short-circuit; reports pin the grounding policy
   revision and score invocation behavior separately from outcome and
   answer-evidence checks. It never measures retrieval quality below the
-  orchestration layer — that remains `benchmark:retrieval`.
+  orchestration layer — that remains `benchmark:retrieval`. A failed live trial
+  is recorded as an `error` outcome (fails Pass, excluded from behavior/latency
+  metrics, non-zero exit) instead of aborting the run. The Claude runner loads no
+  setting sources, skills, or built-in tools, allows only the fixture's MCP tools,
+  and passes only CLI authentication/network environment.
 - The retrieval runner reports Recall@1, Recall@K, MRR, nDCG, no-answer accuracy,
   false-result count, warm mean/p50/p95 latency, misses, and threshold sweeps for
   the active deployment embedding space. Bob-owned private fixture Memories are
@@ -936,7 +1114,10 @@ Benchmark is part of the product quality system even without AutoDream.
   split is only a low-cost smoke test; comparable retrieval scores use the `s` or
   `m` cleaned haystack split. `--reuse-indexed` verifies the exact selected corpus
   before rerunning retrieval-only ablations. Official retrieval comparison skips 30 abstention
-  questions; Lore reports positive retrieval and no-answer accuracy separately.
+  questions; the adapter scores every `_abs` question as an `abstention`-category
+  no-answer case and records the policy in provenance, so Lore reports positive
+  retrieval and no-answer accuracy separately. `noAnswerAccuracy` is null when a
+  suite has no no-answer cases.
 - `evaluation/external/longmemeval-v2.json` pins the newer V2 questions, haystacks,
   and 1.2 GB textual trajectory file. `benchmark:longmemeval-v2:fetch` defaults to
   metadata-only and requires an explicit `small`/`medium` argument before fetching
@@ -951,9 +1132,10 @@ Benchmark is part of the product quality system even without AutoDream.
   and records its model, latency, reasons, and tokens. Fixed-reader adapters send
   verified question images inline to vision-capable OpenAI-compatible or Google
   models; without a judge, judge cases remain unresolved and `scoreComplete` is false.
-  The built-in `lore-portable-deterministic-v2` reader profile uses a character
+  The built-in `lore-portable-deterministic-v3` reader profile uses a character
   budget and temperature 0, so reports must not label it as the paper's sampled,
-  Qwen-token-budgeted official reader. Record prompt hashes, decoding, transport,
+  Qwen-token-budgeted official reader. v3 separates retrieved trajectories with a
+  budgeted blank line; v2 reports concatenated them and are not comparable. Record prompt hashes, decoding, transport,
   image routing, and context-budget units in every result. The runner preserves
   each rendered trajectory exactly across bounded workflow Episodes/Observations,
   indexes them through the separate revisioned Episode-evidence module, groups
@@ -1004,15 +1186,25 @@ Benchmark is part of the product quality system even without AutoDream.
   off by default until a versioned suite proves quality, latency, and resident-memory
   gains over the 0.6B pairwise profile.
 - Retrieval metrics may include Recall@K, MRR, and nDCG; isolation failures are
-  hard failures, not a score that can be averaged away.
+  hard failures, not a score that can be averaged away. The code-aware and joint
+  Memory+Code evaluations exit non-zero on any isolation hard failure without
+  `--strict`; `--strict` only adds the quality thresholds.
 - Workspace-owned evaluation suites follow the same RLS rules as Memories.
 - Never centralize or export private production Memories for evaluation by default.
 - Evaluation runs are read-only against production data. Any write/replay test uses
-  an isolated evaluation Workspace or disposable database.
+  an isolated evaluation Workspace or disposable database. Runs execute in their
+  request. A run still `running` after `EVALUATION_RUN_TIMEOUT_SECONDS` (1 hour)
+  fails with a content-free reason when it is read or before the User's next run,
+  and a live run stops itself at that deadline. An isolation leak outranks expiry:
+  its metrics and isolation error are recorded even if a reader already expired
+  the run. `GET /evaluations/suites` returns
+  pages of at most 100 with `x-lore-next-cursor`.
 - Benchmark-only readers support native Ollama. Pin its model digest and deterministic
   request controls in the report, require loopback plus a locally listed non-cloud
   model, use bounded residency during warm runs, explicitly unload on exit, and never
-  download a model as an implicit benchmark side effect.
+  download a model as an implicit benchmark side effect. MemoryAgentBench's
+  official `substring_exact_match` strips only ASCII `string.punctuation`, as
+  upstream does.
 - MemoryAgentBench may enable benchmark-only structured post-retrieval assembly for
   explicitly versioned current-value questions. Store exactly one numbered fact per
   Memory for that profile, then compact only RLS-authorized returned Memory evidence
@@ -1031,7 +1223,7 @@ The existing application uses:
 
 - Next.js 16 (App Router), React 19, Hono, Bun 1.4.2+ for self-host runtimes,
   package management, tooling, and tests; TypeScript 7;
-- dbmate 2.35 for plain-SQL migration parsing/application and `pg` for runtime
+- dbmate 2.35 for transactional migration parsing/application and `pg` for runtime
   PostgreSQL transactions; Lore has no runtime ORM;
 - SWR 2 for the native browser read/mutation cache, jose, Biome, and Vitest;
 - a Vercel/Geist visual system: `#fafafa` canvas, `#171717` ink, `#ebebeb`
@@ -1068,7 +1260,25 @@ Hono routing, parsing, authorization, and responses; domain services remain
 framework-independent. Use `app.request()` for API tests, including middleware
 and routing. Preserve the unversioned aliases and v1 contract, HEAD/OPTIONS/405
 behavior, and shared admission policy in
-`src/server/auth/auth.ts`. Domain handlers still authorize Actors and install RLS.
+`src/server/auth/auth.ts`. `admitRequest` verifies the human credential once and
+passes the principal to the resolver, which registers the Identity and checks the
+requested Workspace's active Membership in one transaction. For unsafe methods it
+returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of the
+URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
+passes even behind a Host-rewriting proxy, and clients that send neither header
+are unaffected. SQLSTATE 40P01/40001 map to a retryable 409
+`transaction_conflict`. The OpenAPI Error `code` enum is closed and
+`openapi.test.ts` asserts the exact emitted set. Domain handlers still authorize
+Actors and install RLS. Every JSON request body goes through `jsonObject`
+(`src/server/api/input.ts`), which counts UTF-8 bytes as the body streams and
+returns 413 `payload_too_large`; a declared oversized `Content-Length` is refused
+before any byte is read. The default bound is `MAX_JSON_BODY_BYTES` (10 MiB, the
+cap Next's middleware body clone used to impose); Episodes and Evaluation Suites
+pass bounds derived from their field limits (a Suite at 1,000 cases, 10,000-character
+queries, and 100-id expected/forbidden lists must fit), and Workspace import passes
+50,000,000 bytes. A body stream that fails mid-upload is a client abort and maps
+to 400 `invalid_request`, never 500.
+Workspace import refuses an Agent before it reads the body.
 Next mounts Hono through its API catch-all via `hono/vercel`. Cloudflare uses
 request-local Hyperdrive adapters and `waitUntil` queue notifications, before
 OpenNext routing. Default dev/start/local-service commands remain single-service
@@ -1106,6 +1316,7 @@ bun run db:restore # restore into an explicitly named target database
 bun run db:pitr:check # verify PostgreSQL WAL/PITR prerequisites
 bun run db:embedding:report # report build-generation coverage
 bun run db:embedding:activate # atomically activate one complete generation
+bun run db:embedding:requeue-dead # count, or with --apply re-arm, one generation's dead embedding jobs
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
 bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
 bun run benchmark:longmemeval:fetch # download and verify the pinned cleaned S split
@@ -1204,7 +1415,7 @@ those rules with mocks that merely repeat their implementation.
 - `tsconfig.json` sets `incremental: true`, so `bun run typecheck` can report success
   purely from a stale build-info file. `tsBuildInfoFile` keeps it out of the repository
   root, so any bisect over dependency, generated-type,
-  or `tsconfig` changes must `rm -f .next/cache/tsconfig.tsbuildinfo .next/cache/.tsbuildinfo` between
+  or `tsconfig` changes must `rm -f .next/cache/tsconfig.tsbuildinfo .next/cache/.tsbuildinfo .next/cache/scripts.tsbuildinfo` between
   runs, or it measures the cache instead of the change. `skipLibCheck: true` compounds
   this: a conflict between two `.d.ts` files is silent at the declaration site and only
   surfaces as errors at unrelated call sites.
@@ -1218,7 +1429,15 @@ those rules with mocks that merely repeat their implementation.
   green Cloudflare bundle. Moving the file into `src/` is safe on its own, and Next's
   own `src` guidance asks for it there.
   `bun run smoke:next` asserts an unauthenticated `GET /` is 401, which is the only
-  check that proves the file still runs at all.
+  check that proves the file still runs at all. Its matcher must keep excluding
+  `/api` and `/api/*` except `/api/prototype/*`: Next clones every non-GET body
+  that reaches middleware and truncates it at `proxyClientMaxBodySize` (10 MB),
+  which broke large Workspace imports. `tests/server/middleware.test.ts` compiles
+  the matcher with Next's `getMiddlewareMatchers`.
+- Bun 1.3.x segfaults in `next build` and can kill a Vitest worker under the
+  default worker count; use the required Bun 1.4.2+. With mise, a global 1.3.x pin
+  can shadow it: put `~/.local/share/mise/installs/bun/1.4.2/bin` first on `PATH`
+  (or fix the pin) before building or running the full suite.
 - Wrangler upgrades must regenerate `src/types/cloudflare-env.d.ts` and pass a fresh
   typecheck. Wrangler 4.123.0's workerd generated `declare const Buffer: any`,
   which collided with the runtime types and broke `Buffer.toString(encoding)`.

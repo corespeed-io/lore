@@ -1,6 +1,21 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
+import { evaluationFailed } from "../../tools/evaluation/shared/evaluation-exit-status";
+
+test("an isolation hard failure fails the evaluation with or without --strict", () => {
+  for (const strict of [false, true]) {
+    expect(evaluationFailed({ strict, decision: "fail", hardFailureCount: 1 })).toBe(true);
+    // A hard failure is never waived, even by a report that claims to pass.
+    expect(evaluationFailed({ strict, decision: "pass", hardFailureCount: 2 })).toBe(true);
+  }
+});
+
+test("--strict alone turns a missed quality threshold into a failure", () => {
+  expect(evaluationFailed({ strict: false, decision: "fail", hardFailureCount: 0 })).toBe(false);
+  expect(evaluationFailed({ strict: true, decision: "fail", hardFailureCount: 0 })).toBe(true);
+  expect(evaluationFailed({ strict: true, decision: "pass", hardFailureCount: 0 })).toBe(false);
+});
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const foundation = "tools/evaluation/code/evaluate-code-aware-memory.ts";

@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai/web";
+import { providerBaseUrl } from "@/server/providers/environment";
 import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { parsePlannedQueries } from "./parse";
 
@@ -21,10 +22,7 @@ interface GoogleInteractionResponse {
 }
 
 function apiBaseUrl(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
-    throw new Error("Google query planner base URL must use https");
-  }
+  const url = providerBaseUrl(baseUrl, "Google query planner base URL");
   url.search = "";
   url.hash = "";
   return url.toString().replace(/\/$/, "");

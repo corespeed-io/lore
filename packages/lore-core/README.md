@@ -71,8 +71,12 @@ primitives plus maintenance notification so a host module can create or update
 canonical Memories inside its own transaction with identical chunking and
 embedding-job semantics. The host owns authorization, replay bookkeeping, commit,
 and post-commit notification; Lore OSS's Memory Proposals review is a consumer.
-`memoryFromRow`, `MemoryRow`, and `serializedTimestamp` support hosts that map
-their own row selections.
+A primitive's `jobId` is non-null only when it inserted an embedding job, so a
+host notifies maintenance for any non-null id and for nothing else.
+`memoryFromRow`, `MemoryRow`, `memorySelectColumns`, and `serializedTimestamp`
+support hosts that map their own row selections. Select Memory rows with
+`memorySelectColumns` so their timestamps keep the engine's canonical
+microsecond UTC form; a `SELECT *` row carries the driver's millisecond `Date`.
 
 Pure query preparation, feedback-query generation, fusion, recency, and diversity
 live in internal `retrieval/` modules. SQL and storage orchestration remain part

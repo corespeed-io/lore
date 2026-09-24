@@ -13,3 +13,12 @@ node_modules
 tmp
 lore-*.png
 lore-*.json
+# Operator secrets, database dumps, and local benchmark data never enter the
+# build context.
+backups
+.dev.vars
+.dev.vars.*
+evaluation/datasets
+evaluation/results
+.wrangler
+packages/*/dist

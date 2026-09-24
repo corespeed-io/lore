@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RerankDocument, RerankResult } from "@corespeed/lore-core";
 import { type Fetch, Ollama } from "ollama/browser";
+import { providerBaseUrl } from "@/server/providers/environment";
 import type { ConfiguredRerankingProvider } from "../metadata";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
@@ -42,21 +43,9 @@ function boundedInteger(
 }
 
 function providerHost(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("ollama-listwise reranking base URL must use http or https");
-  }
+  const url = providerBaseUrl(baseUrl, "ollama-listwise reranking base URL");
   if (url.hostname === "ollama.com") {
     throw new Error("Ollama reranking requires a self-hosted server; ollama.com is not supported");
-  }
-  if (
-    url.protocol !== "https:" &&
-    url.hostname !== "127.0.0.1" &&
-    url.hostname !== "localhost" &&
-    url.hostname !== "[::1]" &&
-    url.hostname !== "host.docker.internal"
-  ) {
-    throw new Error("ollama-listwise reranking base URL must use https outside localhost");
   }
   return url.toString().replace(/\/$/, "");
 }

@@ -127,29 +127,41 @@ export function fuseQueryResults(
     .map(({ result, score }) => ({ ...result, score }));
 }
 
+/**
+ * Merge retrieval-feedback candidates into the fixed first pass.
+ *
+ * `firstPassResults` is the original fused pool, never a previous merge.
+ * `feedbackResults` holds every round's candidates in discovery order, so the
+ * earliest novel feedback keeps its slot and later rounds only fill what the
+ * shared reserve has left. A full pool keeps its leading first-pass share and
+ * gives feedback at most the trailing reserve; free slots below the budget
+ * also go to feedback. The result never exceeds `limit`.
+ */
 export function appendFeedbackResults(
-  initialResults: MemorySearchResult[],
+  firstPassResults: MemorySearchResult[],
   feedbackResults: MemorySearchResult[],
   limit: number,
 ): MemorySearchResult[] {
-  const initial = initialResults.slice(0, limit);
-  if (limit <= 1) return initial;
-  const initialIds = new Set(initial.map((result) => result.memory.id));
-  const novelFeedback = feedbackResults.filter((result) => !initialIds.has(result.memory.id));
-  if (!novelFeedback.length) return initial;
+  const firstPass = firstPassResults.slice(0, limit);
+  if (limit <= 1) return firstPass;
+  const selectedIds = new Set(firstPass.map((result) => result.memory.id));
+  const novelFeedback: MemorySearchResult[] = [];
+  for (const result of feedbackResults) {
+    if (selectedIds.has(result.memory.id)) continue;
+    selectedIds.add(result.memory.id);
+    novelFeedback.push(result);
+  }
+  if (!novelFeedback.length) return firstPass;
 
-  const reservedFeedbackSlots = Math.min(
-    novelFeedback.length,
-    Math.max(
-      RETRIEVAL_FEEDBACK_CANDIDATE_POLICY.minimumSlots,
-      Math.floor(limit * RETRIEVAL_FEEDBACK_CANDIDATE_POLICY.targetShare),
-    ),
+  const reservedFeedbackSlots = Math.max(
+    RETRIEVAL_FEEDBACK_CANDIDATE_POLICY.minimumSlots,
+    Math.floor(limit * RETRIEVAL_FEEDBACK_CANDIDATE_POLICY.targetShare),
   );
   const feedbackSlots = Math.min(
     novelFeedback.length,
-    Math.max(limit - initial.length, reservedFeedbackSlots),
+    Math.max(limit - firstPass.length, reservedFeedbackSlots),
   );
-  return [...initial.slice(0, limit - feedbackSlots), ...novelFeedback.slice(0, feedbackSlots)];
+  return [...firstPass.slice(0, limit - feedbackSlots), ...novelFeedback.slice(0, feedbackSlots)];
 }
 
 export function timestampMilliseconds(value: unknown): number {

@@ -3,39 +3,89 @@ import { CodeIndexValidationError } from "./errors";
 import { CODE_INDEX_LIMITS } from "./protocol";
 import type { CodeSourceFile, GitRevisionManifest } from "./types";
 
+/** The 400-class error a calling module reports; each Code/context module keeps its own. */
+export type ValidationErrorClass = new (message: string) => Error;
+
+/** Tab, line feed, and carriage return: the only C0 controls a free-text query may carry. */
+const QUERY_WHITESPACE_CODE_POINTS: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0d]);
+
 export function sha256(content: string | Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-export function hasControlCharacters(value: string): boolean {
+export function hasControlCharacters(value: string, allowQueryWhitespace = false): boolean {
   return Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
+    if (allowQueryWhitespace && QUERY_WHITESPACE_CODE_POINTS.has(codePoint)) return false;
     return codePoint <= 31 || codePoint === 127;
   });
 }
 
-export function validateCommitOid(commitOid: string): string {
+export function validateCommitOid(
+  commitOid: string,
+  ErrorClass: ValidationErrorClass = CodeIndexValidationError,
+): string {
   const normalized = commitOid.trim().toLowerCase();
   if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
-    throw new CodeIndexValidationError("commitOid must be a full 40- or 64-character Git OID");
+    throw new ErrorClass("commitOid must be a full 40- or 64-character Git OID");
   }
   return normalized;
 }
 
-export function validateUuid(value: string, name: string): string {
+/** A lowercase RFC 9562 UUID, the same form request Workspace headers must carry. */
+export function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
+export function validateUuid(
+  value: string,
+  name: string,
+  ErrorClass: ValidationErrorClass = CodeIndexValidationError,
+): string {
   const normalized = value.trim().toLowerCase();
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(normalized)
-  ) {
-    throw new CodeIndexValidationError(`${name} must be a UUID`);
-  }
+  if (!isUuid(normalized)) throw new ErrorClass(`${name} must be a UUID`);
   return normalized;
 }
 
-export function validatePlainText(value: string, name: string, maximumLength: number): string {
+/** An identifier-like value (key, name, ref): trimmed, bounded, and free of every C0 control. */
+export function validatePlainText(
+  value: string,
+  name: string,
+  maximumLength: number,
+  ErrorClass: ValidationErrorClass = CodeIndexValidationError,
+): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized)) {
-    throw new CodeIndexValidationError(`${name} is invalid`);
+    throw new ErrorClass(`${name} is invalid`);
+  }
+  return normalized;
+}
+
+/** The longest operator-configured Code Repository key any surface accepts. */
+export const REPOSITORY_KEY_MAXIMUM_LENGTH = 512;
+
+/** An operator-configured Code Repository key, bounded like every other surface. */
+export function validateRepositoryKey(
+  value: string,
+  ErrorClass: ValidationErrorClass = CodeIndexValidationError,
+): string {
+  return validatePlainText(value, "repositoryKey", REPOSITORY_KEY_MAXIMUM_LENGTH, ErrorClass);
+}
+
+/**
+ * A free-text retrieval query: like plain text, but multi-line queries and pasted code keep
+ * their tabs and line breaks, as Memory search already accepts. NUL and the other C0
+ * controls stay rejected.
+ */
+export function validateQueryText(
+  value: string,
+  name: string,
+  maximumLength: number,
+  ErrorClass: ValidationErrorClass = CodeIndexValidationError,
+): string {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maximumLength || hasControlCharacters(normalized, true)) {
+    throw new ErrorClass(`${name} is invalid`);
   }
   return normalized;
 }

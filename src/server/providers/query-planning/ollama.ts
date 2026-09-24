@@ -1,4 +1,5 @@
 import { type Fetch, Ollama } from "ollama/browser";
+import { providerBaseUrl } from "@/server/providers/environment";
 import type { ConfiguredQueryPlanningProvider } from "../metadata";
 import { parsePlannedQueries } from "./parse";
 
@@ -23,10 +24,9 @@ interface OllamaChatResponse {
 }
 
 function apiBaseUrl(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Ollama query planner base URL must use http or https");
-  }
+  // Ollama is sent no credential, so plain HTTP to a LAN host stays allowed; the
+  // shared parser still refuses other schemes and never echoes the URL.
+  const url = providerBaseUrl(baseUrl, "Ollama query planner base URL", { requireHttps: false });
   if (url.hostname === "ollama.com") {
     throw new Error(
       "Ollama query planning requires a self-hosted server; ollama.com is not supported",

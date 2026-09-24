@@ -77,7 +77,8 @@ export interface RetrievalBenchmarkMetrics {
   recallAtK: number;
   reciprocalRank: number;
   ndcgAtK: number;
-  noAnswerAccuracy: number;
+  /** Null when no case is a no-answer case: there is no accuracy to report. */
+  noAnswerAccuracy: number | null;
   averageFalseResults: number;
   isolationPassed: boolean;
   hardFailureCount: number;
@@ -146,7 +147,9 @@ export function aggregateRetrievalBenchmark(
     recallAtK: mean(positiveCases.map((result) => result.recallAtK)),
     reciprocalRank: mean(positiveCases.map((result) => result.reciprocalRank)),
     ndcgAtK: mean(positiveCases.map((result) => result.ndcgAtK)),
-    noAnswerAccuracy: mean(noAnswerCases.map((result) => (result.noAnswerCorrect ? 1 : 0))),
+    noAnswerAccuracy: noAnswerCases.length
+      ? mean(noAnswerCases.map((result) => (result.noAnswerCorrect ? 1 : 0)))
+      : null,
     averageFalseResults: mean(noAnswerCases.map((result) => result.falseResultCount)),
     isolationPassed: hardFailureCount === 0,
     hardFailureCount,

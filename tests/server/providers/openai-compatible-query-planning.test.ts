@@ -65,6 +65,31 @@ test("vLLM query planning does not inherit OpenAI environment credentials", asyn
   await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual(["query"]);
 });
 
+test("a vLLM planner credential requires HTTPS outside loopback", async () => {
+  expect(() =>
+    createOpenAICompatibleQueryPlanningProvider({
+      provider: "vllm",
+      model: "fixture",
+      apiKey: "planner-secret",
+      baseUrl: "http://planner.test/v1",
+    }),
+  ).toThrow("vLLM query planner base URL must use https outside loopback or host.docker.internal");
+
+  for (const baseUrl of ["http://127.0.0.1:8000/v1", "https://planner.test/v1"]) {
+    const provider = createOpenAICompatibleQueryPlanningProvider({
+      provider: "vllm",
+      model: "fixture",
+      apiKey: "planner-secret",
+      baseUrl,
+      fetch: async (_input, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer planner-secret");
+        return Response.json({ choices: [{ message: { content: '{"queries":["query"]}' } }] });
+      },
+    });
+    await expect(provider.plan({ query: "question", maxQueries: 1 })).resolves.toEqual(["query"]);
+  }
+});
+
 test("OpenAI query planning leaves retries disabled and hides provider error bodies", async () => {
   const fetch = vi
     .fn()
@@ -172,5 +197,7 @@ test("Vercel AI Gateway query planning requires a credential and a creator/model
       apiKey: "test-gateway-key",
       baseUrl: "http://gateway.internal/v1",
     }),
-  ).toThrow("Vercel AI Gateway query planner base URL must use https outside localhost");
+  ).toThrow(
+    "Vercel AI Gateway query planner base URL must use https outside loopback or host.docker.internal",
+  );
 });

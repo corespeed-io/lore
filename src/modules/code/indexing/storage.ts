@@ -6,8 +6,7 @@ import { CodeIndexValidationError, CodeRevisionConflictError } from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
 import type {
   CodeDependencyKind,
-  CodeIndexJob,
-  CodeIndexJobStatus,
+  CodeSourceFile,
   GitRevisionManifest,
   GitRevisionManifestEntry,
   PreparedArtifact,
@@ -40,23 +39,6 @@ export interface ActiveGitRevisionRow extends RevisionRow {
   repository_id: string;
   generation_id: string;
   artifact_count: number;
-}
-
-export interface CodeIndexJobRow {
-  id: string;
-  repository_id: string;
-  repository_key: string;
-  commit_oid: string;
-  source_ref: string | null;
-  indexer_revision: string;
-  status: CodeIndexJobStatus;
-  attempt_count: number;
-  max_attempts: number;
-  available_at: Date | string;
-  completed_at: Date | string | null;
-  last_error: string | null;
-  created_at: Date | string;
-  updated_at: Date | string;
 }
 
 function remapArtifactIdentity(
@@ -114,13 +96,31 @@ function reusableArtifact(row: ReusableArtifactRow): PreparedArtifact {
   };
 }
 
+export interface ReusableGitFileLookup {
+  manifest: GitRevisionManifest;
+  /** The decoded source that reused Artifacts must reconstruct exactly. */
+  files: readonly CodeSourceFile[];
+  /**
+   * A leased job's own exact revision. Its `building` generation may donate the complete
+   * files an interrupted attempt already checkpointed. No other `building` generation
+   * donates: it has not passed the ready completeness proof and may never become ready.
+   */
+  resumeRevision: { repositoryId: string; commitOid: string } | null;
+}
+
+/**
+ * Finds prior Artifacts for unchanged Git blobs. Dependencies come from each Artifact's
+ * immutable Dependency Set, never from a generation's edge overlay, which a leased job writes
+ * only in its final ready transaction.
+ */
 export async function loadReusableGitFiles(
   database: PostgresDatabase,
   actor: ActorContext,
-  manifest: GitRevisionManifest,
+  lookup: ReusableGitFileLookup,
   installContext: (transaction: PostgresTransaction) => Promise<void> = (transaction) =>
     installActorContext(transaction, actor),
 ): Promise<Map<string, PreparedFileIndex>> {
+  const { manifest, resumeRevision } = lookup;
   const requestedFiles = manifest.entries
     .filter(
       (entry): entry is GitRevisionManifestEntry & { contentSha256: string } =>
@@ -163,7 +163,21 @@ export async function loadReusableGitFiles(
           AND generation.repository_id = revision.repository_id
           AND generation.revision_id = revision.id
           AND generation.indexer_revision = $3
-          AND generation.status IN ('building', 'ready', 'active', 'retiring')
+          AND (
+            generation.status IN ('ready', 'active', 'retiring')
+            OR (generation.status = 'building'
+              AND revision.repository_id = $4::uuid
+              AND revision.commit_oid = $5::text)
+          )
+         WHERE EXISTS (
+           SELECT 1
+           FROM code_artifacts donated
+           WHERE donated.workspace_id = previous_file.workspace_id
+             AND donated.repository_id = revision.repository_id
+             AND donated.revision_id = revision.id
+             AND donated.generation_id = generation.id
+             AND donated.path = previous_file.path
+         )
          ORDER BY requested.path, revision.created_at DESC, revision.id, previous_file.path
        )
        SELECT reusable_file.target_path, reusable_file.source_path,
@@ -196,18 +210,11 @@ export async function loadReusableGitFiles(
                'siteStartColumn', dependency_payload.site_start_column,
                'siteEndLine', dependency_payload.site_end_line,
                'siteEndColumn', dependency_payload.site_end_column
-             ) ORDER BY dependency.dependency_ordinal
+             ) ORDER BY dependency_payload.ordinal
            )
-           FROM code_dependency_edges dependency
-           JOIN code_dependency_payloads dependency_payload
-             ON dependency_payload.workspace_id = dependency.workspace_id
-            AND dependency_payload.dependency_set_id = artifact.dependency_set_id
-            AND dependency_payload.ordinal = dependency.dependency_ordinal
-           WHERE dependency.workspace_id = artifact.workspace_id
-             AND dependency.repository_id = artifact.repository_id
-             AND dependency.revision_id = artifact.revision_id
-             AND dependency.generation_id = artifact.generation_id
-             AND dependency.from_artifact_id = artifact.id
+           FROM code_dependency_payloads dependency_payload
+           WHERE dependency_payload.workspace_id = artifact.workspace_id
+             AND dependency_payload.dependency_set_id = artifact.dependency_set_id
          ), '[]'::jsonb) AS dependencies
        FROM reusable_file
        JOIN code_artifacts artifact
@@ -220,7 +227,13 @@ export async function loadReusableGitFiles(
         AND payload.id = artifact.payload_id
         AND payload.content_sha256 = artifact.content_sha256
        ORDER BY reusable_file.target_path, artifact.ordinal`,
-      [actor.workspaceId, JSON.stringify(requestedFiles), CODE_INDEX_REVISION],
+      [
+        actor.workspaceId,
+        JSON.stringify(requestedFiles),
+        CODE_INDEX_REVISION,
+        resumeRevision?.repositoryId ?? null,
+        resumeRevision?.commitOid ?? null,
+      ],
     );
     const reusableByPath = new Map<string, PreparedFileIndex>();
     for (const row of result.rows) {
@@ -250,9 +263,9 @@ export async function loadReusableGitFiles(
       );
       reusableByPath.set(row.target_path, prepared);
     }
-    const expectedHashByPath = new Map(
-      requestedFiles.map((file) => [file.path, file.content_sha256] as const),
-    );
+    // Compare with the decoded text rather than the blob digest: the decoder consumes a
+    // leading BOM, so a BOM-prefixed file's Artifacts reconstruct its text, not its bytes.
+    const contentByPath = new Map(lookup.files.map((file) => [file.path, file.content] as const));
     for (const [path, prepared] of reusableByPath) {
       let cursor = 0;
       for (const artifact of prepared.artifacts) {
@@ -260,14 +273,13 @@ export async function loadReusableGitFiles(
         cursor += artifact.content.length;
         artifact.endIndex = cursor;
       }
-      const reconstructsBlob =
+      const reconstructsSource =
         prepared.artifacts.every(
           (artifact, ordinal) =>
             artifact.ordinal === ordinal && artifact.contentSha256 === sha256(artifact.content),
         ) &&
-        sha256(prepared.artifacts.map((artifact) => artifact.content).join("")) ===
-          expectedHashByPath.get(path);
-      if (!reconstructsBlob) reusableByPath.delete(path);
+        prepared.artifacts.map((artifact) => artifact.content).join("") === contentByPath.get(path);
+      if (!reconstructsSource) reusableByPath.delete(path);
     }
     return reusableByPath;
   });
@@ -1026,27 +1038,4 @@ export async function insertGitManifest(
       params,
     );
   }
-}
-
-function timestamp(value: Date | string): string {
-  return new Date(value).toISOString();
-}
-
-export function toCodeIndexJob(row: CodeIndexJobRow): CodeIndexJob {
-  return {
-    id: row.id,
-    repositoryId: row.repository_id,
-    repositoryKey: row.repository_key,
-    commitOid: row.commit_oid,
-    sourceRef: row.source_ref,
-    indexerRevision: row.indexer_revision,
-    status: row.status,
-    attemptCount: Number(row.attempt_count),
-    maximumAttempts: Number(row.max_attempts),
-    availableAt: timestamp(row.available_at),
-    completedAt: row.completed_at ? timestamp(row.completed_at) : null,
-    lastError: row.last_error,
-    createdAt: timestamp(row.created_at),
-    updatedAt: timestamp(row.updated_at),
-  };
 }

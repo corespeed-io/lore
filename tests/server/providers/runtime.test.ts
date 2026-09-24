@@ -68,11 +68,41 @@ test("runtime initializes providers lazily once and keeps maintenance notificati
   expect(getRuntimeMemoryModuleOptions().maintenanceNotifier).toBeUndefined();
 });
 
+/** Deployment knobs are read once per process, so each case needs a fresh module. */
+async function freshRuntimeMemoryModuleOptions(): Promise<MemoryModuleOptions> {
+  vi.resetModules();
+  const { getRuntimeMemoryModuleOptions } = await import("@/server/providers/runtime");
+  return getRuntimeMemoryModuleOptions();
+}
+
+test("runtime reads deployment knobs once and warns about an invalid knob once", async () => {
+  vi.stubEnv("LORE_RERANK_WEIGHT", "2");
+  vi.stubEnv("LORE_EVIDENCE_TOP_CHUNKS", "3");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const { getRuntimeMemoryModuleOptions } = await import("@/server/providers/runtime");
+
+  const first = getRuntimeMemoryModuleOptions();
+  expect(first).toMatchObject({ rerankWeight: 1, evidenceTopChunks: 3 });
+  expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("LORE_RERANK_WEIGHT"));
+
+  vi.stubEnv("LORE_RERANK_WEIGHT", "0.25");
+  vi.stubEnv("LORE_EVIDENCE_TOP_CHUNKS", "5");
+  const notifier = { notify: vi.fn() };
+  for (let request = 0; request < 3; request += 1) {
+    expect(getRuntimeMemoryModuleOptions({ maintenanceNotifier: notifier })).toMatchObject({
+      rerankWeight: 1,
+      evidenceTopChunks: 3,
+      maintenanceNotifier: notifier,
+    });
+  }
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(getRuntimeMemoryModuleOptions().maintenanceNotifier).toBeUndefined();
+});
+
 test.each(Object.entries(numericOptions))(
   "%s preserves defaults, numeric bounds, and invalid-value warnings",
   async (name, [key, fallback, minimum, maximum, integer]) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { getRuntimeMemoryModuleOptions } = await import("@/server/providers/runtime");
     const cases: [string | undefined, number, boolean][] = [
       [undefined, fallback, false],
       ["", fallback, key === "evidenceTopChunks"],
@@ -89,7 +119,9 @@ test.each(Object.entries(numericOptions))(
     for (const [raw, expected, shouldWarn] of cases) {
       vi.stubEnv(name, raw);
       warn.mockClear();
-      expect(getRuntimeMemoryModuleOptions()[key], `${name}=${String(raw)}`).toBe(expected);
+      expect((await freshRuntimeMemoryModuleOptions())[key], `${name}=${String(raw)}`).toBe(
+        expected,
+      );
       expect(warn).toHaveBeenCalledTimes(shouldWarn ? 1 : 0);
       if (shouldWarn) expect(warn).toHaveBeenCalledWith(expect.stringContaining(name));
     }
@@ -98,7 +130,6 @@ test.each(Object.entries(numericOptions))(
 
 test("rerank candidate limits clamp positive integers and silently default other values", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  const { getRuntimeMemoryModuleOptions } = await import("@/server/providers/runtime");
   const cases: [string | undefined, number][] = [
     [undefined, 50],
     ["", 50],
@@ -114,7 +145,7 @@ test("rerank candidate limits clamp positive integers and silently default other
   ];
   for (const [raw, expected] of cases) {
     vi.stubEnv("LORE_RERANK_CANDIDATE_LIMIT", raw);
-    expect(getRuntimeMemoryModuleOptions().rerankCandidateLimit).toBe(expected);
+    expect((await freshRuntimeMemoryModuleOptions()).rerankCandidateLimit).toBe(expected);
   }
   expect(warn).not.toHaveBeenCalled();
 });

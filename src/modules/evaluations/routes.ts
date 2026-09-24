@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
   BadRequestError,
+  decodeCursor,
+  encodeCursor,
   jsonObject,
+  queryInteger,
   requiredString,
   requireHumanActor,
   uuidArray,
@@ -11,11 +14,27 @@ import {
 import type { EvaluationCaseInput } from "./service";
 import { createEvaluationModule } from "./service";
 
+const MAX_EVALUATION_CASES = 1_000;
+const MAX_EVALUATION_QUERY_LENGTH = 10_000;
+const MAX_EVALUATION_CASE_MEMORY_IDS = 100;
+/**
+ * A Suite at its field limits: every case at the query bound in UTF-8 (at most three
+ * bytes per UTF-16 unit), two full id lists of quoted UUIDs, and per-case JSON
+ * framing, plus room for the name. The shared 10 MiB default would refuse Suites the
+ * field limits accept.
+ */
+const MAX_EVALUATION_SUITE_BODY_BYTES =
+  MAX_EVALUATION_CASES *
+    (MAX_EVALUATION_QUERY_LENGTH * 3 + 2 * MAX_EVALUATION_CASE_MEMORY_IDS * 40 + 256) +
+  64 * 1024;
+
 function evaluationCases(value: unknown): EvaluationCaseInput[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new BadRequestError("cases must be a non-empty array");
   }
-  if (value.length > 1_000) throw new BadRequestError("cases exceeds 1000 items");
+  if (value.length > MAX_EVALUATION_CASES) {
+    throw new BadRequestError(`cases exceeds ${MAX_EVALUATION_CASES} items`);
+  }
   return value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new BadRequestError(`cases[${index}] must be an object`);
@@ -26,11 +45,16 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
       throw new BadRequestError(`cases[${index}].limit must be an integer from 1 to 100`);
     }
     return {
-      query: requiredString(evaluationCase.query, `cases[${index}].query`, 10_000),
+      query: requiredString(
+        evaluationCase.query,
+        `cases[${index}].query`,
+        MAX_EVALUATION_QUERY_LENGTH,
+      ),
       expectedMemoryIds: uuidArray(
         evaluationCase.expectedMemoryIds,
         `cases[${index}].expectedMemoryIds`,
         false,
+        MAX_EVALUATION_CASE_MEMORY_IDS,
       ),
       forbiddenMemoryIds:
         evaluationCase.forbiddenMemoryIds === undefined
@@ -39,6 +63,7 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
               evaluationCase.forbiddenMemoryIds,
               `cases[${index}].forbiddenMemoryIds`,
               true,
+              MAX_EVALUATION_CASE_MEMORY_IDS,
             ),
       limit: requestedLimit,
     };
@@ -49,13 +74,20 @@ export const evaluations = new Hono<ApiEnv>()
   .get("/suites", async (c) => {
     const evaluations = createEvaluationModule(await c.var.database());
     const actor = requireHumanActor(await c.var.resolveActor());
-    return c.json(await evaluations.listSuites(actor));
+    const url = new URL(c.req.url);
+    const page = await evaluations.listSuites(actor, {
+      cursor: decodeCursor(url.searchParams.get("cursor")),
+      limit: queryInteger(url, "limit", 50, 1, 100),
+    });
+    const headers = new Headers({ "cache-control": "private, no-store" });
+    if (page.nextCursor) headers.set("x-lore-next-cursor", encodeCursor(page.nextCursor));
+    return c.json(page.suites, { headers });
   })
   .post("/suites", async (c) => {
     const evaluations = createEvaluationModule(await c.var.database());
     const request = c.req.raw;
     const actor = requireHumanActor(await c.var.resolveActor());
-    const body = await jsonObject(request);
+    const body = await jsonObject(request, MAX_EVALUATION_SUITE_BODY_BYTES);
     const requestedVersion = body.version === undefined ? 1 : Number(body.version);
     if (!Number.isInteger(requestedVersion) || requestedVersion < 1) {
       throw new BadRequestError("version must be a positive integer");

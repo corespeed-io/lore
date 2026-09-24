@@ -10,6 +10,13 @@ import {
 import { ContextRetrievalValidationError } from "@/modules/context/retrieval";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi, isApiPath } from "@/server/api/app";
+import { errorResponse } from "@/server/api/errors";
+import {
+  BadRequestError,
+  jsonObject,
+  MAX_JSON_BODY_BYTES,
+  PayloadTooLargeError,
+} from "@/server/api/input";
 import { createAccessModule } from "@/server/auth/access";
 import { loreOpenApiDocument } from "@/server/openapi/document";
 import { createMemoryTestContext } from "../support/memory-context";
@@ -47,6 +54,18 @@ test.each([
     400,
     "invalid_request",
     "Input contains an invalid text value",
+  ],
+  [
+    Object.assign(new Error("deadlock detected while locking private rows"), { code: "40P01" }),
+    409,
+    "transaction_conflict",
+    "The request conflicted with a concurrent change; retry it",
+  ],
+  [
+    Object.assign(new Error("could not serialize access"), { code: "40001" }),
+    409,
+    "transaction_conflict",
+    "The request conflicted with a concurrent change; retry it",
   ],
   [
     Object.assign(new Error("private upstream detail"), { status: 400, code: "invalid_request" }),
@@ -299,4 +318,268 @@ test("concurrent requests reuse their own database adapter without sharing Actor
   });
   expect(revoked.status).toBe(403);
   expect(database).toHaveBeenCalledTimes(3);
+});
+
+test("retryable transaction conflicts tell the caller when to retry", async () => {
+  const response = errorResponse(Object.assign(new Error("deadlock detected"), { code: "40P01" }));
+  expect(response.status).toBe(409);
+  expect(response.headers.get("retry-after")).toBe("1");
+});
+
+test("Workspace import rejects a declared oversized body before reading it", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "hono-import-user");
+  const context = await createMemoryTestContext();
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspaceResponse = await app.request("/api/v1/workspaces", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Import bound" }),
+  });
+  const workspace = (await workspaceResponse.json()) as { id: string };
+  const response = await app.request("/api/v1/workspaces/import", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "content-length": "50000001",
+      "x-lore-workspace-id": workspace.id,
+    },
+    body: "{}",
+  });
+  expect(response.status).toBe(413);
+  expect(await response.json()).toEqual({
+    code: "payload_too_large",
+    error: "Request body exceeds 50000000 bytes",
+  });
+});
+
+test("bounded JSON bodies stop reading a chunked stream once it crosses the byte bound", async () => {
+  const encoder = new TextEncoder();
+  let pulled = 0;
+  const chunked = (chunks: string[]) => {
+    pulled = 0;
+    return new Request("http://lore.local/api/v1/workspaces/import", {
+      method: "POST",
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const chunk = chunks[pulled];
+          pulled += 1;
+          if (chunk === undefined) controller.close();
+          else controller.enqueue(encoder.encode(chunk));
+        },
+      }),
+    });
+  };
+
+  // Exactly 14 UTF-8 bytes: the bound counts bytes, not UTF-16 code units.
+  await expect(jsonObject(chunked(['{"a":', '"日本"}']), 14)).resolves.toEqual({
+    a: "日本",
+  });
+  await expect(
+    jsonObject(chunked(['{"a":"', "x".repeat(8), "y".repeat(8), '"}']), 14),
+  ).rejects.toBeInstanceOf(PayloadTooLargeError);
+  // The reader stopped at the chunk that crossed the bound and never pulled the rest.
+  expect(pulled).toBeLessThan(4);
+  await expect(jsonObject(chunked(["[1]"]), 14)).rejects.toBeInstanceOf(BadRequestError);
+  await expect(jsonObject(chunked(["{"]), 14)).rejects.toThrow("Request body must be valid JSON");
+});
+
+test("a body stream that fails mid-upload is a bad request, not a server fault", async () => {
+  let sent = false;
+  const aborted = new Request("http://lore.local/api/v1/memories", {
+    method: "POST",
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new TextEncoder().encode('{"content":"'));
+        } else controller.error(new Error("connection reset by peer"));
+      },
+    }),
+  });
+  await expect(jsonObject(aborted)).rejects.toThrow("Request body could not be read");
+  await expect(
+    jsonObject(
+      new Request("http://lore.local/api/v1/memories", {
+        method: "POST",
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.error(new Error("aborted"));
+          },
+        }),
+      }),
+    ),
+  ).rejects.toBeInstanceOf(BadRequestError);
+});
+
+test("ordinary JSON routes refuse a body over the default bound with 413", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "hono-body-bound-user");
+  const context = await createMemoryTestContext();
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspaceResponse = await app.request("/api/v1/workspaces", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Body bound" }),
+  });
+  const workspace = (await workspaceResponse.json()) as { id: string };
+  const headers = { "content-type": "application/json", "x-lore-workspace-id": workspace.id };
+  const tooLarge = {
+    code: "payload_too_large",
+    error: `Request body exceeds ${MAX_JSON_BODY_BYTES} bytes`,
+  };
+
+  const declared = await app.request("/api/v1/memories", {
+    method: "POST",
+    headers: { ...headers, "content-length": String(MAX_JSON_BODY_BYTES + 1) },
+    body: "{}",
+  });
+  expect(declared.status).toBe(413);
+  expect(await declared.json()).toEqual(tooLarge);
+
+  // A streamed body without a usable Content-Length is counted while it arrives.
+  const megabyte = new TextEncoder().encode("x".repeat(1024 * 1024));
+  let sent = 0;
+  const streamed = await app.request(
+    new Request("http://lore.local/api/v1/memories", {
+      method: "POST",
+      headers,
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent === 0) controller.enqueue(new TextEncoder().encode('{"content":"'));
+          sent += 1;
+          if (sent > 64) controller.close();
+          else controller.enqueue(megabyte);
+        },
+      }),
+    }),
+  );
+  expect(streamed.status).toBe(413);
+  expect(await streamed.json()).toEqual(tooLarge);
+  expect(sent).toBeLessThan(16);
+
+  // Episodes derive a larger bound from their own content and metadata limits.
+  const episode = await app.request("/api/v1/episodes", {
+    method: "POST",
+    headers: { ...headers, "content-length": String(MAX_JSON_BODY_BYTES + 1) },
+    body: "{}",
+  });
+  expect(episode.status).toBe(400);
+});
+
+test("Workspace import refuses an Agent before it reads the request body", async () => {
+  vi.stubEnv("AUTH_MODE", "password");
+  vi.stubEnv("UI_PASSWORD", "test-password");
+  const context = await createMemoryTestContext();
+  const access = createAccessModule(context.database);
+  const agent = await access.createAgentForWorkspace(context.alice, {
+    name: "Import refusal",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(context.alice, agent.id);
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  let pulls = 0;
+  const request = new Request("http://lore.local/api/v1/workspaces/import", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${credential.token}`,
+      "content-type": "application/json",
+      "x-lore-workspace-id": context.alice.workspaceId,
+    },
+    body: new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          controller.enqueue(new TextEncoder().encode('{"archive":{},"ownerMap":{}}'));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+  });
+
+  const response = await app.request(request);
+
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({
+    code: "access_denied",
+    error: "Workspace import requires a User",
+  });
+  expect(pulls).toBe(0);
+  expect(request.bodyUsed).toBe(false);
+});
+
+test("shared admission rejects cross-site unsafe requests on both API prefixes", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  const { app, database } = noDatabaseApi();
+  const crossSiteHeaders: Record<string, string>[] = [
+    { "sec-fetch-site": "cross-site", "content-type": "text/plain" },
+    { origin: "https://attacker.example", "content-type": "text/plain" },
+  ];
+  for (const path of ["/api/workspaces", "/api/v1/workspaces", "/api/v1/workspaces/import"]) {
+    for (const headers of crossSiteHeaders) {
+      const response = await app.request(`http://lore.local${path}`, {
+        method: "POST",
+        headers,
+        body: '{"name":"csrf"}',
+      });
+      expect(response.status, path).toBe(403);
+      expect(await response.json()).toEqual({
+        code: "access_denied",
+        error: "Cross-site request rejected",
+      });
+    }
+  }
+  expect(database).not.toHaveBeenCalled();
+});
+
+test("a same-origin human request verifies once and resolves its Actor in one transaction", async () => {
+  vi.stubEnv("AUTH_MODE", "none");
+  vi.stubEnv("ALLOW_INSECURE", "1");
+  vi.stubEnv("LORE_LOCAL_SUBJECT", "hono-one-transaction");
+  const context = await createMemoryTestContext();
+  let transactions = 0;
+  const app = createApi({
+    database: () => ({
+      transaction: (use) => {
+        transactions += 1;
+        return context.database.transaction(use);
+      },
+    }),
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const created = await app.request("http://lore.local/api/v1/workspaces", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "http://lore.local",
+      "sec-fetch-site": "same-origin",
+    },
+    body: JSON.stringify({ name: "Same origin" }),
+  });
+  expect(created.status).toBe(201);
+  const workspace = (await created.json()) as { id: string };
+
+  transactions = 0;
+  const actor = await app.request("http://lore.local/api/v1/actor", {
+    headers: { "x-lore-workspace-id": workspace.id },
+  });
+  expect(actor.status).toBe(200);
+  expect(transactions).toBe(1);
 });

@@ -13,19 +13,90 @@ const outputSchemaPath = fileURLToPath(
   new URL("./retrieval-policy-output.schema.json", import.meta.url),
 );
 
-const DISALLOWED_BUILTIN_TOOLS = [
-  "Bash",
-  "Edit",
-  "Glob",
-  "Grep",
-  "NotebookEdit",
-  "Read",
-  "Task",
-  "TodoWrite",
-  "WebFetch",
-  "WebSearch",
-  "Write",
-].join(",");
+// The CLI inherits only what it needs to start, reach the API, and authenticate
+// (API key, OAuth token or credential store, or a Bedrock/Vertex/Foundry
+// provider). Lore's own settings, database URLs, and provider keys never reach it
+// or the fixture MCP server it spawns.
+const CLAUDE_ENVIRONMENT_NAMES = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "NO_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "CLAUDE_CONFIG_DIR",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLOUD_ML_REGION",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_PROJECT",
+]);
+const CLAUDE_ENVIRONMENT_PREFIXES = ["ANTHROPIC_", "AWS_"];
+
+export function isClaudeRetrievalPolicyEnvironmentName(name: string): boolean {
+  return (
+    CLAUDE_ENVIRONMENT_NAMES.has(name) ||
+    CLAUDE_ENVIRONMENT_PREFIXES.some((prefix) => name.startsWith(prefix))
+  );
+}
+
+/** The minimal environment for one isolated Claude Code benchmark turn. */
+export function claudeRetrievalPolicyEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment = { ...source };
+  for (const name of Object.keys(environment)) {
+    if (!isClaudeRetrievalPolicyEnvironmentName(name)) delete environment[name];
+  }
+  return environment;
+}
+
+/**
+ * Isolated Claude Code arguments, modeled on the Codex runner's isolation: no
+ * user/project/local settings (hooks, permissions, plugins, env, CLAUDE.md),
+ * no skills, no saved session, no built-in tools, only the fixture MCP server,
+ * and an explicit allowlist of its Lore tools; anything else is denied.
+ */
+export function claudeRetrievalPolicyArguments(input: {
+  model: string;
+  toolNames: readonly string[];
+  mcpConfig: unknown;
+  outputSchema: unknown;
+}): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "json",
+    "--model",
+    input.model,
+    "--setting-sources",
+    "",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--tools",
+    "",
+    "--permission-mode",
+    "dontAsk",
+    "--strict-mcp-config",
+    "--mcp-config",
+    JSON.stringify(input.mcpConfig),
+    "--json-schema",
+    JSON.stringify(input.outputSchema),
+    ...(input.toolNames.length > 0
+      ? ["--allowedTools", input.toolNames.map((name) => `mcp__lore__${name}`).join(",")]
+      : []),
+  ];
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -145,28 +216,17 @@ export async function runClaudeRetrievalPolicyTurn(
       },
     },
   };
-  const args = [
-    "-p",
-    "--output-format",
-    "json",
-    "--model",
-    input.model,
-    "--strict-mcp-config",
-    "--mcp-config",
-    JSON.stringify(mcpConfig),
-    "--json-schema",
+  const args = claudeRetrievalPolicyArguments({
+    model: input.model,
+    toolNames: input.toolNames,
+    mcpConfig,
     // Claude CLI's validator rejects the draft 2020-12 $schema meta-reference.
-    JSON.stringify({ ...JSON.parse(await readFile(outputSchemaPath, "utf8")), $schema: undefined }),
-    "--disallowedTools",
-    DISALLOWED_BUILTIN_TOOLS,
-    ...(input.toolNames.length > 0
-      ? ["--allowedTools", input.toolNames.map((name) => `mcp__lore__${name}`).join(",")]
-      : []),
-  ];
+    outputSchema: { ...JSON.parse(await readFile(outputSchemaPath, "utf8")), $schema: undefined },
+  });
   const startedAt = performance.now();
   const subprocess = spawn("claude", args, {
     cwd: runDirectory,
-    env: process.env,
+    env: claudeRetrievalPolicyEnvironment(process.env),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const timeout = setTimeout(() => subprocess.kill("SIGTERM"), input.timeoutMs ?? 180_000);

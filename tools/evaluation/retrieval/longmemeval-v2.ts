@@ -247,10 +247,20 @@ function normalizeLiteralAnchor(value: string): string {
     .trim();
 }
 
+/**
+ * Normalize one (often ~1 MB) trajectory once and test many answers against it,
+ * rather than re-normalizing the whole text for every question it serves.
+ */
+export function longMemEvalV2LiteralAnswerMatcher(text: string): (answer: string) => boolean {
+  const normalizedText = normalizeLiteralAnchor(text);
+  return (answer) => {
+    const normalizedAnswer = normalizeLiteralAnchor(answer);
+    return normalizedAnswer.length >= 3 && normalizedText.includes(normalizedAnswer);
+  };
+}
+
 export function longMemEvalV2ContainsLiteralAnswer(text: string, answer: string): boolean {
-  const normalizedAnswer = normalizeLiteralAnchor(answer);
-  if (normalizedAnswer.length < 3) return false;
-  return normalizeLiteralAnchor(text).includes(normalizedAnswer);
+  return longMemEvalV2LiteralAnswerMatcher(text)(answer);
 }
 
 export async function readLongMemEvalV2Questions(

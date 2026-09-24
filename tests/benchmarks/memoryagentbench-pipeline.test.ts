@@ -47,7 +47,7 @@ test("MemoryAgentBench conflict pipeline preserves sequence and rejects private 
     provider: "fixture",
     model: "fixture-reader",
     revision: "fixture-v1",
-    profile: "lore-portable-deterministic-v2",
+    profile: "lore-portable-deterministic-v3",
     transport: "openai-chat-completions",
     instruction: "Newer fact numbers win",
     maximumContextCharacters: 10_000,

@@ -19,7 +19,11 @@ import type {
   ConfiguredRerankingProvider,
 } from "../../../src/server/providers/metadata";
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
-import { requireExactIndexedMemory } from "./indexed-memory-validation";
+import {
+  drainEmbeddingMaintenance,
+  pendingEmbeddingJobCount,
+} from "../shared/embedding-maintenance-drain";
+import { benchmarkMetadataMatches, requireExactIndexedMemory } from "./indexed-memory-validation";
 import type { RetrievalBenchmarkCaseMetrics, RetrievalBenchmarkSuiteSource } from "./retrieval";
 import { aggregateRetrievalBenchmark, evaluateRetrievalBenchmarkCase } from "./retrieval";
 
@@ -44,6 +48,7 @@ interface PersistedBenchmarkMemory {
   owner_user_id: string;
   scope: "shared" | "private";
   content: string;
+  metadata: unknown;
   benchmark_key: string;
 }
 
@@ -79,7 +84,7 @@ function printableMetrics(metrics: ReturnType<typeof aggregateRetrievalBenchmark
     recallAtK: rounded(metrics.recallAtK),
     reciprocalRank: rounded(metrics.reciprocalRank),
     ndcgAtK: rounded(metrics.ndcgAtK),
-    noAnswerAccuracy: rounded(metrics.noAnswerAccuracy),
+    noAnswerAccuracy: metrics.noAnswerAccuracy === null ? null : rounded(metrics.noAnswerAccuracy),
     averageFalseResults: rounded(metrics.averageFalseResults),
     averageLatencyMs: rounded(metrics.averageLatencyMs, 2),
     p50LatencyMs: rounded(metrics.p50LatencyMs, 2),
@@ -123,19 +128,40 @@ function unitIntervalSweep(name: string, fallback: number): number[] {
   return [...new Set(values)];
 }
 
-function candidateLimitSweep(fallback: number): number[] {
+// Deployment bound for LORE_RERANK_CANDIDATE_LIMIT; Core clamps to it as well.
+const MAXIMUM_RERANK_CANDIDATE_LIMIT = 200;
+// Core clamps every Memory search limit to this many returned results.
+const MAXIMUM_SEARCH_RESULT_LIMIT = 100;
+
+/**
+ * Candidate depths to sweep. Callers invoke it only when a reranker or context
+ * expansion will consume the depth, so an unused fallback is never validated.
+ */
+export function candidateLimitSweep(
+  fallback: number,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): number[] {
   const name = "LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS";
-  const configured = process.env[name];
-  const values = configured
-    ? configured.split(",").map((value) => Number(value.trim()))
-    : [fallback];
-  if (
-    values.length === 0 ||
-    values.some((value) => !Number.isInteger(value) || value < 1 || value > 100)
-  ) {
-    throw new Error(`${name} must contain comma-separated integers from 1 to 100`);
+  const configured = environment[name]?.trim();
+  if (configured) {
+    const values = configured.split(",").map((value) => Number(value.trim()));
+    if (
+      values.some(
+        (value) => !Number.isInteger(value) || value < 1 || value > MAXIMUM_RERANK_CANDIDATE_LIMIT,
+      )
+    ) {
+      throw new Error(
+        `${name} must contain comma-separated integers from 1 to ${MAXIMUM_RERANK_CANDIDATE_LIMIT}`,
+      );
+    }
+    return [...new Set(values)];
   }
-  return [...new Set(values)];
+  if (!Number.isInteger(fallback) || fallback < 1 || fallback > MAXIMUM_RERANK_CANDIDATE_LIMIT) {
+    throw new Error(
+      `The rerank candidate limit (LORE_RERANK_CANDIDATE_LIMIT) must be an integer from 1 to ${MAXIMUM_RERANK_CANDIDATE_LIMIT}`,
+    );
+  }
+  return [fallback];
 }
 
 function retrievalLimitSweep(): number[] {
@@ -336,7 +362,10 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     input.rerankDiversityLambda ?? 1,
   );
   const rerankWeights = unitIntervalSweep("LORE_BENCHMARK_RERANK_WEIGHTS", input.rerankWeight ?? 1);
-  const rerankCandidateLimits = candidateLimitSweep(input.rerankCandidateLimit ?? 50);
+  const rerankCandidateLimits =
+    input.rerankingProvider || input.contextGroupExpansion
+      ? candidateLimitSweep(input.rerankCandidateLimit ?? 50)
+      : [];
   const retrievalLimits = retrievalLimitSweep();
   const providerWarnings = input.providerWarnings ?? [];
   const metering = createBenchmarkMetering({
@@ -448,6 +477,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
              owner_user_id,
              scope::text,
              content,
+             metadata,
              metadata->>'benchmarkKey' AS benchmark_key
            FROM memories
            WHERE metadata->>'benchmarkPartition' = $1
@@ -498,13 +528,19 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         const expectedOwnerUserId = fixture.owner === "alice" ? aliceUserId : bobUserId;
         const isPrivateTripwire = fixture.owner === "bob" && fixture.scope === "private";
         const persistedMemory = persistedMemories.get(fixture.key);
+        const metadata = {
+          ...fixture.metadata,
+          benchmarkKey: fixture.key,
+          benchmarkPartition: partition.key,
+        };
         if (
           input.reuseIndexed &&
           (!persistedMemory ||
             persistedMemory.workspace_id !== workspaceId ||
             persistedMemory.owner_user_id !== expectedOwnerUserId ||
             persistedMemory.scope !== fixture.scope ||
-            persistedMemory.content !== fixture.content)
+            persistedMemory.content !== fixture.content ||
+            !benchmarkMetadataMatches(persistedMemory.metadata, metadata))
         ) {
           throw new Error(
             `Indexed benchmark Memory ${partition.key}/${fixture.key} does not match the suite`,
@@ -527,11 +563,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
             {
               content: fixture.content,
               scope: fixture.scope,
-              metadata: {
-                ...fixture.metadata,
-                benchmarkKey: fixture.key,
-                benchmarkPartition: partition.key,
-              },
+              metadata,
             },
           ));
         const qualifiedKey = `${partition.key}\u0000${fixture.key}`;
@@ -595,56 +627,16 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, {
         embeddingProvider,
       });
-      // Provider throttling (429 bursts) exhausts the HTTP adapter's inline
-      // retries and parks jobs with a durable backoff; a backed-off job also
-      // makes run() report idle until its run_at arrives. Waiting is safe —
-      // only sustained zero progress or a dead job aborts the run.
-      let stalledRounds = 0;
-      const sleep = (seconds: number) =>
-        new Promise((resolve) => setTimeout(resolve, seconds * 1_000));
-      while (true) {
-        const results = await Promise.all(
-          Array.from({ length: indexingConcurrency }, () => maintenance.run()),
-        );
-        let roundCompleted = 0;
-        let retryAfterSeconds = 0;
-        for (const result of results) {
-          if (result.status === "idle") continue;
-          if (result.status === "dead") {
-            throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as dead`);
+      completedJobs = await drainEmbeddingMaintenance({
+        run: () => maintenance.run(),
+        concurrency: indexingConcurrency,
+        pendingJobCount: () => pendingEmbeddingJobCount(admin),
+        onProgress: (completed, roundCompleted) => {
+          if (completed % 1_000 < roundCompleted) {
+            console.error(`Embedded ${completed.toLocaleString()} benchmark Memories...`);
           }
-          if (result.status === "retry") {
-            retryAfterSeconds = Math.max(
-              retryAfterSeconds,
-              Math.min(result.retryAfterSeconds ?? 30, 60),
-            );
-            continue;
-          }
-          completedJobs += 1;
-          roundCompleted += 1;
-        }
-        if (roundCompleted > 0) {
-          stalledRounds = 0;
-          if (completedJobs % 1_000 < roundCompleted) {
-            console.error(`Embedded ${completedJobs.toLocaleString()} benchmark Memories...`);
-          }
-          continue;
-        }
-        if (results.every((result) => result.status === "idle")) {
-          const backlog = await admin.query<{ count: string }>(
-            "SELECT count(*)::text AS count FROM memory_embedding_jobs WHERE status = 'pending'",
-          );
-          if (Number(backlog.rows[0]?.count ?? 0) === 0) break;
-          retryAfterSeconds = Math.max(retryAfterSeconds, 15);
-        }
-        stalledRounds += 1;
-        if (stalledRounds > 40) {
-          throw new Error(
-            "Embedding maintenance made no progress across 40 throttled rounds; giving up",
-          );
-        }
-        await sleep(Math.max(retryAfterSeconds, 15));
-      }
+        },
+      });
     }
     const selectedPartitionKeys = [...partitionKeys];
     const jobResult = await admin.query<{ status: string; count: string }>(
@@ -1028,7 +1020,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
               semanticDistanceThreshold: threshold,
               useEmbeddings: true,
               useContextGroupExpansion: true,
-              retrievalLimit: candidateLimit,
+              // Search returns at most 100 results; record the depth actually scored.
+              retrievalLimit: Math.min(candidateLimit, MAXIMUM_SEARCH_RESULT_LIMIT),
               rerankCandidateLimit: candidateLimit,
             }),
           );
@@ -1041,7 +1034,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
               label: `hybrid-candidates@${threshold}|candidates=${candidateLimit}`,
               semanticDistanceThreshold: threshold,
               useEmbeddings: true,
-              retrievalLimit: candidateLimit,
+              retrievalLimit: Math.min(candidateLimit, MAXIMUM_SEARCH_RESULT_LIMIT),
             }),
           );
           for (const minimumScore of rerankMinimumScores) {

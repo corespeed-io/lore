@@ -18,9 +18,15 @@ interface Wikilink {
   label: string;
 }
 
+/**
+ * `unresolvedTitle` explains an inert wikilink. Callers pass a different reason
+ * while the Graph that resolves references is loading, failed, or capped, since
+ * "not found" is only true once a complete Graph read says so.
+ */
 export function renderMarkdown(
   md: string,
   wikilinkTargets: Readonly<Record<string, string>> = {},
+  unresolvedTitle = "Memory reference not found",
 ): string {
   const fences: string[] = [];
   const withoutFences = (md ?? "").replace(/```([\s\S]*?)```/g, (_m, c) => {
@@ -53,7 +59,7 @@ export function renderMarkdown(
       ? wikilinkTargets[wikilink.reference]
       : undefined;
     if (typeof targetMemoryId !== "string" || !targetMemoryId) {
-      return `<span class="wl-unresolved" data-reference="${esc(wikilink.reference)}" title="Memory reference not found">${esc(wikilink.label)}</span>`;
+      return `<span class="wl-unresolved" data-reference="${esc(wikilink.reference)}" title="${esc(unresolvedTitle)}">${esc(wikilink.label)}</span>`;
     }
     return `<a class="wl" href="/memory/${encodeURIComponent(targetMemoryId)}" data-memory-id="${esc(targetMemoryId)}" data-reference="${esc(wikilink.reference)}">${esc(wikilink.label)}</a>`;
   });

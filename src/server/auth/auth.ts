@@ -166,26 +166,87 @@ export function isOperationalProbePath(path: string): boolean {
   return OPERATIONAL_PROBE_PATHS.has(path);
 }
 
-/** Shared admission policy. Domain handlers still authenticate the Actor and enforce RLS. */
-export async function authorizeRequest(request: Request): Promise<Response | undefined> {
-  const path = new URL(request.url).pathname;
-  if (isOperationalProbePath(path)) return;
-  const authorization = request.headers.get("authorization") ?? "";
-  if (path.startsWith("/api/") && /^Bearer lore_agent_[0-9a-f]{64}$/.test(authorization)) return;
-  const result = await checkAuth(request.headers);
-  if (result.ok) return;
-  const status = result.status ?? 403;
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** The request's own host names: its URL, Host, and a proxy's first X-Forwarded-Host. */
+function requestHosts(request: Request): Set<string> {
+  const hosts = new Set([new URL(request.url).host.toLowerCase()]);
+  for (const name of ["host", "x-forwarded-host"]) {
+    const value = request.headers.get(name)?.split(",")[0]?.trim().toLowerCase();
+    if (value) hosts.add(value);
+  }
+  return hosts;
+}
+
+/**
+ * Browser CSRF defense for unsafe methods. A cross-site Fetch Metadata request, or one
+ * whose Origin is not this request's own host, is rejected before authentication, so
+ * ambient Basic credentials or an Access cookie cannot be replayed by another site.
+ * Non-browser clients (SDK, CLI, MCP) send neither header and are unaffected.
+ *
+ * Only a browser can set Sec-Fetch-Site, so `same-origin` is trusted even when a
+ * reverse proxy rewrote Host; other requests fall back to comparing Origin with the
+ * request's hosts. Hosts compare without the scheme because a TLS-terminating proxy
+ * may present plain HTTP here.
+ */
+export function isCrossSiteRequest(request: Request): boolean {
+  if (SAFE_METHODS.has(request.method.toUpperCase())) return false;
+  const site = request.headers.get("sec-fetch-site")?.trim().toLowerCase();
+  if (site === "cross-site") return true;
+  if (site === "same-origin") return false;
+  const origin = request.headers.get("origin");
+  if (origin === null) return false;
+  let originHost: string;
+  try {
+    // An opaque "null" Origin (sandboxed frame, privacy redirect) is never this host.
+    originHost = new URL(origin).host.toLowerCase();
+  } catch {
+    return true;
+  }
+  return !originHost || !requestHosts(request).has(originHost);
+}
+
+function denial(status: number, detail: string | undefined, wwwAuthenticate = false): Response {
   return Response.json(
     {
       code: status === 401 ? "authentication_required" : "access_denied",
-      error: result.detail ?? (status === 401 ? "auth required" : "forbidden"),
+      error: detail ?? (status === 401 ? "auth required" : "forbidden"),
     },
     {
       status,
       headers: {
         "cache-control": "private, no-store",
-        ...(result.wwwAuthenticate ? { "www-authenticate": "Basic" } : {}),
+        ...(wwwAuthenticate ? { "www-authenticate": "Basic" } : {}),
       },
     },
   );
+}
+
+export interface Admission {
+  /** Present when the request must be answered with this response instead. */
+  denied?: Response;
+  /** The verified human principal, so handlers do not verify the credential again. */
+  principal?: AuthPrincipal;
+}
+
+/** Shared admission policy. Domain handlers still authorize the Actor and enforce RLS. */
+export async function admitRequest(request: Request): Promise<Admission> {
+  const path = new URL(request.url).pathname;
+  if (isOperationalProbePath(path)) return {};
+  const authorization = request.headers.get("authorization") ?? "";
+  // A browser never attaches a bearer header on its own, so an explicit Agent token
+  // cannot be forged cross-site; extensions and desktop shells send one with a
+  // foreign or opaque Origin. Only ambient credentials need the cross-site check.
+  if (path.startsWith("/api/") && /^Bearer lore_agent_[0-9a-f]{64}$/.test(authorization)) {
+    return {};
+  }
+  if (isCrossSiteRequest(request)) return { denied: denial(403, "Cross-site request rejected") };
+  const result = await checkAuth(request.headers);
+  if (result.ok) return { principal: result.principal };
+  return { denied: denial(result.status ?? 403, result.detail, result.wwwAuthenticate) };
+}
+
+/** Admission for callers that only need the denial, such as Next middleware. */
+export async function authorizeRequest(request: Request): Promise<Response | undefined> {
+  return (await admitRequest(request)).denied;
 }

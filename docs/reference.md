@@ -14,6 +14,11 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Compose pastes the three passwords unencoded into `postgres://` URLs, so the
+`migrate` job refuses any character outside `A-Z a-z 0-9 . _ ~ ! & ( ) * + , ; = : @ -`
+before it touches the database. Generate each with `openssl rand -hex 32`; a
+base64 value can contain `/` and is refused.
+
 Open [http://localhost:3000](http://localhost:3000). The Compose stack runs every
 plain-SQL migration through dbmate, provisions separate non-owner request and
 maintenance logins, and starts both Lore and its embedding worker under narrow RLS
@@ -401,22 +406,21 @@ GET /api/memories?q=deployment+status&scope=shared&updated_after=2026-01-01T00:0
 
 After eight failed attempts a job remains `dead` for operator inspection instead of
 retrying forever. Updating that Memory or changing the deployment embedding space
-creates a fresh versioned job. After fixing a transient outage, a database operator
-can explicitly retry that same version:
+creates a fresh versioned job. After fixing a transient outage, retry the dead jobs
+of one generation with the maintenance login. Take the generation id from
+`bun run db:embedding:report`; without `--apply` the command only counts:
 
-```sql
-UPDATE memory_embedding_jobs
-SET status = 'pending',
-    attempt_count = 0,
-    available_at = now(),
-    lease_token = NULL,
-    leased_at = NULL,
-    last_error = NULL,
-    completed_at = NULL,
-    updated_at = now()
-WHERE id = 'replace-with-exact-job-id'
-  AND status = 'dead';
+```bash
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id>
+LORE_MAINTENANCE_DATABASE_URL=postgres://... \
+  bun run db:embedding:requeue-dead -- --generation <generation-id> --apply
 ```
+
+`--apply` re-arms every dead job of that building or active generation whose Memory
+still has the job's version, owner, and scope, as `pending` with a fresh retry budget
+(`attempt_count` 0). Dead jobs for a Memory that has since changed stay dead; the
+next sweep cancels them. Do not edit `memory_embedding_jobs` by hand.
 
 The deployment sweep prunes succeeded/cancelled history after 7 days and dead-job
 diagnostics after 30 days.
@@ -424,18 +428,29 @@ diagnostics after 30 days.
 Embedding generations follow `building → active → retiring`. Use
 `LORE_EMBEDDING_BUILD_PROVIDER` and `LORE_EMBEDDING_BUILD_MODEL` on the maintenance
 worker to build beside the active model, inspect coverage with
-`bun run db:embedding:report`, and cut over with
-`bun run db:embedding:activate`. Retiring vectors remain rollback-capable for
+`bun run db:embedding:report` (read-only: it reports `not initialized` rather than
+creating a generation), and cut over with `bun run db:embedding:activate`. All three
+`db:embedding:*` commands run with `--no-env-file`, so pass
+`LORE_MAINTENANCE_DATABASE_URL` and the embedding variables explicitly. Retiring vectors remain rollback-capable for
 `LORE_EMBEDDING_ROLLBACK_SECONDS` (seven days by default).
 Preprocessing revisions use the same rollout even when provider/model strings do
 not change. An upgraded request process reports embedding as degraded and keeps
 lexical retrieval available until its exact generation has been built and activated;
 see [the operations runbook](operations.md#embedding-generation-rollout).
 
-The self-host worker claims one leased job at a time by default. Remote embedding
-services can often improve indexing throughput with `LORE_MAINTENANCE_CONCURRENCY`
-(maximum 32); size `LORE_MAINTENANCE_POOL_SIZE` accordingly. Keep concurrency at 1
+The self-host worker runs three independent loops: the discovery/retention sweep,
+Code Index jobs, and embedding jobs, each with its own backoff, so a long Code Index
+job never delays embeddings and a stalled embedding provider never delays Code
+Indexing or the sweep. The embedding loop claims one leased job at a time by default.
+Remote embedding services can often improve indexing throughput with
+`LORE_MAINTENANCE_CONCURRENCY` (maximum 32), which is a hard bound on concurrently
+held embedding leases. `LORE_MAINTENANCE_POOL_SIZE` defaults to that concurrency plus
+two (one connection each for the Code Index and sweep loops). Keep concurrency at 1
 for memory-constrained local Ollama unless a benchmark proves the machine benefits.
+`bun --no-env-file .worker/maintenance-worker.js --once` runs one sweep, one Code
+Index claim, and one embedding round, then exits non-zero if any of them hit an
+infrastructure error; CI uses it to prove the built bundle connects and claims as
+the maintenance login.
 Ollama's native SDK has no request deadline: a stalled call can hold the worker
 after its lease expires. The lease enables reclamation and fences late writes;
 it does not interrupt HTTP. See [stalled Ollama maintenance](operations.md#stalled-ollama-maintenance)
@@ -529,6 +544,10 @@ export LORE_MAINTENANCE_PASSWORD=maintenance-password
 bun run db:bootstrap
 ```
 
+The bootstrap sends each password to Postgres only as a SCRAM-SHA-256 verifier
+computed locally, so no cleartext password reaches the server log. Runtime passwords
+must therefore be printable ASCII (for example `openssl rand -base64 32`).
+
 Set `DATABASE_URL` to the new runtime login, copy the remaining local values from
 `.env.example`, and run:
 
@@ -536,7 +555,10 @@ Set `DATABASE_URL` to the new runtime login, copy the remaining local values fro
 bun run dev
 ```
 
-Run the self-host maintenance process in a second terminal using its own login:
+Run the self-host maintenance process in a second terminal using its own login.
+Code Indexing runs only when the worker is also given `LORE_CODE_REPOSITORIES` (and
+`AUTH_MODE` for Workspace-unbound entries); see
+[Code Index jobs](operations.md#code-index-jobs).
 
 ```bash
 bun run build:maintenance
@@ -554,7 +576,9 @@ accepted only while both the credential and Workspace grant remain active.
 - `/api/memories` and `/api/memories/:id`
 - `/api/v1/episodes`, `/api/v1/episodes/:id`, and bounded Observation evidence reads
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
-- `/api/evaluations/suites`, suite runs, and run results
+- `/api/evaluations/suites`, suite runs, and run results. The Suite list is paged:
+  50 per page by default (`limit` up to 100), with the next page's opaque `cursor`
+  in `x-lore-next-cursor`; a v1 client that ignores the header sees only the first page
 - `/api/v1/workspaces/export` and `/api/v1/workspaces/import`
 - stable aliases under `/api/v1`, with `/openapi.json` and
   `/api/v1/capabilities` (verified Actor plus `x-lore-workspace-id`); human clients
@@ -744,6 +768,10 @@ changing the production worker setting.
 `LORE_BENCHMARK_RERANK_DIVERSITY_LAMBDAS=1,0.9,0.8` run a rerank/abstention/diversity
 ablation over the same indexed corpus instead of paying the embedding cost again;
 add `LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS=10,20,50` to sweep candidate depth too.
+Candidate depths accept 1-200, the same bound as `LORE_RERANK_CANDIDATE_LIMIT`,
+whose value is the default sweep and is validated only when a reranker or context
+expansion consumes it. The `hybrid-candidates` diagnostic records the depth it
+actually scores, which Memory search caps at 100 results.
 `LORE_BENCHMARK_RERANK_WEIGHTS=0,0.25,0.5,0.75,1` sweeps first-stage/reranker rank
 fusion while memoizing identical reranker requests within that local run.
 The memoization key is SHA-256 hashed and the LRU is bounded to 2,000 entries by
@@ -772,7 +800,12 @@ Use `LORE_BENCHMARK_OUTPUT=evaluation/results/retrieval.json` for the synthetic
 suite or `--output evaluation/results/longmemeval-s.json` for LongMemEval to retain
 the complete local report; the results directory is intentionally gitignored.
 Set `LORE_BENCHMARK_REUSE_INDEXED=1` for the exact same synthetic suite after its
-first run; LongMemEval uses the explicit `--reuse-indexed` flag.
+first run; LongMemEval uses the explicit `--reuse-indexed` flag. Reuse requires each
+persisted Memory's content, owner, scope, and complete metadata (including its
+`benchmarkKey` and `benchmarkPartition`) to equal the fixture's.
+`noAnswerAccuracy` is `null`, not zero, for a suite or category with no no-answer
+cases. Embedding indexing tolerates provider retries and honors their backoff; only a
+dead job or sustained zero progress aborts a run.
 
 ### LongMemEval locally
 
@@ -817,7 +850,11 @@ rewriting Memories or regenerating embeddings.
 The official LongMemEval retrieval comparison excludes its 30 abstention questions.
 Lore keeps positive-case Recall/MRR/nDCG separate from no-answer accuracy, so the
 positive metrics remain comparable while abstention still receives an explicit
-quality gate instead of disappearing from the report.
+quality gate instead of disappearing from the report. Every `_abs` question becomes
+a no-answer case in the `abstention` category: its `answer_session_ids` name the
+sessions that discuss the false premise, not an answer, so they never count as
+positive retrieval hits. The report's `suite.provenance.abstentionPolicy` records
+this policy.
 
 ### LongMemEval-V2 preparation
 
@@ -905,8 +942,12 @@ is a local candidate-quality diagnostic, not the official LongMemEval-V2 answer
 score; `reader` is `null`, answer accuracy is `null`, and `scoreComplete` remains
 false so it cannot be mistaken for an end-to-end result.
 
-The built-in reader is explicitly reported as `lore-portable-deterministic-v2`:
-temperature 0, a character context budget, and provider-default image detail. It is
+The built-in reader is explicitly reported as `lore-portable-deterministic-v3`:
+temperature 0, a character context budget, and provider-default image detail.
+Retrieved trajectories are separated by a blank line that counts against that
+budget (reader revisions `lore-fixed-reader-v3` and `lore-ollama-reader-v2`; earlier
+revisions, and the `lore-portable-deterministic-v2` profile, concatenated
+trajectories with no boundary, so their reports are not comparable). It is
 useful for controlled Lore ablations, but it is not mislabeled as the paper's exact
 Qwen3.5-9B profile, which samples at temperature 0.6/top-p 0.95/top-k 20 and truncates
 memory with the Qwen processor at 200,000 tokens. Reports include the actual decoding
@@ -933,6 +974,11 @@ The reader and judge also accept `LORE_BENCHMARK_READER_PROVIDER=vercel` and
 `LORE_BENCHMARK_JUDGE_PROVIDER=vercel` with a `creator/model` id and
 `AI_GATEWAY_API_KEY`, which is one way to reach a vision-capable model for the 29
 screenshot-backed questions without a second provider account.
+
+A self-hosted vLLM reader or judge authenticates only with its explicit
+`LORE_BENCHMARK_READER_API_KEY` or `LORE_BENCHMARK_JUDGE_API_KEY`; it never falls
+back to `OPENAI_API_KEY`. Any reader or judge request that carries a key must use an
+`https` base URL unless the host is loopback.
 
 For example, an OpenAI-compatible local judge can be added to the command above:
 
@@ -989,6 +1035,12 @@ BENCHMARK_DATABASE_URL=postgres://localhost:5432/lore_locomo_benchmark \
   bun run benchmark:locomo --max-cases 20 --limit 10 --reuse-indexed \
     --output evaluation/results/locomo-positive-4b.json
 ```
+
+The setup retrieval diagnostic is written beside the QA report as
+`<output>.retrieval.json` (replacing a `.json` suffix), so the two reports never
+share a path. Each QA question searches with its original text, exactly as the
+setup diagnostic and upstream do; the category-2 date instruction is added only to
+the reader prompt.
 
 When an exact, immutable retrieval diagnostic for the same selection and provider
 profile already exists, `--skip-retrieval-diagnostic` avoids repeating that setup
@@ -1112,7 +1164,9 @@ questions (3,214 fact Memories at the default 16 facts per Memory), or `--source
 for one exact source. `--facts-per-memory` exposes the chunk-granularity ablation
 when conflict assembly is off; assembly requires one fact per Memory.
 `LORE_MEMORYAGENTBENCH_RETRIEVAL_LIMIT` controls evidence depth. The runner uses the
-official normalized `substring_exact_match`, records per-source accuracy/latency/
+official normalized `substring_exact_match` (upstream `normalize_answer`: lowercase,
+strip only ASCII `string.punctuation`, drop articles, collapse whitespace; curly
+quotes and other non-ASCII punctuation survive), records per-source accuracy/latency/
 tokens, validates the exact corpus before `--reuse-indexed`, and treats any access
 to Bob-private answer tripwires as a hard failure. Tripwires retain exact chunks for
 that RLS assertion but skip embedding; only visible fact Memories consume document-

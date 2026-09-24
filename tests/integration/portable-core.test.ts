@@ -2,7 +2,7 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import { MemoryVersionConflictError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createOperationsModule } from "@/modules/operations/service";
+import { createOperationsModule, NON_TENANT_PUBLIC_TABLES } from "@/modules/operations/service";
 import {
   createPortabilityModule,
   MAX_WORKSPACE_ARCHIVE_LINKS,
@@ -566,13 +566,13 @@ test("Workspace import normalizes UUID case before owner and Link mapping", asyn
   expect(Object.keys(imported.memoryIdMap).sort()).toEqual([source.id, target.id].sort());
 });
 
-test("Workspace import rejects oversized metadata before queueing every child", async () => {
+test("Workspace import rejects metadata over the wire serialized-size bound", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const portability = createPortabilityModule(testContext.database);
   await memories.remember(testContext.carol, { content: "Bound imported metadata." });
   const archive = await portability.exportWorkspace(testContext.carol);
-  archive.memories[0].metadata = { items: Array.from({ length: 10_001 }, () => null) };
+  archive.memories[0].metadata = { items: "x".repeat(100_000) };
   const { checksum: _checksum, ...manifest } = archive.manifest;
   archive.manifest.checksum = await mutationRequestHash({
     manifest,
@@ -585,7 +585,7 @@ test("Workspace import rejects oversized metadata before queueing every child", 
       archive,
       ownerMap: { [testContext.carol.userId]: testContext.alice.userId },
     }),
-  ).rejects.toThrow(/exceeds 10000 values/);
+  ).rejects.toThrow(/metadata exceeds 100000 characters/);
 });
 
 test("Workspace import dry-run rejects document-sized Memory content", async () => {
@@ -617,7 +617,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 3,
+    schemaRevision: 5,
     memoryChunking: {
       revision: "lore-memory-chunking-v2",
       maximumCharacters: 1_200,
@@ -695,14 +695,14 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 4 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 6 WHERE singleton"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 3 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 5 WHERE singleton"),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
@@ -712,4 +712,94 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
     status: "unready",
     components: { rlsRole: "unavailable" },
   });
+});
+
+test("readiness requires RLS on every tenant table, including tables added later", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  const publicTables = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ relname: string; relrowsecurity: boolean }>(
+      `SELECT relname, relrowsecurity
+       FROM pg_class
+       WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')
+       ORDER BY relname`,
+    ),
+  );
+  const protectedTables = publicTables.rows
+    .filter((table) => table.relrowsecurity)
+    .map((table) => table.relname);
+  // The hand-kept list this replaced had drifted from both of these tables.
+  expect(protectedTables).toEqual(
+    expect.arrayContaining(["episode_evidence_chunk_embeddings", "episode_evidence_chunks"]),
+  );
+  for (const table of publicTables.rows.filter((candidate) => !candidate.relrowsecurity)) {
+    expect(NON_TENANT_PUBLIC_TABLES).toContain(table.relname);
+  }
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  for (const table of protectedTables) {
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table} DISABLE ROW LEVEL SECURITY`),
+    );
+    await expect(operations.readiness(), table).resolves.toMatchObject({
+      status: "unready",
+      components: { rlsRole: "unavailable" },
+    });
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY`),
+    );
+  }
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("CREATE TABLE public.future_tenant_records (id uuid PRIMARY KEY)"),
+  );
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
+});
+
+test("readiness exempts an extension's own table, but never a tenant table", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  const admin = (sql: string) =>
+    testContext.adminDatabase.transaction((transaction) => transaction.query(sql));
+  await admin("CREATE TABLE public.extension_reference_records (id integer)");
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
+
+  // As PostGIS owns spatial_ref_sys: the table belongs to the extension, not to Lore.
+  await admin("ALTER EXTENSION vector ADD TABLE public.extension_reference_records");
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  // Extension ownership cannot excuse a tenant table from RLS.
+  await admin("ALTER EXTENSION vector ADD TABLE public.memories");
+  await admin("ALTER TABLE public.memories DISABLE ROW LEVEL SECURITY");
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { rlsRole: "unavailable" },
+  });
+});
+
+test("readiness requires every tenant table to exist", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+  for (const table of ["memory_links", "episode_evidence_chunks"]) {
+    // A renamed table keeps RLS, so only the existence check can catch it.
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table} RENAME TO ${table}_missing`),
+    );
+    await expect(operations.readiness(), table).resolves.toMatchObject({
+      status: "unready",
+      components: { rlsRole: "unavailable" },
+    });
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(`ALTER TABLE public.${table}_missing RENAME TO ${table}`),
+    );
+  }
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
 });

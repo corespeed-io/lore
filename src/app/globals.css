@@ -1100,6 +1100,11 @@ body {
   opacity: 0.45;
 }
 
+/* Names the text-only scope entries once typed nodes take over the palette. */
+.glegend-label {
+  color: var(--faint);
+}
+
 .graph-controls {
   position: absolute;
   z-index: 2;
@@ -1684,6 +1689,15 @@ body {
   border: 1px solid var(--hairline);
   border-radius: 6px;
   padding: 1px 7px;
+}
+
+/* Scope on a Memory row is plain text beside any type badge, never a pill. */
+.memory-scope {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mute);
+  flex-shrink: 0;
 }
 
 /* ── Activity chart (daily activity bars) ───────────────────────────────────── */
@@ -4862,6 +4876,11 @@ a.ext {
   background: color-mix(in srgb, var(--danger) 5%, var(--surface));
   color: var(--danger);
   font-size: 13px;
+}
+
+/* Loading screens set mono type; an alert inside one keeps prose in sans. */
+.app-loading .native-error {
+  font-family: var(--font-sans);
 }
 
 .native-error button {

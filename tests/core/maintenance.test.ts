@@ -291,23 +291,50 @@ test("a requested embedding hint cleans only its own stale job", async () => {
   );
 });
 
-test("maintenance role cannot mutate private chunks without the claimed lease context", async () => {
+test("maintenance role can never mutate canonical chunks", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
   const created = await memories.remember(testContext.alice, {
     content: "Private RLS evidence.",
     scope: "private",
   });
 
-  await testContext.maintenanceDatabase.transaction(async (transaction) => {
+  // Maintenance writes generation-scoped vectors only. Even inside a valid
+  // claimed lease the role holds no UPDATE privilege on canonical chunk rows.
+  await expect(
+    testContext.maintenanceDatabase.transaction((transaction) =>
+      transaction.query("UPDATE memory_chunks SET updated_at = now() WHERE memory_id = $1", [
+        created.id,
+      ]),
+    ),
+  ).rejects.toMatchObject({ code: "42501" });
+  const claimedLease = await testContext.adminDatabase.transaction(async (transaction) => {
+    const lease = crypto.randomUUID();
     const result = await transaction.query<{ id: string }>(
-      `UPDATE memory_chunks
-       SET updated_at = now()
-       WHERE memory_id = $1
+      `UPDATE memory_embedding_jobs
+       SET status = 'processing', attempt_count = 1, lease_token = $1, leased_at = now()
+       WHERE memory_id = $2
        RETURNING id`,
-      [created.id],
+      [lease, created.id],
     );
-    expect(result.rows).toEqual([]);
+    return { id: result.rows[0]?.id ?? "", lease };
+  });
+  await expect(
+    testContext.maintenanceDatabase.transaction(async (transaction) => {
+      await transaction.query(
+        `SELECT set_config('lore.maintenance_job_id', $1, true),
+                set_config('lore.maintenance_lease_token', $2, true)`,
+        [claimedLease.id, claimedLease.lease],
+      );
+      await transaction.query(
+        "UPDATE memory_chunks SET content = 'Rewritten by maintenance' WHERE memory_id = $1",
+        [created.id],
+      );
+    }),
+  ).rejects.toMatchObject({ code: "42501" });
+  await expect(memories.retrieve(testContext.alice, created.id)).resolves.toMatchObject({
+    content: "Private RLS evidence.",
   });
 
   await expect(
@@ -646,4 +673,97 @@ test("expired retiring generations cancel abandoned pending jobs before pruning"
     ),
   );
   expect(retiredState.rows).toEqual([{ generation_count: "0", job_count: "0" }]);
+});
+
+function pausedProvider(pausedVector: number, resumedVector: number) {
+  let release: () => void = () => undefined;
+  let signalStarted: () => void = () => undefined;
+  const resumed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  let calls = 0;
+  const provider = fixtureProvider(async (texts) => {
+    calls += 1;
+    if (calls === 1) {
+      signalStarted();
+      await resumed;
+      return texts.map(() => fixtureVector(pausedVector));
+    }
+    return texts.map(() => fixtureVector(resumedVector));
+  });
+  return { provider, release: () => release(), started };
+}
+
+test("a run whose lease is reclaimed mid-embed writes nothing and reports lost", async () => {
+  const testContext = await createMemoryTestContext();
+  const { provider, release, started } = pausedProvider(1, 0);
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
+  const created = await memories.remember(testContext.alice, {
+    content: "The provider stalls long enough for the lease to expire.",
+  });
+  const logs: string[] = [];
+  const stalled = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+    leaseSeconds: 30,
+    logger: (entry) => logs.push(entry.event),
+  });
+  const replacement = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+    leaseSeconds: 30,
+  });
+
+  const stalledRun = stalled.run();
+  await started;
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE memory_embedding_jobs SET leased_at = now() - interval '1 hour'"),
+  );
+  const completed = await replacement.run();
+  expect(completed).toMatchObject({ status: "complete" });
+  release();
+
+  await expect(stalledRun).resolves.toEqual({ status: "lost", jobId: completed.jobId });
+  expect(logs).toEqual(["job_lost"]);
+  const jobs = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ attempt_count: number; last_error: string | null; status: string }>(
+      "SELECT status::text, attempt_count, last_error FROM memory_embedding_jobs",
+    ),
+  );
+  expect(jobs.rows).toEqual([{ status: "succeeded", attempt_count: 2, last_error: null }]);
+  // Only the replacement's vectors exist: the stalled run's axis-1 vector was fenced.
+  const vectors = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ paused_axis: number; resumed_axis: number }>(
+      `SELECT (embedding::real[])[2] AS paused_axis, (embedding::real[])[1] AS resumed_axis
+       FROM memory_chunk_embeddings
+       WHERE memory_id = $1`,
+      [created.id],
+    ),
+  );
+  expect(vectors.rows).toEqual([{ paused_axis: 0, resumed_axis: 1 }]);
+});
+
+test("a run whose Memory is deleted mid-embed reports lost instead of failing", async () => {
+  const testContext = await createMemoryTestContext();
+  const { provider, release, started } = pausedProvider(0, 0);
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
+  const created = await memories.remember(testContext.alice, { content: "Forgotten mid-embed." });
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+  });
+
+  const run = maintenance.run();
+  await started;
+  await expect(memories.forget(testContext.alice, created.id)).resolves.toBe(true);
+  release();
+
+  await expect(run).resolves.toMatchObject({ status: "lost" });
+  const leftovers = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `SELECT 1 FROM memory_embedding_jobs
+       UNION ALL SELECT 1 FROM memory_chunk_embeddings`,
+    ),
+  );
+  expect(leftovers.rows).toEqual([]);
 });

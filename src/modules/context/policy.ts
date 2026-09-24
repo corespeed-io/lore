@@ -30,6 +30,21 @@ export {
 
 export const JOINT_MEMORY_CODE_PROTOTYPE_REVISION = "joint-memory-code-prototype-v2";
 
+/** Memory Code Evidence anchors one retrieval packet may carry. */
+export const MAXIMUM_CONTEXT_ANCHORS = 25;
+/** Cited declarations compared for contextual impact on a change route. */
+export const CONTEXTUAL_ANCHOR_LIMIT = 5;
+/** Direct callee/import/reference edges followed per cited declaration and revision. */
+export const CONTEXTUAL_EDGE_LIMIT = 25;
+/**
+ * Upper bound of `ContextualImpactAssessment.changes`. Per anchor, `assessContextualImpact`
+ * reports two truncation markers plus at most one change per distinct dependency key, and
+ * each side contributes at most `CONTEXTUAL_EDGE_LIMIT` keys. The aggregate may add one
+ * `anchors:truncated` marker.
+ */
+export const MAXIMUM_CONTEXTUAL_IMPACT_CHANGES =
+  CONTEXTUAL_ANCHOR_LIMIT * (2 + 2 * CONTEXTUAL_EDGE_LIMIT) + 1;
+
 export type JointEvidenceRoute = "abstain" | "both" | "code-only" | "memory-only";
 
 export type JointEvidenceIntent =
@@ -276,6 +291,36 @@ export function assessContextualImpact(
   if (knownContentChange) return { state: "affected", changes };
   if (structuralChange) return { state: "possibly_affected", changes };
   if (uncertainty) return { state: "unknown", changes };
+  return { state: "unaffected", changes };
+}
+
+/**
+ * Combines per-anchor assessments into one packet verdict. `truncated` means some cited
+ * declaration went uncompared: more existed than `CONTEXTUAL_ANCHOR_LIMIT` allows, or the
+ * packet's citations were cut at `MAXIMUM_CONTEXT_ANCHORS`.
+ */
+export function aggregateContextualImpact(
+  assessments: readonly { anchorId: string; assessment: ContextualImpactAssessment }[],
+  truncated: boolean,
+): ContextualImpactAssessment {
+  const changes = assessments.flatMap(({ anchorId, assessment }) =>
+    assessment.changes.map((change) => `anchor:${anchorId}:${change}`),
+  );
+  if (truncated) changes.push("anchors:truncated");
+  const states = new Set(assessments.map(({ assessment }) => assessment.state));
+  if (states.has("affected")) return { state: "affected", changes };
+  if (states.has("possibly_affected")) return { state: "possibly_affected", changes };
+  if (truncated || states.has("unknown") || assessments.length === 0) {
+    return {
+      state: "unknown",
+      changes:
+        changes.length > 0
+          ? changes
+          : assessments.length === 0
+            ? ["not_assessed:no_resolvable_anchor_subject"]
+            : ["assessment:unknown"],
+    };
+  }
   return { state: "unaffected", changes };
 }
 

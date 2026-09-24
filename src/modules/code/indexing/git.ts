@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
-import { CodeIndexValidationError } from "./errors";
+import { CodeIndexValidationError, GitOperationalError } from "./errors";
 import { CODE_INDEX_LIMITS } from "./protocol";
 import type {
   CodeSourceFile,
@@ -13,6 +13,39 @@ import { sha256, validateAndSortFiles, validatePath, validatePlainText } from ".
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * System errnos a later attempt can outlive: resource exhaustion, an interrupted call, or
+ * a path or executable that is not in place yet (ENOENT).
+ */
+const TRANSIENT_ERRNOS: ReadonlySet<string> = new Set([
+  "EAGAIN",
+  "EBUSY",
+  "EINTR",
+  "EIO",
+  "EMFILE",
+  "ENFILE",
+  "ENOENT",
+  "ENOMEM",
+  "ETIMEDOUT",
+]);
+
+/**
+ * Classifies a failed Git call over a revision already resolved in the local clone. A
+ * transient errno or a killed process is operational and retryable; anything else (Git
+ * exiting non-zero on a present commit, an output bound) fails identically on every retry
+ * and is a validation failure. `resolveGitCommit` retries the checks that precede it.
+ */
+export function gitFailure(error: unknown, message: string): Error {
+  const { code, signal } =
+    typeof error === "object" && error !== null
+      ? (error as { code?: unknown; signal?: unknown })
+      : {};
+  if ((typeof code === "string" && TRANSIENT_ERRNOS.has(code)) || typeof signal === "string") {
+    return new GitOperationalError(message, { cause: error });
+  }
+  return new CodeIndexValidationError(message, { cause: error });
+}
+
 async function gitOutput(repositoryPath: string, arguments_: readonly string[]): Promise<Buffer> {
   try {
     const result = await execFileAsync("git", ["-C", repositoryPath, ...arguments_], {
@@ -21,9 +54,7 @@ async function gitOutput(repositoryPath: string, arguments_: readonly string[]):
     });
     return Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
   } catch (error) {
-    throw new CodeIndexValidationError("Unable to read the requested Git revision", {
-      cause: error,
-    });
+    throw gitFailure(error, "Unable to read the requested Git revision");
   }
 }
 
@@ -56,6 +87,9 @@ async function readGitBlobBatch(
     child.once("error", reject);
     child.once("close", (code, signal) => {
       if (code === 0 && !signal && outputBytes <= maximumOutputBytes) resolve();
+      else if (signal && outputBytes <= maximumOutputBytes)
+        // Killed from outside (OOM, shutdown), not by the output bound below.
+        reject(gitFailure({ signal }, "Unable to batch-read Git blobs"));
       else
         reject(
           new CodeIndexValidationError("Unable to batch-read Git blobs", {
@@ -104,11 +138,15 @@ export async function readGitRevisionFiles(
   canonicalPath: string,
   commitOid: string,
 ): Promise<{ files: CodeSourceFile[]; manifest: GitRevisionManifest }> {
+  // The default `-l -z` record is "<mode> <type> <oid> <padded size>\t<path>" with the
+  // path verbatim. A --format %(path) is C-quoted even under -z, which turned every
+  // non-ASCII or quote-containing path into a terminal "invalid path" failure.
   const tree = await gitOutput(canonicalPath, [
     "ls-tree",
-    "-rz",
+    "-r",
+    "-l",
+    "-z",
     "--full-tree",
-    "--format=%(objectmode)%x09%(objecttype)%x09%(objectname)%x09%(objectsize)%x09%(path)",
     commitOid,
   ]);
   let treeText: string;
@@ -130,8 +168,11 @@ export async function readGitRevisionFiles(
   };
   const parsedEntries: ParsedTreeEntry[] = [];
   for (const entry of entries) {
-    const [mode, objectType, objectOid, sizeText, ...pathParts] = entry.split("\t");
-    const path = validatePath(pathParts.join("\t"));
+    // The metadata never contains a tab; the path after the first one may.
+    const tab = entry.indexOf("\t");
+    const [mode, objectType, objectOid, sizeText] =
+      tab < 0 ? [] : entry.slice(0, tab).trim().split(/ +/);
+    const path = validatePath(tab < 0 ? "" : entry.slice(tab + 1));
     if (!mode || !objectType || !objectOid || !sizeText) {
       throw new CodeIndexValidationError(`Malformed Git tree entry: ${path}`);
     }
@@ -202,6 +243,13 @@ export async function readGitRevisionFiles(
         } catch {
           exclusionReason = "invalid_utf8";
         }
+        // The decoder consumes a leading BOM, so a BOM-only blob decodes to no text. Marking
+        // it indexed would promise an Artifact that no parser can produce, and the generation
+        // could never become ready.
+        if (content === "") {
+          content = null;
+          exclusionReason = "empty";
+        }
       }
       if (content !== null) {
         sourceBytes += contentBytes.length;
@@ -259,21 +307,29 @@ export async function resolveGitTreeOid(canonicalPath: string, commitOid: string
   return treeOid;
 }
 
+/**
+ * Resolves the repository path and proves the exact commit is in its object database.
+ * Both checks can fail only until the operator's clone or mount catches up: a path that
+ * does not resolve yet (a mount that is not up) or a commit that is not fetched yet. Both
+ * are retryable, so a job keeps its retry budget; everything after them reads a present
+ * commit and fails identically on every retry.
+ */
 export async function resolveGitCommit(repositoryPath: string, commitOid: string): Promise<string> {
   let canonicalPath: string;
   try {
     canonicalPath = await realpath(repositoryPath);
   } catch (error) {
-    throw new CodeIndexValidationError("repositoryPath must identify a local Git repository", {
+    throw new GitOperationalError("The configured repository is not available", {
       cause: error,
     });
   }
-  const resolvedCommit = (
-    await gitOutput(canonicalPath, ["rev-parse", "--verify", `${commitOid}^{commit}`])
-  )
-    .toString("utf8")
-    .trim()
-    .toLowerCase();
+  let resolved: Buffer;
+  try {
+    resolved = await gitOutput(canonicalPath, ["rev-parse", "--verify", `${commitOid}^{commit}`]);
+  } catch (error) {
+    throw new GitOperationalError("Unable to read the requested Git revision", { cause: error });
+  }
+  const resolvedCommit = resolved.toString("utf8").trim().toLowerCase();
   if (resolvedCommit !== commitOid) {
     throw new CodeIndexValidationError("commitOid did not resolve to the requested exact commit");
   }
