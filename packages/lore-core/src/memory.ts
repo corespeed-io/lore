@@ -697,24 +697,24 @@ async function insertChunks(
   memoryId: string,
   chunks: PreparedChunk[],
 ): Promise<void> {
-  for (const [ordinal, chunk] of chunks.entries()) {
-    await transaction.query(
-      `INSERT INTO memory_chunks (
-         id, workspace_id, memory_id, ordinal, content, chunking_revision, embedding,
-         embedding_provider, embedding_model, embedding_revision, embedded_at
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, NULL, NULL
-       )`,
-      [
-        crypto.randomUUID(),
-        workspaceId,
-        memoryId,
-        ordinal,
-        chunk.content,
-        MEMORY_CHUNKING_REVISION,
-      ],
-    );
-  }
+  if (chunks.length === 0) return;
+  // One round trip while the caller holds the Memory row lock. Ordinals follow
+  // the prepared chunk order. Vectors live in generation-scoped
+  // memory_chunk_embeddings, so no per-chunk embedding columns are written.
+  await transaction.query(
+    `INSERT INTO memory_chunks (
+       id, workspace_id, memory_id, ordinal, content, chunking_revision
+     )
+     SELECT chunk.id, $1::uuid, $2::uuid, (chunk.position - 1)::integer, chunk.content, $5
+     FROM unnest($3::uuid[], $4::text[]) WITH ORDINALITY AS chunk(id, content, position)`,
+    [
+      workspaceId,
+      memoryId,
+      chunks.map(() => crypto.randomUUID()),
+      chunks.map((chunk) => chunk.content),
+      MEMORY_CHUNKING_REVISION,
+    ],
+  );
 }
 
 async function enqueueEmbeddingJob(

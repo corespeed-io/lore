@@ -100,11 +100,6 @@ CREATE TABLE memory_chunks (
   ordinal integer NOT NULL,
   content text NOT NULL,
   chunking_revision text NOT NULL,
-  embedding vector(8),
-  embedding_provider text,
-  embedding_model text,
-  embedding_revision text,
-  embedded_at timestamptz,
   search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
   search_vector_english tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
   entity_aliases text[] GENERATED ALWAYS AS (lore.extract_entity_aliases(content)) STORED
