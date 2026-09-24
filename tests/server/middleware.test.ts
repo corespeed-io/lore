@@ -1,17 +1,8 @@
-import {
-  getMiddlewareMatchers,
-  type ProxyMatcher,
-} from "next/dist/build/analysis/get-page-static-info.js";
+import { getMiddlewareMatchers } from "next/dist/build/analysis/get-page-static-info.js";
 import { expect, test } from "vitest";
 import { config } from "@/middleware";
 
-declare module "next/dist/build/analysis/get-page-static-info.js" {
-  // Next's build uses this export at runtime but omits it from its declarations.
-  export function getMiddlewareMatchers(
-    matcher: readonly string[],
-    nextConfig: Record<string, never>,
-  ): ProxyMatcher[];
-}
+// tests/support/next-middleware-matchers.d.ts declares getMiddlewareMatchers.
 
 // Compile the checked-in matcher exactly as Next does, so the test measures Next's
 // path-to-regexp semantics rather than a hand-copied regular expression.

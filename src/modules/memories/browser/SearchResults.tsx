@@ -79,8 +79,8 @@ export function SearchResults({
   const [rowLimit, setRowLimit] = useState(BROWSE_BATCH);
   // Only a different list resets the window. Browse keeps filling pages into
   // `memories`, and resetting on its length would snap the scroll back to 200 rows.
-  // listKey is the intentional reset signal.
   const listKey = `${workspaceId}|${typeFilter}`;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: listKey is the intentional reset signal.
   useEffect(() => setRowLimit(BROWSE_BATCH), [listKey]);
 
   // A callback ref observes the sentinel whenever it mounts, including when a
