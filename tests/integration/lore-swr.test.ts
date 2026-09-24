@@ -4,6 +4,7 @@ import {
   isLoreAgentsCacheKey,
 } from "@/modules/agents/browser/data";
 import {
+  fullReadAfterResume,
   MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
   MEMORY_RESUME_FULL_REFRESH_MS,
@@ -272,4 +273,35 @@ test("code cache keys isolate the Memory, Workspace, and requested job depth", (
   expect(loreKeys.memoryCodeEvidence(workspaceId, memoryId)).not.toEqual(
     loreKeys.memory(workspaceId, memoryId),
   );
+});
+
+test("only a clean full refresh on resume resets the browse list's age", () => {
+  const previous = { workspaceId: "workspace-a", at: 1_000 };
+  // A failed or navigation-cancelled page leaves pages unread: keep the old age so
+  // the next resume refreshes every page again instead of trusting page 0 alone.
+  expect(
+    fullReadAfterResume({
+      previous,
+      workspaceId: "workspace-a",
+      startedAt: 9_000,
+      pageFailuresDuringRefresh: 1,
+    }),
+  ).toBe(previous);
+  expect(
+    fullReadAfterResume({
+      previous: null,
+      workspaceId: "workspace-a",
+      startedAt: 9_000,
+      pageFailuresDuringRefresh: 2,
+    }),
+  ).toBeNull();
+  // A clean refresh counts from when it started, not when it settled.
+  expect(
+    fullReadAfterResume({
+      previous,
+      workspaceId: "workspace-a",
+      startedAt: 9_000,
+      pageFailuresDuringRefresh: 0,
+    }),
+  ).toEqual({ workspaceId: "workspace-a", at: 9_000 });
 });

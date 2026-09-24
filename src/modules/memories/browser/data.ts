@@ -191,6 +191,27 @@ export function shouldRevalidateMemoryPageOnResume(state: MemoryPageResumeState)
  */
 export const MEMORY_RESUME_FULL_REFRESH_MS = 5 * 60_000;
 
+/** When a Workspace's browse list was last re-read in full. */
+export interface MemoryFullRead {
+  workspaceId: string;
+  at: number;
+}
+
+/**
+ * The full-read record after a resume's full refresh settles. Only a refresh with no
+ * failed or cancelled page counts, and it counts from when it started; otherwise the
+ * previous record stands, so the next resume refreshes every page again.
+ */
+export function fullReadAfterResume(input: {
+  previous: MemoryFullRead | null;
+  workspaceId: string;
+  startedAt: number;
+  pageFailuresDuringRefresh: number;
+}): MemoryFullRead | null {
+  if (input.pageFailuresDuringRefresh > 0) return input.previous;
+  return { workspaceId: input.workspaceId, at: input.startedAt };
+}
+
 export function shouldFullyRevalidateOnResume(input: {
   now: number;
   lastFullReadAt: number | null;
@@ -223,6 +244,9 @@ interface MemoryResumeProbe {
 
 export function useLoreMemories(workspaceId: string, enabled = true) {
   const demand = useRef({ workspaceId, enabled });
+  // Page requests that failed or were cancelled, so a full refresh can tell whether
+  // it actually re-read every page.
+  const pageFailures = useRef(0);
   const resumeProbe = useRef<MemoryResumeProbe | null>(null);
   useLayoutEffect(() => {
     demand.current = { workspaceId, enabled };
@@ -246,11 +270,15 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
       // An in-flight SWR Infinite refresh can continue across route changes.
       // Let its current request finish, but stop before issuing another page.
       if (!demand.current.enabled || demand.current.workspaceId !== scopedWorkspaceId) {
+        pageFailures.current += 1;
         throw new MemoryBrowseCancelled("Memory browse is no longer active");
       }
       const page = await listMemories(scopedWorkspaceId, {
         limit: MEMORY_PAGE_SIZE,
         offset: pageIndex * MEMORY_PAGE_SIZE,
+      }).catch((error: unknown) => {
+        pageFailures.current += 1;
+        throw error;
       });
       const probe = resumeProbe.current;
       if (pageIndex === 0 && probe) probe.firstPageAfter = page;
@@ -264,7 +292,7 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
   );
   // When this Workspace's browse list was last read in full: its first load, or
   // the last resume that re-read every page.
-  const lastFullRead = useRef<{ workspaceId: string; at: number } | null>(null);
+  const lastFullRead = useRef<MemoryFullRead | null>(null);
   const hasData = Boolean(swr.data);
   useEffect(() => {
     if (hasData && lastFullRead.current?.workspaceId !== workspaceId) {
@@ -277,8 +305,19 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
     const lastFullReadAt =
       lastFullRead.current?.workspaceId === workspaceId ? lastFullRead.current.at : null;
     if (shouldFullyRevalidateOnResume({ now, lastFullReadAt })) {
-      lastFullRead.current = { workspaceId, at: now };
-      return swr.mutate();
+      // SWR resolves mutate() with the cached pages even when a page request failed,
+      // so count page failures instead: an interrupted or failed full refresh must not
+      // reset the age, or later resumes would skip pages that were never re-read.
+      const failuresBefore = pageFailures.current;
+      return swr.mutate().then((pages) => {
+        lastFullRead.current = fullReadAfterResume({
+          previous: lastFullRead.current,
+          workspaceId,
+          startedAt: now,
+          pageFailuresDuringRefresh: pageFailures.current - failuresBefore,
+        });
+        return pages;
+      });
     }
     const probe: MemoryResumeProbe = { listedPages: swr.data, firstPageAfter: undefined };
     resumeProbe.current = probe;
