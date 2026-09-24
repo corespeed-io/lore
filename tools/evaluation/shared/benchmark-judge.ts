@@ -5,6 +5,7 @@ import {
   VERCEL_AI_GATEWAY_OPENAI_BASE_URL,
 } from "../../../src/server/providers/vercel-ai-gateway";
 import { extractBoxedAnswer } from "./answer-evaluation";
+import { benchmarkEndpoint } from "./benchmark-endpoint";
 
 export type BenchmarkJudgeKind = "abstention" | "gotchas";
 
@@ -160,14 +161,6 @@ export function parseLongMemEvalV2JudgeResponse(value: string): {
   return { label: Number(labelMatch[1]) as 0 | 1, reason: cleaned };
 }
 
-function endpoint(baseUrl: string, path: string): string {
-  const url = new URL(baseUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("benchmark judge base URL must use http or https");
-  }
-  return new URL(path, `${url.toString().replace(/\/$/, "")}/`).toString();
-}
-
 function usageToken(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -190,12 +183,16 @@ function openAICompatibleBaseUrl(provider: JudgeOptions["provider"]): string {
   return "https://api.openai.com/v1";
 }
 
-/** Deployment credential each judge provider falls back to. */
-const JUDGE_CREDENTIAL_VARIABLES: Record<JudgeOptions["provider"], string> = {
+/**
+ * Deployment credential each judge provider falls back to. A self-hosted vLLM
+ * judge takes only the explicit LORE_BENCHMARK_JUDGE_API_KEY, so a managed
+ * provider's key is never sent to an operator-run endpoint.
+ */
+const JUDGE_CREDENTIAL_VARIABLES: Record<JudgeOptions["provider"], string | undefined> = {
   google: "GEMINI_API_KEY",
   openai: "OPENAI_API_KEY",
   vercel: "AI_GATEWAY_API_KEY",
-  vllm: "OPENAI_API_KEY",
+  vllm: undefined,
 };
 
 function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
@@ -222,7 +219,7 @@ function createOpenAICompatibleJudge(options: JudgeOptions): BenchmarkJudgeProvi
     organization: null,
     project: null,
     defaultHeaders: { Authorization: apiKey ? `Bearer ${apiKey}` : null },
-    baseURL: endpoint(baseUrl, ""),
+    baseURL: benchmarkEndpoint(baseUrl, "benchmark judge", apiKey),
     maxRetries: 0,
     timeout: timeoutMs,
   });
@@ -291,7 +288,11 @@ function createGoogleJudge(options: JudgeOptions): BenchmarkJudgeProvider {
     apiKey,
     vertexai: false,
     httpOptions: {
-      baseUrl: endpoint(options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta", ""),
+      baseUrl: benchmarkEndpoint(
+        options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta",
+        "Google benchmark judge",
+        apiKey,
+      ),
       apiVersion: "",
     },
   });
@@ -391,11 +392,14 @@ export function createBenchmarkJudgeFromEnvironment(
   if (reasoning !== "low" && reasoning !== "medium" && reasoning !== "high") {
     throw new Error("LORE_BENCHMARK_JUDGE_REASONING_EFFORT must be low, medium, or high");
   }
+  const fallbackCredential = JUDGE_CREDENTIAL_VARIABLES[provider];
   const common = {
     provider,
     model: env.LORE_BENCHMARK_JUDGE_MODEL ?? "",
     baseUrl: env.LORE_BENCHMARK_JUDGE_BASE_URL,
-    apiKey: env.LORE_BENCHMARK_JUDGE_API_KEY ?? env[JUDGE_CREDENTIAL_VARIABLES[provider]],
+    apiKey:
+      env.LORE_BENCHMARK_JUDGE_API_KEY ??
+      (fallbackCredential ? env[fallbackCredential] : undefined),
     reasoningEffort: reasoning,
     timeoutMs: configuredInteger(env, "LORE_BENCHMARK_JUDGE_TIMEOUT_MS", 43_200_000),
     maximumOutputTokens: configuredInteger(env, "LORE_BENCHMARK_JUDGE_MAX_OUTPUT_TOKENS", 4_096),

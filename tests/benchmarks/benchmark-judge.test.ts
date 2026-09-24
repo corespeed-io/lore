@@ -204,3 +204,55 @@ test("Vercel AI Gateway judge requires a gateway credential and a creator/model 
     }),
   ).toThrow("creator/model ids");
 });
+
+test("a self-hosted vLLM judge never borrows the OpenAI deployment key", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    expect(request.headers.get("authorization")).toBeNull();
+    return Response.json({ choices: [{ message: { content: '{"label": 1, "reason": "ok"}' } }] });
+  });
+  try {
+    const judge = createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "vllm",
+      LORE_BENCHMARK_JUDGE_MODEL: "judge-model",
+      LORE_BENCHMARK_JUDGE_BASE_URL: "http://judge.test/v1",
+      OPENAI_API_KEY: "sk-openai-deployment-key",
+    });
+    await expect(
+      judge?.judge({
+        kind: "gotchas",
+        question: "Why?",
+        referenceAnswer: "Because",
+        modelFullResponse: "Because",
+      }),
+    ).resolves.toMatchObject({ correct: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  } finally {
+    fetch.mockRestore();
+  }
+});
+
+test("a judge key is never sent to a plaintext endpoint outside loopback", () => {
+  for (const [provider, key] of [
+    ["vllm", "LORE_BENCHMARK_JUDGE_API_KEY"],
+    ["openai", "OPENAI_API_KEY"],
+    ["google", "GEMINI_API_KEY"],
+  ] as const) {
+    expect(() =>
+      createBenchmarkJudgeFromEnvironment({
+        LORE_BENCHMARK_JUDGE_PROVIDER: provider,
+        LORE_BENCHMARK_JUDGE_MODEL: "judge-model",
+        LORE_BENCHMARK_JUDGE_BASE_URL: "http://judge.test/v1",
+        [key]: "secret",
+      }),
+    ).toThrow("must use https outside loopback when it sends an API key");
+  }
+  expect(
+    createBenchmarkJudgeFromEnvironment({
+      LORE_BENCHMARK_JUDGE_PROVIDER: "vllm",
+      LORE_BENCHMARK_JUDGE_MODEL: "judge-model",
+      LORE_BENCHMARK_JUDGE_BASE_URL: "http://127.0.0.1:8002/v1",
+      LORE_BENCHMARK_JUDGE_API_KEY: "secret",
+    })?.provider,
+  ).toBe("vllm");
+});
