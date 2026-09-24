@@ -4,7 +4,11 @@ import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
 import { verifyFile } from "../shared/file-integrity";
 import type { LongMemEvalSplit } from "./longmemeval";
-import { longMemEvalManifest, readLongMemEvalPartitions } from "./longmemeval";
+import {
+  LONGMEMEVAL_ABSTENTION_POLICY,
+  longMemEvalManifest,
+  readLongMemEvalPartitions,
+} from "./longmemeval";
 import { runRetrievalBenchmarkSuite } from "./retrieval-suite";
 
 interface CliOptions {
@@ -196,6 +200,7 @@ const report = await runRetrievalBenchmarkSuite({
       granularity: longMemEvalManifest.granularity,
       duplicateSessionPolicy: "preserve-with-occurrence-suffix",
       blankTurnPolicy: "omit",
+      abstentionPolicy: LONGMEMEVAL_ABSTENTION_POLICY,
       maxCases: options.maxCases ?? null,
       casesPerType: options.casesPerType ?? null,
       questionTypes: options.questionTypes ? [...options.questionTypes].sort() : null,

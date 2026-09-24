@@ -3,9 +3,36 @@ import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "@corespeed/lore-co
 import { expect, test } from "vitest";
 import type { IndexedMemoryChunk } from "../../tools/evaluation/retrieval/indexed-memory-validation";
 import {
+  benchmarkMetadataMatches,
   requireExactIndexedMemory,
   validateExactIndexedMemory,
 } from "../../tools/evaluation/retrieval/indexed-memory-validation";
+
+test("indexed reuse requires the exact fixture metadata, including its benchmark keys", () => {
+  const expected = {
+    questionId: "q-1",
+    session: { number: 2, turns: [1, 2] },
+    optional: undefined,
+    benchmarkKey: "session-2",
+    benchmarkPartition: "q-1",
+  };
+  // JSONB reorders keys and drops undefined members; neither is a mismatch.
+  const stored = {
+    benchmarkPartition: "q-1",
+    benchmarkKey: "session-2",
+    session: { turns: [1, 2], number: 2 },
+    questionId: "q-1",
+  };
+  expect(benchmarkMetadataMatches(stored, expected)).toBe(true);
+  expect(benchmarkMetadataMatches({ ...stored, questionId: "q-2" }, expected)).toBe(false);
+  expect(benchmarkMetadataMatches({ ...stored, extra: true }, expected)).toBe(false);
+  expect(
+    benchmarkMetadataMatches({ ...stored, session: { turns: [2, 1], number: 2 } }, expected),
+  ).toBe(false);
+  const { benchmarkPartition: _partition, ...withoutPartition } = stored;
+  expect(benchmarkMetadataMatches(withoutPartition, expected)).toBe(false);
+  expect(benchmarkMetadataMatches(null, expected)).toBe(false);
+});
 
 const provider: EmbeddingProvider = {
   provider: "test",

@@ -4,11 +4,17 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import type { LongMemEvalRecord } from "../../tools/evaluation/retrieval/longmemeval";
 import {
+  isLongMemEvalAbstention,
+  LONGMEMEVAL_ABSTENTION_POLICY,
   LONGMEMEVAL_QUESTION_TYPES,
   parseLongMemEvalRecord,
   readLongMemEvalPartitions,
   toLongMemEvalPartition,
 } from "../../tools/evaluation/retrieval/longmemeval";
+import {
+  aggregateRetrievalBenchmark,
+  evaluateRetrievalBenchmarkCase,
+} from "../../tools/evaluation/retrieval/retrieval";
 import { readJsonArray } from "../../tools/evaluation/shared/json-array";
 
 const fixture: LongMemEvalRecord = {
@@ -70,6 +76,40 @@ test("LongMemEval accepts numeric aggregate answers from the official dataset", 
   const record = parseLongMemEvalRecord({ ...fixture, answer: 3 });
   expect(record.answer).toBe(3);
   expect(toLongMemEvalPartition(record).memories.at(-1)?.content).toContain("Answer: 3");
+});
+
+test("abstention questions are no-answer cases, never positive retrieval cases", () => {
+  // Official _abs records still name the sessions that discuss the false premise.
+  const record = parseLongMemEvalRecord({ ...fixture, question_id: "question-1_abs" });
+  expect(isLongMemEvalAbstention(record)).toBe(true);
+  expect(isLongMemEvalAbstention(fixture)).toBe(false);
+  const [abstention] = toLongMemEvalPartition(record).cases;
+  expect(abstention).toMatchObject({
+    key: "question-1_abs",
+    category: LONGMEMEVAL_ABSTENTION_POLICY.category,
+    expectedKeys: [],
+    forbiddenKeys: ["__bob_private_tripwire__"],
+  });
+
+  const scored = (retrievedMemoryIds: string[], expectedMemoryIds: string[]) =>
+    evaluateRetrievalBenchmarkCase({
+      retrievedMemoryIds,
+      expectedMemoryIds,
+      limit: 5,
+      latencyMs: 1,
+    });
+  const metrics = aggregateRetrievalBenchmark([
+    scored(["session-2"], ["session-2"]),
+    // Retrieving the premise session is not a positive hit for an abstention case.
+    scored(["session-2"], abstention?.expectedKeys ?? []),
+  ]);
+  expect(metrics).toMatchObject({
+    positiveCaseCount: 1,
+    noAnswerCaseCount: 1,
+    recallAtK: 1,
+    noAnswerAccuracy: 0,
+    averageFalseResults: 1,
+  });
 });
 
 test("blank official turns are accepted but omitted from Memory content", () => {

@@ -13,6 +13,28 @@ export interface IndexedMemoryChunk {
   ordinal: number;
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+    .join(",")}}`;
+}
+
+/**
+ * Whether persisted JSONB metadata is exactly the metadata a fixture would write.
+ * The expected value takes the same JSON round trip PostgreSQL applies (undefined
+ * members vanish), and key order is irrelevant because JSONB does not keep it.
+ */
+export function benchmarkMetadataMatches(
+  actual: unknown,
+  expected: Readonly<Record<string, unknown>>,
+): boolean {
+  const stored: unknown = JSON.parse(JSON.stringify(expected));
+  return canonicalJson(actual) === canonicalJson(stored);
+}
+
 export function validateExactIndexedMemory(input: {
   actualContent: string;
   chunks: IndexedMemoryChunk[];
