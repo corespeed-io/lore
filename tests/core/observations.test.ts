@@ -89,6 +89,32 @@ test("An Episode records immutable ordered Observation evidence with private def
   await testContext.close();
 });
 
+test("Batch Observation reads serialize exactly like Episode retrieval", async () => {
+  const testContext = await createMemoryTestContext();
+  const observations = createObservationModule(testContext.database);
+  const episode = await observations.record(testContext.alice, {
+    kind: "conversation",
+    observations: [
+      {
+        kind: "message",
+        content: "The launch is Tuesday.",
+        metadata: { role: "user" },
+        observedAt: "2026-08-10T18:00:00.123Z",
+      },
+      { kind: "tool_result", content: "Calendar confirms Tuesday at 09:00." },
+    ],
+  });
+  const [first, second] = episode.observations;
+  if (!first || !second) throw new Error("The Episode must return both Observations");
+
+  expect(first.observedAt).toBe("2026-08-10T18:00:00.123000Z");
+  expect(first.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/);
+  await expect(
+    observations.retrieveObservations(testContext.alice, [second.id, first.id]),
+  ).resolves.toEqual([second, first]);
+  await testContext.close();
+});
+
 test("Shared Episode evidence requires active Membership and remains writable only by its owner", async () => {
   const testContext = await createMemoryTestContext();
   const observations = createObservationModule(testContext.database);

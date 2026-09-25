@@ -1,5 +1,9 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
-import { createMemoryMaintenanceModule, MemoryAccessDeniedError } from "@corespeed/lore-core";
+import {
+  createMemoryMaintenanceModule,
+  MemoryAccessDeniedError,
+  RETRIEVAL_ENTITY_ALIAS_POLICY,
+} from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createAccessModule } from "@/server/auth/access";
 import { createMemoryModule } from "../../src/modules/memories/service";
@@ -737,6 +741,42 @@ test("Optional entity alias recall recovers an exact entity when relation wordin
   await testContext.close();
 });
 
+test("Entity alias recall probes only the policy's leading query aliases", async () => {
+  const testContext = await createMemoryTestContext();
+  const query =
+    "Did Aldrix, Brimwold, Corvanth, Dremlik, Esquivar, Fenlowe, Gorvash, Hollisk, Ixtaran or Jorvell travel?";
+  const aliases = await testContext.adminDatabase.transaction(async (transaction) => {
+    const result = await transaction.query<{ aliases: string[] }>(
+      "SELECT lore.extract_entity_aliases($1) AS aliases",
+      [query],
+    );
+    return result.rows[0]?.aliases ?? [];
+  });
+  const cap = RETRIEVAL_ENTITY_ALIAS_POLICY.maximumQueryAliases;
+  const [lastProbed, firstSkipped] = aliases.slice(cap - 1, cap + 1);
+  // Single-name aliases, so each Memory below matches the query through no other channel.
+  expect(lastProbed).toMatch(/^[a-z]+$/);
+  expect(firstSkipped).toMatch(/^[a-z]+$/);
+  const named = (alias = "") => `${alias.charAt(0).toUpperCase()}${alias.slice(1)}`;
+  const writer = createMemoryModule(testContext.database);
+  const probed = await writer.remember(testContext.alice, {
+    content: `${named(lastProbed)} moved to Varnholm.`,
+  });
+  const skipped = await writer.remember(testContext.alice, {
+    content: `${named(firstSkipped)} moved to Varnholm.`,
+  });
+  const entityRecall = createMemoryModule(testContext.database, { entityAliasRecall: true });
+  const ids = async (text: string) =>
+    (await entityRecall.search(testContext.alice, { query: text, limit: 5 })).map(
+      (result) => result.memory.id,
+    );
+
+  await expect(ids(query)).resolves.toEqual([probed.id]);
+  // The skipped alias is recallable when it falls inside the cap.
+  await expect(ids(`Did ${named(firstSkipped)} travel?`)).resolves.toEqual([skipped.id]);
+  await testContext.close();
+});
+
 test("Entity alias recall cannot expose another User's private Memory", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -837,6 +877,35 @@ test("Optional temporal rank fusion can prefer newer relevant Memory", async () 
 
   expect(baseline[0]?.memory.id).toBe(older.id);
   expect(temporal[0]?.memory.id).toBe(newer.id);
+  await testContext.close();
+});
+
+test("Temporal rank fusion keeps relevance order when fused scores tie", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const older = await memories.remember(testContext.alice, {
+    content:
+      "Atlas status codename amber. Atlas status codename amber. Atlas status codename amber.",
+  });
+  const newer = await memories.remember(testContext.alice, {
+    content: "Atlas status is now green.",
+  });
+  await stampUpdatedAt(testContext, [
+    [older.id, "2025-01-01T00:00:00.000Z"],
+    [newer.id, "2026-01-01T00:00:00.000Z"],
+  ]);
+  const search = async (retrievalRecencyWeight: number) =>
+    (
+      await createMemoryModule(testContext.database, {
+        rerankCandidateLimit: 2,
+        retrievalRecencyWeight,
+      }).search(testContext.alice, { query: "Atlas status codename amber", limit: 2 })
+    ).map((result) => result.memory.id);
+
+  // Two candidates swap their relevance and recency ranks, so an even weight
+  // fuses them to exactly equal scores and the more relevant one stays first.
+  await expect(search(0.5)).resolves.toEqual([older.id, newer.id]);
+  await expect(search(0.6)).resolves.toEqual([newer.id, older.id]);
   await testContext.close();
 });
 
@@ -1104,6 +1173,42 @@ test("Explicit context groups can append nearby source memories", async () => {
   });
 
   expect(results.map((result) => result.memory.id)).toEqual([seed.id, related.id]);
+  await testContext.close();
+});
+
+test("Context groups without an ordinal key append the member nearest the seed in time", async () => {
+  const testContext = await createMemoryTestContext();
+  const writer = createMemoryModule(testContext.database);
+  const seed = await writer.remember(testContext.alice, {
+    content: "The orchid launch review starts on Tuesday.",
+    metadata: { sourceSession: "session-a" },
+  });
+  const near = await writer.remember(testContext.alice, {
+    content: "Priya approved the cobalt contingency.",
+    metadata: { sourceSession: "session-a" },
+  });
+  const far = await writer.remember(testContext.alice, {
+    content: "Lin archived the drill notes.",
+    metadata: { sourceSession: "session-a" },
+  });
+  // The nearer member is older than the seed and the farther one newer, so
+  // recency order alone would pick the wrong member.
+  await stampUpdatedAt(testContext, [
+    [seed.id, "2026-01-01T00:00:00.000Z"],
+    [near.id, "2025-12-31T23:00:00.000Z"],
+    [far.id, "2026-03-01T00:00:00.000Z"],
+  ]);
+
+  const results = await createMemoryModule(testContext.database, {
+    contextGroupExpansion: {
+      groupMetadataKey: "sourceSession",
+      baseCandidateLimit: 1,
+      maximumGroups: 1,
+    },
+    rerankCandidateLimit: 2,
+  }).search(testContext.alice, { query: "orchid launch Tuesday", limit: 2 });
+
+  expect(results.map((result) => result.memory.id)).toEqual([seed.id, near.id]);
   await testContext.close();
 });
 
@@ -1604,6 +1709,38 @@ test("A calibrated reranker can abstain even when fusion found one candidate", a
   await testContext.close();
 });
 
+test("A calibrated reranker keeps candidates at or above the minimum score", async () => {
+  const testContext = await createMemoryTestContext();
+  const basic = createMemoryModule(testContext.database);
+  const low = await basic.remember(testContext.alice, { content: "Orchid launch low." });
+  const edge = await basic.remember(testContext.alice, { content: "Orchid launch edge." });
+  const high = await basic.remember(testContext.alice, { content: "Orchid launch high." });
+  const scores = new Map([
+    [low.id, 0.2],
+    [edge.id, 0.4],
+    [high.id, 0.9],
+  ]);
+  const reranked = createMemoryModule(testContext.database, {
+    rerankMinimumScore: 0.4,
+    rerankingProvider: {
+      async rerank(input) {
+        return input.documents.map((document) => ({
+          documentId: document.id,
+          score: scores.get(document.id) ?? 0,
+        }));
+      },
+    },
+  });
+
+  const results = await reranked.search(testContext.alice, { query: "orchid launch", limit: 3 });
+
+  expect(results.map((result) => [result.memory.id, result.rerankScore])).toEqual([
+    [high.id, 0.9],
+    [edge.id, 0.4],
+  ]);
+  await testContext.close();
+});
+
 test("Optional rerank diversity avoids filling top-k with near-duplicate evidence", async () => {
   const testContext = await createMemoryTestContext();
   const basic = createMemoryModule(testContext.database);
@@ -1635,6 +1772,37 @@ test("Optional rerank diversity avoids filling top-k with near-duplicate evidenc
   });
 
   expect(results.map((result) => result.memory.id)).toEqual([first.id, diverse.id]);
+  await testContext.close();
+});
+
+test("Pure-diversity reranking keeps reranker order among equally similar evidence", async () => {
+  const testContext = await createMemoryTestContext();
+  const basic = createMemoryModule(testContext.database);
+  const alpha = await basic.remember(testContext.alice, { content: "Orchid launch alpha." });
+  const beta = await basic.remember(testContext.alice, { content: "Orchid launch beta." });
+  const gamma = await basic.remember(testContext.alice, { content: "Orchid launch gamma." });
+  const scores = new Map([
+    [gamma.id, 0.9],
+    [alpha.id, 0.6],
+    [beta.id, 0.3],
+  ]);
+  const reranked = createMemoryModule(testContext.database, {
+    rerankDiversityLambda: 0,
+    rerankingProvider: {
+      async rerank(input) {
+        return input.documents.map((document) => ({
+          documentId: document.id,
+          score: scores.get(document.id) ?? 0,
+        }));
+      },
+    },
+  });
+
+  const results = await reranked.search(testContext.alice, { query: "orchid launch", limit: 3 });
+
+  // Every pair shares two of four evidence terms, so each selection round ties
+  // and the better-reranked candidate must win it.
+  expect(results.map((result) => result.memory.id)).toEqual([gamma.id, alpha.id, beta.id]);
   await testContext.close();
 });
 
@@ -1828,6 +1996,54 @@ test("Deeper retrieval feedback keeps earlier bridge Memories when the candidate
   // Round two finds two novel Memories; it fills the reserve's free slot and
   // must not evict round one's bridge to make room for both.
   expect(depthTwo).toEqual([...firstPass.slice(0, 8), secondHop.id, thirdHop.id]);
+  await testContext.close();
+});
+
+test("Retrieval feedback extends the query with the first result that adds a novel term", async () => {
+  const testContext = await createMemoryTestContext();
+  const queryTexts: string[] = [];
+  const embeddingProvider = {
+    provider: "fixture",
+    model: "fixture-feedback-order-v1",
+    dimensions: 1024 as const,
+    revision: "fixture-v1",
+    async embed(texts: string[], task: EmbeddingTask) {
+      if (task === "query") queryTexts.push(...texts);
+      return texts.map(() => oneHotVector(0));
+    },
+  };
+  const memories = createMemoryModule(testContext.database);
+  const restated = await memories.remember(testContext.alice, {
+    content: "Zorblat summit city hosts.",
+  });
+  const bridge = await memories.remember(testContext.alice, {
+    content: "The Zorblat summit organizer is Quendra.",
+  });
+  const answer = await memories.remember(testContext.alice, {
+    content: "Quendra the organizer lives in Varnholm.",
+  });
+  const query = "Which city hosts the Zorblat summit?";
+
+  const withoutFeedback = await memories.search(testContext.alice, { query, limit: 3 });
+  const withFeedback = await createMemoryModule(testContext.database, {
+    embeddingProvider,
+    retrievalFeedbackQueries: 3,
+  }).search(testContext.alice, { query, limit: 3 });
+
+  expect(withoutFeedback.map((result) => result.memory.id)).toEqual([restated.id, bridge.id]);
+  expect(withFeedback.map((result) => result.memory.id)).toEqual([
+    restated.id,
+    bridge.id,
+    answer.id,
+  ]);
+  // The top result only restates the question, so round one follows the
+  // bridge instead; round three finds no novel term and issues no query.
+  const bridged = `${query} The Zorblat summit organizer is Quendra.`;
+  expect(queryTexts).toEqual([
+    query,
+    bridged,
+    `${bridged} Quendra the organizer lives in Varnholm.`,
+  ]);
   await testContext.close();
 });
 
