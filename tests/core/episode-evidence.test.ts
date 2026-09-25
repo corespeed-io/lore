@@ -186,6 +186,88 @@ test("Episode evidence reranking ranks by validated score whatever order the pro
   await testContext.close();
 });
 
+test("Episode evidence reranking keeps candidates at or above the calibrated minimum score", async () => {
+  const testContext = await createMemoryTestContext();
+  const observations = createObservationModule(testContext.database);
+  const scores = new Map([
+    ["trajectory-alpha", 0.2],
+    ["trajectory-beta", 0.9],
+    ["trajectory-gamma", 0.4],
+  ]);
+  const episode = await observations.record(testContext.alice, {
+    kind: "workflow",
+    observations: [...scores.keys()].map((trajectoryId) => ({
+      kind: "event" as const,
+      content: `The orbital burn report for ${trajectoryId}.`,
+      metadata: { trajectoryId },
+    })),
+  });
+  await createEpisodeEvidenceModule(testContext.database).index(testContext.alice, {
+    episodeId: episode.id,
+  });
+
+  const results = await createEpisodeEvidenceModule(testContext.database, {
+    rerankMinimumScore: 0.4,
+    rerankingProvider: {
+      async rerank(input) {
+        return input.documents.map((document) => ({
+          documentId: document.id,
+          score: scores.get(document.id) ?? 0,
+        }));
+      },
+    },
+  }).search(testContext.alice, {
+    query: "orbital burn report",
+    groupMetadataKey: "trajectoryId",
+    limit: 3,
+  });
+
+  expect(results.map((result) => [result.sourceKey, result.rerankScore])).toEqual([
+    ["trajectory-beta", 0.9],
+    ["trajectory-gamma", 0.4],
+  ]);
+  await testContext.close();
+});
+
+test("Episode evidence verification with embeddings requires a compatible generation and full coverage", async () => {
+  const testContext = await createMemoryTestContext();
+  const observations = createObservationModule(testContext.database);
+  let providerAvailable = false;
+  const embeddingProvider = {
+    provider: "fixture",
+    model: "episode-verification-v1",
+    dimensions: 1024 as const,
+    revision: "fixture-v1",
+    async embed(texts: string[]) {
+      if (!providerAvailable) throw new Error("unavailable");
+      return texts.map(() => fixtureVector(0));
+    },
+  };
+  const evidence = createEpisodeEvidenceModule(testContext.database, { embeddingProvider });
+  const episode = await observations.record(testContext.alice, {
+    kind: "workflow",
+    observations: [{ kind: "event", content: "Verified trajectory evidence." }],
+  });
+  const verify = () => evidence.index(testContext.alice, { episodeId: episode.id, mode: "verify" });
+
+  await createEpisodeEvidenceModule(testContext.database).index(testContext.alice, {
+    episodeId: episode.id,
+  });
+  await expect(verify()).rejects.toThrow("no active compatible embedding generation");
+
+  // A failed provider still leaves the generation this run created, but no vectors.
+  await expect(evidence.index(testContext.alice, { episodeId: episode.id })).resolves.toMatchObject(
+    { embeddedChunkCount: 0, embeddingGenerationStatus: "active" },
+  );
+  await expect(verify()).rejects.toThrow("embedding coverage is incomplete");
+
+  providerAvailable = true;
+  const indexed = await evidence.index(testContext.alice, { episodeId: episode.id });
+  expect(indexed).toMatchObject({ chunkCount: 1, embeddedChunkCount: 1 });
+  await expect(verify()).resolves.toEqual(indexed);
+  await testContext.close();
+});
+
 test("Episode evidence verification rejects a corrupted derived index", async () => {
   const testContext = await createMemoryTestContext();
   const observations = createObservationModule(testContext.database);

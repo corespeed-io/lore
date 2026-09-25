@@ -7,7 +7,6 @@ import {
   type MemoryStorageContext,
   MemoryVersionConflictError,
 } from "../src/index";
-import { testDatabase } from "../src/testing";
 
 test("an independent storage host runs Memory CRUD and retrieval without OSS identity", async () => {
   const postgres = new PGlite({ extensions: { vector } });
@@ -16,7 +15,7 @@ test("an independent storage host runs Memory CRUD and retrieval without OSS ide
       await readFile(new URL("fixtures/independent-host-schema.sql", import.meta.url), "utf8"),
     );
     const storage: MemoryStorageContext = {
-      database: testDatabase(postgres),
+      database: postgres,
       partitionId: "20000000-0000-4000-8000-000000000001",
       ownerId: "10000000-0000-4000-8000-000000000001",
       sourceId: "30000000-0000-4000-8000-000000000001",

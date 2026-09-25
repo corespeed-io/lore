@@ -46,7 +46,6 @@ function isSentenceBoundary(points: readonly string[], position: number): boolea
   if (!isWhitespace(points[position - 1])) return false;
   let cursor = position - 1;
   while (cursor >= 0 && isWhitespace(points[cursor])) cursor -= 1;
-  // The empty-string fallback is inert: "" is in neither the closer nor the terminator set.
   while (cursor >= 0 && sentenceClosers.has(points[cursor] ?? "")) cursor -= 1;
   return cursor >= 0 && sentenceTerminators.has(points[cursor] ?? "");
 }

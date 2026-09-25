@@ -1,4 +1,4 @@
-import type { EmbeddingTask } from "@corespeed/lore-core";
+import type { EmbeddingTask, MemoryMaintenanceLog } from "@corespeed/lore-core";
 import {
   createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
@@ -138,6 +138,55 @@ test("failed providers release the lease with exponential retry state", async ()
     lease_token: null,
   });
   expect(job.last_error).not.toContain("secret upstream response");
+});
+
+test("failed runs log and return exact retry and dead outcomes", async () => {
+  const testContext = await createMemoryTestContext();
+  const notifications: string[] = [];
+  const provider = fixtureProvider(async () => {
+    throw new Error("still unavailable");
+  });
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: provider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  await memories.remember(testContext.alice, { content: "Retry this embedding later." });
+  await memories.remember(testContext.alice, {
+    content: `# Exhausted\n\n${"This embedding has no attempts left. ".repeat(40)}`,
+  });
+  const [retryJob, deadJob] = notifications;
+  if (!retryJob || !deadJob) throw new Error("Both writes must enqueue a job");
+  const deadChunkCount = await testContext.adminDatabase.transaction(async (transaction) => {
+    await transaction.query("UPDATE memory_embedding_jobs SET max_attempts = 1 WHERE id = $1", [
+      deadJob,
+    ]);
+    const result = await transaction.query<{ count: number }>(
+      `SELECT count(*)::integer AS count
+       FROM memory_chunks chunk
+       JOIN memory_embedding_jobs job ON job.memory_id = chunk.memory_id
+       WHERE job.id = $1`,
+      [deadJob],
+    );
+    return result.rows[0]?.count;
+  });
+  expect(deadChunkCount).toBeGreaterThan(1);
+  const logs: MemoryMaintenanceLog[] = [];
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+    logger: (entry) => logs.push(entry),
+  });
+
+  await expect(maintenance.run(retryJob)).resolves.toEqual({
+    status: "retry",
+    jobId: retryJob,
+    retryAfterSeconds: 30,
+  });
+  await expect(maintenance.run(deadJob)).resolves.toEqual({ status: "dead", jobId: deadJob });
+  expect(logs).toEqual([
+    { event: "job_retry", jobId: retryJob, attempt: 1, chunkCount: 1 },
+    { event: "job_dead", jobId: deadJob, attempt: 1, chunkCount: deadChunkCount },
+  ]);
+  await testContext.close();
 });
 
 test("dead jobs stay dead until the Memory or active embedding space changes", async () => {

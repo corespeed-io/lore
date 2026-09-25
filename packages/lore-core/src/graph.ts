@@ -167,20 +167,14 @@ function memoryLabel(memory: GraphMemory): string | null {
     return memoryPreview(configured, 96);
   }
   const { content } = memory;
-  if (memory.contentComplete) {
-    // split with a limit of 1 always yields one element; the fallback is inert.
-    const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
-    const firstSentence = firstLine.split(SENTENCE_BREAK, 1)[0];
-    return memoryPreview(firstSentence || content, 72);
-  }
+  const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
+  const firstSentence = firstLine.split(SENTENCE_BREAK, 1)[0] ?? "";
+  if (memory.contentComplete) return memoryPreview(firstSentence || content, 72);
   if (content.includes("\n")) {
     // The first line break lies inside the prefix, so the first line is exact.
-    const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
-    const firstSentence = firstLine.split(SENTENCE_BREAK, 1)[0];
     return firstSentence ? memoryPreview(firstSentence, 72) : prefixPreview(content, 72);
   }
   // A sentence break inside the prefix ends the first sentence exactly.
-  const firstSentence = content.split(SENTENCE_BREAK, 1)[0] ?? "";
   if (firstSentence.length < content.length) return memoryPreview(firstSentence, 72);
   // The first sentence runs past the prefix; a trailing CR may open a CRLF break.
   return prefixPreview(content.replace(/\r$/, ""), 72);
@@ -252,25 +246,18 @@ function toMemoryLink(row: MemoryLinkRow): MemoryLink {
 }
 
 function affinityLinks(memories: GraphMemory[], input: ReadMemoryGraph): MemoryGraphLink[] {
-  const termSets = new Map(memories.map((memory) => [memory.id, termsFor(memory.content)]));
+  const termSets = memories.map((memory) => ({ id: memory.id, terms: termsFor(memory.content) }));
   const requestedAffinity = input.minimumAffinity ?? 0.16;
   const minimumAffinity = Number.isFinite(requestedAffinity)
     ? Math.max(0, Math.min(requestedAffinity, 1))
     : 0.16;
   const maxNeighbors = boundedInteger(input.maxNeighbors, 3, 1, 8);
   const candidates: MemoryGraphLink[] = [];
-  for (let leftIndex = 0; leftIndex < memories.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < memories.length; rightIndex += 1) {
-      const left = memories[leftIndex];
-      const right = memories[rightIndex];
-      if (!left || !right) continue;
-      const weight = affinity(
-        termSets.get(left.id) ?? new Set(),
-        termSets.get(right.id) ?? new Set(),
-      );
+  for (const [leftIndex, left] of termSets.entries()) {
+    for (const right of termSets.slice(leftIndex + 1)) {
+      const weight = affinity(left.terms, right.terms);
       if (weight < minimumAffinity) continue;
-      const [source, target] = [left.id, right.id].sort();
-      if (!source || !target) continue;
+      const [source, target] = left.id < right.id ? [left.id, right.id] : [right.id, left.id];
       candidates.push({ source, target, kind: "affinity", weight: Number(weight.toFixed(4)) });
     }
   }
@@ -281,19 +268,17 @@ function affinityLinks(memories: GraphMemory[], input: ReadMemoryGraph): MemoryG
       left.source.localeCompare(right.source) ||
       left.target.localeCompare(right.target),
   );
-  const selectedPairs = new Set<string>();
+  const selected: MemoryGraphLink[] = [];
   const neighbors = new Map<string, number>();
   for (const candidate of candidates) {
     const sourceNeighbors = neighbors.get(candidate.source) ?? 0;
     const targetNeighbors = neighbors.get(candidate.target) ?? 0;
     if (sourceNeighbors >= maxNeighbors || targetNeighbors >= maxNeighbors) continue;
-    selectedPairs.add(`${candidate.source}:${candidate.target}`);
+    selected.push(candidate);
     neighbors.set(candidate.source, sourceNeighbors + 1);
     neighbors.set(candidate.target, targetNeighbors + 1);
   }
-  return candidates.filter((candidate) =>
-    selectedPairs.has(`${candidate.source}:${candidate.target}`),
-  );
+  return selected;
 }
 
 /** The node for one Memory, or null when its content prefix cannot decide it. */

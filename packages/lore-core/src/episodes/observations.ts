@@ -1,5 +1,6 @@
 import type { MemoryStorageContext, PostgresTransaction } from "../db";
 import type { MemoryScope } from "../memory";
+import { utcTimestampSql } from "../timestamp";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
@@ -93,6 +94,8 @@ interface ObservationRow {
   created_at: string;
 }
 
+// Selected with GROUP BY episode.id: the primary key makes every other episode
+// column functionally dependent, so hosts must keep episodes.id as the key.
 const episodeColumns = `
   episode.id,
   episode.workspace_id,
@@ -101,32 +104,23 @@ const episodeColumns = `
   episode.recorded_by_agent_id,
   episode.kind,
   episode.scope,
-  to_char(
-    episode.started_at AT TIME ZONE 'UTC',
-    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-  ) AS started_at,
-  to_char(
-    episode.ended_at AT TIME ZONE 'UTC',
-    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-  ) AS ended_at,
+  ${utcTimestampSql("episode.started_at")} AS started_at,
+  ${utcTimestampSql("episode.ended_at")} AS ended_at,
   count(observation.id)::integer AS observation_count,
-  to_char(
-    episode.created_at AT TIME ZONE 'UTC',
-    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-  ) AS created_at
+  ${utcTimestampSql("episode.created_at")} AS created_at
 `;
 
-const episodeGroup = `
-  episode.id,
-  episode.workspace_id,
-  episode.owner_user_id,
-  episode.recorded_by_actor_kind,
-  episode.recorded_by_agent_id,
-  episode.kind,
-  episode.scope,
-  episode.started_at,
-  episode.ended_at,
-  episode.created_at
+const observationColumns = `
+  observation.id,
+  observation.workspace_id,
+  observation.episode_id,
+  observation.ordinal,
+  observation.kind,
+  ${utcTimestampSql("observation.observed_at")} AS observed_at,
+  observation.payload_sha256,
+  observation.content,
+  observation.metadata,
+  ${utcTimestampSql("observation.created_at")} AS created_at
 `;
 
 function toEpisodeSummary(row: EpisodeRow): EpisodeSummary {
@@ -236,29 +230,13 @@ async function episodeFromId(
        ON observation.workspace_id = episode.workspace_id
       AND observation.episode_id = episode.id
      WHERE episode.workspace_id = $1 AND episode.id = $2
-     GROUP BY ${episodeGroup}`,
+     GROUP BY episode.id`,
     [partitionId, id],
   );
   const episode = episodeResult.rows[0];
   if (!episode) return null;
   const observationResult = await transaction.query<ObservationRow>(
-    `SELECT
-       observation.id,
-       observation.workspace_id,
-       observation.episode_id,
-       observation.ordinal,
-       observation.kind,
-       to_char(
-         observation.observed_at AT TIME ZONE 'UTC',
-         'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-       ) AS observed_at,
-       observation.payload_sha256,
-       observation.content,
-       observation.metadata,
-       to_char(
-         observation.created_at AT TIME ZONE 'UTC',
-         'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-       ) AS created_at
+    `SELECT ${observationColumns}
      FROM observations observation
      WHERE observation.workspace_id = $1 AND observation.episode_id = $2
      ORDER BY observation.ordinal`,
@@ -275,9 +253,9 @@ export function createObservationModule(storage: MemoryStorageContext) {
   const { database } = storage;
   return {
     async retrieve(id: string): Promise<Episode | null> {
-      return database.transaction(async (transaction) => {
-        return episodeFromId(transaction, storage.partitionId, id);
-      });
+      return database.transaction((transaction) =>
+        episodeFromId(transaction, storage.partitionId, id),
+      );
     },
 
     async retrieveObservations(ids: readonly string[]): Promise<Observation[]> {
@@ -290,23 +268,7 @@ export function createObservationModule(storage: MemoryStorageContext) {
       if (uniqueIds.length === 0) return [];
       return database.transaction(async (transaction) => {
         const result = await transaction.query<ObservationRow>(
-          `SELECT
-             observation.id,
-             observation.workspace_id,
-             observation.episode_id,
-             observation.ordinal,
-             observation.kind,
-             to_char(
-               observation.observed_at AT TIME ZONE 'UTC',
-               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-             ) AS observed_at,
-             observation.payload_sha256,
-             observation.content,
-             observation.metadata,
-             to_char(
-               observation.created_at AT TIME ZONE 'UTC',
-               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-             ) AS created_at
+          `SELECT ${observationColumns}
            FROM observations observation
            WHERE observation.workspace_id = $1
              AND observation.id = ANY($2::uuid[])
@@ -334,7 +296,7 @@ export function createObservationModule(storage: MemoryStorageContext) {
                OR episode.created_at < $4::timestamptz
                OR (episode.created_at = $4::timestamptz AND episode.id > $5::uuid)
              )
-           GROUP BY ${episodeGroup}
+           GROUP BY episode.id
            ORDER BY episode.created_at DESC, episode.id
            LIMIT $6`,
           [

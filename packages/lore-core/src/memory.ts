@@ -17,10 +17,10 @@ import type {
   SearchMemory,
   UpdateMemory,
 } from "./memory-types";
-import { RETRIEVAL_CONTEXT_GROUP_POLICY } from "./retrieval/policy";
+import { RETRIEVAL_CONTEXT_GROUP_POLICY, RETRIEVAL_ENTITY_ALIAS_POLICY } from "./retrieval/policy";
 import {
   cjkLexicalGrams,
-  feedbackRetrievalQueries,
+  feedbackRetrievalQuery,
   relaxedEnglishTerms,
   retrievalQueries,
 } from "./retrieval/query";
@@ -33,8 +33,8 @@ import {
   fuseRerankedResults,
   type InternalMemorySearchResult,
   rerankEvidence,
-  timestampMilliseconds,
 } from "./retrieval/ranking";
+import { utcTimestampSql } from "./timestamp";
 import { embeddingVectorLiteral } from "./vector";
 
 export type * from "./memory-types";
@@ -62,10 +62,6 @@ interface SearchRow extends MemoryRow {
   rerank_evidence: string;
 }
 
-interface PreparedChunk {
-  content: string;
-}
-
 type EmbeddingJobMemory = Pick<
   MemoryRow,
   "id" | "owner_user_id" | "scope" | "version" | "workspace_id"
@@ -73,10 +69,6 @@ type EmbeddingJobMemory = Pick<
 
 // Bounds one bulk job INSERT's JSON parameter; each job row is a few hundred bytes.
 const EMBEDDING_JOB_BATCH_SIZE = 5_000;
-
-function prepareChunks(content: string): PreparedChunk[] {
-  return prepareMemoryContent(content).chunks.map((chunk) => ({ content: chunk }));
-}
 
 interface NormalizedContextGroupExpansion {
   groupMetadataKey: string;
@@ -165,7 +157,7 @@ async function expandContextGroupResults(input: {
     const existing = groups.get(group);
     const seed = {
       ordinal: metadataOrdinal(result.memory.metadata, input.expansion.ordinalMetadataKey),
-      timestamp: timestampMilliseconds(result.memory.updatedAt),
+      timestamp: Date.parse(result.memory.updatedAt),
     };
     if (existing) {
       existing.seeds.push(seed);
@@ -248,7 +240,7 @@ async function expandContextGroupResults(input: {
       const group = metadataScalar(result.memory.metadata, input.expansion.groupMetadataKey);
       const groupSeed = group ? groups.get(group) : undefined;
       const ordinal = metadataOrdinal(result.memory.metadata, input.expansion.ordinalMetadataKey);
-      const timestamp = timestampMilliseconds(result.memory.updatedAt);
+      const timestamp = Date.parse(result.memory.updatedAt);
       const ordinalDistances =
         ordinal === null
           ? []
@@ -290,25 +282,13 @@ async function expandContextGroupResults(input: {
 }
 
 /**
- * Normalize a driver-returned timestamp (Date, ISO string, or Postgres text)
- * to a UTC ISO-8601 string. Exported for host extensions that map their own
+ * Serialize a driver-returned timestamp: a `Date` becomes UTC ISO-8601 and text
+ * passes through unchanged. Exported for host extensions that map their own
  * row shapes (for example lore's Memory Proposals module).
  */
 export function serializedTimestamp(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return String(value);
-}
-
-/**
- * The canonical Memory timestamp: RFC 3339 UTC text with the column's full
- * microsecond precision, for example `2026-01-02T03:04:05.123456Z`. A driver
- * `Date` keeps only milliseconds, so a Memory serialized from one would not
- * match the same row's list cursor, and a millisecond cursor would skip rows
- * that share a millisecond. The fixed-width text sorts chronologically and
- * round-trips through `::timestamptz` exactly.
- */
-function memoryTimestampSql(column: string): string {
-  return `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 }
 
 /**
@@ -331,8 +311,8 @@ export function memorySelectColumns(alias?: string): string {
       "metadata",
       "version",
     ].map(column),
-    `${memoryTimestampSql(column("created_at"))} AS created_at`,
-    `${memoryTimestampSql(column("updated_at"))} AS updated_at`,
+    `${utcTimestampSql(column("created_at"))} AS created_at`,
+    `${utcTimestampSql(column("updated_at"))} AS updated_at`,
   ].join(", ");
 }
 
@@ -461,7 +441,7 @@ async function searchOneQuery(input: {
        FROM unnest(lore.extract_entity_aliases($1)) WITH ORDINALITY AS extracted(alias, ordinal)
        WHERE $18::boolean
        ORDER BY ordinal
-       LIMIT 8
+       LIMIT ${RETRIEVAL_ENTITY_ALIAS_POLICY.maximumQueryAliases}
      ),
      entity_alias_matches AS MATERIALIZED (
        SELECT
@@ -735,12 +715,12 @@ async function insertChunks(
   transaction: PostgresTransaction,
   workspaceId: string,
   memoryId: string,
-  chunks: PreparedChunk[],
+  chunks: readonly string[],
 ): Promise<void> {
   if (chunks.length === 0) return;
-  // One round trip while the caller holds the Memory row lock. Ordinals follow
-  // the prepared chunk order. Vectors live in generation-scoped
-  // memory_chunk_embeddings, so no per-chunk embedding columns are written.
+  // One round trip while the caller holds the Memory row lock; ordinals follow
+  // the chunk order. Vectors live in generation-scoped memory_chunk_embeddings,
+  // so no per-chunk embedding columns are written.
   await transaction.query(
     `INSERT INTO memory_chunks (
        id, workspace_id, memory_id, ordinal, content, chunking_revision
@@ -751,7 +731,7 @@ async function insertChunks(
       workspaceId,
       memoryId,
       chunks.map(() => crypto.randomUUID()),
-      chunks.map((chunk) => chunk.content),
+      chunks,
       MEMORY_CHUNKING_REVISION,
     ],
   );
@@ -894,7 +874,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     input: RememberMemory,
     createdByAgentId: string | null = storageScope.sourceId ?? null,
   ): Promise<{ jobId: string | null; memory: Memory }> {
-    const chunks = prepareChunks(input.content);
+    const { chunks } = prepareMemoryContent(input.content);
     const id = crypto.randomUUID();
     const result = await transaction.query<MemoryRow>(
       `INSERT INTO memories (
@@ -942,7 +922,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     }
     const contentToEmbed =
       input.content ?? (input.scope === undefined ? null : currentMemory.content);
-    const chunks = contentToEmbed === null ? null : prepareChunks(contentToEmbed);
+    const chunks = contentToEmbed === null ? null : prepareMemoryContent(contentToEmbed).chunks;
     const result = await transaction.query<MemoryRow>(
       `UPDATE memories
        SET content = COALESCE($3::text, content),
@@ -1269,7 +1249,7 @@ export function createMemoryModule(
       let firstPassResults = fusionResults;
       let feedbackPool: MemorySearchResult[] = [];
       for (let round = 0; round < retrievalFeedbackQueries; round += 1) {
-        const feedback = feedbackRetrievalQueries(feedbackSeedQuery, feedbackSources, 1)[0];
+        const feedback = feedbackRetrievalQuery(feedbackSeedQuery, feedbackSources);
         if (!feedback) break;
         feedbackSourceIds.add(feedback.excludedMemoryId);
         const [feedbackEmbedding] = await embedRetrievalQueries(
@@ -1370,7 +1350,7 @@ export function createMemoryModule(
         return diversifyRerankedResults(
           fuseRerankedResults(
             fusionResults,
-            results.filter((result) => (result.rerankScore ?? result.score) >= rerankMinimumScore),
+            results.filter((result) => result.rerankScore >= rerankMinimumScore),
             rerankWeight,
           ),
           limit,

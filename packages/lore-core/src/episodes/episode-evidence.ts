@@ -1,5 +1,9 @@
-import type { EmbeddingProvider, QueryPlanningProvider, RerankingProvider } from "../capabilities";
-import { validatedEmbeddingDimensions } from "../capabilities";
+import {
+  type EmbeddingProvider,
+  type QueryPlanningProvider,
+  type RerankingProvider,
+  validatedEmbeddingDimensions,
+} from "../capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "../db";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
 import { embeddingVectorLiteral, embeddingVectorLiterals } from "../vector";
@@ -63,10 +67,6 @@ export interface EpisodeEvidenceModuleOptions {
   rerankMinimumScore?: number;
   rerankWeight?: number;
   semanticDistanceThreshold?: number;
-}
-
-interface EpisodeRow {
-  id: string;
 }
 
 interface ObservationRow {
@@ -142,17 +142,15 @@ async function readEpisodeSource(
   transaction: PostgresTransaction,
   storage: MemoryStorageScope,
   episodeId: string,
-): Promise<{ episode: EpisodeRow; observations: ObservationRow[] }> {
-  const episode = await transaction.query<EpisodeRow>(
+): Promise<ObservationRow[]> {
+  const episode = await transaction.query<{ id: string }>(
     `SELECT id
      FROM episodes
      WHERE workspace_id = $1
        AND id = $2`,
     [storage.partitionId, episodeId],
   );
-  if (!episode.rows[0]) {
-    throw new Error("Episode is unavailable for indexing");
-  }
+  if (!episode.rows[0]) throw new Error("Episode is unavailable for indexing");
   const observations = await transaction.query<ObservationRow>(
     `SELECT id, episode_id, ordinal, content, metadata
      FROM observations
@@ -161,7 +159,7 @@ async function readEpisodeSource(
     [storage.partitionId, episodeId],
   );
   if (!observations.rows.length) throw new Error("Episode contains no visible Observations");
-  return { episode: episode.rows[0], observations: observations.rows };
+  return observations.rows;
 }
 
 function prepareChunks(observations: readonly ObservationRow[]): PreparedEvidenceChunk[] {
@@ -585,7 +583,7 @@ async function rerankResults(input: {
     rerankScore: score,
   }));
   return scored
-    .filter((result) => (result.rerankScore ?? 0) >= input.minimumScore)
+    .filter((result) => result.rerankScore >= input.minimumScore)
     .sort(
       (left, right) => right.score - left.score || left.sourceKey.localeCompare(right.sourceKey),
     )
@@ -617,11 +615,11 @@ export function createEpisodeEvidenceModule(
 
   return {
     async index(input: IndexEpisodeEvidence): Promise<EpisodeEvidenceIndexResult> {
-      const source = await database.transaction(async (transaction) => {
-        return readEpisodeSource(transaction, storage, input.episodeId);
-      });
-      const expectedChunks = prepareChunks(source.observations);
-      const sourceCharacters = source.observations.reduce(
+      const observations = await database.transaction((transaction) =>
+        readEpisodeSource(transaction, storage, input.episodeId),
+      );
+      const expectedChunks = prepareChunks(observations);
+      const sourceCharacters = observations.reduce(
         (total, observation) => total + Array.from(observation.content).length,
         0,
       );
@@ -661,19 +659,18 @@ export function createEpisodeEvidenceModule(
         });
       }
 
-      const persisted = await database.transaction(async (transaction) => {
-        return persistedChunks(transaction, storage, input.episodeId);
-      });
+      const persisted = await database.transaction((transaction) =>
+        persistedChunks(transaction, storage, input.episodeId),
+      );
       validatePersistedChunks(expectedChunks, persisted);
 
-      let generation: { id: string; status: "active" | "retiring" } | null = null;
-      if (embeddingProvider) {
-        generation = await database.transaction(async (transaction) => {
-          return matchingGeneration(transaction, embeddingProvider, input.mode !== "verify");
-        });
-        if (input.mode === "verify" && !generation) {
-          throw new Error("Episode evidence has no active compatible embedding generation");
-        }
+      const generation = embeddingProvider
+        ? await database.transaction((transaction) =>
+            matchingGeneration(transaction, embeddingProvider, input.mode !== "verify"),
+          )
+        : null;
+      if (embeddingProvider && input.mode === "verify" && !generation) {
+        throw new Error("Episode evidence has no active compatible embedding generation");
       }
 
       if (embeddingProvider && generation && input.mode !== "verify") {
@@ -725,7 +722,7 @@ export function createEpisodeEvidenceModule(
                )
                ON CONFLICT (generation_id, chunk_id) DO NOTHING`,
               [
-                generation?.id,
+                generation.id,
                 storage.partitionId,
                 JSON.stringify(
                   batch.map((chunk, index) => ({
@@ -742,16 +739,16 @@ export function createEpisodeEvidenceModule(
       }
 
       const embedded = generation
-        ? await database.transaction(async (transaction) => {
-            return embeddedChunkCount(transaction, storage, input.episodeId, generation.id);
-          })
+        ? await database.transaction((transaction) =>
+            embeddedChunkCount(transaction, storage, input.episodeId, generation.id),
+          )
         : 0;
       if (input.mode === "verify" && embeddingProvider && embedded !== expectedChunks.length) {
         throw new Error("Episode evidence embedding coverage is incomplete");
       }
       return {
         episodeId: input.episodeId,
-        observationCount: source.observations.length,
+        observationCount: observations.length,
         chunkCount: expectedChunks.length,
         embeddedChunkCount: embedded,
         sourceCharacters,
