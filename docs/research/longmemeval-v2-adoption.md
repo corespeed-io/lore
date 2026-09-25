@@ -3,7 +3,7 @@
 Research date: 2026-08-14. External claims below use only the official
 LongMemEval and LongMemEval-V2 papers, repositories, and released datasets.
 Lore-specific claims use this repository's pinned manifests, benchmark runner,
-and ADRs.
+and product vocabulary.
 
 ## Decision
 
@@ -181,7 +181,7 @@ Episodes/Observations, builds revisioned lexical/vector artifacts through
 before top-k, then groups evidence back by trajectory identity. Bob-private
 tripwires use the same Episode-evidence path. Raw trajectories never become
 canonical Memories, and deleting an Episode cascades its rebuildable artifacts
-([bounded-Memory ADR](../adr/0003-bounded-memory-not-document.md),
+([Memory vocabulary](../CONTEXT.md),
 [Lore V2 runner](../../tools/evaluation/retrieval/run-longmemeval-v2.ts)).
 
 V2-Small is therefore the right primary agent-memory gate, V2-Medium is the right
