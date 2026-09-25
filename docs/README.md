@@ -20,13 +20,6 @@ Package-specific setup lives with the [memory engine](../packages/lore-core/READ
 [CLI](../packages/cli/README.md), and
 [MCP adapter](../packages/mcp/README.md).
 
-## Architecture decisions
-
-- [Deployment-level embedding configuration](adr/0001-deployment-embedding-configuration.md)
-- [Observations before automatic Memory](adr/0002-observations-before-automatic-memory.md)
-- [Bounded Memory, separate from raw documents](adr/0003-bounded-memory-not-document.md)
-- [Reconstructable, versioned Memory chunks](adr/0004-reconstructable-versioned-memory-chunks.md)
-
 ## Research and evaluations
 
 [Research index](research/README.md) lists retained source audits and benchmark
