@@ -1,5 +1,4 @@
-import type { EmbeddingProvider } from "./capabilities";
-import { validatedEmbeddingDimensions } from "./capabilities";
+import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
 import type { PostgresDatabase, PostgresTransaction } from "./db";
 import { embeddingVectorLiterals } from "./vector";
 
@@ -154,31 +153,12 @@ export function createMemoryMaintenanceModule(
     });
     // A NULL status means the lease is no longer ours. The replacement lease
     // token already fenced every write this run attempted.
-    if (!status) {
-      logger({
-        event: "job_lost",
-        jobId: job.id,
-        attempt: job.attempt_count,
-        chunkCount,
-      });
-      return { status: "lost", jobId: job.id };
-    }
-    if (status === "dead") {
-      logger({
-        event: "job_dead",
-        jobId: job.id,
-        attempt: job.attempt_count,
-        chunkCount,
-      });
-      return { status: "dead", jobId: job.id };
-    }
-    logger({
-      event: "job_retry",
-      jobId: job.id,
-      attempt: job.attempt_count,
-      chunkCount,
-    });
-    return { status: "retry", jobId: job.id, retryAfterSeconds: delay };
+    const outcome = status === null ? "lost" : status === "dead" ? "dead" : "retry";
+    const event = ({ lost: "job_lost", dead: "job_dead", retry: "job_retry" } as const)[outcome];
+    logger({ event, jobId: job.id, attempt: job.attempt_count, chunkCount });
+    return outcome === "retry"
+      ? { status: outcome, jobId: job.id, retryAfterSeconds: delay }
+      : { status: outcome, jobId: job.id };
   }
 
   /** Reads coverage without creating the generation; null when it does not exist yet. */
@@ -230,10 +210,6 @@ export function createMemoryMaintenanceModule(
         if (!id) throw new Error("Embedding generation activation failed");
         return id;
       });
-    },
-
-    async pruneRetiringGenerations(retentionSeconds = 604_800): Promise<number> {
-      return pruneRetiringEmbeddingGenerations(database, retentionSeconds);
     },
 
     async seedStale(limit = 100): Promise<string[]> {

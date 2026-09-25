@@ -2,7 +2,7 @@
  * @corespeed/lore-core — Lore's reusable memory engine.
  *
  * The kernel owns Memory storage, canonical content bounds, deterministic
- * chunking, hybrid retrieval, Memory Links/graph reads, leased embedding
+ * chunking, hybrid retrieval, Memory Links/graph reads, and leased embedding
  * maintenance over a PostgreSQL store. Hosts supply a bound
  * {@link MemoryStorageContext}; its transactions establish their own access
  * policy before the engine reads or writes. Identity, tenant authorization,

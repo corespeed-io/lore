@@ -31,7 +31,7 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
   narrow `PostgresDatabase` transaction interface. Its storage schema still uses
   physical names such as `workspace_id`, `owner_user_id`, and
   `created_by_agent_id`; the module maps opaque keys to those existing columns.
-  This refactor requires no data migration. Memory tables, lexical helper
+  Memory tables, lexical helper
   functions, and the selected embedding/maintenance capabilities remain a host
   schema contract; OSS identity tables and request replay tables are not engine
   prerequisites.
@@ -48,7 +48,7 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 | --- | --- |
 | `.` | Memory storage, retrieval, graph, maintenance, content/chunking, `MemoryStorageContext`, db seam, and model capability interfaces |
 | `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback |
-| `./episodes` | Bounded Episode/Observation validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index |
+| `./episodes` | Bounded Episode/Observation validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
 | `./testing` | Host-pluggable schema-contract test kit |
 
 Lore OSS implements model capabilities under `src/server/providers`. Its domain
@@ -89,13 +89,12 @@ The lore app consumes it as TypeScript source through the Bun workspace
 `transpilePackages`.
 
 There is deliberately no npm publishing, submodule, mirror, or sync script.
-CoreSpeed HaaS retains its existing vendored `packages/memory-core` fork. The
-planned cutover to a verbatim copy of this package was cancelled on 2026-09-15.
+CoreSpeed HaaS retains its existing vendored `packages/memory-core` fork.
 Lore remains upstream; HaaS ports selected changes manually and records their
 provenance. The packages are not assumed to be semantically identical, and Lore
 tasks do not require automatic changes to the HaaS fork. Hosts adopting this
 package can run `./testing` against their own schema. Its `testDatabase` helper
-accepts optional host transaction initialization; it chooses no database role.
+applies host transaction initialization; it chooses no database role.
 Package tests also exercise real CRUD/retrieval against a minimal independent
 PGlite schema without OSS identity tables or authorization functions, alongside
 the OSS schema's isolation and embedding-maintenance contract.

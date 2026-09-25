@@ -13,25 +13,19 @@ import { createMemoryModule, type MemoryScope } from "./memory";
  * host-owned; the engine does not install or authenticate them.
  */
 
-/** Minimal structural view of a PGlite instance (or compatible driver). */
-export interface TransactionalTestDatabase {
-  transaction<T>(use: (transaction: TestDatabaseTransaction) => Promise<T>): Promise<T>;
-}
-
-export interface TestDatabaseTransaction {
-  query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }>;
-}
-
-/** Adapt a test database with optional host-owned transaction initialization. */
+/**
+ * Wrap a test database (a PGlite instance fits structurally) with host-owned
+ * transaction initialization.
+ */
 export function testDatabase(
-  postgres: TransactionalTestDatabase,
-  initializeTransaction?: (transaction: PostgresTransaction) => Promise<void>,
+  postgres: PostgresDatabase,
+  initializeTransaction: (transaction: PostgresTransaction) => Promise<void>,
 ): PostgresDatabase {
   return {
     transaction: (use) =>
       postgres.transaction(async (transaction) => {
-        await initializeTransaction?.(transaction);
-        return use({ query: (sql, params) => transaction.query(sql, params) });
+        await initializeTransaction(transaction);
+        return use(transaction);
       }),
   };
 }

@@ -1,8 +1,10 @@
 import type { MemorySearchResult } from "../memory-types";
 import { RETRIEVAL_CJK_LEXICAL_POLICY } from "./policy";
 
+const termPattern = /[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu;
+
 export function relaxedEnglishTerms(query: string): string[] {
-  const terms = query.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu) ?? [];
+  const terms = query.match(termPattern) ?? [];
   const seen = new Set<string>();
   const unique: string[] = [];
   for (const term of terms) {
@@ -62,7 +64,7 @@ export function cjkLexicalGrams(rawQuery: string): string[] {
 
 export function evidenceTerms(text: string): Set<string> {
   return new Set(
-    (text.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu) ?? [])
+    (text.match(termPattern) ?? [])
       .map((term) => term.toLocaleLowerCase())
       .filter((term) => term.length > 1),
   );
@@ -101,8 +103,7 @@ function feedbackEvidenceExcerpt(original: string, evidence: string): string {
     evidence.match(/[^.!?。！？]+(?:[.!?。！？]+|$)/gu)?.map((passage) => passage.trim()) ?? [];
   if (!passages.length || !queryTerms.length) return evidence.slice(0, 1_000);
 
-  // passages is non-empty here, so the fallback is inert.
-  let bestPassage = passages[0] ?? "";
+  let bestPassage = "";
   let bestScore = Number.NEGATIVE_INFINITY;
   for (const [index, passage] of passages.entries()) {
     const terms = evidenceTerms(passage);
@@ -134,15 +135,15 @@ export function retrievalQueries(original: string, planned: string[], maximum: n
   return queries;
 }
 
-export function feedbackRetrievalQueries(
+/**
+ * The query for one feedback round: the accumulated query extended with the
+ * strongest-overlap excerpt of the first result that adds a novel term.
+ */
+export function feedbackRetrievalQuery(
   original: string,
   results: MemorySearchResult[],
-  maximum: number,
-): Array<{ query: string; excludedMemoryId: string }> {
-  if (maximum <= 0) return [];
+): { query: string; excludedMemoryId: string } | undefined {
   const originalTerms = evidenceTerms(original);
-  const queries: Array<{ query: string; excludedMemoryId: string }> = [];
-  const seen = new Set<string>();
   for (const result of results) {
     const evidence = result.evidence.trim();
     if (!evidence) continue;
@@ -151,12 +152,10 @@ export function feedbackRetrievalQueries(
       (term) => term.length > 2 && !feedbackStopWords.has(term) && !originalTerms.has(term),
     );
     if (!hasNovelTerm) continue;
-    const query = `${original.slice(0, 1_000)}\n${excerpt}`.trim().replace(/\s+/g, " ");
-    const key = query.toLocaleLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    queries.push({ query, excludedMemoryId: result.memory.id });
-    if (queries.length >= maximum) break;
+    return {
+      query: `${original.slice(0, 1_000)}\n${excerpt}`.trim().replace(/\s+/g, " "),
+      excludedMemoryId: result.memory.id,
+    };
   }
-  return queries;
+  return undefined;
 }

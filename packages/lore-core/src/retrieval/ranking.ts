@@ -42,18 +42,14 @@ export function diversifyRerankedResults(
         : 0;
       const relevance = (results.length - candidate.index) / results.length;
       const objective = lambda * relevance - (1 - lambda) * maximumSimilarity;
-      if (
-        objective > bestObjective ||
-        // bestIndex always addresses a live entry in remaining; the fallback is inert.
-        (objective === bestObjective &&
-          candidate.index < (remaining[bestIndex]?.index ?? Number.POSITIVE_INFINITY))
-      ) {
+      // remaining stays in rank order, so a strict comparison keeps the
+      // better-ranked candidate on a tie.
+      if (objective > bestObjective) {
         bestObjective = objective;
         bestIndex = index;
       }
     }
-    const best = remaining.splice(bestIndex, 1)[0];
-    if (best) selected.push(best);
+    selected.push(...remaining.splice(bestIndex, 1));
   }
   return selected.map((item) => item.result);
 }
@@ -164,42 +160,29 @@ export function appendFeedbackResults(
   return [...firstPass.slice(0, limit - feedbackSlots), ...novelFeedback.slice(0, feedbackSlots)];
 }
 
-export function timestampMilliseconds(value: unknown): number {
-  if (value instanceof Date) return value.getTime();
-  return Date.parse(String(value));
-}
-
 export function fuseRecencyResults(
   results: MemorySearchResult[],
   weight: number,
 ): MemorySearchResult[] {
   if (weight <= 0 || results.length <= 1) return results;
-  const relevanceRankById = new Map(
-    results.map((result, index) => [result.memory.id, index + 1] as const),
-  );
   const recencyRankById = new Map(
     [...results]
       .sort(
         (left, right) =>
-          timestampMilliseconds(right.memory.updatedAt) -
-            timestampMilliseconds(left.memory.updatedAt) ||
+          Date.parse(right.memory.updatedAt) - Date.parse(left.memory.updatedAt) ||
           left.memory.id.localeCompare(right.memory.id),
       )
       .map((result, index) => [result.memory.id, index + 1] as const),
   );
+  // results arrive in relevance order and the sort is stable, so equal scores
+  // keep their relevance order.
   return results
-    .map((result) => {
-      const relevanceRank = relevanceRankById.get(result.memory.id) ?? results.length;
+    .map((result, index) => {
       const recencyRank = recencyRankById.get(result.memory.id) ?? results.length;
       return {
         ...result,
-        score: (1 - weight) / (60 + relevanceRank) + weight / (60 + recencyRank),
+        score: (1 - weight) / (60 + index + 1) + weight / (60 + recencyRank),
       };
     })
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        (relevanceRankById.get(left.memory.id) ?? 0) -
-          (relevanceRankById.get(right.memory.id) ?? 0),
-    );
+    .sort((left, right) => right.score - left.score);
 }

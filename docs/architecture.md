@@ -243,7 +243,7 @@ generation activation/pruning. Expired request replay and event cleanup,
 `purgeExpiredPortableCoreRecords`, lives in `src/modules/operations/maintenance.ts`.
 
 The `./testing` contract kit accepts host-bound contexts and a `testDatabase`
-helper with optional transaction initialization. Tests exercise both the OSS RLS
+helper that applies host transaction initialization. Tests exercise both the OSS RLS
 schema and real CRUD/retrieval on a minimal independent PGlite schema without
 identity tables or authorization functions. The latter verifies the engine can
 operate without importing OSS policy; it does not supply a replacement security
