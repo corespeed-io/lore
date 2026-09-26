@@ -335,6 +335,18 @@ export function knobOverride(
   return value;
 }
 
+/** Entity-alias recall for this run: `LORE_BENCHMARK_ENTITY_ALIAS_RECALL`, or the deployment value. */
+export function entityAliasRecallOverride(
+  knobs: RetrievalKnobs,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  const value = environment.LORE_BENCHMARK_ENTITY_ALIAS_RECALL?.trim().toLowerCase();
+  if (!value) return knobs.entityAliasRecall;
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  throw new Error("LORE_BENCHMARK_ENTITY_ALIAS_RECALL must be 0, 1, false, or true");
+}
+
 export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInput) {
   const thresholds = benchmarkThresholds(input.suite.thresholds);
   const { knobs } = input;
@@ -358,17 +370,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     "retrievalRecencyWeight",
     knobs,
   );
-  const configuredEntityAliasValue =
-    process.env.LORE_BENCHMARK_ENTITY_ALIAS_RECALL?.trim().toLowerCase();
-  if (
-    configuredEntityAliasValue &&
-    !["0", "1", "false", "true"].includes(configuredEntityAliasValue)
-  ) {
-    throw new Error("LORE_BENCHMARK_ENTITY_ALIAS_RECALL must be 0, 1, false, or true");
-  }
-  const configuredEntityAliasRecall = configuredEntityAliasValue
-    ? configuredEntityAliasValue === "1" || configuredEntityAliasValue === "true"
-    : knobs.entityAliasRecall;
+  const configuredEntityAliasRecall = entityAliasRecallOverride(knobs);
   const indexingConcurrency = embeddingConcurrency();
   const rerankMinimumScores = unitIntervalSweep(
     "LORE_BENCHMARK_RERANK_MIN_SCORES",
