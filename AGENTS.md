@@ -293,7 +293,11 @@ been removed. Lore now has a native implementation, split into two concepts
   changed chunk may follow its ordinal only when that surrounding sequence still
   matches; equal-count reorder/replacement must abstain as `ambiguous`. Artifact
   pruning must not delete citation anchors. Joint retrieval assesses all result
-  Memories' citations in one read-only transaction (`assessMemoryCitations`);
+  Memories' citations in one read (`assessMemoryCitations`); after the Memory and
+  Code searches, which call providers outside any transaction, every later Code read
+  of one packet (assessment, anchored Artifacts, contextual impact) shares one
+  REPEATABLE READ, READ ONLY snapshot, so a generation activated mid-packet cannot
+  split them;
   identity matching goes through the path-free Symbol Set payload index, not a
   suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
   cut list marks contextual impact `anchors:truncated`, so it is never

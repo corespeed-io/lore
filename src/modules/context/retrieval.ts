@@ -223,14 +223,143 @@ function deliveredRoute(memoryCount: number, codeCount: number) {
   return "abstain" as const;
 }
 
+/**
+ * Every Code read of one packet after its searches: anchor assessment, the anchored
+ * Artifacts, and contextual impact. The caller runs it in one repeatable-read,
+ * read-only snapshot, so a generation activated mid-packet cannot split them across
+ * two generations. It makes no provider call, so the snapshot stays short.
+ */
+async function readAnchoredCode(input: {
+  actor: ActorContext;
+  plan: ReturnType<typeof planJointEvidenceRoute>;
+  repositoryKey: string;
+  requestedCommitOid: string;
+  memoryResults: readonly { memory: { id: string } }[];
+  code: ReturnType<typeof createCodeIndexReadModule>;
+  dependencies: ReturnType<typeof createCodeDependencyGraphModule>;
+  evidence: ReturnType<typeof createCodeEvidenceModule>;
+}) {
+  const {
+    actor,
+    plan,
+    repositoryKey,
+    requestedCommitOid,
+    memoryResults,
+    code,
+    dependencies,
+    evidence,
+  } = input;
+  const anchors: RetrievedAnchorContext[] = [];
+  // More citations existed than one packet carries, so some were never assessed.
+  let anchorsTruncated = false;
+  const anchoredArtifactIds: string[] = [];
+  const contextualSubjects: Array<{
+    anchorId: string;
+    baseCommitOid: string;
+    beforeSubject: DependencySubject;
+    afterSubject: DependencySubject;
+  }> = [];
+  {
+    // One read lists and assesses the citations of every result Memory, in result
+    // order. Retrieval never persists revalidation. One citation past the cap proves
+    // that the packet is incomplete; it is dropped, never delivered.
+    const assessed = await evidence.assessMemoryCitations(actor, {
+      memoryIds: memoryResults.map((result) => result.memory.id),
+      repositoryKey,
+      commitOid: requestedCommitOid,
+      limit: MAXIMUM_CONTEXT_ANCHORS + 1,
+    });
+    anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
+    for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
+      anchors.push({
+        id: citation.id,
+        memoryId: citation.memoryId,
+        relationship: citation.relationship,
+        localState: assessment.validationState,
+        citedCommitOid: citation.citedCommitOid,
+        citedPath: citation.citedPath,
+        validatedCommitOid: assessment.validatedCommitOid,
+        validatedPath: assessment.validatedPath,
+      });
+      if (
+        assessment.validatedArtifactId &&
+        !anchoredArtifactIds.includes(assessment.validatedArtifactId)
+      ) {
+        anchoredArtifactIds.push(assessment.validatedArtifactId);
+      }
+      if (assessment.validatedRevisionId) {
+        contextualSubjects.push({
+          anchorId: citation.id,
+          baseCommitOid: citation.citedCommitOid,
+          beforeSubject: dependencySubject(citation, citation.citedPath),
+          afterSubject: dependencySubject(citation, assessment.validatedPath ?? citation.citedPath),
+        });
+      }
+    }
+  }
+
+  const anchoredArtifacts =
+    anchoredArtifactIds.length > 0 &&
+    repositoryKey !== undefined &&
+    requestedCommitOid !== undefined
+      ? await code.getArtifacts(actor, {
+          repositoryKey,
+          commitOid: requestedCommitOid,
+          artifactIds: anchoredArtifactIds,
+        })
+      : [];
+  let contextualImpact: ContextualImpactAssessment | null = null;
+  if (
+    plan.needsContextualImpact &&
+    // With no cited declaration to compare, there is nothing to assess:
+    // reporting `unknown` here would brand every dependency question with
+    // a permanent conflict that describes the absence of anchors, not the
+    // code. Truncated or unresolved traversal still reports `unknown`, and so
+    // does a citation list cut at the packet cap, whose unassessed rest may
+    // hold a declaration.
+    (contextualSubjects.length > 0 || anchorsTruncated)
+  ) {
+    const selectedSubjects = contextualSubjects.slice(0, CONTEXTUAL_ANCHOR_LIMIT);
+    const assessments = [];
+    for (const selected of selectedSubjects) {
+      const before = await contextualDependencyFingerprints({
+        actor,
+        code,
+        dependencies,
+        repositoryKey,
+        commitOid: selected.baseCommitOid,
+        subject: selected.beforeSubject,
+      });
+      const after = await contextualDependencyFingerprints({
+        actor,
+        code,
+        dependencies,
+        repositoryKey,
+        commitOid: requestedCommitOid,
+        subject: selected.afterSubject,
+      });
+      assessments.push({
+        anchorId: selected.anchorId,
+        assessment: assessContextualImpact(before.fingerprints, after.fingerprints, {
+          beforeTruncated: before.truncated,
+          afterTruncated: after.truncated,
+        }),
+      });
+    }
+    contextualImpact = aggregateContextualImpact(
+      assessments,
+      anchorsTruncated || contextualSubjects.length > selectedSubjects.length,
+    );
+  }
+  return { anchors, anchoredArtifacts, contextualImpact };
+}
+
 export function createContextRetrievalModule(
   database: PostgresDatabase,
   memoryOptions: MemoryModuleOptions = {},
 ): ContextRetrievalModule {
   const memories = createMemoryModule(database, memoryOptions);
   const code = createCodeIndexReadModule(database);
-  const dependencies = createCodeDependencyGraphModule(database);
-  const evidence = createCodeEvidenceModule(database);
 
   return {
     async retrieve(actor, input) {
@@ -312,74 +441,33 @@ export function createContextRetrievalModule(
           : [],
       ]);
 
-      const anchors: RetrievedAnchorContext[] = [];
-      // More citations existed than one packet carries, so some were never assessed.
-      let anchorsTruncated = false;
-      const anchoredArtifactIds: string[] = [];
-      const contextualSubjects: Array<{
-        anchorId: string;
-        baseCommitOid: string;
-        beforeSubject: DependencySubject;
-        afterSubject: DependencySubject;
-      }> = [];
-      if (
+      // The searches above call providers outside any transaction; every later Code
+      // read shares one snapshot. Only anchor expansion reads Code after the search.
+      const { anchors, anchoredArtifacts, contextualImpact } =
         plan.needsAnchorExpansion &&
         plan.needsLocalAssessment &&
-        repositoryKey !== undefined &&
-        requestedCommitOid !== undefined &&
-        memoryResults.length > 0
-      ) {
-        // One read-only transaction lists and assesses the citations of every result Memory,
-        // in result order. Retrieval never persists revalidation. One citation past the cap
-        // proves that the packet is incomplete; it is dropped, never delivered.
-        const assessed = await evidence.assessMemoryCitations(actor, {
-          memoryIds: memoryResults.map((result) => result.memory.id),
-          repositoryKey,
-          commitOid: requestedCommitOid,
-          limit: MAXIMUM_CONTEXT_ANCHORS + 1,
-        });
-        anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
-        for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
-          anchors.push({
-            id: citation.id,
-            memoryId: citation.memoryId,
-            relationship: citation.relationship,
-            localState: assessment.validationState,
-            citedCommitOid: citation.citedCommitOid,
-            citedPath: citation.citedPath,
-            validatedCommitOid: assessment.validatedCommitOid,
-            validatedPath: assessment.validatedPath,
-          });
-          if (
-            assessment.validatedArtifactId &&
-            !anchoredArtifactIds.includes(assessment.validatedArtifactId)
-          ) {
-            anchoredArtifactIds.push(assessment.validatedArtifactId);
-          }
-          if (assessment.validatedRevisionId) {
-            contextualSubjects.push({
-              anchorId: citation.id,
-              baseCommitOid: citation.citedCommitOid,
-              beforeSubject: dependencySubject(citation, citation.citedPath),
-              afterSubject: dependencySubject(
-                citation,
-                assessment.validatedPath ?? citation.citedPath,
-              ),
-            });
-          }
-        }
-      }
-
-      const anchoredArtifacts =
-        anchoredArtifactIds.length > 0 &&
+        memoryResults.length > 0 &&
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
-          ? await code.getArtifacts(actor, {
-              repositoryKey,
-              commitOid: requestedCommitOid,
-              artifactIds: anchoredArtifactIds,
+          ? await database.transaction(async (transaction) => {
+              await transaction.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+              const snapshot: PostgresDatabase = { transaction: (use) => use(transaction) };
+              return readAnchoredCode({
+                actor,
+                plan,
+                repositoryKey,
+                requestedCommitOid,
+                memoryResults,
+                code: createCodeIndexReadModule(snapshot),
+                dependencies: createCodeDependencyGraphModule(snapshot),
+                evidence: createCodeEvidenceModule(snapshot),
+              });
             })
-          : [];
+          : {
+              anchors: [] as RetrievedAnchorContext[],
+              anchoredArtifacts: [],
+              contextualImpact: null,
+            };
       const selectedCodeArtifacts = [
         ...anchoredArtifacts,
         ...codeResults.filter(
@@ -426,51 +514,6 @@ export function createContextRetrievalModule(
         }
         return values;
       });
-      let contextualImpact: ContextualImpactAssessment | null = null;
-      if (
-        plan.needsContextualImpact &&
-        // With no cited declaration to compare, there is nothing to assess:
-        // reporting `unknown` here would brand every dependency question with
-        // a permanent conflict that describes the absence of anchors, not the
-        // code. Truncated or unresolved traversal still reports `unknown`, and so
-        // does a citation list cut at the packet cap, whose unassessed rest may
-        // hold a declaration.
-        (contextualSubjects.length > 0 || anchorsTruncated) &&
-        repositoryKey !== undefined &&
-        requestedCommitOid !== undefined
-      ) {
-        const selectedSubjects = contextualSubjects.slice(0, CONTEXTUAL_ANCHOR_LIMIT);
-        const assessments = [];
-        for (const selected of selectedSubjects) {
-          const before = await contextualDependencyFingerprints({
-            actor,
-            code,
-            dependencies,
-            repositoryKey,
-            commitOid: selected.baseCommitOid,
-            subject: selected.beforeSubject,
-          });
-          const after = await contextualDependencyFingerprints({
-            actor,
-            code,
-            dependencies,
-            repositoryKey,
-            commitOid: requestedCommitOid,
-            subject: selected.afterSubject,
-          });
-          assessments.push({
-            anchorId: selected.anchorId,
-            assessment: assessContextualImpact(before.fingerprints, after.fingerprints, {
-              beforeTruncated: before.truncated,
-              afterTruncated: after.truncated,
-            }),
-          });
-        }
-        contextualImpact = aggregateContextualImpact(
-          assessments,
-          anchorsTruncated || contextualSubjects.length > selectedSubjects.length,
-        );
-      }
       if (contextualImpact && contextualImpact.state !== "unaffected") {
         conflicts.push(`contextual-impact:${contextualImpact.state}`);
       }

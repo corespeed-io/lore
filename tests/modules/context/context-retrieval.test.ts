@@ -674,3 +674,72 @@ test("a cited path containing # still resolves its declaration for contextual im
   // unresolvable subject that reports `unknown`.
   expect(packet.receipt.contextualImpact).toEqual({ state: "unaffected", changes: [] });
 }, 90_000);
+
+test("one packet's Code reads after its searches share one repeatable-read snapshot", async () => {
+  const context = await createMemoryTestContext();
+  const memories = createMemoryModule(context.database);
+  const code = createCodeIndexModule(context.database);
+  const codeRead = createCodeIndexReadModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+  const repositoryKey = "corespeed/packet-snapshot";
+  for (const [commitOid, value] of [
+    [BASE_COMMIT, "before"],
+    [CURRENT_COMMIT, "after"],
+  ] as const) {
+    await code.indexRevision(context.alice, {
+      repositoryKey,
+      displayName: "Packet snapshot",
+      commitOid,
+      files: [
+        {
+          path: "src/snapshot.ts",
+          content: `export function snapshotPolicy() { return snapshotHelper(); }\nexport function snapshotHelper() { return "${value}"; }\n`,
+        },
+      ],
+    });
+  }
+  const memory = await memories.remember(context.alice, {
+    content: "The snapshot policy rationale explains why snapshotPolicy delegates.",
+  });
+  const [artifact] = await codeRead.search(context.alice, {
+    repositoryKey,
+    commitOid: BASE_COMMIT,
+    query: "snapshotPolicy",
+  });
+  if (!artifact) throw new Error("Expected the snapshotPolicy Artifact");
+  await evidence.cite(context.alice, {
+    memoryId: memory.id,
+    artifactId: artifact.id,
+    relationship: "rationale",
+  });
+
+  const isolation: string[] = [];
+  let transactions = 0;
+  const counted = {
+    transaction: <Result>(use: Parameters<typeof context.database.transaction<Result>>[0]) => {
+      transactions += 1;
+      return context.database.transaction(async (transaction) => {
+        const result = await use(transaction);
+        const level = await transaction.query<{ transaction_isolation: string }>(
+          "SHOW transaction_isolation",
+        );
+        isolation.push(level.rows[0]?.transaction_isolation ?? "");
+        return result;
+      });
+    },
+  };
+  const packet = await createContextRetrievalModule(counted).retrieve(context.alice, {
+    query: "What changed about the snapshot policy rationale?",
+    memoryQuery: "snapshot policy rationale",
+    repositoryKey,
+    commitOid: CURRENT_COMMIT,
+  });
+
+  expect(packet.anchors).toHaveLength(1);
+  expect(packet.receipt.contextualImpact).not.toBeNull();
+  // Memory search, Code search, then one snapshot for assessment, anchored Artifacts,
+  // and contextual impact (which alone reads two revisions' dependencies).
+  expect(transactions).toBe(3);
+  expect(isolation.filter((level) => level === "repeatable read")).toHaveLength(1);
+  await context.close();
+}, 90_000);
