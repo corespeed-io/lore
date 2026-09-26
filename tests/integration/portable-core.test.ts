@@ -3,6 +3,7 @@ import { MemoryVersionConflictError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createOperationsModule, NON_TENANT_PUBLIC_TABLES } from "@/modules/operations/service";
+import { workspaceArchiveChecksum } from "@/modules/portability/checksum";
 import {
   MAX_WORKSPACE_ARCHIVE_LINKS,
   MAX_WORKSPACE_ARCHIVE_MEMORIES,
@@ -508,7 +509,7 @@ test("Workspace import cannot reveal an RLS-hidden Memory id collision", async (
   const sourceOwner = archive.memories[0].ownerUserId;
   archive.memories[0].id = hidden.id;
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await mutationRequestHash({
+  archive.manifest.checksum = await workspaceArchiveChecksum({
     manifest,
     memories: archive.memories,
     links: archive.links,
@@ -552,7 +553,7 @@ test("Workspace import normalizes UUID case before owner and Link mapping", asyn
     link.targetMemoryId = link.targetMemoryId.toUpperCase();
   }
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await mutationRequestHash({
+  archive.manifest.checksum = await workspaceArchiveChecksum({
     manifest,
     memories: archive.memories,
     links: archive.links,
@@ -575,7 +576,7 @@ test("Workspace import rejects metadata over the wire serialized-size bound", as
   const archive = await portability.exportWorkspace(testContext.carol);
   archive.memories[0].metadata = { items: "x".repeat(100_000) };
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await mutationRequestHash({
+  archive.manifest.checksum = await workspaceArchiveChecksum({
     manifest,
     memories: archive.memories,
     links: archive.links,
@@ -597,7 +598,7 @@ test("Workspace import dry-run rejects document-sized Memory content", async () 
   const archive = await portability.exportWorkspace(testContext.carol);
   archive.memories[0].content = "x".repeat(32_001);
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await mutationRequestHash({
+  archive.manifest.checksum = await workspaceArchiveChecksum({
     manifest,
     memories: archive.memories,
     links: archive.links,

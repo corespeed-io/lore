@@ -15,11 +15,11 @@ import {
   validateMemoryScope,
 } from "@corespeed/lore-core";
 import { createMemoryMutationPrimitives } from "@/modules/memories/service";
-import { mutationRequestHash } from "@/server/api/idempotency";
 import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
+import { workspaceArchiveChecksum } from "./checksum";
 import {
   MAX_WORKSPACE_ARCHIVE_BYTES,
   MAX_WORKSPACE_ARCHIVE_LINKS,
@@ -318,7 +318,7 @@ function archivePayload(archive: WorkspaceArchive): Omit<WorkspaceArchive, "mani
 }
 
 async function archiveChecksum(archive: WorkspaceArchive): Promise<string> {
-  return mutationRequestHash(archivePayload(archive));
+  return workspaceArchiveChecksum(archivePayload(archive));
 }
 
 /** The checksum of an archive supplied for import, whose fields may be arbitrarily deep. */

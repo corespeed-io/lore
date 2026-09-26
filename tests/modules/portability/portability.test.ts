@@ -3,6 +3,7 @@ import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
+import { workspaceArchiveChecksum } from "@/modules/portability/checksum";
 import {
   createPortabilityModule,
   exportedTimestamp,
@@ -10,7 +11,6 @@ import {
   type WorkspaceArchive,
   WorkspaceExportLimitError,
 } from "@/modules/portability/service";
-import { mutationRequestHash } from "@/server/api/idempotency";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { createMemoryTestContext, type MemoryTestContext } from "../../support/memory-context";
 
@@ -329,7 +329,7 @@ test("import enqueues embedding jobs in its transaction and notifies them after 
 
 async function resigned(archive: WorkspaceArchive): Promise<WorkspaceArchive> {
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await mutationRequestHash({
+  archive.manifest.checksum = await workspaceArchiveChecksum({
     manifest,
     memories: archive.memories,
     links: archive.links,
