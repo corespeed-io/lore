@@ -1,10 +1,14 @@
 import { expect, test } from "vitest";
+import { retrievalKnobsFromEnvironment } from "../../src/server/providers/retrieval-knobs";
 import type { RetrievalBenchmarkCaseMetrics } from "../../tools/evaluation/retrieval/retrieval";
 import {
   aggregateRetrievalBenchmark,
   evaluateRetrievalBenchmarkCase,
 } from "../../tools/evaluation/retrieval/retrieval";
-import { candidateLimitSweep } from "../../tools/evaluation/retrieval/retrieval-suite";
+import {
+  candidateLimitSweep,
+  knobOverride,
+} from "../../tools/evaluation/retrieval/retrieval-suite";
 
 test("positive retrieval cases report ranking quality and latency", () => {
   const metrics = evaluateRetrievalBenchmarkCase({
@@ -140,4 +144,32 @@ test("candidate-depth sweeps accept the full deployment bound and name the right
   ).toThrow(
     "LORE_BENCHMARK_RERANK_CANDIDATE_LIMITS must contain comma-separated integers from 1 to 200",
   );
+});
+
+test("a benchmark runs with the deployment's knobs unless a LORE_BENCHMARK_ variable overrides one", () => {
+  const { knobs } = retrievalKnobsFromEnvironment({ LORE_EVIDENCE_TOP_CHUNKS: "3" });
+  expect(knobOverride("LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS", "evidenceTopChunks", knobs, {})).toBe(
+    3,
+  );
+  expect(
+    knobOverride("LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS", "evidenceTopChunks", knobs, {
+      LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS: " ",
+    }),
+  ).toBe(3);
+  expect(
+    knobOverride("LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS", "evidenceTopChunks", knobs, {
+      LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS: "5",
+    }),
+  ).toBe(5);
+  // An override is held to the deployment bounds.
+  expect(() =>
+    knobOverride("LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS", "evidenceTopChunks", knobs, {
+      LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS: "6",
+    }),
+  ).toThrow("LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS must be an integer from 1 to 5");
+  expect(() =>
+    knobOverride("LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT", "retrievalRecencyWeight", knobs, {
+      LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT: "1.5",
+    }),
+  ).toThrow("LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT must be a number from 0 to 1");
 });

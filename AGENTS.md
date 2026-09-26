@@ -774,8 +774,9 @@ them requires a restart. `RETRIEVAL_KNOBS` (`src/server/providers/retrieval-knob
 defines every knob's variable, default, and bounds once: the server warns about an
 invalid value and falls back (the reranker candidate limit clamps silently), and
 every benchmark runner reads the same table through
-`strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, so a
-benchmark's default run is the deployment default.
+`strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, and hands
+the whole table to the suite, so a benchmark's default run is the deployment
+default; a `LORE_BENCHMARK_*` variable overrides one knob within its bounds.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the

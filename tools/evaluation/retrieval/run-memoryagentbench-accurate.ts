@@ -187,21 +187,12 @@ if (!embeddingProvider) throw new Error("MemoryAgentBench requires a valid embed
 const queryPlanningProvider = createQueryPlanningProviderFromEnvironment(process.env, warn);
 const rerankingProvider = createRerankingProviderFromEnvironment(process.env, warn);
 // The deployment's own knob table, strictly: a benchmark refuses an invalid value.
-const retrievalKnobs = strictRetrievalKnobsFromEnvironment(process.env);
 const report = await runRetrievalBenchmarkSuite({
   databaseUrl: databaseUrl as string,
   embeddingProvider,
-  evidenceNeighborChunks: retrievalKnobs.evidenceNeighborChunks,
-  evidenceTopChunks: retrievalKnobs.evidenceTopChunks,
+  knobs: strictRetrievalKnobsFromEnvironment(process.env),
   queryPlanningProvider,
-  queryPlannerMaxQueries: retrievalKnobs.queryPlannerMaxQueries,
-  retrievalFeedbackQueries: retrievalKnobs.retrievalFeedbackQueries,
-  retrievalRecencyWeight: retrievalKnobs.retrievalRecencyWeight,
   rerankingProvider,
-  rerankCandidateLimit: retrievalKnobs.rerankCandidateLimit,
-  rerankDiversityLambda: retrievalKnobs.rerankDiversityLambda,
-  rerankMinimumScore: retrievalKnobs.rerankMinimumScore,
-  rerankWeight: retrievalKnobs.rerankWeight,
   providerWarnings,
   outputPath: options.outputPath,
   reuseIndexed: options.reuseIndexed,

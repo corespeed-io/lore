@@ -26,14 +26,7 @@ const queryPlanningProvider = createQueryPlanningProviderFromEnvironment(process
   console.error(message);
 });
 // The deployment's own knob table, strictly: a benchmark refuses an invalid value.
-const {
-  queryPlannerMaxQueries: configuredQueryPlannerMaxQueries,
-  rerankCandidateLimit,
-  rerankMinimumScore: configuredRerankMinimumScore,
-  rerankDiversityLambda: configuredRerankDiversityLambda,
-  rerankWeight: configuredRerankWeight,
-  retrievalRecencyWeight: configuredRetrievalRecencyWeight,
-} = strictRetrievalKnobsFromEnvironment(process.env);
+const knobs = strictRetrievalKnobsFromEnvironment(process.env);
 
 async function* partitions(): AsyncGenerator<RetrievalBenchmarkPartition> {
   yield {
@@ -51,14 +44,9 @@ async function* partitions(): AsyncGenerator<RetrievalBenchmarkPartition> {
 const report = await runRetrievalBenchmarkSuite({
   databaseUrl,
   embeddingProvider,
+  knobs,
   queryPlanningProvider,
-  queryPlannerMaxQueries: configuredQueryPlannerMaxQueries,
-  retrievalRecencyWeight: configuredRetrievalRecencyWeight,
   rerankingProvider,
-  rerankCandidateLimit,
-  rerankDiversityLambda: configuredRerankDiversityLambda,
-  rerankMinimumScore: configuredRerankMinimumScore,
-  rerankWeight: configuredRerankWeight,
   providerWarnings,
   outputPath: process.env.LORE_BENCHMARK_OUTPUT,
   reuseIndexed: process.env.LORE_BENCHMARK_REUSE_INDEXED === "1",
