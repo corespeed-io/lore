@@ -50,7 +50,10 @@ export async function applyMemoryChange(
       revalidate: true,
     });
   } else {
-    if (change.memoryId) await mutate(loreKeys.memory(workspaceId, change.memoryId));
+    // The Memory may have changed or gone, so no view keeps showing the old one.
+    if (change.memoryId) {
+      await mutate(loreKeys.memory(workspaceId, change.memoryId), undefined, { revalidate: true });
+    }
     await caches.mutateMemories();
   }
   void mutate((key) => isWorkspaceSearchKey(key, workspaceId));

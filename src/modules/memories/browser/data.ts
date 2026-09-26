@@ -349,11 +349,14 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
     (...args) => {
       if (demand.current.enabled) return swr.mutate(...args);
       // Paused revalidation would discard SWR's in-flight request without
-      // replacing it. Cache patches are still safe with revalidation disabled,
-      // and a write the list could not re-read makes the next resume re-read
-      // every page instead of trusting page 0.
-      lastFullRead.current = null;
-      if (!args.length) return Promise.resolve(swr.data);
+      // replacing it. A cache patch is exact, so it is applied with revalidation
+      // disabled. A bare re-read request means a write of unknown extent (an
+      // import may add Memories behind page 0), so the next resume re-reads every
+      // page instead of trusting page 0.
+      if (!args.length) {
+        lastFullRead.current = null;
+        return Promise.resolve(swr.data);
+      }
       const [data, options] = args;
       return swr.mutate(data, {
         ...(typeof options === "object" ? options : {}),

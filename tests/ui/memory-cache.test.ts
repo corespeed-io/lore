@@ -91,7 +91,11 @@ test("a forgotten Memory leaves its detail and every browse page", async () => {
 test("an unknown outcome re-reads the Memory, the browse list, searches, and the Graph", async () => {
   const cache = caches();
   await applyMemoryChange({ kind: "changed", memoryId: "b" }, cache.targets);
-  expect(cache.calls[0]).toEqual([loreKeys.memory(WORKSPACE, "b")]);
+  expect(cache.calls[0]).toEqual([
+    loreKeys.memory(WORKSPACE, "b"),
+    undefined,
+    { revalidate: true },
+  ]);
   expect(cache.mutateMemories).toHaveBeenCalledWith();
   expect(searchFilter(cache.calls)(loreKeys.search(WORKSPACE, "q", 25))).toBe(true);
   expect(cache.mutateGraph).toHaveBeenCalledOnce();
