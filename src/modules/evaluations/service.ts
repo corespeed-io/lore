@@ -6,6 +6,7 @@ import type {
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 
 export type EvaluationRunStatus = "running" | "completed" | "failed";
 
@@ -19,8 +20,9 @@ export const EVALUATION_RUN_EXPIRED_ERROR = "Evaluation run expired before it co
 /** Takes precedence over every other run error: an isolation leak is a hard failure. */
 export const EVALUATION_ISOLATION_FAILURE_ERROR = "Isolation failure: forbidden Memory retrieved";
 
-export class EvaluationSuiteNotFoundError extends Error {
+export class EvaluationSuiteNotFoundError extends DomainError {
   override name = "EvaluationSuiteNotFoundError";
+  readonly code = "not_found";
 }
 
 export interface RankingMetrics {

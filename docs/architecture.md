@@ -39,7 +39,9 @@ request. It reuses that request's database adapter and identity resolver; handle
 choose when to resolve an Actor or User. Liveness probes, admission failures, and
 unmatched or unsupported routes do not initialize application dependencies. Shared
 `onError` handling maps known domain failures to the public error contract and
-hides unexpected error details. API tests use `app.request()`.
+hides unexpected error details: a domain failure extends `DomainError`
+(`src/server/errors.ts`) and names its public code, and `src/server/api/errors.ts`
+maps codes to HTTP statuses without knowing any domain. API tests use `app.request()`.
 Public paths, headers, authentication, RLS, and SDK/OpenAPI contracts are shared
 across both hosts.
 `src/server/auth/auth.ts` owns the common admission policy; domain handlers

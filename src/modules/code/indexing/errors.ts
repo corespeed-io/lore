@@ -1,16 +1,17 @@
-export class CodeIndexAccessDeniedError extends Error {
+import { DomainError } from "@/server/errors";
+
+export class CodeIndexAccessDeniedError extends DomainError {
   override name = "CodeIndexAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
-export class CodeIndexValidationError extends Error {
+export class CodeIndexValidationError extends DomainError {
   override name = "CodeIndexValidationError";
-  readonly status = 400;
+  readonly code = "invalid_request";
 }
 
 export class CodeRevisionConflictError extends Error {
   override name = "CodeRevisionConflictError";
-  readonly status = 409;
 }
 
 /**

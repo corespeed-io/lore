@@ -1,4 +1,5 @@
 import { MEMORY_SCOPES } from "@corespeed/lore-core";
+import { LORE_ERROR_CODES } from "@/server/errors";
 
 export const errorSchema = {
   type: "object",
@@ -7,23 +8,7 @@ export const errorSchema = {
   properties: {
     code: {
       type: "string",
-      enum: [
-        "access_denied",
-        "authentication_required",
-        "idempotency_conflict",
-        "internal_error",
-        "invalid_archive",
-        "invalid_request",
-        "method_not_allowed",
-        "not_found",
-        "payload_too_large",
-        "precondition_required",
-        "proposal_capacity_exceeded",
-        "proposal_review_conflict",
-        "transaction_conflict",
-        "version_conflict",
-        "workspace_export_limit_exceeded",
-      ],
+      enum: [...LORE_ERROR_CODES],
     },
     error: { type: "string" },
   },

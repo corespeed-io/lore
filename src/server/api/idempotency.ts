@@ -1,5 +1,6 @@
 import type { PostgresTransaction } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 
 export interface IdempotencyRequest {
   key: string;
@@ -24,9 +25,9 @@ export interface MutationClaim<Result> {
   };
 }
 
-export class IdempotencyConflictError extends Error {
+export class IdempotencyConflictError extends DomainError {
   override name = "IdempotencyConflictError";
-  readonly status = 409;
+  readonly code = "idempotency_conflict";
 }
 
 function actorIdentity(actor: ActorContext): { id: string; kind: "agent" | "user" } {

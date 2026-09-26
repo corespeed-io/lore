@@ -7,7 +7,7 @@ import {
 } from "@/modules/code/indexing/validation";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
-
+import { DomainError } from "@/server/errors";
 import {
   type CodeEvidenceRelationship,
   type CodeEvidenceValidationState,
@@ -108,14 +108,14 @@ export interface CodeEvidenceModule {
   ): Promise<MemoryCodeEvidence>;
 }
 
-export class CodeEvidenceAccessDeniedError extends Error {
+export class CodeEvidenceAccessDeniedError extends DomainError {
   override name = "CodeEvidenceAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
-export class CodeEvidenceValidationError extends Error {
+export class CodeEvidenceValidationError extends DomainError {
   override name = "CodeEvidenceValidationError";
-  readonly status = 400;
+  readonly code = "invalid_request";
 }
 
 interface EvidenceRow {

@@ -5,13 +5,14 @@ import { mutationRequestHash } from "@/server/api/idempotency";
 import { AccessDeniedError } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
+import { DomainError } from "@/server/errors";
 import { IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
 
 // One source for the check and the published OpenAPI header pattern.
 const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 
-export class BadRequestError extends Error {
-  readonly status = 400;
+export class BadRequestError extends DomainError {
+  readonly code = "invalid_request";
 }
 
 interface Cursor {
@@ -64,8 +65,8 @@ export async function idempotencyRequest(
   };
 }
 
-export class PayloadTooLargeError extends Error {
-  readonly status = 413;
+export class PayloadTooLargeError extends DomainError {
+  readonly code = "payload_too_large";
 }
 
 /**
@@ -243,6 +244,6 @@ export function requireHumanActor(actor: ActorContext): ActorContext {
   return actor;
 }
 
-export class PreconditionRequiredError extends Error {
-  readonly status = 428;
+export class PreconditionRequiredError extends DomainError {
+  readonly code = "precondition_required";
 }

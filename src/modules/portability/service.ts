@@ -19,6 +19,7 @@ import { mutationRequestHash } from "@/server/api/idempotency";
 import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 import {
   MAX_WORKSPACE_ARCHIVE_BYTES,
   MAX_WORKSPACE_ARCHIVE_LINKS,
@@ -35,20 +36,19 @@ const ARCHIVE_LINK_OVERHEAD_BYTES = 320;
 const ARCHIVE_MANIFEST_BYTES = 1_024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export class PortabilityValidationError extends Error {
+export class PortabilityValidationError extends DomainError {
   override name = "PortabilityValidationError";
-  readonly status = 400;
+  readonly code = "invalid_archive";
 }
 
-export class PortabilityAccessDeniedError extends Error {
+export class PortabilityAccessDeniedError extends DomainError {
   override name = "PortabilityAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
-export class WorkspaceExportLimitError extends Error {
+export class WorkspaceExportLimitError extends DomainError {
   override name = "WorkspaceExportLimitError";
   readonly code = "workspace_export_limit_exceeded";
-  readonly status = 409;
 }
 
 export interface WorkspaceArchiveMemory {

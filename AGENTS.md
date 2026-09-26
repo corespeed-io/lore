@@ -1339,8 +1339,12 @@ returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of t
 URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
 passes even behind a Host-rewriting proxy, and clients that send neither header
 are unaffected. SQLSTATE 40P01/40001 map to a retryable 409
-`transaction_conflict`. The OpenAPI Error `code` enum is closed and
-`openapi.test.ts` asserts the exact emitted set. Domain handlers still authorize
+`transaction_conflict`. The public error vocabulary is `LORE_ERROR_CODES`
+(`src/server/errors.ts`), which the OpenAPI Error `code` enum lists exactly. A
+failure a caller may see extends `DomainError` there and declares its `code`;
+domain modules name no HTTP status. `src/server/api/errors.ts` imports no domain
+module: it maps each code to its status in one table and names the engine's three
+public failure classes, which cannot extend OSS classes. Domain handlers still authorize
 Actors and install RLS. Every JSON request body goes through `jsonObject`
 (`src/server/api/input.ts`), which counts UTF-8 bytes as the body streams and
 returns 413 `payload_too_large`; a declared oversized `Content-Length` is refused

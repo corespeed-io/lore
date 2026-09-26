@@ -9,10 +9,11 @@ import {
 } from "@corespeed/lore-core/episodes";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage } from "@/server/database/memory-storage";
+import { DomainError } from "@/server/errors";
 
-export class EpisodeEvidenceAccessDeniedError extends Error {
+export class EpisodeEvidenceAccessDeniedError extends DomainError {
   override name = "EpisodeEvidenceAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
 /** Index admission is an OSS write policy, including read-only verification. */

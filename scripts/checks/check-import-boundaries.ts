@@ -94,7 +94,6 @@ function forbiddenInWorker(name: string): boolean {
 const SERVER_COMPOSITION_FILES = new Set([
   "src/server/api/app.ts",
   "src/server/api/cloudflare.ts",
-  "src/server/api/errors.ts",
   "src/server/api/next.ts",
   "src/server/openapi/document.ts",
   "src/instrumentation.ts",

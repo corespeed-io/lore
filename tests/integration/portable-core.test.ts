@@ -472,7 +472,6 @@ test("Workspace export stops at the visible Memory sentinel before querying Link
     }),
   ).rejects.toMatchObject({
     code: "workspace_export_limit_exceeded",
-    status: 409,
   } satisfies Partial<WorkspaceExportLimitError>);
   expect(queries.some((query) => query.includes("FROM memory_links"))).toBe(false);
 });

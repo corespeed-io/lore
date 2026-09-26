@@ -149,7 +149,6 @@ test("export enforces its archive byte budget at the exact boundary", async () =
   expect(archiveBytes(exact)).toBeLessThanOrEqual(memoryBytes);
   await expect(exportWith(memoryBytes - 1)).rejects.toMatchObject({
     code: "workspace_export_limit_exceeded",
-    status: 409,
   } satisfies Partial<WorkspaceExportLimitError>);
 
   await graph.connect(testContext.carol, {

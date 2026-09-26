@@ -1059,7 +1059,10 @@ test("a Workspace outside the allowlist gets exactly the unconfigured-key refusa
   );
   expect(denied).toBeInstanceOf(CodeIndexValidationError);
   expect(unconfigured).toBeInstanceOf(CodeIndexValidationError);
-  expect(denied).toMatchObject({ message: CODE_REPOSITORY_NOT_CONFIGURED, status: 400 });
+  expect(denied).toMatchObject({
+    message: CODE_REPOSITORY_NOT_CONFIGURED,
+    code: "invalid_request",
+  });
   expect({ ...(denied as object), message: (denied as Error).message }).toEqual({
     ...(unconfigured as object),
     message: (unconfigured as Error).message,

@@ -21,6 +21,7 @@ import {
 } from "@/modules/code/indexing/validation";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 import type {
   ContextRetrievalRoute,
   ContextualImpactAssessment,
@@ -118,9 +119,9 @@ export interface ContextRetrievalModule {
   retrieve(actor: ActorContext, input: RetrieveContextInput): Promise<RetrievedContext>;
 }
 
-export class ContextRetrievalValidationError extends Error {
+export class ContextRetrievalValidationError extends DomainError {
   override name = "ContextRetrievalValidationError";
-  readonly status = 400;
+  readonly code = "invalid_request";
 }
 
 type DependencySubject = { path: string } | { symbol: string };

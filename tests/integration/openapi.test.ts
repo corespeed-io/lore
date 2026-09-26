@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { domainErrorCodes } from "@/server/api/errors";
+import { LORE_ERROR_CODES } from "@/server/errors";
 import { loreOpenApiDocument } from "@/server/openapi/document";
 import { idempotencyHeader } from "@/server/openapi/shared";
 
@@ -104,20 +104,10 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/readyz",
     ].sort(),
   );
-  // The Error code enum is closed: it lists exactly the codes Lore emits. Besides the
-  // domain error table these are route/admission literals and the SQLSTATE mappings.
-  const emittedCodes = [
-    ...domainErrorCodes,
-    "access_denied",
-    "authentication_required",
-    "internal_error",
-    "invalid_request",
-    "method_not_allowed",
-    "not_found",
-    "transaction_conflict",
-  ];
+  // The Error code enum is closed: it is exactly the public vocabulary every domain
+  // error, route literal, and SQLSTATE mapping draws its code from.
   expect([...document.components.schemas.Error.properties.code.enum].sort()).toEqual(
-    [...new Set(emittedCodes)].sort(),
+    [...LORE_ERROR_CODES].sort(),
   );
   expect([...document.components.schemas.Error.properties.code.enum].sort()).toEqual([
     "access_denied",

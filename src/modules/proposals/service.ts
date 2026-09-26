@@ -30,6 +30,7 @@ import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { beginMutation, completeMutation } from "@/server/api/idempotency";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 import {
   MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
   MAXIMUM_MEMORY_PROPOSAL_LIST,
@@ -45,19 +46,19 @@ import {
  * memory engine.
  */
 
-export class MemoryProposalAccessDeniedError extends Error {
+export class MemoryProposalAccessDeniedError extends DomainError {
   override name = "MemoryProposalAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
-export class MemoryProposalReviewConflictError extends Error {
+export class MemoryProposalReviewConflictError extends DomainError {
   override name = "MemoryProposalReviewConflictError";
-  readonly status = 409;
+  readonly code = "proposal_review_conflict";
 }
 
-export class MemoryProposalCapacityError extends Error {
+export class MemoryProposalCapacityError extends DomainError {
   override name = "MemoryProposalCapacityError";
-  readonly status = 409;
+  readonly code = "proposal_capacity_exceeded";
 }
 
 export const MEMORY_PROPOSAL_KINDS = ["create", "update"] as const;
