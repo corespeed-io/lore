@@ -1,11 +1,12 @@
 "use client";
 
-import type {
-  CreateMemoryInput,
-  Memory,
-  MemoryScope,
-  MemorySearchResult,
-  UpdateMemoryInput,
+import {
+  type CreateMemoryInput,
+  LORE_CONTRACT,
+  type Memory,
+  type MemoryScope,
+  type MemorySearchResult,
+  type UpdateMemoryInput,
 } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
@@ -87,9 +88,10 @@ export function forgetMemory(
   return getBrowserClient().workspace(workspaceId).forgetMemory(id, { expectedVersion });
 }
 
-export const MEMORY_PAGE_SIZE = 100;
+export const MEMORY_PAGE_SIZE = LORE_CONTRACT.limits.memoryListLimit;
 
-export const MAX_MEMORY_PAGES = 50;
+/** Browse fills at most the Graph read budget, so both windows name the same Memories. */
+export const MAX_MEMORY_PAGES = Math.ceil(LORE_CONTRACT.limits.graphNodes / MEMORY_PAGE_SIZE);
 
 export function upsertMemoryPages(
   pages: readonly (readonly Memory[])[] | undefined,
@@ -347,7 +349,10 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
     (...args) => {
       if (demand.current.enabled) return swr.mutate(...args);
       // Paused revalidation would discard SWR's in-flight request without
-      // replacing it. Cache patches are still safe with revalidation disabled.
+      // replacing it. Cache patches are still safe with revalidation disabled,
+      // and a write the list could not re-read makes the next resume re-read
+      // every page instead of trusting page 0.
+      lastFullRead.current = null;
       if (!args.length) return Promise.resolve(swr.data);
       const [data, options] = args;
       return swr.mutate(data, {

@@ -425,7 +425,13 @@ been removed. Lore now has a native implementation, split into two concepts
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
-  paged list plus active search and graph keys. Returning to browse re-reads only
+  paged list plus every cached search and the graph key, all through one path,
+  `applyMemoryChange` (`src/shell/memory-cache.ts`); a domain view reports a write
+  to the shell instead of touching another domain's cache keys. A write the paused
+  browse list could not re-read makes its next resume re-read every page. The Graph
+  read model behind wikilinks and Related (`buildGraphStore`) lives in
+  `src/modules/graph/browser/store.ts`, and browser bounds (Graph nodes, browse page
+  size and window) come from the SDK's `LORE_CONTRACT`. Returning to browse re-reads only
   page 0, plus any later page that is missing from the cache, no longer matches the
   list, or sits behind a page 0 that gained or lost a Memory; every page is re-read
   on resume once the last full read is 5 minutes old

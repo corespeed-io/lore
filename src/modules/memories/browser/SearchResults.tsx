@@ -2,6 +2,7 @@
 
 import type { Memory, MemorySearchResult } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useState } from "react";
+import { MAX_MEMORY_PAGES, MEMORY_PAGE_SIZE } from "@/modules/memories/browser/data";
 import { plain } from "@/modules/memories/browser/markdown";
 import {
   memoryConfiguredType,
@@ -11,6 +12,8 @@ import {
   typeLabel,
   typeSort,
 } from "@/modules/memories/browser/presentation";
+
+const BROWSE_WINDOW = MEMORY_PAGE_SIZE * MAX_MEMORY_PAGES;
 
 interface SearchResultsProps {
   workspaceId: string;
@@ -140,7 +143,12 @@ export function SearchResults({
             Showing {filtered.length}
             {typeFilter !== "all" ? ` of ${memories.length}` : ""} memories
           </p>
-          {capped && <span>Browse is limited to 5,000 Memories. Search covers the Workspace.</span>}
+          {capped && (
+            <span>
+              Browse is limited to {BROWSE_WINDOW.toLocaleString("en-US")} Memories. Search covers
+              the Workspace.
+            </span>
+          )}
         </div>
         <div className="chip-row">
           {chips.map(([key, label]) => (
