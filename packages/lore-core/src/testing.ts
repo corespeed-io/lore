@@ -3,6 +3,64 @@ import type { EmbeddingProvider } from "./capabilities";
 import type { MemoryStorageContext, PostgresDatabase, PostgresTransaction } from "./db";
 import { createMemoryMaintenanceModule } from "./maintenance";
 import { createMemoryModule, type MemoryScope } from "./memory";
+import {
+  CORE_SCHEMA_CONTRACT,
+  type SchemaContractGroup,
+  type SchemaContractGroupName,
+} from "./schema-contract";
+
+export { CORE_SCHEMA_CONTRACT, type SchemaContractGroupName } from "./schema-contract";
+
+/**
+ * Every item of the named schema-contract groups that a database lacks, read from
+ * its catalog: a missing table or column, function signature, or enum label set.
+ * An empty result means the schema provides those groups.
+ */
+export async function missingSchemaContract(
+  transaction: PostgresTransaction,
+  groups: readonly SchemaContractGroupName[],
+): Promise<string[]> {
+  const missing: string[] = [];
+  for (const name of groups) {
+    const group: SchemaContractGroup = CORE_SCHEMA_CONTRACT[name];
+    for (const [table, columns] of Object.entries(group.tables)) {
+      const result = await transaction.query<{ column_name: string }>(
+        `SELECT attribute.attname AS column_name
+         FROM pg_attribute attribute
+         WHERE attribute.attrelid = to_regclass($1)
+           AND attribute.attnum > 0
+           AND NOT attribute.attisdropped`,
+        [`public.${table}`],
+      );
+      if (result.rows.length === 0) {
+        missing.push(`${name}: table ${table}`);
+        continue;
+      }
+      const present = new Set(result.rows.map((row) => row.column_name));
+      for (const column of columns) {
+        if (!present.has(column)) missing.push(`${name}: column ${table}.${column}`);
+      }
+    }
+    for (const signature of group.functions) {
+      const result = await transaction.query<{ present: boolean }>(
+        "SELECT to_regprocedure($1) IS NOT NULL AS present",
+        [signature],
+      );
+      if (!result.rows[0]?.present) missing.push(`${name}: function ${signature}`);
+    }
+    for (const [type, labels] of Object.entries(group.enums)) {
+      const result = await transaction.query<{ label: string }>(
+        `SELECT enumlabel AS label FROM pg_enum WHERE enumtypid = to_regtype($1)`,
+        [`public.${type}`],
+      );
+      const present = result.rows.map((row) => row.label).sort();
+      if (present.join(",") !== [...labels].sort().join(",")) {
+        missing.push(`${name}: enum ${type} (${[...labels].join(", ")})`);
+      }
+    }
+  }
+  return missing;
+}
 
 /**
  * Host-pluggable schema contract kit. A host supplies storage contexts whose

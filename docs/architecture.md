@@ -221,6 +221,13 @@ invalid-input response and derives its wire schemas and OpenAPI bounds from the
 same exports, so a rule is defined once. Core refuses an out-of-range input rather
 than clamping or trimming it.
 
+Core's storage dependency is explicit too. `packages/lore-core/src/schema-contract.ts`
+lists, per capability group, every table, column, `lore.*` function, enum, and
+transaction setting its SQL uses; a source scan keeps the list exact, and each host
+proves its schema provides the groups it relies on. Hosts never write engine tables
+directly: forget, batch import, and batch Link inserts are engine primitives that
+run inside the host's transaction.
+
 The supplied database must constrain every transaction before Core uses it.
 OSS `src/server/auth/actor-context.ts` owns User/Workspace/Agent context;
 `src/server/database/memory-storage.ts` installs it for every engine transaction,

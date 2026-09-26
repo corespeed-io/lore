@@ -1,3 +1,4 @@
+import { queryInRecordBatches } from "./batch";
 import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "./db";
 import { isPostgresAccessDenied } from "./db";
@@ -13,6 +14,7 @@ import {
 } from "./memory-input";
 import type {
   ContextGroupExpansionOptions,
+  InsertMemoryRecord,
   ListMemory,
   Memory,
   MemoryMaintenanceNotifier,
@@ -54,7 +56,6 @@ export class MemoryAccessDeniedError extends Error {
 
 export class MemoryVersionConflictError extends Error {
   override name = "MemoryVersionConflictError";
-  readonly status = 412;
 
   constructor(
     readonly expectedVersion: number,
@@ -1031,8 +1032,105 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     return jobIds;
   }
 
+  /**
+   * Delete one Memory under its row lock. Returns false when the store shows no
+   * such Memory; throws MemoryVersionConflictError on a stale expected version.
+   * Chunks, vectors, jobs, and Links go with it through the schema's cascades.
+   */
+  async function forgetMemoryInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    id: string,
+    expectedVersion?: number,
+  ): Promise<boolean> {
+    const current = await transaction.query<{ version: number }>(
+      `SELECT version FROM memories
+       WHERE id = $1 AND workspace_id = $2
+       FOR UPDATE`,
+      [id, storageScope.partitionId],
+    );
+    const version = current.rows[0]?.version;
+    if (version === undefined) return false;
+    if (expectedVersion !== undefined && version !== expectedVersion) {
+      throw new MemoryVersionConflictError(expectedVersion, version);
+    }
+    const result = await transaction.query<{ id: string }>(
+      `DELETE FROM memories WHERE id = $1 AND workspace_id = $2 AND version = $3 RETURNING id`,
+      [id, storageScope.partitionId, version],
+    );
+    return result.rows.length === 1;
+  }
+
+  /**
+   * Insert many Memories with caller-chosen ids in bounded set-based batches, with
+   * their chunks and embedding jobs. Every record obeys the same content, scope, and
+   * metadata rules as a single write. Returns each inserted id with its version.
+   */
+  async function insertMemoriesInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    records: readonly InsertMemoryRecord[],
+  ): Promise<{ jobIds: string[]; memories: Array<{ id: string; version: number }> }> {
+    const prepared = records.map((record) => ({
+      id: record.id,
+      scope: validateMemoryScope(record.scope),
+      content: record.content,
+      metadata: validateMemoryMetadata(record.metadata),
+      chunks: prepareMemoryContent(record.content).chunks,
+    }));
+    const inserted = await queryInRecordBatches<{ id: string; version: number | string }>(
+      transaction,
+      `INSERT INTO memories (
+         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
+       )
+       SELECT record.id, $2::uuid, $3::uuid, $4::uuid, record.scope, record.content,
+              record.metadata
+       FROM jsonb_to_recordset($1::jsonb) AS record(
+         id uuid, scope memory_scope, content text, metadata jsonb
+       )
+       RETURNING id, version`,
+      prepared.map(({ id, scope, content, metadata }) => ({ id, scope, content, metadata })),
+      [storageScope.partitionId, storageScope.ownerId, storageScope.sourceId ?? null],
+    );
+    await queryInRecordBatches(
+      transaction,
+      `INSERT INTO memory_chunks (
+         id, workspace_id, memory_id, ordinal, content, chunking_revision
+       )
+       SELECT gen_random_uuid(), $2::uuid, record.memory_id, record.ordinal, record.content,
+              $3::text
+       FROM jsonb_to_recordset($1::jsonb) AS record(
+         memory_id uuid, ordinal integer, content text
+       )`,
+      prepared.flatMap(({ id, chunks }) =>
+        chunks.map((content, ordinal) => ({ memory_id: id, ordinal, content })),
+      ),
+      [storageScope.partitionId, MEMORY_CHUNKING_REVISION],
+    );
+    // Jobs target the version each INSERT actually produced, not an assumed default.
+    const versions = new Map(inserted.map((row) => [row.id, Number(row.version)] as const));
+    const memories = prepared.map(({ id, scope }) => {
+      const version = versions.get(id);
+      if (version === undefined) throw new Error("A batch-inserted Memory returned no row");
+      return { id, scope, version };
+    });
+    const jobIds = await enqueueEmbeddingJobsInTransaction(
+      transaction,
+      memories.map(({ id, scope, version }) => ({
+        id,
+        workspace_id: storageScope.partitionId,
+        owner_user_id: storageScope.ownerId,
+        scope,
+        version,
+      })),
+    );
+    return { jobIds, memories: memories.map(({ id, version }) => ({ id, version })) };
+  }
+
   return {
     enqueueEmbeddingJobsInTransaction,
+    forgetMemoryInTransaction,
+    insertMemoriesInTransaction,
     insertMemoryInTransaction,
     notifyMaintenance,
     notifyMaintenanceMany,
@@ -1079,8 +1177,12 @@ export function createMemoryModule(
     0,
     Math.min(options.semanticDistanceThreshold ?? 0.5, 2),
   );
-  const { insertMemoryInTransaction, notifyMaintenance, updateMemoryInTransaction } =
-    createMemoryMutationPrimitives(options);
+  const {
+    forgetMemoryInTransaction,
+    insertMemoryInTransaction,
+    notifyMaintenance,
+    updateMemoryInTransaction,
+  } = createMemoryMutationPrimitives(options);
 
   return {
     async remember(input: RememberMemory): Promise<Memory> {
@@ -1132,24 +1234,9 @@ export function createMemoryModule(
     },
 
     async forget(id: string, options: MemoryMutationOptions = {}): Promise<boolean> {
-      return database.transaction(async (transaction) => {
-        const current = await transaction.query<{ version: number }>(
-          `SELECT version FROM memories
-           WHERE id = $1 AND workspace_id = $2
-           FOR UPDATE`,
-          [id, storageScope.partitionId],
-        );
-        const version = current.rows[0]?.version;
-        if (version === undefined) return false;
-        if (options.expectedVersion !== undefined && version !== options.expectedVersion) {
-          throw new MemoryVersionConflictError(options.expectedVersion, version);
-        }
-        const result = await transaction.query<{ id: string }>(
-          `DELETE FROM memories WHERE id = $1 AND workspace_id = $2 AND version = $3 RETURNING id`,
-          [id, storageScope.partitionId, version],
-        );
-        return result.rows.length === 1;
-      });
+      return database.transaction((transaction) =>
+        forgetMemoryInTransaction(transaction, storageScope, id, options.expectedVersion),
+      );
     },
 
     async list(input: ListMemory = {}): Promise<Memory[]> {

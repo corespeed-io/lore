@@ -45,7 +45,19 @@ been removed. Lore now has a native implementation, split into two concepts
   catches everything the other does. It is also held to the union strictness of
   its hosts (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), which the
   application is not, and CI runs `bun run --cwd packages/lore-core check` as its
-  own gate against a minimal PGlite schema with no identity tables. lore oss's own
+  own gate against a minimal PGlite schema with no identity tables. Its storage
+  dependency is written down: `packages/lore-core/src/schema-contract.ts` lists, per
+  capability group (`memory`, `graph`, `maintenance`, `episodes`), every table and
+  column, `lore.*` function signature, enum label set, and transaction setting the
+  engine's SQL uses. `packages/lore-core/tests/schema-contract.test.ts` scans the
+  engine source and fails on any SQL name the contract omits (or any contract entry
+  no longer used); `missingSchemaContract` (`./testing`) checks a schema's catalog
+  against named groups. The independent-host fixture provides `memory` and `graph`
+  and runs CRUD, retrieval, Links, batch inserts, and forget with no identity
+  tables; `tests/core/schema-contract.test.ts` proves the lore oss schema provides
+  all four groups. OSS writes no engine table directly: forget, batch import, and
+  batch Links go through `forgetMemoryInTransaction`, `insertMemoriesInTransaction`,
+  and `insertMemoryLinksInTransaction`, and core errors carry no HTTP status. lore oss's own
   run of the engine contract suite against its migration chain and identity model
   is `tests/core/contract.test.ts`, part of the application tests; no file under
   `packages/lore-core` may import a repository file outside that package. In-repo it is
@@ -113,8 +125,12 @@ been removed. Lore now has a native implementation, split into two concepts
   replaces any `INVALID` leftover. The forget triggers find replay bodies by those
   JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
   `{proposal,acceptedMemoryId}`, `{episode,id}`), so renaming one in a replayed
-  response needs a forward migration; `tests/server/replay-scrub.test.ts` proves by
-  content, not by those paths, that forgetting removes every such body.
+  response needs a forward migration. `ReplayBody` (`src/server/api/idempotency.ts`)
+  is the only type `completeMutation` accepts and names exactly those keys, so a
+  rename fails typecheck, and `tests/server/replay-scrub.test.ts` proves by content,
+  not by those paths, that forgetting removes every such body. Moving the scrub to
+  an explicit subject column is a two-release migration (the JSON-path triggers must
+  outlive every older app instance) and has not been scheduled.
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
   CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities

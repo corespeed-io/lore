@@ -1,3 +1,4 @@
+import { queryInRecordBatches } from "./batch";
 import type { MemoryStorageContext, PostgresTransaction } from "./db";
 import type { Memory, MemoryScope } from "./memory";
 import { validateMemoryMetadata } from "./memory-input";
@@ -466,6 +467,44 @@ async function readGraphRows(
  * Memory Graph and durable Memory Links over a host-scoped database.
  * The host owns visibility and write authorization for both link endpoints.
  */
+/**
+ * Insert many Memory Links in bounded set-based batches. Each obeys the Link rules;
+ * a Link that duplicates an existing (source, target, kind) is skipped. Returns the
+ * ids of the Links actually inserted.
+ */
+export async function insertMemoryLinksInTransaction(
+  transaction: PostgresTransaction,
+  partitionId: string,
+  links: readonly ConnectMemories[],
+): Promise<string[]> {
+  const records = links.map((link, index) => {
+    const { kind, weight, metadata } = validateMemoryLink(link, `links[${index}]`);
+    return {
+      source_memory_id: link.sourceMemoryId,
+      target_memory_id: link.targetMemoryId,
+      kind,
+      weight,
+      metadata,
+    };
+  });
+  const inserted = await queryInRecordBatches(
+    transaction,
+    `INSERT INTO memory_links (
+       id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
+     )
+     SELECT gen_random_uuid(), $2::uuid, record.source_memory_id, record.target_memory_id,
+            record.kind, record.weight, record.metadata
+     FROM jsonb_to_recordset($1::jsonb) AS record(
+       source_memory_id uuid, target_memory_id uuid, kind text, weight real, metadata jsonb
+     )
+     ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
+     RETURNING id`,
+    records,
+    [partitionId],
+  );
+  return inserted.map((row) => row.id);
+}
+
 export function createMemoryGraphModule(storage: MemoryStorageContext) {
   const { database } = storage;
   return {

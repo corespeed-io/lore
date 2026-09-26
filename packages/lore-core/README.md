@@ -49,7 +49,7 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 | `.` | Memory storage, retrieval, graph, maintenance, content/chunking, the domain contract (`LoreValidationError`, vocabularies, limits, and input validators), `MemoryStorageContext`, db seam, and model capability interfaces |
 | `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback |
 | `./episodes` | Episode/Observation vocabularies (`EPISODE_KINDS`, `OBSERVATION_KINDS`), bounded admission validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
-| `./testing` | Host-pluggable schema-contract test kit |
+| `./testing` | Host-pluggable schema-contract test kit, `CORE_SCHEMA_CONTRACT`, and `missingSchemaContract` |
 
 Lore OSS implements model capabilities under `src/server/providers`. Its domain
 modules map Core results to the unchanged Workspace/User/Agent wire fields.
@@ -58,6 +58,16 @@ and expired replay/event cleanup also belong to OSS. Core retains normalized
 Episode validation, evidence algorithms, and embedding lease/generation maintenance.
 See the [architecture guide](../../docs/architecture.md#memory-engine-and-host-policy)
 for host assembly and model transport policy.
+
+## Schema contract
+
+`src/schema-contract.ts` is the engine's whole storage dependency, grouped by
+capability: `memory` (CRUD and retrieval), `graph` (Memory Links), `maintenance`
+(embedding jobs and generations), and `episodes`. Each group names its tables and
+columns, `lore.*` function signatures, enum labels, and the transaction settings
+the engine writes. `tests/schema-contract.test.ts` fails when the engine's SQL
+names anything the contract omits, and `missingSchemaContract` from `./testing`
+checks a host schema's catalog against the groups it provides.
 
 Maintenance leases fence ownership and allow reclamation; they do not cancel
 provider calls. `embeddingMaintenanceLeaseSeconds` estimates a reservation from

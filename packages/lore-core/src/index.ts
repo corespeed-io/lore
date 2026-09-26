@@ -14,6 +14,7 @@
  * the embedding, reranking, and query-planning capability interfaces.
  */
 
+export * from "./batch";
 export * from "./capabilities";
 export * from "./db";
 export * from "./graph";

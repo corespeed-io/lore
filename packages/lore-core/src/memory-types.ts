@@ -23,6 +23,14 @@ export interface RememberMemory {
   metadata?: Record<string, unknown>;
 }
 
+/** One Memory of a batch insert, whose id the caller chose (for example an import). */
+export interface InsertMemoryRecord {
+  id: string;
+  scope: MemoryScope;
+  content: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface UpdateMemory {
   content?: string;
   scope?: MemoryScope;

@@ -5,11 +5,12 @@ import type {
   PostgresTransaction,
 } from "@corespeed/lore-core";
 import {
+  insertMemoryLinksInTransaction,
   isStorableText,
   LoreValidationError,
-  MEMORY_CHUNKING_REVISION,
   MemoryContentValidationError,
   prepareMemoryContent,
+  queryInRecordBatches,
   validateMemoryLink,
   validateMemoryScope,
 } from "@corespeed/lore-core";
@@ -32,9 +33,6 @@ const MAX_IMPORT_MAINTENANCE_NOTIFICATIONS = 1_000;
 const ARCHIVE_MEMORY_OVERHEAD_BYTES = 256;
 const ARCHIVE_LINK_OVERHEAD_BYTES = 320;
 const ARCHIVE_MANIFEST_BYTES = 1_024;
-// Each import INSERT carries one bounded JSON array parameter.
-const IMPORT_BATCH_ROWS = 5_000;
-const IMPORT_BATCH_CHARACTERS = 4_000_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class PortabilityValidationError extends Error {
@@ -497,64 +495,6 @@ function normalizedOwnerMap(value: Record<string, string>): Record<string, strin
 }
 
 /** Serialize records into bounded JSON arrays, one lazily built parameter per INSERT. */
-function* recordBatches(records: readonly object[]): Generator<string> {
-  let pending: string[] = [];
-  let characters = 0;
-  for (const record of records) {
-    const serialized = JSON.stringify(record);
-    if (
-      pending.length > 0 &&
-      (pending.length >= IMPORT_BATCH_ROWS ||
-        characters + serialized.length > IMPORT_BATCH_CHARACTERS)
-    ) {
-      yield `[${pending.join(",")}]`;
-      pending = [];
-      characters = 0;
-    }
-    pending.push(serialized);
-    characters += serialized.length + 1;
-  }
-  if (pending.length > 0) yield `[${pending.join(",")}]`;
-}
-
-/**
- * Run one set-based INSERT per bounded batch. `sql` reads its rows from
- * `jsonb_to_recordset($1::jsonb)`, so RLS WITH CHECK and row triggers still apply to
- * every row exactly as they would to single-row inserts. Returns the RETURNING rows.
- */
-async function insertInBatches<Row extends object = { id: string }>(
-  transaction: PostgresTransaction,
-  sql: string,
-  records: readonly object[],
-  parameters: readonly unknown[],
-): Promise<Row[]> {
-  const returned: Row[] = [];
-  for (const batch of recordBatches(records)) {
-    const result = await transaction.query<Row>(sql, [batch, ...parameters]);
-    returned.push(...result.rows);
-  }
-  return returned;
-}
-
-const INSERT_IMPORTED_MEMORIES = `INSERT INTO memories (
-     id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
-   )
-   SELECT record.id, $2::uuid, $3::uuid, NULL::uuid, record.scope, record.content,
-          record.metadata
-   FROM jsonb_to_recordset($1::jsonb) AS record(
-     id uuid, scope memory_scope, content text, metadata jsonb
-   )
-   RETURNING id, version`;
-
-const INSERT_IMPORTED_CHUNKS = `INSERT INTO memory_chunks (
-     id, workspace_id, memory_id, ordinal, content, chunking_revision
-   )
-   SELECT gen_random_uuid(), $2::uuid, record.memory_id, record.ordinal, record.content,
-          $3::text
-   FROM jsonb_to_recordset($1::jsonb) AS record(
-     memory_id uuid, ordinal integer, content text
-   )`;
-
 const INSERT_IMPORT_PROVENANCE = `INSERT INTO memory_import_provenance (
      workspace_id, memory_id, import_id, source_memory_id,
      source_owner_user_id, source_created_at, source_updated_at
@@ -566,23 +506,12 @@ const INSERT_IMPORT_PROVENANCE = `INSERT INTO memory_import_provenance (
      source_created_at timestamptz, source_updated_at timestamptz
    )`;
 
-const INSERT_IMPORTED_LINKS = `INSERT INTO memory_links (
-     id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
-   )
-   SELECT gen_random_uuid(), $2::uuid, record.source_memory_id, record.target_memory_id,
-          record.kind, record.weight, record.metadata
-   FROM jsonb_to_recordset($1::jsonb) AS record(
-     source_memory_id uuid, target_memory_id uuid, kind text, weight real, metadata jsonb
-   )
-   ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
-   RETURNING id`;
-
 export function createPortabilityModule(
   database: PostgresDatabase,
   options: PortabilityModuleOptions = {},
 ) {
   const { maximumArchiveBytes = MAX_WORKSPACE_ARCHIVE_BYTES, ...mutationOptions } = options;
-  const { enqueueEmbeddingJobsInTransaction, notifyMaintenanceMany } =
+  const { insertMemoriesInTransaction, notifyMaintenanceMany } =
     createMemoryMutationPrimitives(mutationOptions);
 
   return {
@@ -849,26 +778,17 @@ export function createPortabilityModule(
           memoryIdMap[memory.id] = targetId;
           return { memory, targetId };
         });
-        const insertedMemories = await insertInBatches<{ id: string; version: number | string }>(
+        const inserted = await insertMemoriesInTransaction(
           transaction,
-          INSERT_IMPORTED_MEMORIES,
+          actor,
           targets.map(({ memory, targetId }) => ({
             id: targetId,
             scope: memory.scope,
             content: memory.content,
             metadata: memory.metadata,
           })),
-          [actor.workspaceId, actor.userId],
         );
-        await insertInBatches(
-          transaction,
-          INSERT_IMPORTED_CHUNKS,
-          targets.flatMap(({ memory, targetId }) =>
-            memory.chunks.map((content, ordinal) => ({ memory_id: targetId, ordinal, content })),
-          ),
-          [actor.workspaceId, MEMORY_CHUNKING_REVISION],
-        );
-        await insertInBatches(
+        await queryInRecordBatches(
           transaction,
           INSERT_IMPORT_PROVENANCE,
           targets.map(({ memory, targetId }) => ({
@@ -880,35 +800,17 @@ export function createPortabilityModule(
           })),
           [actor.workspaceId, importId],
         );
-        // Jobs target the version each INSERT actually produced, not an assumed default.
-        const insertedVersions = new Map(
-          insertedMemories.map((row) => [row.id, Number(row.version)] as const),
-        );
-        const jobIds = await enqueueEmbeddingJobsInTransaction(
+        const jobIds = inserted.jobIds;
+        const importedLinks = await insertMemoryLinksInTransaction(
           transaction,
-          targets.map(({ memory, targetId }) => {
-            const version = insertedVersions.get(targetId);
-            if (version === undefined) throw new Error("Imported Memory was not inserted");
-            return {
-              id: targetId,
-              workspace_id: actor.workspaceId,
-              owner_user_id: actor.userId,
-              scope: memory.scope,
-              version,
-            };
-          }),
-        );
-        const importedLinks = await insertInBatches(
-          transaction,
-          INSERT_IMPORTED_LINKS,
+          actor.workspaceId,
           includedLinks.map((link) => ({
-            source_memory_id: memoryIdMap[link.sourceMemoryId],
-            target_memory_id: memoryIdMap[link.targetMemoryId],
+            sourceMemoryId: memoryIdMap[link.sourceMemoryId],
+            targetMemoryId: memoryIdMap[link.targetMemoryId],
             kind: link.kind,
             weight: link.weight,
             metadata: link.metadata,
           })),
-          [actor.workspaceId],
         );
 
         const result: WorkspaceImportResult = {
