@@ -13,6 +13,11 @@ import type { Memory as CoreMemory } from "../../../src/modules/memories/service
 test("the inferred wire model stays aligned with the engine and generated SDK", () => {
   expectTypeOf<Memory>().toMatchTypeOf<CoreMemory>();
   expectTypeOf<Memory>().toMatchTypeOf<SdkMemory>();
+  // The same fields in all three: a field the engine adds must reach the Zod wire
+  // schema (and so OpenAPI and the SDK), never only the response body.
+  expectTypeOf<keyof Memory>().toEqualTypeOf<keyof CoreMemory>();
+  expectTypeOf<keyof Memory>().toEqualTypeOf<keyof SdkMemory>();
+  expectTypeOf<Memory["scope"]>().toEqualTypeOf<CoreMemory["scope"]>();
 });
 
 test("writes retain HTTP trimming and code-point bounds without trimming stored responses", () => {

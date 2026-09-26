@@ -1,3 +1,5 @@
+import { MEMORY_SCOPES } from "@corespeed/lore-core";
+
 export const errorSchema = {
   type: "object",
   additionalProperties: false,
@@ -26,6 +28,9 @@ export const errorSchema = {
     error: { type: "string" },
   },
 } as const;
+
+/** A Memory scope; Episodes, Proposals, and archives carry the same value. */
+export const memoryScopeSchema = { type: "string", enum: [...MEMORY_SCOPES] } as const;
 
 export const timestampProperties = {
   createdAt: { type: "string", format: "date-time" },

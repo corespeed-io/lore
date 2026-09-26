@@ -11,12 +11,10 @@ import {
   uuidArray,
   uuidString,
 } from "@/server/api/input";
+import { EVALUATION_LIMITS } from "./limits";
 import type { EvaluationCaseInput } from "./service";
 import { createEvaluationModule } from "./service";
 
-const MAX_EVALUATION_CASES = 1_000;
-const MAX_EVALUATION_QUERY_LENGTH = 10_000;
-const MAX_EVALUATION_CASE_MEMORY_IDS = 100;
 /**
  * A Suite at its field limits: every case at the query bound in UTF-8 (at most three
  * bytes per UTF-16 unit), two full id lists of quoted UUIDs, and per-case JSON
@@ -24,37 +22,48 @@ const MAX_EVALUATION_CASE_MEMORY_IDS = 100;
  * field limits accept.
  */
 const MAX_EVALUATION_SUITE_BODY_BYTES =
-  MAX_EVALUATION_CASES *
-    (MAX_EVALUATION_QUERY_LENGTH * 3 + 2 * MAX_EVALUATION_CASE_MEMORY_IDS * 40 + 256) +
+  EVALUATION_LIMITS.maximumCases *
+    (EVALUATION_LIMITS.maximumCaseQueryLength * 3 +
+      2 * EVALUATION_LIMITS.maximumCaseMemoryIds * 40 +
+      256) +
   64 * 1024;
 
 function evaluationCases(value: unknown): EvaluationCaseInput[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new BadRequestError("cases must be a non-empty array");
   }
-  if (value.length > MAX_EVALUATION_CASES) {
-    throw new BadRequestError(`cases exceeds ${MAX_EVALUATION_CASES} items`);
+  if (value.length > EVALUATION_LIMITS.maximumCases) {
+    throw new BadRequestError(`cases exceeds ${EVALUATION_LIMITS.maximumCases} items`);
   }
   return value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new BadRequestError(`cases[${index}] must be an object`);
     }
     const evaluationCase = item as Record<string, unknown>;
-    const requestedLimit = evaluationCase.limit === undefined ? 10 : Number(evaluationCase.limit);
-    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) {
-      throw new BadRequestError(`cases[${index}].limit must be an integer from 1 to 100`);
+    const requestedLimit =
+      evaluationCase.limit === undefined
+        ? EVALUATION_LIMITS.defaultCaseLimit
+        : Number(evaluationCase.limit);
+    if (
+      !Number.isInteger(requestedLimit) ||
+      requestedLimit < 1 ||
+      requestedLimit > EVALUATION_LIMITS.maximumCaseLimit
+    ) {
+      throw new BadRequestError(
+        `cases[${index}].limit must be an integer from 1 to ${EVALUATION_LIMITS.maximumCaseLimit}`,
+      );
     }
     return {
       query: requiredString(
         evaluationCase.query,
         `cases[${index}].query`,
-        MAX_EVALUATION_QUERY_LENGTH,
+        EVALUATION_LIMITS.maximumCaseQueryLength,
       ),
       expectedMemoryIds: uuidArray(
         evaluationCase.expectedMemoryIds,
         `cases[${index}].expectedMemoryIds`,
         false,
-        MAX_EVALUATION_CASE_MEMORY_IDS,
+        EVALUATION_LIMITS.maximumCaseMemoryIds,
       ),
       forbiddenMemoryIds:
         evaluationCase.forbiddenMemoryIds === undefined
@@ -63,7 +72,7 @@ function evaluationCases(value: unknown): EvaluationCaseInput[] {
               evaluationCase.forbiddenMemoryIds,
               `cases[${index}].forbiddenMemoryIds`,
               true,
-              MAX_EVALUATION_CASE_MEMORY_IDS,
+              EVALUATION_LIMITS.maximumCaseMemoryIds,
             ),
       limit: requestedLimit,
     };
@@ -77,7 +86,13 @@ export const evaluations = new Hono<ApiEnv>()
     const url = new URL(c.req.url);
     const page = await evaluations.listSuites(actor, {
       cursor: decodeCursor(url.searchParams.get("cursor")),
-      limit: queryInteger(url, "limit", 50, 1, 100),
+      limit: queryInteger(
+        url,
+        "limit",
+        EVALUATION_LIMITS.defaultSuiteList,
+        1,
+        EVALUATION_LIMITS.maximumSuiteList,
+      ),
     });
     const headers = new Headers({ "cache-control": "private, no-store" });
     if (page.nextCursor) headers.set("x-lore-next-cursor", encodeCursor(page.nextCursor));
@@ -93,12 +108,16 @@ export const evaluations = new Hono<ApiEnv>()
       throw new BadRequestError("version must be a positive integer");
     }
     const suite = await evaluations.createSuite(actor, {
-      name: requiredString(body.name, "name", 120),
+      name: requiredString(body.name, "name", EVALUATION_LIMITS.maximumNameLength),
       version: requestedVersion,
       description:
         body.description === undefined
           ? undefined
-          : requiredString(body.description, "description", 10_000),
+          : requiredString(
+              body.description,
+              "description",
+              EVALUATION_LIMITS.maximumDescriptionLength,
+            ),
       cases: evaluationCases(body.cases),
     });
     return c.json(suite, 201);

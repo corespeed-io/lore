@@ -12,6 +12,15 @@ export const SUPERSEDED_CODE_INDEX_REVISIONS: readonly string[] = [
   "ast-grep-0.45.3-web-structural-graph-v6-derived-sets",
 ];
 
+/** The most Code Index jobs one list read returns, and the default page. */
+export const MAXIMUM_CODE_INDEX_JOB_LIST = 100;
+export const DEFAULT_CODE_INDEX_JOB_LIST = 20;
+/** The most Code Artifacts one search returns. */
+export const MAXIMUM_CODE_SEARCH_RESULTS = 100;
+/** The most dependency edges (and ambiguity candidates) one read returns, and the default. */
+export const MAXIMUM_CODE_DEPENDENCY_RESULTS = 200;
+export const DEFAULT_CODE_DEPENDENCY_RESULTS = 50;
+
 export const CODE_INDEX_LIMITS = {
   maximumArtifactCodeUnits: 6_000,
   maximumArtifacts: 100_000,

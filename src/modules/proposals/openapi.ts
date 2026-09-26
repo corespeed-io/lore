@@ -1,17 +1,25 @@
 import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-core";
-import { codeEvidenceRelationshipSchema } from "@/modules/code/openapi";
+import {
+  codeEvidenceRelationshipSchema,
+  commitOidSchema,
+  repositoryPathSchema,
+} from "@/modules/code/openapi";
 import {
   humanSecurity,
   idempotencyHeader,
   jsonResponse,
+  memoryScopeSchema,
   requestBody,
   workspaceHeader,
 } from "@/server/openapi/shared";
+import { MAXIMUM_MEMORY_PROPOSAL_EVIDENCE, MAXIMUM_MEMORY_PROPOSAL_LIST } from "./limits";
+
+const evidenceLimitDescription = `Memory, Observation, and Code evidence have a combined limit of ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE}.`;
 
 const proposalCodeEvidenceProperty = {
   type: "array",
-  maxItems: 50,
-  description: "Memory, Observation, and Code evidence have a combined limit of 50.",
+  maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+  description: evidenceLimitDescription,
   items: { $ref: "#/components/schemas/ProposeMemoryCodeEvidenceInput" },
 } as const;
 
@@ -24,18 +32,18 @@ const memoryProposalUpdateProperties = {
     minLength: 1,
     maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
   },
-  scope: { type: "string", enum: ["shared", "private"] },
+  scope: memoryScopeSchema,
   metadata: { type: "object", additionalProperties: true },
   evidenceMemoryIds: {
     type: "array",
-    maxItems: 50,
-    description: "Memory, Observation, and Code evidence have a combined limit of 50.",
+    maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+    description: evidenceLimitDescription,
     items: { type: "string", format: "uuid" },
   },
   evidenceObservationIds: {
     type: "array",
-    maxItems: 50,
-    description: "Memory, Observation, and Code evidence have a combined limit of 50.",
+    maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+    description: evidenceLimitDescription,
     items: { type: "string", format: "uuid" },
   },
   codeEvidence: proposalCodeEvidenceProperty,
@@ -62,7 +70,11 @@ export const proposalsPaths = {
           in: "query",
           schema: { type: "string", enum: ["pending", "accepted", "rejected"] },
         },
-        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: MAXIMUM_MEMORY_PROPOSAL_LIST },
+        },
       ],
       responses: {
         "200": jsonResponse("Owner-private Memory Proposals", {
@@ -138,18 +150,18 @@ export const proposalsSchemas = {
         minLength: 1,
         maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
       },
-      scope: { type: "string", enum: ["shared", "private"], default: "shared" },
+      scope: { ...memoryScopeSchema, default: "shared" },
       metadata: { type: "object", additionalProperties: true },
       evidenceMemoryIds: {
         type: "array",
-        maxItems: 50,
-        description: "Memory, Observation, and Code evidence have a combined limit of 50.",
+        maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+        description: evidenceLimitDescription,
         items: { type: "string", format: "uuid" },
       },
       evidenceObservationIds: {
         type: "array",
-        maxItems: 50,
-        description: "Memory, Observation, and Code evidence have a combined limit of 50.",
+        maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+        description: evidenceLimitDescription,
         items: { type: "string", format: "uuid" },
       },
       codeEvidence: proposalCodeEvidenceProperty,
@@ -198,8 +210,8 @@ export const proposalsSchemas = {
       citedRevisionId: { type: "string", format: "uuid" },
       citedGenerationId: { type: "string", format: "uuid" },
       citedArtifactId: { type: "string", format: "uuid" },
-      citedCommitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
-      citedPath: { type: "string", minLength: 1, maxLength: 1024 },
+      citedCommitOid: commitOidSchema,
+      citedPath: repositoryPathSchema,
       citedSymbolKey: { oneOf: [{ type: "string" }, { type: "null" }] },
       citedDeclarationKey: { oneOf: [{ type: "string" }, { type: "null" }] },
       citedDeclarationChunkOrdinal: {
@@ -256,21 +268,21 @@ export const proposalsSchemas = {
         minLength: 1,
         maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
       },
-      proposedScope: { type: "string", enum: ["shared", "private"] },
+      proposedScope: memoryScopeSchema,
       proposedMetadata: { type: "object", additionalProperties: true },
       evidenceMemoryIds: {
         type: "array",
-        maxItems: 50,
+        maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
         items: { type: "string", format: "uuid" },
       },
       evidenceObservationIds: {
         type: "array",
-        maxItems: 50,
+        maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
         items: { type: "string", format: "uuid" },
       },
       codeEvidence: {
         type: "array",
-        maxItems: 50,
+        maxItems: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
         items: { $ref: "#/components/schemas/MemoryProposalCodeEvidence" },
       },
       status: { type: "string", enum: ["pending", "accepted", "rejected"] },

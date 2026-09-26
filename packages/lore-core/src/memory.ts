@@ -3,6 +3,14 @@ import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } fr
 import { isPostgresAccessDenied } from "./db";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
 import { prepareMemoryContent } from "./memory-content";
+import {
+  memoryListLimit,
+  memoryListOffset,
+  memorySearchLimit,
+  memorySearchQuery,
+  validateMemoryMetadata,
+  validateMemoryScope,
+} from "./memory-input";
 import type {
   ContextGroupExpansionOptions,
   ListMemory,
@@ -37,7 +45,7 @@ import {
 import { utcTimestampSql } from "./timestamp";
 import { embeddingVectorLiteral } from "./vector";
 
-export type * from "./memory-types";
+export * from "./memory-types";
 export * from "./retrieval/policy";
 
 export class MemoryAccessDeniedError extends Error {
@@ -813,6 +821,17 @@ async function enqueueEmbeddingJob(
  * Map a raw `memories` row to the public {@link Memory} shape. Select the row
  * with {@link memorySelectColumns} so its timestamps use the canonical form.
  */
+/** List and search filters obey the same rules as the values they match. */
+function validateReadFilters(input: {
+  scope?: MemoryScope | undefined;
+  metadataFilter?: Record<string, unknown> | undefined;
+}): void {
+  if (input.scope !== undefined) validateMemoryScope(input.scope);
+  if (input.metadataFilter !== undefined) {
+    validateMemoryMetadata(input.metadataFilter, "metadataFilter");
+  }
+}
+
 export function memoryFromRow(row: MemoryRow): Memory {
   return {
     id: row.id,
@@ -875,6 +894,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     createdByAgentId: string | null = storageScope.sourceId ?? null,
   ): Promise<{ jobId: string | null; memory: Memory }> {
     const { chunks } = prepareMemoryContent(input.content);
+    const scope = input.scope === undefined ? defaultMemoryScope : validateMemoryScope(input.scope);
+    const metadata = input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata);
     const id = crypto.randomUUID();
     const result = await transaction.query<MemoryRow>(
       `INSERT INTO memories (
@@ -886,9 +907,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         storageScope.partitionId,
         storageScope.ownerId,
         createdByAgentId,
-        input.scope ?? defaultMemoryScope,
+        scope,
         input.content,
-        JSON.stringify(input.metadata ?? {}),
+        JSON.stringify(metadata),
       ],
     );
     const memory = result.rows[0];
@@ -907,6 +928,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     input: UpdateMemory,
     expectedVersion?: number,
   ): Promise<{ chunksChanged: boolean; jobId: string | null; memory: Memory } | null> {
+    if (input.scope !== undefined) validateMemoryScope(input.scope);
+    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
     const current = await transaction.query<MemoryRow>(
       `SELECT *
        FROM memories
@@ -1130,8 +1153,9 @@ export function createMemoryModule(
     },
 
     async list(input: ListMemory = {}): Promise<Memory[]> {
-      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
-      const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
+      const limit = memoryListLimit(input.limit);
+      const offset = memoryListOffset(input.offset);
+      validateReadFilters(input);
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryRow>(
           // ORDER BY is qualified: a bare updated_at would name the text output
@@ -1171,9 +1195,10 @@ export function createMemoryModule(
     },
 
     async search(input: SearchMemory): Promise<MemorySearchResult[]> {
-      const query = input.query.trim();
+      const query = memorySearchQuery(input.query);
+      const limit = memorySearchLimit(input.limit);
+      validateReadFilters(input);
       if (!query) return [];
-      const limit = Math.max(1, Math.min(input.limit ?? 10, 100));
       const hasSecondStage =
         Boolean(rerankingProvider) || retrievalRecencyWeight > 0 || Boolean(contextGroupExpansion);
       const resultLimit = hasSecondStage ? Math.max(limit, rerankCandidateLimit) : limit;

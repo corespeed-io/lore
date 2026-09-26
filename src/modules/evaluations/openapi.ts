@@ -1,3 +1,4 @@
+import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   humanSecurity,
   jsonResponse,
@@ -5,6 +6,7 @@ import {
   timestampProperties,
   workspaceHeader,
 } from "@/server/openapi/shared";
+import { EVALUATION_LIMITS } from "./limits";
 
 export const evaluationsPaths = {
   "/api/v1/evaluations/suites": {
@@ -16,13 +18,18 @@ export const evaluationsPaths = {
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: EVALUATION_LIMITS.maximumSuiteList,
+            default: EVALUATION_LIMITS.defaultSuiteList,
+          },
         },
         {
           name: "cursor",
           in: "query",
           description: "Opaque x-lore-next-cursor value from the previous page.",
-          schema: { type: "string", maxLength: 512 },
+          schema: { type: "string", maxLength: CURSOR_MAXIMUM_LENGTH },
         },
       ],
       responses: {
@@ -101,19 +108,19 @@ export const evaluationsSchemas = {
     additionalProperties: false,
     required: ["query", "expectedMemoryIds"],
     properties: {
-      query: { type: "string", minLength: 1, maxLength: 10_000 },
+      query: { type: "string", minLength: 1, maxLength: EVALUATION_LIMITS.maximumCaseQueryLength },
       expectedMemoryIds: {
         type: "array",
         minItems: 1,
-        maxItems: 100,
+        maxItems: EVALUATION_LIMITS.maximumCaseMemoryIds,
         items: { type: "string", format: "uuid" },
       },
       forbiddenMemoryIds: {
         type: "array",
-        maxItems: 100,
+        maxItems: EVALUATION_LIMITS.maximumCaseMemoryIds,
         items: { type: "string", format: "uuid" },
       },
-      limit: { type: "integer", minimum: 1, maximum: 100 },
+      limit: { type: "integer", minimum: 1, maximum: EVALUATION_LIMITS.maximumCaseLimit },
     },
   },
   CreateEvaluationSuiteInput: {
@@ -121,13 +128,16 @@ export const evaluationsSchemas = {
     additionalProperties: false,
     required: ["name", "cases"],
     properties: {
-      name: { type: "string", minLength: 1, maxLength: 120 },
+      name: { type: "string", minLength: 1, maxLength: EVALUATION_LIMITS.maximumNameLength },
       version: { type: "integer", minimum: 1, default: 1 },
-      description: { type: "string", maxLength: 10_000 },
+      description: {
+        type: "string",
+        maxLength: EVALUATION_LIMITS.maximumDescriptionLength,
+      },
       cases: {
         type: "array",
         minItems: 1,
-        maxItems: 1_000,
+        maxItems: EVALUATION_LIMITS.maximumCases,
         items: { $ref: "#/components/schemas/EvaluationCaseInput" },
       },
     },
@@ -148,7 +158,7 @@ export const evaluationsSchemas = {
         type: "array",
         items: { type: "string", format: "uuid" },
       },
-      limit: { type: "integer", minimum: 1, maximum: 100 },
+      limit: { type: "integer", minimum: 1, maximum: EVALUATION_LIMITS.maximumCaseLimit },
     },
   },
   EvaluationSuite: {

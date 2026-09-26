@@ -117,8 +117,10 @@ been removed. Lore now has a native implementation, split into two concepts
   content, not by those paths, that forgetting removes every such body.
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
-  CHECK bounds, and every `lore.portable_core_capabilities()` limit (and its
-  OpenAPI `const`). Fix a failure there with a forward migration or a TypeScript
+  CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities
+  are served from `DEPLOYMENT_LIMITS` (`src/modules/operations/limits.ts`), which
+  also generates their OpenAPI `const` values; the frozen SQL function only has to
+  keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
   must update `lore_system_state.schema_revision` to its own version number (currently 5) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
@@ -160,6 +162,27 @@ been removed. Lore now has a native implementation, split into two concepts
   Episode modules under `src/modules` enforce product policy and map engine storage
   keys to the unchanged Workspace/User/Agent wire fields. Core storage and retrieval
   remain in `packages/lore-core`; see `docs/architecture.md` for the split;
+- lore-core owns the **domain contract**: the model, its types, and its input rules.
+  It exports them without Zod (the user's 2026-09-26 decision): `as const`
+  vocabularies (`MEMORY_SCOPES`, `EPISODE_KINDS`, `OBSERVATION_KINDS`), limit
+  objects that name their counting unit (`MEMORY_CONTENT_LIMITS`,
+  `MEMORY_METADATA_LIMITS`, `MEMORY_LIST_LIMITS`, `MEMORY_SEARCH_LIMITS`,
+  `MEMORY_GRAPH_LIMITS`, `MEMORY_LINK_LIMITS`), and plain validators
+  (`validateMemoryMetadata`, `validateMemoryScope`, `validateMemoryLink`,
+  `normalizedEpisode`, …). Every engine rule throws `LoreValidationError`
+  (`packages/lore-core/src/validation.ts`), which names the failing `field`;
+  `src/server/api/errors.ts` maps that one class to 400 `invalid_request`, so OSS
+  routes check wire shapes only and never restate an engine rule. The engine
+  refuses an out-of-range value — a list/search/Graph limit, an offset, an
+  over-long query or Link kind, a Link weight outside `[0,1]` — and never clamps or
+  trims it into range; Links are stored exactly as given. OSS derives its wire
+  contract from these exports: Zod `z.enum(MEMORY_SCOPES)` and a metadata refine
+  that calls the engine validator (`src/server/api/shared-schemas.ts`), OpenAPI
+  enums and bounds from the same constants, and OSS-owned vocabularies defined once
+  in their module (`src/modules/code/evidence-contract.ts`, the Context policy
+  tuples, `src/modules/proposals/limits.ts`, `src/modules/evaluations/limits.ts`).
+  A compile-time test holds the Zod `Memory`, the engine-derived service `Memory`,
+  and the SDK `Memory` to one field set;
 - `packages/lore-core/src/memory-content.ts` owns the canonical Memory content boundary. A Memory
   is one coherent knowledge record, recommended at no more than 8,000 Unicode
   characters and hard-limited to 32,000 characters and 64 derived chunks. Direct
@@ -507,8 +530,8 @@ been removed. Lore now has a native implementation, split into two concepts
   Zod/parser stack exhaustion to 400 for excessively nested JSON. PostgreSQL enforces
   its Unicode restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register
   recursive JSON with Zod when generating OpenAPI so references target `#/components/schemas`.
-  The reusable engine retains storage types and content invariants; OSS owns
-  authorization policy and the public wire mapping;
+  The reusable engine owns the domain types and input rules; OSS owns
+  authorization policy and the public wire mapping derived from them;
 - Self-hosting exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
@@ -752,7 +775,8 @@ The restored Dashboard/Graph/Memories interface consumes native `Workspace`,
 tool-shaped compatibility client, page/slug view model, `/api/call`, or any
 generic upstream adapter to support the historical component structure.
 
-The native Graph endpoint caps reads at 5,000 visible Memories. It returns all
+The native Graph endpoint caps reads at 5,000 visible Memories
+(`MEMORY_GRAPH_LIMITS.maximumNodes`); a larger `limit` is a 400, not a silent clamp. It returns all
 RLS-visible Memory Links whose endpoints are in that node set, then derives at most
 three affinities per Memory among the first 500 otherwise isolated nodes. Each
 node reads only a 1,000-code-point content prefix; complete content is fetched

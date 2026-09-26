@@ -1,17 +1,11 @@
 import {
   type EmbeddingGenerationReport,
   MEMORY_CHUNK_MAXIMUM_CHARACTERS,
-  MEMORY_CHUNK_OVERLAP_CHARACTERS,
-  MEMORY_CHUNKING_REVISION,
   MEMORY_CONTENT_LIMITS,
   type MemoryScope,
 } from "@corespeed/lore-core";
 import {
   type EpisodeKind,
-  MAX_EPISODE_CONTENT_CHARACTERS,
-  MAX_EPISODE_METADATA_CHARACTERS,
-  MAX_EPISODE_OBSERVATIONS,
-  MAX_OBSERVATION_BATCH_READ,
   MAX_OBSERVATION_CONTENT_CHARACTERS,
   type ObservationKind,
 } from "@corespeed/lore-core/episodes";
@@ -19,13 +13,8 @@ import { expect, test } from "vitest";
 import type {
   CodeEvidenceRelationship,
   CodeEvidenceValidationState,
-} from "@/modules/code/evidence";
-import {
-  type CodeDependencyResolution,
-  MAXIMUM_CODE_DEPENDENCY_RESULTS,
-} from "@/modules/code/graph";
-import { CODE_INDEX_LIMITS } from "@/modules/code/indexing/protocol";
-import { MAXIMUM_CODE_SEARCH_RESULTS } from "@/modules/code/indexing/read";
+} from "@/modules/code/evidence-contract";
+import type { CodeDependencyResolution } from "@/modules/code/graph";
 import type { GenerationRow } from "@/modules/code/indexing/storage";
 import type {
   CodeDependencyKind,
@@ -39,18 +28,14 @@ import {
   REPOSITORY_PATH_MAXIMUM_LENGTH,
 } from "@/modules/code/indexing/validation";
 import type { EvaluationRunStatus } from "@/modules/evaluations/service";
+import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "@/modules/operations/limits";
 import { operationsSchemas } from "@/modules/operations/openapi";
-import { createOperationsModule, type DeploymentCapabilities } from "@/modules/operations/service";
+import { createOperationsModule } from "@/modules/operations/service";
 import {
-  MAX_WORKSPACE_ARCHIVE_LINKS,
-  MAX_WORKSPACE_ARCHIVE_MEMORIES,
-} from "@/modules/portability/limits";
-import {
-  MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
-  MAXIMUM_MEMORY_PROPOSAL_LIST,
-  type MemoryProposalKind,
-  type MemoryProposalStatus,
-} from "@/modules/proposals/service";
+  MAXIMUM_PENDING_MEMORY_PROPOSALS,
+  MEMORY_PROPOSAL_RETENTION_DAYS,
+} from "@/modules/proposals/limits";
+import type { MemoryProposalKind, MemoryProposalStatus } from "@/modules/proposals/service";
 import type {
   AgentGrantPermission,
   AgentGrantStatus,
@@ -226,59 +211,45 @@ test("CHECK constraints bound what the TypeScript validators bound", async () =>
   await testContext.close();
 });
 
-test("published capabilities equal the limits the application enforces", async () => {
+test("the frozen capabilities function and the published contract equal the enforced limits", async () => {
   const testContext = await createMemoryTestContext();
   const constraints = await constraintDefinitions(testContext);
+
+  // Two limits are enforced only in SQL: the pending-Proposal trigger and the
+  // expiry CHECK. Their TypeScript constants must name the same numbers.
   const [pendingTrigger] = await asAdmin<{ definition: string }>(
     testContext,
     "SELECT pg_get_functiondef('lore.validate_memory_proposal_target()'::regprocedure) AS definition",
   );
-  const retentionDays = new Set(
-    [...(constraints.get("memory_proposals_check2") ?? "").matchAll(/'(\d+) days'::interval/g)].map(
-      (match) => Number(match[1]),
-    ),
+  expect(Number(capture(pendingTrigger?.definition, /\)\s*>=\s*(\d+)\s*THEN/))).toBe(
+    MAXIMUM_PENDING_MEMORY_PROPOSALS,
   );
-  expect(retentionDays.size).toBe(1);
+  const retentionDays = [
+    ...(constraints.get("memory_proposals_check2") ?? "").matchAll(/'(\d+) days'::interval/g),
+  ].map((match) => Number(match[1]));
+  expect(retentionDays.length).toBeGreaterThan(0);
+  expect(new Set(retentionDays)).toEqual(new Set([MEMORY_PROPOSAL_RETENTION_DAYS]));
 
-  const enforced: DeploymentCapabilities["limits"] = {
-    memoryContentRecommendedCharacters: MEMORY_CONTENT_LIMITS.recommendedCharacters,
-    memoryContentMaximumCharacters: MEMORY_CONTENT_LIMITS.maximumCharacters,
-    memoryMaximumChunks: MEMORY_CONTENT_LIMITS.maximumChunks,
-    workspaceArchiveMemories: MAX_WORKSPACE_ARCHIVE_MEMORIES,
-    workspaceArchiveLinks: MAX_WORKSPACE_ARCHIVE_LINKS,
-    memoryProposalEvidence: MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
-    memoryProposalList: MAXIMUM_MEMORY_PROPOSAL_LIST,
-    // Enforced only in SQL: the pending-Proposal trigger and the expiry CHECK.
-    memoryProposalPending: Number(capture(pendingTrigger?.definition, /\)\s*>=\s*(\d+)\s*THEN/)),
-    memoryProposalRetentionSeconds: [...retentionDays][0] * 24 * 60 * 60,
-    episodeObservations: MAX_EPISODE_OBSERVATIONS,
-    episodeContentCharacters: MAX_EPISODE_CONTENT_CHARACTERS,
-    episodeMetadataCharacters: MAX_EPISODE_METADATA_CHARACTERS,
-    observationContentCharacters: MAX_OBSERVATION_CONTENT_CHARACTERS,
-    observationBatchRead: MAX_OBSERVATION_BATCH_READ,
-    codeIndexFiles: CODE_INDEX_LIMITS.maximumFiles,
-    codeIndexSourceBytes: CODE_INDEX_LIMITS.maximumSourceBytes,
-    codeIndexArtifacts: CODE_INDEX_LIMITS.maximumArtifacts,
-    codeDependencyResults: MAXIMUM_CODE_DEPENDENCY_RESULTS,
-    codeSearchResults: MAXIMUM_CODE_SEARCH_RESULTS,
-  };
+  // The application serves limits from its constants; the baseline's function
+  // still restates them for any reader of the SQL, so it must not drift.
+  const [frozen] = await asAdmin<{
+    capabilities: { limits: unknown; memoryChunking: unknown };
+  }>(testContext, "SELECT lore.portable_core_capabilities() AS capabilities");
+  expect(frozen?.capabilities.limits).toEqual(DEPLOYMENT_LIMITS);
+  expect(frozen?.capabilities.memoryChunking).toEqual(MEMORY_CHUNKING_CAPABILITY);
 
   const capabilities = await createOperationsModule(testContext.database, {
     embeddingConfigured: true,
   }).capabilities();
-  expect(capabilities.limits).toEqual(enforced);
-  expect(capabilities.memoryChunking).toEqual({
-    revision: MEMORY_CHUNKING_REVISION,
-    maximumCharacters: MEMORY_CHUNK_MAXIMUM_CHARACTERS,
-    overlapCharacters: MEMORY_CHUNK_OVERLAP_CHARACTERS,
-  });
+  expect(capabilities.limits).toEqual(DEPLOYMENT_LIMITS);
+  expect(capabilities.memoryChunking).toEqual(MEMORY_CHUNKING_CAPABILITY);
 
   const published = operationsSchemas.Capabilities.properties.limits;
-  expect([...published.required].sort()).toEqual(Object.keys(enforced).sort());
+  expect([...published.required].sort()).toEqual(Object.keys(DEPLOYMENT_LIMITS).sort());
   expect(
     Object.fromEntries(
       Object.entries(published.properties).map(([name, schema]) => [name, schema.const]),
     ),
-  ).toEqual(enforced);
+  ).toEqual(DEPLOYMENT_LIMITS);
   await testContext.close();
 });

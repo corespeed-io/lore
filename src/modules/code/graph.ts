@@ -1,7 +1,12 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { CodeIndexValidationError } from "@/modules/code/indexing/errors";
+import {
+  DEFAULT_CODE_DEPENDENCY_RESULTS,
+  MAXIMUM_CODE_DEPENDENCY_RESULTS,
+} from "@/modules/code/indexing/protocol";
 import type { CodeDependencyKind } from "@/modules/code/indexing/types";
 import {
+  CODE_SYMBOL_MAXIMUM_LENGTH,
   validateCommitOid,
   validatePath,
   validatePlainText,
@@ -12,9 +17,6 @@ import { installActorContext } from "@/server/auth/actor-context";
 
 export type CodeDependencyDirection = "callers" | "callees";
 export type CodeDependencyResolution = "resolved" | "ambiguous" | "unresolved";
-
-/** The most dependency edges (and ambiguity candidates) one read returns. */
-export const MAXIMUM_CODE_DEPENDENCY_RESULTS = 200;
 
 export interface QueryCodeDependenciesInput {
   repositoryKey: string;
@@ -157,9 +159,11 @@ export function createCodeDependencyGraphModule(
       if (hasSymbol === hasPath) {
         throw new CodeIndexValidationError("Provide exactly one of symbol or path");
       }
-      const symbol = hasSymbol ? validatePlainText(input.symbol ?? "", "symbol", 1_600) : null;
+      const symbol = hasSymbol
+        ? validatePlainText(input.symbol ?? "", "symbol", CODE_SYMBOL_MAXIMUM_LENGTH)
+        : null;
       const path = hasPath ? validatePath(input.path ?? "") : null;
-      const limit = input.limit ?? 50;
+      const limit = input.limit ?? DEFAULT_CODE_DEPENDENCY_RESULTS;
       if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_CODE_DEPENDENCY_RESULTS) {
         throw new CodeIndexValidationError(
           `limit must be an integer from 1 through ${MAXIMUM_CODE_DEPENDENCY_RESULTS}`,

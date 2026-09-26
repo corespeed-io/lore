@@ -21,8 +21,18 @@ export function hasControlCharacters(value: string, allowQueryWhitespace = false
   });
 }
 
-/** A full 40-character SHA-1 or 64-character SHA-256 Git object id, lowercase. */
-export const COMMIT_OID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+/**
+ * A full 40-character SHA-1 or 64-character SHA-256 Git object id, lowercase, in the
+ * form the published contract and the schema's CHECK constraints both use.
+ */
+export const COMMIT_OID_JSON_PATTERN = "^[0-9a-f]{40}([0-9a-f]{24})?$";
+export const COMMIT_OID_PATTERN = new RegExp(COMMIT_OID_JSON_PATTERN);
+/** A Code search query, in UTF-16 code units. */
+export const CODE_QUERY_MAXIMUM_LENGTH = 2_000;
+/** A revision's optional source ref (for example a branch name), in UTF-16 code units. */
+export const CODE_SOURCE_REF_MAXIMUM_LENGTH = 512;
+/** A dependency-read symbol, in UTF-16 code units. */
+export const CODE_SYMBOL_MAXIMUM_LENGTH = 1_600;
 /** Repository-relative paths, in UTF-16 code units. */
 export const REPOSITORY_PATH_MAXIMUM_LENGTH = 1_024;
 

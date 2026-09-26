@@ -224,7 +224,7 @@ test("An Episode has an aggregate metadata budget", async () => {
         metadata: { payload: "m".repeat(99_000) },
       })),
     }),
-  ).rejects.toThrow("Episode metadata may contain at most 1000000 characters");
+  ).rejects.toThrow("Episode metadata exceeds 1000000 characters");
 
   await testContext.close();
 });

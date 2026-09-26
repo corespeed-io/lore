@@ -1,6 +1,6 @@
 import {
+  LoreValidationError,
   MemoryAccessDeniedError,
-  MemoryContentValidationError,
   MemoryVersionConflictError,
 } from "@corespeed/lore-core";
 import {
@@ -37,7 +37,8 @@ import { BadRequestError, PayloadTooLargeError, PreconditionRequiredError } from
 const errorResponses = [
   [BadRequestError, 400, "invalid_request"],
   [RequestInputError, 400, "invalid_request"],
-  [MemoryContentValidationError, 400, "invalid_request"],
+  // Every engine input rule, and each OSS domain rule that reuses the class.
+  [LoreValidationError, 400, "invalid_request"],
   [CodeIndexValidationError, 400, "invalid_request"],
   [CodeEvidenceValidationError, 400, "invalid_request"],
   [ContextRetrievalValidationError, 400, "invalid_request"],

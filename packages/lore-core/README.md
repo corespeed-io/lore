@@ -46,9 +46,9 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 
 | Entry | Contents |
 | --- | --- |
-| `.` | Memory storage, retrieval, graph, maintenance, content/chunking, `MemoryStorageContext`, db seam, and model capability interfaces |
+| `.` | Memory storage, retrieval, graph, maintenance, content/chunking, the domain contract (`LoreValidationError`, vocabularies, limits, and input validators), `MemoryStorageContext`, db seam, and model capability interfaces |
 | `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback |
-| `./episodes` | Bounded Episode/Observation validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
+| `./episodes` | Episode/Observation vocabularies (`EPISODE_KINDS`, `OBSERVATION_KINDS`), bounded admission validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
 | `./testing` | Host-pluggable schema-contract test kit |
 
 Lore OSS implements model capabilities under `src/server/providers`. Its domain

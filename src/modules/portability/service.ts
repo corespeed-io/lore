@@ -5,9 +5,13 @@ import type {
   PostgresTransaction,
 } from "@corespeed/lore-core";
 import {
+  isStorableText,
+  LoreValidationError,
   MEMORY_CHUNKING_REVISION,
   MemoryContentValidationError,
   prepareMemoryContent,
+  validateMemoryLink,
+  validateMemoryScope,
 } from "@corespeed/lore-core";
 import { createMemoryMutationPrimitives } from "@/modules/memories/service";
 import { mutationRequestHash } from "@/server/api/idempotency";
@@ -245,13 +249,6 @@ function importedTimestamp(value: unknown, name: string): string {
   return value;
 }
 
-// PostgreSQL refuses NUL and unpaired UTF-16 surrogates in text and JSONB.
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-function storableText(value: string): boolean {
-  return !value.includes("\0") && !LONE_SURROGATE.test(value);
-}
-
 /**
  * Reject archive JSON that only PostgreSQL would refuse, at write time, which a dry
  * run never reaches: NUL or an unpaired surrogate in any key or string. An own
@@ -264,7 +261,7 @@ function assertStorableJson(value: unknown, name: string): void {
       if (key === "__proto__") {
         throw new PortabilityValidationError(`${name} must not contain a __proto__ key`);
       }
-      if (!storableText(key) || (typeof item === "string" && !storableText(item))) {
+      if (!isStorableText(key) || (typeof item === "string" && !isStorableText(item))) {
         throw new PortabilityValidationError(`${name} contains a NUL character or invalid Unicode`);
       }
       return item;
@@ -272,6 +269,18 @@ function assertStorableJson(value: unknown, name: string): void {
   } catch (error) {
     if (error instanceof RangeError) {
       throw new PortabilityValidationError(`${name} is too deeply nested`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+/** An engine rule, reported as an archive validation failure. */
+function archiveRule<T>(check: () => T): T {
+  try {
+    return check();
+  } catch (error) {
+    if (error instanceof LoreValidationError) {
+      throw new PortabilityValidationError(error.message, { cause: error });
     }
     throw error;
   }
@@ -379,9 +388,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     if (memoryIds.has(id)) throw new PortabilityValidationError(`duplicate Memory id ${id}`);
     memoryIds.add(id);
     const ownerUserId = uuid(memory.ownerUserId, `memories[${index}].ownerUserId`);
-    if (memory.scope !== "private" && memory.scope !== "shared") {
-      throw new PortabilityValidationError(`memories[${index}].scope is invalid`);
-    }
+    const scope = archiveRule(() => validateMemoryScope(memory.scope, `memories[${index}].scope`));
     let chunks: readonly string[];
     try {
       chunks = prepareMemoryContent(memory.content).chunks;
@@ -402,7 +409,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     normalizedMemories.push({
       id,
       ownerUserId,
-      scope: memory.scope,
+      scope,
       content: memory.content,
       metadata: normalizedMetadata,
       version: memory.version,
@@ -422,29 +429,34 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     linkIds.add(id);
     const source = uuid(link.sourceMemoryId, `links[${index}].sourceMemoryId`);
     const target = uuid(link.targetMemoryId, `links[${index}].targetMemoryId`);
-    if (!memoryIds.has(source) || !memoryIds.has(target) || source === target) {
+    if (!memoryIds.has(source) || !memoryIds.has(target)) {
       throw new PortabilityValidationError(`links[${index}] has invalid endpoints`);
     }
-    if (
-      typeof link.kind !== "string" ||
-      !link.kind.trim() ||
-      !storableText(link.kind) ||
-      link.kind.length > 64
-    ) {
-      throw new PortabilityValidationError(`links[${index}].kind is invalid`);
-    }
-    if (!Number.isFinite(link.weight) || link.weight < 0 || link.weight > 1) {
-      throw new PortabilityValidationError(`links[${index}].weight is invalid`);
+    // A Link is required to name its kind and weight; the engine owns their rules.
+    if (link.kind === undefined || link.weight === undefined) {
+      throw new PortabilityValidationError(`links[${index}] must include kind and weight`);
     }
     const normalizedMetadata = metadata(link.metadata, `links[${index}].metadata`);
+    const { kind, weight } = archiveRule(() =>
+      validateMemoryLink(
+        {
+          sourceMemoryId: source,
+          targetMemoryId: target,
+          kind: link.kind,
+          weight: link.weight,
+          metadata: normalizedMetadata,
+        },
+        `links[${index}]`,
+      ),
+    );
     const createdAt = importedTimestamp(link.createdAt, `links[${index}].createdAt`);
     const updatedAt = importedTimestamp(link.updatedAt, `links[${index}].updatedAt`);
     normalizedLinks.push({
       id,
       sourceMemoryId: source,
       targetMemoryId: target,
-      kind: link.kind,
-      weight: link.weight,
+      kind,
+      weight,
       metadata: normalizedMetadata,
       createdAt,
       updatedAt,

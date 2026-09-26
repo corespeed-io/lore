@@ -8,18 +8,28 @@ import type {
 } from "@corespeed/lore-core";
 import {
   isPostgresAccessDenied,
+  LoreValidationError,
   MemoryVersionConflictError,
   memorySelectColumns,
   prepareMemoryContent,
   serializedTimestamp,
 } from "@corespeed/lore-core";
-import type { CodeEvidenceRelationship } from "@/modules/code/evidence";
+import {
+  CODE_EVIDENCE_RELATIONSHIP_MESSAGE,
+  type CodeEvidenceRelationship,
+  isCodeEvidenceRelationship,
+} from "@/modules/code/evidence-contract";
 import type { Memory } from "@/modules/memories/service";
 import { createMemoryMutationPrimitives, memoryFromRow } from "@/modules/memories/service";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { beginMutation, completeMutation } from "@/server/api/idempotency";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import {
+  MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+  MAXIMUM_MEMORY_PROPOSAL_LIST,
+  MEMORY_PROPOSAL_RETENTION_DAYS,
+} from "./limits";
 
 /**
  * Memory Proposals: owner-private review state for suggested create/update
@@ -45,13 +55,10 @@ export class MemoryProposalCapacityError extends Error {
   readonly status = 409;
 }
 
-/** Memory, Observation, and Code evidence records one Proposal may cite, in total. */
-export const MAXIMUM_MEMORY_PROPOSAL_EVIDENCE = 50;
-/** The most Proposals one list read returns. */
-export const MAXIMUM_MEMORY_PROPOSAL_LIST = 100;
-
-export type MemoryProposalKind = "create" | "update";
-export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+export const MEMORY_PROPOSAL_KINDS = ["create", "update"] as const;
+export type MemoryProposalKind = (typeof MEMORY_PROPOSAL_KINDS)[number];
+export const MEMORY_PROPOSAL_STATUSES = ["pending", "accepted", "rejected"] as const;
+export type MemoryProposalStatus = (typeof MEMORY_PROPOSAL_STATUSES)[number];
 
 export interface MemoryProposalCodeEvidence {
   ordinal: number;
@@ -312,19 +319,20 @@ export function createMemoryProposalsModule(
           ]),
         ).values(),
       ];
-      if (
-        codeEvidence.some(
-          (evidence) =>
-            !["supports", "contradicts", "implements", "rationale"].includes(evidence.relationship),
-        )
-      ) {
-        throw new TypeError("Proposal Code Evidence relationship is invalid");
+      for (const [index, evidence] of codeEvidence.entries()) {
+        if (!isCodeEvidenceRelationship(evidence.relationship)) {
+          throw new LoreValidationError(
+            `codeEvidence[${index}].relationship`,
+            `codeEvidence[${index}].${CODE_EVIDENCE_RELATIONSHIP_MESSAGE}`,
+          );
+        }
       }
       if (
         evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length >
         MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
       ) {
-        throw new TypeError(
+        throw new LoreValidationError(
+          "evidence",
           `A Memory Proposal may cite at most ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} evidence records`,
         );
       }
@@ -334,7 +342,10 @@ export function createMemoryProposalsModule(
         input.scope === undefined &&
         input.metadata === undefined
       ) {
-        throw new TypeError("An update proposal must change content, scope, or metadata");
+        throw new LoreValidationError(
+          "content",
+          "An update proposal must change content, scope, or metadata",
+        );
       }
 
       try {
@@ -696,7 +707,7 @@ export function createMemoryProposalsModule(
                SET status = 'rejected',
                    reviewed_by_user_id = $3,
                    reviewed_at = now(),
-                   expires_at = now() + interval '30 days'
+                   expires_at = now() + interval '${MEMORY_PROPOSAL_RETENTION_DAYS} days'
                WHERE id = $1 AND workspace_id = $2
                RETURNING *`,
               [id, actor.workspaceId, actor.userId],
@@ -761,7 +772,7 @@ export function createMemoryProposalsModule(
                  reviewed_by_user_id = $3,
                  accepted_memory_id = $4,
                  reviewed_at = now(),
-                 expires_at = now() + interval '30 days'
+                 expires_at = now() + interval '${MEMORY_PROPOSAL_RETENTION_DAYS} days'
              WHERE id = $1 AND workspace_id = $2
              RETURNING *`,
             [id, actor.workspaceId, actor.userId, applied.memory.id],

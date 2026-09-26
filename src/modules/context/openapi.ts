@@ -1,5 +1,34 @@
-import { jsonResponse, requestBody, workspaceHeader } from "@/server/openapi/shared";
-import { MAXIMUM_CONTEXT_ANCHORS, MAXIMUM_CONTEXTUAL_IMPACT_CHANGES } from "./policy";
+import { MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
+import { CODE_SEARCH_CHANNELS } from "@/modules/code/indexing/types";
+import {
+  codeEvidenceRelationshipSchema,
+  codeEvidenceValidationStateSchema,
+  codeQuerySchema,
+  commitOidSchema,
+  repositoryKeySchema,
+  repositoryPathSchema,
+} from "@/modules/code/openapi";
+import {
+  jsonResponse,
+  memoryScopeSchema,
+  requestBody,
+  workspaceHeader,
+} from "@/server/openapi/shared";
+import {
+  CONTEXT_RETRIEVAL_LIMITS,
+  CONTEXT_RETRIEVAL_ROUTES,
+  CONTEXTUAL_IMPACT_STATES,
+  JOINT_EVIDENCE_INTENTS,
+  JOINT_EVIDENCE_ROUTES,
+  MAXIMUM_CONTEXT_ANCHORS,
+  MAXIMUM_CONTEXTUAL_IMPACT_CHANGES,
+} from "./policy";
+
+const memoryQuerySchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength,
+} as const;
 
 export const contextPaths = {
   "/api/v1/context/retrieve": {
@@ -26,21 +55,31 @@ export const contextSchemas = {
     additionalProperties: false,
     required: ["query"],
     properties: {
-      query: { type: "string", minLength: 1, maxLength: 10_000 },
-      memoryQuery: { type: "string", minLength: 1, maxLength: 10_000 },
-      codeQuery: { type: "string", minLength: 1, maxLength: 2_000 },
-      repositoryKey: { type: "string", minLength: 1, maxLength: 512 },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+      query: memoryQuerySchema,
+      memoryQuery: memoryQuerySchema,
+      codeQuery: codeQuerySchema,
+      repositoryKey: repositoryKeySchema,
+      commitOid: commitOidSchema,
       route: {
         type: "string",
-        enum: ["auto", "both", "code-only", "memory-only"],
+        enum: [...CONTEXT_RETRIEVAL_ROUTES],
         default: "auto",
       },
-      memoryLimit: { type: "integer", minimum: 1, maximum: 10, default: 5 },
-      codeLimit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
-      scope: { type: "string", enum: ["shared", "private"] },
+      memoryLimit: {
+        type: "integer",
+        minimum: 1,
+        maximum: CONTEXT_RETRIEVAL_LIMITS.maximumMemoryLimit,
+        default: CONTEXT_RETRIEVAL_LIMITS.defaultMemoryLimit,
+      },
+      codeLimit: {
+        type: "integer",
+        minimum: 1,
+        maximum: CONTEXT_RETRIEVAL_LIMITS.maximumCodeLimit,
+        default: CONTEXT_RETRIEVAL_LIMITS.defaultCodeLimit,
+      },
+      scope: memoryScopeSchema,
       metadata: { type: "object", additionalProperties: true },
-      pathPrefix: { type: "string", minLength: 1, maxLength: 1_024 },
+      pathPrefix: repositoryPathSchema,
     },
   },
   ContextRetrievalPlan: {
@@ -57,11 +96,11 @@ export const contextSchemas = {
     properties: {
       intent: {
         type: "string",
-        enum: ["blast-radius", "change", "current-code", "memory-recall", "rationale", "unknown"],
+        enum: [...JOINT_EVIDENCE_INTENTS],
       },
       route: {
         type: "string",
-        enum: ["abstain", "both", "code-only", "memory-only"],
+        enum: [...JOINT_EVIDENCE_ROUTES],
       },
       needsAnchorExpansion: { type: "boolean" },
       needsContextualImpact: { type: "boolean" },
@@ -75,7 +114,7 @@ export const contextSchemas = {
     required: ["id", "scope", "updatedAt", "score", "evidence"],
     properties: {
       id: { type: "string", format: "uuid" },
-      scope: { type: "string", enum: ["shared", "private"] },
+      scope: memoryScopeSchema,
       updatedAt: { type: "string", format: "date-time" },
       score: { type: "number" },
       rerankScore: { type: "number", minimum: 0, maximum: 1 },
@@ -98,7 +137,7 @@ export const contextSchemas = {
     ],
     properties: {
       artifactId: { type: "string", format: "uuid" },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+      commitOid: commitOidSchema,
       path: { type: "string" },
       symbol: { oneOf: [{ type: "string" }, { type: "null" }] },
       startLine: { type: "integer", minimum: 1 },
@@ -107,7 +146,7 @@ export const contextSchemas = {
       matchedChannels: {
         type: "array",
         uniqueItems: true,
-        items: { type: "string", enum: ["symbol", "literal", "lexical", "path"] },
+        items: { type: "string", enum: [...CODE_SEARCH_CHANNELS] },
       },
       content: { type: "string", maxLength: 6_000 },
     },
@@ -128,21 +167,12 @@ export const contextSchemas = {
     properties: {
       id: { type: "string", format: "uuid" },
       memoryId: { type: "string", format: "uuid" },
-      relationship: {
-        type: "string",
-        enum: ["supports", "contradicts", "implements", "rationale"],
-      },
-      localState: {
-        type: "string",
-        enum: ["current", "moved", "changed", "deleted", "ambiguous", "unverifiable"],
-      },
-      citedCommitOid: {
-        type: "string",
-        pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$",
-      },
+      relationship: codeEvidenceRelationshipSchema,
+      localState: codeEvidenceValidationStateSchema,
+      citedCommitOid: commitOidSchema,
       citedPath: { type: "string" },
       validatedCommitOid: {
-        oneOf: [{ type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" }, { type: "null" }],
+        oneOf: [commitOidSchema, { type: "null" }],
       },
       validatedPath: { oneOf: [{ type: "string" }, { type: "null" }] },
     },
@@ -154,7 +184,7 @@ export const contextSchemas = {
     properties: {
       state: {
         type: "string",
-        enum: ["affected", "possibly_affected", "unaffected", "unknown"],
+        enum: [...CONTEXTUAL_IMPACT_STATES],
       },
       changes: {
         type: "array",
@@ -176,11 +206,19 @@ export const contextSchemas = {
       "contextualImpact",
     ],
     properties: {
-      memoryCandidates: { type: "integer", minimum: 0, maximum: 10 },
-      codeCandidates: { type: "integer", minimum: 0, maximum: 20 },
+      memoryCandidates: {
+        type: "integer",
+        minimum: 0,
+        maximum: CONTEXT_RETRIEVAL_LIMITS.maximumMemoryLimit,
+      },
+      codeCandidates: {
+        type: "integer",
+        minimum: 0,
+        maximum: CONTEXT_RETRIEVAL_LIMITS.maximumCodeLimit,
+      },
       anchorCandidates: { type: "integer", minimum: 0, maximum: MAXIMUM_CONTEXT_ANCHORS },
       requestedCommitOid: {
-        oneOf: [{ type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" }, { type: "null" }],
+        oneOf: [commitOidSchema, { type: "null" }],
       },
       memoryQuery: { oneOf: [{ type: "string" }, { type: "null" }] },
       codeQuery: { oneOf: [{ type: "string" }, { type: "null" }] },
@@ -209,7 +247,7 @@ export const contextSchemas = {
       plan: { $ref: "#/components/schemas/ContextRetrievalPlan" },
       deliveredRoute: {
         type: "string",
-        enum: ["abstain", "both", "code-only", "memory-only"],
+        enum: [...JOINT_EVIDENCE_ROUTES],
       },
       memories: {
         type: "array",

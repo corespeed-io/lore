@@ -10,9 +10,14 @@ export function requiredMemoryContent(value: unknown): string {
   return parseMemoryInput(CreateMemoryInputSchema.shape.content, value);
 }
 
+/** The `metadata` list/search query parameter, as raw JSON text. */
+export const METADATA_FILTER_MAXIMUM_LENGTH = 10_000;
+
 export function metadataFilter(value: string | null): Record<string, unknown> | undefined {
   if (value === null || value.trim() === "") return undefined;
-  if (value.length > 10_000) throw new BadRequestError("metadata exceeds 10000 characters");
+  if (value.length > METADATA_FILTER_MAXIMUM_LENGTH) {
+    throw new BadRequestError(`metadata exceeds ${METADATA_FILTER_MAXIMUM_LENGTH} characters`);
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);

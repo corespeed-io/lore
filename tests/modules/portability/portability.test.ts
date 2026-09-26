@@ -421,7 +421,7 @@ test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
     (archive) => {
       archive.links[0].kind = "cites\uD83D";
     },
-    /links\[0\]\.kind is invalid/,
+    /links\[0\]\.kind must be non-blank text of at most 64 characters/,
   ],
   [
     "a top-level __proto__ metadata key",

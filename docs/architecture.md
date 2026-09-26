@@ -214,6 +214,13 @@ versioned policy from the Memory module's storage orchestration. `db.ts` holds t
 whole storage seam — transaction interface, `MemoryStorageContext`, and the
 RLS-denial predicate — and `capabilities.ts` holds the model contracts.
 
+Core also owns the domain contract, without Zod: `as const` vocabularies, limit
+objects that name their counting unit, and plain validators, all of which throw
+`LoreValidationError` naming the failing field. A host maps that one class to its
+invalid-input response and derives its wire schemas and OpenAPI bounds from the
+same exports, so a rule is defined once. Core refuses an out-of-range input rather
+than clamping or trimming it.
+
 The supplied database must constrain every transaction before Core uses it.
 OSS `src/server/auth/actor-context.ts` owns User/Workspace/Agent context;
 `src/server/database/memory-storage.ts` installs it for every engine transaction,

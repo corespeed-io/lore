@@ -1,14 +1,16 @@
 import { Hono } from "hono";
+import { MAXIMUM_CODE_INDEX_JOB_LIST } from "@/modules/code/indexing/protocol";
 import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
+import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
 import {
-  createCodeIndexReadModule,
-  MAXIMUM_CODE_INDEX_JOB_LIST,
-} from "@/modules/code/indexing/read";
+  CODE_QUERY_MAXIMUM_LENGTH,
+  REPOSITORY_KEY_MAXIMUM_LENGTH,
+} from "@/modules/code/indexing/validation";
 import type { ApiEnv } from "@/server/api/dependencies";
 import { BadRequestError, jsonObject } from "@/server/api/input";
 import { observeOperation } from "@/server/telemetry/telemetry";
-import type { CodeEvidenceRelationship } from "./evidence";
 import { createCodeEvidenceModule } from "./evidence";
+import type { CodeEvidenceRelationship } from "./evidence-contract";
 import type { CodeDependencyDirection } from "./graph";
 import { createCodeDependencyGraphModule } from "./graph";
 
@@ -59,9 +61,9 @@ export const code = new Hono<ApiEnv>()
     const pathPrefix = url.searchParams.get("path_prefix")?.trim() || undefined;
     const results = await observeOperation("code-index.search", () =>
       code.search(actor, {
-        repositoryKey: requiredQuery(url, "repository_key", 512),
+        repositoryKey: requiredQuery(url, "repository_key", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredQuery(url, "commit_oid", 64),
-        query: requiredQuery(url, "q", 2_000),
+        query: requiredQuery(url, "q", CODE_QUERY_MAXIMUM_LENGTH),
         limit: optionalLimit(url),
         pathPrefix,
       }),
@@ -77,7 +79,7 @@ export const code = new Hono<ApiEnv>()
     const path = url.searchParams.get("path") ?? undefined;
     const result = await observeOperation("code-index.dependencies", () =>
       graph.query(actor, {
-        repositoryKey: requiredQuery(url, "repository_key", 512),
+        repositoryKey: requiredQuery(url, "repository_key", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredQuery(url, "commit_oid", 64),
         direction: dependencyDirection(url),
         symbol,
@@ -108,7 +110,7 @@ export const code = new Hono<ApiEnv>()
     }
     const job = await observeOperation("code-index.enqueue", () =>
       queue.enqueue(actor, {
-        repositoryKey: requiredBodyString(body, "repositoryKey", 512),
+        repositoryKey: requiredBodyString(body, "repositoryKey", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredBodyString(body, "commitOid", 64),
         ...(typeof sourceRef === "string" ? { sourceRef } : {}),
       }),
@@ -161,7 +163,7 @@ export const codeEvidence = new Hono<ApiEnv>().post("/:id/revalidate", async (c)
   const result = await observeOperation("code-evidence.revalidate", () =>
     evidence.revalidate(actor, {
       evidenceId,
-      repositoryKey: requiredBodyString(body, "repositoryKey", 512),
+      repositoryKey: requiredBodyString(body, "repositoryKey", REPOSITORY_KEY_MAXIMUM_LENGTH),
       commitOid: requiredBodyString(body, "commitOid", 64),
     }),
   );

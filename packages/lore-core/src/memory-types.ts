@@ -1,6 +1,8 @@
 import type { EmbeddingProvider, QueryPlanningProvider, RerankingProvider } from "./capabilities";
 
-export type MemoryScope = "shared" | "private";
+/** Who may read a Memory: every member of its Workspace, or only its owner User. */
+export const MEMORY_SCOPES = ["shared", "private"] as const;
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
 
 export interface Memory {
   id: string;

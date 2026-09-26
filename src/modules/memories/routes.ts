@@ -1,3 +1,4 @@
+import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { Hono } from "hono";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ApiEnv } from "@/server/api/dependencies";
@@ -38,9 +39,17 @@ export const memories = new Hono<ApiEnv>()
     const actor = await c.var.resolveActor();
     const url = new URL(request.url);
     const requestedQuery = url.searchParams.get("q");
-    const query = requestedQuery?.trim() ? requiredString(requestedQuery, "q", 10_000) : "";
-    const limit = queryInteger(url, "limit", 50, 1, 100);
-    const offset = queryInteger(url, "offset", 0, 0, 1_000_000);
+    const query = requestedQuery?.trim()
+      ? requiredString(requestedQuery, "q", MEMORY_SEARCH_LIMITS.maximumQueryLength)
+      : "";
+    const limit = queryInteger(
+      url,
+      "limit",
+      MEMORY_LIST_LIMITS.defaultLimit,
+      1,
+      MEMORY_LIST_LIMITS.maximumLimit,
+    );
+    const offset = queryInteger(url, "offset", 0, 0, MEMORY_LIST_LIMITS.maximumOffset);
     const cursor = decodeCursor(url.searchParams.get("cursor"));
     if (cursor && url.searchParams.has("offset")) {
       throw new BadRequestError("cursor and offset cannot be combined");

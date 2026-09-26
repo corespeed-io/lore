@@ -8,14 +8,11 @@ import {
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 
-export type CodeEvidenceRelationship = "contradicts" | "implements" | "rationale" | "supports";
-export type CodeEvidenceValidationState =
-  | "ambiguous"
-  | "changed"
-  | "current"
-  | "deleted"
-  | "moved"
-  | "unverifiable";
+import {
+  type CodeEvidenceRelationship,
+  type CodeEvidenceValidationState,
+  isCodeEvidenceRelationship,
+} from "./evidence-contract";
 
 export interface MemoryCodeEvidence {
   id: string;
@@ -609,7 +606,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
     async cite(actor, input) {
       const memoryId = validateUuid(input.memoryId, "memoryId", CodeEvidenceValidationError);
       const artifactId = validateUuid(input.artifactId, "artifactId", CodeEvidenceValidationError);
-      if (!["supports", "contradicts", "implements", "rationale"].includes(input.relationship)) {
+      if (!isCodeEvidenceRelationship(input.relationship)) {
         throw new CodeEvidenceValidationError("relationship is invalid");
       }
       try {

@@ -1,6 +1,8 @@
+import { MEMORY_GRAPH_LIMITS } from "@corespeed/lore-core";
 import { Hono } from "hono";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import type { ApiEnv } from "@/server/api/dependencies";
+import { queryInteger } from "@/server/api/input";
 import { observeOperation } from "@/server/telemetry/telemetry";
 
 export const graph = new Hono<ApiEnv>().get("/", async (c) => {
@@ -8,7 +10,12 @@ export const graph = new Hono<ApiEnv>().get("/", async (c) => {
   const request = c.req.raw;
   const actor = await c.var.resolveActor();
   const url = new URL(request.url);
-  const requestedLimit = Number(url.searchParams.get("limit") ?? "5000");
-  const limit = Number.isFinite(requestedLimit) ? requestedLimit : 5_000;
+  const limit = queryInteger(
+    url,
+    "limit",
+    MEMORY_GRAPH_LIMITS.maximumNodes,
+    1,
+    MEMORY_GRAPH_LIMITS.maximumNodes,
+  );
   return c.json(await observeOperation("graph.read", () => graph.read(actor, { limit })));
 });

@@ -1,5 +1,71 @@
 import type { MemoryStorageContext, PostgresTransaction } from "./db";
 import type { Memory, MemoryScope } from "./memory";
+import { validateMemoryMetadata } from "./memory-input";
+import {
+  isStorableText,
+  LoreValidationError,
+  boundedInteger as validatedInteger,
+} from "./validation";
+
+export const MEMORY_GRAPH_LIMITS = {
+  /** Visible Memories one Graph read returns at most. */
+  maximumNodes: 5_000,
+} as const;
+
+export const MEMORY_LINK_LIMITS = {
+  /** Link kind length, in UTF-16 code units. */
+  maximumKindLength: 64,
+  defaultKind: "related",
+  defaultWeight: 1,
+} as const;
+
+export interface ValidMemoryLink {
+  kind: string;
+  weight: number;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * The rules every durable Memory Link obeys, however it is written. Values are
+ * stored exactly as given; an invalid kind or weight is refused, never trimmed or
+ * clamped.
+ */
+export function validateMemoryLink(
+  input: {
+    sourceMemoryId: string;
+    targetMemoryId: string;
+    kind?: unknown;
+    weight?: unknown;
+    metadata?: unknown;
+  },
+  field = "link",
+): ValidMemoryLink {
+  if (input.sourceMemoryId === input.targetMemoryId) {
+    throw new LoreValidationError(field, `${field} must connect two different Memories`);
+  }
+  const kind = input.kind === undefined ? MEMORY_LINK_LIMITS.defaultKind : input.kind;
+  if (
+    typeof kind !== "string" ||
+    !kind.trim() ||
+    !isStorableText(kind) ||
+    kind.length > MEMORY_LINK_LIMITS.maximumKindLength
+  ) {
+    throw new LoreValidationError(
+      `${field}.kind`,
+      `${field}.kind must be non-blank text of at most ${MEMORY_LINK_LIMITS.maximumKindLength} characters`,
+    );
+  }
+  const weight = input.weight === undefined ? MEMORY_LINK_LIMITS.defaultWeight : input.weight;
+  if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 1) {
+    throw new LoreValidationError(
+      `${field}.weight`,
+      `${field}.weight must be a number from 0 through 1`,
+    );
+  }
+  const metadata =
+    input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata, `${field}.metadata`);
+  return { kind, weight, metadata };
+}
 
 export interface MemoryGraphNode {
   id: string;
@@ -404,11 +470,7 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
   const { database } = storage;
   return {
     async connect(input: ConnectMemories): Promise<MemoryLink> {
-      const kind = input.kind?.trim() || "related";
-      const requestedWeight = input.weight ?? 1;
-      const weight = Number.isFinite(requestedWeight)
-        ? Math.max(0, Math.min(requestedWeight, 1))
-        : 1;
+      const { kind, weight, metadata } = validateMemoryLink(input);
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryLinkRow>(
           `INSERT INTO memory_links (
@@ -422,7 +484,7 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
             input.targetMemoryId,
             kind,
             weight,
-            JSON.stringify(input.metadata ?? {}),
+            JSON.stringify(metadata),
           ],
         );
         const row = result.rows[0];
@@ -432,7 +494,11 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
     },
 
     async read(input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
-      const limit = boundedInteger(input.limit, 5_000, 1, 5_000);
+      const limit = validatedInteger(input.limit, "limit", {
+        minimum: 1,
+        maximum: MEMORY_GRAPH_LIMITS.maximumNodes,
+        fallback: MEMORY_GRAPH_LIMITS.maximumNodes,
+      });
       return database.transaction(async (transaction) => {
         const bounded = await readGraphRows(
           transaction,

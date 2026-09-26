@@ -1,3 +1,4 @@
+import { hasLoneSurrogate } from "@corespeed/lore-core";
 import type { z } from "zod/v4";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { mutationRequestHash } from "@/server/api/idempotency";
@@ -22,9 +23,12 @@ export function encodeCursor(cursor: Cursor): string {
   return btoa(JSON.stringify(cursor)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 }
 
+/** Longest opaque pagination cursor any list accepts. */
+export const CURSOR_MAXIMUM_LENGTH = 512;
+
 export function decodeCursor(value: string | null): Cursor | undefined {
   if (value === null || value.trim() === "") return undefined;
-  if (value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) {
+  if (value.length > CURSOR_MAXIMUM_LENGTH || !/^[A-Za-z0-9_-]+$/.test(value)) {
     throw new BadRequestError("cursor is invalid");
   }
   try {
@@ -177,20 +181,6 @@ export function requiredRawString(value: unknown, name: string, maximumLength: n
     throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
   }
   return value;
-}
-
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const current = value.charCodeAt(index);
-    if (current >= 0xd800 && current <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) return true;
-      index += 1;
-    } else if (current >= 0xdc00 && current <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function positiveInteger(value: unknown, name: string): number {

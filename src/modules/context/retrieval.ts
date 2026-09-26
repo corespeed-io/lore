@@ -1,13 +1,20 @@
-import type { MemoryModuleOptions, MemoryScope, PostgresDatabase } from "@corespeed/lore-core";
+import {
+  MEMORY_SEARCH_LIMITS,
+  type MemoryModuleOptions,
+  type MemoryScope,
+  type PostgresDatabase,
+} from "@corespeed/lore-core";
+import type { MemoryCodeEvidence } from "@/modules/code/evidence";
+import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import type {
   CodeEvidenceRelationship,
   CodeEvidenceValidationState,
-  MemoryCodeEvidence,
-} from "@/modules/code/evidence";
-import { createCodeEvidenceModule } from "@/modules/code/evidence";
+} from "@/modules/code/evidence-contract";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
+import type { CodeSearchChannel } from "@/modules/code/indexing/types";
 import {
+  CODE_QUERY_MAXIMUM_LENGTH,
   validateCommitOid,
   validateQueryText,
   validateRepositoryKey,
@@ -15,6 +22,7 @@ import {
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
 import type {
+  ContextRetrievalRoute,
   ContextualImpactAssessment,
   DependencyFingerprint,
   JointEvidenceIntent,
@@ -23,6 +31,8 @@ import type {
 import {
   aggregateContextualImpact,
   assessContextualImpact,
+  CONTEXT_RETRIEVAL_LIMITS,
+  CONTEXT_RETRIEVAL_ROUTES,
   CONTEXTUAL_ANCHOR_LIMIT,
   CONTEXTUAL_EDGE_LIMIT,
   MAXIMUM_CONTEXT_ANCHORS,
@@ -30,8 +40,6 @@ import {
 } from "./policy";
 
 export const CONTEXT_RETRIEVAL_REVISION = "joint-memory-code-v2";
-
-export type ContextRetrievalRoute = "auto" | "both" | "code-only" | "memory-only";
 
 export interface RetrieveContextInput {
   query: string;
@@ -64,7 +72,7 @@ export interface RetrievedCodeContext {
   startLine: number;
   endLine: number;
   score: number;
-  matchedChannels: Array<"symbol" | "literal" | "lexical" | "path">;
+  matchedChannels: CodeSearchChannel[];
   content: string;
 }
 
@@ -220,7 +228,7 @@ export function createContextRetrievalModule(
 
   return {
     async retrieve(actor, input) {
-      const query = queryText(input.query, "query", 10_000);
+      const query = queryText(input.query, "query", MEMORY_SEARCH_LIMITS.maximumQueryLength);
       const repositoryKey =
         input.repositoryKey === undefined
           ? undefined
@@ -235,7 +243,7 @@ export function createContextRetrievalModule(
         );
       }
       const route = input.route ?? "auto";
-      if (!(["auto", "both", "code-only", "memory-only"] as const).includes(route)) {
+      if (!CONTEXT_RETRIEVAL_ROUTES.includes(route)) {
         throw new ContextRetrievalValidationError("route is invalid");
       }
       if ((route === "both" || route === "code-only") && repositoryKey === undefined) {
@@ -249,8 +257,18 @@ export function createContextRetrievalModule(
       if (input.codeQuery !== undefined && repositoryKey === undefined) {
         throw new ContextRetrievalValidationError("codeQuery requires repositoryKey and commitOid");
       }
-      const memoryLimit = limit(input.memoryLimit, 5, 10, "memoryLimit");
-      const codeLimit = limit(input.codeLimit, 10, 20, "codeLimit");
+      const memoryLimit = limit(
+        input.memoryLimit,
+        CONTEXT_RETRIEVAL_LIMITS.defaultMemoryLimit,
+        CONTEXT_RETRIEVAL_LIMITS.maximumMemoryLimit,
+        "memoryLimit",
+      );
+      const codeLimit = limit(
+        input.codeLimit,
+        CONTEXT_RETRIEVAL_LIMITS.defaultCodeLimit,
+        CONTEXT_RETRIEVAL_LIMITS.maximumCodeLimit,
+        "codeLimit",
+      );
       const plan = planJointEvidenceRoute({
         query,
         hasRepositoryContext: repositoryKey !== undefined,
@@ -258,11 +276,15 @@ export function createContextRetrievalModule(
       });
       const memoryQuery =
         plan.route === "memory-only" || plan.route === "both"
-          ? queryText(input.memoryQuery ?? query, "memoryQuery", 10_000)
+          ? queryText(
+              input.memoryQuery ?? query,
+              "memoryQuery",
+              MEMORY_SEARCH_LIMITS.maximumQueryLength,
+            )
           : null;
       const codeQuery =
         plan.route === "code-only" || plan.route === "both"
-          ? queryText(input.codeQuery ?? query, "codeQuery", 2_000)
+          ? queryText(input.codeQuery ?? query, "codeQuery", CODE_QUERY_MAXIMUM_LENGTH)
           : null;
       const [memoryResults, codeResults] = await Promise.all([
         memoryQuery !== null

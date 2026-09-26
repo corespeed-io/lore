@@ -2,6 +2,7 @@ import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-core";
 import {
   humanSecurity,
   jsonResponse,
+  memoryScopeSchema,
   requestBody,
   timestampProperties,
   workspaceHeader,
@@ -55,7 +56,7 @@ export const portabilitySchemas = {
     properties: {
       id: { type: "string", format: "uuid" },
       ownerUserId: { type: "string", format: "uuid" },
-      scope: { type: "string", enum: ["shared", "private"] },
+      scope: memoryScopeSchema,
       content: {
         type: "string",
         minLength: 1,

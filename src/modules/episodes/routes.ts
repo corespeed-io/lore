@@ -1,14 +1,11 @@
-import type {
-  EpisodeKind,
-  ObservationKind,
-  RecordObservation,
-} from "@corespeed/lore-core/episodes";
+import { MEMORY_LIST_LIMITS } from "@corespeed/lore-core";
+import type { RecordObservation } from "@corespeed/lore-core/episodes";
 import {
   MAX_EPISODE_CONTENT_CHARACTERS,
   MAX_EPISODE_METADATA_CHARACTERS,
-  MAX_EPISODE_OBSERVATIONS,
   MAX_OBSERVATION_BATCH_READ,
-  MAX_OBSERVATION_CONTENT_CHARACTERS,
+  validateEpisodeKind,
+  validateObservationKind,
 } from "@corespeed/lore-core/episodes";
 import { Hono } from "hono";
 import { createObservationModule } from "@/modules/episodes/service";
@@ -21,7 +18,6 @@ import {
   jsonObject,
   optionalTimestamp,
   queryInteger,
-  requiredRawString,
   uuidString,
 } from "@/server/api/input";
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
@@ -35,80 +31,32 @@ import { observeOperation } from "@/server/telemetry/telemetry";
 const MAX_EPISODE_BODY_BYTES =
   6 * (MAX_EPISODE_CONTENT_CHARACTERS + MAX_EPISODE_METADATA_CHARACTERS) + 1024 * 1024;
 
-function episodeKind(value: unknown, optional = false): EpisodeKind | undefined {
-  if (optional && (value === undefined || value === null || value === "")) return undefined;
-  if (
-    value === "conversation" ||
-    value === "workflow" ||
-    value === "document" ||
-    value === "event"
-  ) {
-    return value;
-  }
-  throw new BadRequestError("kind must be conversation, workflow, document, or event");
+function optionalEpisodeKind(value: string | null) {
+  return value === null || value === "" ? undefined : validateEpisodeKind(value);
 }
 
-function observationKind(value: unknown, name: string): ObservationKind {
-  if (
-    value === "message" ||
-    value === "tool_call" ||
-    value === "tool_result" ||
-    value === "document_fragment" ||
-    value === "event"
-  ) {
-    return value;
-  }
-  throw new BadRequestError(
-    `${name} must be message, tool_call, tool_result, document_fragment, or event`,
-  );
-}
-
+// Wire shapes only: the engine's normalizedEpisode owns kinds, counts, and bounds.
 function episodeObservations(value: unknown): RecordObservation[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_EPISODE_OBSERVATIONS) {
-    throw new BadRequestError(`observations must contain 1 to ${MAX_EPISODE_OBSERVATIONS} items`);
-  }
-  const observations = value.map((item, index) => {
+  if (!Array.isArray(value)) throw new BadRequestError("observations must be an array");
+  return value.map((item, index) => {
+    const name = `observations[${index}]`;
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new BadRequestError(`observations[${index}] must be an object`);
+      throw new BadRequestError(`${name} must be an object`);
     }
     const observation = item as Record<string, unknown>;
     if (observation.observedAt !== undefined && typeof observation.observedAt !== "string") {
-      throw new BadRequestError(`observations[${index}].observedAt must be an ISO 8601 timestamp`);
+      throw new BadRequestError(`${name}.observedAt must be an ISO 8601 timestamp`);
     }
-    const observedAt = optionalTimestamp(
-      observation.observedAt ?? null,
-      `observations[${index}].observedAt`,
-    );
+    if (typeof observation.content !== "string") {
+      throw new BadRequestError(`${name}.content must be a string`);
+    }
     return {
-      kind: observationKind(observation.kind, `observations[${index}].kind`),
-      content: requiredRawString(
-        observation.content,
-        `observations[${index}].content`,
-        MAX_OBSERVATION_CONTENT_CHARACTERS,
-      ),
+      kind: validateObservationKind(observation.kind, `${name}.kind`),
+      content: observation.content,
       metadata: metadata(observation.metadata),
-      observedAt,
+      observedAt: optionalTimestamp(observation.observedAt ?? null, `${name}.observedAt`),
     };
   });
-  const totalCharacters = observations.reduce(
-    (total, observation) => total + observation.content.length,
-    0,
-  );
-  if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
-    throw new BadRequestError(
-      `Episode content exceeds ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
-    );
-  }
-  const totalMetadataCharacters = observations.reduce(
-    (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
-    0,
-  );
-  if (totalMetadataCharacters > MAX_EPISODE_METADATA_CHARACTERS) {
-    throw new BadRequestError(
-      `Episode metadata exceeds ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
-    );
-  }
-  return observations;
 }
 
 export const episodes = new Hono<ApiEnv>()
@@ -118,11 +66,17 @@ export const episodes = new Hono<ApiEnv>()
     const actor = await c.var.resolveActor();
     const url = new URL(request.url);
     const cursor = decodeCursor(url.searchParams.get("cursor"));
-    const limit = queryInteger(url, "limit", 50, 1, 100);
+    const limit = queryInteger(
+      url,
+      "limit",
+      MEMORY_LIST_LIMITS.defaultLimit,
+      1,
+      MEMORY_LIST_LIMITS.maximumLimit,
+    );
     const episodes = await observeOperation("episode.list", () =>
       observations.list(actor, {
         cursor: cursor ? { id: cursor.id, createdAt: cursor.updatedAt } : undefined,
-        kind: episodeKind(url.searchParams.get("kind"), true),
+        kind: optionalEpisodeKind(url.searchParams.get("kind")),
         limit,
         scope: memoryScope(url.searchParams.get("scope") ?? undefined),
       }),
@@ -140,7 +94,7 @@ export const episodes = new Hono<ApiEnv>()
     const actor = await c.var.resolveActor();
     const body = await jsonObject(request, MAX_EPISODE_BODY_BYTES);
     const input = {
-      kind: episodeKind(body.kind) as EpisodeKind,
+      kind: validateEpisodeKind(body.kind),
       scope: memoryScope(body.scope) ?? "private",
       observations: episodeObservations(body.observations),
     };

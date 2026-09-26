@@ -1,11 +1,14 @@
+import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import {
   idempotencyHeader,
   ifMatchHeader,
   jsonResponse,
   memoryIdParameter,
+  memoryScopeSchema,
   requestBody,
   workspaceHeader,
 } from "@/server/openapi/shared";
+import { METADATA_FILTER_MAXIMUM_LENGTH } from "./input";
 import { memoryOpenApiSchemas } from "./schemas";
 
 const memorySchemas = memoryOpenApiSchemas();
@@ -16,12 +19,20 @@ export const memoriesPaths = {
       operationId: "listOrSearchMemories",
       parameters: [
         workspaceHeader,
-        { name: "q", in: "query", schema: { type: "string", maxLength: 10_000 } },
-        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+        {
+          name: "q",
+          in: "query",
+          schema: { type: "string", maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: MEMORY_LIST_LIMITS.maximumLimit },
+        },
         {
           name: "offset",
           in: "query",
-          schema: { type: "integer", minimum: 0, maximum: 1_000_000 },
+          schema: { type: "integer", minimum: 0, maximum: MEMORY_LIST_LIMITS.maximumOffset },
         },
         {
           name: "cursor",
@@ -32,7 +43,7 @@ export const memoriesPaths = {
         {
           name: "scope",
           in: "query",
-          schema: { type: "string", enum: ["shared", "private"] },
+          schema: memoryScopeSchema,
         },
         {
           name: "updated_after",
@@ -50,7 +61,7 @@ export const memoriesPaths = {
           name: "metadata",
           in: "query",
           description: "JSON object applied as a bounded JSONB-containment filter.",
-          schema: { type: "string", maxLength: 10_000 },
+          schema: { type: "string", maxLength: METADATA_FILTER_MAXIMUM_LENGTH },
         },
       ],
       responses: {
@@ -160,7 +171,7 @@ export const memoriesSchemas = {
       reference: { type: "string" },
       label: { type: "string" },
       preview: { type: "string" },
-      scope: { type: "string", enum: ["shared", "private"] },
+      scope: memoryScopeSchema,
       type: { type: "string" },
       updatedAt: { type: "string", format: "date-time" },
     },

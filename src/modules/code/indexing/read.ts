@@ -2,6 +2,11 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
+import {
+  DEFAULT_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_SEARCH_RESULTS,
+} from "./protocol";
 import type {
   CodeArtifact,
   CodeArtifactSymbol,
@@ -18,7 +23,9 @@ import type {
   SearchCodeIndexInput,
 } from "./types";
 import {
+  CODE_QUERY_MAXIMUM_LENGTH,
   hasControlCharacters,
+  REPOSITORY_PATH_MAXIMUM_LENGTH,
   validateCommitOid,
   validateQueryText,
   validateRepositoryKey,
@@ -47,11 +54,6 @@ export interface GetCodeArtifactsInput extends CodeRevisionSelector {
 export interface ListCodeIndexJobsInput {
   limit?: number;
 }
-
-export const MAXIMUM_CODE_INDEX_JOB_LIST = 100;
-/** The most Code Artifacts one search returns. */
-export const MAXIMUM_CODE_SEARCH_RESULTS = 100;
-const DEFAULT_CODE_INDEX_JOB_LIST = 20;
 
 export interface CodeArtifactLogicalDigest {
   artifactId: string;
@@ -132,7 +134,7 @@ function validatePathPrefix(path: string): string {
   if (
     !normalized ||
     trimmed !== path ||
-    normalized.length > 1_024 ||
+    normalized.length > REPOSITORY_PATH_MAXIMUM_LENGTH ||
     normalized.startsWith("/") ||
     normalized.includes("\\") ||
     hasControlCharacters(normalized) ||
@@ -430,7 +432,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     async search(actor, input) {
       const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
-      const query = validateQueryText(input.query, "query", 2_000);
+      const query = validateQueryText(input.query, "query", CODE_QUERY_MAXIMUM_LENGTH);
       const literalPattern = exactLikePattern(query);
       const contentLiteralPredicate = hasTrigramWord(query)
         ? `lower(payload.content) LIKE lower($8) ESCAPE chr(92)`

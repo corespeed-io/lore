@@ -5,10 +5,49 @@ import {
   timestampProperties,
   workspaceHeader,
 } from "@/server/openapi/shared";
+import { CODE_EVIDENCE_RELATIONSHIPS, CODE_EVIDENCE_VALIDATION_STATES } from "./evidence-contract";
+import {
+  DEFAULT_CODE_DEPENDENCY_RESULTS,
+  DEFAULT_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_DEPENDENCY_RESULTS,
+  MAXIMUM_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_SEARCH_RESULTS,
+} from "./indexing/protocol";
+import { CODE_SEARCH_CHANNELS } from "./indexing/types";
+import {
+  CODE_QUERY_MAXIMUM_LENGTH,
+  CODE_SOURCE_REF_MAXIMUM_LENGTH,
+  CODE_SYMBOL_MAXIMUM_LENGTH,
+  COMMIT_OID_JSON_PATTERN,
+  REPOSITORY_KEY_MAXIMUM_LENGTH,
+  REPOSITORY_PATH_MAXIMUM_LENGTH,
+} from "./indexing/validation";
 
 export const codeEvidenceRelationshipSchema = {
   type: "string",
-  enum: ["supports", "contradicts", "implements", "rationale"],
+  enum: [...CODE_EVIDENCE_RELATIONSHIPS],
+} as const;
+
+export const codeEvidenceValidationStateSchema = {
+  type: "string",
+  enum: [...CODE_EVIDENCE_VALIDATION_STATES],
+} as const;
+
+export const commitOidSchema = { type: "string", pattern: COMMIT_OID_JSON_PATTERN } as const;
+export const repositoryKeySchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: REPOSITORY_KEY_MAXIMUM_LENGTH,
+} as const;
+export const repositoryPathSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: REPOSITORY_PATH_MAXIMUM_LENGTH,
+} as const;
+export const codeQuerySchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: CODE_QUERY_MAXIMUM_LENGTH,
 } as const;
 
 export const codePaths = {
@@ -21,29 +60,29 @@ export const codePaths = {
           name: "repository_key",
           in: "query",
           required: true,
-          schema: { type: "string", minLength: 1, maxLength: 512 },
+          schema: repositoryKeySchema,
         },
         {
           name: "commit_oid",
           in: "query",
           required: true,
-          schema: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+          schema: commitOidSchema,
         },
         {
           name: "q",
           in: "query",
           required: true,
-          schema: { type: "string", minLength: 1, maxLength: 2_000 },
+          schema: codeQuerySchema,
         },
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: 100 },
+          schema: { type: "integer", minimum: 1, maximum: MAXIMUM_CODE_SEARCH_RESULTS },
         },
         {
           name: "path_prefix",
           in: "query",
-          schema: { type: "string", minLength: 1, maxLength: 1_024 },
+          schema: repositoryPathSchema,
         },
       ],
       responses: {
@@ -65,13 +104,13 @@ export const codePaths = {
           name: "repository_key",
           in: "query",
           required: true,
-          schema: { type: "string", minLength: 1, maxLength: 512 },
+          schema: repositoryKeySchema,
         },
         {
           name: "commit_oid",
           in: "query",
           required: true,
-          schema: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+          schema: commitOidSchema,
         },
         {
           name: "direction",
@@ -82,17 +121,22 @@ export const codePaths = {
         {
           name: "symbol",
           in: "query",
-          schema: { type: "string", minLength: 1, maxLength: 1_600 },
+          schema: { type: "string", minLength: 1, maxLength: CODE_SYMBOL_MAXIMUM_LENGTH },
         },
         {
           name: "path",
           in: "query",
-          schema: { type: "string", minLength: 1, maxLength: 1_024 },
+          schema: repositoryPathSchema,
         },
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MAXIMUM_CODE_DEPENDENCY_RESULTS,
+            default: DEFAULT_CODE_DEPENDENCY_RESULTS,
+          },
         },
       ],
       responses: {
@@ -131,7 +175,12 @@ export const codePaths = {
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MAXIMUM_CODE_INDEX_JOB_LIST,
+            default: DEFAULT_CODE_INDEX_JOB_LIST,
+          },
         },
       ],
       responses: {
@@ -267,7 +316,7 @@ export const codeSchemas = {
       matchedChannels: {
         type: "array",
         uniqueItems: true,
-        items: { type: "string", enum: ["symbol", "literal", "lexical", "path"] },
+        items: { type: "string", enum: [...CODE_SEARCH_CHANNELS] },
       },
       score: { type: "number" },
     },
@@ -329,7 +378,7 @@ export const codeSchemas = {
     properties: {
       status: { const: "ok" },
       repositoryKey: { type: "string" },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+      commitOid: commitOidSchema,
       direction: { type: "string", enum: ["callers", "callees"] },
       subject: { $ref: "#/components/schemas/CodeGraphLocator" },
       edges: {
@@ -347,7 +396,7 @@ export const codeSchemas = {
     properties: {
       status: { const: "ambiguous" },
       repositoryKey: { type: "string" },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+      commitOid: commitOidSchema,
       direction: { type: "string", enum: ["callers", "callees"] },
       candidates: {
         type: "array",
@@ -365,7 +414,7 @@ export const codeSchemas = {
     properties: {
       status: { const: "not_found" },
       repositoryKey: { type: "string" },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+      commitOid: commitOidSchema,
       direction: { type: "string", enum: ["callers", "callees"] },
       candidates: {
         type: "array",
@@ -426,9 +475,9 @@ export const codeSchemas = {
     additionalProperties: false,
     required: ["repositoryKey", "commitOid"],
     properties: {
-      repositoryKey: { type: "string", minLength: 1, maxLength: 512 },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
-      sourceRef: { type: "string", minLength: 1, maxLength: 512 },
+      repositoryKey: repositoryKeySchema,
+      commitOid: commitOidSchema,
+      sourceRef: { type: "string", minLength: 1, maxLength: CODE_SOURCE_REF_MAXIMUM_LENGTH },
     },
   },
   CiteMemoryCodeEvidenceInput: {
@@ -439,7 +488,7 @@ export const codeSchemas = {
       artifactId: { type: "string", format: "uuid" },
       relationship: {
         type: "string",
-        enum: ["supports", "contradicts", "implements", "rationale"],
+        enum: [...CODE_EVIDENCE_RELATIONSHIPS],
       },
     },
   },
@@ -448,8 +497,8 @@ export const codeSchemas = {
     additionalProperties: false,
     required: ["repositoryKey", "commitOid"],
     properties: {
-      repositoryKey: { type: "string", minLength: 1, maxLength: 512 },
-      commitOid: { type: "string", pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+      repositoryKey: repositoryKeySchema,
+      commitOid: commitOidSchema,
     },
   },
   MemoryCodeEvidence: {
@@ -501,11 +550,11 @@ export const codeSchemas = {
       citedContentSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
       relationship: {
         type: "string",
-        enum: ["supports", "contradicts", "implements", "rationale"],
+        enum: [...CODE_EVIDENCE_RELATIONSHIPS],
       },
       validationState: {
         type: "string",
-        enum: ["current", "moved", "changed", "deleted", "ambiguous", "unverifiable"],
+        enum: [...CODE_EVIDENCE_VALIDATION_STATES],
       },
       validatedRevisionId: {
         oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],

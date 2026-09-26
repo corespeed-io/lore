@@ -27,6 +27,7 @@ import type {
   VerifiedGitPreparation,
 } from "./types";
 import {
+  CODE_SOURCE_REF_MAXIMUM_LENGTH,
   digestFiles,
   digestGitManifest,
   mapConcurrent,
@@ -152,7 +153,9 @@ export function createCodeIndexModule(
     }
     const repositoryKey = validateRepositoryKey(input.repositoryKey);
     const commitOid = validateCommitOid(input.commitOid);
-    const sourceRef = input.sourceRef ? validatePlainText(input.sourceRef, "sourceRef", 512) : null;
+    const sourceRef = input.sourceRef
+      ? validatePlainText(input.sourceRef, "sourceRef", CODE_SOURCE_REF_MAXIMUM_LENGTH)
+      : null;
     const files = validateAndSortFiles(input.files);
     const sourceDigest = digestFiles(files);
     const treeDigest = digestGitManifest(preparation.manifest);
@@ -344,7 +347,7 @@ export function createCodeIndexModule(
       const displayName = validatePlainText(input.displayName, "displayName", 200);
       const commitOid = validateCommitOid(input.commitOid);
       const sourceRef = input.sourceRef
-        ? validatePlainText(input.sourceRef, "sourceRef", 512)
+        ? validatePlainText(input.sourceRef, "sourceRef", CODE_SOURCE_REF_MAXIMUM_LENGTH)
         : null;
       const files = validateAndSortFiles(input.files);
       const sourceDigest = digestFiles(files);

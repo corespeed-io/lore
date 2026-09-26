@@ -1,4 +1,5 @@
 import { chunkMemoryContent, MemoryChunkingError } from "./memory-chunking";
+import { hasLoneSurrogate, LoreValidationError } from "./validation";
 
 export const MEMORY_CONTENT_LIMITS = {
   recommendedCharacters: 8_000,
@@ -6,30 +7,17 @@ export const MEMORY_CONTENT_LIMITS = {
   maximumChunks: 64,
 } as const;
 
-export class MemoryContentValidationError extends TypeError {
+export class MemoryContentValidationError extends LoreValidationError {
   override name = "MemoryContentValidationError";
-  readonly status = 400;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super("content", message, options);
+  }
 }
 
 export interface PreparedMemoryContent {
   content: string;
   chunks: readonly string[];
-}
-
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      // charCodeAt past the end is NaN and every NaN comparison is false, so a
-      // string ENDING in a high surrogate needs the integer guard to be caught.
-      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) return true;
-      index += 1;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function prepareMemoryContent(content: string): PreparedMemoryContent {

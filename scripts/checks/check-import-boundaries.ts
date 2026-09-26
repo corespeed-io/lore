@@ -51,9 +51,12 @@ export const MODULES: Record<string, ModuleDeclaration> = {
     dependsOn: [],
     exports: [
       "evidence.ts",
+      "evidence-contract.ts",
       "graph.ts",
       "openapi.ts",
+      "indexing/protocol.ts",
       "indexing/read.ts",
+      "indexing/types.ts",
       "indexing/validation.ts",
       "browser/data.ts",
       "browser/evidence-presentation.ts",
@@ -68,12 +71,15 @@ export const MODULES: Record<string, ModuleDeclaration> = {
     dependsOn: ["code"],
     exports: ["input.ts", "service.ts", "browser/data.ts", "browser/presentation.ts"],
   },
-  operations: { dependsOn: ["code", "portability", "workspaces"], exports: [] },
+  operations: { dependsOn: ["code", "portability", "proposals", "workspaces"], exports: [] },
   portability: {
     dependsOn: ["memories"],
     exports: ["limits.ts", "browser/data.ts", "browser/presentation.ts"],
   },
-  proposals: { dependsOn: ["agents", "code", "episodes", "memories"], exports: [] },
+  proposals: {
+    dependsOn: ["agents", "code", "episodes", "memories"],
+    exports: ["limits.ts"],
+  },
   workspaces: { dependsOn: [], exports: ["browser/data.ts"] },
 };
 

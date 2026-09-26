@@ -1,14 +1,14 @@
-import {
-  MEMORY_CHUNK_MAXIMUM_CHARACTERS,
-  MEMORY_CHUNK_OVERLAP_CHARACTERS,
-  MEMORY_CHUNKING_REVISION,
-  MEMORY_CONTENT_LIMITS,
-} from "@corespeed/lore-core";
-import {
-  MAX_WORKSPACE_ARCHIVE_LINKS,
-  MAX_WORKSPACE_ARCHIVE_MEMORIES,
-} from "@/modules/portability/limits";
 import { actorSecurity, errorSchema, jsonResponse, workspaceHeader } from "@/server/openapi/shared";
+import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
+
+/** One `{ const }` schema per published value, in declaration order. */
+function constProperties(
+  values: Readonly<Record<string, number | string>>,
+): Record<string, { const: number | string }> {
+  return Object.fromEntries(
+    Object.entries(values).map(([name, value]) => [name, { const: value }]),
+  );
+}
 
 export const operationsPaths = {
   "/api/v1/capabilities": {
@@ -96,11 +96,7 @@ export const operationsSchemas = {
         type: "object",
         additionalProperties: false,
         required: ["revision", "maximumCharacters", "overlapCharacters"],
-        properties: {
-          revision: { const: MEMORY_CHUNKING_REVISION },
-          maximumCharacters: { const: MEMORY_CHUNK_MAXIMUM_CHARACTERS },
-          overlapCharacters: { const: MEMORY_CHUNK_OVERLAP_CHARACTERS },
-        },
+        properties: constProperties(MEMORY_CHUNKING_CAPABILITY),
       },
       features: {
         type: "object",
@@ -135,52 +131,8 @@ export const operationsSchemas = {
       limits: {
         type: "object",
         additionalProperties: false,
-        required: [
-          "memoryContentRecommendedCharacters",
-          "memoryContentMaximumCharacters",
-          "memoryMaximumChunks",
-          "workspaceArchiveMemories",
-          "workspaceArchiveLinks",
-          "memoryProposalEvidence",
-          "memoryProposalList",
-          "memoryProposalPending",
-          "memoryProposalRetentionSeconds",
-          "episodeObservations",
-          "episodeContentCharacters",
-          "episodeMetadataCharacters",
-          "observationContentCharacters",
-          "observationBatchRead",
-          "codeIndexFiles",
-          "codeIndexSourceBytes",
-          "codeIndexArtifacts",
-          "codeDependencyResults",
-          "codeSearchResults",
-        ],
-        properties: {
-          memoryContentRecommendedCharacters: {
-            const: MEMORY_CONTENT_LIMITS.recommendedCharacters,
-          },
-          memoryContentMaximumCharacters: {
-            const: MEMORY_CONTENT_LIMITS.maximumCharacters,
-          },
-          memoryMaximumChunks: { const: MEMORY_CONTENT_LIMITS.maximumChunks },
-          workspaceArchiveMemories: { const: MAX_WORKSPACE_ARCHIVE_MEMORIES },
-          workspaceArchiveLinks: { const: MAX_WORKSPACE_ARCHIVE_LINKS },
-          memoryProposalEvidence: { const: 50 },
-          memoryProposalList: { const: 100 },
-          memoryProposalPending: { const: 100 },
-          memoryProposalRetentionSeconds: { const: 2_592_000 },
-          episodeObservations: { const: 100 },
-          episodeContentCharacters: { const: 1_000_000 },
-          episodeMetadataCharacters: { const: 1_000_000 },
-          observationContentCharacters: { const: 100_000 },
-          observationBatchRead: { const: 50 },
-          codeIndexFiles: { const: 20_000 },
-          codeIndexSourceBytes: { const: 134_217_728 },
-          codeIndexArtifacts: { const: 100_000 },
-          codeDependencyResults: { const: 200 },
-          codeSearchResults: { const: 100 },
-        },
+        required: Object.keys(DEPLOYMENT_LIMITS),
+        properties: constProperties(DEPLOYMENT_LIMITS),
       },
       activeEmbeddingGeneration: {
         oneOf: [

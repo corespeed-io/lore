@@ -1,4 +1,8 @@
 import { Hono } from "hono";
+import {
+  CODE_EVIDENCE_RELATIONSHIP_MESSAGE,
+  isCodeEvidenceRelationship,
+} from "@/modules/code/evidence-contract";
 import { memoryEtag, requiredMemoryContent } from "@/modules/memories/input";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
@@ -13,39 +17,34 @@ import {
 } from "@/server/api/input";
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
 import { observeOperation } from "@/server/telemetry/telemetry";
+import { MAXIMUM_MEMORY_PROPOSAL_LIST } from "./limits";
 import type { MemoryProposalStatus, ProposeMemoryCodeEvidence } from "./service";
 import {
   createMemoryProposalsModule,
-  MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
-  MAXIMUM_MEMORY_PROPOSAL_LIST,
+  MEMORY_PROPOSAL_KINDS,
+  MEMORY_PROPOSAL_STATUSES,
 } from "./service";
 
 function memoryProposalStatus(value: string | null): MemoryProposalStatus | undefined {
   if (value === null || value.trim() === "") return undefined;
-  if (value === "pending" || value === "accepted" || value === "rejected") return value;
-  throw new BadRequestError("status must be pending, accepted, or rejected");
+  if (MEMORY_PROPOSAL_STATUSES.includes(value as MemoryProposalStatus)) {
+    return value as MemoryProposalStatus;
+  }
+  throw new BadRequestError(`status must be ${MEMORY_PROPOSAL_STATUSES.join(", ")}`);
 }
 
 function proposalCodeEvidence(value: unknown): ProposeMemoryCodeEvidence[] {
   if (!Array.isArray(value)) {
     throw new BadRequestError("codeEvidence must be an array");
   }
-  if (value.length > 50) throw new BadRequestError("codeEvidence exceeds 50 items");
   return value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       throw new BadRequestError(`codeEvidence[${index}] must be an object`);
     }
     const evidence = item as Record<string, unknown>;
     const relationship = evidence.relationship;
-    if (
-      relationship !== "supports" &&
-      relationship !== "contradicts" &&
-      relationship !== "implements" &&
-      relationship !== "rationale"
-    ) {
-      throw new BadRequestError(
-        `codeEvidence[${index}].relationship must be supports, contradicts, implements, or rationale`,
-      );
+    if (!isCodeEvidenceRelationship(relationship)) {
+      throw new BadRequestError(`codeEvidence[${index}].${CODE_EVIDENCE_RELATIONSHIP_MESSAGE}`);
     }
     return {
       artifactId: uuidString(evidence.artifactId, `codeEvidence[${index}].artifactId`),
@@ -83,14 +82,6 @@ export const proposals = new Hono<ApiEnv>()
         : uuidArray(body.evidenceObservationIds, "evidenceObservationIds", true);
     const codeEvidence =
       body.codeEvidence === undefined ? [] : proposalCodeEvidence(body.codeEvidence);
-    if (
-      evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length >
-      MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
-    ) {
-      throw new BadRequestError(
-        `Proposal evidence exceeds ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} items`,
-      );
-    }
     const input =
       body.kind === "create"
         ? {
@@ -115,15 +106,7 @@ export const proposals = new Hono<ApiEnv>()
               codeEvidence,
             }
           : null;
-    if (!input) throw new BadRequestError("kind must be create or update");
-    if (
-      input.kind === "update" &&
-      input.content === undefined &&
-      input.scope === undefined &&
-      input.metadata === undefined
-    ) {
-      throw new BadRequestError("An update proposal must change content, scope, or metadata");
-    }
+    if (!input) throw new BadRequestError(`kind must be ${MEMORY_PROPOSAL_KINDS.join(" or ")}`);
     const proposal = await observeOperation("memory-proposal.create", async () =>
       proposals.propose(actor, input, {
         idempotency: await idempotencyRequest(request, "memory-proposal.create", input),
