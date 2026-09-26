@@ -294,6 +294,8 @@ function uuid(value: unknown, name: string): string {
 // Archive metadata obeys the same wire contract as a direct Memory write, so an
 // exported Memory can always be imported again.
 function metadata(value: unknown, name: string): Record<string, unknown> {
+  // First, so an archive keeps its own storability and __proto__ messages.
+  assertStorableJson(value, name);
   let parsed: ReturnType<typeof MemoryMetadataSchema.safeParse>;
   try {
     parsed = MemoryMetadataSchema.safeParse(value);
@@ -309,7 +311,6 @@ function metadata(value: unknown, name: string): Record<string, unknown> {
       `${name}: ${parsed.error.issues[0]?.message ?? "metadata is invalid"}`,
     );
   }
-  assertStorableJson(value, name);
   return parsed.data;
 }
 

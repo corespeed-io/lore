@@ -5,6 +5,7 @@ import {
   MAX_EPISODE_METADATA_CHARACTERS,
   MAX_OBSERVATION_BATCH_READ,
   validateEpisodeKind,
+  validateObservationCount,
   validateObservationKind,
 } from "@corespeed/lore-core/episodes";
 import { Hono } from "hono";
@@ -38,6 +39,8 @@ function optionalEpisodeKind(value: string | null) {
 // Wire shapes only: the engine's normalizedEpisode owns kinds, counts, and bounds.
 function episodeObservations(value: unknown): RecordObservation[] {
   if (!Array.isArray(value)) throw new BadRequestError("observations must be an array");
+  // Refuse an oversized batch before any per-item work or replay hashing.
+  validateObservationCount(value.length);
   return value.map((item, index) => {
     const name = `observations[${index}]`;
     if (!item || typeof item !== "object" || Array.isArray(item)) {

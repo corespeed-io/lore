@@ -37,6 +37,16 @@ export function validateObservationKind(value: unknown, field = "kind"): Observa
   return value as ObservationKind;
 }
 
+/** An Episode holds 1 to MAX_EPISODE_OBSERVATIONS Observations. */
+export function validateObservationCount(count: number): void {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_EPISODE_OBSERVATIONS) {
+    throw new LoreValidationError(
+      "observations",
+      `observations must contain 1 to ${MAX_EPISODE_OBSERVATIONS} items`,
+    );
+  }
+}
+
 function listOf(values: readonly string[]): string {
   return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
 }
@@ -204,16 +214,10 @@ export function normalizedEpisode(input: RecordEpisode): {
 } {
   validateEpisodeKind(input.kind);
   if (input.scope !== undefined) validateMemoryScope(input.scope);
-  if (
-    !Array.isArray(input.observations) ||
-    input.observations.length < 1 ||
-    input.observations.length > MAX_EPISODE_OBSERVATIONS
-  ) {
-    throw new LoreValidationError(
-      "observations",
-      `observations must contain 1 to ${MAX_EPISODE_OBSERVATIONS} items`,
-    );
+  if (!Array.isArray(input.observations)) {
+    throw new LoreValidationError("observations", "observations must be an array");
   }
+  validateObservationCount(input.observations.length);
   const recordedAt = new Date().toISOString();
   let totalCharacters = 0;
   let totalMetadataCharacters = 0;

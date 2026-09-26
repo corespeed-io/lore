@@ -818,10 +818,6 @@ async function enqueueEmbeddingJob(
   return inserted.rows.length > 0 ? jobId : null;
 }
 
-/**
- * Map a raw `memories` row to the public {@link Memory} shape. Select the row
- * with {@link memorySelectColumns} so its timestamps use the canonical form.
- */
 /** List and search filters obey the same rules as the values they match. */
 function validateReadFilters(input: {
   scope?: MemoryScope | undefined;
@@ -833,6 +829,10 @@ function validateReadFilters(input: {
   }
 }
 
+/**
+ * Map a raw `memories` row to the public {@link Memory} shape. Select the row
+ * with {@link memorySelectColumns} so its timestamps use the canonical form.
+ */
 export function memoryFromRow(row: MemoryRow): Memory {
   return {
     id: row.id,

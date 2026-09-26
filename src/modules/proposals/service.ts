@@ -15,6 +15,11 @@ import {
   serializedTimestamp,
 } from "@corespeed/lore-core";
 import {
+  CITABLE_ARTIFACT_SOURCE,
+  CITED_ANCHOR_COLUMNS,
+  recordCodeEvidenceSql,
+} from "@/modules/code/evidence";
+import {
   CODE_EVIDENCE_RELATIONSHIP_MESSAGE,
   type CodeEvidenceRelationship,
   isCodeEvidenceRelationship,
@@ -319,7 +324,8 @@ export function createMemoryProposalsModule(
           ]),
         ).values(),
       ];
-      for (const [index, evidence] of codeEvidence.entries()) {
+      // Indexes name the request's own entries, before de-duplication.
+      for (const [index, evidence] of (input.codeEvidence ?? []).entries()) {
         if (!isCodeEvidenceRelationship(evidence.relationship)) {
           throw new LoreValidationError(
             `codeEvidence[${index}].relationship`,
@@ -492,38 +498,9 @@ export function createMemoryProposalsModule(
           const storedCodeEvidence: MemoryProposalCodeEvidence[] = [];
           for (const [ordinal, requestedEvidence] of codeEvidence.entries()) {
             const visibleArtifact = await transaction.query<MemoryProposalCodeEvidenceRow>(
-              `SELECT $1::uuid AS proposal_id, $2::integer AS ordinal,
-                 artifact.repository_id, artifact.revision_id AS cited_revision_id,
-                 artifact.generation_id AS cited_generation_id,
-                 artifact.id AS cited_artifact_id, revision.commit_oid AS cited_commit_oid,
-                 $3::code_evidence_relationship AS relationship,
-                 artifact.path AS cited_path, artifact.symbol_key AS cited_symbol_key,
-                 artifact.declaration_key AS cited_declaration_key,
-                 artifact.declaration_chunk_ordinal AS cited_declaration_chunk_ordinal,
-                 CASE WHEN artifact.declaration_key IS NULL THEN NULL ELSE (
-                   SELECT encode(sha256(convert_to(string_agg(
-                     CASE WHEN sibling.id = artifact.id THEN '*' ELSE sibling.content_sha256 END,
-                     '' ORDER BY sibling.declaration_chunk_ordinal
-                   ), 'UTF8')), 'hex')
-                   FROM code_artifacts sibling
-                   WHERE sibling.workspace_id = artifact.workspace_id
-                     AND sibling.repository_id = artifact.repository_id
-                     AND sibling.revision_id = artifact.revision_id
-                     AND sibling.generation_id = artifact.generation_id
-                     AND sibling.declaration_key = artifact.declaration_key
-                 ) END AS cited_declaration_context_sha256,
-                 artifact.content_sha256 AS cited_content_sha256
-               FROM code_artifacts artifact
-               JOIN code_index_generations generation
-                 ON generation.workspace_id = artifact.workspace_id
-                AND generation.repository_id = artifact.repository_id
-                AND generation.revision_id = artifact.revision_id
-                AND generation.id = artifact.generation_id
-                AND generation.status = 'active'
-               JOIN code_revisions revision
-                 ON revision.workspace_id = artifact.workspace_id
-                AND revision.repository_id = artifact.repository_id
-                AND revision.id = artifact.revision_id
+              `SELECT $1::uuid AS proposal_id, $2::integer AS ordinal, ${CITED_ANCHOR_COLUMNS},
+                 $3::code_evidence_relationship AS relationship
+               FROM ${CITABLE_ARTIFACT_SOURCE}
                WHERE artifact.workspace_id = $4 AND artifact.id = $5`,
               [
                 id,
@@ -778,28 +755,13 @@ export function createMemoryProposalsModule(
             [id, actor.workspaceId, actor.userId, applied.memory.id],
           );
           await transaction.query(
-            `INSERT INTO memory_code_evidence (
-               id, workspace_id, memory_id, repository_id,
-               cited_revision_id, cited_generation_id, cited_artifact_id,
-               cited_commit_oid, relationship, cited_path, cited_symbol_key,
-               cited_declaration_key, cited_declaration_chunk_ordinal,
-               cited_declaration_context_sha256, cited_content_sha256, validation_state,
-               validated_revision_id, validated_generation_id, validated_artifact_id,
-               validated_commit_oid, validated_path, created_by_user_id, created_by_agent_id
-             )
-             SELECT gen_random_uuid(), evidence.workspace_id, $3, evidence.repository_id,
-               evidence.cited_revision_id, evidence.cited_generation_id,
-               evidence.cited_artifact_id, evidence.cited_commit_oid,
-               evidence.relationship, evidence.cited_path, evidence.cited_symbol_key,
-               evidence.cited_declaration_key, evidence.cited_declaration_chunk_ordinal,
-               evidence.cited_declaration_context_sha256,
-               evidence.cited_content_sha256, 'current',
-               evidence.cited_revision_id, evidence.cited_generation_id,
-               evidence.cited_artifact_id, evidence.cited_commit_oid,
-               evidence.cited_path, $4, NULL
-             FROM memory_proposal_code_evidence evidence
-             WHERE evidence.workspace_id = $1 AND evidence.proposal_id = $2
-             ON CONFLICT (memory_id, cited_artifact_id, relationship) DO NOTHING`,
+            recordCodeEvidenceSql({
+              anchors: `memory_proposal_code_evidence anchor
+                WHERE anchor.workspace_id = $1 AND anchor.proposal_id = $2`,
+              memoryId: "$3",
+              createdByUserId: "$4",
+              createdByAgentId: "NULL",
+            }),
             [actor.workspaceId, id, applied.memory.id, actor.userId],
           );
           const [proposal] = await proposalsFromRows(transaction, accepted.rows);

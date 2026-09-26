@@ -185,13 +185,15 @@ been removed. Lore now has a native implementation, split into two concepts
   `MEMORY_METADATA_LIMITS`, `MEMORY_LIST_LIMITS`, `MEMORY_SEARCH_LIMITS`,
   `MEMORY_GRAPH_LIMITS`, `MEMORY_LINK_LIMITS`), and plain validators
   (`validateMemoryMetadata`, `validateMemoryScope`, `validateMemoryLink`,
-  `normalizedEpisode`, …). Every engine rule throws `LoreValidationError`
+  `normalizedEpisode`, …). Every engine rule on request input throws `LoreValidationError`
   (`packages/lore-core/src/validation.ts`), which names the failing `field`;
   `src/server/api/errors.ts` maps that one class to 400 `invalid_request`, so OSS
   routes check wire shapes only and never restate an engine rule. The engine
   refuses an out-of-range value — a list/search/Graph limit, an offset, an
-  over-long query or Link kind, a Link weight outside `[0,1]` — and never clamps or
-  trims it into range; Links are stored exactly as given. OSS derives its wire
+  over-long query or Link kind, a Link weight outside `[0,1]`, metadata with a NUL
+  or unpaired surrogate — and never clamps or trims it into range; Links are stored
+  exactly as given. Deployment tuning options (reranking weights, candidate budgets)
+  are operator configuration, not request input, and keep their documented bounds. OSS derives its wire
   contract from these exports: Zod `z.enum(MEMORY_SCOPES)` and a metadata refine
   that calls the engine validator (`src/server/api/shared-schemas.ts`), OpenAPI
   enums and bounds from the same constants, and OSS-owned vocabularies defined once
@@ -792,7 +794,8 @@ tool-shaped compatibility client, page/slug view model, `/api/call`, or any
 generic upstream adapter to support the historical component structure.
 
 The native Graph endpoint caps reads at 5,000 visible Memories
-(`MEMORY_GRAPH_LIMITS.maximumNodes`); a larger `limit` is a 400, not a silent clamp. It returns all
+(`MEMORY_GRAPH_LIMITS.maximumNodes`); a `limit` that is not an integer from 1 to
+that bound is a 400, not a silent clamp or fallback. It returns all
 RLS-visible Memory Links whose endpoints are in that node set, then derives at most
 three affinities per Memory among the first 500 otherwise isolated nodes. Each
 node reads only a 1,000-code-point content prefix; complete content is fetched

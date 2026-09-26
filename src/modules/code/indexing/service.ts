@@ -7,6 +7,7 @@ import {
   CodeIndexValidationError,
   CodeRevisionConflictError,
 } from "./errors";
+import { activeGenerationOf, REVISION_GENERATION_SOURCE } from "./generation-sql";
 import { readGitRevisionFiles, resolveGitCommit, resolveGitTreeOid } from "./git";
 import { prepareFile } from "./parser";
 import { CODE_INDEX_LIMITS, CODE_INDEX_REVISION } from "./protocol";
@@ -122,21 +123,11 @@ export function createCodeIndexModule(
         `SELECT revision.id, revision.repository_id, revision.source_digest,
            revision.tree_oid, revision.tree_digest, revision.file_count,
            generation.id AS generation_id, generation.artifact_count
-         FROM code_repositories repository
-         JOIN code_revisions revision
-           ON revision.workspace_id = repository.workspace_id
-          AND revision.repository_id = repository.id
-         JOIN code_index_generations generation
-           ON generation.workspace_id = revision.workspace_id
-          AND generation.repository_id = revision.repository_id
-          AND generation.revision_id = revision.id
-         WHERE repository.workspace_id = $1
-           AND repository.repository_key = $2
-           AND revision.commit_oid = $3
+         FROM ${REVISION_GENERATION_SOURCE}
+         WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$3" })}
            AND revision.tree_oid = $4
            AND revision.tree_digest IS NOT NULL
-           AND generation.indexer_revision = $5
-           AND generation.status = 'active'`,
+           AND generation.indexer_revision = $5`,
         [actor.workspaceId, repositoryKey, commitOid, treeOid, CODE_INDEX_REVISION],
       );
       return result.rows[0] ?? null;

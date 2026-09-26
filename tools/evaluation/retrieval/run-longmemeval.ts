@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { createEmbeddingProviderFromEnvironment } from "../../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
@@ -62,6 +63,10 @@ function parseArgs(args: string[]): CliOptions {
       index += 1;
     } else if (flag === "--limit") {
       options.limit = positiveInteger(value, flag);
+      // The engine refuses a larger search limit; fail before indexing a corpus.
+      if (options.limit > MEMORY_SEARCH_LIMITS.maximumLimit) {
+        throw new Error(`--limit must be at most ${MEMORY_SEARCH_LIMITS.maximumLimit}`);
+      }
       index += 1;
     } else if (flag === "--output") {
       if (!value) throw new Error("--output requires a path");

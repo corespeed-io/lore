@@ -1,5 +1,5 @@
 import { MEMORY_SCOPES, type MemoryScope } from "./memory-types";
-import { boundedInteger, LoreValidationError } from "./validation";
+import { boundedInteger, isStorableText, LoreValidationError } from "./validation";
 
 export const MEMORY_METADATA_LIMITS = {
   /** `JSON.stringify` length of one metadata object, in UTF-16 code units. */
@@ -26,7 +26,10 @@ export function validateMemoryScope(value: unknown, field = "scope"): MemoryScop
   return value as MemoryScope;
 }
 
-/** A JSON object within the metadata bound; Memories, Links, and Observations share it. */
+/**
+ * A JSON object within the metadata bound whose keys and strings PostgreSQL can
+ * store; Memories, Links, Observations, and filters share it.
+ */
 export function validateMemoryMetadata(
   value: unknown,
   field = "metadata",
@@ -35,10 +38,19 @@ export function validateMemoryMetadata(
     throw new LoreValidationError(field, `${field} must be an object`);
   }
   let serialized: string;
+  let storable = true;
   try {
-    serialized = JSON.stringify(value);
+    serialized = JSON.stringify(value, (key: string, item: unknown) => {
+      if (!isStorableText(key) || (typeof item === "string" && !isStorableText(item))) {
+        storable = false;
+      }
+      return item;
+    });
   } catch (error) {
     throw new LoreValidationError(field, `${field} must be JSON serializable`, { cause: error });
+  }
+  if (!storable) {
+    throw new LoreValidationError(field, `${field} contains a NUL character or invalid Unicode`);
   }
   if (serialized.length > MEMORY_METADATA_LIMITS.maximumSerializedLength) {
     throw new LoreValidationError(

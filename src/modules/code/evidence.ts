@@ -13,6 +13,7 @@ import {
   type CodeEvidenceValidationState,
   isCodeEvidenceRelationship,
 } from "./evidence-contract";
+import { activeGenerationOf, REVISION_GENERATION_SOURCE } from "./indexing/generation-sql";
 
 export interface MemoryCodeEvidence {
   id: string;
@@ -154,6 +155,87 @@ interface RevalidationCandidate {
   declaration_context_sha256: string | null;
 }
 
+/**
+ * The masked declaration-context fingerprint of the chunk `artifact` names:
+ * SHA-256 over the content digests of its declaration's chunks in ordinal order,
+ * with that chunk replaced by `*`. Stored anchors are immutable, so this expression
+ * is part of the anchor protocol; citation, Proposal snapshots, and assessment all
+ * build it here. `artifact` is a trusted SQL alias, never input.
+ */
+export function declarationContextSha256Sql(artifact: string): string {
+  return `CASE WHEN ${artifact}.declaration_key IS NULL THEN NULL ELSE (
+    SELECT encode(sha256(convert_to(string_agg(
+      CASE WHEN sibling.id = ${artifact}.id THEN '*' ELSE sibling.content_sha256 END,
+      '' ORDER BY sibling.declaration_chunk_ordinal
+    ), 'UTF8')), 'hex')
+    FROM code_artifacts sibling
+    WHERE sibling.workspace_id = ${artifact}.workspace_id
+      AND sibling.repository_id = ${artifact}.repository_id
+      AND sibling.revision_id = ${artifact}.revision_id
+      AND sibling.generation_id = ${artifact}.generation_id
+      AND sibling.declaration_key = ${artifact}.declaration_key
+  ) END`;
+}
+
+/** A citable Artifact: RLS-visible, in its revision's active generation. */
+export const CITABLE_ARTIFACT_SOURCE = `code_artifacts artifact
+  JOIN code_index_generations generation
+    ON generation.workspace_id = artifact.workspace_id
+   AND generation.repository_id = artifact.repository_id
+   AND generation.revision_id = artifact.revision_id
+   AND generation.id = artifact.generation_id
+   AND generation.status = 'active'
+  JOIN code_revisions revision
+    ON revision.workspace_id = artifact.workspace_id
+   AND revision.repository_id = artifact.repository_id
+   AND revision.id = artifact.revision_id`;
+
+/** The immutable anchor snapshot of a citable Artifact, named as anchors store it. */
+export const CITED_ANCHOR_COLUMNS = `artifact.workspace_id, artifact.repository_id,
+  artifact.revision_id AS cited_revision_id,
+  artifact.generation_id AS cited_generation_id,
+  artifact.id AS cited_artifact_id,
+  revision.commit_oid AS cited_commit_oid,
+  artifact.path AS cited_path,
+  artifact.symbol_key AS cited_symbol_key,
+  artifact.declaration_key AS cited_declaration_key,
+  artifact.declaration_chunk_ordinal AS cited_declaration_chunk_ordinal,
+  ${declarationContextSha256Sql("artifact")} AS cited_declaration_context_sha256,
+  artifact.content_sha256 AS cited_content_sha256`;
+
+/**
+ * The one statement that records Memory Code Evidence. `anchors` is a FROM item
+ * (with any WHERE) exposing anchor snapshot columns and `relationship` as `anchor`;
+ * the other inputs are SQL parameter placeholders. A new anchor starts `current`
+ * at the revision it cites, and an existing (Memory, Artifact, relationship) anchor
+ * is kept unchanged.
+ */
+export function recordCodeEvidenceSql(input: {
+  anchors: string;
+  memoryId: string;
+  createdByUserId: string;
+  createdByAgentId: string;
+}): string {
+  return `INSERT INTO memory_code_evidence (
+      id, workspace_id, memory_id, repository_id,
+      cited_revision_id, cited_generation_id, cited_artifact_id,
+      cited_commit_oid, relationship, cited_path, cited_symbol_key,
+      cited_declaration_key, cited_declaration_chunk_ordinal,
+      cited_declaration_context_sha256, cited_content_sha256, validation_state,
+      validated_revision_id, validated_generation_id, validated_artifact_id,
+      validated_commit_oid, validated_path, created_by_user_id, created_by_agent_id
+    )
+    SELECT gen_random_uuid(), anchor.workspace_id, ${input.memoryId}, anchor.repository_id,
+      anchor.cited_revision_id, anchor.cited_generation_id, anchor.cited_artifact_id,
+      anchor.cited_commit_oid, anchor.relationship, anchor.cited_path, anchor.cited_symbol_key,
+      anchor.cited_declaration_key, anchor.cited_declaration_chunk_ordinal,
+      anchor.cited_declaration_context_sha256, anchor.cited_content_sha256, 'current',
+      anchor.cited_revision_id, anchor.cited_generation_id, anchor.cited_artifact_id,
+      anchor.cited_commit_oid, anchor.cited_path, ${input.createdByUserId}, ${input.createdByAgentId}
+    FROM ${input.anchors}
+    ON CONFLICT (memory_id, cited_artifact_id, relationship) DO NOTHING`;
+}
+
 const EVIDENCE_SELECT = `SELECT evidence.id, evidence.memory_id,
   evidence.repository_id, evidence.cited_revision_id, evidence.cited_generation_id,
   evidence.cited_artifact_id, evidence.cited_commit_oid,
@@ -230,19 +312,9 @@ async function assessmentTarget(
   const target = await transaction.query<AssessmentTarget>(
     `SELECT revision.id AS revision_id, generation.id AS generation_id,
        generation.indexer_revision
-     FROM code_repositories repository
-     JOIN code_revisions revision
-       ON revision.workspace_id = repository.workspace_id
-      AND revision.repository_id = repository.id
-     JOIN code_index_generations generation
-       ON generation.workspace_id = revision.workspace_id
-      AND generation.repository_id = revision.repository_id
-      AND generation.revision_id = revision.id
-      AND generation.status = 'active'
-     WHERE repository.workspace_id = $1
-       AND repository.id = $2
-       AND repository.repository_key = $3
-       AND revision.commit_oid = $4`,
+     FROM ${REVISION_GENERATION_SOURCE}
+     WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$3", commitOid: "$4" })}
+       AND repository.id = $2`,
     [workspaceId, repositoryId, repositoryKey, commitOid],
   );
   return target.rows[0] ?? null;
@@ -356,18 +428,7 @@ async function assessAgainstTarget(
      SELECT artifact.id, artifact.path, artifact.content_sha256,
        artifact.symbol_key, artifact.declaration_key,
        artifact.declaration_chunk_ordinal,
-       CASE WHEN artifact.declaration_key IS NULL THEN NULL ELSE (
-         SELECT encode(sha256(convert_to(string_agg(
-           CASE WHEN sibling.id = artifact.id THEN '*' ELSE sibling.content_sha256 END,
-           '' ORDER BY sibling.declaration_chunk_ordinal
-         ), 'UTF8')), 'hex')
-         FROM code_artifacts sibling
-         WHERE sibling.workspace_id = artifact.workspace_id
-           AND sibling.repository_id = artifact.repository_id
-           AND sibling.revision_id = artifact.revision_id
-           AND sibling.generation_id = artifact.generation_id
-           AND sibling.declaration_key = artifact.declaration_key
-       ) END AS declaration_context_sha256
+       ${declarationContextSha256Sql("artifact")} AS declaration_context_sha256
      FROM candidate
      JOIN code_artifacts artifact
        ON artifact.workspace_id = $1
@@ -612,53 +673,18 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
       try {
         return await database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
-          const evidenceId = crypto.randomUUID();
           await transaction.query(
-            `INSERT INTO memory_code_evidence (
-               id, workspace_id, memory_id, repository_id,
-               cited_revision_id, cited_generation_id, cited_artifact_id,
-               cited_commit_oid, relationship, cited_path, cited_symbol_key, cited_declaration_key,
-               cited_declaration_chunk_ordinal, cited_declaration_context_sha256,
-               cited_content_sha256, validation_state,
-               validated_revision_id, validated_generation_id,
-               validated_artifact_id, validated_commit_oid, validated_path,
-               created_by_user_id, created_by_agent_id
-             )
-             SELECT $1, artifact.workspace_id, $2, artifact.repository_id,
-               artifact.revision_id, artifact.generation_id, artifact.id,
-               revision.commit_oid, $3, artifact.path, artifact.symbol_key, artifact.declaration_key,
-               artifact.declaration_chunk_ordinal,
-               CASE WHEN artifact.declaration_key IS NULL THEN NULL ELSE (
-                 SELECT encode(sha256(convert_to(string_agg(
-                   CASE WHEN sibling.id = artifact.id THEN '*' ELSE sibling.content_sha256 END,
-                   '' ORDER BY sibling.declaration_chunk_ordinal
-                 ), 'UTF8')), 'hex')
-                 FROM code_artifacts sibling
-                 WHERE sibling.workspace_id = artifact.workspace_id
-                   AND sibling.repository_id = artifact.repository_id
-                   AND sibling.revision_id = artifact.revision_id
-                   AND sibling.generation_id = artifact.generation_id
-                   AND sibling.declaration_key = artifact.declaration_key
-               ) END,
-               artifact.content_sha256, 'current',
-               artifact.revision_id, artifact.generation_id, artifact.id,
-               revision.commit_oid, artifact.path,
-               $4, $5
-             FROM code_artifacts artifact
-             JOIN code_index_generations generation
-               ON generation.workspace_id = artifact.workspace_id
-              AND generation.repository_id = artifact.repository_id
-              AND generation.revision_id = artifact.revision_id
-              AND generation.id = artifact.generation_id
-              AND generation.status = 'active'
-             JOIN code_revisions revision
-               ON revision.workspace_id = artifact.workspace_id
-              AND revision.repository_id = artifact.repository_id
-              AND revision.id = artifact.revision_id
-             WHERE artifact.workspace_id = $6 AND artifact.id = $7
-             ON CONFLICT (memory_id, cited_artifact_id, relationship) DO NOTHING`,
+            recordCodeEvidenceSql({
+              anchors: `(
+                SELECT ${CITED_ANCHOR_COLUMNS}, $2::code_evidence_relationship AS relationship
+                FROM ${CITABLE_ARTIFACT_SOURCE}
+                WHERE artifact.workspace_id = $5 AND artifact.id = $6
+              ) anchor`,
+              memoryId: "$1",
+              createdByUserId: "$3",
+              createdByAgentId: "$4",
+            }),
             [
-              evidenceId,
               memoryId,
               input.relationship,
               actor.userId,

@@ -73,6 +73,12 @@ test("metadata is one bounded JSON object wherever the engine stores or filters 
   expect(
     (await rejection(memories.list(testContext.alice, { metadataFilter: oversized }))).field,
   ).toBe("metadataFilter");
+  // PostgreSQL refuses these in JSONB; the engine names the field instead.
+  for (const metadata of [{ note: "bad\u0000" }, { ["key\uD83D"]: "value" }]) {
+    expect(
+      (await rejection(memories.remember(testContext.alice, { content: "x", metadata }))).message,
+    ).toBe("metadata contains a NUL character or invalid Unicode");
+  }
   await testContext.close();
 });
 

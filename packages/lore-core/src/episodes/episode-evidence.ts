@@ -6,6 +6,8 @@ import {
 } from "../capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "../db";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
+import { MEMORY_SEARCH_LIMITS } from "../memory-input";
+import { boundedInteger, boundedNumber, LoreValidationError } from "../validation";
 import { embeddingVectorLiteral, embeddingVectorLiterals } from "../vector";
 
 export const EPISODE_EVIDENCE_INDEX_REVISION =
@@ -102,32 +104,6 @@ interface SearchRow {
 }
 
 const embeddingBatchSize = 32;
-
-function boundedInteger(
-  value: number | undefined,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-) {
-  const selected = value ?? fallback;
-  if (!Number.isInteger(selected) || selected < minimum || selected > maximum) {
-    throw new TypeError(`Expected an integer from ${minimum} to ${maximum}`);
-  }
-  return selected;
-}
-
-function boundedNumber(
-  value: number | undefined,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-) {
-  const selected = value ?? fallback;
-  if (!Number.isFinite(selected) || selected < minimum || selected > maximum) {
-    throw new TypeError(`Expected a number from ${minimum} to ${maximum}`);
-  }
-  return selected;
-}
 
 function sourceKeyFor(row: SearchRow, groupMetadataKey: string | undefined): string {
   if (!groupMetadataKey) return row.episode_id;
@@ -595,13 +571,41 @@ export function createEpisodeEvidenceModule(
   options: EpisodeEvidenceModuleOptions = {},
 ) {
   const { database } = storage;
-  const evidenceNeighborChunks = boundedInteger(options.evidenceNeighborChunks, 0, 0, 2);
-  const evidenceTopObservations = boundedInteger(options.evidenceTopObservations, 1, 1, 5);
-  const queryPlannerMaxQueries = boundedInteger(options.queryPlannerMaxQueries, 3, 1, 5);
-  const rerankCandidateLimit = boundedInteger(options.rerankCandidateLimit, 50, 1, 200);
-  const rerankMinimumScore = boundedNumber(options.rerankMinimumScore, 0, 0, 1);
-  const rerankWeight = boundedNumber(options.rerankWeight, 1, 0, 1);
-  const semanticDistanceThreshold = boundedNumber(options.semanticDistanceThreshold, 0.5, 0, 2);
+  const evidenceNeighborChunks = boundedInteger(
+    options.evidenceNeighborChunks,
+    "evidenceNeighborChunks",
+    { minimum: 0, maximum: 2, fallback: 0 },
+  );
+  const evidenceTopObservations = boundedInteger(
+    options.evidenceTopObservations,
+    "evidenceTopObservations",
+    { minimum: 1, maximum: 5, fallback: 1 },
+  );
+  const queryPlannerMaxQueries = boundedInteger(
+    options.queryPlannerMaxQueries,
+    "queryPlannerMaxQueries",
+    { minimum: 1, maximum: 5, fallback: 3 },
+  );
+  const rerankCandidateLimit = boundedInteger(
+    options.rerankCandidateLimit,
+    "rerankCandidateLimit",
+    { minimum: 1, maximum: 200, fallback: 50 },
+  );
+  const rerankMinimumScore = boundedNumber(options.rerankMinimumScore, "rerankMinimumScore", {
+    minimum: 0,
+    maximum: 1,
+    fallback: 0,
+  });
+  const rerankWeight = boundedNumber(options.rerankWeight, "rerankWeight", {
+    minimum: 0,
+    maximum: 1,
+    fallback: 1,
+  });
+  const semanticDistanceThreshold = boundedNumber(
+    options.semanticDistanceThreshold,
+    "semanticDistanceThreshold",
+    { minimum: 0, maximum: 2, fallback: 0.5 },
+  );
   const embeddingProvider = options.embeddingProvider;
   const embeddingDimensions = validatedEmbeddingDimensions(
     options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
@@ -761,13 +765,17 @@ export function createEpisodeEvidenceModule(
     async search(input: SearchEpisodeEvidence): Promise<EpisodeEvidenceSearchResult[]> {
       const query = input.query.trim();
       if (!query) return [];
-      const limit = boundedInteger(input.limit, 10, 1, 100);
+      const limit = boundedInteger(input.limit, "limit", {
+        minimum: 1,
+        maximum: MEMORY_SEARCH_LIMITS.maximumLimit,
+        fallback: MEMORY_SEARCH_LIMITS.defaultLimit,
+      });
       const sourceKeys = [...new Set(input.sourceKeys ?? [])];
       if (sourceKeys.length && !input.groupMetadataKey) {
-        throw new TypeError("sourceKeys require groupMetadataKey");
+        throw new LoreValidationError("sourceKeys", "sourceKeys require groupMetadataKey");
       }
       if (sourceKeys.length > 1_000)
-        throw new TypeError("At most 1000 source keys may be searched");
+        throw new LoreValidationError("sourceKeys", "At most 1000 source keys may be searched");
       const resultLimit = options.rerankingProvider ? Math.max(limit, rerankCandidateLimit) : limit;
       const candidateLimit = Math.min(resultLimit * 4, 800);
       let planned: string[] = [];

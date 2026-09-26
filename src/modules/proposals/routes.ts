@@ -30,7 +30,8 @@ function memoryProposalStatus(value: string | null): MemoryProposalStatus | unde
   if (MEMORY_PROPOSAL_STATUSES.includes(value as MemoryProposalStatus)) {
     return value as MemoryProposalStatus;
   }
-  throw new BadRequestError(`status must be ${MEMORY_PROPOSAL_STATUSES.join(", ")}`);
+  const [last, ...others] = [...MEMORY_PROPOSAL_STATUSES].reverse();
+  throw new BadRequestError(`status must be ${others.reverse().join(", ")}, or ${last}`);
 }
 
 function proposalCodeEvidence(value: unknown): ProposeMemoryCodeEvidence[] {
