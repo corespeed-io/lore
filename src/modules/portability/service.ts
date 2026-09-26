@@ -134,13 +134,9 @@ interface ExportLinkRow {
   running_bytes: number | string;
 }
 
-interface NormalizedArchiveMemory extends WorkspaceArchiveMemory {
-  chunks: readonly string[];
-}
-
 interface NormalizedArchive {
   manifest: WorkspaceArchive["manifest"];
-  memories: NormalizedArchiveMemory[];
+  memories: WorkspaceArchiveMemory[];
   links: WorkspaceArchiveLink[];
 }
 
@@ -378,7 +374,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     throw new PortabilityValidationError("archive manifest counts do not match its records");
   }
   const memoryIds = new Set<string>();
-  const normalizedMemories: NormalizedArchiveMemory[] = [];
+  const normalizedMemories: WorkspaceArchiveMemory[] = [];
   for (const [index, memory] of archive.memories.entries()) {
     if (!memory || typeof memory !== "object" || Array.isArray(memory)) {
       throw new PortabilityValidationError(`memories[${index}] must be an object`);
@@ -388,9 +384,9 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     memoryIds.add(id);
     const ownerUserId = uuid(memory.ownerUserId, `memories[${index}].ownerUserId`);
     const scope = archiveRule(() => validateMemoryScope(memory.scope, `memories[${index}].scope`));
-    let chunks: readonly string[];
+    // Chunking is the content rule; the insert chunks again, so keep no result here.
     try {
-      chunks = prepareMemoryContent(memory.content).chunks;
+      prepareMemoryContent(memory.content);
     } catch (error) {
       if (error instanceof MemoryContentValidationError) {
         throw new PortabilityValidationError(`memories[${index}].content: ${error.message}`, {
@@ -414,7 +410,6 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
       version: memory.version,
       createdAt,
       updatedAt,
-      chunks,
     });
   }
   const linkIds = new Set<string>();
@@ -495,7 +490,7 @@ function normalizedOwnerMap(value: Record<string, string>): Record<string, strin
   return normalized;
 }
 
-/** Serialize records into bounded JSON arrays, one lazily built parameter per INSERT. */
+/** One provenance row per imported Memory, written in bounded record batches. */
 const INSERT_IMPORT_PROVENANCE = `INSERT INTO memory_import_provenance (
      workspace_id, memory_id, import_id, source_memory_id,
      source_owner_user_id, source_created_at, source_updated_at

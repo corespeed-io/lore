@@ -7,13 +7,16 @@ import {
   CORE_SCHEMA_CONTRACT,
   type SchemaContractGroup,
   type SchemaContractGroupName,
+  type TableContract,
 } from "./schema-contract";
 
 export { CORE_SCHEMA_CONTRACT, type SchemaContractGroupName } from "./schema-contract";
 
 /**
  * Every item of the named schema-contract groups that a database lacks, read from
- * its catalog: a missing table or column, function signature, or enum label set.
+ * its catalog: a table or column, an insertable NOT NULL column without a default,
+ * a generated column, an ON CONFLICT unique key, a cascading foreign key, a type,
+ * a function signature, an enum label set, or an enum value the engine compares.
  * An empty result means the schema provides those groups.
  */
 export async function missingSchemaContract(
@@ -23,23 +26,19 @@ export async function missingSchemaContract(
   const missing: string[] = [];
   for (const name of groups) {
     const group: SchemaContractGroup = CORE_SCHEMA_CONTRACT[name];
-    for (const [table, columns] of Object.entries(group.tables)) {
-      const result = await transaction.query<{ column_name: string }>(
-        `SELECT attribute.attname AS column_name
-         FROM pg_attribute attribute
-         WHERE attribute.attrelid = to_regclass($1)
-           AND attribute.attnum > 0
-           AND NOT attribute.attisdropped`,
-        [`public.${table}`],
+    for (const [table, contract] of Object.entries(group.tables)) {
+      missing.push(
+        ...(await missingTableContract(transaction, table, contract)).map(
+          (item) => `${name}: ${item}`,
+        ),
       );
-      if (result.rows.length === 0) {
-        missing.push(`${name}: table ${table}`);
-        continue;
-      }
-      const present = new Set(result.rows.map((row) => row.column_name));
-      for (const column of columns) {
-        if (!present.has(column)) missing.push(`${name}: column ${table}.${column}`);
-      }
+    }
+    for (const type of group.types) {
+      const result = await transaction.query<{ present: boolean }>(
+        "SELECT to_regtype($1) IS NOT NULL AS present",
+        [type],
+      );
+      if (!result.rows[0]?.present) missing.push(`${name}: type ${type}`);
     }
     for (const signature of group.functions) {
       const result = await transaction.query<{ present: boolean }>(
@@ -49,14 +48,116 @@ export async function missingSchemaContract(
       if (!result.rows[0]?.present) missing.push(`${name}: function ${signature}`);
     }
     for (const [type, labels] of Object.entries(group.enums)) {
-      const result = await transaction.query<{ label: string }>(
-        `SELECT enumlabel AS label FROM pg_enum WHERE enumtypid = to_regtype($1)`,
-        [`public.${type}`],
-      );
-      const present = result.rows.map((row) => row.label).sort();
+      const present = (await enumLabels(transaction, `public.${type}`)).sort();
       if (present.join(",") !== [...labels].sort().join(",")) {
         missing.push(`${name}: enum ${type} (${[...labels].join(", ")})`);
       }
+    }
+    for (const [column, values] of Object.entries(group.values)) {
+      const [table, attribute] = column.split(".") as [string, string];
+      const result = await transaction.query<{ type_name: string | null }>(
+        `SELECT format_type(attribute.atttypid, NULL) AS type_name
+         FROM pg_attribute attribute
+         WHERE attribute.attrelid = to_regclass($1) AND attribute.attname = $2`,
+        [`public.${table}`, attribute],
+      );
+      const typeName = result.rows[0]?.type_name;
+      if (!typeName) continue;
+      const labels = await enumLabels(transaction, typeName);
+      if (labels.length > 0 && values.some((value) => !labels.includes(value))) {
+        missing.push(`${name}: values ${column} (${[...values].join(", ")})`);
+      }
+    }
+  }
+  return missing;
+}
+
+async function enumLabels(transaction: PostgresTransaction, type: string): Promise<string[]> {
+  const result = await transaction.query<{ label: string }>(
+    "SELECT enumlabel AS label FROM pg_enum WHERE enumtypid = to_regtype($1)",
+    [type],
+  );
+  return result.rows.map((row) => row.label);
+}
+
+async function missingTableContract(
+  transaction: PostgresTransaction,
+  table: string,
+  contract: TableContract,
+): Promise<string[]> {
+  const relation = `public.${table}`;
+  const attributes = await transaction.query<{
+    column_name: string;
+    not_null: boolean;
+    has_value: boolean;
+    generated: boolean;
+  }>(
+    `SELECT attribute.attname AS column_name, attribute.attnotnull AS not_null,
+       (attribute.atthasdef OR attribute.attidentity <> '' OR attribute.attgenerated <> '')
+         AS has_value,
+       attribute.attgenerated <> '' AS generated
+     FROM pg_attribute attribute
+     WHERE attribute.attrelid = to_regclass($1)
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped`,
+    [relation],
+  );
+  if (attributes.rows.length === 0) return [`table ${table}`];
+  const missing: string[] = [];
+  const byName = new Map(attributes.rows.map((row) => [row.column_name, row]));
+  for (const column of new Set([...contract.columns, ...(contract.inserts ?? [])])) {
+    if (!byName.has(column)) missing.push(`column ${table}.${column}`);
+  }
+  if (contract.inserts) {
+    const inserted = new Set(contract.inserts);
+    for (const row of attributes.rows) {
+      if (row.not_null && !row.has_value && !inserted.has(row.column_name)) {
+        missing.push(`default for ${table}.${row.column_name}, which the engine does not insert`);
+      }
+    }
+  }
+  for (const column of contract.generated ?? []) {
+    if (byName.has(column) && !byName.get(column)?.generated) {
+      missing.push(`generated column ${table}.${column}`);
+    }
+  }
+  if (contract.uniqueKeys?.length) {
+    const indexes = await transaction.query<{ columns: string[] }>(
+      `SELECT ARRAY(
+         SELECT attribute.attname
+         FROM unnest(index.indkey) AS key(attnum)
+         JOIN pg_attribute attribute
+           ON attribute.attrelid = index.indrelid AND attribute.attnum = key.attnum
+       ) AS columns
+       FROM pg_index index
+       WHERE index.indrelid = to_regclass($1) AND index.indisunique AND index.indpred IS NULL`,
+      [relation],
+    );
+    const unique = indexes.rows.map((row) => [...row.columns].sort().join(","));
+    for (const key of contract.uniqueKeys) {
+      if (!unique.includes([...key].sort().join(","))) {
+        missing.push(`unique key ${table} (${key.join(", ")})`);
+      }
+    }
+  }
+  for (const cascade of contract.cascades ?? []) {
+    const result = await transaction.query<{ present: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM pg_constraint constraint_row
+         JOIN pg_attribute attribute
+           ON attribute.attrelid = constraint_row.conrelid
+          AND attribute.attnum = ANY(constraint_row.conkey)
+         WHERE constraint_row.contype = 'f'
+           AND constraint_row.confdeltype = 'c'
+           AND constraint_row.conrelid = to_regclass($1)
+           AND constraint_row.confrelid = to_regclass($2)
+           AND attribute.attname = $3
+       ) AS present`,
+      [relation, `public.${cascade.parent}`, cascade.column],
+    );
+    if (!result.rows[0]?.present) {
+      missing.push(`cascading foreign key ${table}.${cascade.column} -> ${cascade.parent}`);
     }
   }
   return missing;

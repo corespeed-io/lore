@@ -464,10 +464,6 @@ async function readGraphRows(
 }
 
 /**
- * Memory Graph and durable Memory Links over a host-scoped database.
- * The host owns visibility and write authorization for both link endpoints.
- */
-/**
  * Insert many Memory Links in bounded set-based batches. Each obeys the Link rules;
  * a Link that duplicates an existing (source, target, kind) is skipped. Returns the
  * ids of the Links actually inserted.
@@ -505,6 +501,10 @@ export async function insertMemoryLinksInTransaction(
   return inserted.map((row) => row.id);
 }
 
+/**
+ * Memory Graph and durable Memory Links over a host-scoped database.
+ * The host owns visibility and write authorization for both link endpoints.
+ */
 export function createMemoryGraphModule(storage: MemoryStorageContext) {
   const { database } = storage;
   return {

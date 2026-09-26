@@ -63,11 +63,14 @@ for host assembly and model transport policy.
 
 `src/schema-contract.ts` is the engine's whole storage dependency, grouped by
 capability: `memory` (CRUD and retrieval), `graph` (Memory Links), `maintenance`
-(embedding jobs and generations), and `episodes`. Each group names its tables and
-columns, `lore.*` function signatures, enum labels, and the transaction settings
-the engine writes. `tests/schema-contract.test.ts` fails when the engine's SQL
-names anything the contract omits, and `missingSchemaContract` from `./testing`
-checks a host schema's catalog against the groups it provides.
+(embedding jobs and generations), and `episodes`. Each group names its tables with
+the columns the engine reads and inserts, generated columns, ON CONFLICT unique
+keys, and cascading foreign keys, plus types, `lore.*` function signatures, enum
+labels and compared values, and the transaction settings the engine writes.
+`tests/schema-contract.test.ts` fails when a table, function, setting, INSERT
+column list, or ON CONFLICT target in the engine's SQL differs from the contract
+(read-only column lists are kept by hand), and `missingSchemaContract` from
+`./testing` checks a host schema's catalog against the groups it provides.
 
 Maintenance leases fence ownership and allow reclamation; they do not cancel
 provider calls. `embeddingMaintenanceLeaseSeconds` estimates a reservation from
