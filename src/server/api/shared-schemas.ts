@@ -1,5 +1,6 @@
 import {
   LoreValidationError,
+  MEMORY_METADATA_LIMITS,
   MEMORY_SCOPES,
   type MemoryScope,
   validateMemoryMetadata,
@@ -28,7 +29,9 @@ export const MemoryMetadataSchema = z
       if (!(error instanceof LoreValidationError)) throw error;
       context.addIssue({ code: "custom", message: error.message });
     }
-  });
+  })
+  // JSON Schema cannot bound an object's serialized size, so publish the rule.
+  .meta({ "x-lore-maxSerializedLength": MEMORY_METADATA_LIMITS.maximumSerializedLength });
 
 export function memoryScope(value: unknown): MemoryScope | undefined {
   return parseMemoryInput(MemoryScopeSchema.optional(), value);

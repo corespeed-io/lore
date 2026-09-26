@@ -124,7 +124,7 @@ export class ContextRetrievalValidationError extends DomainError {
   readonly code = "invalid_request";
 }
 
-type DependencySubject = { path: string } | { symbol: string };
+export type DependencySubject = { path: string } | { symbol: string };
 
 /**
  * The cited declaration at `path`. A symbol key is its path, `#`, and a path-free suffix;
@@ -139,7 +139,12 @@ function dependencySubject(citation: MemoryCodeEvidence, path: string): Dependen
   return { symbol: `${path}#${symbolKey.slice(citedPrefix.length)}` };
 }
 
-async function dependencyFingerprints(input: {
+/**
+ * The contextual-impact fingerprints of a subject's direct callees at one exact
+ * revision: at most CONTEXTUAL_EDGE_LIMIT edges, each resolved target fingerprinted
+ * by its complete logical declaration. Evaluations measure this same function.
+ */
+export async function contextualDependencyFingerprints(input: {
   actor: ActorContext;
   code: ReturnType<typeof createCodeIndexReadModule>;
   dependencies: ReturnType<typeof createCodeDependencyGraphModule>;
@@ -437,7 +442,7 @@ export function createContextRetrievalModule(
         const selectedSubjects = contextualSubjects.slice(0, CONTEXTUAL_ANCHOR_LIMIT);
         const assessments = [];
         for (const selected of selectedSubjects) {
-          const before = await dependencyFingerprints({
+          const before = await contextualDependencyFingerprints({
             actor,
             code,
             dependencies,
@@ -445,7 +450,7 @@ export function createContextRetrievalModule(
             commitOid: selected.baseCommitOid,
             subject: selected.beforeSubject,
           });
-          const after = await dependencyFingerprints({
+          const after = await contextualDependencyFingerprints({
             actor,
             code,
             dependencies,

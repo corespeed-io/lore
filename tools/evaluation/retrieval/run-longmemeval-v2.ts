@@ -19,6 +19,7 @@ import { createPostgresDatabase } from "../../../src/server/database/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
+import { strictRetrievalKnobsFromEnvironment } from "../../../src/server/providers/retrieval-knobs";
 import {
   evaluateLongMemEvalV2Answer,
   isUnknownLongMemEvalV2Answer,
@@ -168,22 +169,6 @@ function sha256(value: string): string {
 
 function tripwireContent(question: LongMemEvalV2Question): string {
   return `Private answer tripwire for ${question.id}\nQuestion: ${question.question}\nAnswer: ${question.answer}`;
-}
-
-function numericSetting(name: string, fallback: number, minimum: number, maximum: number): number {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(`${name} must be from ${minimum} to ${maximum}`);
-  }
-  return parsed;
-}
-
-function integerSetting(name: string, fallback: number, minimum: number, maximum: number): number {
-  const parsed = numericSetting(name, fallback, minimum, maximum);
-  if (!Number.isInteger(parsed)) throw new Error(`${name} must be an integer`);
-  return parsed;
 }
 
 function corpusKey(
@@ -382,16 +367,18 @@ const metering = createBenchmarkMetering({
   rerankingProvider: configuredRerankingProvider,
 });
 const { embeddingProvider, queryPlanningProvider, rerankingProvider } = metering;
-const evidenceNeighborChunks = integerSetting("LORE_EVIDENCE_NEIGHBOR_CHUNKS", 0, 0, 2);
-const evidenceTopChunks = integerSetting("LORE_EVIDENCE_TOP_CHUNKS", 1, 1, 5);
-const retrievalFeedbackQueries = integerSetting("LORE_RETRIEVAL_FEEDBACK_QUERIES", 0, 0, 3);
-const retrievalRecencyWeight = numericSetting("LORE_RETRIEVAL_RECENCY_WEIGHT", 0, 0, 1);
-const queryPlannerMaxQueries = integerSetting("LORE_QUERY_PLANNER_MAX_QUERIES", 3, 1, 5);
-const rerankCandidateLimit = integerSetting("LORE_RERANK_CANDIDATE_LIMIT", 50, 1, 200);
-const rerankDiversityLambda = numericSetting("LORE_RERANK_DIVERSITY_LAMBDA", 1, 0, 1);
-const rerankMinimumScore = numericSetting("LORE_RERANK_MIN_SCORE", 0, 0, 1);
-const rerankWeight = numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1);
-const semanticDistanceThreshold = numericSetting("LORE_SEMANTIC_DISTANCE_THRESHOLD", 0.5, 0, 2);
+// The deployment's own knob table, strictly: a benchmark refuses an invalid value.
+const retrievalKnobs = strictRetrievalKnobsFromEnvironment(process.env);
+const evidenceNeighborChunks = retrievalKnobs.evidenceNeighborChunks;
+const evidenceTopChunks = retrievalKnobs.evidenceTopChunks;
+const retrievalFeedbackQueries = retrievalKnobs.retrievalFeedbackQueries;
+const retrievalRecencyWeight = retrievalKnobs.retrievalRecencyWeight;
+const queryPlannerMaxQueries = retrievalKnobs.queryPlannerMaxQueries;
+const rerankCandidateLimit = retrievalKnobs.rerankCandidateLimit;
+const rerankDiversityLambda = retrievalKnobs.rerankDiversityLambda;
+const rerankMinimumScore = retrievalKnobs.rerankMinimumScore;
+const rerankWeight = retrievalKnobs.rerankWeight;
+const semanticDistanceThreshold = retrievalKnobs.semanticDistanceThreshold;
 if (retrievalFeedbackQueries !== 0 || retrievalRecencyWeight !== 0) {
   throw new Error(
     "LongMemEval-V2 Episode evidence does not yet support retrieval feedback or recency fusion",

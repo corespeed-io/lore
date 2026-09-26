@@ -10,6 +10,7 @@ import {
   type EnqueueCodeIndexInput,
   type Episode,
   IDEMPOTENCY_KEY_PATTERN,
+  LORE_CONTRACT,
   LoreApiError,
   LoreClient,
   type LoreClientOptions,
@@ -92,8 +93,15 @@ export interface LoreMcpCodeClient {
   ): Promise<MemoryCodeEvidence>;
 }
 
-const scopeSchema = z.enum(["shared", "private"]);
-const MAX_METADATA_CHARACTERS = 100_000;
+const VOCABULARIES = LORE_CONTRACT.vocabularies;
+const LIMITS = LORE_CONTRACT.limits;
+const commitOidSchema = z.string().regex(new RegExp(LORE_CONTRACT.patterns.commitOid));
+const repositoryKeySchema = z.string().trim().min(1).max(LIMITS.repositoryKeyLength);
+const repositoryPathSchema = z.string().trim().min(1).max(LIMITS.repositoryPathLength);
+const codeQuerySchema = z.string().trim().min(1).max(LIMITS.codeQueryLength);
+const scopeSchema = z.enum(VOCABULARIES.memoryScopes);
+const MAX_METADATA_CHARACTERS = LIMITS.memoryMetadataSerializedLength;
+const MAX_PROPOSAL_EVIDENCE = LIMITS.memoryProposalEvidence;
 const MAX_MCP_OUTPUT_CHARACTERS = 128_000;
 const LIST_CONTENT_BUDGET = 2_800;
 const SEARCH_EVIDENCE_BUDGET = 2_800;
@@ -146,24 +154,23 @@ const searchResultSchema = z.object({
   evidence: z.string().max(SEARCH_EVIDENCE_BUDGET),
   evidenceTruncated: z.boolean(),
 });
-const codeEvidenceRelationshipSchema = z.enum([
-  "supports",
-  "contradicts",
-  "implements",
-  "rationale",
-]);
+const codeEvidenceRelationshipSchema = z.enum(VOCABULARIES.codeEvidenceRelationships);
 const proposalCodeEvidenceInputSchema = z.object({
   artifactId: z.string().uuid(),
   relationship: codeEvidenceRelationshipSchema,
 });
 const proposalCodeEvidenceSchema = z.object({
-  ordinal: z.number().int().min(0).max(49),
+  ordinal: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_PROPOSAL_EVIDENCE - 1),
   repositoryId: z.string().uuid(),
   citedRevisionId: z.string().uuid(),
   citedGenerationId: z.string().uuid(),
   citedArtifactId: z.string().uuid(),
-  citedCommitOid: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
-  citedPath: z.string().min(1).max(1024),
+  citedCommitOid: commitOidSchema,
+  citedPath: z.string().min(1).max(LIMITS.repositoryPathLength),
   citedSymbolKey: z.string().nullable(),
   citedDeclarationKey: z.string().nullable(),
   citedDeclarationChunkOrdinal: z.number().int().min(0).nullable(),
@@ -176,31 +183,31 @@ const proposalCodeEvidenceSchema = z.object({
 });
 const proposalSubmissionSchema = z.object({
   id: z.string().uuid(),
-  kind: z.enum(["create", "update"]),
+  kind: z.enum(VOCABULARIES.memoryProposalKinds),
   targetMemoryId: z.string().uuid().nullable(),
   baseMemoryVersion: z.number().int().positive().nullable(),
   proposedScope: scopeSchema,
-  evidenceMemoryIds: z.array(z.string().uuid()).max(50),
-  evidenceObservationIds: z.array(z.string().uuid()).max(50),
-  codeEvidence: z.array(proposalCodeEvidenceSchema).max(50),
-  status: z.enum(["pending", "accepted", "rejected"]),
+  evidenceMemoryIds: z.array(z.string().uuid()).max(MAX_PROPOSAL_EVIDENCE),
+  evidenceObservationIds: z.array(z.string().uuid()).max(MAX_PROPOSAL_EVIDENCE),
+  codeEvidence: z.array(proposalCodeEvidenceSchema).max(MAX_PROPOSAL_EVIDENCE),
+  status: z.enum(VOCABULARIES.memoryProposalStatuses),
   createdAt: z.string(),
 });
 const episodeSubmissionSchema = z.object({
   id: z.string().uuid(),
-  kind: z.enum(["conversation", "workflow", "document", "event"]),
+  kind: z.enum(VOCABULARIES.episodeKinds),
   scope: scopeSchema,
   observations: z
     .array(
       z.object({
         id: z.string().uuid(),
-        kind: z.enum(["message", "tool_call", "tool_result", "document_fragment", "event"]),
+        kind: z.enum(VOCABULARIES.observationKinds),
         observedAt: z.string(),
         payloadSha256: z.string().regex(/^[0-9a-f]{64}$/),
       }),
     )
     .min(1)
-    .max(100),
+    .max(LIMITS.episodeObservations),
   createdAt: z.string(),
 });
 
@@ -381,7 +388,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         "List Memories visible to the configured Lore Actor and Workspace. Content is a bounded preview; contentTruncated and metadataTruncated identify omitted data. Use the returned cursor to continue browsing.",
       inputSchema: z.object({
         limit: z.number().int().min(1).max(25).default(25),
-        cursor: z.string().max(512).optional(),
+        cursor: z.string().max(LIMITS.cursorLength).optional(),
         scope: scopeSchema.optional(),
       }),
       outputSchema: z.object({
@@ -412,7 +419,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
       description:
         "Search only Memories visible to the configured Lore Actor and Workspace using Lore's authorized retrieval pipeline. Results return bounded evidence and Memory metadata, not redundant full Memory content.",
       inputSchema: z.object({
-        query: z.string().trim().min(1).max(10_000),
+        query: z.string().trim().min(1).max(LIMITS.memorySearchQueryLength),
         limit: z.number().int().min(1).max(25).default(10),
         scope: scopeSchema.optional(),
         metadata: metadataSchema.optional(),
@@ -505,16 +512,16 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         "Record an ordered Episode of durable, immutable Observation evidence. This does not create searchable Memory. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
       inputSchema: z
         .object({
-          kind: z.enum(["conversation", "workflow", "document", "event"]),
+          kind: z.enum(VOCABULARIES.episodeKinds),
           scope: scopeSchema.default("private"),
           observations: z
             .array(
               z.object({
-                kind: z.enum(["message", "tool_call", "tool_result", "document_fragment", "event"]),
+                kind: z.enum(VOCABULARIES.observationKinds),
                 content: z
                   .string()
                   .min(1)
-                  .max(100_000)
+                  .max(LIMITS.observationContentCharacters)
                   .refine((content) => content.trim().length > 0, {
                     message: "Observation content is required",
                   }),
@@ -523,7 +530,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
               }),
             )
             .min(1)
-            .max(100),
+            .max(LIMITS.episodeObservations),
           idempotencyKey: idempotencyKeySchema,
         })
         .superRefine((input, context) => {
@@ -531,10 +538,10 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             (total, observation) => total + observation.content.length,
             0,
           );
-          if (characters > 1_000_000) {
+          if (characters > LIMITS.episodeContentCharacters) {
             context.addIssue({
               code: "custom",
-              message: "Episode content exceeds 1000000 characters",
+              message: `Episode content exceeds ${LIMITS.episodeContentCharacters} characters`,
               path: ["observations"],
             });
           }
@@ -542,10 +549,10 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             (total, observation) => total + JSON.stringify(observation.metadata ?? {}).length,
             0,
           );
-          if (metadataCharacters > 1_000_000) {
+          if (metadataCharacters > LIMITS.episodeMetadataCharacters) {
             context.addIssue({
               code: "custom",
-              message: "Episode metadata exceeds 1000000 characters",
+              message: `Episode metadata exceeds ${LIMITS.episodeMetadataCharacters} characters`,
               path: ["observations"],
             });
           }
@@ -580,17 +587,23 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             content: memoryContentSchema,
             scope: scopeSchema.default("shared"),
             metadata: metadataSchema.optional(),
-            evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
-            evidenceObservationIds: z.array(z.string().uuid()).max(50).optional(),
-            codeEvidence: z.array(proposalCodeEvidenceInputSchema).max(50).optional(),
+            evidenceMemoryIds: z.array(z.string().uuid()).max(MAX_PROPOSAL_EVIDENCE).optional(),
+            evidenceObservationIds: z
+              .array(z.string().uuid())
+              .max(MAX_PROPOSAL_EVIDENCE)
+              .optional(),
+            codeEvidence: z
+              .array(proposalCodeEvidenceInputSchema)
+              .max(MAX_PROPOSAL_EVIDENCE)
+              .optional(),
             idempotencyKey: idempotencyKeySchema,
           })
           .refine(
             (input) =>
               (input.evidenceMemoryIds?.length ?? 0) +
                 (input.evidenceObservationIds?.length ?? 0) <=
-              50 - (input.codeEvidence?.length ?? 0),
-            { message: "proposal evidence exceeds 50 items" },
+              MAX_PROPOSAL_EVIDENCE - (input.codeEvidence?.length ?? 0),
+            { message: `proposal evidence exceeds ${MAX_PROPOSAL_EVIDENCE} items` },
           ),
         z
           .object({
@@ -600,9 +613,15 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             content: memoryContentSchema.optional(),
             scope: scopeSchema.optional(),
             metadata: metadataSchema.optional(),
-            evidenceMemoryIds: z.array(z.string().uuid()).max(50).optional(),
-            evidenceObservationIds: z.array(z.string().uuid()).max(50).optional(),
-            codeEvidence: z.array(proposalCodeEvidenceInputSchema).max(50).optional(),
+            evidenceMemoryIds: z.array(z.string().uuid()).max(MAX_PROPOSAL_EVIDENCE).optional(),
+            evidenceObservationIds: z
+              .array(z.string().uuid())
+              .max(MAX_PROPOSAL_EVIDENCE)
+              .optional(),
+            codeEvidence: z
+              .array(proposalCodeEvidenceInputSchema)
+              .max(MAX_PROPOSAL_EVIDENCE)
+              .optional(),
             idempotencyKey: idempotencyKeySchema,
           })
           .refine(
@@ -616,8 +635,8 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             (input) =>
               (input.evidenceMemoryIds?.length ?? 0) +
                 (input.evidenceObservationIds?.length ?? 0) <=
-              50 - (input.codeEvidence?.length ?? 0),
-            { message: "proposal evidence exceeds 50 items" },
+              MAX_PROPOSAL_EVIDENCE - (input.codeEvidence?.length ?? 0),
+            { message: `proposal evidence exceeds ${MAX_PROPOSAL_EVIDENCE} items` },
           ),
       ]),
       outputSchema: z.object({ proposal: proposalSubmissionSchema }),
@@ -719,21 +738,13 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
 }
 
 function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
-  const commitOidSchema = z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/);
   const evidenceSchema = z.object({
     id: z.string().uuid(),
     memoryId: z.string().uuid(),
     citedCommitOid: commitOidSchema,
     citedPath: z.string(),
-    relationship: z.enum(["supports", "contradicts", "implements", "rationale"]),
-    validationState: z.enum([
-      "current",
-      "moved",
-      "changed",
-      "deleted",
-      "ambiguous",
-      "unverifiable",
-    ]),
+    relationship: codeEvidenceRelationshipSchema,
+    validationState: z.enum(VOCABULARIES.codeEvidenceValidationStates),
     validatedCommitOid: commitOidSchema.nullable(),
     validatedPath: z.string().nullable(),
   });
@@ -745,8 +756,8 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
   });
   const dependencyEdgeSchema = z.object({
     id: z.string().uuid(),
-    kind: z.enum(["calls", "imports", "references"]),
-    resolution: z.enum(["resolved", "ambiguous", "unresolved"]),
+    kind: z.enum(VOCABULARIES.codeDependencyKinds),
+    resolution: z.enum(VOCABULARIES.codeDependencyResolutions),
     targetText: z.string(),
     from: codeLocatorSchema,
     to: codeLocatorSchema,
@@ -765,11 +776,11 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
       description:
         "Search RLS-visible Code Artifacts from one configured repository and exact full commit OID. Code Evidence is separate from canonical Memory. Content is a bounded excerpt marked by contentTruncated; truncated means trailing results were omitted to fit the output limit.",
       inputSchema: z.object({
-        repositoryKey: z.string().trim().min(1).max(512),
+        repositoryKey: repositoryKeySchema,
         commitOid: commitOidSchema,
-        query: z.string().trim().min(1).max(2_000),
+        query: codeQuerySchema,
         limit: z.number().int().min(1).max(25).default(10),
-        pathPrefix: z.string().trim().min(1).max(1_024).optional(),
+        pathPrefix: repositoryPathSchema.optional(),
       }),
       outputSchema: z.object({
         artifacts: z.array(
@@ -782,7 +793,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
             symbol: z.string().nullable(),
             startLine: z.number().int(),
             endLine: z.number().int(),
-            matchedChannels: z.array(z.enum(["symbol", "literal", "lexical", "path"])),
+            matchedChannels: z.array(z.enum(VOCABULARIES.codeSearchChannels)),
             score: z.number(),
             content: z.string(),
             contentTruncated: z.boolean(),
@@ -831,12 +842,17 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
         "Return bounded callers or callees for exactly one symbol or path from an RLS-visible repository and exact full commit OID. Ambiguous and unresolved static-analysis targets remain explicit. truncated means more edges or candidates exist than were returned, either past the limit or past the output limit.",
       inputSchema: z
         .object({
-          repositoryKey: z.string().trim().min(1).max(512),
+          repositoryKey: repositoryKeySchema,
           commitOid: commitOidSchema,
-          direction: z.enum(["callers", "callees"]),
+          direction: z.enum(VOCABULARIES.codeDependencyDirections),
           symbol: z.string().trim().min(1).max(1_600).optional(),
-          path: z.string().trim().min(1).max(1_024).optional(),
-          limit: z.number().int().min(1).max(200).default(50),
+          path: repositoryPathSchema.optional(),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(LIMITS.codeDependencyResults)
+            .default(LIMITS.codeDependencyResultsDefault),
         })
         .refine((input) => (input.symbol === undefined) !== (input.path === undefined), {
           message: "Provide exactly one of symbol or path",
@@ -845,9 +861,9 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
         status: z.enum(["ok", "ambiguous", "not_found"]),
         repositoryKey: z.string(),
         commitOid: commitOidSchema,
-        direction: z.enum(["callers", "callees"]),
+        direction: z.enum(VOCABULARIES.codeDependencyDirections),
         subject: codeLocatorSchema.optional(),
-        edges: z.array(dependencyEdgeSchema).max(200).optional(),
+        edges: z.array(dependencyEdgeSchema).max(LIMITS.codeDependencyResults).optional(),
         truncated: z.boolean().optional(),
         candidates: z.array(codeLocatorSchema).optional(),
       }),
@@ -891,16 +907,16 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
       description:
         "Queue one exact commit from an operator-configured repository. The tool accepts a repository key, never a filesystem path or remote credential.",
       inputSchema: z.object({
-        repositoryKey: z.string().trim().min(1).max(512),
+        repositoryKey: repositoryKeySchema,
         commitOid: commitOidSchema,
-        sourceRef: z.string().trim().min(1).max(512).optional(),
+        sourceRef: z.string().trim().min(1).max(LIMITS.codeSourceRefLength).optional(),
       }),
       outputSchema: z.object({
         job: z.object({
           id: z.string().uuid(),
           repositoryKey: z.string(),
           commitOid: commitOidSchema,
-          status: z.enum(["pending", "processing", "succeeded", "dead", "cancelled"]),
+          status: z.enum(VOCABULARIES.codeIndexJobStatuses),
         }),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -935,7 +951,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
           repositoryKey: z.string(),
           commitOid: commitOidSchema,
           indexerRevision: z.string(),
-          status: z.enum(["pending", "processing", "succeeded", "dead", "cancelled"]),
+          status: z.enum(VOCABULARIES.codeIndexJobStatuses),
           attemptCount: z.number().int(),
           maximumAttempts: z.number().int(),
           lastError: z.string().nullable(),
@@ -1002,7 +1018,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
       inputSchema: z.object({
         memoryId: z.string().uuid(),
         artifactId: z.string().uuid(),
-        relationship: z.enum(["supports", "contradicts", "implements", "rationale"]),
+        relationship: codeEvidenceRelationshipSchema,
       }),
       outputSchema: z.object({ evidence: evidenceSchema }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -1036,7 +1052,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
         "Re-resolve one citation against an explicitly selected exact commit. Updates only evidence validity; never rewrites canonical Memory.",
       inputSchema: z.object({
         evidenceId: z.string().uuid(),
-        repositoryKey: z.string().trim().min(1).max(512),
+        repositoryKey: repositoryKeySchema,
         commitOid: commitOidSchema,
       }),
       outputSchema: z.object({ evidence: evidenceSchema }),
@@ -1068,17 +1084,9 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
 }
 
 function registerContextTools(server: McpServer, context: LoreMcpContextClient): void {
-  const commitOidSchema = z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/);
-  const routeSchema = z.enum(["auto", "both", "code-only", "memory-only"]);
-  const deliveredRouteSchema = z.enum(["abstain", "both", "code-only", "memory-only"]);
-  const validationStateSchema = z.enum([
-    "current",
-    "moved",
-    "changed",
-    "deleted",
-    "ambiguous",
-    "unverifiable",
-  ]);
+  const routeSchema = z.enum(VOCABULARIES.contextRoutes);
+  const deliveredRouteSchema = z.enum(VOCABULARIES.contextPlanRoutes);
+  const validationStateSchema = z.enum(VOCABULARIES.codeEvidenceValidationStates);
   server.registerTool(
     "lore_retrieve_context",
     {
@@ -1087,17 +1095,17 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
         "Use this tool before answering when correctness depends on prior Workspace decisions, user-specific facts, current repository behavior, or exact-revision Code Index evidence. For a historical-decision versus current-Code question, retrieve both evidence families. Code requires an operator-configured repository key plus a full commit OID; if that exact revision is unavailable, ask for it instead of guessing or searching Memory as a substitute. Do not use it for transformations fully supported by supplied text, general knowledge, or unconstrained brainstorming. Returns one bounded, provenance-bearing packet from independently authorized Memory and Code evidence; Code Evidence assessment is side-effect-free. evidenceTruncated and contentTruncated mark shortened excerpts, and truncated means trailing items were omitted to fit the output limit.",
       inputSchema: z
         .object({
-          query: z.string().trim().min(1).max(10_000),
-          memoryQuery: z.string().trim().min(1).max(10_000).optional(),
-          codeQuery: z.string().trim().min(1).max(2_000).optional(),
-          repositoryKey: z.string().trim().min(1).max(512).optional(),
+          query: z.string().trim().min(1).max(LIMITS.memorySearchQueryLength),
+          memoryQuery: z.string().trim().min(1).max(LIMITS.memorySearchQueryLength).optional(),
+          codeQuery: codeQuerySchema.optional(),
+          repositoryKey: repositoryKeySchema.optional(),
           commitOid: commitOidSchema.optional(),
           route: routeSchema.optional(),
-          memoryLimit: z.number().int().min(1).max(10).optional(),
-          codeLimit: z.number().int().min(1).max(20).optional(),
+          memoryLimit: z.number().int().min(1).max(LIMITS.contextMemoryLimit).optional(),
+          codeLimit: z.number().int().min(1).max(LIMITS.contextCodeLimit).optional(),
           scope: scopeSchema.optional(),
           metadata: metadataSchema.optional(),
-          pathPrefix: z.string().trim().min(1).max(1_024).optional(),
+          pathPrefix: repositoryPathSchema.optional(),
         })
         .superRefine((input, refinement) => {
           if ((input.repositoryKey === undefined) !== (input.commitOid === undefined)) {
@@ -1132,14 +1140,7 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
         revision: z.string(),
         query: z.string(),
         plan: z.object({
-          intent: z.enum([
-            "blast-radius",
-            "change",
-            "current-code",
-            "memory-recall",
-            "rationale",
-            "unknown",
-          ]),
+          intent: z.enum(VOCABULARIES.contextIntents),
           route: deliveredRouteSchema,
           needsAnchorExpansion: z.boolean(),
           needsContextualImpact: z.boolean(),
@@ -1167,7 +1168,7 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
             startLine: z.number().int().positive(),
             endLine: z.number().int().positive(),
             score: z.number(),
-            matchedChannels: z.array(z.enum(["symbol", "literal", "lexical", "path"])),
+            matchedChannels: z.array(z.enum(VOCABULARIES.codeSearchChannels)),
             content: z.string(),
             contentTruncated: z.boolean(),
           }),
@@ -1194,7 +1195,7 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
           codeQuery: z.string().nullable(),
           contextualImpact: z
             .object({
-              state: z.enum(["affected", "possibly_affected", "unaffected", "unknown"]),
+              state: z.enum(VOCABULARIES.contextImpactStates),
               changes: z.array(z.string()),
             })
             .nullable(),

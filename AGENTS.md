@@ -533,7 +533,12 @@ been removed. Lore now has a native implementation, split into two concepts
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
   their items under the 128,000-character MCP output ceiling and report omitted
   trailing items with `truncated: true`. The SDK and MCP enforce the server's
-  visible-ASCII Idempotency-Key rule client-side.
+  visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, and
+  pattern a client checks before a request comes from `LORE_CONTRACT`, which
+  `sdk:generate` reads out of the OpenAPI document by explicit path (failing when
+  one is missing) and the SDK exports; the SDK, CLI, and MCP restate none of them.
+  JSON Schema cannot bound an object's serialized size, so the metadata bound is
+  published as `x-lore-maxSerializedLength`.
   Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;
@@ -755,7 +760,12 @@ row's driver `Date` drops microseconds, so host code returning Memories must
 select through it, and any such `updatedAt` is an exact list cursor. Workspace
 archive and Graph node timestamps stay millisecond and are not cursors.
 Retrieval knobs are read once per process beside the cached providers; changing
-them requires a restart.
+them requires a restart. `RETRIEVAL_KNOBS` (`src/server/providers/retrieval-knobs.ts`)
+defines every knob's variable, default, and bounds once: the server warns about an
+invalid value and falls back (the reranker candidate limit clamps silently), and
+every benchmark runner reads the same table through
+`strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, so a
+benchmark's default run is the deployment default.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the
@@ -1260,7 +1270,10 @@ Benchmark is part of the product quality system even without AutoDream.
 - Retrieval metrics may include Recall@K, MRR, and nDCG; isolation failures are
   hard failures, not a score that can be averaged away. The code-aware and joint
   Memory+Code evaluations exit non-zero on any isolation hard failure without
-  `--strict`; `--strict` only adds the quality thresholds.
+  `--strict`; `--strict` only adds the quality thresholds. The joint evaluation's ablation
+  variants compose production policy steps; contextual impact is measured with the
+  production `contextualDependencyFingerprints` (`src/modules/context/retrieval.ts`),
+  never a copy.
 - Workspace-owned evaluation suites follow the same RLS rules as Memories.
 - Never centralize or export private production Memories for evaluation by default.
 - Evaluation runs are read-only against production data. Any write/replay test uses

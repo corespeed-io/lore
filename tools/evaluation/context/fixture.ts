@@ -11,10 +11,10 @@ import type {
 } from "../../../src/modules/code/evidence";
 import { createCodeEvidenceModule } from "../../../src/modules/code/evidence";
 import { createCodeDependencyGraphModule } from "../../../src/modules/code/graph";
+import { createCodeIndexReadModule } from "../../../src/modules/code/indexing/read";
 import { createCodeIndexModule } from "../../../src/modules/code/indexing/service";
 import type { CodeArtifact } from "../../../src/modules/code/indexing/types";
 import type {
-  DependencyFingerprint,
   GroupedJointEvidencePacket,
   JointAnchorEvidence,
   JointCodeEvidence,
@@ -27,6 +27,7 @@ import {
   planJointEvidenceRoute,
   prioritizeAnchoredMemories,
 } from "../../../src/modules/context/policy";
+import { contextualDependencyFingerprints } from "../../../src/modules/context/retrieval";
 import type { Memory } from "../../../src/modules/memories/service";
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import type { ActorContext } from "../../../src/server/auth/actor-context";
@@ -229,58 +230,6 @@ async function artifactFor(
   return artifact;
 }
 
-async function dependencyFingerprints(input: {
-  actor: ActorContext;
-  code: ReturnType<typeof createCodeIndexModule>;
-  dependencies: ReturnType<typeof createCodeDependencyGraphModule>;
-  commitOid: string;
-  symbol: string;
-}): Promise<{ fingerprints: DependencyFingerprint[]; truncated: boolean }> {
-  const result = await input.dependencies.query(input.actor, {
-    repositoryKey: REPOSITORY_KEY,
-    commitOid: input.commitOid,
-    direction: "callees",
-    symbol: input.symbol,
-    limit: 50,
-  });
-  if (result.status !== "ok") {
-    return {
-      fingerprints: [
-        {
-          kind: "subject",
-          resolution: result.status === "ambiguous" ? "ambiguous" : "unresolved",
-          targetKey: input.symbol,
-          contentSha256: null,
-        },
-      ],
-      truncated: false,
-    };
-  }
-
-  const fingerprints: DependencyFingerprint[] = [];
-  for (const edge of result.edges) {
-    let contentSha256: string | null = null;
-    if (edge.resolution === "resolved" && edge.to.artifactId) {
-      const query = edge.to.symbol ?? edge.to.path ?? edge.targetText;
-      const candidates = await input.code.search(input.actor, {
-        repositoryKey: REPOSITORY_KEY,
-        commitOid: input.commitOid,
-        query,
-        limit: 20,
-      });
-      contentSha256 =
-        candidates.find((candidate) => candidate.id === edge.to.artifactId)?.contentSha256 ?? null;
-    }
-    fingerprints.push({
-      kind: edge.kind,
-      resolution: edge.resolution,
-      targetKey: edge.to.symbolKey ?? edge.to.symbol ?? edge.targetText,
-      contentSha256,
-    });
-  }
-  return { fingerprints, truncated: result.truncated };
-}
-
 async function bootstrapDatabase(): Promise<{
   actor: ActorContext;
   database: PostgresDatabase;
@@ -327,6 +276,7 @@ async function bootstrapDatabase(): Promise<{
 export async function createJointMemoryCodePrototypeSession(): Promise<JointPrototypeSession> {
   const { actor, database, forbiddenActor, postgres } = await bootstrapDatabase();
   const code = createCodeIndexModule(database);
+  const codeReads = createCodeIndexReadModule(database);
   const dependencies = createCodeDependencyGraphModule(database);
   const evidence = createCodeEvidenceModule(database);
   const memories = createMemoryModule(database);
@@ -772,19 +722,22 @@ export async function createJointMemoryCodePrototypeSession(): Promise<JointProt
         evaluationCase.commitOid &&
         evaluationCase.subjectSymbol
       ) {
-        const before = await dependencyFingerprints({
+        // The production fingerprinting, so this ablation measures what ships.
+        const before = await contextualDependencyFingerprints({
           actor,
-          code,
+          code: codeReads,
           dependencies,
+          repositoryKey: REPOSITORY_KEY,
           commitOid: evaluationCase.baseCommitOid,
-          symbol: evaluationCase.subjectSymbol,
+          subject: { symbol: evaluationCase.subjectSymbol },
         });
-        const after = await dependencyFingerprints({
+        const after = await contextualDependencyFingerprints({
           actor,
-          code,
+          code: codeReads,
           dependencies,
+          repositoryKey: REPOSITORY_KEY,
           commitOid: evaluationCase.commitOid,
-          symbol: evaluationCase.subjectSymbol,
+          subject: { symbol: evaluationCase.subjectSymbol },
         });
         contextualImpact = assessContextualImpact(before.fingerprints, after.fingerprints, {
           beforeTruncated: before.truncated,
