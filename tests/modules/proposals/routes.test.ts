@@ -188,9 +188,10 @@ test("Agent submits a Proposal over v1 and only the human owner can accept it", 
   ).resolves.toEqual([]);
   await testContext.adminDatabase.transaction(async (transaction) => {
     await expect(
+      // By content, not by the JSON path the scrub trigger itself matches.
       transaction.query(
-        "SELECT id FROM request_idempotency_records WHERE response_body #>> '{proposal,id}' = $1",
-        [submitted.id],
+        "SELECT id FROM request_idempotency_records WHERE strpos(response_body::text, $1) > 0",
+        ["The assistant proposes this fact."],
       ),
     ).resolves.toMatchObject({ rows: [] });
   });

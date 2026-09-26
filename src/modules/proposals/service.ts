@@ -45,6 +45,11 @@ export class MemoryProposalCapacityError extends Error {
   readonly status = 409;
 }
 
+/** Memory, Observation, and Code evidence records one Proposal may cite, in total. */
+export const MAXIMUM_MEMORY_PROPOSAL_EVIDENCE = 50;
+/** The most Proposals one list read returns. */
+export const MAXIMUM_MEMORY_PROPOSAL_LIST = 100;
+
 export type MemoryProposalKind = "create" | "update";
 export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
 
@@ -315,8 +320,13 @@ export function createMemoryProposalsModule(
       ) {
         throw new TypeError("Proposal Code Evidence relationship is invalid");
       }
-      if (evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length > 50) {
-        throw new TypeError("A Memory Proposal may cite at most 50 evidence records");
+      if (
+        evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length >
+        MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
+      ) {
+        throw new TypeError(
+          `A Memory Proposal may cite at most ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} evidence records`,
+        );
       }
       if (
         input.kind === "update" &&
@@ -588,7 +598,7 @@ export function createMemoryProposalsModule(
       if (actor.agentId) {
         throw new MemoryProposalAccessDeniedError("Only a human User can review Memory Proposals");
       }
-      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      const limit = Math.max(1, Math.min(input.limit ?? 50, MAXIMUM_MEMORY_PROPOSAL_LIST));
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryProposalRow>(

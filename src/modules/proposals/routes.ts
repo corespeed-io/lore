@@ -14,7 +14,11 @@ import {
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
 import { observeOperation } from "@/server/telemetry/telemetry";
 import type { MemoryProposalStatus, ProposeMemoryCodeEvidence } from "./service";
-import { createMemoryProposalsModule } from "./service";
+import {
+  createMemoryProposalsModule,
+  MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+  MAXIMUM_MEMORY_PROPOSAL_LIST,
+} from "./service";
 
 function memoryProposalStatus(value: string | null): MemoryProposalStatus | undefined {
   if (value === null || value.trim() === "") return undefined;
@@ -58,7 +62,7 @@ export const proposals = new Hono<ApiEnv>()
     const url = new URL(request.url);
     const proposalList = await observeOperation("memory-proposal.list", () =>
       proposals.listProposals(actor, {
-        limit: queryInteger(url, "limit", 50, 1, 100),
+        limit: queryInteger(url, "limit", 50, 1, MAXIMUM_MEMORY_PROPOSAL_LIST),
         status: memoryProposalStatus(url.searchParams.get("status")),
       }),
     );
@@ -79,8 +83,13 @@ export const proposals = new Hono<ApiEnv>()
         : uuidArray(body.evidenceObservationIds, "evidenceObservationIds", true);
     const codeEvidence =
       body.codeEvidence === undefined ? [] : proposalCodeEvidence(body.codeEvidence);
-    if (evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length > 50) {
-      throw new BadRequestError("Proposal evidence exceeds 50 items");
+    if (
+      evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length >
+      MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
+    ) {
+      throw new BadRequestError(
+        `Proposal evidence exceeds ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} items`,
+      );
     }
     const input =
       body.kind === "create"

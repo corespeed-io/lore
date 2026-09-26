@@ -49,6 +49,8 @@ export interface ListCodeIndexJobsInput {
 }
 
 export const MAXIMUM_CODE_INDEX_JOB_LIST = 100;
+/** The most Code Artifacts one search returns. */
+export const MAXIMUM_CODE_SEARCH_RESULTS = 100;
 const DEFAULT_CODE_INDEX_JOB_LIST = 20;
 
 export interface CodeArtifactLogicalDigest {
@@ -440,8 +442,10 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
         ? `lower(artifact.path) LIKE lower($8) ESCAPE chr(92)`
         : `position(lower($3) in lower(artifact.path)) > 0`;
       const limit = input.limit ?? 10;
-      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-        throw new CodeIndexValidationError("limit must be an integer from 1 through 100");
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_CODE_SEARCH_RESULTS) {
+        throw new CodeIndexValidationError(
+          `limit must be an integer from 1 through ${MAXIMUM_CODE_SEARCH_RESULTS}`,
+        );
       }
       const pathPrefix = input.pathPrefix ? validatePathPrefix(input.pathPrefix) : null;
       return database.transaction(async (transaction) => {

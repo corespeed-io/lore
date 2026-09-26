@@ -13,6 +13,9 @@ import { installActorContext } from "@/server/auth/actor-context";
 export type CodeDependencyDirection = "callers" | "callees";
 export type CodeDependencyResolution = "resolved" | "ambiguous" | "unresolved";
 
+/** The most dependency edges (and ambiguity candidates) one read returns. */
+export const MAXIMUM_CODE_DEPENDENCY_RESULTS = 200;
+
 export interface QueryCodeDependenciesInput {
   repositoryKey: string;
   commitOid: string;
@@ -157,8 +160,10 @@ export function createCodeDependencyGraphModule(
       const symbol = hasSymbol ? validatePlainText(input.symbol ?? "", "symbol", 1_600) : null;
       const path = hasPath ? validatePath(input.path ?? "") : null;
       const limit = input.limit ?? 50;
-      if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-        throw new CodeIndexValidationError("limit must be an integer from 1 through 200");
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_CODE_DEPENDENCY_RESULTS) {
+        throw new CodeIndexValidationError(
+          `limit must be an integer from 1 through ${MAXIMUM_CODE_DEPENDENCY_RESULTS}`,
+        );
       }
 
       return database.transaction(async (transaction) => {

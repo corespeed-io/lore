@@ -21,12 +21,17 @@ export function hasControlCharacters(value: string, allowQueryWhitespace = false
   });
 }
 
+/** A full 40-character SHA-1 or 64-character SHA-256 Git object id, lowercase. */
+export const COMMIT_OID_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+/** Repository-relative paths, in UTF-16 code units. */
+export const REPOSITORY_PATH_MAXIMUM_LENGTH = 1_024;
+
 export function validateCommitOid(
   commitOid: string,
   ErrorClass: ValidationErrorClass = CodeIndexValidationError,
 ): string {
   const normalized = commitOid.trim().toLowerCase();
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(normalized)) {
+  if (!COMMIT_OID_PATTERN.test(normalized)) {
     throw new ErrorClass("commitOid must be a full 40- or 64-character Git OID");
   }
   return normalized;
@@ -95,7 +100,7 @@ export function validatePath(path: string): string {
   if (
     !normalized ||
     normalized !== path ||
-    normalized.length > 1_024 ||
+    normalized.length > REPOSITORY_PATH_MAXIMUM_LENGTH ||
     normalized.startsWith("/") ||
     normalized.includes("\\") ||
     hasControlCharacters(normalized) ||
