@@ -7,7 +7,7 @@ import {
 import {
   MAX_WORKSPACE_ARCHIVE_LINKS,
   MAX_WORKSPACE_ARCHIVE_MEMORIES,
-} from "@/modules/portability/service";
+} from "@/modules/portability/limits";
 import { actorSecurity, errorSchema, jsonResponse, workspaceHeader } from "@/server/openapi/shared";
 
 export const operationsPaths = {

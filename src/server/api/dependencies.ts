@@ -1,7 +1,24 @@
 import type { MemoryModuleOptions, PostgresDatabase } from "@corespeed/lore-core";
-import type { ConfiguredCodeRepositories } from "@/modules/code/indexing/queue";
 import type { AuthPrincipal } from "@/server/auth/auth";
 import { createRequestContextResolver } from "@/server/auth/request-context";
+
+/**
+ * One operator-configured Code Repository (`LORE_CODE_REPOSITORIES`). Hosts inject
+ * the registry the Code module parses; that module decides what each entry permits.
+ */
+export interface ConfiguredCodeRepository {
+  displayName: string;
+  repositoryPath: string;
+  /**
+   * Workspaces whose Actors may enqueue and index this repository. An entry
+   * without this binding serves every Workspace, so
+   * configuredCodeRepositoriesFromEnvironment keeps one only when the deployment
+   * runs a single-operator auth mode (AUTH_MODE password or none).
+   */
+  workspaceIds?: readonly string[];
+}
+
+export type ConfiguredCodeRepositories = Readonly<Record<string, ConfiguredCodeRepository>>;
 
 /** Hosts own database/provider lifetimes; routes resolve dependencies only when needed. */
 export interface ApiDependencies {

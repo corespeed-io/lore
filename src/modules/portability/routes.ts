@@ -2,12 +2,9 @@ import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
 import { BadRequestError, jsonObject } from "@/server/api/input";
 import { observeOperation } from "@/server/telemetry/telemetry";
+import { MAX_WORKSPACE_IMPORT_BODY_BYTES } from "./limits";
 import type { ImportWorkspaceArchive } from "./service";
-import {
-  createPortabilityModule,
-  MAX_WORKSPACE_IMPORT_BODY_BYTES,
-  PortabilityAccessDeniedError,
-} from "./service";
+import { createPortabilityModule, PortabilityAccessDeniedError } from "./service";
 
 export const portability = new Hono<ApiEnv>()
   .get("/export", async (c) => {

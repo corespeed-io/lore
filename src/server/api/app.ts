@@ -13,6 +13,7 @@ import { proposals } from "@/modules/proposals/routes";
 import { actor, workspaces } from "@/modules/workspaces/routes";
 import { errorResponse } from "@/server/api/errors";
 import { admitRequest } from "@/server/auth/auth";
+import { loreOpenApiDocument } from "@/server/openapi/document";
 import { securityHeaders } from "@/server/security-headers";
 import { type ApiDependencies, type ApiEnv, createRequestDependencies } from "./dependencies";
 
@@ -62,7 +63,17 @@ export function createApi(dependencies: ApiDependencies) {
     .route("/memory-proposals", proposals)
     .route("/workspaces", portability);
 
-  return app.route("/", operations).route("/api", shared).route("/api/v1", v1);
+  // The document describes every module, so it is served by this composition root.
+  const openApi = new Hono<ApiEnv>().get("/", (c) => {
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.json(loreOpenApiDocument());
+  });
+
+  return app
+    .route("/", operations)
+    .route("/openapi.json", openApi)
+    .route("/api", shared)
+    .route("/api/v1", v1);
 }
 
 function respondToUnsupportedMethod(c: Context<ApiEnv>, methods: string[]): Response {

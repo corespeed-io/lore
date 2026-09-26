@@ -4,9 +4,11 @@ import { expect, test } from "vitest";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
 import { createOperationsModule, NON_TENANT_PUBLIC_TABLES } from "@/modules/operations/service";
 import {
-  createPortabilityModule,
   MAX_WORKSPACE_ARCHIVE_LINKS,
   MAX_WORKSPACE_ARCHIVE_MEMORIES,
+} from "@/modules/portability/limits";
+import {
+  createPortabilityModule,
   PortabilityValidationError,
   WorkspaceExportLimitError,
 } from "@/modules/portability/service";

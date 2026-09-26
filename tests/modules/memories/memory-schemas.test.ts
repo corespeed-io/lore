@@ -3,11 +3,11 @@ import { expect, expectTypeOf, test } from "vitest";
 import type { Memory } from "@/modules/memories/schemas";
 import {
   CreateMemoryInputSchema,
-  MemoryMetadataSchema,
   MemorySchema,
   memoryOpenApiSchemas,
   UpdateMemoryInputSchema,
 } from "@/modules/memories/schemas";
+import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
 import type { Memory as CoreMemory } from "../../../src/modules/memories/service";
 
 test("the inferred wire model stays aligned with the engine and generated SDK", () => {

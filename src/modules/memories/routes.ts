@@ -14,8 +14,9 @@ import {
   requiredString,
   uuidString,
 } from "@/server/api/input";
+import { memoryScope } from "@/server/api/shared-schemas";
 import { observeOperation } from "@/server/telemetry/telemetry";
-import { memoryEtag, memoryScope, metadataFilter } from "./input";
+import { memoryEtag, metadataFilter } from "./input";
 import { CreateMemoryInputSchema, UpdateMemoryInputSchema } from "./schemas";
 
 function expectedMemoryVersion(request: Request): number {

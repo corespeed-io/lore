@@ -1,8 +1,7 @@
 import "server-only";
 
+import type { MemoryGraph, MemoryScope } from "@corespeed/lore-core";
 import pg from "pg";
-import type { GraphData } from "@/modules/graph/browser/types";
-import type { MemoryScope } from "@/modules/memories/schemas";
 
 interface NodeRow {
   id: string;
@@ -19,7 +18,7 @@ interface LinkRow {
   weight: number;
 }
 
-export async function readGraphScaleBenchmark(): Promise<GraphData> {
+export async function readGraphScaleBenchmark(): Promise<MemoryGraph> {
   const connectionString = process.env.BENCHMARK_DATABASE_URL;
   if (!connectionString) throw new Error("BENCHMARK_DATABASE_URL is not configured");
 

@@ -12,7 +12,6 @@ import {
 } from "@corespeed/lore-core/episodes";
 import { Hono } from "hono";
 import { createObservationModule } from "@/modules/episodes/service";
-import { memoryScope, metadata } from "@/modules/memories/input";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
   BadRequestError,
@@ -25,6 +24,7 @@ import {
   requiredRawString,
   uuidString,
 } from "@/server/api/input";
+import { memoryScope, metadata } from "@/server/api/shared-schemas";
 import { observeOperation } from "@/server/telemetry/telemetry";
 
 /**

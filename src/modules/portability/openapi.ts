@@ -6,7 +6,7 @@ import {
   timestampProperties,
   workspaceHeader,
 } from "@/server/openapi/shared";
-import { MAX_WORKSPACE_ARCHIVE_LINKS, MAX_WORKSPACE_ARCHIVE_MEMORIES } from "./service";
+import { MAX_WORKSPACE_ARCHIVE_LINKS, MAX_WORKSPACE_ARCHIVE_MEMORIES } from "./limits";
 
 export const portabilityPaths = {
   "/api/v1/workspaces/export": {

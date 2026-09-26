@@ -21,7 +21,6 @@ import {
   CODE_INDEX_REVISION,
   SUPERSEDED_CODE_INDEX_REVISIONS,
 } from "@/modules/code/indexing/protocol";
-import type { ConfiguredCodeRepositories } from "@/modules/code/indexing/queue";
 import {
   CODE_REPOSITORY_NOT_CONFIGURED,
   configuredCodeRepositoriesFromEnvironment,
@@ -29,6 +28,7 @@ import {
 } from "@/modules/code/indexing/queue";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createApi } from "@/server/api/app";
+import type { ConfiguredCodeRepositories } from "@/server/api/dependencies";
 import { createAccessModule } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";

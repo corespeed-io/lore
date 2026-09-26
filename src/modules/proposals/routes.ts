@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { memoryEtag, memoryScope, metadata, requiredMemoryContent } from "@/modules/memories/input";
+import { memoryEtag, requiredMemoryContent } from "@/modules/memories/input";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
   BadRequestError,
@@ -11,6 +11,7 @@ import {
   uuidArray,
   uuidString,
 } from "@/server/api/input";
+import { memoryScope, metadata } from "@/server/api/shared-schemas";
 import { observeOperation } from "@/server/telemetry/telemetry";
 import type { MemoryProposalStatus, ProposeMemoryCodeEvidence } from "./service";
 import { createMemoryProposalsModule } from "./service";

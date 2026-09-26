@@ -24,9 +24,9 @@ reads as both verb and noun, which is how `benchmark-retrieval.ts` and
 
 `*` denotes related commands, including dataset fetch and profile variants; see
 [package.json](../../package.json) for their exact names. Domain-specific helpers
-and output schemas stay with their runner family. The policy MCP fixture remains
-in [`packages/mcp/benchmark-fixture.ts`](../../packages/mcp/benchmark-fixture.ts)
-so its server dependency resolves within that package.
+and output schemas stay with their runner family. The policy MCP fixture server is
+[`policy/serve-retrieval-policy-fixture.ts`](policy/serve-retrieval-policy-fixture.ts);
+the root workspace supplies its `@modelcontextprotocol/server` dependency.
 
 The standalone [dimension setup helper](retrieval/migrate-dimensions.ts)
 documents how to prepare a disposable benchmark database for non-default embedding

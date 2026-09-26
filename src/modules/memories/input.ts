@@ -1,6 +1,6 @@
-import type { MemoryScope } from "@corespeed/lore-core";
 import { BadRequestError, parseMemoryInput } from "@/server/api/input";
-import { CreateMemoryInputSchema, MemoryMetadataSchema, MemoryScopeSchema } from "./schemas";
+import { metadata } from "@/server/api/shared-schemas";
+import { CreateMemoryInputSchema } from "./schemas";
 
 export function memoryEtag(version: number): string {
   return `"memory-v${version}"`;
@@ -8,14 +8,6 @@ export function memoryEtag(version: number): string {
 
 export function requiredMemoryContent(value: unknown): string {
   return parseMemoryInput(CreateMemoryInputSchema.shape.content, value);
-}
-
-export function memoryScope(value: unknown): MemoryScope | undefined {
-  return parseMemoryInput(MemoryScopeSchema.optional(), value);
-}
-
-export function metadata(value: unknown): Record<string, unknown> | undefined {
-  return parseMemoryInput(MemoryMetadataSchema.optional(), value);
 }
 
 export function metadataFilter(value: string | null): Record<string, unknown> | undefined {

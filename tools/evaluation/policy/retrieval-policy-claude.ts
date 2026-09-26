@@ -6,9 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { RetrievalPolicyTrace } from "./retrieval-policy";
 import { codexRetrievalPolicyToolFilter } from "./retrieval-policy-codex";
 
-const fixturePath = fileURLToPath(
-  new URL("../../../packages/mcp/benchmark-fixture.ts", import.meta.url),
-);
+const fixturePath = fileURLToPath(new URL("./serve-retrieval-policy-fixture.ts", import.meta.url));
 const outputSchemaPath = fileURLToPath(
   new URL("./retrieval-policy-output.schema.json", import.meta.url),
 );

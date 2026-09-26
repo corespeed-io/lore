@@ -12,6 +12,7 @@ import { AgentsView } from "@/modules/agents/browser/AgentsView";
 import { useLoreGraph } from "@/modules/graph/browser/data";
 import { GraphView } from "@/modules/graph/browser/GraphView";
 import { LocalGraphModal } from "@/modules/graph/browser/LocalGraphModal";
+import { memoryGraphContext } from "@/modules/graph/browser/memory-context";
 import { type GraphData, isGraphCapped } from "@/modules/graph/browser/types";
 import {
   removeMemoryFromPages,
@@ -437,6 +438,13 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   }
 
   const graphReady = graphLoaded && !graphError && graphData.nodes.length > 0;
+  const selectedRelated = selectedMemory ? graphNeighbors(graph, selectedMemory.id) : [];
+  const selectedGraphContext = memoryGraphContext({
+    state: graphState,
+    capped: isGraphCapped(graphData),
+    inGraph: Boolean(selectedMemory && graph.byId[selectedMemory.id]),
+    relatedCount: selectedRelated.length,
+  });
   const graphVisible = tab === "graph" && !selectedMemoryId && graphReady;
   if (graphVisible) graphEverVisible.current = true;
 
@@ -502,10 +510,8 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                 workspaceId={activeWorkspaceId}
                 memory={selectedMemory}
                 wikilinkTargets={graph.byReference}
-                related={graphNeighbors(graph, selectedMemory.id)}
-                graphState={graphState}
-                graphCapped={isGraphCapped(graphData)}
-                inGraph={Boolean(graph.byId[selectedMemory.id])}
+                related={selectedRelated}
+                graphContext={selectedGraphContext}
                 backLabel={TAB_LABELS[tab]}
                 saving={saving}
                 error={mutationError}

@@ -1,5 +1,6 @@
 import type {
   MemoryMutationPrimitivesOptions,
+  MemoryScope,
   PostgresDatabase,
   PostgresTransaction,
 } from "@corespeed/lore-core";
@@ -8,25 +9,20 @@ import {
   MemoryContentValidationError,
   prepareMemoryContent,
 } from "@corespeed/lore-core";
-import { MemoryMetadataSchema, type MemoryScope } from "@/modules/memories/schemas";
 import { createMemoryMutationPrimitives } from "@/modules/memories/service";
 import { mutationRequestHash } from "@/server/api/idempotency";
+import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import {
+  MAX_WORKSPACE_ARCHIVE_BYTES,
+  MAX_WORKSPACE_ARCHIVE_LINKS,
+  MAX_WORKSPACE_ARCHIVE_MEMORIES,
+  WORKSPACE_ARCHIVE_FORMAT,
+} from "./limits";
 
-export const WORKSPACE_ARCHIVE_FORMAT = "lore-workspace-v1";
-export const MAX_WORKSPACE_ARCHIVE_MEMORIES = 10_000;
-export const MAX_WORKSPACE_ARCHIVE_LINKS = 50_000;
-/** The largest accepted import request body, in UTF-8 bytes. */
-export const MAX_WORKSPACE_IMPORT_BODY_BYTES = 50_000_000;
 /** Embedding jobs an import wakes directly: ten Queue batches, like one sweep. */
 const MAX_IMPORT_MAINTENANCE_NOTIFICATIONS = 1_000;
-/**
- * Export budget for one compact archive, in UTF-8 bytes. An import body also carries
- * the ownerMap (at most 10,000 entries of about 80 bytes) and its own envelope, so
- * this margin keeps every archive that export produces importable.
- */
-export const MAX_WORKSPACE_ARCHIVE_BYTES = 48_000_000;
 // Upper bounds for each serialized record beyond its measured JSON content (or kind)
 // and metadata: ids, timestamps, version or weight, property names, and separators.
 const ARCHIVE_MEMORY_OVERHEAD_BYTES = 256;
