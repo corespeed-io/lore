@@ -189,11 +189,11 @@ function toObservation(row: ObservationRow): Observation {
   };
 }
 
-function normalizedTimestamp(value: string | undefined, fallback: string): string {
+function normalizedTimestamp(value: string | undefined, fallback: string, field: string): string {
   if (value === undefined) return fallback;
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds)) {
-    throw new LoreValidationError("observedAt", "observedAt must be an ISO 8601 timestamp");
+    throw new LoreValidationError(field, `${field} must be an ISO 8601 timestamp`);
   }
   return new Date(milliseconds).toISOString();
 }
@@ -257,7 +257,7 @@ export function normalizedEpisode(input: RecordEpisode): {
       kind,
       content: observation.content,
       metadata,
-      observedAt: normalizedTimestamp(observation.observedAt, recordedAt),
+      observedAt: normalizedTimestamp(observation.observedAt, recordedAt, `${field}.observedAt`),
     };
   });
   if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
