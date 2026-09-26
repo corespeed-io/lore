@@ -8,6 +8,7 @@ import { DomainError, type LoreErrorCode } from "@/server/errors";
 /** The HTTP status of every public error code. */
 const HTTP_STATUS: Record<LoreErrorCode, number> = {
   access_denied: 403,
+  agent_not_disabled: 409,
   authentication_required: 401,
   idempotency_conflict: 409,
   internal_error: 500,

@@ -8,7 +8,7 @@ import {
   uuidString,
 } from "@/server/api/input";
 import type { AgentGrantPermission, AgentStatus } from "@/server/auth/access";
-import { createAccessModule } from "@/server/auth/access";
+import { AgentNotDisabledError, createAccessModule } from "@/server/auth/access";
 
 function agentPermission(
   value: unknown,
@@ -72,9 +72,7 @@ export const agents = new Hono<ApiEnv>()
     if (result === "deleted") {
       return c.body(null, 204);
     }
-    if (result === "must_disable") {
-      return c.json({ code: "invalid_request", error: "Disable Agent before deleting it" }, 409);
-    }
+    if (result === "must_disable") throw new AgentNotDisabledError();
     return c.json({ code: "not_found", error: "Agent not found" }, 404);
   })
   .get("/:id/credentials", async (c) => {

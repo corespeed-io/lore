@@ -16,6 +16,15 @@ export class AccessDeniedError extends DomainError {
   readonly code = "access_denied";
 }
 
+/** An Agent is deleted only once it is disabled. */
+export class AgentNotDisabledError extends DomainError {
+  override name = "AgentNotDisabledError";
+  readonly code = "agent_not_disabled";
+  constructor() {
+    super("Disable Agent before deleting it");
+  }
+}
+
 export interface Agent {
   id: string;
   ownerUserId: string;

@@ -111,6 +111,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
   );
   expect([...document.components.schemas.Error.properties.code.enum].sort()).toEqual([
     "access_denied",
+    "agent_not_disabled",
     "authentication_required",
     "idempotency_conflict",
     "internal_error",

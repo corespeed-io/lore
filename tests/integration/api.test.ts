@@ -1109,7 +1109,7 @@ test("Agent HTTP resource provisions a grant and issues a revocable one-time tok
   expect(activeDeleteResponse.status).toBe(409);
   expect(activeDeleteResponse.headers.get("cache-control")).toBe("private, no-store");
   await expect(activeDeleteResponse.json()).resolves.toEqual({
-    code: "invalid_request",
+    code: "agent_not_disabled",
     error: "Disable Agent before deleting it",
   });
 

@@ -1,6 +1,7 @@
 // Generated from Lore's canonical OpenAPI document. Do not edit by hand.
 export const LORE_ERROR_CODES = [
   "access_denied",
+  "agent_not_disabled",
   "authentication_required",
   "idempotency_conflict",
   "internal_error",

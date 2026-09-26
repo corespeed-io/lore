@@ -831,7 +831,7 @@ export interface components {
         };
         readonly Error: {
             /** @enum {string} */
-            readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
+            readonly code: "access_denied" | "agent_not_disabled" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
             readonly error: string;
         };
         readonly EvaluationCase: {
