@@ -1,4 +1,5 @@
 import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
+import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
   ifMatchHeader,
@@ -38,7 +39,7 @@ export const memoriesPaths = {
           name: "cursor",
           in: "query",
           description: "Opaque browse cursor; mutually exclusive with offset.",
-          schema: { type: "string" },
+          schema: { type: "string", maxLength: CURSOR_MAXIMUM_LENGTH },
         },
         {
           name: "scope",

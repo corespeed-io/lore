@@ -130,7 +130,10 @@ const memoryContentSchema = z
   });
 const idempotencyKeySchema = z
   .string()
-  .regex(IDEMPOTENCY_KEY_PATTERN, "idempotencyKey must contain 1 to 128 visible ASCII characters")
+  .regex(
+    IDEMPOTENCY_KEY_PATTERN,
+    `idempotencyKey must contain 1 to ${LIMITS.idempotencyKeyLength} visible ASCII characters`,
+  )
   .optional();
 const memoryIdentitySchema = z.object({
   id: z.string().uuid(),
@@ -845,7 +848,7 @@ function registerCodeTools(server: McpServer, code: LoreMcpCodeClient): void {
           repositoryKey: repositoryKeySchema,
           commitOid: commitOidSchema,
           direction: z.enum(VOCABULARIES.codeDependencyDirections),
-          symbol: z.string().trim().min(1).max(1_600).optional(),
+          symbol: z.string().trim().min(1).max(LIMITS.codeSymbolLength).optional(),
           path: repositoryPathSchema.optional(),
           limit: z
             .number()

@@ -472,7 +472,7 @@ export async function runLoreCli(
         io,
         await workspace.searchMemories({
           query: fromStdin
-            ? await stdinValue(io, 10_000, "query")
+            ? await stdinValue(io, LORE_CONTRACT.limits.memorySearchQueryLength, "query")
             : requiredPosition(parsed.positionals, 2, "query"),
           limit: optionInteger(parsed.values.limit, "--limit"),
           scope: optionScope(parsed.values.scope),

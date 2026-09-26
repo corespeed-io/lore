@@ -147,9 +147,12 @@ export const LORE_CONTRACT = {
     "codeDependencyResultsDefault": 50,
     "codeIndexJobList": 100,
     "codeIndexJobListDefault": 20,
-    "cursorLength": 512
+    "cursorLength": 512,
+    "idempotencyKeyLength": 128,
+    "workspaceNameLength": 120
   },
   "patterns": {
-    "commitOid": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    "commitOid": "^[0-9a-f]{40}([0-9a-f]{24})?$",
+    "idempotencyKey": "^[\\x21-\\x7e]{1,128}$"
   }
 } as const;

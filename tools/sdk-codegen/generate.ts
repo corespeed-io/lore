@@ -104,6 +104,23 @@ function text(document: unknown, path: string): string {
   if (typeof value !== "string" || !value) throw new TypeError(`OpenAPI ${path} must be a string`);
   return value;
 }
+/**
+ * One contract value that guards several places in the API. Every path must
+ * publish the same value; when one changes alone the generator fails, so a client
+ * never checks one endpoint's input against another endpoint's bound.
+ */
+function same<T>(read: (document: unknown, path: string) => T, document: unknown, paths: string[]) {
+  const [first, ...rest] = paths.map((path) => ({ path, value: read(document, path) }));
+  if (!first) throw new TypeError("A contract value needs at least one OpenAPI path");
+  for (const other of rest) {
+    if (other.value !== first.value) {
+      throw new TypeError(
+        `OpenAPI ${other.path} (${String(other.value)}) differs from ${first.path} (${String(first.value)})`,
+      );
+    }
+  }
+  return first.value;
+}
 
 /**
  * The published vocabularies, bounds, and patterns clients enforce before a
@@ -114,6 +131,16 @@ function contract(document: unknown) {
   const limits = `${schemas}/Capabilities/properties/limits/properties`;
   const memories = "/paths/~1api~1v1~1memories/get/parameters";
   const context = `${schemas}/RetrieveContextInput/properties`;
+  const codeSearch = "/paths/~1api~1v1~1code~1search/get/parameters";
+  const codeDependencies = "/paths/~1api~1v1~1code~1dependencies/get/parameters";
+  const idempotentWrites = [
+    "/paths/~1api~1v1~1memories/post",
+    "/paths/~1api~1v1~1memories~1{memoryId}/patch",
+    "/paths/~1api~1v1~1memories~1{memoryId}/delete",
+    "/paths/~1api~1v1~1episodes/post",
+    "/paths/~1api~1v1~1episodes~1{episodeId}/delete",
+    "/paths/~1api~1v1~1memory-proposals/post",
+  ];
   return {
     vocabularies: {
       memoryScopes: stringEnum(document, `${schemas}/Memory/properties/scope`),
@@ -156,7 +183,11 @@ function contract(document: unknown) {
         document,
         `${schemas}/Memory/properties/metadata/x-lore-maxSerializedLength`,
       ),
-      memorySearchQueryLength: integer(document, `${memories}/[q]/schema/maxLength`),
+      memorySearchQueryLength: same(integer, document, [
+        `${memories}/[q]/schema/maxLength`,
+        `${context}/query/maxLength`,
+        `${context}/memoryQuery/maxLength`,
+      ]),
       memoryListLimit: integer(document, `${memories}/[limit]/schema/maximum`),
       memoryListOffset: integer(document, `${memories}/[offset]/schema/maximum`),
       graphNodes: integer(
@@ -175,17 +206,28 @@ function contract(document: unknown) {
       observationBatchRead: integer(document, `${limits}/observationBatchRead/const`),
       codeSearchResults: integer(document, `${limits}/codeSearchResults/const`),
       codeDependencyResults: integer(document, `${limits}/codeDependencyResults/const`),
-      codeQueryLength: integer(document, `${context}/codeQuery/maxLength`),
-      codeSymbolLength: integer(
-        document,
-        "/paths/~1api~1v1~1code~1dependencies/get/parameters/[symbol]/schema/maxLength",
-      ),
+      codeQueryLength: same(integer, document, [
+        `${codeSearch}/[q]/schema/maxLength`,
+        `${context}/codeQuery/maxLength`,
+      ]),
+      codeSymbolLength: integer(document, `${codeDependencies}/[symbol]/schema/maxLength`),
       codeSourceRefLength: integer(
         document,
         `${schemas}/EnqueueCodeIndexInput/properties/sourceRef/maxLength`,
       ),
-      repositoryKeyLength: integer(document, `${context}/repositoryKey/maxLength`),
-      repositoryPathLength: integer(document, `${context}/pathPrefix/maxLength`),
+      repositoryKeyLength: same(integer, document, [
+        `${context}/repositoryKey/maxLength`,
+        `${codeSearch}/[repository_key]/schema/maxLength`,
+        `${codeDependencies}/[repository_key]/schema/maxLength`,
+        `${schemas}/EnqueueCodeIndexInput/properties/repositoryKey/maxLength`,
+        `${schemas}/RevalidateMemoryCodeEvidenceInput/properties/repositoryKey/maxLength`,
+      ]),
+      repositoryPathLength: same(integer, document, [
+        `${context}/pathPrefix/maxLength`,
+        `${codeSearch}/[path_prefix]/schema/maxLength`,
+        `${codeDependencies}/[path]/schema/maxLength`,
+        `${schemas}/MemoryProposalCodeEvidence/properties/citedPath/maxLength`,
+      ]),
       contextMemoryLimit: integer(document, `${context}/memoryLimit/maximum`),
       contextMemoryLimitDefault: integer(document, `${context}/memoryLimit/default`),
       contextCodeLimit: integer(document, `${context}/codeLimit/maximum`),
@@ -202,13 +244,37 @@ function contract(document: unknown) {
         document,
         "/paths/~1api~1v1~1code~1index-jobs/get/parameters/[limit]/schema/default",
       ),
-      cursorLength: integer(
-        document,
+      cursorLength: same(integer, document, [
+        `${memories}/[cursor]/schema/maxLength`,
         "/paths/~1api~1v1~1evaluations~1suites/get/parameters/[cursor]/schema/maxLength",
+      ]),
+      idempotencyKeyLength: same(
+        integer,
+        document,
+        idempotentWrites.map(
+          (operation) => `${operation}/parameters/[Idempotency-Key]/schema/maxLength`,
+        ),
+      ),
+      workspaceNameLength: integer(
+        document,
+        "/paths/~1api~1v1~1workspaces/post/requestBody/content/application~1json/schema/properties/name/maxLength",
       ),
     },
     patterns: {
-      commitOid: text(document, `${context}/commitOid/pattern`),
+      commitOid: same(text, document, [
+        `${context}/commitOid/pattern`,
+        `${codeSearch}/[commit_oid]/schema/pattern`,
+        `${codeDependencies}/[commit_oid]/schema/pattern`,
+        `${schemas}/EnqueueCodeIndexInput/properties/commitOid/pattern`,
+        `${schemas}/RevalidateMemoryCodeEvidenceInput/properties/commitOid/pattern`,
+      ]),
+      idempotencyKey: same(
+        text,
+        document,
+        idempotentWrites.map(
+          (operation) => `${operation}/parameters/[Idempotency-Key]/schema/pattern`,
+        ),
+      ),
     },
   };
 }

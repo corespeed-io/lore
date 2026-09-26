@@ -545,8 +545,10 @@ been removed. Lore now has a native implementation, split into two concepts
   trailing items with `truncated: true`. The SDK and MCP enforce the server's
   visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, and
   pattern a client checks before a request comes from `LORE_CONTRACT`, which
-  `sdk:generate` reads out of the OpenAPI document by explicit path (failing when
-  one is missing) and the SDK exports; the SDK, CLI, and MCP restate none of them.
+  `sdk:generate` reads out of the OpenAPI document by explicit path, from every
+  endpoint the value guards (failing when one is missing or two disagree), and the
+  SDK exports; the SDK, CLI, and MCP restate none of them (standard UUID syntax
+  aside).
   JSON Schema cannot bound an object's serialized size, so the metadata bound is
   published as `x-lore-maxSerializedLength`.
   Clients in other languages use the HTTP API described by OpenAPI.
