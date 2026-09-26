@@ -134,12 +134,17 @@ Callers import the specific interface they use. Do not recreate aggregate `lib`,
 `types`, route, browser-client, or hook files spanning unrelated domains,
 or barrels that re-export server code alongside browser code. Domain hooks share the central
 cache-key vocabulary so mutations can invalidate related views consistently.
-Cross-domain UI composition belongs in `src/shell`.
+A domain imports another only along the declared module graph (`MODULES` in
+`scripts/checks/check-import-boundaries.ts`), and only that module's exported
+files; composition across domains with no declared dependency belongs in
+`src/shell`, which is how Memory detail receives what the Graph can vouch for.
 
-`bun run architecture:check` matches `src/modules/*/browser/**` as a directory, so
+`bun run architecture:check` recognizes `src/modules/*/browser/**` as a directory, so
 a new browser file never requires a `biome.json` edit. Keep that guard keyed on the
 directory: an allowlist of file names silently makes the file layout load-bearing
-and pushes unrelated helpers into whichever name is already blessed.
+and pushes unrelated helpers into whichever name is already blessed. A module's
+`exports` list is the one deliberate exception: it names the files other modules
+may import, so widening a module's public surface is a reviewed edit.
 
 API route handlers and the canonical OpenAPI document define the API contract consumed
 by the TypeScript SDK and direct HTTP clients. The CLI and external MCP adapter
@@ -192,7 +197,8 @@ Core is the one entry under `packages/` that is not a distributable: it is
 package so that the layering is mechanically enforced rather than merely
 documented. Its own `tsconfig.json` omits the `@/*` mapping, so an import from
 the engine back into OSS fails to compile, and `bun run architecture:check`
-denies it OSS paths, host frameworks, Zod, and concrete model SDKs. Its stricter
+denies it OSS paths, host frameworks, Zod, concrete model SDKs, and any repository
+file outside the package, tests included. Its stricter
 compiler settings and its own CI gate apply to the engine alone. Treat a change
 that needs either guard relaxed as a design question, not a configuration fix.
 

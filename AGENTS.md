@@ -45,7 +45,10 @@ been removed. Lore now has a native implementation, split into two concepts
   catches everything the other does. It is also held to the union strictness of
   its hosts (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), which the
   application is not, and CI runs `bun run --cwd packages/lore-core check` as its
-  own gate against a minimal PGlite schema with no identity tables. In-repo it is
+  own gate against a minimal PGlite schema with no identity tables. lore oss's own
+  run of the engine contract suite against its migration chain and identity model
+  is `tests/core/contract.test.ts`, part of the application tests; no file under
+  `packages/lore-core` may import a repository file outside that package. In-repo it is
   consumed as workspace TypeScript source (root tsconfig paths, vitest aliases,
   Next `transpilePackages`), never as a built dependency.
   **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
@@ -107,7 +110,16 @@ been removed. Lore now has a native implementation, split into two concepts
   `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
   idempotent writes never wait on the build. Each index is dropped (`DROP INDEX
   CONCURRENTLY IF EXISTS`) and then built, so a rerun after a stopped build
-  replaces any `INVALID` leftover. Every new migration
+  replaces any `INVALID` leftover. The forget triggers find replay bodies by those
+  JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
+  `{proposal,acceptedMemoryId}`, `{episode,id}`), so renaming one in a replayed
+  response needs a forward migration; `tests/server/replay-scrub.test.ts` proves by
+  content, not by those paths, that forgetting removes every such body.
+  `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
+  TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
+  CHECK bounds, and every `lore.portable_core_capabilities()` limit (and its
+  OpenAPI `const`). Fix a failure there with a forward migration or a TypeScript
+  change, never by editing an applied migration. Every new migration
   must update `lore_system_state.schema_revision` to its own version number (currently 5) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
@@ -131,8 +143,8 @@ been removed. Lore now has a native implementation, split into two concepts
   its `schema_revision` UPDATE, which the wrapper commits in one transaction with
   the ledger row; a stopped run records nothing and the next run repeats the whole
   file, so every such index must be dropped before it is built. PGlite harnesses
-  (`tests/support/memory-context.ts`, restore verification, the lore-core contract
-  test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
+  (`tests/support/memory-context.ts`, restore verification, the OSS-hosted engine
+  contract test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
   `applyMigrationChain`/`migrationQueries`; never apply a migration file with one
   `exec(fileContents)`. `pg` remains the runtime adapter behind the narrow
   transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
@@ -326,10 +338,20 @@ been removed. Lore now has a native implementation, split into two concepts
   UI remains a distinct module within Next.js; it does not need a separate package
   or service. UI, CLI, and MCP depend on the TypeScript SDK, which calls the OSS API;
   the API supplies authorization and tenancy before composing Core and PostgreSQL.
-  `bun run architecture:check` guards these dependency boundaries in CI. Every
-  browser-side file of a domain lives under `src/modules/*/browser/`, and that
-  directory glob — not a list of blessed file names — is what the guard matches.
-  Adding a browser file must never require editing `biome.json`.
+  `bun run architecture:check` guards these dependency boundaries in CI: Biome's
+  restricted imports plus `scripts/checks/check-import-boundaries.ts`, which keeps
+  no baseline of tolerated violations. That script puts every file under `src/`
+  and `packages/` in one layer (Core; SDK/CLI/MCP; server infrastructure; domain
+  modules, split into server and `browser/`; server and UI composition; Next
+  pages), lets a layer import only the layers below it (type-only imports
+  included), and holds cross-domain imports to its declared acyclic `MODULES`
+  graph: a module imports another only when it declares that dependency, and only
+  the files that module exports. Nothing the Cloudflare Worker entry reaches may
+  import a native or Bun-only package. Every browser-side file of a domain lives
+  under `src/modules/*/browser/`, and that directory — not a list of blessed file
+  names — is how both guards recognize browser code. Adding a browser file must
+  never require editing `biome.json`; exposing a file to another module is a
+  deliberate edit to that module's `exports`.
   `browser/data.ts` owns a domain's SDK calls together with its SWR hooks; API
   paths, Workspace headers, serialization, parsing, cancellation, and errors
   belong to the SDK. Do not reintroduce a per-domain `client.ts` layer that only
@@ -470,7 +492,10 @@ been removed. Lore now has a native implementation, split into two concepts
   Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;
-- `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4.
+- `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4;
+  the scope and metadata schemas it shares with Proposals, Episodes, and Workspace
+  archives live in `src/server/api/shared-schemas.ts` so no domain imports another
+  for them.
   HTTP Memory writes validate with these schemas, and OpenAPI generates its
   Memory/create/update components from them. Browser wire types and public content
   limits are imported directly from the generated TypeScript SDK contract; browser
