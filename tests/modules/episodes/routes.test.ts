@@ -274,3 +274,67 @@ test("Episode metadata budgets use the original JSON representation", async () =
   expect(responses.map((response) => response.status)).toEqual([201, 201]);
   await testContext.close();
 });
+
+test("Episode kinds and wire shapes are refused with the engine's vocabulary", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "episode-http-vocabulary";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Evidence vocabulary" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+
+  const unknownKind = await app.request(
+    new Request("http://lore.local/api/v1/episodes?kind=diary", { headers }),
+  );
+  expect(unknownKind.status).toBe(400);
+  await expect(unknownKind.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "kind must be conversation, workflow, document, or event",
+  });
+  // An empty kind filter is no filter.
+  const unfiltered = await app.request(
+    new Request("http://lore.local/api/v1/episodes?kind=", { headers }),
+  );
+  expect(unfiltered.status).toBe(200);
+
+  const cases: Array<[unknown, string]> = [
+    [
+      { kind: "diary", observations: [{ kind: "message", content: "x" }] },
+      "kind must be conversation, workflow, document, or event",
+    ],
+    [{ kind: "conversation", observations: "x" }, "observations must be an array"],
+    [{ kind: "conversation", observations: [] }, "observations must contain 1 to 100 items"],
+    [
+      { kind: "conversation", observations: [{ kind: "message", content: 42 }] },
+      "observations[0].content must be a string",
+    ],
+    [
+      { kind: "conversation", observations: [{ kind: "thought", content: "x" }] },
+      "observations[0].kind must be message, tool_call, tool_result, document_fragment, or event",
+    ],
+  ];
+  for (const [body, error] of cases) {
+    const response = await app.request(
+      new Request("http://lore.local/api/v1/episodes", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+    expect(response.status, error).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+  await testContext.close();
+});

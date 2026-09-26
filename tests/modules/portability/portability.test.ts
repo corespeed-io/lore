@@ -422,6 +422,36 @@ test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
     },
     /links\[0\]\.kind must be non-blank text of at most 64 characters/,
   ],
+  // The engine's Link and scope rules, reported as archive failures (invalid_archive),
+  // never as the engine's own invalid_request.
+  [
+    "a Link from a Memory to itself",
+    (archive) => {
+      archive.links[0].targetMemoryId = archive.links[0].sourceMemoryId;
+    },
+    /links\[0\] must connect two different Memories/,
+  ],
+  [
+    "a Link without a weight",
+    (archive) => {
+      delete (archive.links[0] as Partial<WorkspaceArchive["links"][number]>).weight;
+    },
+    /links\[0\] must include kind and weight/,
+  ],
+  [
+    "a Link weight above 1",
+    (archive) => {
+      archive.links[0].weight = 1.5;
+    },
+    /links\[0\]\.weight must be a number from 0 through 1/,
+  ],
+  [
+    "an unknown Memory scope",
+    (archive) => {
+      (archive.memories[1] as { scope: string }).scope = "team";
+    },
+    /memories\[1\]\.scope must be shared or private/,
+  ],
   [
     "a top-level __proto__ metadata key",
     (archive) => {

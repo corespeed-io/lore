@@ -5,6 +5,7 @@ import type {
   RetrievalGroundingReasonCode,
 } from "@corespeed/lore-sdk";
 import {
+  LORE_CONTRACT,
   LoreApiError,
   LoreClient,
   loreConfigurationFromEnvironment,
@@ -827,5 +828,253 @@ describe("Lore TypeScript SDK", () => {
         /LORE_REQUEST_TIMEOUT_MS|timeoutMs/,
       );
     }
+  });
+});
+
+/**
+ * Every client-side bound comes from the published contract: a value one past it is
+ * refused before any request, and the bound itself is sent. A drifted or restated
+ * constant would move one of these edges.
+ */
+describe("client bounds from LORE_CONTRACT", () => {
+  const LIMITS = LORE_CONTRACT.limits;
+  const code = { repositoryKey: "corespeed/lore", commitOid: "a".repeat(40) };
+  const observationIds = (count: number) =>
+    Array.from(
+      { length: count },
+      (_, index) => `50000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    );
+  type Call = (client: LoreClient) => Promise<unknown>;
+  const workspace = (client: LoreClient) => client.workspace(WORKSPACE_ID);
+
+  const edges: Array<[string, Call, Call, RegExp]> = [
+    [
+      "Graph nodes",
+      (client) => workspace(client).graph(LIMITS.graphNodes),
+      (client) => workspace(client).graph(LIMITS.graphNodes + 1),
+      /^Graph limit must be an integer from 1 to 5000$/,
+    ],
+    [
+      "Memory list limit",
+      (client) => workspace(client).listMemories({ limit: LIMITS.memoryListLimit }),
+      (client) => workspace(client).listMemories({ limit: LIMITS.memoryListLimit + 1 }),
+      /^limit must be an integer from 1 to 100$/,
+    ],
+    [
+      "Memory list offset",
+      (client) => workspace(client).listMemories({ offset: LIMITS.memoryListOffset }),
+      (client) => workspace(client).listMemories({ offset: LIMITS.memoryListOffset + 1 }),
+      /^offset must be an integer from 0 to 1000000$/,
+    ],
+    [
+      "Memory search query",
+      (client) =>
+        workspace(client).searchMemories({ query: "q".repeat(LIMITS.memorySearchQueryLength) }),
+      (client) =>
+        workspace(client).searchMemories({
+          query: "q".repeat(LIMITS.memorySearchQueryLength + 1),
+        }),
+      /^query must contain 1 to 10000 characters$/,
+    ],
+    [
+      "Code search results",
+      (client) =>
+        workspace(client).searchCode({ ...code, query: "guard", limit: LIMITS.codeSearchResults }),
+      (client) =>
+        workspace(client).searchCode({
+          ...code,
+          query: "guard",
+          limit: LIMITS.codeSearchResults + 1,
+        }),
+      /^limit must be an integer from 1 to 100$/,
+    ],
+    [
+      "Code search query",
+      (client) =>
+        workspace(client).searchCode({ ...code, query: "q".repeat(LIMITS.codeQueryLength) }),
+      (client) =>
+        workspace(client).searchCode({ ...code, query: "q".repeat(LIMITS.codeQueryLength + 1) }),
+      /^query must contain 1 to 2000 characters$/,
+    ],
+    [
+      "repository key",
+      (client) =>
+        workspace(client).searchCode({
+          ...code,
+          repositoryKey: "r".repeat(LIMITS.repositoryKeyLength),
+          query: "guard",
+        }),
+      (client) =>
+        workspace(client).searchCode({
+          ...code,
+          repositoryKey: "r".repeat(LIMITS.repositoryKeyLength + 1),
+          query: "guard",
+        }),
+      /^repositoryKey must contain 1 to 512 characters$/,
+    ],
+    [
+      "commit OID",
+      (client) => workspace(client).searchCode({ ...code, commitOid: "b".repeat(64), query: "g" }),
+      (client) => workspace(client).searchCode({ ...code, commitOid: "b".repeat(41), query: "g" }),
+      /^commitOid must be a full 40- or 64-character Git OID$/,
+    ],
+    [
+      "context Memory limit",
+      (client) =>
+        workspace(client).retrieveContext({ query: "why", memoryLimit: LIMITS.contextMemoryLimit }),
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          memoryLimit: LIMITS.contextMemoryLimit + 1,
+        }),
+      /^limit must be an integer from 1 to 10$/,
+    ],
+    [
+      "context Code limit",
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          ...code,
+          codeLimit: LIMITS.contextCodeLimit,
+        }),
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          ...code,
+          codeLimit: LIMITS.contextCodeLimit + 1,
+        }),
+      /^limit must be an integer from 1 to 20$/,
+    ],
+    [
+      "context Memory query",
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          memoryQuery: "m".repeat(LIMITS.memorySearchQueryLength),
+        }),
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          memoryQuery: "m".repeat(LIMITS.memorySearchQueryLength + 1),
+        }),
+      /^memoryQuery must contain 1 to 10000 characters$/,
+    ],
+    [
+      "dependency symbol",
+      (client) =>
+        workspace(client).queryCodeDependencies({
+          ...code,
+          direction: "callees",
+          symbol: "s".repeat(LIMITS.codeSymbolLength),
+        }),
+      (client) =>
+        workspace(client).queryCodeDependencies({
+          ...code,
+          direction: "callees",
+          symbol: "s".repeat(LIMITS.codeSymbolLength + 1),
+        }),
+      /^symbol must contain 1 to 1600 characters$/,
+    ],
+    [
+      "dependency path",
+      (client) =>
+        workspace(client).queryCodeDependencies({
+          ...code,
+          direction: "callers",
+          path: "p".repeat(LIMITS.repositoryPathLength),
+        }),
+      (client) =>
+        workspace(client).queryCodeDependencies({
+          ...code,
+          direction: "callers",
+          path: "p".repeat(LIMITS.repositoryPathLength + 1),
+        }),
+      /^path is invalid$/,
+    ],
+    [
+      "dependency results",
+      (client) =>
+        workspace(client).queryCodeDependencies({
+          ...code,
+          direction: "callers",
+          symbol: "guard",
+          limit: LIMITS.codeDependencyResults,
+        }),
+      (client) =>
+        workspace(client).queryCodeDependencies({
+          ...code,
+          direction: "callers",
+          symbol: "guard",
+          limit: LIMITS.codeDependencyResults + 1,
+        }),
+      /^limit must be an integer from 1 to 200$/,
+    ],
+    [
+      "Code Index job list",
+      (client) => workspace(client).listCodeIndexJobs({ limit: LIMITS.codeIndexJobList }),
+      (client) => workspace(client).listCodeIndexJobs({ limit: LIMITS.codeIndexJobList + 1 }),
+      /^limit must be an integer from 1 to 100$/,
+    ],
+    [
+      "Observation batch read",
+      (client) => workspace(client).getObservations(observationIds(LIMITS.observationBatchRead)),
+      (client) =>
+        workspace(client).getObservations(observationIds(LIMITS.observationBatchRead + 1)),
+      /^observationIds must contain 1 to 50 UUIDs$/,
+    ],
+    [
+      "Workspace name",
+      (client) => client.createWorkspace("w".repeat(LIMITS.workspaceNameLength)),
+      (client) => client.createWorkspace("w".repeat(LIMITS.workspaceNameLength + 1)),
+      /^Workspace name must contain 1 to 120 characters$/,
+    ],
+  ];
+
+  test.each(edges)(
+    "%s: the bound is sent, one past it is refused",
+    async (_name, atBound, past, message) => {
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json({}));
+      const client = new LoreClient({ baseUrl: "http://127.0.0.1:3000", fetch: fetchMock });
+
+      await expect(past(client)).rejects.toThrow(message);
+      expect(fetchMock).not.toHaveBeenCalled();
+      // The response body is irrelevant here; only whether a request left the client.
+      await atBound(client).catch(() => undefined);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  test("defaults come from the contract too", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({}));
+    const client = new LoreClient({ baseUrl: "http://127.0.0.1:3000", fetch: fetchMock });
+    await workspace(client)
+      .graph()
+      .catch(() => undefined);
+    await workspace(client)
+      .listCodeIndexJobs()
+      .catch(() => undefined);
+    await workspace(client)
+      .queryCodeDependencies({ ...code, direction: "callers", symbol: "guard" })
+      .catch(() => undefined);
+    await workspace(client)
+      .retrieveContext({ query: "why", ...code })
+      .catch(() => undefined);
+
+    const [graphUrl, jobsUrl, dependenciesUrl] = fetchMock.mock.calls.map(
+      ([url]) => new URL(String(url)),
+    );
+    expect(graphUrl?.searchParams.get("limit")).toBe(String(LIMITS.graphNodes));
+    expect(jobsUrl?.searchParams.get("limit")).toBe(String(LIMITS.codeIndexJobListDefault));
+    expect(dependenciesUrl?.searchParams.get("limit")).toBe(
+      String(LIMITS.codeDependencyResultsDefault),
+    );
+    const contextBody = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(contextBody).toMatchObject({
+      memoryLimit: LIMITS.contextMemoryLimitDefault,
+      codeLimit: LIMITS.contextCodeLimitDefault,
+    });
   });
 });

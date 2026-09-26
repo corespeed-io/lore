@@ -369,3 +369,72 @@ test("Proposal HTTP validation is bounded and stable", async () => {
 
   await testContext.close();
 });
+
+test("the Proposal rules the service owns answer HTTP as 400 invalid_request", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "proposal-http-rules";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Proposal Rules" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const created = (await (
+    await app.request(
+      new Request("http://lore.local/api/v1/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "Launch Monday" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const propose = (body: Record<string, unknown>) =>
+    app.request(
+      new Request("http://lore.local/api/v1/memory-proposals", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+
+  // These rules moved from the route into the Proposal service with the refactor.
+  const unchanged = await propose({
+    kind: "update",
+    targetMemoryId: created.id,
+    expectedVersion: 1,
+  });
+  expect(unchanged.status).toBe(400);
+  await expect(unchanged.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "An update proposal must change content, scope, or metadata",
+  });
+  const overCited = await propose({
+    kind: "create",
+    content: "Too much evidence",
+    evidenceMemoryIds: Array.from(
+      { length: 51 },
+      (_, index) => `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    ),
+  });
+  expect(overCited.status).toBe(400);
+  await expect(overCited.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "A Memory Proposal may cite at most 50 evidence records",
+  });
+
+  const listed = await app.request(
+    new Request("http://lore.local/api/v1/memory-proposals", { headers }),
+  );
+  await expect(listed.json()).resolves.toEqual([]);
+  await testContext.close();
+});

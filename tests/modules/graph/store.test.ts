@@ -45,3 +45,15 @@ test("neighbors come from links in both directions and never include the node it
   expect(graphNeighbors(store, "missing")).toEqual([]);
   expect(graphNeighbors(null, "a")).toEqual([]);
 });
+
+test("an ambiguous reference stays ambiguous however many nodes share it", () => {
+  const store = buildGraphStore({
+    nodes: [node("a", "dup"), node("b", "dup"), node("c", "dup"), node("d", "")],
+    links: [],
+  });
+  // Without the ambiguity record, the third node would claim the reference again.
+  expect(store.byReference.dup).toBeUndefined();
+  // An empty reference is no reference; the node still answers to its id.
+  expect(store.byReference[""]).toBeUndefined();
+  expect(store.byReference.d).toBe("d");
+});

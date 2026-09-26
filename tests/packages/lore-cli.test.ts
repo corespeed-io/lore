@@ -515,3 +515,52 @@ test("CLI stdin rejects malformed UTF-8 instead of changing Memory content", asy
 
   await expect(readBoundedUtf8Stdin(input())).rejects.toThrow(/valid UTF-8/);
 });
+
+test.each<[string, string[], RegExp]>([
+  [
+    "an unknown Episode kind",
+    ["episode", "list", "--kind", "diary"],
+    /--kind must be conversation, workflow, document, or event/,
+  ],
+  [
+    "an unknown Code Evidence relationship",
+    [
+      "memory",
+      "propose",
+      "create",
+      "A proposed fact",
+      "--code-evidence",
+      "80000000-0000-4000-8000-000000000001:endorses",
+    ],
+    /--code-evidence relationship must be supports, contradicts, implements, or rationale/,
+  ],
+  [
+    "more evidence than one Proposal may cite",
+    [
+      "memory",
+      "propose",
+      "create",
+      "A proposed fact",
+      ...Array.from({ length: 51 }, (_, index) => [
+        "--evidence",
+        `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      ]).flat(),
+    ],
+    /--evidence may be repeated at most 50 times/,
+  ],
+])(
+  "CLI refuses %s from the published contract before any request",
+  async (_name, args, message) => {
+    const captured = captureIo();
+    const fetchMock = vi.fn();
+    const exitCode = await runLoreCli(args, {
+      environment: { LORE_WORKSPACE_ID: WORKSPACE_ID },
+      fetch: fetchMock,
+      io: captured.io,
+    });
+
+    expect(exitCode).toBe(2);
+    expect(captured.stderr.join("")).toMatch(message);
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);

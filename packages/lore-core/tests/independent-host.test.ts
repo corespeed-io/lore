@@ -108,6 +108,73 @@ test("the independent host provides the memory and graph contract groups", async
   }
 });
 
+test("an empty database lacks every table, type, function, and enum a group names", async () => {
+  const postgres = new PGlite();
+  try {
+    const missing = await missingSchemaContract(postgres, ["memory", "graph"]);
+    expect(missing).toEqual(
+      expect.arrayContaining([
+        "memory: table memories",
+        "memory: table memory_chunks",
+        "memory: type vector",
+        "memory: function lore.extract_entity_aliases(text)",
+        "memory: enum memory_scope (shared, private)",
+        "graph: table memory_links",
+      ]),
+    );
+    // A compared value is checked only against a column that exists.
+    expect(missing.some((item) => item.includes("values "))).toBe(false);
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("a schema that drifts from the contract is reported item by item", async () => {
+  const postgres = new PGlite({ extensions: { vector } });
+  try {
+    await postgres.exec(
+      await readFile(new URL("fixtures/independent-host-schema.sql", import.meta.url), "utf8"),
+    );
+    const unique = await postgres.query<{ name: string }>(
+      `SELECT conname AS name FROM pg_constraint
+       WHERE conrelid = 'memory_links'::regclass AND contype = 'u'`,
+    );
+    await postgres.exec(`
+      -- An engine-omitted NOT NULL column without a default.
+      ALTER TABLE memories ALTER COLUMN version DROP DEFAULT;
+      -- A lexical channel the host must derive, stored as a plain column.
+      ALTER TABLE memory_chunks DROP COLUMN entity_aliases;
+      ALTER TABLE memory_chunks ADD COLUMN entity_aliases text[];
+      -- Forget deletes only the parent, so this foreign key must cascade.
+      ALTER TABLE memory_chunks DROP CONSTRAINT memory_chunks_memory_id_fkey;
+      ALTER TABLE memory_chunks ADD FOREIGN KEY (memory_id) REFERENCES memories(id);
+      -- A generation status enum that cannot hold a value the engine compares.
+      CREATE TYPE generation_status AS ENUM ('active', 'building');
+      ALTER TABLE embedding_generations
+        ALTER COLUMN status TYPE generation_status USING status::generation_status;
+      -- A scope enum with a label the engine does not know.
+      ALTER TYPE memory_scope ADD VALUE 'team';
+      -- A missing column, and an ON CONFLICT target only a partial index covers.
+      ALTER TABLE memory_links DROP COLUMN weight;
+      ALTER TABLE memory_links DROP CONSTRAINT ${unique.rows[0]?.name};
+      CREATE UNIQUE INDEX memory_links_partial ON memory_links
+        (workspace_id, source_memory_id, target_memory_id, kind) WHERE kind <> '';
+    `);
+
+    await expect(missingSchemaContract(postgres, ["memory", "graph"])).resolves.toEqual([
+      "memory: default for memories.version, which the engine does not insert",
+      "memory: generated column memory_chunks.entity_aliases",
+      "memory: cascading foreign key memory_chunks.memory_id -> memories",
+      "memory: enum memory_scope (shared, private)",
+      "memory: values embedding_generations.status (active, retiring)",
+      "graph: column memory_links.weight",
+      "graph: unique key memory_links (workspace_id, source_memory_id, target_memory_id, kind)",
+    ]);
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("Links, batch inserts, and forget run on the independent host", async () => {
   const postgres = new PGlite({ extensions: { vector } });
   try {
