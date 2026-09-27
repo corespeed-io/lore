@@ -2,21 +2,25 @@ import { queryInRecordBatches } from "./batch";
 import type { MemoryStorageContext, PostgresTransaction } from "./db";
 import type { Memory, MemoryScope } from "./memory";
 import { validateMemoryMetadata } from "./memory-input";
-import {
-  isStorableText,
-  LoreValidationError,
-  boundedInteger as validatedInteger,
-} from "./validation";
+import { boundedInteger, isStorableText, LoreValidationError } from "./validation";
 
 export const MEMORY_GRAPH_LIMITS = {
   /** Visible Memories one Graph read returns at most. */
   maximumNodes: 5_000,
 } as const;
 
+/**
+ * Link weights are stored as PostgreSQL `real` (a 32-bit float), which refuses a
+ * non-zero value that would round to zero; this is its smallest positive value.
+ */
+const SMALLEST_STORABLE_WEIGHT = 2 ** -149;
+
 export const MEMORY_LINK_LIMITS = {
   /** Link kind length, in UTF-16 code units. */
   maximumKindLength: 64,
   defaultKind: "related",
+  minimumWeight: 0,
+  maximumWeight: 1,
   defaultWeight: 1,
 } as const;
 
@@ -41,7 +45,8 @@ export function validateMemoryLink(
   },
   field = "link",
 ): ValidMemoryLink {
-  if (input.sourceMemoryId === input.targetMemoryId) {
+  // UUIDs compare case-insensitively, as PostgreSQL compares them.
+  if (input.sourceMemoryId.toLowerCase() === input.targetMemoryId.toLowerCase()) {
     throw new LoreValidationError(field, `${field} must connect two different Memories`);
   }
   const kind = input.kind === undefined ? MEMORY_LINK_LIMITS.defaultKind : input.kind;
@@ -57,10 +62,21 @@ export function validateMemoryLink(
     );
   }
   const weight = input.weight === undefined ? MEMORY_LINK_LIMITS.defaultWeight : input.weight;
-  if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 1) {
+  if (
+    typeof weight !== "number" ||
+    !Number.isFinite(weight) ||
+    weight < MEMORY_LINK_LIMITS.minimumWeight ||
+    weight > MEMORY_LINK_LIMITS.maximumWeight
+  ) {
     throw new LoreValidationError(
       `${field}.weight`,
-      `${field}.weight must be a number from 0 through 1`,
+      `${field}.weight must be a number from ${MEMORY_LINK_LIMITS.minimumWeight} through ${MEMORY_LINK_LIMITS.maximumWeight}`,
+    );
+  }
+  if (weight !== 0 && weight < SMALLEST_STORABLE_WEIGHT) {
+    throw new LoreValidationError(
+      `${field}.weight`,
+      `${field}.weight must be 0 or at least ${SMALLEST_STORABLE_WEIGHT}`,
     );
   }
   const metadata =
@@ -199,7 +215,8 @@ const AFFINITY_NODE_CAP = 500;
 const GRAPH_CONTENT_PREFIX_CHARACTERS = 1_000;
 const SENTENCE_BREAK = /(?<=[.!?。！？])\s/u;
 
-function boundedInteger(
+/** An internal read option, clamped into range; request input is refused instead. */
+function clampedInteger(
   value: number | undefined,
   fallback: number,
   minimum: number,
@@ -318,7 +335,7 @@ function affinityLinks(memories: GraphMemory[], input: ReadMemoryGraph): MemoryG
   const minimumAffinity = Number.isFinite(requestedAffinity)
     ? Math.max(0, Math.min(requestedAffinity, 1))
     : 0.16;
-  const maxNeighbors = boundedInteger(input.maxNeighbors, 3, 1, 8);
+  const maxNeighbors = clampedInteger(input.maxNeighbors, 3, 1, 8);
   const candidates: MemoryGraphLink[] = [];
   for (const [leftIndex, left] of termSets.entries()) {
     for (const right of termSets.slice(leftIndex + 1)) {
@@ -533,7 +550,7 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
     },
 
     async read(input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
-      const limit = validatedInteger(input.limit, "limit", {
+      const limit = boundedInteger(input.limit, "limit", {
         minimum: 1,
         maximum: MEMORY_GRAPH_LIMITS.maximumNodes,
         fallback: MEMORY_GRAPH_LIMITS.maximumNodes,

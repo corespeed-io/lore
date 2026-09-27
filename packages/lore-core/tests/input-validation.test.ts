@@ -169,6 +169,17 @@ describe("shared input rules", () => {
     expect(refusal(() => validateMemoryLink({ ...endpoints, metadata: [] })).field).toBe(
       "link.metadata",
     );
+    // PostgreSQL stores the weight as real, which refuses a value that rounds to zero.
+    expect(refusal(() => validateMemoryLink({ ...endpoints, weight: 1e-50 }))).toMatchObject({
+      field: "link.weight",
+      message: `link.weight must be 0 or at least ${2 ** -149}`,
+    });
+    expect(validateMemoryLink({ ...endpoints, weight: 2 ** -149 }).weight).toBe(2 ** -149);
+    // Endpoint ids that differ only in case name the same Memory.
+    const id = "40000000-0000-4000-8000-00000000000a";
+    expect(
+      refusal(() => validateMemoryLink({ sourceMemoryId: id, targetMemoryId: id.toUpperCase() })),
+    ).toMatchObject({ field: "link", message: "link must connect two different Memories" });
   });
 });
 

@@ -1064,7 +1064,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
   /**
    * Insert many Memories with caller-chosen ids in bounded set-based batches, with
    * their chunks and embedding jobs. Every record obeys the same content, scope, and
-   * metadata rules as a single write. Returns each inserted id with its version.
+   * metadata rules as a single write. Returns each inserted id, in PostgreSQL's
+   * lowercase form, with its version.
    */
   async function insertMemoriesInTransaction(
     transaction: PostgresTransaction,
@@ -1072,7 +1073,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     records: readonly InsertMemoryRecord[],
   ): Promise<{ jobIds: string[]; memories: Array<{ id: string; version: number }> }> {
     const prepared = records.map((record) => ({
-      id: record.id,
+      // PostgreSQL returns uuid in lowercase; match RETURNING rows in that form.
+      id: record.id.toLowerCase(),
       scope: validateMemoryScope(record.scope),
       content: record.content,
       metadata: validateMemoryMetadata(record.metadata),

@@ -103,7 +103,11 @@ export const CORE_SCHEMA_CONTRACT = {
       embedding_generations: EMBEDDING_GENERATIONS,
       memory_chunk_embeddings: {
         columns: ["generation_id", "workspace_id", "memory_id", "chunk_id", "embedding"],
-        cascades: [{ column: "memory_id", parent: "memories" }],
+        // An update replaces a Memory's chunks, and its vectors must go with them.
+        cascades: [
+          { column: "memory_id", parent: "memories" },
+          { column: "chunk_id", parent: "memory_chunks" },
+        ],
       },
     },
     functions: ["lore.extract_entity_aliases(text)"],

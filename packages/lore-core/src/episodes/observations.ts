@@ -9,8 +9,6 @@ export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
 export const MAX_EPISODE_METADATA_CHARACTERS = 1_000_000;
 export const MAX_OBSERVATION_CONTENT_CHARACTERS = 100_000;
 export const MAX_OBSERVATION_BATCH_READ = 50;
-/** `JSON.stringify` length of one Observation's metadata, in UTF-16 code units. */
-export const MAX_OBSERVATION_METADATA_CHARACTERS = 100_000;
 
 export const EPISODE_KINDS = ["conversation", "workflow", "document", "event"] as const;
 export type EpisodeKind = (typeof EPISODE_KINDS)[number];
@@ -244,13 +242,8 @@ export function normalizedEpisode(input: RecordEpisode): {
       observation.metadata === undefined
         ? {}
         : validateMemoryMetadata(observation.metadata, `${field}.metadata`);
+    // validateMemoryMetadata already bounds each Observation's metadata.
     const metadataCharacters = JSON.stringify(metadata).length;
-    if (metadataCharacters > MAX_OBSERVATION_METADATA_CHARACTERS) {
-      throw new LoreValidationError(
-        `${field}.metadata`,
-        `${field}.metadata exceeds ${MAX_OBSERVATION_METADATA_CHARACTERS} characters`,
-      );
-    }
     totalCharacters += observation.content.length;
     totalMetadataCharacters += metadataCharacters;
     return {

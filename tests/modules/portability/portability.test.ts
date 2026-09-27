@@ -446,6 +446,13 @@ test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
     /links\[0\]\.weight must be a number from 0 through 1/,
   ],
   [
+    "a Link weight PostgreSQL's real would round to zero",
+    (archive) => {
+      archive.links[0].weight = 1e-50;
+    },
+    /links\[0\]\.weight must be 0 or at least/,
+  ],
+  [
     "an unknown Memory scope",
     (archive) => {
       (archive.memories[1] as { scope: string }).scope = "team";

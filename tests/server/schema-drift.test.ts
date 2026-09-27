@@ -2,6 +2,7 @@ import {
   type EmbeddingGenerationReport,
   MEMORY_CHUNK_MAXIMUM_CHARACTERS,
   MEMORY_CONTENT_LIMITS,
+  MEMORY_LINK_LIMITS,
   type MemoryScope,
 } from "@corespeed/lore-core";
 import {
@@ -190,6 +191,16 @@ test("CHECK constraints bound what the TypeScript validators bound", async () =>
     MEMORY_CONTENT_LIMITS.maximumCharacters,
   );
   expect(bound("memory_chunks_content_check", "content")).toBe(MEMORY_CHUNK_MAXIMUM_CHARACTERS);
+  // Workspace import writes Links only after validateMemoryLink, so a looser engine
+  // bound would surface as a CHECK violation instead of invalid_archive.
+  expect(bound("memory_links_kind_check", "kind")).toBe(MEMORY_LINK_LIMITS.maximumKindLength);
+  const weightCheck = /weight >= \((\d+)\)::double precision\) AND \(weight <= \((\d+)\)/.exec(
+    constraints.get("memory_links_weight_check") ?? "",
+  );
+  expect(weightCheck?.slice(1).map(Number)).toEqual([
+    MEMORY_LINK_LIMITS.minimumWeight,
+    MEMORY_LINK_LIMITS.maximumWeight,
+  ]);
   expect(bound("observations_content_check", "content")).toBe(MAX_OBSERVATION_CONTENT_CHARACTERS);
   expect(bound("code_repositories_repository_key_check", "repository_key")).toBe(
     REPOSITORY_KEY_MAXIMUM_LENGTH,

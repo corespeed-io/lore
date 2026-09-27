@@ -187,13 +187,14 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
       ownerId: "10000000-0000-4000-8000-000000000001",
     };
     const primitives = createMemoryMutationPrimitives();
-    const ids = ["40000000-0000-4000-8000-000000000001", "40000000-0000-4000-8000-000000000002"];
+    const ids = ["40000000-0000-4000-8000-00000000000a", "40000000-0000-4000-8000-00000000000b"];
     const inserted = await postgres.transaction((transaction) =>
       primitives.insertMemoriesInTransaction(
         transaction,
         storage,
+        // A host's own ids may be uppercase; PostgreSQL returns uuid in lowercase.
         ids.map((id, index) => ({
-          id,
+          id: index === 0 ? id.toUpperCase() : id,
           scope: "shared",
           content: `Imported harbor fact ${index}.`,
           metadata: { index },
