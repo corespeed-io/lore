@@ -157,3 +157,49 @@ test("every scanned file belongs to a layer", () => {
     ),
   );
 });
+
+test("a comment opener inside a line comment or a string hides no later import", () => {
+  const imports = scanImports(
+    [
+      "// Routes `/api/*` go to Hono.",
+      'import { spawn } from "node:child_process";',
+      'const glob = "docs/*";',
+      'const url = "https://lore.local"; // trailing comment',
+      'const lazy = import("./lazy");',
+      "/** Worker entry. */",
+      '/* import { hidden } from "./commented-out"; */',
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    imports.map((item) => [item.specifier, item.line]),
+    [
+      ["node:child_process", 2],
+      ["./lazy", 5],
+    ],
+  );
+});
+
+test("the Worker check follows wrangler.jsonc main and refuses a missing entry", () => {
+  const renamed = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "wrangler.jsonc": '{\n  // The Worker entry.\n  "main": "src/worker/entry.ts"\n}\n',
+      "src/worker/entry.ts": 'import { spawn } from "node:child_process";\nexport { spawn };\n',
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    renamed.includes(
+      "src/worker/entry.ts: the Worker bundle reaches node:child_process via src/worker/entry.ts",
+    ),
+  );
+  const missing = checkImportBoundaries(
+    fixture({ ...CLEAN, "wrangler.jsonc": '{ "main": "src/worker/gone.ts" }\n' }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    missing.includes(
+      'wrangler.jsonc: the Worker entry "src/worker/gone.ts" is not a scanned source file',
+    ),
+  );
+});

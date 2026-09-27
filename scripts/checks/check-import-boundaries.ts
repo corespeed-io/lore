@@ -83,8 +83,19 @@ export const MODULES: Record<string, ModuleDeclaration> = {
   workspaces: { dependsOn: [], exports: ["browser/data.ts"] },
 };
 
-/** The Cloudflare Worker bundle; nothing it reaches may need native code or a child process. */
-const WORKER_ENTRYPOINTS = ["src/worker/cloudflare.ts"];
+/**
+ * The Cloudflare Worker bundle's entry: wrangler.jsonc `main`, so a renamed entry
+ * cannot switch the check off. Nothing it reaches may need native code or a child
+ * process. A root without wrangler.jsonc (a test fixture) uses the default path.
+ */
+const DEFAULT_WORKER_ENTRYPOINT = "src/worker/cloudflare.ts";
+
+function workerEntrypoint(root: string): { entrypoint: string; declared: boolean } {
+  const config = resolve(root, "wrangler.jsonc");
+  if (!existsSync(config)) return { entrypoint: DEFAULT_WORKER_ENTRYPOINT, declared: false };
+  const main = /"main"\s*:\s*"([^"]+)"/.exec(readFileSync(config, "utf8"))?.[1];
+  return { entrypoint: (main ?? "").replace(/^\.\//, ""), declared: true };
+}
 const WORKER_FORBIDDEN_PACKAGES = ["@ast-grep/napi", "node:child_process", "child_process", "bun"];
 
 function forbiddenInWorker(name: string): boolean {
@@ -124,11 +135,18 @@ export interface ImportRecord {
 const IMPORT_PATTERN =
   /(?:^|[\s;{}])(import|export)\s+(type\s+)?(?:[^'"`;]*?\s+from\s+)?["']([^"'\n]+)["']|\bimport\(\s*["']([^"'\n]+)["']\s*\)/g;
 
+// One left-to-right pass over strings, template literals, and comments, so a `/*`
+// or `//` inside a string, or a `/*` inside a line comment, never starts a comment.
+const COMMENT_OR_STRING =
+  /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`/g;
+
 function stripComments(source: string): string {
   // Replace comment characters with spaces so offsets (and so line numbers) survive.
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "))
-    .replace(/^[ \t]*\/\/.*$/gm, (comment) => " ".repeat(comment.length));
+  // A misread string can only leave a comment in place (a loud false finding), never
+  // hide an import.
+  return source.replace(COMMENT_OR_STRING, (token) =>
+    token.startsWith("/") ? token.replace(/[^\n]/g, " ") : token,
+  );
 }
 
 export function scanImports(source: string): ImportRecord[] {
@@ -380,8 +398,13 @@ export function checkImportBoundaries(
     }
   }
 
-  for (const entrypoint of WORKER_ENTRYPOINTS) {
-    if (!valueEdges.has(entrypoint)) continue;
+  const { entrypoint, declared } = workerEntrypoint(root);
+  if (declared && !valueEdges.has(entrypoint)) {
+    findings.push(
+      `wrangler.jsonc: the Worker entry ${JSON.stringify(entrypoint)} is not a scanned source file`,
+    );
+  }
+  if (valueEdges.has(entrypoint)) {
     const parents = new Map<string, string>();
     const queue = [entrypoint];
     const seen = new Set(queue);
