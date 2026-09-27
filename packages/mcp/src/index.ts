@@ -431,7 +431,12 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         "Search only Memories visible to the configured Lore Actor and Workspace using Lore's authorized retrieval pipeline. Results return bounded evidence and Memory metadata, not redundant full Memory content.",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(LIMITS.memorySearchQueryLength),
-        limit: z.number().int().min(1).max(25).default(10),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(25)
+          .default(Math.min(LIMITS.memorySearchLimitDefault, 25)),
         scope: scopeSchema.optional(),
         metadata: metadataFilterSchema.optional(),
       }),

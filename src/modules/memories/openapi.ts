@@ -33,8 +33,9 @@ export const memoriesPaths = {
             type: "integer",
             minimum: 1,
             maximum: MEMORY_LIST_LIMITS.maximumLimit,
-            default: MEMORY_LIST_LIMITS.defaultLimit,
-            // A search has its own default, which one `default` cannot express.
+            // A list and a search default differently, which one `default` cannot
+            // express, so both are published as extensions and neither as `default`.
+            "x-lore-listDefault": MEMORY_LIST_LIMITS.defaultLimit,
             "x-lore-searchDefault": MEMORY_SEARCH_LIMITS.defaultLimit,
           },
         },

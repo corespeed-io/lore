@@ -136,7 +136,7 @@ export function clientContract(document: unknown) {
       ]),
       // One default serves the Memory list and the Episode list; a search has its own.
       memoryListLimitDefault: same(integer, document, [
-        `${memories}/[limit]/schema/default`,
+        `${memories}/[limit]/schema/x-lore-listDefault`,
         "/paths/~1api~1v1~1episodes/get/parameters/[limit]/schema/default",
       ]),
       memorySearchLimitDefault: integer(

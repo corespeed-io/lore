@@ -158,28 +158,53 @@ test("an error that only looks public is reported as internal without its messag
   }
 });
 
-// A 4xx/5xx status literal handed to c.json/c.body/c.text, or a `code` key in any
-// `json({ ... })` object literal.
+// A 4xx/5xx status handed to c.json/c.body/c.text (as an argument or a `status`
+// in its init), a `status` 4xx/5xx init on a raw Response, or a `code` key in any
+// `json({ ... })` object literal. Each alternative is linear: no nested repeat.
 const PUBLIC_ERROR_BODY =
-  /\bc\.(?:json|body|text)\((?:[^;]|\n)*?,\s*[45]\d\d\s*[,)]|json\(\s*\{[^}]*\bcode\s*:/;
+  /\bc\.(?:json|body|text)\([^;]*?,\s*[45]\d\d\s*[,)]|\b(?:c\.(?:json|body|text)|Response\.json|new Response)\([^;]*?\bstatus\s*:\s*[45]\d\d\b|json\(\s*\{[^}]*\bcode\s*:/;
 
-test("the public-error-body guard catches reordered and code-less bodies", () => {
+// errors.ts is the table itself, and the Edge admission path in auth.ts builds its
+// bodies from the same table without pulling the engine into middleware. The
+// development Graph benchmark route is outside the public contract (AGENTS.md).
+const PUBLIC_ERROR_OWNERS = new Set([
+  join("src", "server", "api", "errors.ts"),
+  join("src", "server", "auth", "auth.ts"),
+  join("src", "app", "api", "prototype", "graph-scale", "route.ts"),
+]);
+
+test("the public-error-body guard catches reordered, code-less, and init-status bodies", () => {
   for (const source of [
     'c.json({ error: "Agent not found", code: "not_found" }, 404)',
     'c.json({ error: "gone" }, 404)',
     "c.body(null, 404)",
+    'c.json({ error: "gone" }, { status: 404 })',
+    'Response.json({ error: "not found" }, { status: 404 })',
     'Response.json({ code: "not_found", error: "gone" })',
   ]) {
     expect(PUBLIC_ERROR_BODY.test(source), source).toBe(true);
   }
-  for (const source of ["c.json(result, 201)", "c.body(null, 204)", "c.json(memory)"]) {
+  for (const source of [
+    "c.json(result, 201)",
+    "c.body(null, 204)",
+    "c.json(memory)",
+    "c.json(result, { status: 201 })",
+  ]) {
     expect(PUBLIC_ERROR_BODY.test(source), source).toBe(false);
   }
 });
 
+test("the public-error-body guard stays linear and still finds a later offender", () => {
+  const fields = Array.from({ length: 40 }, (_, index) => `    f${index}: ${index},`).join("\n");
+  const source = `r.get("/x", (c) =>\n  c.json({\n${fields}\n  }),\n);\nx.get("/y", (c) => {\n  return c.json({ error: "gone" }, 404);\n});\n`;
+  const started = performance.now();
+  expect(PUBLIC_ERROR_BODY.test(source)).toBe(true);
+  expect(performance.now() - started).toBeLessThan(200);
+});
+
 test("no route writes a public error body itself", () => {
-  // A literal `json({ code: ... })` body would pair a code with a status the one
-  // table does not own; everything else throws a DomainError or calls errorResponse.
+  // A literal error body would pair a code or status with what the one table does
+  // not own; everything else throws a DomainError or calls errorResponse.
   const offenders: string[] = [];
   const visit = (directory: string) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -187,7 +212,7 @@ test("no route writes a public error body itself", () => {
       if (entry.isDirectory()) visit(path);
       else if (
         /\.tsx?$/.test(entry.name) &&
-        path !== join("src", "server", "api", "errors.ts") &&
+        !PUBLIC_ERROR_OWNERS.has(path) &&
         PUBLIC_ERROR_BODY.test(readFileSync(path, "utf8"))
       ) {
         offenders.push(path);

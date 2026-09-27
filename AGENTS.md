@@ -555,7 +555,9 @@ been removed. Lore now has a native implementation, split into two concepts
   SDK exports; the SDK, CLI, and MCP restate none of them (standard UUID syntax
   aside).
   JSON Schema cannot bound an object's serialized size, so the metadata bound is
-  published as `x-lore-maxSerializedLength`.
+  published as `x-lore-maxSerializedLength`; one Memory `limit` parameter cannot carry
+  a list and a search default, so they are published as `x-lore-listDefault` and
+  `x-lore-searchDefault`, with no `default`.
   Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;
@@ -786,11 +788,12 @@ every benchmark runner reads the same table through
 `strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, and hands
 the whole table to the suite, so a benchmark's default run is the deployment
 default; a `LORE_BENCHMARK_*` variable overrides one knob within its bounds. The
-dense distance threshold is the exception where a suite declares its own
-`thresholds` (retrieval-v1, LongMemEval-S): that sweep, or `LORE_BENCHMARK_THRESHOLDS`,
-replaces `LORE_SEMANTIC_DISTANCE_THRESHOLD`. LoCoMo, MemoryAgentBench, and
-LongMemEval-V2 run at the deployment threshold, which `LORE_BENCHMARK_THRESHOLDS` still
-overrides for a LoCoMo run.
+dense distance threshold is the exception where a retrieval suite declares its own
+`thresholds` (retrieval-v1, LongMemEval-S, the LoCoMo retrieval diagnostic, and
+MemoryAgentBench Accurate Retrieval): that sweep, or `LORE_BENCHMARK_THRESHOLDS`,
+replaces `LORE_SEMANTIC_DISTANCE_THRESHOLD`. The LoCoMo QA, MemoryAgentBench Conflict,
+and LongMemEval-V2 answer searches run at the deployment threshold;
+`LORE_BENCHMARK_THRESHOLDS` changes only a LoCoMo QA run's setup retrieval diagnostic.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the
@@ -1383,10 +1386,13 @@ are unaffected. SQLSTATE 40P01/40001 map to a retryable 409
 `transaction_conflict`. The public error vocabulary is `LORE_ERROR_CODES`
 (`src/server/errors.ts`), which the OpenAPI Error `code` enum lists exactly. A
 failure a caller may see extends `DomainError` there and declares its `code`;
-domain modules name no HTTP status. A route throws one too, `NotFoundError` for a
+domain modules name no HTTP status. The code-to-status table `HTTP_STATUS` lives
+in `src/server/errors.ts`, which imports nothing, so the Edge admission path in
+`src/server/auth/auth.ts` reads it without pulling the engine into middleware. A
+route throws one too, `NotFoundError` for a
 missing or invisible resource, and never writes `c.json({ code })` itself
 (`error-response.test.ts` scans for it). `src/server/api/errors.ts` imports no domain
-module: it maps each code to its status in one table and names the engine's three
+module: it answers each code with the table's status and names the engine's three
 public failure classes, which cannot extend OSS classes. An engine
 `LoreConfigurationError` (an out-of-range deployment option) is deliberately not
 among them and answers 500. Clients must accept an Error `code` they do not know;

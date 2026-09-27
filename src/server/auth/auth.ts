@@ -1,16 +1,15 @@
-// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file and ./config run
-// in the Edge runtime — use only Web APIs (atob, fetch, jose), never Node-only
+// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file, ./config, and
+// @/server/errors run in the Edge runtime — use only Web APIs (atob, fetch, jose), never Node-only
 // ones (Buffer, node:*, fs). A Node API pulled in here poisons the middleware
 // bundle: it passes typecheck and breaks only at build/deploy.
 import { parse as parseCookies } from "hono/utils/cookie";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { errorResponse } from "@/server/api/errors";
 import { loadConfig } from "@/server/config";
-import { DomainError } from "@/server/errors";
+import { DomainError, HTTP_STATUS } from "@/server/errors";
 
 export interface AuthResult {
   ok: boolean;
-  status?: number;
+  status?: 401 | 403;
   wwwAuthenticate?: boolean;
   // Human-readable reason for a denial, so the client error names the real cause
   // (which auth mode / which env is missing) instead of a generic guess.
@@ -218,15 +217,24 @@ export class WorkspaceAccessError extends DomainError {
   readonly code = "access_denied";
 }
 
-/** A refused admission, answered from the error table like any other public failure. */
-function denial(status: number, detail: string | undefined, wwwAuthenticate = false): Response {
-  const response = errorResponse(
+/** A refused admission, answered with the error table's status like any public failure. */
+function denial(status: 401 | 403, detail: string | undefined, wwwAuthenticate = false): Response {
+  // Built here rather than by errorResponse, which would pull the engine into the
+  // Edge middleware bundle.
+  const error =
     status === 401
       ? new RequestAuthenticationError(detail ?? "auth required")
-      : new WorkspaceAccessError(detail ?? "forbidden"),
+      : new WorkspaceAccessError(detail ?? "forbidden");
+  return Response.json(
+    { code: error.code, error: error.message },
+    {
+      status: HTTP_STATUS[error.code],
+      headers: {
+        "cache-control": "private, no-store",
+        ...(wwwAuthenticate ? { "www-authenticate": "Basic" } : {}),
+      },
+    },
   );
-  if (wwwAuthenticate) response.headers.set("www-authenticate", "Basic");
-  return response;
 }
 
 export interface Admission {

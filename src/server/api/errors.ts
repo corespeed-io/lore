@@ -3,27 +3,7 @@ import {
   MemoryAccessDeniedError,
   MemoryVersionConflictError,
 } from "@corespeed/lore-core";
-import { DomainError, type LoreErrorCode } from "@/server/errors";
-
-/** The HTTP status of every public error code. */
-const HTTP_STATUS: Record<LoreErrorCode, number> = {
-  access_denied: 403,
-  agent_not_disabled: 409,
-  authentication_required: 401,
-  idempotency_conflict: 409,
-  internal_error: 500,
-  invalid_archive: 400,
-  invalid_request: 400,
-  method_not_allowed: 405,
-  not_found: 404,
-  payload_too_large: 413,
-  precondition_required: 428,
-  proposal_capacity_exceeded: 409,
-  proposal_review_conflict: 409,
-  transaction_conflict: 409,
-  version_conflict: 412,
-  workspace_export_limit_exceeded: 409,
-};
+import { DomainError, HTTP_STATUS, type LoreErrorCode } from "@/server/errors";
 
 // The engine cannot extend OSS classes, so its public failures are named here.
 const ENGINE_ERRORS = [
