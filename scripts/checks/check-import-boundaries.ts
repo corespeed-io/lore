@@ -96,6 +96,38 @@ function workerEntrypoint(root: string): { entrypoint: string; declared: boolean
   const main = /"main"\s*:\s*"([^"]+)"/.exec(readFileSync(config, "utf8"))?.[1];
   return { entrypoint: (main ?? "").replace(/^\.\//, ""), declared: true };
 }
+/** The Edge middleware entry, and what nothing it reaches may be. */
+const EDGE_ENTRYPOINT = "src/middleware.ts";
+const EDGE_FORBIDDEN_PREFIXES = ["packages/lore-core/", "src/server/api/"];
+
+/**
+ * Visit every edge reachable from `root` over value imports, with the chain of files
+ * that leads to it. Each file is expanded once.
+ */
+function forEachReachableEdge(
+  valueEdges: Map<string, Resolution[]>,
+  root: string,
+  visit: (edge: Resolution, chain: string[]) => void,
+): void {
+  const parents = new Map<string, string>();
+  const queue = [root];
+  const seen = new Set(queue);
+  while (queue.length) {
+    const file = queue.shift() as string;
+    const chain = [file];
+    for (let parent = parents.get(file); parent; parent = parents.get(parent)) {
+      chain.unshift(parent);
+    }
+    for (const edge of valueEdges.get(file) ?? []) {
+      visit(edge, edge.file === null ? chain : [...chain, edge.file]);
+      if (edge.file === null || seen.has(edge.file) || !valueEdges.has(edge.file)) continue;
+      seen.add(edge.file);
+      parents.set(edge.file, file);
+      queue.push(edge.file);
+    }
+  }
+}
+
 /** A file OpenNext compiles into the Worker bundle beside the wrangler entry. */
 function isOpenNextInput(file: string): boolean {
   return (
@@ -135,98 +167,84 @@ export interface ImportRecord {
   typeOnly: boolean;
 }
 
-// Static import/export-from (including `import type`), side-effect imports, dynamic
-// import() with a quoted or plain template specifier, and require() (including TS
-// `import x = require()`). Bun.Transpiler.scanImports drops type-only imports, and a
-// browser file must not reach server code even for a type.
-const IMPORT_PATTERN =
-  /(?:^|[\s;{}])(import|export)\s+(type\s+)?(?:[^'"`;]*?\s+from\s+)?["']([^"'\n]+)["']|\bimport\(\s*["']([^"'\n]+)["']\s*\)|\bimport\(\s*`([^`$\\\n]+)`\s*\)|(?<![.\w$])require\(\s*["']([^"'\n]+)["']\s*\)/g;
-
-// A regex literal starts where an expression may: after an operator, an arrow, an
-// opening bracket, a separator, or a keyword that takes an expression. A `/`
-// elsewhere is division, which is left in place like any other code. A lone `<` or
-// `>` is left out, and so is `/>`, so a JSX closing or self-closing tag never opens
-// one. This lexer is a heuristic, so it only adds type-only imports to what the
-// parser finds (scanImports); a shape it misreads can never hide a value import.
-const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%~^]|=>|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/>])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*`;
-
-// One left-to-right pass over comments, strings, template literals, and regex
-// literals, so a `/*` or `//` inside a string, a regex, or a line comment never
-// starts a comment.
-const COMMENT_OR_STRING = new RegExp(
-  [
-    String.raw`\/\*[\s\S]*?\*\/`,
-    String.raw`\/\/[^\n]*`,
-    String.raw`"(?:\\.|[^"\\\n])*"`,
-    String.raw`'(?:\\.|[^'\\\n])*'`,
-    String.raw`\`(?:\\[\s\S]|[^\`\\])*\``,
-    REGEX_LITERAL,
-  ].join("|"),
-  "g",
-);
-
-function stripComments(source: string): string {
-  // Replace comment characters with spaces so offsets (and so line numbers) survive.
-  // Strings and regex literals stay in place.
-  return source.replace(COMMENT_OR_STRING, (token) =>
-    token.startsWith("/*") || token.startsWith("//") ? token.replace(/[^\n]/g, " ") : token,
-  );
-}
-
-/** Every import the heuristic lexer sees, with its line and whether it is `type`. */
-function lexImports(source: string): ImportRecord[] {
-  const code = stripComments(source);
-  const imports: ImportRecord[] = [];
-  for (const match of code.matchAll(IMPORT_PATTERN)) {
-    const specifier = match[3] ?? match[4] ?? match[5] ?? match[6];
-    if (!specifier) continue;
-    const line =
-      code.slice(0, match.index).split("\n").length + (match[0].startsWith("\n") ? 1 : 0);
-    imports.push({ specifier, line, typeOnly: Boolean(match[2]) });
-  }
-  return imports;
-}
-
 const TRANSPILERS = {
   ts: new Bun.Transpiler({ loader: "ts" }),
   tsx: new Bun.Transpiler({ loader: "tsx" }),
 };
 
+/** The JSX runtime Bun reports for a TSX file that never names it. */
+const INJECTED = new Set(
+  TRANSPILERS.tsx.scanImports("export const a = <a />;").map((item) => item.path),
+);
+
+// `import type` and `export type` statements, which the compiler erases, and inline
+// `type` modifiers inside an import or export clause. Under verbatimModuleSyntax an
+// all-inline-type clause still loads its module (`import {} from`), so only the
+// statement form makes an import type-only.
+const STATEMENT_TYPE =
+  /\b(?:import\s+type(?=\s+(?:[{*]|[A-Za-z_$][\w$]*\s*(?:,|from\b)))|export\s+type(?=\s*[{*]))/g;
+const IMPORT_CLAUSE = /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}/g;
+const INLINE_TYPE = /([{,]\s*)type(?=\s+[A-Za-z_$])/g;
+
+/** Blank the inline `type` modifiers, keeping every offset. */
+function withoutInlineTypes(source: string): string {
+  return source.replace(IMPORT_CLAUSE, (clause) =>
+    clause.replace(INLINE_TYPE, (_modifier, lead: string) => `${lead}    `),
+  );
+}
+
+/** Blank every `type` modifier, statement and inline, keeping every offset. */
+function withoutTypeModifiers(source: string): string {
+  return withoutInlineTypes(source).replace(STATEMENT_TYPE, (statement) =>
+    statement.replace(/type$/, "    "),
+  );
+}
+
 function quotedIn(source: string, specifier: string): boolean {
   return ['"', "'", "`"].some((quote) => source.includes(`${quote}${specifier}${quote}`));
 }
 
-function lineOf(source: string, specifier: string): number {
-  const at = ['"', "'", "`"]
-    .map((quote) => source.indexOf(`${quote}${specifier}${quote}`))
-    .filter((index) => index >= 0);
-  return source.slice(0, Math.min(...at)).split("\n").length;
+/** The specifiers Bun's parser reports, without a JSX runtime the file never names. */
+function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: string): string[] {
+  return transpiler
+    .scanImports(source)
+    .map((item) => item.path)
+    .filter((specifier) => !INJECTED.has(specifier) || quotedIn(original, specifier));
 }
 
 /**
- * The imports of one source file. A real TypeScript parser (Bun.Transpiler) decides
- * which value imports exist, so no comment, string, regex, or JSX shape can hide
- * one. Bun drops type-only imports, which a browser file must not use to reach
- * server code either, so the lexer adds whatever it sees that the parser did not,
- * as type-only edges: those count for the layer rules but never for the Worker ban.
- * Throws when the source does not parse.
+ * The imports of one source file, all from Bun's TypeScript parser, so no comment,
+ * string, regex, or JSX shape can hide one. Bun reports only what loads at run
+ * time, so a second parse with every `type` modifier blanked also reports the
+ * type-only imports, which a browser file must not use to reach server code either:
+ * those count for the layer rules but never for the Worker ban. Lines come from the
+ * first written occurrence of each specifier. Throws when the source does not parse.
  */
 export function scanImports(source: string, loader: "ts" | "tsx" = "tsx"): ImportRecord[] {
-  const lexed = lexImports(source);
   // Bun's parser refuses a shebang line; blank it so offsets and lines survive.
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
-  const values = TRANSPILERS[loader]
-    .scanImports(parsable)
-    .map((item) => item.path)
-    // Bun reports the JSX runtime it would inject; only written specifiers count.
-    .filter((specifier) => quotedIn(source, specifier));
-  const records: ImportRecord[] = [];
+  const transpiler = TRANSPILERS[loader];
+  const values = parsedSpecifiers(transpiler, withoutInlineTypes(parsable), source);
+  const everything = parsedSpecifiers(transpiler, withoutTypeModifiers(parsable), source);
+  const remainingValues = new Map<string, number>();
   for (const specifier of values) {
-    const index = lexed.findIndex((record) => record.specifier === specifier && !record.typeOnly);
-    const [seen] = index >= 0 ? lexed.splice(index, 1) : [];
-    records.push({ specifier, line: seen?.line ?? lineOf(source, specifier), typeOnly: false });
+    remainingValues.set(specifier, (remainingValues.get(specifier) ?? 0) + 1);
   }
-  for (const record of lexed) records.push({ ...record, typeOnly: true });
+  const searchFrom = new Map<string, number>();
+  const records: ImportRecord[] = [];
+  for (const specifier of everything) {
+    const remaining = remainingValues.get(specifier) ?? 0;
+    if (remaining > 0) remainingValues.set(specifier, remaining - 1);
+    const from = searchFrom.get(specifier) ?? 0;
+    const at = ['"', "'", "`"]
+      .map((quote) => source.indexOf(`${quote}${specifier}${quote}`, from))
+      .filter((index) => index >= 0);
+    const index = at.length ? Math.min(...at) : -1;
+    if (index >= 0) searchFrom.set(specifier, index + 1);
+    // A specifier written with escapes has no literal occurrence; name line 1.
+    const line = index >= 0 ? source.slice(0, index).split("\n").length : 1;
+    records.push({ specifier, line, typeOnly: remaining === 0 });
+  }
   return records.sort((left, right) => left.line - right.line);
 }
 
@@ -427,6 +445,11 @@ export function checkImportBoundaries(
         findings.push(`${where}: cannot resolve ${record.specifier}`);
         continue;
       }
+      // A module the bundler loads but this guard never scans would hide its imports.
+      if (!SOURCE_EXTENSIONS.some((extension) => resolution.file?.endsWith(extension))) {
+        findings.push(`${where}: imports ${resolution.file}, which this guard does not scan`);
+        continue;
+      }
       const target = classify(resolution.file);
       if (!target) {
         findings.push(`${where}: imports ${resolution.file}, which is outside src/ and packages/`);
@@ -489,29 +512,33 @@ export function checkImportBoundaries(
     ...[...valueEdges.keys()].filter(isOpenNextInput).sort(),
   ];
   for (const workerRoot of workerRoots) {
-    const parents = new Map<string, string>();
-    const queue = [workerRoot];
-    const seen = new Set(queue);
-    while (queue.length) {
-      const file = queue.shift() as string;
-      for (const edge of valueEdges.get(file) ?? []) {
-        if (edge.file === null) {
-          if (forbiddenInWorker(edge.packageName)) {
-            const chain = [file];
-            for (let parent = parents.get(file); parent; parent = parents.get(parent))
-              chain.unshift(parent);
-            findings.push(
-              `${workerRoot}: the Worker bundle reaches ${edge.packageName} via ${chain.join(" -> ")}`,
-            );
-          }
-          continue;
-        }
-        if (seen.has(edge.file) || !valueEdges.has(edge.file)) continue;
-        seen.add(edge.file);
-        parents.set(edge.file, file);
-        queue.push(edge.file);
+    forEachReachableEdge(valueEdges, workerRoot, (edge, chain) => {
+      if (edge.file === null && forbiddenInWorker(edge.packageName)) {
+        findings.push(
+          `${workerRoot}: the Worker bundle reaches ${edge.packageName} via ${chain.join(" -> ")}`,
+        );
       }
-    }
+    });
+  }
+
+  // The Edge middleware bundle must stay free of the engine and of the API layer that
+  // wraps it, whose imports typecheck and build without complaint.
+  if (valueEdges.has(EDGE_ENTRYPOINT)) {
+    forEachReachableEdge(valueEdges, EDGE_ENTRYPOINT, (edge, chain) => {
+      const reached =
+        edge.file === null
+          ? forbiddenInWorker(edge.packageName)
+            ? edge.packageName
+            : null
+          : EDGE_FORBIDDEN_PREFIXES.some((prefix) => edge.file?.startsWith(prefix))
+            ? edge.file
+            : null;
+      if (reached) {
+        findings.push(
+          `${EDGE_ENTRYPOINT}: the Edge middleware reaches ${reached} via ${chain.join(" -> ")}`,
+        );
+      }
+    });
   }
 
   return findings;

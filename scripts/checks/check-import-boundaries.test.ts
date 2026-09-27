@@ -58,11 +58,12 @@ test("scanning keeps type-only, multi-line, side-effect, and dynamic imports", (
       'const text = "import nothing from here";',
     ].join("\n"),
   );
+  // A finding names the line that writes the specifier.
   assert.deepEqual(
     imports.map(({ specifier, line, typeOnly }) => [specifier, line, typeOnly]),
     [
       ["./a", 1, true],
-      ["./b", 2, false],
+      ["./b", 5, false],
       ["./side-effect", 6, false],
       ["./re-export", 7, false],
       ["./lazy", 10, false],
@@ -274,6 +275,14 @@ test("shapes a regex lexer misreads hide no value import from the parser", () =>
       ["bun"],
       source,
     );
+    // The same shapes hide no type-only import either.
+    assert.deepEqual(
+      scanImports(
+        `${source.replace('import("bun")', "0")}\nexport type { X } from "@/server/x";`,
+      ).map((item) => [item.specifier, item.typeOnly]),
+      [["@/server/x", true]],
+      source,
+    );
   }
 });
 
@@ -297,6 +306,72 @@ test("type-only imports stay type-only, and an unparsable file is a finding", ()
   assert.ok(
     findings.some((item) =>
       item.startsWith("src/modules/beta/broken.ts: cannot be parsed for imports"),
+    ),
+  );
+});
+
+test("an all-inline-type import still loads its module, so the Worker ban counts it", () => {
+  // Under verbatimModuleSyntax `import { type Lang } from "x"` compiles to
+  // `import {} from "x"`, which still bundles x.
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/worker/cloudflare.ts":
+        'import { run } from "@/server/database/runner";\nexport default run;\n',
+      "src/server/database/runner.ts":
+        'import { type Lang } from "@ast-grep/napi";\nexport { type ChildProcess } from "node:child_process";\nexport const run = (lang?: Lang) => lang;\n',
+    }),
+    TWO_MODULES,
+  );
+  for (const name of ["@ast-grep/napi", "node:child_process"]) {
+    assert.ok(
+      findings.some((item) => item.includes(`the Worker bundle reaches ${name}`)),
+      name,
+    );
+  }
+});
+
+test("a specifier written with escapes is the module it names", () => {
+  assert.deepEqual(
+    scanImports('import "\\x62un";\nimport { s } from "node:child\\u005Fprocess";\ns;\n', "ts")
+      .filter((item) => !item.typeOnly)
+      .map((item) => item.specifier),
+    ["bun", "node:child_process"],
+  );
+});
+
+test("the Edge middleware may not reach the engine or the API layer", () => {
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/middleware.ts":
+        'import { authorize } from "@/server/auth/auth";\nexport const middleware = authorize;\n',
+      "src/server/auth/auth.ts":
+        'import { errorResponse } from "@/server/api/errors";\nexport const authorize = errorResponse;\n',
+      "src/server/api/errors.ts": "export const errorResponse = 1;\n",
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.includes(
+      "src/middleware.ts: the Edge middleware reaches src/server/api/errors.ts via src/middleware.ts -> src/server/auth/auth.ts -> src/server/api/errors.ts",
+    ),
+  );
+});
+
+test("a module the guard cannot scan is a finding", () => {
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/worker/cloudflare.ts": 'import { run } from "./svc.mts";\nexport default run;\n',
+      "src/worker/svc.mts":
+        'import { spawn } from "node:child_process";\nexport const run = spawn;\n',
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.includes(
+      "src/worker/cloudflare.ts:1: imports src/worker/svc.mts, which this guard does not scan",
     ),
   );
 });
