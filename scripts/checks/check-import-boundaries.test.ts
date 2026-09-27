@@ -179,6 +179,46 @@ test("a comment opener inside a line comment or a string hides no later import",
   );
 });
 
+test("a comment opener inside a regex literal hides no later import", () => {
+  const imports = scanImports(
+    [
+      "const TRAILING_SLASHES = /\\/*$/;",
+      'const lazy = import("node:child_process");',
+      'const end = "*/";',
+      'const URL_RE = /https?:\\/\\//; const later = import("bun:sqlite");',
+      'const ratio = total / count; // import("./commented-out")',
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    imports.map((item) => [item.specifier, item.line]),
+    [
+      ["node:child_process", 2],
+      ["bun:sqlite", 4],
+    ],
+  );
+});
+
+test("template-literal imports and require() are scanned", () => {
+  const imports = scanImports(
+    [
+      "const napi = await import(`@ast-grep/napi`);",
+      'const cp = require("node:child_process");',
+      'import fs = require("node:fs");',
+      'const plugin = loader.require("not-a-module");',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+      "const dynamic = await import(`./${name}`);",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    imports.map((item) => [item.specifier, item.line]),
+    [
+      ["@ast-grep/napi", 1],
+      ["node:child_process", 2],
+      ["node:fs", 3],
+    ],
+  );
+});
+
 test("the Worker check follows wrangler.jsonc main and refuses a missing entry", () => {
   const renamed = checkImportBoundaries(
     fixture({
@@ -201,5 +241,58 @@ test("the Worker check follows wrangler.jsonc main and refuses a missing entry",
     missing.includes(
       'wrangler.jsonc: the Worker entry "src/worker/gone.ts" is not a scanned source file',
     ),
+  );
+});
+
+test("the Worker check covers the App Router files OpenNext bundles with its entry", () => {
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/app/api/native/route.ts":
+        'import { parse } from "@/server/native";\nexport const GET = parse;\n',
+      "src/server/native.ts": 'import { parse } from "@ast-grep/napi";\nexport { parse };\n',
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.includes(
+      "src/app/api/native/route.ts: the Worker bundle reaches @ast-grep/napi via src/app/api/native/route.ts -> src/server/native.ts",
+    ),
+  );
+});
+
+test("a Worker entry fails closed on Bun built-ins, unresolved imports, and a missing main", () => {
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/worker/cloudflare.ts": [
+        'import "./styles.css";',
+        // A `/*` inside a template literal must not open a comment that hides the
+        // Bun-only import below it until the `*/` in the next template.
+        "const glob = `src/*`;",
+        'import { Database } from "bun:sqlite";',
+        "const end = `*/`;",
+        'import { gone } from "@/server/missing";',
+        "export { Database, end, glob, gone };",
+      ].join("\n"),
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.includes(
+      "src/worker/cloudflare.ts: the Worker bundle reaches bun:sqlite via src/worker/cloudflare.ts",
+    ),
+  );
+  assert.ok(findings.includes("src/worker/cloudflare.ts:5: cannot resolve @/server/missing"));
+  // A stylesheet is an asset, not a module dependency.
+  assert.ok(!findings.some((item) => item.includes("styles.css")));
+
+  // A wrangler.jsonc without `main` cannot switch the Worker check off.
+  const withoutMain = checkImportBoundaries(
+    fixture({ ...CLEAN, "wrangler.jsonc": '{ "name": "lore" }\n' }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    withoutMain.includes('wrangler.jsonc: the Worker entry "" is not a scanned source file'),
   );
 });

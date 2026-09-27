@@ -96,6 +96,12 @@ function workerEntrypoint(root: string): { entrypoint: string; declared: boolean
   const main = /"main"\s*:\s*"([^"]+)"/.exec(readFileSync(config, "utf8"))?.[1];
   return { entrypoint: (main ?? "").replace(/^\.\//, ""), declared: true };
 }
+/** A file OpenNext compiles into the Worker bundle beside the wrangler entry. */
+function isOpenNextInput(file: string): boolean {
+  return (
+    file.startsWith("src/app/") || file === "src/instrumentation.ts" || file === "src/middleware.ts"
+  );
+}
 const WORKER_FORBIDDEN_PACKAGES = ["@ast-grep/napi", "node:child_process", "child_process", "bun"];
 
 function forbiddenInWorker(name: string): boolean {
@@ -129,23 +135,39 @@ export interface ImportRecord {
   typeOnly: boolean;
 }
 
-// Static import/export-from (including `import type`), side-effect imports, and
-// dynamic import(). Bun.Transpiler.scanImports drops type-only imports, and a
+// Static import/export-from (including `import type`), side-effect imports, dynamic
+// import() with a quoted or plain template specifier, and require() (including TS
+// `import x = require()`). Bun.Transpiler.scanImports drops type-only imports, and a
 // browser file must not reach server code even for a type.
 const IMPORT_PATTERN =
-  /(?:^|[\s;{}])(import|export)\s+(type\s+)?(?:[^'"`;]*?\s+from\s+)?["']([^"'\n]+)["']|\bimport\(\s*["']([^"'\n]+)["']\s*\)/g;
+  /(?:^|[\s;{}])(import|export)\s+(type\s+)?(?:[^'"`;]*?\s+from\s+)?["']([^"'\n]+)["']|\bimport\(\s*["']([^"'\n]+)["']\s*\)|\bimport\(\s*`([^`$\\\n]+)`\s*\)|(?<![.\w$])require\(\s*["']([^"'\n]+)["']\s*\)/g;
 
-// One left-to-right pass over strings, template literals, and comments, so a `/*`
-// or `//` inside a string, or a `/*` inside a line comment, never starts a comment.
-const COMMENT_OR_STRING =
-  /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`/g;
+// A regex literal starts where an expression may: after an operator, an opening
+// bracket, a separator, or a keyword that takes an expression. A `/` elsewhere is
+// division, which is left in place like any other code.
+const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%<>~^]|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*`;
+
+// One left-to-right pass over comments, strings, template literals, and regex
+// literals, so a `/*` or `//` inside a string, a regex, or a line comment never
+// starts a comment.
+const COMMENT_OR_STRING = new RegExp(
+  [
+    String.raw`\/\*[\s\S]*?\*\/`,
+    String.raw`\/\/[^\n]*`,
+    String.raw`"(?:\\.|[^"\\\n])*"`,
+    String.raw`'(?:\\.|[^'\\\n])*'`,
+    String.raw`\`(?:\\[\s\S]|[^\`\\])*\``,
+    REGEX_LITERAL,
+  ].join("|"),
+  "g",
+);
 
 function stripComments(source: string): string {
   // Replace comment characters with spaces so offsets (and so line numbers) survive.
-  // A misread string can only leave a comment in place (a loud false finding), never
-  // hide an import.
+  // Strings and regex literals stay in place, so misreading one can only leave a
+  // comment in place (a loud false finding), never hide an import.
   return source.replace(COMMENT_OR_STRING, (token) =>
-    token.startsWith("/") ? token.replace(/[^\n]/g, " ") : token,
+    token.startsWith("/*") || token.startsWith("//") ? token.replace(/[^\n]/g, " ") : token,
   );
 }
 
@@ -153,7 +175,7 @@ export function scanImports(source: string): ImportRecord[] {
   const code = stripComments(source);
   const imports: ImportRecord[] = [];
   for (const match of code.matchAll(IMPORT_PATTERN)) {
-    const specifier = match[3] ?? match[4];
+    const specifier = match[3] ?? match[4] ?? match[5] ?? match[6];
     if (!specifier) continue;
     const line =
       code.slice(0, match.index).split("\n").length + (match[0].startsWith("\n") ? 1 : 0);
@@ -404,9 +426,15 @@ export function checkImportBoundaries(
       `wrangler.jsonc: the Worker entry ${JSON.stringify(entrypoint)} is not a scanned source file`,
     );
   }
-  if (valueEdges.has(entrypoint)) {
+  // OpenNext bundles every App Router file, the middleware, and instrumentation into
+  // the same Worker as its entry, which imports that bundle as generated output.
+  const workerRoots = [
+    ...(valueEdges.has(entrypoint) ? [entrypoint] : []),
+    ...[...valueEdges.keys()].filter(isOpenNextInput).sort(),
+  ];
+  for (const workerRoot of workerRoots) {
     const parents = new Map<string, string>();
-    const queue = [entrypoint];
+    const queue = [workerRoot];
     const seen = new Set(queue);
     while (queue.length) {
       const file = queue.shift() as string;
@@ -417,7 +445,7 @@ export function checkImportBoundaries(
             for (let parent = parents.get(file); parent; parent = parents.get(parent))
               chain.unshift(parent);
             findings.push(
-              `${entrypoint}: the Worker bundle reaches ${edge.packageName} via ${chain.join(" -> ")}`,
+              `${workerRoot}: the Worker bundle reaches ${edge.packageName} via ${chain.join(" -> ")}`,
             );
           }
           continue;
