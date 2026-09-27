@@ -56,12 +56,17 @@ been removed. Lore now has a native implementation, split into two concepts
   fails when a table, function, setting, INSERT column list, or ON CONFLICT target
   differs from the contract; read-only column lists are kept by hand.
   `missingSchemaContract` (`./testing`) checks a schema's catalog against named
-  groups, including defaults for every NOT NULL column the engine does not insert. The independent-host fixture provides `memory` and `graph`
+  groups, including defaults for every NOT NULL column the engine does not insert;
+  an ON CONFLICT key counts only as a whole, non-partial unique index on plain
+  columns, since an expression or partial index cannot match the target. The
+  independent-host fixture provides `memory` and `graph`
   and runs CRUD, retrieval, Links, batch inserts, and forget with no identity
   tables; `tests/core/schema-contract.test.ts` proves the lore oss schema provides
   all four groups. OSS writes no engine table directly: forget, batch import, and
-  batch Links go through `forgetMemoryInTransaction`, `insertMemoriesInTransaction`,
-  and `insertMemoryLinksInTransaction`, and core errors carry no HTTP status. lore oss's own
+  batch Links go through `forgetMemoryInTransaction`, `insertMemoriesInTransaction`
+  (fresh host-generated ids, never an archive's: a collision with an invisible
+  Memory would reveal it), and `insertMemoryLinksInTransaction`, and core errors
+  carry no HTTP status. lore oss's own
   run of the engine contract suite against its migration chain and identity model
   is `tests/core/contract.test.ts`, part of the application tests; no file under
   `packages/lore-core` may import a repository file outside that package. In-repo it is
@@ -194,7 +199,8 @@ been removed. Lore now has a native implementation, split into two concepts
   `src/server/api/errors.ts` maps that one class to 400 `invalid_request`, so OSS
   routes check wire shapes only and never restate an engine rule. The engine
   refuses an out-of-range value — a list/search/Graph limit, an offset, an
-  over-long query or Link kind, a Link weight outside `[0,1]`, metadata with a NUL
+  over-long query or Link kind, a Link weight outside `[0,1]` or one PostgreSQL
+  `real` would round to zero (an exported `1e-45` still imports), metadata with a NUL
   or unpaired surrogate — and never clamps or trims it into range; Links are stored
   exactly as given. Deployment tuning options (reranking weights, candidate budgets)
   are operator configuration, not request input, and keep their documented bounds. OSS derives its wire
@@ -208,7 +214,11 @@ been removed. Lore now has a native implementation, split into two concepts
 - `packages/lore-core/src/memory-content.ts` owns the canonical Memory content boundary. A Memory
   is one coherent knowledge record, recommended at no more than 8,000 Unicode
   characters and hard-limited to 32,000 characters and 64 derived chunks. Direct
-  writes, Proposals, and imports must share this validator. Route longer raw
+  writes, Proposals, and imports must share this validator. It counts code points
+  without building an array (the UTF-16 length bounds the count first, and counting
+  stops past the limit), so a 10 MiB body or 50 MB archive cannot exhaust a Worker
+  isolate before the bound refuses it; do not measure content with `Array.from`.
+  Route longer raw
   documents to bounded `document_fragment` Observations in a document Episode;
   never auto-split them into canonical Memories;
 - `packages/lore-core/src/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
@@ -401,11 +411,16 @@ been removed. Lore now has a native implementation, split into two concepts
   `src/middleware.ts`, `src/instrumentation.ts`), and nothing the Edge middleware
   reaches may be engine (`packages/lore-core/`) or API-layer (`src/server/api/`) code.
   Imports come from Bun's TypeScript parser (`Bun.Transpiler.scanImports`), twice:
-  once as written, for what loads at run time (an all-inline-type clause still does,
-  as `import {} from` under `verbatimModuleSyntax`), and once with every `type`
-  modifier blanked, whose extra specifiers are the type-only imports. No comment,
-  string, regex, or JSX shape can hide one. A file that does not parse, or an import
-  of an in-repo module that is not `.ts`/`.tsx`, is a finding. A computed specifier
+  once with inline `type` modifiers blanked, for what loads at run time (under
+  `verbatimModuleSyntax` an all-inline-type clause still loads, as `import {} from`),
+  and once with statement `type` modifiers blanked too, whose extra specifiers are
+  the type-only imports; a comment beside a modifier reads as whitespace. Type-only
+  imports count for the layer and module-graph rules, never for the Worker or Edge
+  walks. No comment, string, regex, or JSX shape can hide one. A file that does not
+  parse (reported at the parser's line:column), an unresolvable in-repo import, an
+  import of an in-repo module that is not `.ts`/`.tsx` (stylesheets and other assets
+  aside), and a declared `MODULES` dependency or export that nothing uses are all
+  findings. A computed specifier
   (`import("node:" + name)`) is invisible to any scan; the Cloudflare dry run, which
   sees the real bundle, is the backstop for those. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
@@ -565,8 +580,8 @@ been removed. Lore now has a native implementation, split into two concepts
   aside).
   JSON Schema cannot bound an object's serialized size, so the metadata bound is
   published as `x-lore-maxSerializedLength`; one Memory `limit` parameter cannot carry
-  a list and a search default, so they are published as `x-lore-listDefault` and
-  `x-lore-searchDefault`, with no `default`.
+  a list and a search default, so they are published as `x-lore-listDefault` (50) and
+  `x-lore-searchDefault` (10), with no `default`.
   Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;

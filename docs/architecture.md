@@ -147,7 +147,9 @@ a new browser file never requires a `biome.json` edit. Keep that guard keyed on 
 directory: an allowlist of file names silently makes the file layout load-bearing
 and pushes unrelated helpers into whichever name is already blessed. A module's
 `exports` list is the one deliberate exception: it names the files other modules
-may import, so widening a module's public surface is a reviewed edit.
+may import, so widening a module's public surface is a reviewed edit. The graph
+stays tight in both directions: a declared dependency or export that nothing uses
+also fails the check.
 
 API route handlers and the canonical OpenAPI document define the API contract consumed
 by the TypeScript SDK and direct HTTP clients. The CLI and external MCP adapter

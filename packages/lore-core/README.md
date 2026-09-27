@@ -70,7 +70,9 @@ labels and compared values, and the transaction settings the engine writes.
 `tests/schema-contract.test.ts` fails when a table, function, setting, INSERT
 column list, or ON CONFLICT target in the engine's SQL differs from the contract
 (read-only column lists are kept by hand), and `missingSchemaContract` from
-`./testing` checks a host schema's catalog against the groups it provides.
+`./testing` checks a host schema's catalog against the groups it provides. It
+counts a unique key only as a whole, non-partial unique index on plain columns:
+an expression or partial index cannot match an ON CONFLICT target.
 
 Maintenance leases fence ownership and allow reclamation; they do not cancel
 provider calls. `embeddingMaintenanceLeaseSeconds` estimates a reservation from
@@ -126,9 +128,11 @@ its own:
   distance threshold) throws `LoreConfigurationError`, a server failure that names
   its `option`, not a 400.
 - **Input is refused, never trimmed or clamped.** Link kind (non-blank, at most
-  `MEMORY_LINK_LIMITS.maximumKindLength`, stored as given) and weight (0 through 1,
-  representable as PostgreSQL `real`), list/search/Graph limits and offsets, scope,
-  metadata, and Episode evidence search inputs all throw `LoreValidationError`.
+  `MEMORY_LINK_LIMITS.maximumKindLength`, stored as given) and weight (0 through 1;
+  a nonzero value PostgreSQL `real` would round to zero is refused, while the
+  `1e-45` PostgreSQL prints for its smallest `real` is accepted), list/search/Graph
+  limits and offsets, scope, metadata, and Episode evidence search inputs all throw
+  `LoreValidationError`.
   `graph.connect` used to trim its kind and clamp its weight.
 - **Batch primitives validate every record before any statement**, and a refusal
   names the record: `records[i].content`, `links[i].weight`. `insertMemoriesInTransaction`
