@@ -21,6 +21,22 @@ export interface PreparedMemoryContent {
   readonly chunks: readonly string[];
 }
 
+/**
+ * Whether `content` holds more than `maximum` code points, without building an array
+ * of them: a code point takes one or two UTF-16 units, so the unit length bounds the
+ * count, and counting stops at the first one past the limit.
+ */
+function exceedsCodePoints(content: string, maximum: number): boolean {
+  if (content.length <= maximum) return false;
+  if (content.length > maximum * 2) return true;
+  let count = 0;
+  for (const _codePoint of content) {
+    count += 1;
+    if (count > maximum) return true;
+  }
+  return false;
+}
+
 /** Every result prepareMemoryContent returned, so a later write may reuse its chunks. */
 const ENGINE_PREPARED = new WeakSet<PreparedMemoryContent>();
 
@@ -34,7 +50,7 @@ export function prepareMemoryContent(content: string): PreparedMemoryContent {
   if (hasLoneSurrogate(content)) {
     throw new MemoryContentValidationError("Memory content contains invalid Unicode");
   }
-  if (Array.from(content).length > MEMORY_CONTENT_LIMITS.maximumCharacters) {
+  if (exceedsCodePoints(content, MEMORY_CONTENT_LIMITS.maximumCharacters)) {
     throw new MemoryContentValidationError(
       `Memory content may contain at most ${MEMORY_CONTENT_LIMITS.maximumCharacters} Unicode characters`,
     );

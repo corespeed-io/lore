@@ -26,6 +26,11 @@ export interface RememberMemory {
 
 /** One Memory of a batch insert, whose id the caller chose (for example an import). */
 export interface InsertMemoryRecord {
+  /**
+   * A fresh canonical UUID the host generated. Never reuse an id from outside (an
+   * archive's own ids): a primary-key collision with a Memory the caller cannot see
+   * would reveal that it exists.
+   */
   id: string;
   scope: MemoryScope;
   content: string;

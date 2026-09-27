@@ -131,4 +131,6 @@ its own:
   metadata, and Episode evidence search inputs all throw `LoreValidationError`.
   `graph.connect` used to trim its kind and clamp its weight.
 - **Batch primitives validate every record before any statement**, and a refusal
-  names the record: `records[i].content`, `links[i].weight`.
+  names the record: `records[i].content`, `links[i].weight`. `insertMemoriesInTransaction`
+  takes the ids it inserts; give it fresh UUIDs, never ids from an archive, or a
+  collision with an invisible Memory reveals that it exists.
