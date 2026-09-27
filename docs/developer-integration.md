@@ -154,7 +154,8 @@ arrives as `http_error`; its `status` still classifies it. Clients generated fro
 OpenAPI in other languages must likewise accept an Error `code` outside the enum they
 were built from. The API refuses an out-of-range value instead of clamping it: a list,
 search, or Graph `limit` or `offset` outside its published bounds answers 400
-`invalid_request`. Direct update/forget and
+`invalid_request`. A Memory list without `limit` returns up to 50 Memories and a
+search (`q`) up to 10, as the SDK and MCP do. Direct update/forget and
 update proposals require the current positive Memory version. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional

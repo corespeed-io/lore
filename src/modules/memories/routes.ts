@@ -43,13 +43,9 @@ export const memories = new Hono<ApiEnv>()
     const query = requestedQuery?.trim()
       ? requiredString(requestedQuery, "q", MEMORY_SEARCH_LIMITS.maximumQueryLength)
       : "";
-    const limit = queryInteger(
-      url,
-      "limit",
-      MEMORY_LIST_LIMITS.defaultLimit,
-      1,
-      query ? MEMORY_SEARCH_LIMITS.maximumLimit : MEMORY_LIST_LIMITS.maximumLimit,
-    );
+    // A list and a search each take their own engine default and bound.
+    const limits = query ? MEMORY_SEARCH_LIMITS : MEMORY_LIST_LIMITS;
+    const limit = queryInteger(url, "limit", limits.defaultLimit, 1, limits.maximumLimit);
     const offset = queryInteger(url, "offset", 0, 0, MEMORY_LIST_LIMITS.maximumOffset);
     const cursor = decodeCursor(url.searchParams.get("cursor"));
     if (cursor && url.searchParams.has("offset")) {

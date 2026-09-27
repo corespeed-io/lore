@@ -4,7 +4,9 @@
 // bundle: it passes typecheck and breaks only at build/deploy.
 import { parse as parseCookies } from "hono/utils/cookie";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { errorResponse } from "@/server/api/errors";
 import { loadConfig } from "@/server/config";
+import { DomainError } from "@/server/errors";
 
 export interface AuthResult {
   ok: boolean;
@@ -206,20 +208,25 @@ export function isCrossSiteRequest(request: Request): boolean {
   return !originHost || !requestHosts(request).has(originHost);
 }
 
+export class RequestAuthenticationError extends DomainError {
+  override name = "RequestAuthenticationError";
+  readonly code = "authentication_required";
+}
+
+export class WorkspaceAccessError extends DomainError {
+  override name = "WorkspaceAccessError";
+  readonly code = "access_denied";
+}
+
+/** A refused admission, answered from the error table like any other public failure. */
 function denial(status: number, detail: string | undefined, wwwAuthenticate = false): Response {
-  return Response.json(
-    {
-      code: status === 401 ? "authentication_required" : "access_denied",
-      error: detail ?? (status === 401 ? "auth required" : "forbidden"),
-    },
-    {
-      status,
-      headers: {
-        "cache-control": "private, no-store",
-        ...(wwwAuthenticate ? { "www-authenticate": "Basic" } : {}),
-      },
-    },
+  const response = errorResponse(
+    status === 401
+      ? new RequestAuthenticationError(detail ?? "auth required")
+      : new WorkspaceAccessError(detail ?? "forbidden"),
   );
+  if (wwwAuthenticate) response.headers.set("www-authenticate", "Basic");
+  return response;
 }
 
 export interface Admission {

@@ -158,9 +158,28 @@ test("an error that only looks public is reported as internal without its messag
   }
 });
 
+// A 4xx/5xx status literal handed to c.json/c.body/c.text, or a `code` key in any
+// `json({ ... })` object literal.
+const PUBLIC_ERROR_BODY =
+  /\bc\.(?:json|body|text)\((?:[^;]|\n)*?,\s*[45]\d\d\s*[,)]|json\(\s*\{[^}]*\bcode\s*:/;
+
+test("the public-error-body guard catches reordered and code-less bodies", () => {
+  for (const source of [
+    'c.json({ error: "Agent not found", code: "not_found" }, 404)',
+    'c.json({ error: "gone" }, 404)',
+    "c.body(null, 404)",
+    'Response.json({ code: "not_found", error: "gone" })',
+  ]) {
+    expect(PUBLIC_ERROR_BODY.test(source), source).toBe(true);
+  }
+  for (const source of ["c.json(result, 201)", "c.body(null, 204)", "c.json(memory)"]) {
+    expect(PUBLIC_ERROR_BODY.test(source), source).toBe(false);
+  }
+});
+
 test("no route writes a public error body itself", () => {
-  // A literal `c.json({ code: ... }, status)` would pair a code with a status the
-  // one table does not own; routes throw a DomainError instead.
+  // A literal `json({ code: ... })` body would pair a code with a status the one
+  // table does not own; everything else throws a DomainError or calls errorResponse.
   const offenders: string[] = [];
   const visit = (directory: string) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -168,7 +187,8 @@ test("no route writes a public error body itself", () => {
       if (entry.isDirectory()) visit(path);
       else if (
         /\.tsx?$/.test(entry.name) &&
-        /c\.json\(\s*\{\s*code:/.test(readFileSync(path, "utf8"))
+        path !== join("src", "server", "api", "errors.ts") &&
+        PUBLIC_ERROR_BODY.test(readFileSync(path, "utf8"))
       ) {
         offenders.push(path);
       }

@@ -65,19 +65,22 @@ export function errorResponse(error: unknown): Response {
         code: "transaction_conflict",
         error: "The request conflicted with a concurrent change; retry it",
       },
-      { status: 409, headers: { "cache-control": "private, no-store", "retry-after": "1" } },
+      {
+        status: HTTP_STATUS.transaction_conflict,
+        headers: { "cache-control": "private, no-store", "retry-after": "1" },
+      },
     );
   }
   // PostgreSQL enforces its text encoding restrictions for JSONB as well as text.
   if (state === "22P05" || state === "22021" || state === "22P02") {
     return Response.json(
       { code: "invalid_request", error: "Input contains an invalid text value" },
-      { status: 400, headers: { "cache-control": "private, no-store" } },
+      { status: HTTP_STATUS.invalid_request, headers: { "cache-control": "private, no-store" } },
     );
   }
   console.error("Unhandled Lore request error", error);
   return Response.json(
     { code: "internal_error", error: "Internal server error" },
-    { status: 500, headers: { "cache-control": "private, no-store" } },
+    { status: HTTP_STATUS.internal_error, headers: { "cache-control": "private, no-store" } },
   );
 }

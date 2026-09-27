@@ -120,8 +120,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         transaction,
         memoryStorageInTransaction(transaction, actor),
         id,
-        expectedVersion,
-        lockedVersion,
+        { expectedVersion, lockedVersion },
       );
     },
   };

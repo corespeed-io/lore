@@ -134,6 +134,15 @@ export function clientContract(document: unknown) {
         `${memories}/[limit]/schema/maximum`,
         "/paths/~1api~1v1~1episodes/get/parameters/[limit]/schema/maximum",
       ]),
+      // One default serves the Memory list and the Episode list; a search has its own.
+      memoryListLimitDefault: same(integer, document, [
+        `${memories}/[limit]/schema/default`,
+        "/paths/~1api~1v1~1episodes/get/parameters/[limit]/schema/default",
+      ]),
+      memorySearchLimitDefault: integer(
+        document,
+        `${memories}/[limit]/schema/x-lore-searchDefault`,
+      ),
       memoryMetadataFilterLength: integer(document, `${memories}/[metadata]/schema/maxLength`),
       memoryListOffset: integer(document, `${memories}/[offset]/schema/maximum`),
       graphNodes: integer(

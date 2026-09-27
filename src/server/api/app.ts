@@ -78,14 +78,15 @@ export function createApi(dependencies: ApiDependencies) {
 }
 
 function respondToUnsupportedMethod(c: Context<ApiEnv>, methods: string[]): Response {
-  c.header("Allow", [...methods, "OPTIONS"].join(", "));
+  const allow = [...methods, "OPTIONS"].join(", ");
+  c.header("Allow", allow);
   if (c.req.method === "OPTIONS") {
     c.header("Content-Type", undefined);
     return c.body(null, 204);
   }
   // The error table owns the status; Allow goes on that response, not the context.
   const response = errorResponse(new MethodNotAllowedError("Method not allowed"));
-  response.headers.set("Allow", [...methods, "OPTIONS"].join(", "));
+  response.headers.set("Allow", allow);
   return response;
 }
 

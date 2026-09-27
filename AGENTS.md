@@ -786,9 +786,11 @@ every benchmark runner reads the same table through
 `strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, and hands
 the whole table to the suite, so a benchmark's default run is the deployment
 default; a `LORE_BENCHMARK_*` variable overrides one knob within its bounds. The
-dense distance threshold is the exception: a suite sweeps its own `thresholds` (or
-`LORE_BENCHMARK_THRESHOLDS`), so `LORE_SEMANTIC_DISTANCE_THRESHOLD` is validated but
-not used.
+dense distance threshold is the exception where a suite declares its own
+`thresholds` (retrieval-v1, LongMemEval-S): that sweep, or `LORE_BENCHMARK_THRESHOLDS`,
+replaces `LORE_SEMANTIC_DISTANCE_THRESHOLD`. LoCoMo, MemoryAgentBench, and
+LongMemEval-V2 run at the deployment threshold, which `LORE_BENCHMARK_THRESHOLDS` still
+overrides for a LoCoMo run.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the

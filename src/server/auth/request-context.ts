@@ -2,18 +2,16 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
 import { createAccessModule } from "./access";
-import { type AuthPrincipal, checkAuth } from "./auth";
+import {
+  type AuthPrincipal,
+  checkAuth,
+  RequestAuthenticationError,
+  WorkspaceAccessError,
+} from "./auth";
 import { createIdentityModule } from "./identity";
 
-export class RequestAuthenticationError extends DomainError {
-  override name = "RequestAuthenticationError";
-  readonly code = "authentication_required";
-}
-
-export class WorkspaceAccessError extends DomainError {
-  override name = "WorkspaceAccessError";
-  readonly code = "access_denied";
-}
+// Admission refuses with the same two failures, so they live beside it.
+export { RequestAuthenticationError, WorkspaceAccessError };
 
 export class RequestInputError extends DomainError {
   override name = "RequestInputError";

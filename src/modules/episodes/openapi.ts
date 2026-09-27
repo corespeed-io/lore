@@ -74,7 +74,12 @@ export const episodesPaths = {
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: MEMORY_LIST_LIMITS.maximumLimit },
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MEMORY_LIST_LIMITS.maximumLimit,
+            default: MEMORY_LIST_LIMITS.defaultLimit,
+          },
         },
       ],
       responses: {

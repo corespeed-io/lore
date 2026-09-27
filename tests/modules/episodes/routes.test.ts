@@ -390,6 +390,23 @@ test("Episode content and text bounds the engine now owns still answer 400 over 
     expect(response.status, error).toBe(400);
     await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
   }
+  // The engine's rules run before the Idempotency-Key is read and the body hashed, so
+  // an Episode it refuses answers with its own rule even under a malformed key.
+  const refusedFirst = await app.request(
+    new Request("http://lore.local/api/v1/episodes", {
+      method: "POST",
+      headers: { ...headers, "idempotency-key": "not visible ascii" },
+      body: JSON.stringify({
+        kind: "conversation",
+        observations: [observation("fits"), observation("  ")],
+      }),
+    }),
+  );
+  expect(refusedFirst.status).toBe(400);
+  await expect(refusedFirst.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "observations[1].content must contain 1 to 100000 characters",
+  });
   // A refused request stores no replay, so the same key may carry a valid Episode.
   const recorded = await app.request(
     new Request("http://lore.local/api/v1/episodes", {

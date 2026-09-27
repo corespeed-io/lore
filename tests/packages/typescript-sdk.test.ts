@@ -861,6 +861,20 @@ describe("client bounds from LORE_CONTRACT", () => {
       /^limit must be an integer from 1 to 100$/,
     ],
     [
+      "Memory metadata filter",
+      // {"note":"..."} serializes to the value plus 11 characters.
+      (client) =>
+        workspace(client).searchMemories({
+          query: "q",
+          metadata: { note: "m".repeat(LIMITS.memoryMetadataFilterLength - 11) },
+        }),
+      (client) =>
+        workspace(client).listMemories({
+          metadata: { note: "m".repeat(LIMITS.memoryMetadataFilterLength - 10) },
+        }),
+      /^metadata filter exceeds 10000 serialized characters$/,
+    ],
+    [
       "Memory list offset",
       (client) => workspace(client).listMemories({ offset: LIMITS.memoryListOffset }),
       (client) => workspace(client).listMemories({ offset: LIMITS.memoryListOffset + 1 }),
@@ -1065,6 +1079,18 @@ describe("client bounds from LORE_CONTRACT", () => {
     await workspace(client)
       .retrieveContext({ query: "why", ...code })
       .catch(() => undefined);
+    await workspace(client)
+      .listMemoryProposals()
+      .catch(() => undefined);
+    await workspace(client)
+      .listMemories()
+      .catch(() => undefined);
+    await workspace(client)
+      .searchMemories({ query: "harbor" })
+      .catch(() => undefined);
+    await workspace(client)
+      .listEpisodes()
+      .catch(() => undefined);
 
     const [graphUrl, jobsUrl, dependenciesUrl] = fetchMock.mock.calls.map(
       ([url]) => new URL(String(url)),
@@ -1078,6 +1104,12 @@ describe("client bounds from LORE_CONTRACT", () => {
       string,
       unknown
     >;
+    const limitOf = (call: number) =>
+      new URL(String(fetchMock.mock.calls[call]?.[0])).searchParams.get("limit");
+    expect(limitOf(4)).toBe(String(LIMITS.memoryProposalListDefault));
+    expect(limitOf(5)).toBe(String(LIMITS.memoryListLimitDefault));
+    expect(limitOf(6)).toBe(String(LIMITS.memorySearchLimitDefault));
+    expect(limitOf(7)).toBe(String(LIMITS.memoryListLimitDefault));
     expect(contextBody).toMatchObject({
       memoryLimit: LIMITS.contextMemoryLimitDefault,
       codeLimit: LIMITS.contextCodeLimitDefault,

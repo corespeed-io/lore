@@ -660,6 +660,23 @@ describe("Lore external MCP adapter", () => {
     expect(memories.proposeMemory).toHaveBeenCalledOnce();
   });
 
+  test("lore_search refuses a metadata filter past the query-string bound", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    // {"note":"..."} serializes to the value plus 11 characters.
+    const search = (length: number) =>
+      client.callTool({
+        name: "lore_search",
+        arguments: { query: "q", metadata: { note: "m".repeat(length - 11) } },
+      });
+    const refused = await search(10_001);
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("metadata filter exceeds 10000 characters");
+    expect(memories.searchMemories).not.toHaveBeenCalled();
+    expect((await search(10_000)).isError).not.toBe(true);
+    expect(memories.searchMemories).toHaveBeenCalledOnce();
+  });
+
   test("rejects document-sized Memory content before calling Lore", async () => {
     const memories = fakeMemories();
     const client = await connect(memories);

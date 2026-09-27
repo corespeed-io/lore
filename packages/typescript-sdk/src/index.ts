@@ -829,7 +829,9 @@ export class LoreWorkspaceClient {
     if (input.cursor && input.offset !== undefined) {
       throw new TypeError("cursor and offset cannot be combined");
     }
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    const params = new URLSearchParams({
+      limit: String(normalizedLimit(input.limit, LIMITS.memoryListLimitDefault)),
+    });
     if (input.cursor) params.set("cursor", input.cursor);
     if (input.offset !== undefined) {
       if (
@@ -856,7 +858,7 @@ export class LoreWorkspaceClient {
     }
     const params = new URLSearchParams({
       q: query,
-      limit: String(normalizedLimit(input.limit, 10)),
+      limit: String(normalizedLimit(input.limit, LIMITS.memorySearchLimitDefault)),
     });
     addMemoryFilters(params, input);
     return (
@@ -1124,7 +1126,9 @@ export class LoreWorkspaceClient {
   }
 
   async listEpisodes(input: EpisodeListInput = {}): Promise<EpisodePage> {
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    const params = new URLSearchParams({
+      limit: String(normalizedLimit(input.limit, LIMITS.memoryListLimitDefault)),
+    });
     if (input.cursor) params.set("cursor", input.cursor);
     if (input.kind) params.set("kind", input.kind);
     if (input.scope) params.set("scope", input.scope);

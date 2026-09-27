@@ -28,7 +28,15 @@ export const memoriesPaths = {
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: MEMORY_LIST_LIMITS.maximumLimit },
+          description: `Defaults to ${MEMORY_LIST_LIMITS.defaultLimit} for a list and ${MEMORY_SEARCH_LIMITS.defaultLimit} for a search (q).`,
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MEMORY_LIST_LIMITS.maximumLimit,
+            default: MEMORY_LIST_LIMITS.defaultLimit,
+            // A search has its own default, which one `default` cannot express.
+            "x-lore-searchDefault": MEMORY_SEARCH_LIMITS.defaultLimit,
+          },
         },
         {
           name: "offset",

@@ -124,6 +124,8 @@ export const LORE_CONTRACT = {
     "memoryMetadataSerializedLength": 100000,
     "memorySearchQueryLength": 10000,
     "memoryListLimit": 100,
+    "memoryListLimitDefault": 50,
+    "memorySearchLimitDefault": 10,
     "memoryMetadataFilterLength": 10000,
     "memoryListOffset": 1000000,
     "graphNodes": 5000,

@@ -2115,6 +2115,7 @@ export interface operations {
             readonly query?: {
                 /** @description Opaque browse cursor; mutually exclusive with offset. */
                 readonly cursor?: string;
+                /** @description Defaults to 50 for a list and 10 for a search (q). */
                 readonly limit?: number;
                 /** @description JSON object applied as a bounded JSONB-containment filter. */
                 readonly metadata?: string;

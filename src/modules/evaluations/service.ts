@@ -9,6 +9,9 @@ import { installActorContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
 import { EVALUATION_LIMITS } from "./limits";
 
+const { defaultCaseLimit, defaultSuiteList, maximumCaseLimit, maximumSuiteList } =
+  EVALUATION_LIMITS;
+
 export type EvaluationRunStatus = "running" | "completed" | "failed";
 
 /**
@@ -417,13 +420,7 @@ export function createEvaluationModule(
               evaluationCase.query,
               unique(evaluationCase.expectedMemoryIds),
               unique(evaluationCase.forbiddenMemoryIds ?? []),
-              Math.max(
-                1,
-                Math.min(
-                  evaluationCase.limit ?? EVALUATION_LIMITS.defaultCaseLimit,
-                  EVALUATION_LIMITS.maximumCaseLimit,
-                ),
-              ),
+              Math.max(1, Math.min(evaluationCase.limit ?? defaultCaseLimit, maximumCaseLimit)),
             ],
           );
           cases.push(toCase(result.rows[0]));
@@ -440,10 +437,7 @@ export function createEvaluationModule(
     ): Promise<EvaluationSuitePage> {
       const limit = Math.max(
         1,
-        Math.min(
-          Math.trunc(input.limit ?? EVALUATION_LIMITS.defaultSuiteList),
-          EVALUATION_LIMITS.maximumSuiteList,
-        ),
+        Math.min(Math.trunc(input.limit ?? defaultSuiteList), maximumSuiteList),
       );
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);

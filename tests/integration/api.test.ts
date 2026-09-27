@@ -1,3 +1,4 @@
+import { MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createApi } from "@/server/api/app";
@@ -620,6 +621,44 @@ test("Memory HTTP cursor advances within the authorized ordering", async () => {
   );
   await expect(secondPage.json()).resolves.toEqual([expect.objectContaining({ id: memoryIds[2] })]);
   expect(secondPage.headers.get("x-lore-next-cursor")).toBeNull();
+  await testContext.close();
+});
+
+test("Memory HTTP defaults a search to the search limit and a list to the list limit", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "http-default-limit-user";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Default limits" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const count = MEMORY_SEARCH_LIMITS.defaultLimit + 2;
+  for (let index = 0; index < count; index += 1) {
+    await app.request(
+      new Request("http://lore.local/api/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: `Harbor tide log entry ${index}.` }),
+      }),
+    );
+  }
+  const listed = await app.request(new Request("http://lore.local/api/memories", { headers }));
+  await expect(listed.json()).resolves.toHaveLength(count);
+  const searched = await app.request(
+    new Request("http://lore.local/api/memories?q=harbor", { headers }),
+  );
+  await expect(searched.json()).resolves.toHaveLength(MEMORY_SEARCH_LIMITS.defaultLimit);
   await testContext.close();
 });
 
