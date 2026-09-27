@@ -242,6 +242,7 @@ const rerankMinimumScore = retrievalKnobs.rerankMinimumScore;
 const rerankWeight = retrievalKnobs.rerankWeight;
 const retrievalFeedbackQueries = retrievalKnobs.retrievalFeedbackQueries;
 const retrievalRecencyWeight = retrievalKnobs.retrievalRecencyWeight;
+const entityAliasRecall = retrievalKnobs.entityAliasRecall;
 const evidenceNeighborChunks = retrievalKnobs.evidenceNeighborChunks;
 const evidenceTopChunks = retrievalKnobs.evidenceTopChunks;
 const semanticDistanceThreshold = retrievalKnobs.semanticDistanceThreshold;
@@ -314,6 +315,7 @@ try {
   const searchModule = createMemoryModule(requestDatabase, {
     contextGroupExpansion,
     embeddingProvider,
+    entityAliasRecall,
     evidenceNeighborChunks,
     evidenceTopChunks,
     queryPlanningProvider,
@@ -585,6 +587,7 @@ try {
     retrieval: {
       limit: options.limit,
       semanticDistanceThreshold,
+      entityAliasRecall,
       evidenceNeighborChunks,
       evidenceTopChunks,
       evidencePolicy: RETRIEVAL_EVIDENCE_POLICY,
