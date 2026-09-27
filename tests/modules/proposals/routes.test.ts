@@ -418,16 +418,39 @@ test("the Proposal rules the service owns answer HTTP as 400 invalid_request", a
     code: "invalid_request",
     error: "An update proposal must change content, scope, or metadata",
   });
+  const evidenceId = (index: number) =>
+    `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+  // Each list stays within its own bound; together they exceed the shared one.
   const overCited = await propose({
     kind: "create",
     content: "Too much evidence",
-    evidenceMemoryIds: Array.from(
-      { length: 51 },
-      (_, index) => `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-    ),
+    evidenceMemoryIds: Array.from({ length: 30 }, (_, index) => evidenceId(index)),
+    evidenceObservationIds: Array.from({ length: 21 }, (_, index) => evidenceId(100 + index)),
   });
   expect(overCited.status).toBe(400);
   await expect(overCited.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "A Memory Proposal may cite at most 50 evidence records",
+  });
+  // Repeats count as the published per-list bound counts them.
+  const repeatedInOneList = await propose({
+    kind: "create",
+    content: "Repeated evidence",
+    evidenceMemoryIds: Array.from({ length: 51 }, () => created.id),
+  });
+  expect(repeatedInOneList.status).toBe(400);
+  await expect(repeatedInOneList.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "evidenceMemoryIds exceeds 50 items",
+  });
+  const repeatedAcrossLists = await propose({
+    kind: "create",
+    content: "Repeated evidence",
+    evidenceMemoryIds: Array.from({ length: 26 }, () => created.id),
+    evidenceObservationIds: Array.from({ length: 25 }, () => evidenceId(200)),
+  });
+  expect(repeatedAcrossLists.status).toBe(400);
+  await expect(repeatedAcrossLists.json()).resolves.toEqual({
     code: "invalid_request",
     error: "A Memory Proposal may cite at most 50 evidence records",
   });

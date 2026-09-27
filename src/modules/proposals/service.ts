@@ -34,7 +34,9 @@ import { DomainError } from "@/server/errors";
 import {
   MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
   MAXIMUM_MEMORY_PROPOSAL_LIST,
+  type MEMORY_PROPOSAL_KINDS,
   MEMORY_PROPOSAL_RETENTION_DAYS,
+  type MEMORY_PROPOSAL_STATUSES,
 } from "./limits";
 
 /**
@@ -61,9 +63,7 @@ export class MemoryProposalCapacityError extends DomainError {
   readonly code = "proposal_capacity_exceeded";
 }
 
-export const MEMORY_PROPOSAL_KINDS = ["create", "update"] as const;
 export type MemoryProposalKind = (typeof MEMORY_PROPOSAL_KINDS)[number];
-export const MEMORY_PROPOSAL_STATUSES = ["pending", "accepted", "rejected"] as const;
 export type MemoryProposalStatus = (typeof MEMORY_PROPOSAL_STATUSES)[number];
 
 export interface MemoryProposalCodeEvidence {
@@ -334,8 +334,12 @@ export function createMemoryProposalsModule(
           );
         }
       }
+      // Every requested entry counts, repeats included, as the published per-list
+      // bounds and the clients count them; storage keeps each record once.
       if (
-        evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length >
+        (input.evidenceMemoryIds?.length ?? 0) +
+          (input.evidenceObservationIds?.length ?? 0) +
+          (input.codeEvidence?.length ?? 0) >
         MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
       ) {
         throw new LoreValidationError(

@@ -17,13 +17,14 @@ import {
 } from "@/server/api/input";
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
 import { observeOperation } from "@/server/telemetry/telemetry";
-import { MAXIMUM_MEMORY_PROPOSAL_LIST } from "./limits";
-import type { MemoryProposalStatus, ProposeMemoryCodeEvidence } from "./service";
 import {
-  createMemoryProposalsModule,
+  MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+  MAXIMUM_MEMORY_PROPOSAL_LIST,
   MEMORY_PROPOSAL_KINDS,
   MEMORY_PROPOSAL_STATUSES,
-} from "./service";
+} from "./limits";
+import type { MemoryProposalStatus, ProposeMemoryCodeEvidence } from "./service";
+import { createMemoryProposalsModule } from "./service";
 
 function memoryProposalStatus(value: string | null): MemoryProposalStatus | undefined {
   if (value === null || value.trim() === "") return undefined;
@@ -37,6 +38,9 @@ function memoryProposalStatus(value: string | null): MemoryProposalStatus | unde
 function proposalCodeEvidence(value: unknown): ProposeMemoryCodeEvidence[] {
   if (!Array.isArray(value)) {
     throw new BadRequestError("codeEvidence must be an array");
+  }
+  if (value.length > MAXIMUM_MEMORY_PROPOSAL_EVIDENCE) {
+    throw new BadRequestError(`codeEvidence exceeds ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} items`);
   }
   return value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -76,11 +80,21 @@ export const proposals = new Hono<ApiEnv>()
     const evidenceMemoryIds =
       body.evidenceMemoryIds === undefined
         ? []
-        : uuidArray(body.evidenceMemoryIds, "evidenceMemoryIds", true);
+        : uuidArray(
+            body.evidenceMemoryIds,
+            "evidenceMemoryIds",
+            true,
+            MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+          );
     const evidenceObservationIds =
       body.evidenceObservationIds === undefined
         ? []
-        : uuidArray(body.evidenceObservationIds, "evidenceObservationIds", true);
+        : uuidArray(
+            body.evidenceObservationIds,
+            "evidenceObservationIds",
+            true,
+            MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+          );
     const codeEvidence =
       body.codeEvidence === undefined ? [] : proposalCodeEvidence(body.codeEvidence);
     const input =

@@ -1,3 +1,6 @@
+export const MEMORY_PROPOSAL_KINDS = ["create", "update"] as const;
+export const MEMORY_PROPOSAL_STATUSES = ["pending", "accepted", "rejected"] as const;
+
 /** Memory, Observation, and Code evidence records one Proposal may cite, in total. */
 export const MAXIMUM_MEMORY_PROPOSAL_EVIDENCE = 50;
 /** The most Proposals one list read returns. */

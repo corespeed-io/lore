@@ -1,9 +1,10 @@
 "use client";
 
-import type {
-  MemoryProposal,
-  MemoryProposalReviewResult,
-  MemoryProposalStatus,
+import {
+  LORE_CONTRACT,
+  type MemoryProposal,
+  type MemoryProposalReviewResult,
+  type MemoryProposalStatus,
 } from "@corespeed/lore-sdk";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRMutation from "swr/mutation";
@@ -17,7 +18,7 @@ export function listMemoryProposals(
 ): Promise<readonly MemoryProposal[]> {
   return getBrowserClient()
     .workspace(workspaceId)
-    .listMemoryProposals({ status, limit: 100, signal });
+    .listMemoryProposals({ status, limit: LORE_CONTRACT.limits.memoryProposalList, signal });
 }
 
 export function reviewMemoryProposal(
