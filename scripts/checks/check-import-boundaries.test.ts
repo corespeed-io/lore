@@ -198,6 +198,29 @@ test("a comment opener inside a regex literal hides no later import", () => {
   );
 });
 
+test("an arrow's regex literal, or one holding a backtick, hides no later import", () => {
+  for (const regex of [
+    "export const trailing = (s: string) => /\\/*$/.test(s);",
+    'export const inlineCode = (s: string) => s.replace(/`([^`]+)`/g, "<code>$1</code>");',
+    'export const plain = (s: string) => s.replace(/[#*`>]/g, "");',
+    "const HTTP_TOKEN = /^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$/;",
+  ]) {
+    const imports = scanImports(
+      [
+        regex,
+        "const glob = `src/*`;",
+        'export const load = () => import("bun");',
+        "const end = `*/`;",
+      ].join("\n"),
+    );
+    assert.deepEqual(
+      imports.map((item) => item.specifier),
+      ["bun"],
+      regex,
+    );
+  }
+});
+
 test("a JSX tag before a template literal hides no later import", () => {
   const closing = scanImports(
     [

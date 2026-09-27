@@ -142,13 +142,13 @@ export interface ImportRecord {
 const IMPORT_PATTERN =
   /(?:^|[\s;{}])(import|export)\s+(type\s+)?(?:[^'"`;]*?\s+from\s+)?["']([^"'\n]+)["']|\bimport\(\s*["']([^"'\n]+)["']\s*\)|\bimport\(\s*`([^`$\\\n]+)`\s*\)|(?<![.\w$])require\(\s*["']([^"'\n]+)["']\s*\)/g;
 
-// A regex literal starts where an expression may: after an operator, an opening
-// bracket, a separator, or a keyword that takes an expression. A `/` elsewhere is
-// division, which is left in place like any other code. `<` and `>` are left out,
-// and so is `/>`, so a JSX closing or self-closing tag never opens one. A regex
-// literal never holds a backtick, so a misread one cannot swallow a template
-// literal's opening and shift every later string and comment.
-const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%~^]|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/>])(?:\\[^\n\x60]|\[(?:\\[^\n\x60]|[^\]\\\n\x60])*\]|[^/\\\n[\x60])+\/[dgimsuvy]*`;
+// A regex literal starts where an expression may: after an operator, an arrow, an
+// opening bracket, a separator, or a keyword that takes an expression. A `/`
+// elsewhere is division, which is left in place like any other code. A lone `<` or
+// `>` is left out, and so is `/>`, so a JSX closing or self-closing tag never opens
+// one. This is a heuristic lexer: a shape it misreads can still hide an import, so
+// every new shape it must handle gets a fixture below.
+const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%~^]|=>|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/>])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*`;
 
 // One left-to-right pass over comments, strings, template literals, and regex
 // literals, so a `/*` or `//` inside a string, a regex, or a line comment never
@@ -167,8 +167,7 @@ const COMMENT_OR_STRING = new RegExp(
 
 function stripComments(source: string): string {
   // Replace comment characters with spaces so offsets (and so line numbers) survive.
-  // Strings and regex literals stay in place. A misread regex ends at the next `/` on
-  // its line and holds no backtick, so it cannot shift template literals below it.
+  // Strings and regex literals stay in place.
   return source.replace(COMMENT_OR_STRING, (token) =>
     token.startsWith("/*") || token.startsWith("//") ? token.replace(/[^\n]/g, " ") : token,
   );
