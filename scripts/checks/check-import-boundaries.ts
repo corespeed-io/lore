@@ -146,8 +146,8 @@ const IMPORT_PATTERN =
 // opening bracket, a separator, or a keyword that takes an expression. A `/`
 // elsewhere is division, which is left in place like any other code. A lone `<` or
 // `>` is left out, and so is `/>`, so a JSX closing or self-closing tag never opens
-// one. This is a heuristic lexer: a shape it misreads can still hide an import, so
-// every new shape it must handle gets a fixture below.
+// one. This lexer is a heuristic, so it only adds type-only imports to what the
+// parser finds (scanImports); a shape it misreads can never hide a value import.
 const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%~^]|=>|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/>])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*`;
 
 // One left-to-right pass over comments, strings, template literals, and regex
@@ -173,7 +173,8 @@ function stripComments(source: string): string {
   );
 }
 
-export function scanImports(source: string): ImportRecord[] {
+/** Every import the heuristic lexer sees, with its line and whether it is `type`. */
+function lexImports(source: string): ImportRecord[] {
   const code = stripComments(source);
   const imports: ImportRecord[] = [];
   for (const match of code.matchAll(IMPORT_PATTERN)) {
@@ -184,6 +185,49 @@ export function scanImports(source: string): ImportRecord[] {
     imports.push({ specifier, line, typeOnly: Boolean(match[2]) });
   }
   return imports;
+}
+
+const TRANSPILERS = {
+  ts: new Bun.Transpiler({ loader: "ts" }),
+  tsx: new Bun.Transpiler({ loader: "tsx" }),
+};
+
+function quotedIn(source: string, specifier: string): boolean {
+  return ['"', "'", "`"].some((quote) => source.includes(`${quote}${specifier}${quote}`));
+}
+
+function lineOf(source: string, specifier: string): number {
+  const at = ['"', "'", "`"]
+    .map((quote) => source.indexOf(`${quote}${specifier}${quote}`))
+    .filter((index) => index >= 0);
+  return source.slice(0, Math.min(...at)).split("\n").length;
+}
+
+/**
+ * The imports of one source file. A real TypeScript parser (Bun.Transpiler) decides
+ * which value imports exist, so no comment, string, regex, or JSX shape can hide
+ * one. Bun drops type-only imports, which a browser file must not use to reach
+ * server code either, so the lexer adds whatever it sees that the parser did not,
+ * as type-only edges: those count for the layer rules but never for the Worker ban.
+ * Throws when the source does not parse.
+ */
+export function scanImports(source: string, loader: "ts" | "tsx" = "tsx"): ImportRecord[] {
+  const lexed = lexImports(source);
+  // Bun's parser refuses a shebang line; blank it so offsets and lines survive.
+  const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
+  const values = TRANSPILERS[loader]
+    .scanImports(parsable)
+    .map((item) => item.path)
+    // Bun reports the JSX runtime it would inject; only written specifiers count.
+    .filter((specifier) => quotedIn(source, specifier));
+  const records: ImportRecord[] = [];
+  for (const specifier of values) {
+    const index = lexed.findIndex((record) => record.specifier === specifier && !record.typeOnly);
+    const [seen] = index >= 0 ? lexed.splice(index, 1) : [];
+    records.push({ specifier, line: seen?.line ?? lineOf(source, specifier), typeOnly: false });
+  }
+  for (const record of lexed) records.push({ ...record, typeOnly: true });
+  return records.sort((left, right) => left.line - right.line);
 }
 
 interface Resolution {
@@ -364,7 +408,17 @@ export function checkImportBoundaries(
       continue;
     }
     const edges: Resolution[] = [];
-    for (const record of scanImports(readFileSync(join(root, file), "utf8"))) {
+    let records: ImportRecord[];
+    try {
+      records = scanImports(
+        readFileSync(join(root, file), "utf8"),
+        file.endsWith(".tsx") ? "tsx" : "ts",
+      );
+    } catch (error) {
+      findings.push(`${file}: cannot be parsed for imports (${String(error)})`);
+      continue;
+    }
+    for (const record of records) {
       const resolution = resolveImport(file, record.specifier);
       if (!record.typeOnly) edges.push(resolution);
       const where = `${file}:${record.line}`;

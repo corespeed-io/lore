@@ -259,6 +259,48 @@ test("a JSX tag before a template literal hides no later import", () => {
   );
 });
 
+test("shapes a regex lexer misreads hide no value import from the parser", () => {
+  for (const source of [
+    'export const Help = () => <p>Match src/*.ts files</p>;\nexport const load = () => import("bun");\n/** doc */',
+    'export const Link = () => <p>see https://x.dev</p>; const load = () => import("bun");',
+    'export function f(ok: boolean, s: string) { if (ok) /\\/*x/.test(s); return import("bun"); }\n/** doc */',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+    'const a = `${Math.random() > 0.5 ? `x` : `y/*`}`;\nexport const load = () => import("bun");\nconst end = "*/";',
+  ]) {
+    assert.deepEqual(
+      scanImports(source)
+        .filter((item) => !item.typeOnly)
+        .map((item) => item.specifier),
+      ["bun"],
+      source,
+    );
+  }
+});
+
+test("type-only imports stay type-only, and an unparsable file is a finding", () => {
+  const imports = scanImports(
+    'import type { A } from "./a";\nexport type { B } from "./b";\nimport { c } from "./c";\nexport const d = c;\n',
+    "ts",
+  );
+  assert.deepEqual(
+    imports.map((item) => [item.specifier, item.line, item.typeOnly]),
+    [
+      ["./a", 1, true],
+      ["./b", 2, true],
+      ["./c", 3, false],
+    ],
+  );
+  const findings = checkImportBoundaries(
+    fixture({ ...CLEAN, "src/modules/beta/broken.ts": "export const = ;\n" }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.some((item) =>
+      item.startsWith("src/modules/beta/broken.ts: cannot be parsed for imports"),
+    ),
+  );
+});
+
 test("template-literal imports and require() are scanned", () => {
   const imports = scanImports(
     [

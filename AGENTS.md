@@ -398,7 +398,10 @@ been removed. Lore now has a native implementation, split into two concepts
   the files that module exports. Nothing the Cloudflare Worker bundle reaches may
   import a native or Bun-only package: the check walks from the wrangler `main`
   entry and from every file OpenNext compiles into it (`src/app/**`,
-  `src/middleware.ts`, `src/instrumentation.ts`). Every browser-side file of a domain lives
+  `src/middleware.ts`, `src/instrumentation.ts`). Value imports come from Bun's
+  TypeScript parser (`Bun.Transpiler.scanImports`), so no comment, string, regex, or
+  JSX shape can hide one; a regex lexer only adds the type-only imports Bun drops,
+  and a file that does not parse is a finding. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
