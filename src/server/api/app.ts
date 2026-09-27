@@ -13,6 +13,8 @@ import { proposals } from "@/modules/proposals/routes";
 import { actor, workspaces } from "@/modules/workspaces/routes";
 import { errorResponse } from "@/server/api/errors";
 import { admitRequest } from "@/server/auth/auth";
+import { MethodNotAllowedError, NotFoundError } from "@/server/errors";
+import { loreOpenApiDocument } from "@/server/openapi/document";
 import { securityHeaders } from "@/server/security-headers";
 import { type ApiDependencies, type ApiEnv, createRequestDependencies } from "./dependencies";
 
@@ -20,7 +22,7 @@ import { type ApiDependencies, type ApiEnv, createRequestDependencies } from "./
 export function createApi(dependencies: ApiDependencies) {
   const app = new Hono<ApiEnv>();
   app.onError(errorResponse);
-  app.notFound((c) => c.json({ code: "not_found", error: "Not found" }, 404));
+  app.notFound(() => errorResponse(new NotFoundError("Not found")));
   const headers = securityHeaders();
   app.use(async (c, next) => {
     await next();
@@ -62,16 +64,30 @@ export function createApi(dependencies: ApiDependencies) {
     .route("/memory-proposals", proposals)
     .route("/workspaces", portability);
 
-  return app.route("/", operations).route("/api", shared).route("/api/v1", v1);
+  // The document describes every module, so it is served by this composition root.
+  const openApi = new Hono<ApiEnv>().get("/", (c) => {
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.json(loreOpenApiDocument());
+  });
+
+  return app
+    .route("/", operations)
+    .route("/openapi.json", openApi)
+    .route("/api", shared)
+    .route("/api/v1", v1);
 }
 
 function respondToUnsupportedMethod(c: Context<ApiEnv>, methods: string[]): Response {
-  c.header("Allow", [...methods, "OPTIONS"].join(", "));
+  const allow = [...methods, "OPTIONS"].join(", ");
+  c.header("Allow", allow);
   if (c.req.method === "OPTIONS") {
     c.header("Content-Type", undefined);
     return c.body(null, 204);
   }
-  return c.json({ code: "method_not_allowed", error: "Method not allowed" }, 405);
+  // The error table owns the status; Allow goes on that response, not the context.
+  const response = errorResponse(new MethodNotAllowedError("Method not allowed"));
+  response.headers.set("Allow", allow);
+  return response;
 }
 
 export function isApiPath(path: string): boolean {

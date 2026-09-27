@@ -1,3 +1,4 @@
+import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { Hono } from "hono";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ApiEnv } from "@/server/api/dependencies";
@@ -14,8 +15,10 @@ import {
   requiredString,
   uuidString,
 } from "@/server/api/input";
+import { memoryScope } from "@/server/api/shared-schemas";
+import { NotFoundError } from "@/server/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";
-import { memoryEtag, memoryScope, metadataFilter } from "./input";
+import { memoryEtag, metadataFilter } from "./input";
 import { CreateMemoryInputSchema, UpdateMemoryInputSchema } from "./schemas";
 
 function expectedMemoryVersion(request: Request): number {
@@ -37,9 +40,13 @@ export const memories = new Hono<ApiEnv>()
     const actor = await c.var.resolveActor();
     const url = new URL(request.url);
     const requestedQuery = url.searchParams.get("q");
-    const query = requestedQuery?.trim() ? requiredString(requestedQuery, "q", 10_000) : "";
-    const limit = queryInteger(url, "limit", 50, 1, 100);
-    const offset = queryInteger(url, "offset", 0, 0, 1_000_000);
+    const query = requestedQuery?.trim()
+      ? requiredString(requestedQuery, "q", MEMORY_SEARCH_LIMITS.maximumQueryLength)
+      : "";
+    // A list and a search each take their own engine default and bound.
+    const limits = query ? MEMORY_SEARCH_LIMITS : MEMORY_LIST_LIMITS;
+    const limit = queryInteger(url, "limit", limits.defaultLimit, 1, limits.maximumLimit);
+    const offset = queryInteger(url, "offset", 0, 0, MEMORY_LIST_LIMITS.maximumOffset);
     const cursor = decodeCursor(url.searchParams.get("cursor"));
     if (cursor && url.searchParams.has("offset")) {
       throw new BadRequestError("cursor and offset cannot be combined");
@@ -111,9 +118,8 @@ export const memories = new Hono<ApiEnv>()
     const memory = await observeOperation("memory.retrieve", () =>
       memories.retrieve(actor, memoryId),
     );
-    return memory
-      ? c.json(memory, { headers: { etag: memoryEtag(memory.version) } })
-      : c.json({ code: "not_found", error: "Memory not found" }, 404);
+    if (!memory) throw new NotFoundError("Memory not found");
+    return c.json(memory, { headers: { etag: memoryEtag(memory.version) } });
   })
   .patch("/:id", async (c) => {
     const memories = createMemoryModule(await c.var.database(), c.var.memoryOptions());
@@ -134,9 +140,8 @@ export const memories = new Hono<ApiEnv>()
         }),
       }),
     );
-    return memory
-      ? c.json(memory, { headers: { etag: memoryEtag(memory.version) } })
-      : c.json({ code: "not_found", error: "Memory not found" }, 404);
+    if (!memory) throw new NotFoundError("Memory not found");
+    return c.json(memory, { headers: { etag: memoryEtag(memory.version) } });
   })
   .delete("/:id", async (c) => {
     const memories = createMemoryModule(await c.var.database());
@@ -154,7 +159,6 @@ export const memories = new Hono<ApiEnv>()
         }),
       }),
     );
-    return forgotten
-      ? c.body(null, 204)
-      : c.json({ code: "not_found", error: "Memory not found" }, 404);
+    if (!forgotten) throw new NotFoundError("Memory not found");
+    return c.body(null, 204);
   });

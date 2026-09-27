@@ -1,5 +1,5 @@
-import type { ConfiguredCodeRepositories } from "@/modules/code/indexing/queue";
 import { configuredCodeRepositoriesFromEnvironment } from "@/modules/code/indexing/queue";
+import type { ConfiguredCodeRepositories } from "@/server/api/dependencies";
 
 /**
  * The maintenance worker's Code Repository registry. An invalid LORE_CODE_REPOSITORIES

@@ -1,26 +1,22 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { isPostgresAccessDenied } from "@corespeed/lore-core";
+import type {
+  ConfiguredCodeRepositories,
+  ConfiguredCodeRepository,
+} from "@/server/api/dependencies";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
 import { CODE_INDEX_REVISION } from "./protocol";
 import { type CodeIndexJobRow, toCodeIndexJob } from "./read";
 import type { CodeIndexJob } from "./types";
-import { isUuid, validateCommitOid, validatePlainText, validateRepositoryKey } from "./validation";
-
-export interface ConfiguredCodeRepository {
-  displayName: string;
-  repositoryPath: string;
-  /**
-   * Workspaces whose Actors may enqueue and index this repository. An entry
-   * without this binding serves every Workspace, so
-   * configuredCodeRepositoriesFromEnvironment keeps one only when the deployment
-   * runs a single-operator auth mode (AUTH_MODE password or none).
-   */
-  workspaceIds?: readonly string[];
-}
-
-export type ConfiguredCodeRepositories = Readonly<Record<string, ConfiguredCodeRepository>>;
+import {
+  CODE_SOURCE_REF_MAXIMUM_LENGTH,
+  isUuid,
+  validateCommitOid,
+  validatePlainText,
+  validateRepositoryKey,
+} from "./validation";
 
 /**
  * The single refusal for a key this deployment does not serve to the caller's
@@ -82,7 +78,7 @@ export function createCodeIndexQueueModule(
       const repositoryPath = validatePlainText(configured.repositoryPath, "repositoryPath", 4_096);
       const normalizedCommitOid = validateCommitOid(input.commitOid);
       const sourceRef = input.sourceRef
-        ? validatePlainText(input.sourceRef, "sourceRef", 512)
+        ? validatePlainText(input.sourceRef, "sourceRef", CODE_SOURCE_REF_MAXIMUM_LENGTH)
         : null;
       try {
         return await database.transaction(async (transaction) => {

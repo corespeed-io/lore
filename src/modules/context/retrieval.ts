@@ -1,20 +1,29 @@
-import type { MemoryModuleOptions, MemoryScope, PostgresDatabase } from "@corespeed/lore-core";
+import {
+  MEMORY_SEARCH_LIMITS,
+  type MemoryModuleOptions,
+  type MemoryScope,
+  type PostgresDatabase,
+} from "@corespeed/lore-core";
+import type { MemoryCodeEvidence } from "@/modules/code/evidence";
+import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import type {
   CodeEvidenceRelationship,
   CodeEvidenceValidationState,
-  MemoryCodeEvidence,
-} from "@/modules/code/evidence";
-import { createCodeEvidenceModule } from "@/modules/code/evidence";
+} from "@/modules/code/evidence-contract";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
+import type { CodeSearchChannel } from "@/modules/code/indexing/types";
 import {
+  CODE_QUERY_MAXIMUM_LENGTH,
   validateCommitOid,
   validateQueryText,
   validateRepositoryKey,
 } from "@/modules/code/indexing/validation";
 import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 import type {
+  ContextRetrievalRoute,
   ContextualImpactAssessment,
   DependencyFingerprint,
   JointEvidenceIntent,
@@ -23,6 +32,8 @@ import type {
 import {
   aggregateContextualImpact,
   assessContextualImpact,
+  CONTEXT_RETRIEVAL_LIMITS,
+  CONTEXT_RETRIEVAL_ROUTES,
   CONTEXTUAL_ANCHOR_LIMIT,
   CONTEXTUAL_EDGE_LIMIT,
   MAXIMUM_CONTEXT_ANCHORS,
@@ -30,8 +41,6 @@ import {
 } from "./policy";
 
 export const CONTEXT_RETRIEVAL_REVISION = "joint-memory-code-v2";
-
-export type ContextRetrievalRoute = "auto" | "both" | "code-only" | "memory-only";
 
 export interface RetrieveContextInput {
   query: string;
@@ -64,7 +73,7 @@ export interface RetrievedCodeContext {
   startLine: number;
   endLine: number;
   score: number;
-  matchedChannels: Array<"symbol" | "literal" | "lexical" | "path">;
+  matchedChannels: CodeSearchChannel[];
   content: string;
 }
 
@@ -110,12 +119,12 @@ export interface ContextRetrievalModule {
   retrieve(actor: ActorContext, input: RetrieveContextInput): Promise<RetrievedContext>;
 }
 
-export class ContextRetrievalValidationError extends Error {
+export class ContextRetrievalValidationError extends DomainError {
   override name = "ContextRetrievalValidationError";
-  readonly status = 400;
+  readonly code = "invalid_request";
 }
 
-type DependencySubject = { path: string } | { symbol: string };
+export type DependencySubject = { path: string } | { symbol: string };
 
 /**
  * The cited declaration at `path`. A symbol key is its path, `#`, and a path-free suffix;
@@ -130,7 +139,12 @@ function dependencySubject(citation: MemoryCodeEvidence, path: string): Dependen
   return { symbol: `${path}#${symbolKey.slice(citedPrefix.length)}` };
 }
 
-async function dependencyFingerprints(input: {
+/**
+ * The contextual-impact fingerprints of a subject's direct callees at one exact
+ * revision: at most CONTEXTUAL_EDGE_LIMIT edges, each resolved target fingerprinted
+ * by its complete logical declaration. Evaluations measure this same function.
+ */
+export async function contextualDependencyFingerprints(input: {
   actor: ActorContext;
   code: ReturnType<typeof createCodeIndexReadModule>;
   dependencies: ReturnType<typeof createCodeDependencyGraphModule>;
@@ -209,18 +223,141 @@ function deliveredRoute(memoryCount: number, codeCount: number) {
   return "abstain" as const;
 }
 
+/**
+ * Every Code read of one packet after its searches: anchor assessment, the anchored
+ * Artifacts, and contextual impact. The caller runs it in one repeatable-read,
+ * read-only snapshot, so a generation activated mid-packet cannot split them across
+ * two generations. It makes no provider call, so the snapshot stays short.
+ */
+async function readAnchoredCode(input: {
+  actor: ActorContext;
+  plan: ReturnType<typeof planJointEvidenceRoute>;
+  repositoryKey: string;
+  requestedCommitOid: string;
+  memoryResults: readonly { memory: { id: string } }[];
+  code: ReturnType<typeof createCodeIndexReadModule>;
+  dependencies: ReturnType<typeof createCodeDependencyGraphModule>;
+  evidence: ReturnType<typeof createCodeEvidenceModule>;
+}) {
+  const {
+    actor,
+    plan,
+    repositoryKey,
+    requestedCommitOid,
+    memoryResults,
+    code,
+    dependencies,
+    evidence,
+  } = input;
+  const anchors: RetrievedAnchorContext[] = [];
+  const anchoredArtifactIds: string[] = [];
+  const contextualSubjects: Array<{
+    anchorId: string;
+    baseCommitOid: string;
+    beforeSubject: DependencySubject;
+    afterSubject: DependencySubject;
+  }> = [];
+  // One read lists and assesses the citations of every result Memory, in result
+  // order. Retrieval never persists revalidation. One citation past the cap proves
+  // that the packet is incomplete; it is dropped, never delivered.
+  const assessed = await evidence.assessMemoryCitations(actor, {
+    memoryIds: memoryResults.map((result) => result.memory.id),
+    repositoryKey,
+    commitOid: requestedCommitOid,
+    limit: MAXIMUM_CONTEXT_ANCHORS + 1,
+  });
+  // More citations existed than one packet carries, so some were never assessed.
+  const anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
+  for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
+    anchors.push({
+      id: citation.id,
+      memoryId: citation.memoryId,
+      relationship: citation.relationship,
+      localState: assessment.validationState,
+      citedCommitOid: citation.citedCommitOid,
+      citedPath: citation.citedPath,
+      validatedCommitOid: assessment.validatedCommitOid,
+      validatedPath: assessment.validatedPath,
+    });
+    if (
+      assessment.validatedArtifactId &&
+      !anchoredArtifactIds.includes(assessment.validatedArtifactId)
+    ) {
+      anchoredArtifactIds.push(assessment.validatedArtifactId);
+    }
+    if (assessment.validatedRevisionId) {
+      contextualSubjects.push({
+        anchorId: citation.id,
+        baseCommitOid: citation.citedCommitOid,
+        beforeSubject: dependencySubject(citation, citation.citedPath),
+        afterSubject: dependencySubject(citation, assessment.validatedPath ?? citation.citedPath),
+      });
+    }
+  }
+  const anchoredArtifacts =
+    anchoredArtifactIds.length > 0
+      ? await code.getArtifacts(actor, {
+          repositoryKey,
+          commitOid: requestedCommitOid,
+          artifactIds: anchoredArtifactIds,
+        })
+      : [];
+  let contextualImpact: ContextualImpactAssessment | null = null;
+  if (
+    plan.needsContextualImpact &&
+    // With no cited declaration to compare, there is nothing to assess:
+    // reporting `unknown` here would brand every dependency question with
+    // a permanent conflict that describes the absence of anchors, not the
+    // code. Truncated or unresolved traversal still reports `unknown`, and so
+    // does a citation list cut at the packet cap, whose unassessed rest may
+    // hold a declaration.
+    (contextualSubjects.length > 0 || anchorsTruncated)
+  ) {
+    const selectedSubjects = contextualSubjects.slice(0, CONTEXTUAL_ANCHOR_LIMIT);
+    const assessments = [];
+    for (const selected of selectedSubjects) {
+      const before = await contextualDependencyFingerprints({
+        actor,
+        code,
+        dependencies,
+        repositoryKey,
+        commitOid: selected.baseCommitOid,
+        subject: selected.beforeSubject,
+      });
+      const after = await contextualDependencyFingerprints({
+        actor,
+        code,
+        dependencies,
+        repositoryKey,
+        commitOid: requestedCommitOid,
+        subject: selected.afterSubject,
+      });
+      assessments.push({
+        anchorId: selected.anchorId,
+        assessment: assessContextualImpact(before.fingerprints, after.fingerprints, {
+          beforeTruncated: before.truncated,
+          afterTruncated: after.truncated,
+        }),
+      });
+    }
+    contextualImpact = aggregateContextualImpact(
+      assessments,
+      anchorsTruncated || contextualSubjects.length > selectedSubjects.length,
+    );
+  }
+  return { anchors, anchoredArtifacts, contextualImpact };
+}
+
 export function createContextRetrievalModule(
   database: PostgresDatabase,
   memoryOptions: MemoryModuleOptions = {},
 ): ContextRetrievalModule {
   const memories = createMemoryModule(database, memoryOptions);
   const code = createCodeIndexReadModule(database);
-  const dependencies = createCodeDependencyGraphModule(database);
-  const evidence = createCodeEvidenceModule(database);
 
   return {
     async retrieve(actor, input) {
-      const query = queryText(input.query, "query", 10_000);
+      const query = queryText(input.query, "query", MEMORY_SEARCH_LIMITS.maximumQueryLength);
       const repositoryKey =
         input.repositoryKey === undefined
           ? undefined
@@ -235,7 +372,7 @@ export function createContextRetrievalModule(
         );
       }
       const route = input.route ?? "auto";
-      if (!(["auto", "both", "code-only", "memory-only"] as const).includes(route)) {
+      if (!CONTEXT_RETRIEVAL_ROUTES.includes(route)) {
         throw new ContextRetrievalValidationError("route is invalid");
       }
       if ((route === "both" || route === "code-only") && repositoryKey === undefined) {
@@ -249,8 +386,18 @@ export function createContextRetrievalModule(
       if (input.codeQuery !== undefined && repositoryKey === undefined) {
         throw new ContextRetrievalValidationError("codeQuery requires repositoryKey and commitOid");
       }
-      const memoryLimit = limit(input.memoryLimit, 5, 10, "memoryLimit");
-      const codeLimit = limit(input.codeLimit, 10, 20, "codeLimit");
+      const memoryLimit = limit(
+        input.memoryLimit,
+        CONTEXT_RETRIEVAL_LIMITS.defaultMemoryLimit,
+        CONTEXT_RETRIEVAL_LIMITS.maximumMemoryLimit,
+        "memoryLimit",
+      );
+      const codeLimit = limit(
+        input.codeLimit,
+        CONTEXT_RETRIEVAL_LIMITS.defaultCodeLimit,
+        CONTEXT_RETRIEVAL_LIMITS.maximumCodeLimit,
+        "codeLimit",
+      );
       const plan = planJointEvidenceRoute({
         query,
         hasRepositoryContext: repositoryKey !== undefined,
@@ -258,11 +405,15 @@ export function createContextRetrievalModule(
       });
       const memoryQuery =
         plan.route === "memory-only" || plan.route === "both"
-          ? queryText(input.memoryQuery ?? query, "memoryQuery", 10_000)
+          ? queryText(
+              input.memoryQuery ?? query,
+              "memoryQuery",
+              MEMORY_SEARCH_LIMITS.maximumQueryLength,
+            )
           : null;
       const codeQuery =
         plan.route === "code-only" || plan.route === "both"
-          ? queryText(input.codeQuery ?? query, "codeQuery", 2_000)
+          ? queryText(input.codeQuery ?? query, "codeQuery", CODE_QUERY_MAXIMUM_LENGTH)
           : null;
       const [memoryResults, codeResults] = await Promise.all([
         memoryQuery !== null
@@ -284,74 +435,33 @@ export function createContextRetrievalModule(
           : [],
       ]);
 
-      const anchors: RetrievedAnchorContext[] = [];
-      // More citations existed than one packet carries, so some were never assessed.
-      let anchorsTruncated = false;
-      const anchoredArtifactIds: string[] = [];
-      const contextualSubjects: Array<{
-        anchorId: string;
-        baseCommitOid: string;
-        beforeSubject: DependencySubject;
-        afterSubject: DependencySubject;
-      }> = [];
-      if (
+      // The searches above call providers outside any transaction; every later Code
+      // read shares one snapshot. Only anchor expansion reads Code after the search.
+      const { anchors, anchoredArtifacts, contextualImpact } =
         plan.needsAnchorExpansion &&
         plan.needsLocalAssessment &&
-        repositoryKey !== undefined &&
-        requestedCommitOid !== undefined &&
-        memoryResults.length > 0
-      ) {
-        // One read-only transaction lists and assesses the citations of every result Memory,
-        // in result order. Retrieval never persists revalidation. One citation past the cap
-        // proves that the packet is incomplete; it is dropped, never delivered.
-        const assessed = await evidence.assessMemoryCitations(actor, {
-          memoryIds: memoryResults.map((result) => result.memory.id),
-          repositoryKey,
-          commitOid: requestedCommitOid,
-          limit: MAXIMUM_CONTEXT_ANCHORS + 1,
-        });
-        anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
-        for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
-          anchors.push({
-            id: citation.id,
-            memoryId: citation.memoryId,
-            relationship: citation.relationship,
-            localState: assessment.validationState,
-            citedCommitOid: citation.citedCommitOid,
-            citedPath: citation.citedPath,
-            validatedCommitOid: assessment.validatedCommitOid,
-            validatedPath: assessment.validatedPath,
-          });
-          if (
-            assessment.validatedArtifactId &&
-            !anchoredArtifactIds.includes(assessment.validatedArtifactId)
-          ) {
-            anchoredArtifactIds.push(assessment.validatedArtifactId);
-          }
-          if (assessment.validatedRevisionId) {
-            contextualSubjects.push({
-              anchorId: citation.id,
-              baseCommitOid: citation.citedCommitOid,
-              beforeSubject: dependencySubject(citation, citation.citedPath),
-              afterSubject: dependencySubject(
-                citation,
-                assessment.validatedPath ?? citation.citedPath,
-              ),
-            });
-          }
-        }
-      }
-
-      const anchoredArtifacts =
-        anchoredArtifactIds.length > 0 &&
+        memoryResults.length > 0 &&
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
-          ? await code.getArtifacts(actor, {
-              repositoryKey,
-              commitOid: requestedCommitOid,
-              artifactIds: anchoredArtifactIds,
+          ? await database.transaction(async (transaction) => {
+              await transaction.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+              const snapshot: PostgresDatabase = { transaction: (use) => use(transaction) };
+              return readAnchoredCode({
+                actor,
+                plan,
+                repositoryKey,
+                requestedCommitOid,
+                memoryResults,
+                code: createCodeIndexReadModule(snapshot),
+                dependencies: createCodeDependencyGraphModule(snapshot),
+                evidence: createCodeEvidenceModule(snapshot),
+              });
             })
-          : [];
+          : {
+              anchors: [] as RetrievedAnchorContext[],
+              anchoredArtifacts: [],
+              contextualImpact: null,
+            };
       const selectedCodeArtifacts = [
         ...anchoredArtifacts,
         ...codeResults.filter(
@@ -398,51 +508,6 @@ export function createContextRetrievalModule(
         }
         return values;
       });
-      let contextualImpact: ContextualImpactAssessment | null = null;
-      if (
-        plan.needsContextualImpact &&
-        // With no cited declaration to compare, there is nothing to assess:
-        // reporting `unknown` here would brand every dependency question with
-        // a permanent conflict that describes the absence of anchors, not the
-        // code. Truncated or unresolved traversal still reports `unknown`, and so
-        // does a citation list cut at the packet cap, whose unassessed rest may
-        // hold a declaration.
-        (contextualSubjects.length > 0 || anchorsTruncated) &&
-        repositoryKey !== undefined &&
-        requestedCommitOid !== undefined
-      ) {
-        const selectedSubjects = contextualSubjects.slice(0, CONTEXTUAL_ANCHOR_LIMIT);
-        const assessments = [];
-        for (const selected of selectedSubjects) {
-          const before = await dependencyFingerprints({
-            actor,
-            code,
-            dependencies,
-            repositoryKey,
-            commitOid: selected.baseCommitOid,
-            subject: selected.beforeSubject,
-          });
-          const after = await dependencyFingerprints({
-            actor,
-            code,
-            dependencies,
-            repositoryKey,
-            commitOid: requestedCommitOid,
-            subject: selected.afterSubject,
-          });
-          assessments.push({
-            anchorId: selected.anchorId,
-            assessment: assessContextualImpact(before.fingerprints, after.fingerprints, {
-              beforeTruncated: before.truncated,
-              afterTruncated: after.truncated,
-            }),
-          });
-        }
-        contextualImpact = aggregateContextualImpact(
-          assessments,
-          anchorsTruncated || contextualSubjects.length > selectedSubjects.length,
-        );
-      }
       if (contextualImpact && contextualImpact.state !== "unaffected") {
         conflicts.push(`contextual-impact:${contextualImpact.state}`);
       }

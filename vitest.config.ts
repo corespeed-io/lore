@@ -13,6 +13,7 @@ export default defineConfig({
       "@": repositoryPath("./src"),
       "@corespeed/lore-core/postgres": repositoryPath("./packages/lore-core/src/postgres.ts"),
       "@corespeed/lore-core/episodes": repositoryPath("./packages/lore-core/src/episodes/index.ts"),
+      "@corespeed/lore-core/testing": repositoryPath("./packages/lore-core/src/testing.ts"),
       "@corespeed/lore-core": repositoryPath("./packages/lore-core/src/index.ts"),
       "@corespeed/lore-sdk": repositoryPath("./packages/typescript-sdk/src/index.ts"),
       "@corespeed/lore-cli": repositoryPath("./packages/cli/src/index.ts"),

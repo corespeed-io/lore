@@ -1,5 +1,6 @@
 import type { PostgresTransaction } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 
 export interface IdempotencyRequest {
   key: string;
@@ -24,9 +25,9 @@ export interface MutationClaim<Result> {
   };
 }
 
-export class IdempotencyConflictError extends Error {
+export class IdempotencyConflictError extends DomainError {
   override name = "IdempotencyConflictError";
-  readonly status = 409;
+  readonly code = "idempotency_conflict";
 }
 
 function actorIdentity(actor: ActorContext): { id: string; kind: "agent" | "user" } {
@@ -123,11 +124,32 @@ export async function beginMutation<Result>(
   };
 }
 
+/**
+ * Every replay body a mutation may store. Bodies that carry canonical content are
+ * deleted when their subject is forgotten, by triggers that read these exact JSON
+ * paths (0001_v1_baseline.sql: `{memory,id}`, `{proposal,id}`,
+ * `{proposal,targetMemoryId}`, `{proposal,acceptedMemoryId}`, `{episode,id}`; 0005
+ * indexes the same paths). The key names are therefore a storage contract: renaming
+ * one needs a forward migration, and a new content-carrying body needs a new scrub
+ * path. tests/server/replay-scrub.test.ts proves the scrub end to end.
+ */
+export type ReplayBody =
+  | { memory: { id: string } | null }
+  | {
+      proposal: {
+        id: string;
+        targetMemoryId: string | null;
+        acceptedMemoryId: string | null;
+      };
+    }
+  | { episode: { id: string } }
+  | { deleted: boolean };
+
 export async function completeMutation(
   transaction: PostgresTransaction,
   requestId: string,
   status: number,
-  body: unknown,
+  body: ReplayBody,
   idempotent: boolean,
 ): Promise<void> {
   if (!idempotent) return;

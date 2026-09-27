@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
 import { jsonObject, requiredString, requireHumanActor } from "@/server/api/input";
 import { createAccessModule } from "@/server/auth/access";
+import { WORKSPACE_NAME_MAXIMUM_LENGTH } from "./limits";
 
 export const workspaces = new Hono<ApiEnv>()
   .get("/", async (c) => {
@@ -15,7 +16,7 @@ export const workspaces = new Hono<ApiEnv>()
     const user = await c.var.resolveUser();
     const body = await jsonObject(request);
     const workspace = await access.createWorkspace(user, {
-      name: requiredString(body.name, "name", 120),
+      name: requiredString(body.name, "name", WORKSPACE_NAME_MAXIMUM_LENGTH),
     });
     return c.json(workspace, 201);
   });

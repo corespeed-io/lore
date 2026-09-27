@@ -1,4 +1,5 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
+import type { ConfiguredCodeRepositories } from "@/server/api/dependencies";
 import type { ActorContext } from "@/server/auth/actor-context";
 import {
   CodeIndexRetryableError,
@@ -7,7 +8,6 @@ import {
   CodeRevisionConflictError,
 } from "./errors";
 import { CODE_INDEX_REVISION, SUPERSEDED_CODE_INDEX_REVISIONS } from "./protocol";
-import type { ConfiguredCodeRepositories } from "./queue";
 import { CODE_REPOSITORY_NOT_CONFIGURED, configuredCodeRepositoryForWorkspace } from "./queue";
 import { createCodeIndexModule } from "./service";
 import type { CodeIndexJobStatus } from "./types";

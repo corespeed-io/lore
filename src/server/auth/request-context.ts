@@ -1,22 +1,21 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 import { createAccessModule } from "./access";
-import { type AuthPrincipal, checkAuth } from "./auth";
+import {
+  type AuthPrincipal,
+  checkAuth,
+  RequestAuthenticationError,
+  WorkspaceAccessError,
+} from "./auth";
 import { createIdentityModule } from "./identity";
 
-export class RequestAuthenticationError extends Error {
-  override name = "RequestAuthenticationError";
-  readonly status = 401;
-}
+// Admission refuses with the same two failures, so they live beside it.
+export { RequestAuthenticationError, WorkspaceAccessError };
 
-export class WorkspaceAccessError extends Error {
-  override name = "WorkspaceAccessError";
-  readonly status = 403;
-}
-
-export class RequestInputError extends Error {
+export class RequestInputError extends DomainError {
   override name = "RequestInputError";
-  readonly status = 400;
+  readonly code = "invalid_request";
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

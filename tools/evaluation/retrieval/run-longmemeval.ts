@@ -1,7 +1,9 @@
 import { resolve } from "node:path";
+import { MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { createEmbeddingProviderFromEnvironment } from "../../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
+import { strictRetrievalKnobsFromEnvironment } from "../../../src/server/providers/retrieval-knobs";
 import { verifyFile } from "../shared/file-integrity";
 import type { LongMemEvalSplit } from "./longmemeval";
 import {
@@ -62,6 +64,10 @@ function parseArgs(args: string[]): CliOptions {
       index += 1;
     } else if (flag === "--limit") {
       options.limit = positiveInteger(value, flag);
+      // The engine refuses a larger search limit; fail before indexing a corpus.
+      if (options.limit > MEMORY_SEARCH_LIMITS.maximumLimit) {
+        throw new Error(`--limit must be at most ${MEMORY_SEARCH_LIMITS.maximumLimit}`);
+      }
       index += 1;
     } else if (flag === "--output") {
       if (!value) throw new Error("--output requires a path");
@@ -126,63 +132,15 @@ const queryPlanningProvider = createQueryPlanningProviderFromEnvironment(process
   providerWarnings.push(message);
   console.error(message);
 });
-const configuredQueryPlannerMaxQueries = Number(process.env.LORE_QUERY_PLANNER_MAX_QUERIES ?? 3);
-if (
-  !Number.isInteger(configuredQueryPlannerMaxQueries) ||
-  configuredQueryPlannerMaxQueries < 1 ||
-  configuredQueryPlannerMaxQueries > 5
-) {
-  throw new Error("LORE_QUERY_PLANNER_MAX_QUERIES must be an integer from 1 to 5");
-}
-const configuredRerankCandidateLimit = Number(process.env.LORE_RERANK_CANDIDATE_LIMIT);
-const rerankCandidateLimit =
-  Number.isInteger(configuredRerankCandidateLimit) && configuredRerankCandidateLimit > 0
-    ? Math.min(configuredRerankCandidateLimit, 200)
-    : 50;
-const configuredRerankMinimumScore = Number(process.env.LORE_RERANK_MIN_SCORE ?? 0);
-if (
-  !Number.isFinite(configuredRerankMinimumScore) ||
-  configuredRerankMinimumScore < 0 ||
-  configuredRerankMinimumScore > 1
-) {
-  throw new Error("LORE_RERANK_MIN_SCORE must be between 0 and 1");
-}
-const configuredRerankDiversityLambda = Number(process.env.LORE_RERANK_DIVERSITY_LAMBDA ?? 1);
-if (
-  !Number.isFinite(configuredRerankDiversityLambda) ||
-  configuredRerankDiversityLambda < 0 ||
-  configuredRerankDiversityLambda > 1
-) {
-  throw new Error("LORE_RERANK_DIVERSITY_LAMBDA must be between 0 and 1");
-}
-const configuredRerankWeight = Number(process.env.LORE_RERANK_WEIGHT ?? 1);
-if (
-  !Number.isFinite(configuredRerankWeight) ||
-  configuredRerankWeight < 0 ||
-  configuredRerankWeight > 1
-) {
-  throw new Error("LORE_RERANK_WEIGHT must be between 0 and 1");
-}
-const configuredRetrievalRecencyWeight = Number(process.env.LORE_RETRIEVAL_RECENCY_WEIGHT ?? 0);
-if (
-  !Number.isFinite(configuredRetrievalRecencyWeight) ||
-  configuredRetrievalRecencyWeight < 0 ||
-  configuredRetrievalRecencyWeight > 1
-) {
-  throw new Error("LORE_RETRIEVAL_RECENCY_WEIGHT must be between 0 and 1");
-}
+// The deployment's own knob table, strictly: a benchmark refuses an invalid value.
+const knobs = strictRetrievalKnobsFromEnvironment(process.env);
 
 const report = await runRetrievalBenchmarkSuite({
   databaseUrl,
   embeddingProvider,
+  knobs,
   queryPlanningProvider,
-  queryPlannerMaxQueries: configuredQueryPlannerMaxQueries,
-  retrievalRecencyWeight: configuredRetrievalRecencyWeight,
   rerankingProvider,
-  rerankCandidateLimit,
-  rerankDiversityLambda: configuredRerankDiversityLambda,
-  rerankMinimumScore: configuredRerankMinimumScore,
-  rerankWeight: configuredRerankWeight,
   providerWarnings,
   outputPath: options.outputPath,
   reuseIndexed: options.reuseIndexed,

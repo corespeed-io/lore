@@ -15,12 +15,10 @@ import {
 import { createCodeIndexMaintenanceModule } from "@/modules/code/indexing/maintenance";
 import { prepareFile } from "@/modules/code/indexing/parser";
 import { CODE_INDEX_LIMITS, CODE_INDEX_REVISION } from "@/modules/code/indexing/protocol";
-import {
-  type ConfiguredCodeRepository,
-  createCodeIndexQueueModule,
-} from "@/modules/code/indexing/queue";
+import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import type { PreparedArtifact } from "@/modules/code/indexing/types";
+import type { ConfiguredCodeRepository } from "@/server/api/dependencies";
 import { createAccessModule } from "@/server/auth/access";
 import type { ActorContext } from "../../../src/server/auth/actor-context";
 import { installActorContext } from "../../../src/server/auth/actor-context";

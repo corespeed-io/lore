@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
 import { CodeEvidenceAccessDeniedError, createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import { createMemoryProposalsModule } from "@/modules/proposals/service";
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import { installActorContext } from "../../../src/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
@@ -54,6 +56,68 @@ function reorderedSplitDeclaration(marker: string, targetBeforeBeta: boolean): s
     "",
   ].join("\n");
 }
+
+test("cite, Proposal acceptance, and assessment agree on the masked declaration fingerprint", async () => {
+  // Cite, the Proposal snapshot, and assessment all build the fingerprint through
+  // declarationContextSha256Sql. Stored anchors are immutable, so the algorithm itself
+  // is pinned too.
+  const context = await createMemoryTestContext();
+  const memories = createMemoryModule(context.database);
+  const proposals = createMemoryProposalsModule(context.database);
+  const code = createCodeIndexModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+  const repositoryKey = "corespeed/evidence-fingerprint-agreement";
+  const commitOid = "9".repeat(40);
+  await code.indexRevision(context.alice, {
+    repositoryKey,
+    displayName: "Evidence fingerprint agreement",
+    commitOid,
+    files: [{ path: "src/split.ts", content: splitDeclaration("fingerprint") }],
+  });
+  const chunks = await context.adminDatabase.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string; content_sha256: string }>(
+      `SELECT artifact.id, artifact.content_sha256
+       FROM code_artifacts artifact
+       WHERE artifact.workspace_id = $1 AND artifact.path = 'src/split.ts'
+         AND artifact.declaration_key IS NOT NULL
+       ORDER BY artifact.declaration_chunk_ordinal`,
+      [context.alice.workspaceId],
+    );
+    return result.rows;
+  });
+  expect(chunks.length).toBeGreaterThan(2);
+  const cited = chunks[1];
+  if (!cited) throw new Error("Expected a middle declaration chunk");
+  const expected = createHash("sha256")
+    .update(chunks.map((chunk) => (chunk.id === cited.id ? "*" : chunk.content_sha256)).join(""))
+    .digest("hex");
+
+  const memory = await memories.remember(context.alice, { content: "Directly cited policy." });
+  const citation = await evidence.cite(context.alice, {
+    memoryId: memory.id,
+    artifactId: cited.id,
+    relationship: "supports",
+  });
+  expect(citation.citedDeclarationContextSha256).toBe(expected);
+
+  const proposal = await proposals.propose(context.alice, {
+    kind: "create",
+    content: "Policy cited through a Proposal.",
+    codeEvidence: [{ artifactId: cited.id, relationship: "supports" }],
+  });
+  expect(proposal.codeEvidence[0]?.citedDeclarationContextSha256).toBe(expected);
+  const accepted = await proposals.reviewProposal(context.alice, proposal.id, "accept");
+  if (!accepted?.memory) throw new Error("Expected the accepted Proposal Memory");
+  const [acceptedCitation] = await evidence.list(context.alice, { memoryId: accepted.memory.id });
+  expect(acceptedCitation?.citedDeclarationContextSha256).toBe(expected);
+
+  for (const evidenceId of [citation.id, acceptedCitation?.id ?? ""]) {
+    await expect(
+      evidence.assess(context.alice, { evidenceId, repositoryKey, commitOid }),
+    ).resolves.toMatchObject({ validationState: "current", validatedArtifactId: cited.id });
+  }
+  await context.close();
+});
 
 test("RLS rejects a forged declaration-context fingerprint", async () => {
   const context = await createMemoryTestContext();

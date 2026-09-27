@@ -1,11 +1,15 @@
+import { MEMORY_LINK_LIMITS, MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
+import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
   ifMatchHeader,
   jsonResponse,
   memoryIdParameter,
+  memoryScopeSchema,
   requestBody,
   workspaceHeader,
 } from "@/server/openapi/shared";
+import { METADATA_FILTER_MAXIMUM_LENGTH } from "./input";
 import { memoryOpenApiSchemas } from "./schemas";
 
 const memorySchemas = memoryOpenApiSchemas();
@@ -16,23 +20,40 @@ export const memoriesPaths = {
       operationId: "listOrSearchMemories",
       parameters: [
         workspaceHeader,
-        { name: "q", in: "query", schema: { type: "string", maxLength: 10_000 } },
-        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+        {
+          name: "q",
+          in: "query",
+          schema: { type: "string", maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength },
+        },
+        {
+          name: "limit",
+          in: "query",
+          description: `Defaults to ${MEMORY_LIST_LIMITS.defaultLimit} for a list and ${MEMORY_SEARCH_LIMITS.defaultLimit} for a search (q).`,
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MEMORY_LIST_LIMITS.maximumLimit,
+            // A list and a search default differently, which one `default` cannot
+            // express, so both are published as extensions and neither as `default`.
+            "x-lore-listDefault": MEMORY_LIST_LIMITS.defaultLimit,
+            "x-lore-searchDefault": MEMORY_SEARCH_LIMITS.defaultLimit,
+          },
+        },
         {
           name: "offset",
           in: "query",
-          schema: { type: "integer", minimum: 0, maximum: 1_000_000 },
+          schema: { type: "integer", minimum: 0, maximum: MEMORY_LIST_LIMITS.maximumOffset },
         },
         {
           name: "cursor",
           in: "query",
           description: "Opaque browse cursor; mutually exclusive with offset.",
-          schema: { type: "string" },
+          schema: { type: "string", maxLength: CURSOR_MAXIMUM_LENGTH },
         },
         {
           name: "scope",
           in: "query",
-          schema: { type: "string", enum: ["shared", "private"] },
+          schema: memoryScopeSchema,
         },
         {
           name: "updated_after",
@@ -50,7 +71,7 @@ export const memoriesPaths = {
           name: "metadata",
           in: "query",
           description: "JSON object applied as a bounded JSONB-containment filter.",
-          schema: { type: "string", maxLength: 10_000 },
+          schema: { type: "string", maxLength: METADATA_FILTER_MAXIMUM_LENGTH },
         },
       ],
       responses: {
@@ -160,7 +181,7 @@ export const memoriesSchemas = {
       reference: { type: "string" },
       label: { type: "string" },
       preview: { type: "string" },
-      scope: { type: "string", enum: ["shared", "private"] },
+      scope: memoryScopeSchema,
       type: { type: "string" },
       updatedAt: { type: "string", format: "date-time" },
     },
@@ -173,7 +194,11 @@ export const memoriesSchemas = {
       source: { type: "string", format: "uuid" },
       target: { type: "string", format: "uuid" },
       kind: { type: "string" },
-      weight: { type: "number", minimum: 0, maximum: 1 },
+      weight: {
+        type: "number",
+        minimum: MEMORY_LINK_LIMITS.minimumWeight,
+        maximum: MEMORY_LINK_LIMITS.maximumWeight,
+      },
     },
   },
 };

@@ -2,13 +2,13 @@ import {
   memoryFromRow as coreMemoryFromRow,
   createMemoryModule as createCoreMemoryModule,
   createMemoryMutationPrimitives as createCoreMutationPrimitives,
+  type InsertMemoryRecord,
   isPostgresAccessDenied,
   type ListMemory,
   MemoryAccessDeniedError,
   type MemoryModuleOptions,
   type MemoryMutationPrimitivesOptions,
   type MemoryRow,
-  MemoryVersionConflictError,
   type PostgresDatabase,
   type PostgresTransaction,
   type RememberMemory,
@@ -50,9 +50,20 @@ export function memoryFromRow(row: MemoryRow): Memory {
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
   const primitives = createCoreMutationPrimitives(options);
   return {
-    enqueueEmbeddingJobsInTransaction: primitives.enqueueEmbeddingJobsInTransaction,
     notifyMaintenance: primitives.notifyMaintenance,
     notifyMaintenanceMany: primitives.notifyMaintenanceMany,
+    /** Batch-insert Memories owned by the Actor's User, with chunks and embedding jobs. */
+    insertMemoriesInTransaction(
+      transaction: PostgresTransaction,
+      actor: ActorContext,
+      records: readonly InsertMemoryRecord[],
+    ) {
+      return primitives.insertMemoriesInTransaction(
+        transaction,
+        memoryStorageInTransaction(transaction, actor),
+        records,
+      );
+    },
     async insertMemoryInTransaction(
       transaction: PostgresTransaction,
       actor: ActorContext,
@@ -89,6 +100,29 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       );
       return result ? { ...result, memory: memoryFromStorage(result.memory) } : null;
     },
+    /** False when the Memory is absent or this Actor may not write it. */
+    async forgetMemoryInTransaction(
+      transaction: PostgresTransaction,
+      actor: ActorContext,
+      id: string,
+      expectedVersion?: number,
+    ): Promise<boolean> {
+      // One locking read proves write authority before the version check and hands
+      // the engine the locked version, so it does not lock the row again.
+      const writable = await transaction.query<{ version: number }>(
+        `SELECT version FROM memories WHERE id = $1 AND workspace_id = $2
+         AND lore.can_write_memory(workspace_id, owner_user_id) FOR UPDATE`,
+        [id, actor.workspaceId],
+      );
+      const lockedVersion = writable.rows[0]?.version;
+      if (lockedVersion === undefined) return false;
+      return primitives.forgetMemoryInTransaction(
+        transaction,
+        memoryStorageInTransaction(transaction, actor),
+        id,
+        { expectedVersion, lockedVersion },
+      );
+    },
   };
 }
 
@@ -103,8 +137,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         `the module is configured for ${dimensions} but the provider embeds at ${options.embeddingProvider.dimensions}`,
     );
   }
-  const { insertMemoryInTransaction, updateMemoryInTransaction, notifyMaintenance } =
-    createMemoryMutationPrimitives(options);
+  const {
+    forgetMemoryInTransaction,
+    insertMemoryInTransaction,
+    updateMemoryInTransaction,
+    notifyMaintenance,
+  } = createMemoryMutationPrimitives(options);
   const coreFor = (actor: ActorContext) =>
     createCoreMemoryModule(createMemoryStorage(database, actor), options);
   return {
@@ -226,36 +264,14 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           options.idempotency,
         );
         if (claim.replay) return claim.replay.body.deleted;
-        const current = await transaction.query<{ version: number }>(
-          `SELECT version
-           FROM memories
-           WHERE id = $1
-             AND workspace_id = $2
-             AND lore.can_write_memory(workspace_id, owner_user_id)
-           FOR UPDATE`,
-          [id, actor.workspaceId],
+        // Write authority is checked before the version, so a Memory this Actor may
+        // not write reads as absent rather than as a version conflict.
+        const deleted = await forgetMemoryInTransaction(
+          transaction,
+          actor,
+          id,
+          options.expectedVersion,
         );
-        const currentVersion = current.rows[0]?.version;
-        if (currentVersion === undefined) {
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            404,
-            { deleted: false },
-            Boolean(options.idempotency),
-          );
-          return false;
-        }
-        if (options.expectedVersion !== undefined && currentVersion !== options.expectedVersion) {
-          throw new MemoryVersionConflictError(options.expectedVersion, currentVersion);
-        }
-        const result = await transaction.query<{ id: string }>(
-          `DELETE FROM memories
-           WHERE id = $1 AND workspace_id = $2 AND version = $3
-           RETURNING id`,
-          [id, actor.workspaceId, currentVersion],
-        );
-        const deleted = result.rows.length === 1;
         await completeMutation(
           transaction,
           claim.requestId,

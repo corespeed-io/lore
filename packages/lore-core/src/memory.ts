@@ -1,10 +1,24 @@
+import { queryInRecordBatches } from "./batch";
 import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "./db";
 import { isPostgresAccessDenied } from "./db";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
-import { prepareMemoryContent } from "./memory-content";
+import {
+  MemoryContentValidationError,
+  memoryContentChunks,
+  prepareMemoryContent,
+} from "./memory-content";
+import {
+  memoryListLimit,
+  memoryListOffset,
+  memorySearchLimit,
+  memorySearchQuery,
+  validateMemoryMetadata,
+  validateMemoryScope,
+} from "./memory-input";
 import type {
   ContextGroupExpansionOptions,
+  InsertMemoryRecord,
   ListMemory,
   Memory,
   MemoryMaintenanceNotifier,
@@ -37,7 +51,7 @@ import {
 import { utcTimestampSql } from "./timestamp";
 import { embeddingVectorLiteral } from "./vector";
 
-export type * from "./memory-types";
+export * from "./memory-types";
 export * from "./retrieval/policy";
 
 export class MemoryAccessDeniedError extends Error {
@@ -46,7 +60,6 @@ export class MemoryAccessDeniedError extends Error {
 
 export class MemoryVersionConflictError extends Error {
   override name = "MemoryVersionConflictError";
-  readonly status = 412;
 
   constructor(
     readonly expectedVersion: number,
@@ -809,6 +822,30 @@ async function enqueueEmbeddingJob(
   return inserted.rows.length > 0 ? jobId : null;
 }
 
+/** A batch record's chunks; a content refusal names the record that broke the rule. */
+function batchRecordChunks(record: InsertMemoryRecord, index: number): readonly string[] {
+  try {
+    return memoryContentChunks(record.content, record.preparedContent);
+  } catch (error) {
+    if (!(error instanceof MemoryContentValidationError)) throw error;
+    throw new MemoryContentValidationError(error.message, {
+      cause: error,
+      field: `records[${index}].content`,
+    });
+  }
+}
+
+/** List and search filters obey the same rules as the values they match. */
+function validateReadFilters(input: {
+  scope?: MemoryScope | undefined;
+  metadataFilter?: Record<string, unknown> | undefined;
+}): void {
+  if (input.scope !== undefined) validateMemoryScope(input.scope);
+  if (input.metadataFilter !== undefined) {
+    validateMemoryMetadata(input.metadataFilter, "metadataFilter");
+  }
+}
+
 /**
  * Map a raw `memories` row to the public {@link Memory} shape. Select the row
  * with {@link memorySelectColumns} so its timestamps use the canonical form.
@@ -875,6 +912,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     createdByAgentId: string | null = storageScope.sourceId ?? null,
   ): Promise<{ jobId: string | null; memory: Memory }> {
     const { chunks } = prepareMemoryContent(input.content);
+    const scope = input.scope === undefined ? defaultMemoryScope : validateMemoryScope(input.scope);
+    const metadata = input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata);
     const id = crypto.randomUUID();
     const result = await transaction.query<MemoryRow>(
       `INSERT INTO memories (
@@ -886,9 +925,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         storageScope.partitionId,
         storageScope.ownerId,
         createdByAgentId,
-        input.scope ?? defaultMemoryScope,
+        scope,
         input.content,
-        JSON.stringify(input.metadata ?? {}),
+        JSON.stringify(metadata),
       ],
     );
     const memory = result.rows[0];
@@ -907,6 +946,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     input: UpdateMemory,
     expectedVersion?: number,
   ): Promise<{ chunksChanged: boolean; jobId: string | null; memory: Memory } | null> {
+    if (input.scope !== undefined) validateMemoryScope(input.scope);
+    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
     const current = await transaction.query<MemoryRow>(
       `SELECT *
        FROM memories
@@ -1008,8 +1049,113 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     return jobIds;
   }
 
+  /**
+   * Delete one Memory under its row lock. Returns false when the store shows no
+   * such Memory; throws MemoryVersionConflictError on a stale expected version.
+   * Chunks, vectors, jobs, and Links go with it through the schema's cascades.
+   * A host that already read the row's version under `FOR UPDATE` in this
+   * transaction passes it as `lockedVersion`, and the engine skips its own read.
+   */
+  async function forgetMemoryInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    id: string,
+    versions: { expectedVersion?: number | undefined; lockedVersion?: number | undefined } = {},
+  ): Promise<boolean> {
+    const { expectedVersion, lockedVersion } = versions;
+    let version = lockedVersion;
+    if (version === undefined) {
+      const current = await transaction.query<{ version: number }>(
+        `SELECT version FROM memories
+         WHERE id = $1 AND workspace_id = $2
+         FOR UPDATE`,
+        [id, storageScope.partitionId],
+      );
+      version = current.rows[0]?.version;
+    }
+    if (version === undefined) return false;
+    if (expectedVersion !== undefined && version !== expectedVersion) {
+      throw new MemoryVersionConflictError(expectedVersion, version);
+    }
+    const result = await transaction.query<{ id: string }>(
+      `DELETE FROM memories WHERE id = $1 AND workspace_id = $2 AND version = $3 RETURNING id`,
+      [id, storageScope.partitionId, version],
+    );
+    return result.rows.length === 1;
+  }
+
+  /**
+   * Insert many Memories with caller-chosen ids in bounded set-based batches, with
+   * their chunks and embedding jobs. Every record obeys the same content, scope, and
+   * metadata rules as a single write. Returns each inserted id, in PostgreSQL's
+   * lowercase form, with its version.
+   */
+  async function insertMemoriesInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    records: readonly InsertMemoryRecord[],
+  ): Promise<{ jobIds: string[]; memories: Array<{ id: string; version: number }> }> {
+    const prepared = records.map((record, index) => ({
+      // PostgreSQL returns uuid in lowercase; match RETURNING rows in that form.
+      id: record.id.toLowerCase(),
+      scope: validateMemoryScope(record.scope, `records[${index}].scope`),
+      content: record.content,
+      metadata: validateMemoryMetadata(record.metadata, `records[${index}].metadata`),
+      chunks: batchRecordChunks(record, index),
+    }));
+    const inserted = await queryInRecordBatches<{ id: string; version: number | string }>(
+      transaction,
+      `INSERT INTO memories (
+         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
+       )
+       SELECT record.id, $2::uuid, $3::uuid, $4::uuid, record.scope, record.content,
+              record.metadata
+       FROM jsonb_to_recordset($1::jsonb) AS record(
+         id uuid, scope memory_scope, content text, metadata jsonb
+       )
+       RETURNING id, version`,
+      prepared.map(({ id, scope, content, metadata }) => ({ id, scope, content, metadata })),
+      [storageScope.partitionId, storageScope.ownerId, storageScope.sourceId ?? null],
+    );
+    await queryInRecordBatches(
+      transaction,
+      `INSERT INTO memory_chunks (
+         id, workspace_id, memory_id, ordinal, content, chunking_revision
+       )
+       SELECT gen_random_uuid(), $2::uuid, record.memory_id, record.ordinal, record.content,
+              $3::text
+       FROM jsonb_to_recordset($1::jsonb) AS record(
+         memory_id uuid, ordinal integer, content text
+       )`,
+      prepared.flatMap(({ id, chunks }) =>
+        chunks.map((content, ordinal) => ({ memory_id: id, ordinal, content })),
+      ),
+      [storageScope.partitionId, MEMORY_CHUNKING_REVISION],
+    );
+    // Jobs target the version each INSERT actually produced, not an assumed default.
+    const versions = new Map(inserted.map((row) => [row.id, Number(row.version)] as const));
+    const memories = prepared.map(({ id, scope }) => {
+      const version = versions.get(id);
+      if (version === undefined) throw new Error("A batch-inserted Memory returned no row");
+      return { id, scope, version };
+    });
+    const jobIds = await enqueueEmbeddingJobsInTransaction(
+      transaction,
+      memories.map(({ id, scope, version }) => ({
+        id,
+        workspace_id: storageScope.partitionId,
+        owner_user_id: storageScope.ownerId,
+        scope,
+        version,
+      })),
+    );
+    return { jobIds, memories: memories.map(({ id, version }) => ({ id, version })) };
+  }
+
   return {
     enqueueEmbeddingJobsInTransaction,
+    forgetMemoryInTransaction,
+    insertMemoriesInTransaction,
     insertMemoryInTransaction,
     notifyMaintenance,
     notifyMaintenanceMany,
@@ -1056,8 +1202,12 @@ export function createMemoryModule(
     0,
     Math.min(options.semanticDistanceThreshold ?? 0.5, 2),
   );
-  const { insertMemoryInTransaction, notifyMaintenance, updateMemoryInTransaction } =
-    createMemoryMutationPrimitives(options);
+  const {
+    forgetMemoryInTransaction,
+    insertMemoryInTransaction,
+    notifyMaintenance,
+    updateMemoryInTransaction,
+  } = createMemoryMutationPrimitives(options);
 
   return {
     async remember(input: RememberMemory): Promise<Memory> {
@@ -1109,29 +1259,17 @@ export function createMemoryModule(
     },
 
     async forget(id: string, options: MemoryMutationOptions = {}): Promise<boolean> {
-      return database.transaction(async (transaction) => {
-        const current = await transaction.query<{ version: number }>(
-          `SELECT version FROM memories
-           WHERE id = $1 AND workspace_id = $2
-           FOR UPDATE`,
-          [id, storageScope.partitionId],
-        );
-        const version = current.rows[0]?.version;
-        if (version === undefined) return false;
-        if (options.expectedVersion !== undefined && version !== options.expectedVersion) {
-          throw new MemoryVersionConflictError(options.expectedVersion, version);
-        }
-        const result = await transaction.query<{ id: string }>(
-          `DELETE FROM memories WHERE id = $1 AND workspace_id = $2 AND version = $3 RETURNING id`,
-          [id, storageScope.partitionId, version],
-        );
-        return result.rows.length === 1;
-      });
+      return database.transaction((transaction) =>
+        forgetMemoryInTransaction(transaction, storageScope, id, {
+          expectedVersion: options.expectedVersion,
+        }),
+      );
     },
 
     async list(input: ListMemory = {}): Promise<Memory[]> {
-      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
-      const offset = Math.max(0, Math.min(input.offset ?? 0, 1_000_000));
+      const limit = memoryListLimit(input.limit);
+      const offset = memoryListOffset(input.offset);
+      validateReadFilters(input);
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryRow>(
           // ORDER BY is qualified: a bare updated_at would name the text output
@@ -1171,9 +1309,10 @@ export function createMemoryModule(
     },
 
     async search(input: SearchMemory): Promise<MemorySearchResult[]> {
-      const query = input.query.trim();
+      const query = memorySearchQuery(input.query);
+      const limit = memorySearchLimit(input.limit);
+      validateReadFilters(input);
       if (!query) return [];
-      const limit = Math.max(1, Math.min(input.limit ?? 10, 100));
       const hasSecondStage =
         Boolean(rerankingProvider) || retrievalRecencyWeight > 0 || Boolean(contextGroupExpansion);
       const resultLimit = hasSecondStage ? Math.max(limit, rerankCandidateLimit) : limit;

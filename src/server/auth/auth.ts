@@ -1,14 +1,16 @@
-// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file and ./config run
-// in the Edge runtime — use only Web APIs (atob, fetch, jose), never Node-only
-// ones (Buffer, node:*, fs). A Node API pulled in here poisons the middleware
-// bundle: it passes typecheck and breaks only at build/deploy.
+// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file, @/server/config,
+// and @/server/errors run in the Edge runtime — use only Web APIs (atob, fetch,
+// jose), never Node-only ones (Buffer, node:*, fs). A Node API pulled in here
+// poisons the middleware bundle: it passes typecheck and breaks only at
+// build/deploy. architecture:check refuses a path from middleware to the engine.
 import { parse as parseCookies } from "hono/utils/cookie";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { loadConfig } from "@/server/config";
+import { DomainError, HTTP_STATUS } from "@/server/errors";
 
 export interface AuthResult {
   ok: boolean;
-  status?: number;
+  status?: 401 | 403;
   wwwAuthenticate?: boolean;
   // Human-readable reason for a denial, so the client error names the real cause
   // (which auth mode / which env is missing) instead of a generic guess.
@@ -206,14 +208,28 @@ export function isCrossSiteRequest(request: Request): boolean {
   return !originHost || !requestHosts(request).has(originHost);
 }
 
-function denial(status: number, detail: string | undefined, wwwAuthenticate = false): Response {
+export class RequestAuthenticationError extends DomainError {
+  override name = "RequestAuthenticationError";
+  readonly code = "authentication_required";
+}
+
+export class WorkspaceAccessError extends DomainError {
+  override name = "WorkspaceAccessError";
+  readonly code = "access_denied";
+}
+
+/** A refused admission, answered with the error table's status like any public failure. */
+function denial(status: 401 | 403, detail: string | undefined, wwwAuthenticate = false): Response {
+  // Built here rather than by errorResponse, which would pull the engine into the
+  // Edge middleware bundle.
+  const error =
+    status === 401
+      ? new RequestAuthenticationError(detail ?? "auth required")
+      : new WorkspaceAccessError(detail ?? "forbidden");
   return Response.json(
+    { code: error.code, error: error.message },
     {
-      code: status === 401 ? "authentication_required" : "access_denied",
-      error: detail ?? (status === 401 ? "auth required" : "forbidden"),
-    },
-    {
-      status,
+      status: HTTP_STATUS[error.code],
       headers: {
         "cache-control": "private, no-store",
         ...(wwwAuthenticate ? { "www-authenticate": "Basic" } : {}),

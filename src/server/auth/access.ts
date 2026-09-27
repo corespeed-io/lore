@@ -2,6 +2,7 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import { isPostgresAccessDenied } from "@corespeed/lore-core";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { installActorContext, installUserContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
 
 export type AgentStatus = "active" | "disabled";
 export type AgentGrantPermission = "read" | "write";
@@ -10,8 +11,18 @@ export type AgentDeletionResult = "deleted" | "must_disable" | "not_found";
 export type MembershipRole = "owner" | "admin" | "member";
 export type MembershipStatus = "active" | "suspended";
 
-export class AccessDeniedError extends Error {
+export class AccessDeniedError extends DomainError {
   override name = "AccessDeniedError";
+  readonly code = "access_denied";
+}
+
+/** An Agent is deleted only once it is disabled. */
+export class AgentNotDisabledError extends DomainError {
+  override name = "AgentNotDisabledError";
+  readonly code = "agent_not_disabled";
+  constructor() {
+    super("Disable Agent before deleting it");
+  }
 }
 
 export interface Agent {

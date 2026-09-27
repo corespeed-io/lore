@@ -12,6 +12,10 @@ one Workspace-scoped request, with Code pinned to an explicit repository key and
 full commit OID. V2 keeps citation-local freshness separate from bounded contextual
 impact over exact-revision direct dependencies.
 
+`LORE_CONTRACT` publishes the vocabularies, bounds, and patterns the API enforces, as
+generated from the same OpenAPI document; the SDK checks input against it before a
+request, and so should any caller that validates early.
+
 Install with `bun add @corespeed/lore-sdk`. The package exports standard ESM and
 TypeScript declarations; applications can use it in any runtime with the required
 Web APIs, including browsers and Bun. Repository builds and packaging use Bun.

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import openapiTS, { astToString } from "openapi-typescript";
 import { loreOpenApiDocument } from "../../src/server/openapi/document";
+import { clientContract } from "./contract";
 
 const repositoryUrl = new URL("../../", import.meta.url);
 const openApiOutputUrl = new URL("packages/typescript-sdk/src/generated/openapi.ts", repositoryUrl);
@@ -93,7 +94,7 @@ async function generatedArtifacts(): Promise<ReadonlyMap<URL, string>> {
     ],
     [
       runtimeOutputUrl,
-      `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n\nexport const MEMORY_CONTENT_LIMITS = ${JSON.stringify(memoryContentLimits(document), null, 2)} as const;\n`,
+      `${generatedHeader("Lore's canonical OpenAPI document")}export const LORE_ERROR_CODES = ${JSON.stringify(errorCodes, null, 2)} as const;\n\nexport const MEMORY_CONTENT_LIMITS = ${JSON.stringify(memoryContentLimits(document), null, 2)} as const;\n\n/** Published vocabularies, bounds, and patterns; clients never restate them. */\nexport const LORE_CONTRACT = ${JSON.stringify(clientContract(document), null, 2)} as const;\n`,
     ],
     [
       cliVersionOutputUrl,

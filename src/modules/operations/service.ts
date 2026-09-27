@@ -1,5 +1,6 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/telemetry";
+import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 export const LORE_API_VERSION = "v1";
 export const LORE_SCHEMA_REVISION = 5;
@@ -70,11 +71,7 @@ export interface DeploymentCapabilities {
   apiVersion: "v1";
   schemaRevision: number;
   deploymentId: string;
-  memoryChunking: {
-    revision: string;
-    maximumCharacters: number;
-    overlapCharacters: number;
-  };
+  memoryChunking: typeof MEMORY_CHUNKING_CAPABILITY;
   features: {
     idempotency: boolean;
     optimisticConcurrency: boolean;
@@ -88,27 +85,7 @@ export interface DeploymentCapabilities {
     codeDependencies: boolean;
     codeEvidence: boolean;
   };
-  limits: {
-    memoryContentRecommendedCharacters: number;
-    memoryContentMaximumCharacters: number;
-    memoryMaximumChunks: number;
-    workspaceArchiveMemories: number;
-    workspaceArchiveLinks: number;
-    memoryProposalEvidence: number;
-    memoryProposalList: number;
-    memoryProposalPending: number;
-    memoryProposalRetentionSeconds: number;
-    episodeObservations: number;
-    episodeContentCharacters: number;
-    episodeMetadataCharacters: number;
-    observationContentCharacters: number;
-    observationBatchRead: number;
-    codeIndexFiles: number;
-    codeIndexSourceBytes: number;
-    codeIndexArtifacts: number;
-    codeDependencyResults: number;
-    codeSearchResults: number;
-  };
+  limits: typeof DEPLOYMENT_LIMITS;
   activeEmbeddingGeneration: {
     provider: string;
     model: string;
@@ -156,7 +133,14 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           );
           const capabilities = result.rows[0]?.capabilities;
           if (!capabilities) throw new Error("Portable Core capabilities are unavailable");
-          return capabilities;
+          // The database reports deployment state; limits come from the constants
+          // that enforce them (tests/server/schema-drift.test.ts keeps the frozen
+          // SQL copy equal).
+          return {
+            ...capabilities,
+            memoryChunking: MEMORY_CHUNKING_CAPABILITY,
+            limits: DEPLOYMENT_LIMITS,
+          };
         }),
       );
     },

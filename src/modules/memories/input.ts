@@ -1,6 +1,6 @@
-import type { MemoryScope } from "@corespeed/lore-core";
 import { BadRequestError, parseMemoryInput } from "@/server/api/input";
-import { CreateMemoryInputSchema, MemoryMetadataSchema, MemoryScopeSchema } from "./schemas";
+import { metadata } from "@/server/api/shared-schemas";
+import { CreateMemoryInputSchema } from "./schemas";
 
 export function memoryEtag(version: number): string {
   return `"memory-v${version}"`;
@@ -10,17 +10,14 @@ export function requiredMemoryContent(value: unknown): string {
   return parseMemoryInput(CreateMemoryInputSchema.shape.content, value);
 }
 
-export function memoryScope(value: unknown): MemoryScope | undefined {
-  return parseMemoryInput(MemoryScopeSchema.optional(), value);
-}
-
-export function metadata(value: unknown): Record<string, unknown> | undefined {
-  return parseMemoryInput(MemoryMetadataSchema.optional(), value);
-}
+/** The `metadata` list/search query parameter, as raw JSON text. */
+export const METADATA_FILTER_MAXIMUM_LENGTH = 10_000;
 
 export function metadataFilter(value: string | null): Record<string, unknown> | undefined {
   if (value === null || value.trim() === "") return undefined;
-  if (value.length > 10_000) throw new BadRequestError("metadata exceeds 10000 characters");
+  if (value.length > METADATA_FILTER_MAXIMUM_LENGTH) {
+    throw new BadRequestError(`metadata exceeds ${METADATA_FILTER_MAXIMUM_LENGTH} characters`);
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);

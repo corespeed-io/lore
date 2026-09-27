@@ -341,6 +341,13 @@ temporal variant when `LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT` is set; external
 benchmarks record `LORE_RETRIEVAL_RECENCY_WEIGHT` and the shared second-stage
 candidate budget.
 
+Every retrieval benchmark starts from the deployment's own knob values
+(`LORE_EVIDENCE_*`, `LORE_RETRIEVAL_*`, `LORE_RERANK_*`, `LORE_QUERY_PLANNER_MAX_QUERIES`,
+`LORE_ENTITY_ALIAS_RECALL`), read through the same table the server uses, and
+refuses to start on an invalid one, so a default benchmark run measures the
+deployment configuration. A `LORE_BENCHMARK_*` variable overrides one knob for an
+ablation and must stay within that knob's deployment bounds.
+
 For multi-hop, comparison, counting, and temporal questions, Lore can optionally
 ask a deployment-level chat model for up to four additional evidence queries before
 first-stage retrieval. The planner receives only the caller's question. Lore always

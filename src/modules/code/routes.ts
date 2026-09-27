@@ -1,14 +1,21 @@
 import { Hono } from "hono";
-import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
 import {
-  createCodeIndexReadModule,
+  CODE_DEPENDENCY_DIRECTIONS,
+  MAXIMUM_CODE_DEPENDENCY_RESULTS,
   MAXIMUM_CODE_INDEX_JOB_LIST,
-} from "@/modules/code/indexing/read";
+  MAXIMUM_CODE_SEARCH_RESULTS,
+} from "@/modules/code/indexing/protocol";
+import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
+import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
+import {
+  CODE_QUERY_MAXIMUM_LENGTH,
+  REPOSITORY_KEY_MAXIMUM_LENGTH,
+} from "@/modules/code/indexing/validation";
 import type { ApiEnv } from "@/server/api/dependencies";
 import { BadRequestError, jsonObject } from "@/server/api/input";
 import { observeOperation } from "@/server/telemetry/telemetry";
-import type { CodeEvidenceRelationship } from "./evidence";
 import { createCodeEvidenceModule } from "./evidence";
+import type { CodeEvidenceRelationship } from "./evidence-contract";
 import type { CodeDependencyDirection } from "./graph";
 import { createCodeDependencyGraphModule } from "./graph";
 
@@ -20,7 +27,7 @@ function requiredQuery(url: URL, name: string, maximumLength: number): string {
   return value;
 }
 
-function optionalLimit(url: URL, maximum = 100): number | undefined {
+function optionalLimit(url: URL, maximum: number): number | undefined {
   const value = url.searchParams.get("limit");
   if (value === null) return undefined;
   const parsed = Number(value);
@@ -32,10 +39,11 @@ function optionalLimit(url: URL, maximum = 100): number | undefined {
 
 function dependencyDirection(url: URL): CodeDependencyDirection {
   const value = requiredQuery(url, "direction", 16);
-  if (value !== "callers" && value !== "callees") {
-    throw new BadRequestError("direction must be callers or callees");
+  const direction = CODE_DEPENDENCY_DIRECTIONS.find((candidate) => candidate === value);
+  if (!direction) {
+    throw new BadRequestError(`direction must be ${CODE_DEPENDENCY_DIRECTIONS.join(" or ")}`);
   }
-  return value;
+  return direction;
 }
 
 function requiredBodyString(
@@ -59,10 +67,10 @@ export const code = new Hono<ApiEnv>()
     const pathPrefix = url.searchParams.get("path_prefix")?.trim() || undefined;
     const results = await observeOperation("code-index.search", () =>
       code.search(actor, {
-        repositoryKey: requiredQuery(url, "repository_key", 512),
+        repositoryKey: requiredQuery(url, "repository_key", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredQuery(url, "commit_oid", 64),
-        query: requiredQuery(url, "q", 2_000),
-        limit: optionalLimit(url),
+        query: requiredQuery(url, "q", CODE_QUERY_MAXIMUM_LENGTH),
+        limit: optionalLimit(url, MAXIMUM_CODE_SEARCH_RESULTS),
         pathPrefix,
       }),
     );
@@ -77,12 +85,12 @@ export const code = new Hono<ApiEnv>()
     const path = url.searchParams.get("path") ?? undefined;
     const result = await observeOperation("code-index.dependencies", () =>
       graph.query(actor, {
-        repositoryKey: requiredQuery(url, "repository_key", 512),
+        repositoryKey: requiredQuery(url, "repository_key", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredQuery(url, "commit_oid", 64),
         direction: dependencyDirection(url),
         symbol,
         path,
-        limit: optionalLimit(url, 200),
+        limit: optionalLimit(url, MAXIMUM_CODE_DEPENDENCY_RESULTS),
       }),
     );
     return c.json(result);
@@ -108,7 +116,7 @@ export const code = new Hono<ApiEnv>()
     }
     const job = await observeOperation("code-index.enqueue", () =>
       queue.enqueue(actor, {
-        repositoryKey: requiredBodyString(body, "repositoryKey", 512),
+        repositoryKey: requiredBodyString(body, "repositoryKey", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredBodyString(body, "commitOid", 64),
         ...(typeof sourceRef === "string" ? { sourceRef } : {}),
       }),
@@ -161,7 +169,7 @@ export const codeEvidence = new Hono<ApiEnv>().post("/:id/revalidate", async (c)
   const result = await observeOperation("code-evidence.revalidate", () =>
     evidence.revalidate(actor, {
       evidenceId,
-      repositoryKey: requiredBodyString(body, "repositoryKey", 512),
+      repositoryKey: requiredBodyString(body, "repositoryKey", REPOSITORY_KEY_MAXIMUM_LENGTH),
       commitOid: requiredBodyString(body, "commitOid", 64),
     }),
   );

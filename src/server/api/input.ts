@@ -1,16 +1,18 @@
+import { hasLoneSurrogate } from "@corespeed/lore-core";
 import type { z } from "zod/v4";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { mutationRequestHash } from "@/server/api/idempotency";
 import { AccessDeniedError } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
-import { IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
+import { DomainError } from "@/server/errors";
+import { IDEMPOTENCY_KEY_MAXIMUM_LENGTH, IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
 
 // One source for the check and the published OpenAPI header pattern.
 const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 
-export class BadRequestError extends Error {
-  readonly status = 400;
+export class BadRequestError extends DomainError {
+  readonly code = "invalid_request";
 }
 
 interface Cursor {
@@ -22,9 +24,12 @@ export function encodeCursor(cursor: Cursor): string {
   return btoa(JSON.stringify(cursor)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 }
 
+/** Longest opaque pagination cursor any list accepts. */
+export const CURSOR_MAXIMUM_LENGTH = 512;
+
 export function decodeCursor(value: string | null): Cursor | undefined {
   if (value === null || value.trim() === "") return undefined;
-  if (value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) {
+  if (value.length > CURSOR_MAXIMUM_LENGTH || !/^[A-Za-z0-9_-]+$/.test(value)) {
     throw new BadRequestError("cursor is invalid");
   }
   try {
@@ -51,7 +56,9 @@ export async function idempotencyRequest(
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key) return undefined;
   if (!IDEMPOTENCY_KEY.test(key)) {
-    throw new BadRequestError("Idempotency-Key must contain 1 to 128 visible ASCII characters");
+    throw new BadRequestError(
+      `Idempotency-Key must contain 1 to ${IDEMPOTENCY_KEY_MAXIMUM_LENGTH} visible ASCII characters`,
+    );
   }
   return {
     key,
@@ -60,8 +67,8 @@ export async function idempotencyRequest(
   };
 }
 
-export class PayloadTooLargeError extends Error {
-  readonly status = 413;
+export class PayloadTooLargeError extends DomainError {
+  readonly code = "payload_too_large";
 }
 
 /**
@@ -163,36 +170,6 @@ export function parseMemoryInput<Schema extends z.ZodType>(
   }
 }
 
-export function requiredRawString(value: unknown, name: string, maximumLength: number): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new BadRequestError(`${name} is required`);
-  }
-  if (value.includes("\0")) {
-    throw new BadRequestError(`${name} contains an invalid null character`);
-  }
-  if (hasLoneSurrogate(value)) {
-    throw new BadRequestError(`${name} contains invalid Unicode`);
-  }
-  if (value.length > maximumLength) {
-    throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
-  }
-  return value;
-}
-
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const current = value.charCodeAt(index);
-    if (current >= 0xd800 && current <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) return true;
-      index += 1;
-    } else if (current >= 0xdc00 && current <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function positiveInteger(value: unknown, name: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
@@ -253,6 +230,6 @@ export function requireHumanActor(actor: ActorContext): ActorContext {
   return actor;
 }
 
-export class PreconditionRequiredError extends Error {
-  readonly status = 428;
+export class PreconditionRequiredError extends DomainError {
+  readonly code = "precondition_required";
 }

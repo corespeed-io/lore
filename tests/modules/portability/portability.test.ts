@@ -1,8 +1,9 @@
 import type { EmbeddingTask, PostgresDatabase } from "@corespeed/lore-core";
 import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
+import { workspaceArchiveChecksum } from "@/modules/portability/checksum";
 import {
   createPortabilityModule,
   exportedTimestamp,
@@ -10,9 +11,15 @@ import {
   type WorkspaceArchive,
   WorkspaceExportLimitError,
 } from "@/modules/portability/service";
-import { mutationRequestHash } from "@/server/api/idempotency";
+import { createApi } from "@/server/api/app";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { createMemoryTestContext, type MemoryTestContext } from "../../support/memory-context";
+
+afterEach(() => {
+  for (const key of ["AUTH_MODE", "ALLOW_INSECURE", "LORE_LOCAL_SUBJECT"]) {
+    delete process.env[key];
+  }
+});
 
 function ownerMapTo(archive: WorkspaceArchive, actor: ActorContext): Record<string, string> {
   return Object.fromEntries(
@@ -149,7 +156,6 @@ test("export enforces its archive byte budget at the exact boundary", async () =
   expect(archiveBytes(exact)).toBeLessThanOrEqual(memoryBytes);
   await expect(exportWith(memoryBytes - 1)).rejects.toMatchObject({
     code: "workspace_export_limit_exceeded",
-    status: 409,
   } satisfies Partial<WorkspaceExportLimitError>);
 
   await graph.connect(testContext.carol, {
@@ -330,7 +336,7 @@ test("import enqueues embedding jobs in its transaction and notifies them after 
 
 async function resigned(archive: WorkspaceArchive): Promise<WorkspaceArchive> {
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await mutationRequestHash({
+  archive.manifest.checksum = await workspaceArchiveChecksum({
     manifest,
     memories: archive.memories,
     links: archive.links,
@@ -421,7 +427,44 @@ test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
     (archive) => {
       archive.links[0].kind = "cites\uD83D";
     },
-    /links\[0\]\.kind is invalid/,
+    /links\[0\]\.kind must be non-blank text of at most 64 characters/,
+  ],
+  // The engine's Link and scope rules, reported as archive failures (invalid_archive),
+  // never as the engine's own invalid_request.
+  [
+    "a Link from a Memory to itself",
+    (archive) => {
+      archive.links[0].targetMemoryId = archive.links[0].sourceMemoryId;
+    },
+    /links\[0\] must connect two different Memories/,
+  ],
+  [
+    "a Link without a weight",
+    (archive) => {
+      delete (archive.links[0] as Partial<WorkspaceArchive["links"][number]>).weight;
+    },
+    /links\[0\] must include kind and weight/,
+  ],
+  [
+    "a Link weight above 1",
+    (archive) => {
+      archive.links[0].weight = 1.5;
+    },
+    /links\[0\]\.weight must be a number from 0 through 1/,
+  ],
+  [
+    "a Link weight PostgreSQL's real would round to zero",
+    (archive) => {
+      archive.links[0].weight = 1e-50;
+    },
+    /links\[0\]\.weight must be 0 or a value PostgreSQL real does not round to zero/,
+  ],
+  [
+    "an unknown Memory scope",
+    (archive) => {
+      (archive.memories[1] as { scope: string }).scope = "team";
+    },
+    /memories\[1\]\.scope must be shared or private/,
   ],
   [
     "a top-level __proto__ metadata key",
@@ -606,4 +649,57 @@ test("a timestamp a driver returns as PostgreSQL text exports in the form import
   expect(() => exportedTimestamp("2026-02-30 00:00:00+00")).toThrow(
     "Database returned a timestamp outside the archive format",
   );
+});
+
+test("HTTP import answers an engine Link rule as 400 invalid_archive, dry run or not", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "portability-http-rules";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Import Rules" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const { userId } = (await (
+    await app.request(new Request("http://lore.local/api/v1/actor", { headers }))
+  ).json()) as { userId: string };
+  const archive = await linkedArchive(testContext);
+  // validateMemoryLink owns this rule; the archive must not surface it as the
+  // engine's own invalid_request.
+  archive.links[0].targetMemoryId = archive.links[0].sourceMemoryId;
+  const signed = await resigned(archive);
+  const ownerMap = Object.fromEntries(
+    [...new Set(signed.memories.map((memory) => memory.ownerUserId))].map((owner) => [
+      owner,
+      userId,
+    ]),
+  );
+
+  for (const dryRun of [true, false]) {
+    const response = await app.request(
+      new Request("http://lore.local/api/v1/workspaces/import", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ archive: signed, ownerMap, dryRun }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      code: "invalid_archive",
+      error: "links[0] must connect two different Memories",
+    });
+  }
+  const listed = await app.request(new Request("http://lore.local/api/memories", { headers }));
+  await expect(listed.json()).resolves.toEqual([]);
+  await testContext.close();
 });

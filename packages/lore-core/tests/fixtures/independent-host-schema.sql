@@ -122,3 +122,16 @@ CREATE TABLE memory_chunk_embeddings (
   embedding vector(8) NOT NULL,
   PRIMARY KEY (generation_id, chunk_id)
 );
+
+CREATE TABLE memory_links (
+  id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL,
+  source_memory_id uuid NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  target_memory_id uuid NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  kind text NOT NULL,
+  weight real NOT NULL DEFAULT 1,
+  metadata jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, source_memory_id, target_memory_id, kind)
+);

@@ -102,7 +102,8 @@ export interface SearchCodeIndexInput {
   pathPrefix?: string;
 }
 
-export type CodeSearchChannel = "lexical" | "literal" | "path" | "symbol";
+export const CODE_SEARCH_CHANNELS = ["symbol", "literal", "lexical", "path"] as const;
+export type CodeSearchChannel = (typeof CODE_SEARCH_CHANNELS)[number];
 
 export interface CodeRevisionSelector {
   repositoryKey: string;

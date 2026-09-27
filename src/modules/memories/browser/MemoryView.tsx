@@ -14,11 +14,10 @@ import {
 } from "@/modules/code/browser/evidence-presentation";
 import { renderMarkdown } from "@/modules/memories/browser/markdown";
 import {
-  memoryGraphContext,
+  type MemoryGraphContext,
   memoryTitle,
   memoryType,
 } from "@/modules/memories/browser/presentation";
-import type { ReadState } from "@/shared/browser/read-state";
 
 interface MemoryLink {
   id: string;
@@ -30,11 +29,8 @@ interface MemoryViewProps {
   memory: Memory;
   wikilinkTargets: Readonly<Record<string, string>>;
   related: MemoryLink[];
-  /** The Workspace Graph read that resolves wikilinks, Related, and Connections. */
-  graphState: ReadState;
-  graphCapped: boolean;
-  /** Whether this Memory is a node of the loaded Graph. */
-  inGraph: boolean;
+  /** What the Workspace Graph read can vouch for about wikilinks, Related, and Connections. */
+  graphContext: MemoryGraphContext;
   backLabel: string;
   saving: boolean;
   error: string | null;
@@ -183,9 +179,7 @@ export function MemoryView({
   memory,
   wikilinkTargets,
   related,
-  graphState,
-  graphCapped,
-  inGraph,
+  graphContext,
   backLabel,
   saving,
   error,
@@ -207,12 +201,6 @@ export function MemoryView({
   } = memory;
   const title = memoryTitle(memory);
   const type = memoryType(memory);
-  const graphContext = memoryGraphContext({
-    state: graphState,
-    capped: graphCapped,
-    inGraph,
-    relatedCount: related.length,
-  });
   const { unresolvedWikilinkTitle } = graphContext;
   const bodyHtml = useMemo(
     () =>

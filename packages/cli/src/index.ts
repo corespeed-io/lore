@@ -1,10 +1,12 @@
 import { parseArgs } from "node:util";
 import {
   type CreateMemoryProposalInput,
+  LORE_CONTRACT,
   LoreApiError,
   LoreClient,
   type LoreClientOptions,
   loreConfigurationFromEnvironment,
+  MEMORY_CONTENT_LIMITS,
   type MemoryScope,
   type RecordEpisodeInput,
   type UpdateMemoryInput,
@@ -73,7 +75,21 @@ class CliUsageError extends Error {
   override name = "CliUsageError";
 }
 
-const MAX_MEMORY_CONTENT_CHARACTERS = 32_000;
+const MAX_MEMORY_CONTENT_CHARACTERS = MEMORY_CONTENT_LIMITS.maximumCharacters;
+const MAX_PROPOSAL_EVIDENCE = LORE_CONTRACT.limits.memoryProposalEvidence;
+const CODE_EVIDENCE_RELATIONSHIPS = LORE_CONTRACT.vocabularies.codeEvidenceRelationships;
+type CodeEvidenceRelationship = (typeof CODE_EVIDENCE_RELATIONSHIPS)[number];
+const EPISODE_KINDS = LORE_CONTRACT.vocabularies.episodeKinds;
+type EpisodeKind = (typeof EPISODE_KINDS)[number];
+
+function isEpisodeKind(value: string): value is EpisodeKind {
+  return (EPISODE_KINDS as readonly string[]).includes(value);
+}
+
+/** "a, b, or c" for usage messages. */
+function listOf(values: readonly string[]): string {
+  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
+}
 
 function defaultIo(): LoreCliIo {
   return {
@@ -157,7 +173,9 @@ function optionEvidence(
   name = "--evidence",
 ): string[] | undefined {
   if (values === undefined) return undefined;
-  if (values.length > 50) throw new CliUsageError(`${name} may be repeated at most 50 times`);
+  if (values.length > MAX_PROPOSAL_EVIDENCE) {
+    throw new CliUsageError(`${name} may be repeated at most ${MAX_PROPOSAL_EVIDENCE} times`);
+  }
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const normalized = values.map((value) => value.trim().toLowerCase());
   if (normalized.some((value) => !uuidPattern.test(value))) {
@@ -169,15 +187,17 @@ function optionEvidence(
 function optionCodeEvidence(values: readonly string[] | undefined):
   | Array<{
       artifactId: string;
-      relationship: "contradicts" | "implements" | "rationale" | "supports";
+      relationship: CodeEvidenceRelationship;
     }>
   | undefined {
   if (values === undefined) return undefined;
-  if (values.length > 50) {
-    throw new CliUsageError("--code-evidence may be repeated at most 50 times");
+  if (values.length > MAX_PROPOSAL_EVIDENCE) {
+    throw new CliUsageError(
+      `--code-evidence may be repeated at most ${MAX_PROPOSAL_EVIDENCE} times`,
+    );
   }
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const relationships = new Set(["contradicts", "implements", "rationale", "supports"]);
+  const relationships = new Set<string>(CODE_EVIDENCE_RELATIONSHIPS);
   const normalized = values.map((value) => {
     const [rawArtifactId, relationship, extra] = value.trim().toLowerCase().split(":");
     if (!rawArtifactId || !relationship || extra || !uuidPattern.test(rawArtifactId)) {
@@ -185,12 +205,12 @@ function optionCodeEvidence(values: readonly string[] | undefined):
     }
     if (!relationships.has(relationship)) {
       throw new CliUsageError(
-        "--code-evidence relationship must be supports, contradicts, implements, or rationale",
+        `--code-evidence relationship must be ${listOf(CODE_EVIDENCE_RELATIONSHIPS)}`,
       );
     }
     return {
       artifactId: rawArtifactId,
-      relationship: relationship as "contradicts" | "implements" | "rationale" | "supports",
+      relationship: relationship as CodeEvidenceRelationship,
     };
   });
   return [
@@ -222,8 +242,11 @@ function optionInteger(value: string | undefined, name: string): number | undefi
 
 function optionScope(value: string | undefined): MemoryScope | undefined {
   if (value === undefined) return undefined;
-  if (value === "shared" || value === "private") return value;
-  throw new CliUsageError("--scope must be shared or private");
+  const scope = LORE_CONTRACT.vocabularies.memoryScopes.find((candidate) => candidate === value);
+  if (scope) return scope;
+  throw new CliUsageError(
+    `--scope must be ${LORE_CONTRACT.vocabularies.memoryScopes.join(" or ")}`,
+  );
 }
 
 function optionMetadata(value: string | undefined): Record<string, unknown> | undefined {
@@ -348,9 +371,13 @@ export async function runLoreCli(
         "code dependencies callers|callees --repository KEY --commit OID (--symbol SYMBOL|--path PATH)",
       );
       allowedOptions(parsed.values, ["commit", "limit", "path", "repository", "symbol"]);
-      const direction = parsed.positionals[2];
-      if (direction !== "callers" && direction !== "callees") {
-        throw new CliUsageError("Code Dependency direction must be callers or callees");
+      const direction = LORE_CONTRACT.vocabularies.codeDependencyDirections.find(
+        (candidate) => candidate === parsed.positionals[2],
+      );
+      if (!direction) {
+        throw new CliUsageError(
+          `Code Dependency direction must be ${LORE_CONTRACT.vocabularies.codeDependencyDirections.join(" or ")}`,
+        );
       }
       const repositoryKey = parsed.values.repository?.trim();
       const commitOid = parsed.values.commit?.trim();
@@ -378,14 +405,8 @@ export async function runLoreCli(
       exactPositionals(parsed.positionals, 2, "episode list");
       allowedOptions(parsed.values, ["cursor", "kind", "limit", "scope"]);
       const kind = parsed.values.kind;
-      if (
-        kind !== undefined &&
-        kind !== "conversation" &&
-        kind !== "workflow" &&
-        kind !== "document" &&
-        kind !== "event"
-      ) {
-        throw new CliUsageError("--kind must be conversation, workflow, document, or event");
+      if (kind !== undefined && !isEpisodeKind(kind)) {
+        throw new CliUsageError(`--kind must be ${listOf(EPISODE_KINDS)}`);
       }
       output(
         io,
@@ -458,7 +479,7 @@ export async function runLoreCli(
         io,
         await workspace.searchMemories({
           query: fromStdin
-            ? await stdinValue(io, 10_000, "query")
+            ? await stdinValue(io, LORE_CONTRACT.limits.memorySearchQueryLength, "query")
             : requiredPosition(parsed.positionals, 2, "query"),
           limit: optionInteger(parsed.values.limit, "--limit"),
           scope: optionScope(parsed.values.scope),
@@ -579,9 +600,11 @@ export async function runLoreCli(
         (proposal.evidenceMemoryIds?.length ?? 0) +
           (proposal.evidenceObservationIds?.length ?? 0) +
           (proposal.codeEvidence?.length ?? 0) >
-        50
+        MAX_PROPOSAL_EVIDENCE
       ) {
-        throw new CliUsageError("Proposal evidence may contain at most 50 total items");
+        throw new CliUsageError(
+          `Proposal evidence may contain at most ${MAX_PROPOSAL_EVIDENCE} total items`,
+        );
       }
       output(
         io,

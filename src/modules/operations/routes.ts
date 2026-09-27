@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { ApiEnv } from "@/server/api/dependencies";
-import { loreOpenApiDocument } from "@/server/openapi/document";
 import { createOperationsModule, livenessReport } from "./service";
 
 export const capabilities = new Hono<ApiEnv>().get("/", async (c) => {
@@ -29,8 +28,4 @@ export const operations = new Hono<ApiEnv>()
     const report = await operations.readiness();
     c.header("Cache-Control", "no-store");
     return c.json(report, report.status === "unready" ? 503 : 200);
-  })
-  .get("/openapi.json", (c) => {
-    c.header("Cache-Control", "public, max-age=3600");
-    return c.json(loreOpenApiDocument());
   });

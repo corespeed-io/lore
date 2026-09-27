@@ -8,7 +8,7 @@
 import type {
   CodeEvidenceRelationship,
   CodeEvidenceValidationState,
-} from "@/modules/code/evidence";
+} from "@/modules/code/evidence-contract";
 import {
   CODE_BEHAVIOR_PATTERN,
   CURRENT_STATE_PATTERN,
@@ -45,17 +45,37 @@ export const CONTEXTUAL_EDGE_LIMIT = 25;
 export const MAXIMUM_CONTEXTUAL_IMPACT_CHANGES =
   CONTEXTUAL_ANCHOR_LIMIT * (2 + 2 * CONTEXTUAL_EDGE_LIMIT) + 1;
 
-export type JointEvidenceRoute = "abstain" | "both" | "code-only" | "memory-only";
+/** The route a caller may request; `auto` lets the policy choose. */
+export const CONTEXT_RETRIEVAL_ROUTES = ["auto", "both", "code-only", "memory-only"] as const;
+export type ContextRetrievalRoute = (typeof CONTEXT_RETRIEVAL_ROUTES)[number];
 
-export type JointEvidenceIntent =
-  | "blast-radius"
-  | "change"
-  | "current-code"
-  | "memory-recall"
-  | "rationale"
-  | "unknown";
+export const CONTEXT_RETRIEVAL_LIMITS = {
+  defaultMemoryLimit: 5,
+  maximumMemoryLimit: 10,
+  defaultCodeLimit: 10,
+  maximumCodeLimit: 20,
+} as const;
 
-export type ContextualImpactState = "affected" | "possibly_affected" | "unaffected" | "unknown";
+export const JOINT_EVIDENCE_ROUTES = ["abstain", "both", "code-only", "memory-only"] as const;
+export type JointEvidenceRoute = (typeof JOINT_EVIDENCE_ROUTES)[number];
+
+export const JOINT_EVIDENCE_INTENTS = [
+  "blast-radius",
+  "change",
+  "current-code",
+  "memory-recall",
+  "rationale",
+  "unknown",
+] as const;
+export type JointEvidenceIntent = (typeof JOINT_EVIDENCE_INTENTS)[number];
+
+export const CONTEXTUAL_IMPACT_STATES = [
+  "affected",
+  "possibly_affected",
+  "unaffected",
+  "unknown",
+] as const;
+export type ContextualImpactState = (typeof CONTEXTUAL_IMPACT_STATES)[number];
 
 export interface JointEvidenceQuery {
   query: string;

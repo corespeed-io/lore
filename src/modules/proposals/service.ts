@@ -13,13 +13,31 @@ import {
   prepareMemoryContent,
   serializedTimestamp,
 } from "@corespeed/lore-core";
-import type { CodeEvidenceRelationship } from "@/modules/code/evidence";
+import {
+  CITABLE_ARTIFACT_SOURCE,
+  CITED_ANCHOR_COLUMNS,
+  recordCodeEvidenceSql,
+} from "@/modules/code/evidence";
+import {
+  CODE_EVIDENCE_RELATIONSHIP_MESSAGE,
+  type CodeEvidenceRelationship,
+  isCodeEvidenceRelationship,
+} from "@/modules/code/evidence-contract";
 import type { Memory } from "@/modules/memories/service";
 import { createMemoryMutationPrimitives, memoryFromRow } from "@/modules/memories/service";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { beginMutation, completeMutation } from "@/server/api/idempotency";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import { DomainError } from "@/server/errors";
+import {
+  DEFAULT_MEMORY_PROPOSAL_LIST,
+  MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
+  MAXIMUM_MEMORY_PROPOSAL_LIST,
+  type MEMORY_PROPOSAL_KINDS,
+  MEMORY_PROPOSAL_RETENTION_DAYS,
+  type MEMORY_PROPOSAL_STATUSES,
+} from "./limits";
 
 /**
  * Memory Proposals: owner-private review state for suggested create/update
@@ -30,23 +48,36 @@ import { installActorContext } from "@/server/auth/actor-context";
  * memory engine.
  */
 
-export class MemoryProposalAccessDeniedError extends Error {
+export class MemoryProposalAccessDeniedError extends DomainError {
   override name = "MemoryProposalAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
-export class MemoryProposalReviewConflictError extends Error {
+export class MemoryProposalReviewConflictError extends DomainError {
   override name = "MemoryProposalReviewConflictError";
-  readonly status = 409;
+  readonly code = "proposal_review_conflict";
 }
 
-export class MemoryProposalCapacityError extends Error {
+export class MemoryProposalCapacityError extends DomainError {
   override name = "MemoryProposalCapacityError";
-  readonly status = 409;
+  readonly code = "proposal_capacity_exceeded";
 }
 
-export type MemoryProposalKind = "create" | "update";
-export type MemoryProposalStatus = "pending" | "accepted" | "rejected";
+/** A Proposal rule this module owns, naming the field that broke it. */
+export class MemoryProposalValidationError extends DomainError {
+  override name = "MemoryProposalValidationError";
+  readonly code = "invalid_request";
+
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export type MemoryProposalKind = (typeof MEMORY_PROPOSAL_KINDS)[number];
+export type MemoryProposalStatus = (typeof MEMORY_PROPOSAL_STATUSES)[number];
 
 export interface MemoryProposalCodeEvidence {
   ordinal: number;
@@ -307,16 +338,27 @@ export function createMemoryProposalsModule(
           ]),
         ).values(),
       ];
-      if (
-        codeEvidence.some(
-          (evidence) =>
-            !["supports", "contradicts", "implements", "rationale"].includes(evidence.relationship),
-        )
-      ) {
-        throw new TypeError("Proposal Code Evidence relationship is invalid");
+      // Indexes name the request's own entries, before de-duplication.
+      for (const [index, evidence] of (input.codeEvidence ?? []).entries()) {
+        if (!isCodeEvidenceRelationship(evidence.relationship)) {
+          throw new MemoryProposalValidationError(
+            `codeEvidence[${index}].relationship`,
+            `codeEvidence[${index}].${CODE_EVIDENCE_RELATIONSHIP_MESSAGE}`,
+          );
+        }
       }
-      if (evidenceMemoryIds.length + evidenceObservationIds.length + codeEvidence.length > 50) {
-        throw new TypeError("A Memory Proposal may cite at most 50 evidence records");
+      // Every requested entry counts, repeats included, as the published per-list
+      // bounds and the clients count them; storage keeps each record once.
+      if (
+        (input.evidenceMemoryIds?.length ?? 0) +
+          (input.evidenceObservationIds?.length ?? 0) +
+          (input.codeEvidence?.length ?? 0) >
+        MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
+      ) {
+        throw new MemoryProposalValidationError(
+          "evidence",
+          `A Memory Proposal may cite at most ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} evidence records`,
+        );
       }
       if (
         input.kind === "update" &&
@@ -324,7 +366,10 @@ export function createMemoryProposalsModule(
         input.scope === undefined &&
         input.metadata === undefined
       ) {
-        throw new TypeError("An update proposal must change content, scope, or metadata");
+        throw new MemoryProposalValidationError(
+          "proposal",
+          "An update proposal must change content, scope, or metadata",
+        );
       }
 
       try {
@@ -471,38 +516,9 @@ export function createMemoryProposalsModule(
           const storedCodeEvidence: MemoryProposalCodeEvidence[] = [];
           for (const [ordinal, requestedEvidence] of codeEvidence.entries()) {
             const visibleArtifact = await transaction.query<MemoryProposalCodeEvidenceRow>(
-              `SELECT $1::uuid AS proposal_id, $2::integer AS ordinal,
-                 artifact.repository_id, artifact.revision_id AS cited_revision_id,
-                 artifact.generation_id AS cited_generation_id,
-                 artifact.id AS cited_artifact_id, revision.commit_oid AS cited_commit_oid,
-                 $3::code_evidence_relationship AS relationship,
-                 artifact.path AS cited_path, artifact.symbol_key AS cited_symbol_key,
-                 artifact.declaration_key AS cited_declaration_key,
-                 artifact.declaration_chunk_ordinal AS cited_declaration_chunk_ordinal,
-                 CASE WHEN artifact.declaration_key IS NULL THEN NULL ELSE (
-                   SELECT encode(sha256(convert_to(string_agg(
-                     CASE WHEN sibling.id = artifact.id THEN '*' ELSE sibling.content_sha256 END,
-                     '' ORDER BY sibling.declaration_chunk_ordinal
-                   ), 'UTF8')), 'hex')
-                   FROM code_artifacts sibling
-                   WHERE sibling.workspace_id = artifact.workspace_id
-                     AND sibling.repository_id = artifact.repository_id
-                     AND sibling.revision_id = artifact.revision_id
-                     AND sibling.generation_id = artifact.generation_id
-                     AND sibling.declaration_key = artifact.declaration_key
-                 ) END AS cited_declaration_context_sha256,
-                 artifact.content_sha256 AS cited_content_sha256
-               FROM code_artifacts artifact
-               JOIN code_index_generations generation
-                 ON generation.workspace_id = artifact.workspace_id
-                AND generation.repository_id = artifact.repository_id
-                AND generation.revision_id = artifact.revision_id
-                AND generation.id = artifact.generation_id
-                AND generation.status = 'active'
-               JOIN code_revisions revision
-                 ON revision.workspace_id = artifact.workspace_id
-                AND revision.repository_id = artifact.repository_id
-                AND revision.id = artifact.revision_id
+              `SELECT $1::uuid AS proposal_id, $2::integer AS ordinal, ${CITED_ANCHOR_COLUMNS},
+                 $3::code_evidence_relationship AS relationship
+               FROM ${CITABLE_ARTIFACT_SOURCE}
                WHERE artifact.workspace_id = $4 AND artifact.id = $5`,
               [
                 id,
@@ -588,7 +604,10 @@ export function createMemoryProposalsModule(
       if (actor.agentId) {
         throw new MemoryProposalAccessDeniedError("Only a human User can review Memory Proposals");
       }
-      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      const limit = Math.max(
+        1,
+        Math.min(input.limit ?? DEFAULT_MEMORY_PROPOSAL_LIST, MAXIMUM_MEMORY_PROPOSAL_LIST),
+      );
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryProposalRow>(
@@ -686,7 +705,7 @@ export function createMemoryProposalsModule(
                SET status = 'rejected',
                    reviewed_by_user_id = $3,
                    reviewed_at = now(),
-                   expires_at = now() + interval '30 days'
+                   expires_at = now() + interval '${MEMORY_PROPOSAL_RETENTION_DAYS} days'
                WHERE id = $1 AND workspace_id = $2
                RETURNING *`,
               [id, actor.workspaceId, actor.userId],
@@ -751,34 +770,19 @@ export function createMemoryProposalsModule(
                  reviewed_by_user_id = $3,
                  accepted_memory_id = $4,
                  reviewed_at = now(),
-                 expires_at = now() + interval '30 days'
+                 expires_at = now() + interval '${MEMORY_PROPOSAL_RETENTION_DAYS} days'
              WHERE id = $1 AND workspace_id = $2
              RETURNING *`,
             [id, actor.workspaceId, actor.userId, applied.memory.id],
           );
           await transaction.query(
-            `INSERT INTO memory_code_evidence (
-               id, workspace_id, memory_id, repository_id,
-               cited_revision_id, cited_generation_id, cited_artifact_id,
-               cited_commit_oid, relationship, cited_path, cited_symbol_key,
-               cited_declaration_key, cited_declaration_chunk_ordinal,
-               cited_declaration_context_sha256, cited_content_sha256, validation_state,
-               validated_revision_id, validated_generation_id, validated_artifact_id,
-               validated_commit_oid, validated_path, created_by_user_id, created_by_agent_id
-             )
-             SELECT gen_random_uuid(), evidence.workspace_id, $3, evidence.repository_id,
-               evidence.cited_revision_id, evidence.cited_generation_id,
-               evidence.cited_artifact_id, evidence.cited_commit_oid,
-               evidence.relationship, evidence.cited_path, evidence.cited_symbol_key,
-               evidence.cited_declaration_key, evidence.cited_declaration_chunk_ordinal,
-               evidence.cited_declaration_context_sha256,
-               evidence.cited_content_sha256, 'current',
-               evidence.cited_revision_id, evidence.cited_generation_id,
-               evidence.cited_artifact_id, evidence.cited_commit_oid,
-               evidence.cited_path, $4, NULL
-             FROM memory_proposal_code_evidence evidence
-             WHERE evidence.workspace_id = $1 AND evidence.proposal_id = $2
-             ON CONFLICT (memory_id, cited_artifact_id, relationship) DO NOTHING`,
+            recordCodeEvidenceSql({
+              anchors: `memory_proposal_code_evidence anchor
+                WHERE anchor.workspace_id = $1 AND anchor.proposal_id = $2`,
+              memoryId: "$3",
+              createdByUserId: "$4",
+              createdByAgentId: "NULL",
+            }),
             [actor.workspaceId, id, applied.memory.id, actor.userId],
           );
           const [proposal] = await proposalsFromRows(transaction, accepted.rows);

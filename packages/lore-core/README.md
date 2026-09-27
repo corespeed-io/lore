@@ -46,10 +46,10 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 
 | Entry | Contents |
 | --- | --- |
-| `.` | Memory storage, retrieval, graph, maintenance, content/chunking, `MemoryStorageContext`, db seam, and model capability interfaces |
+| `.` | Memory storage, retrieval, graph, maintenance, content/chunking, the domain contract (`LoreValidationError`, vocabularies, limits, and input validators), `MemoryStorageContext`, db seam, and model capability interfaces |
 | `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback |
-| `./episodes` | Bounded Episode/Observation validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
-| `./testing` | Host-pluggable schema-contract test kit |
+| `./episodes` | Episode/Observation vocabularies (`EPISODE_KINDS`, `OBSERVATION_KINDS`), bounded admission validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
+| `./testing` | Host-pluggable schema-contract test kit, `CORE_SCHEMA_CONTRACT`, and `missingSchemaContract` |
 
 Lore OSS implements model capabilities under `src/server/providers`. Its domain
 modules map Core results to the unchanged Workspace/User/Agent wire fields.
@@ -58,6 +58,21 @@ and expired replay/event cleanup also belong to OSS. Core retains normalized
 Episode validation, evidence algorithms, and embedding lease/generation maintenance.
 See the [architecture guide](../../docs/architecture.md#memory-engine-and-host-policy)
 for host assembly and model transport policy.
+
+## Schema contract
+
+`src/schema-contract.ts` is the engine's whole storage dependency, grouped by
+capability: `memory` (CRUD and retrieval), `graph` (Memory Links), `maintenance`
+(embedding jobs and generations), and `episodes`. Each group names its tables with
+the columns the engine reads and inserts, generated columns, ON CONFLICT unique
+keys, and cascading foreign keys, plus types, `lore.*` function signatures, enum
+labels and compared values, and the transaction settings the engine writes.
+`tests/schema-contract.test.ts` fails when a table, function, setting, INSERT
+column list, or ON CONFLICT target in the engine's SQL differs from the contract
+(read-only column lists are kept by hand), and `missingSchemaContract` from
+`./testing` checks a host schema's catalog against the groups it provides. It
+counts a unique key only as a whole, non-partial unique index on plain columns:
+an expression or partial index cannot match an ON CONFLICT target.
 
 Maintenance leases fence ownership and allow reclamation; they do not cancel
 provider calls. `embeddingMaintenanceLeaseSeconds` estimates a reservation from
@@ -98,3 +113,28 @@ applies host transaction initialization; it chooses no database role.
 Package tests also exercise real CRUD/retrieval against a minimal independent
 PGlite schema without OSS identity tables or authorization functions, alongside
 the OSS schema's isolation and embedding-maintenance contract.
+
+### Behavior a port must carry
+
+These engine rules changed the public API in ways a hand port does not surface on
+its own:
+
+- **Errors carry no HTTP status.** Map them by class: `LoreValidationError`
+  (including `MemoryContentValidationError`) is a 400 input refusal that names its
+  `field`; `MemoryVersionConflictError` is 412; `MemoryAccessDeniedError` is 403.
+  A host that read a `.status` property from engine errors now gets none. An
+  out-of-range Episode evidence retrieval knob (neighbor chunks, top Observations,
+  planner queries, rerank candidate limit, minimum score, and weight, and the
+  distance threshold) throws `LoreConfigurationError`, a server failure that names
+  its `option`, not a 400.
+- **Input is refused, never trimmed or clamped.** Link kind (non-blank, at most
+  `MEMORY_LINK_LIMITS.maximumKindLength`, stored as given) and weight (0 through 1;
+  a nonzero value PostgreSQL `real` would round to zero is refused, while the
+  `1e-45` PostgreSQL prints for its smallest `real` is accepted), list/search/Graph
+  limits and offsets, scope, metadata, and Episode evidence search inputs all throw
+  `LoreValidationError`.
+  `graph.connect` used to trim its kind and clamp its weight.
+- **Batch primitives validate every record before any statement**, and a refusal
+  names the record: `records[i].content`, `links[i].weight`. `insertMemoriesInTransaction`
+  takes the ids it inserts; give it fresh UUIDs, never ids from an archive, or a
+  collision with an invisible Memory reveals that it exists.

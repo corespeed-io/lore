@@ -1,5 +1,85 @@
+import { queryInRecordBatches } from "./batch";
 import type { MemoryStorageContext, PostgresTransaction } from "./db";
 import type { Memory, MemoryScope } from "./memory";
+import { validateMemoryMetadata } from "./memory-input";
+import { boundedInteger, isStorableText, LoreValidationError } from "./validation";
+
+export const MEMORY_GRAPH_LIMITS = {
+  /** Visible Memories one Graph read returns at most. */
+  maximumNodes: 5_000,
+} as const;
+
+export const MEMORY_LINK_LIMITS = {
+  /** Link kind length, in UTF-16 code units. */
+  maximumKindLength: 64,
+  defaultKind: "related",
+  minimumWeight: 0,
+  maximumWeight: 1,
+  defaultWeight: 1,
+} as const;
+
+export interface ValidMemoryLink {
+  kind: string;
+  weight: number;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * The rules every durable Memory Link obeys, however it is written. Values are
+ * stored exactly as given; an invalid kind or weight is refused, never trimmed or
+ * clamped.
+ */
+export function validateMemoryLink(
+  input: {
+    sourceMemoryId: string;
+    targetMemoryId: string;
+    kind?: unknown;
+    weight?: unknown;
+    metadata?: unknown;
+  },
+  field = "link",
+): ValidMemoryLink {
+  // UUIDs compare case-insensitively, as PostgreSQL compares them.
+  if (input.sourceMemoryId.toLowerCase() === input.targetMemoryId.toLowerCase()) {
+    throw new LoreValidationError(field, `${field} must connect two different Memories`);
+  }
+  const kind = input.kind === undefined ? MEMORY_LINK_LIMITS.defaultKind : input.kind;
+  if (
+    typeof kind !== "string" ||
+    !kind.trim() ||
+    !isStorableText(kind) ||
+    kind.length > MEMORY_LINK_LIMITS.maximumKindLength
+  ) {
+    throw new LoreValidationError(
+      `${field}.kind`,
+      `${field}.kind must be non-blank text of at most ${MEMORY_LINK_LIMITS.maximumKindLength} characters`,
+    );
+  }
+  const weight = input.weight === undefined ? MEMORY_LINK_LIMITS.defaultWeight : input.weight;
+  if (
+    typeof weight !== "number" ||
+    !Number.isFinite(weight) ||
+    weight < MEMORY_LINK_LIMITS.minimumWeight ||
+    weight > MEMORY_LINK_LIMITS.maximumWeight
+  ) {
+    throw new LoreValidationError(
+      `${field}.weight`,
+      `${field}.weight must be a number from ${MEMORY_LINK_LIMITS.minimumWeight} through ${MEMORY_LINK_LIMITS.maximumWeight}`,
+    );
+  }
+  // Weights are stored as PostgreSQL `real` (a 32-bit float), which refuses a
+  // non-zero value that would round to zero. Test the rounding itself: PostgreSQL
+  // prints the smallest real as 1e-45, below 2 ** -149, and that must import again.
+  if (weight !== 0 && Math.fround(weight) === 0) {
+    throw new LoreValidationError(
+      `${field}.weight`,
+      `${field}.weight must be 0 or a value PostgreSQL real does not round to zero`,
+    );
+  }
+  const metadata =
+    input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata, `${field}.metadata`);
+  return { kind, weight, metadata };
+}
 
 export interface MemoryGraphNode {
   id: string;
@@ -132,7 +212,8 @@ const AFFINITY_NODE_CAP = 500;
 const GRAPH_CONTENT_PREFIX_CHARACTERS = 1_000;
 const SENTENCE_BREAK = /(?<=[.!?。！？])\s/u;
 
-function boundedInteger(
+/** An internal read option, clamped into range; request input is refused instead. */
+function clampedInteger(
   value: number | undefined,
   fallback: number,
   minimum: number,
@@ -251,7 +332,7 @@ function affinityLinks(memories: GraphMemory[], input: ReadMemoryGraph): MemoryG
   const minimumAffinity = Number.isFinite(requestedAffinity)
     ? Math.max(0, Math.min(requestedAffinity, 1))
     : 0.16;
-  const maxNeighbors = boundedInteger(input.maxNeighbors, 3, 1, 8);
+  const maxNeighbors = clampedInteger(input.maxNeighbors, 3, 1, 8);
   const candidates: MemoryGraphLink[] = [];
   for (const [leftIndex, left] of termSets.entries()) {
     for (const right of termSets.slice(leftIndex + 1)) {
@@ -397,6 +478,44 @@ async function readGraphRows(
 }
 
 /**
+ * Insert many Memory Links in bounded set-based batches. Each obeys the Link rules;
+ * a Link that duplicates an existing (source, target, kind) is skipped. Returns the
+ * ids of the Links actually inserted.
+ */
+export async function insertMemoryLinksInTransaction(
+  transaction: PostgresTransaction,
+  partitionId: string,
+  links: readonly ConnectMemories[],
+): Promise<string[]> {
+  const records = links.map((link, index) => {
+    const { kind, weight, metadata } = validateMemoryLink(link, `links[${index}]`);
+    return {
+      source_memory_id: link.sourceMemoryId,
+      target_memory_id: link.targetMemoryId,
+      kind,
+      weight,
+      metadata,
+    };
+  });
+  const inserted = await queryInRecordBatches(
+    transaction,
+    `INSERT INTO memory_links (
+       id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
+     )
+     SELECT gen_random_uuid(), $2::uuid, record.source_memory_id, record.target_memory_id,
+            record.kind, record.weight, record.metadata
+     FROM jsonb_to_recordset($1::jsonb) AS record(
+       source_memory_id uuid, target_memory_id uuid, kind text, weight real, metadata jsonb
+     )
+     ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
+     RETURNING id`,
+    records,
+    [partitionId],
+  );
+  return inserted.map((row) => row.id);
+}
+
+/**
  * Memory Graph and durable Memory Links over a host-scoped database.
  * The host owns visibility and write authorization for both link endpoints.
  */
@@ -404,11 +523,7 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
   const { database } = storage;
   return {
     async connect(input: ConnectMemories): Promise<MemoryLink> {
-      const kind = input.kind?.trim() || "related";
-      const requestedWeight = input.weight ?? 1;
-      const weight = Number.isFinite(requestedWeight)
-        ? Math.max(0, Math.min(requestedWeight, 1))
-        : 1;
+      const { kind, weight, metadata } = validateMemoryLink(input);
       return database.transaction(async (transaction) => {
         const result = await transaction.query<MemoryLinkRow>(
           `INSERT INTO memory_links (
@@ -422,7 +537,7 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
             input.targetMemoryId,
             kind,
             weight,
-            JSON.stringify(input.metadata ?? {}),
+            JSON.stringify(metadata),
           ],
         );
         const row = result.rows[0];
@@ -432,7 +547,11 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
     },
 
     async read(input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
-      const limit = boundedInteger(input.limit, 5_000, 1, 5_000);
+      const limit = boundedInteger(input.limit, "limit", {
+        minimum: 1,
+        maximum: MEMORY_GRAPH_LIMITS.maximumNodes,
+        fallback: MEMORY_GRAPH_LIMITS.maximumNodes,
+      });
       return database.transaction(async (transaction) => {
         const bounded = await readGraphRows(
           transaction,

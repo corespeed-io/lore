@@ -1,10 +1,10 @@
-import type { MemoryScope } from "@corespeed/lore-sdk";
+import { LORE_CONTRACT, type MemoryScope } from "@corespeed/lore-sdk";
 
 /**
  * The native Graph read budget. A graph of this size may omit visible Memories,
  * so its counts are lower bounds and a missing reference is not proof of absence.
  */
-export const GRAPH_NODE_LIMIT = 5_000;
+export const GRAPH_NODE_LIMIT = LORE_CONTRACT.limits.graphNodes;
 
 export function isGraphCapped(data: GraphData): boolean {
   return data.nodes.length >= GRAPH_NODE_LIMIT;

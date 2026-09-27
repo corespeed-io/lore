@@ -1,6 +1,8 @@
 import type { MemoryStorageContext, PostgresTransaction } from "../db";
 import type { MemoryScope } from "../memory";
+import { memoryListLimit, validateMemoryMetadata, validateMemoryScope } from "../memory-input";
 import { utcTimestampSql } from "../timestamp";
+import { isStorableText, LoreValidationError } from "../validation";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
@@ -8,13 +10,44 @@ export const MAX_EPISODE_METADATA_CHARACTERS = 1_000_000;
 export const MAX_OBSERVATION_CONTENT_CHARACTERS = 100_000;
 export const MAX_OBSERVATION_BATCH_READ = 50;
 
-export type EpisodeKind = "conversation" | "workflow" | "document" | "event";
-export type ObservationKind =
-  | "message"
-  | "tool_call"
-  | "tool_result"
-  | "document_fragment"
-  | "event";
+export const EPISODE_KINDS = ["conversation", "workflow", "document", "event"] as const;
+export type EpisodeKind = (typeof EPISODE_KINDS)[number];
+export const OBSERVATION_KINDS = [
+  "message",
+  "tool_call",
+  "tool_result",
+  "document_fragment",
+  "event",
+] as const;
+export type ObservationKind = (typeof OBSERVATION_KINDS)[number];
+
+export function validateEpisodeKind(value: unknown, field = "kind"): EpisodeKind {
+  if (!EPISODE_KINDS.includes(value as EpisodeKind)) {
+    throw new LoreValidationError(field, `${field} must be ${listOf(EPISODE_KINDS)}`);
+  }
+  return value as EpisodeKind;
+}
+
+export function validateObservationKind(value: unknown, field = "kind"): ObservationKind {
+  if (!OBSERVATION_KINDS.includes(value as ObservationKind)) {
+    throw new LoreValidationError(field, `${field} must be ${listOf(OBSERVATION_KINDS)}`);
+  }
+  return value as ObservationKind;
+}
+
+/** An Episode holds 1 to MAX_EPISODE_OBSERVATIONS Observations. */
+export function validateObservationCount(count: number): void {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_EPISODE_OBSERVATIONS) {
+    throw new LoreValidationError(
+      "observations",
+      `observations must contain 1 to ${MAX_EPISODE_OBSERVATIONS} items`,
+    );
+  }
+}
+
+function listOf(values: readonly string[]): string {
+  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
+}
 
 export interface Observation {
   id: string;
@@ -154,13 +187,19 @@ function toObservation(row: ObservationRow): Observation {
   };
 }
 
-function normalizedTimestamp(value: string | undefined, fallback: string): string {
+function normalizedTimestamp(value: string | undefined, fallback: string, field: string): string {
   if (value === undefined) return fallback;
   const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds)) throw new TypeError("observedAt must be an ISO timestamp");
+  if (!Number.isFinite(milliseconds)) {
+    throw new LoreValidationError(field, `${field} must be an ISO 8601 timestamp`);
+  }
   return new Date(milliseconds).toISOString();
 }
 
+/**
+ * The engine's Episode admission rules: kinds, scope, Observation count and
+ * content/metadata bounds, and timestamps. Hosts validate wire shapes only.
+ */
 export function normalizedEpisode(input: RecordEpisode): {
   endedAt: string;
   observations: Array<{
@@ -171,43 +210,59 @@ export function normalizedEpisode(input: RecordEpisode): {
   }>;
   startedAt: string;
 } {
-  if (
-    !Array.isArray(input.observations) ||
-    input.observations.length < 1 ||
-    input.observations.length > MAX_EPISODE_OBSERVATIONS
-  ) {
-    throw new TypeError(`An Episode must contain 1 to ${MAX_EPISODE_OBSERVATIONS} Observations`);
+  validateEpisodeKind(input.kind);
+  if (input.scope !== undefined) validateMemoryScope(input.scope);
+  if (!Array.isArray(input.observations)) {
+    throw new LoreValidationError("observations", "observations must be an array");
   }
+  validateObservationCount(input.observations.length);
   const recordedAt = new Date().toISOString();
   let totalCharacters = 0;
   let totalMetadataCharacters = 0;
-  const observations = input.observations.map((observation) => {
+  const observations = input.observations.map((observation, index) => {
+    const field = `observations[${index}]`;
+    const kind = validateObservationKind(observation.kind, `${field}.kind`);
     if (
       typeof observation.content !== "string" ||
       !observation.content.trim() ||
       observation.content.length > MAX_OBSERVATION_CONTENT_CHARACTERS
     ) {
-      throw new TypeError(
-        `Observation content must contain 1 to ${MAX_OBSERVATION_CONTENT_CHARACTERS} characters`,
+      throw new LoreValidationError(
+        `${field}.content`,
+        `${field}.content must contain 1 to ${MAX_OBSERVATION_CONTENT_CHARACTERS} characters`,
       );
     }
+    if (!isStorableText(observation.content)) {
+      throw new LoreValidationError(
+        `${field}.content`,
+        `${field}.content contains a NUL character or invalid Unicode`,
+      );
+    }
+    const metadata =
+      observation.metadata === undefined
+        ? {}
+        : validateMemoryMetadata(observation.metadata, `${field}.metadata`);
+    // validateMemoryMetadata already bounds each Observation's metadata.
+    const metadataCharacters = JSON.stringify(metadata).length;
     totalCharacters += observation.content.length;
-    totalMetadataCharacters += JSON.stringify(observation.metadata ?? {}).length;
+    totalMetadataCharacters += metadataCharacters;
     return {
-      kind: observation.kind,
+      kind,
       content: observation.content,
-      metadata: observation.metadata ?? {},
-      observedAt: normalizedTimestamp(observation.observedAt, recordedAt),
+      metadata,
+      observedAt: normalizedTimestamp(observation.observedAt, recordedAt, `${field}.observedAt`),
     };
   });
   if (totalCharacters > MAX_EPISODE_CONTENT_CHARACTERS) {
-    throw new TypeError(
-      `Episode content may contain at most ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
+    throw new LoreValidationError(
+      "observations",
+      `Episode content exceeds ${MAX_EPISODE_CONTENT_CHARACTERS} characters`,
     );
   }
   if (totalMetadataCharacters > MAX_EPISODE_METADATA_CHARACTERS) {
-    throw new TypeError(
-      `Episode metadata may contain at most ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
+    throw new LoreValidationError(
+      "observations",
+      `Episode metadata exceeds ${MAX_EPISODE_METADATA_CHARACTERS} characters`,
     );
   }
   const timestamps = observations.map((observation) => Date.parse(observation.observedAt));
@@ -261,7 +316,8 @@ export function createObservationModule(storage: MemoryStorageContext) {
     async retrieveObservations(ids: readonly string[]): Promise<Observation[]> {
       const uniqueIds = [...new Set(ids)];
       if (uniqueIds.length > MAX_OBSERVATION_BATCH_READ) {
-        throw new TypeError(
+        throw new LoreValidationError(
+          "ids",
           `At most ${MAX_OBSERVATION_BATCH_READ} Observations may be read at once`,
         );
       }
@@ -280,7 +336,9 @@ export function createObservationModule(storage: MemoryStorageContext) {
     },
 
     async list(input: ListEpisodes = {}): Promise<EpisodeSummary[]> {
-      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      const limit = memoryListLimit(input.limit);
+      if (input.kind !== undefined) validateEpisodeKind(input.kind);
+      if (input.scope !== undefined) validateMemoryScope(input.scope);
       return database.transaction(async (transaction) => {
         const result = await transaction.query<EpisodeRow>(
           `SELECT ${episodeColumns}

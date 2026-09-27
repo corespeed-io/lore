@@ -14,6 +14,7 @@ import { createPostgresDatabase } from "../../../src/server/database/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
+import { strictRetrievalKnobsFromEnvironment } from "../../../src/server/providers/retrieval-knobs";
 import type {
   BenchmarkConflictCandidateValidation,
   BenchmarkConflictCarTrace,
@@ -365,18 +366,20 @@ const metering = createBenchmarkMetering({
   rerankingProvider: configuredRerankingProvider,
 });
 const { embeddingProvider, queryPlanningProvider, rerankingProvider } = metering;
-const evidenceNeighborChunks = integerSetting("LORE_EVIDENCE_NEIGHBOR_CHUNKS", 0, 0, 2);
-const evidenceTopChunks = integerSetting("LORE_EVIDENCE_TOP_CHUNKS", 1, 1, 5);
-const retrievalFeedbackQueries = integerSetting("LORE_RETRIEVAL_FEEDBACK_QUERIES", 0, 0, 3);
-const retrievalRecencyWeight = numericSetting("LORE_RETRIEVAL_RECENCY_WEIGHT", 0, 0, 1);
-const queryPlannerMaxQueries = integerSetting("LORE_QUERY_PLANNER_MAX_QUERIES", 3, 1, 5);
+// The deployment's own knob table, strictly: a benchmark refuses an invalid value.
+const retrievalKnobs = strictRetrievalKnobsFromEnvironment(process.env);
+const evidenceNeighborChunks = retrievalKnobs.evidenceNeighborChunks;
+const evidenceTopChunks = retrievalKnobs.evidenceTopChunks;
+const retrievalFeedbackQueries = retrievalKnobs.retrievalFeedbackQueries;
+const retrievalRecencyWeight = retrievalKnobs.retrievalRecencyWeight;
+const queryPlannerMaxQueries = retrievalKnobs.queryPlannerMaxQueries;
 const embeddingConcurrency = integerSetting("LORE_BENCHMARK_EMBEDDING_CONCURRENCY", 1, 1, 32);
-const rerankCandidateLimit = integerSetting("LORE_RERANK_CANDIDATE_LIMIT", 50, 1, 200);
-const rerankDiversityLambda = numericSetting("LORE_RERANK_DIVERSITY_LAMBDA", 1, 0, 1);
-const rerankMinimumScore = numericSetting("LORE_RERANK_MIN_SCORE", 0, 0, 1);
-const rerankWeight = numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1);
-const semanticDistanceThreshold = numericSetting("LORE_SEMANTIC_DISTANCE_THRESHOLD", 0.5, 0, 2);
-const entityAliasRecall = booleanSetting("LORE_ENTITY_ALIAS_RECALL");
+const rerankCandidateLimit = retrievalKnobs.rerankCandidateLimit;
+const rerankDiversityLambda = retrievalKnobs.rerankDiversityLambda;
+const rerankMinimumScore = retrievalKnobs.rerankMinimumScore;
+const rerankWeight = retrievalKnobs.rerankWeight;
+const semanticDistanceThreshold = retrievalKnobs.semanticDistanceThreshold;
+const entityAliasRecall = retrievalKnobs.entityAliasRecall;
 
 const admin = new pg.Client({ connectionString: databaseUrl });
 const requestDatabase = createPostgresDatabase({ connectionString: databaseUrl });

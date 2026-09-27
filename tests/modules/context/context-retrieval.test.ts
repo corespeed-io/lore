@@ -674,3 +674,143 @@ test("a cited path containing # still resolves its declaration for contextual im
   // unresolvable subject that reports `unknown`.
   expect(packet.receipt.contextualImpact).toEqual({ state: "unaffected", changes: [] });
 }, 90_000);
+
+test("one packet's Code reads after its searches share one repeatable-read snapshot", async () => {
+  const context = await createMemoryTestContext();
+  const memories = createMemoryModule(context.database);
+  const code = createCodeIndexModule(context.database);
+  const codeRead = createCodeIndexReadModule(context.database);
+  const evidence = createCodeEvidenceModule(context.database);
+  const repositoryKey = "corespeed/packet-snapshot";
+  for (const [commitOid, value] of [
+    [BASE_COMMIT, "before"],
+    [CURRENT_COMMIT, "after"],
+  ] as const) {
+    await code.indexRevision(context.alice, {
+      repositoryKey,
+      displayName: "Packet snapshot",
+      commitOid,
+      files: [
+        {
+          path: "src/snapshot.ts",
+          content: `export function snapshotPolicy() { return snapshotHelper(); }\nexport function snapshotHelper() { return "${value}"; }\n`,
+        },
+      ],
+    });
+  }
+  const memory = await memories.remember(context.alice, {
+    content: "The snapshot policy rationale explains why snapshotPolicy delegates.",
+  });
+  const [artifact] = await codeRead.search(context.alice, {
+    repositoryKey,
+    commitOid: BASE_COMMIT,
+    query: "snapshotPolicy",
+  });
+  if (!artifact) throw new Error("Expected the snapshotPolicy Artifact");
+  await evidence.cite(context.alice, {
+    memoryId: memory.id,
+    artifactId: artifact.id,
+    relationship: "rationale",
+  });
+
+  const isolation: string[] = [];
+  let transactions = 0;
+  const counted = {
+    transaction: <Result>(use: Parameters<typeof context.database.transaction<Result>>[0]) => {
+      transactions += 1;
+      return context.database.transaction(async (transaction) => {
+        const result = await use(transaction);
+        const level = await transaction.query<{ transaction_isolation: string }>(
+          "SHOW transaction_isolation",
+        );
+        isolation.push(level.rows[0]?.transaction_isolation ?? "");
+        return result;
+      });
+    },
+  };
+  const packet = await createContextRetrievalModule(counted).retrieve(context.alice, {
+    query: "What changed about the snapshot policy rationale?",
+    memoryQuery: "snapshot policy rationale",
+    repositoryKey,
+    commitOid: CURRENT_COMMIT,
+  });
+
+  expect(packet.anchors).toHaveLength(1);
+  expect(packet.receipt.contextualImpact).not.toBeNull();
+  // Memory search, Code search, then one snapshot for assessment, anchored Artifacts,
+  // and contextual impact (which alone reads two revisions' dependencies).
+  expect(transactions).toBe(3);
+  expect(isolation.filter((level) => level === "repeatable read")).toHaveLength(1);
+  await context.close();
+}, 90_000);
+
+test("HTTP validates packet scope and metadata with the shared Memory rules", async () => {
+  // The route once kept its own scope and metadata checks; it now shares the Memory
+  // wire schemas, so every refusal names the rule a Memory write would name.
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "context-retrieval-alice";
+  const context = await createMemoryTestContext();
+  await context.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO identities (id, user_id, provider, subject)
+       VALUES ($1, $2, 'local', $3)`,
+      [crypto.randomUUID(), context.alice.userId, process.env.LORE_LOCAL_SUBJECT],
+    );
+  });
+  const memories = createMemoryModule(context.database);
+  const tagged = await memories.remember(context.alice, {
+    content: "The deployment convention is to ship behind a canary.",
+    metadata: { topic: "deploy" },
+  });
+  await memories.remember(context.alice, {
+    content: "The deployment convention for docs is a direct publish.",
+    metadata: { topic: "docs" },
+  });
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const retrieve = (body: Record<string, unknown>) =>
+    app.request(
+      new Request("http://lore.local/api/v1/context/retrieve", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-lore-workspace-id": context.alice.workspaceId,
+        },
+        body: JSON.stringify({
+          query: "What is our deployment convention?",
+          route: "memory-only",
+          ...body,
+        }),
+      }),
+    );
+
+  for (const [body, error] of [
+    [{ scope: "team" }, "scope must be shared or private"],
+    [{ scope: null }, "scope must be shared or private"],
+    [{ metadata: ["deploy"] }, "metadata must be an object"],
+    [{ metadata: null }, "metadata must be an object"],
+    [{ metadata: { note: "m".repeat(100_000) } }, "metadata exceeds 100000 characters"],
+    // A lone surrogate survives JSON.parse; PostgreSQL would refuse it in JSONB.
+    [{ metadata: { note: "\uD800" } }, "metadata contains a NUL character or invalid Unicode"],
+    [{ metadata: { note: "bad\u0000" } }, "metadata contains a NUL character or invalid Unicode"],
+  ] as const) {
+    const response = await retrieve(body);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+
+  // A valid scope and metadata filter reach the Memory search before top-k.
+  const response = await retrieve({ scope: "shared", metadata: { topic: "deploy" } });
+  expect(response.status).toBe(200);
+  const packet = (await response.json()) as {
+    deliveredRoute: string;
+    memories: Array<{ id: string; scope: string }>;
+  };
+  expect(packet.deliveredRoute).toBe("memory-only");
+  expect(packet.memories).toEqual([expect.objectContaining({ id: tagged.id, scope: "shared" })]);
+  await context.close();
+}, 90_000);

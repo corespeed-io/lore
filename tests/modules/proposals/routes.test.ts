@@ -1,4 +1,8 @@
 import { afterEach, expect, test } from "vitest";
+import {
+  createMemoryProposalsModule,
+  MemoryProposalValidationError,
+} from "@/modules/proposals/service";
 import { createApi } from "@/server/api/app";
 
 import { createMemoryTestContext } from "../../support/memory-context";
@@ -188,9 +192,10 @@ test("Agent submits a Proposal over v1 and only the human owner can accept it", 
   ).resolves.toEqual([]);
   await testContext.adminDatabase.transaction(async (transaction) => {
     await expect(
+      // By content, not by the JSON path the scrub trigger itself matches.
       transaction.query(
-        "SELECT id FROM request_idempotency_records WHERE response_body #>> '{proposal,id}' = $1",
-        [submitted.id],
+        "SELECT id FROM request_idempotency_records WHERE strpos(response_body::text, $1) > 0",
+        ["The assistant proposes this fact."],
       ),
     ).resolves.toMatchObject({ rows: [] });
   });
@@ -366,5 +371,191 @@ test("Proposal HTTP validation is bounded and stable", async () => {
     code: "proposal_capacity_exceeded",
   });
 
+  await testContext.close();
+});
+
+test("the Proposal rules the service owns answer HTTP as 400 invalid_request", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "proposal-http-rules";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Proposal Rules" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const created = (await (
+    await app.request(
+      new Request("http://lore.local/api/v1/memories", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content: "Launch Monday" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const propose = (body: Record<string, unknown>) =>
+    app.request(
+      new Request("http://lore.local/api/v1/memory-proposals", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+
+  // These rules moved from the route into the Proposal service with the refactor.
+  const unchanged = await propose({
+    kind: "update",
+    targetMemoryId: created.id,
+    expectedVersion: 1,
+  });
+  expect(unchanged.status).toBe(400);
+  await expect(unchanged.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "An update proposal must change content, scope, or metadata",
+  });
+  const evidenceId = (index: number) =>
+    `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+  // Each list stays within its own bound; together they exceed the shared one.
+  const overCited = await propose({
+    kind: "create",
+    content: "Too much evidence",
+    evidenceMemoryIds: Array.from({ length: 30 }, (_, index) => evidenceId(index)),
+    evidenceObservationIds: Array.from({ length: 21 }, (_, index) => evidenceId(100 + index)),
+  });
+  expect(overCited.status).toBe(400);
+  await expect(overCited.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "A Memory Proposal may cite at most 50 evidence records",
+  });
+  // Repeats count as the published per-list bound counts them.
+  const repeatedInOneList = await propose({
+    kind: "create",
+    content: "Repeated evidence",
+    evidenceMemoryIds: Array.from({ length: 51 }, () => created.id),
+  });
+  expect(repeatedInOneList.status).toBe(400);
+  await expect(repeatedInOneList.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "evidenceMemoryIds exceeds 50 items",
+  });
+  const repeatedAcrossLists = await propose({
+    kind: "create",
+    content: "Repeated evidence",
+    evidenceMemoryIds: Array.from({ length: 26 }, () => created.id),
+    evidenceObservationIds: Array.from({ length: 25 }, () => evidenceId(200)),
+  });
+  expect(repeatedAcrossLists.status).toBe(400);
+  await expect(repeatedAcrossLists.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "A Memory Proposal may cite at most 50 evidence records",
+  });
+
+  const listed = await app.request(
+    new Request("http://lore.local/api/v1/memory-proposals", { headers }),
+  );
+  await expect(listed.json()).resolves.toEqual([]);
+  await testContext.close();
+});
+
+test("Proposal route refusals name each published vocabulary and bound exactly", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "proposal-http-vocabulary";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Proposal Vocabulary" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const propose = (body: Record<string, unknown>) =>
+    app.request(
+      new Request("http://lore.local/api/v1/memory-proposals", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+  const artifactId = "80000000-0000-4000-8000-000000000001";
+
+  // Each message is built from the vocabulary or bound it enforces.
+  for (const [response, error] of [
+    [
+      await app.request(
+        new Request("http://lore.local/api/v1/memory-proposals?status=archived", { headers }),
+      ),
+      "status must be pending, accepted, or rejected",
+    ],
+    [await propose({ kind: "delete", content: "Unknown kind" }), "kind must be create or update"],
+    [
+      await propose({
+        kind: "create",
+        content: "Unknown relationship",
+        codeEvidence: [
+          { artifactId, relationship: "supports" },
+          { artifactId, relationship: "cites" },
+        ],
+      }),
+      "codeEvidence[1].relationship must be supports, contradicts, implements, or rationale",
+    ],
+    [
+      await propose({
+        kind: "create",
+        content: "Too much Code evidence",
+        codeEvidence: Array.from({ length: 51 }, () => ({ artifactId, relationship: "supports" })),
+      }),
+      "codeEvidence exceeds 50 items",
+    ],
+  ] as const) {
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+  await testContext.close();
+});
+
+test("a direct Proposal caller gets the relationship rule by its own entry, before any write", async () => {
+  const testContext = await createMemoryTestContext();
+  const proposals = createMemoryProposalsModule(testContext.database);
+  const artifactId = "80000000-0000-4000-8000-000000000002";
+
+  // The Proposal rule reports the requested index even when an earlier entry
+  // repeats the same artifact, and it refuses before the Code Artifact lookup.
+  const refused = await proposals
+    .propose(testContext.alice, {
+      kind: "create",
+      content: "A direct caller's invalid relationship",
+      codeEvidence: [
+        { artifactId, relationship: "supports" },
+        { artifactId, relationship: "supports" },
+        { artifactId, relationship: "endorses" as "supports" },
+      ],
+    })
+    .then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+  expect(refused).toBeInstanceOf(MemoryProposalValidationError);
+  expect(refused).toMatchObject({
+    field: "codeEvidence[2].relationship",
+    message: "codeEvidence[2].relationship must be supports, contradicts, implements, or rationale",
+  });
+  await expect(proposals.listProposals(testContext.alice)).resolves.toEqual([]);
   await testContext.close();
 });

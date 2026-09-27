@@ -626,6 +626,68 @@ describe("Lore external MCP adapter", () => {
     expect(JSON.stringify(result.structuredContent)).not.toContain("Proposed fact");
   });
 
+  test("counts every Proposal evidence kind against one published total", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    const ids = (prefix: string, count: number) =>
+      Array.from(
+        { length: count },
+        (_, index) => `${prefix}-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      );
+    const propose = (codeEvidenceCount: number) =>
+      client.callTool({
+        name: "lore_propose",
+        arguments: {
+          kind: "create",
+          content: "Proposed fact",
+          evidenceMemoryIds: ids("20000000", 20),
+          evidenceObservationIds: ids("70000000", 10),
+          codeEvidence: ids("80000000", codeEvidenceCount).map((artifactId) => ({
+            artifactId,
+            relationship: "supports",
+          })),
+        },
+      });
+
+    // Each list fits on its own; together they pass the total by one.
+    const crowded = await propose(21);
+    expect(crowded.isError).toBe(true);
+    expect(JSON.stringify(crowded.content)).toContain("proposal evidence exceeds 50 items");
+    expect(memories.proposeMemory).not.toHaveBeenCalled();
+
+    const full = await propose(20);
+    expect(full.isError).not.toBe(true);
+    expect(memories.proposeMemory).toHaveBeenCalledOnce();
+  });
+
+  test("lore_search and lore_list apply their documented default limits", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    await client.callTool({ name: "lore_search", arguments: { query: "authorized" } });
+    expect(memories.searchMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "authorized", limit: 10 }),
+    );
+    await client.callTool({ name: "lore_list", arguments: {} });
+    expect(memories.listMemories).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+  });
+
+  test("lore_search refuses a metadata filter past the query-string bound", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    // {"note":"..."} serializes to the value plus 11 characters.
+    const search = (length: number) =>
+      client.callTool({
+        name: "lore_search",
+        arguments: { query: "q", metadata: { note: "m".repeat(length - 11) } },
+      });
+    const refused = await search(10_001);
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("metadata filter exceeds 10000 characters");
+    expect(memories.searchMemories).not.toHaveBeenCalled();
+    expect((await search(10_000)).isError).not.toBe(true);
+    expect(memories.searchMemories).toHaveBeenCalledOnce();
+  });
+
   test("rejects document-sized Memory content before calling Lore", async () => {
     const memories = fakeMemories();
     const client = await connect(memories);

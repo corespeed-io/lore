@@ -830,8 +830,11 @@ export interface components {
             readonly workspaceId: string;
         };
         readonly Error: {
-            /** @enum {string} */
-            readonly code: "access_denied" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
+            /**
+             * @description Stable failure code. A later release may add codes, so clients must accept a code they do not know and classify it by HTTP status.
+             * @enum {string}
+             */
+            readonly code: "access_denied" | "agent_not_disabled" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
             readonly error: string;
         };
         readonly EvaluationCase: {
@@ -2104,6 +2107,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["MemoryGraph"];
                 };
             };
+            readonly 400: components["responses"]["Error"];
         };
     };
     readonly listOrSearchMemories: {
@@ -2111,6 +2115,7 @@ export interface operations {
             readonly query?: {
                 /** @description Opaque browse cursor; mutually exclusive with offset. */
                 readonly cursor?: string;
+                /** @description Defaults to 50 for a list and 10 for a search (q). */
                 readonly limit?: number;
                 /** @description JSON object applied as a bounded JSONB-containment filter. */
                 readonly metadata?: string;

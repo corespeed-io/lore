@@ -1,6 +1,9 @@
 import type { EmbeddingProvider, QueryPlanningProvider, RerankingProvider } from "./capabilities";
+import type { PreparedMemoryContent } from "./memory-content";
 
-export type MemoryScope = "shared" | "private";
+/** Who may read a Memory: every member of its Workspace, or only its owner User. */
+export const MEMORY_SCOPES = ["shared", "private"] as const;
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
 
 export interface Memory {
   id: string;
@@ -19,6 +22,24 @@ export interface RememberMemory {
   content: string;
   scope?: MemoryScope;
   metadata?: Record<string, unknown>;
+}
+
+/** One Memory of a batch insert, whose id the caller chose (for example an import). */
+export interface InsertMemoryRecord {
+  /**
+   * A fresh canonical UUID the host generated. Never reuse an id from outside (an
+   * archive's own ids): a primary-key collision with a Memory the caller cannot see
+   * would reveal that it exists.
+   */
+  id: string;
+  scope: MemoryScope;
+  content: string;
+  metadata: Record<string, unknown>;
+  /**
+   * `prepareMemoryContent(content)`, when the host already validated this content;
+   * the insert then reuses its chunks instead of chunking the content again.
+   */
+  preparedContent?: PreparedMemoryContent;
 }
 
 export interface UpdateMemory {

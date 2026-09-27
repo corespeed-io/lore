@@ -4,20 +4,13 @@ import {
   prepareMemoryContent,
 } from "@corespeed/lore-core";
 import { z } from "zod/v4";
+import {
+  JsonValueSchema,
+  MemoryMetadataSchema,
+  MemoryScopeSchema,
+} from "@/server/api/shared-schemas";
 
-/** The OSS wire contract. The engine continues to own content and authorization invariants. */
-export const MemoryScopeSchema = z.enum(["shared", "private"], {
-  error: "scope must be shared or private",
-});
-
-const JsonValueSchema = z.json();
-
-export const MemoryMetadataSchema = z
-  .record(z.string(), JsonValueSchema, { error: "metadata must be an object" })
-  .refine((value) => JSON.stringify(value).length <= 100_000, {
-    error: "metadata exceeds 100000 characters",
-  });
-
+// The OSS Memory wire schemas. Each delegates to the engine's input rules.
 // Zod string lengths count UTF-16 units. Lore's validator counts Unicode code points
 // and checks reconstructable chunk limits; JSON Schema maxLength uses code points.
 const MemoryContentSchema = z
@@ -62,7 +55,6 @@ export const UpdateMemoryInputSchema = CreateMemoryInputSchema.partial()
   .meta({ minProperties: 1 });
 
 export type Memory = z.infer<typeof MemorySchema>;
-export type MemoryScope = z.infer<typeof MemoryScopeSchema>;
 export type CreateMemoryInput = z.infer<typeof CreateMemoryInputSchema>;
 export type UpdateMemoryInput = z.infer<typeof UpdateMemoryInputSchema>;
 

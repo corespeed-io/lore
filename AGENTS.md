@@ -45,7 +45,31 @@ been removed. Lore now has a native implementation, split into two concepts
   catches everything the other does. It is also held to the union strictness of
   its hosts (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), which the
   application is not, and CI runs `bun run --cwd packages/lore-core check` as its
-  own gate against a minimal PGlite schema with no identity tables. In-repo it is
+  own gate against a minimal PGlite schema with no identity tables. Its storage
+  dependency is written down: `packages/lore-core/src/schema-contract.ts` lists, per
+  capability group (`memory`, `graph`, `maintenance`, `episodes`), every table with
+  the columns the engine reads and inserts, the generated columns its lexical
+  channels read, the unique keys its ON CONFLICT clauses target, the cascading
+  foreign keys its deletes rely on, plus types, `lore.*` function signatures, enum
+  labels and compared values, and transaction settings.
+  `packages/lore-core/tests/schema-contract.test.ts` scans the engine source and
+  fails when a table, function, setting, INSERT column list, or ON CONFLICT target
+  differs from the contract; read-only column lists are kept by hand.
+  `missingSchemaContract` (`./testing`) checks a schema's catalog against named
+  groups, including defaults for every NOT NULL column the engine does not insert;
+  an ON CONFLICT key counts only as a whole, non-partial unique index on plain
+  columns, since an expression or partial index cannot match the target. The
+  independent-host fixture provides `memory` and `graph`
+  and runs CRUD, retrieval, Links, batch inserts, and forget with no identity
+  tables; `tests/core/schema-contract.test.ts` proves the lore oss schema provides
+  all four groups. OSS writes no engine table directly: forget, batch import, and
+  batch Links go through `forgetMemoryInTransaction`, `insertMemoriesInTransaction`
+  (fresh host-generated ids, never an archive's: a collision with an invisible
+  Memory would reveal it), and `insertMemoryLinksInTransaction`, and core errors
+  carry no HTTP status. lore oss's own
+  run of the engine contract suite against its migration chain and identity model
+  is `tests/core/contract.test.ts`, part of the application tests; no file under
+  `packages/lore-core` may import a repository file outside that package. In-repo it is
   consumed as workspace TypeScript source (root tsconfig paths, vitest aliases,
   Next `transpilePackages`), never as a built dependency.
   **Distribution is an upstream/fork convention** (Yunpeng, 2026-09-15):
@@ -107,7 +131,22 @@ been removed. Lore now has a native implementation, split into two concepts
   `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
   idempotent writes never wait on the build. Each index is dropped (`DROP INDEX
   CONCURRENTLY IF EXISTS`) and then built, so a rerun after a stopped build
-  replaces any `INVALID` leftover. Every new migration
+  replaces any `INVALID` leftover. The forget triggers find replay bodies by those
+  JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
+  `{proposal,acceptedMemoryId}`, `{episode,id}`), so renaming one in a replayed
+  response needs a forward migration. `ReplayBody` (`src/server/api/idempotency.ts`)
+  is the only type `completeMutation` accepts and names exactly those keys, so a
+  rename fails typecheck, and `tests/server/replay-scrub.test.ts` proves by content,
+  not by those paths, that forgetting removes every such body. Moving the scrub to
+  an explicit subject column is a two-release migration (the JSON-path triggers must
+  outlive every older app instance) and has not been scheduled.
+  `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
+  TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
+  CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities
+  are served from `DEPLOYMENT_LIMITS` (`src/modules/operations/limits.ts`), which
+  also generates their OpenAPI `const` values; the frozen SQL function only has to
+  keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
+  change, never by editing an applied migration. Every new migration
   must update `lore_system_state.schema_revision` to its own version number (currently 5) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
@@ -131,8 +170,8 @@ been removed. Lore now has a native implementation, split into two concepts
   its `schema_revision` UPDATE, which the wrapper commits in one transaction with
   the ledger row; a stopped run records nothing and the next run repeats the whole
   file, so every such index must be dropped before it is built. PGlite harnesses
-  (`tests/support/memory-context.ts`, restore verification, the lore-core contract
-  test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
+  (`tests/support/memory-context.ts`, restore verification, the OSS-hosted engine
+  contract test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
   `applyMigrationChain`/`migrationQueries`; never apply a migration file with one
   `exec(fileContents)`. `pg` remains the runtime adapter behind the narrow
   transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
@@ -148,10 +187,38 @@ been removed. Lore now has a native implementation, split into two concepts
   Episode modules under `src/modules` enforce product policy and map engine storage
   keys to the unchanged Workspace/User/Agent wire fields. Core storage and retrieval
   remain in `packages/lore-core`; see `docs/architecture.md` for the split;
+- lore-core owns the **domain contract**: the model, its types, and its input rules.
+  It exports them without Zod (the user's 2026-09-26 decision): `as const`
+  vocabularies (`MEMORY_SCOPES`, `EPISODE_KINDS`, `OBSERVATION_KINDS`), limit
+  objects that name their counting unit (`MEMORY_CONTENT_LIMITS`,
+  `MEMORY_METADATA_LIMITS`, `MEMORY_LIST_LIMITS`, `MEMORY_SEARCH_LIMITS`,
+  `MEMORY_GRAPH_LIMITS`, `MEMORY_LINK_LIMITS`), and plain validators
+  (`validateMemoryMetadata`, `validateMemoryScope`, `validateMemoryLink`,
+  `normalizedEpisode`, …). Every engine rule on request input throws `LoreValidationError`
+  (`packages/lore-core/src/validation.ts`), which names the failing `field`;
+  `src/server/api/errors.ts` maps that one class to 400 `invalid_request`, so OSS
+  routes check wire shapes only and never restate an engine rule. The engine
+  refuses an out-of-range value — a list/search/Graph limit, an offset, an
+  over-long query or Link kind, a Link weight outside `[0,1]` or one PostgreSQL
+  `real` would round to zero (an exported `1e-45` still imports), metadata with a NUL
+  or unpaired surrogate — and never clamps or trims it into range; Links are stored
+  exactly as given. Deployment tuning options (reranking weights, candidate budgets)
+  are operator configuration, not request input, and keep their documented bounds. OSS derives its wire
+  contract from these exports: Zod `z.enum(MEMORY_SCOPES)` and a metadata refine
+  that calls the engine validator (`src/server/api/shared-schemas.ts`), OpenAPI
+  enums and bounds from the same constants, and OSS-owned vocabularies defined once
+  in their module (`src/modules/code/evidence-contract.ts`, the Context policy
+  tuples, `src/modules/proposals/limits.ts`, `src/modules/evaluations/limits.ts`).
+  A compile-time test holds the Zod `Memory`, the engine-derived service `Memory`,
+  and the SDK `Memory` to one field set;
 - `packages/lore-core/src/memory-content.ts` owns the canonical Memory content boundary. A Memory
   is one coherent knowledge record, recommended at no more than 8,000 Unicode
   characters and hard-limited to 32,000 characters and 64 derived chunks. Direct
-  writes, Proposals, and imports must share this validator. Route longer raw
+  writes, Proposals, and imports must share this validator. It counts code points
+  without building an array (the UTF-16 length bounds the count first, and counting
+  stops past the limit), so a 10 MiB body or 50 MB archive cannot exhaust a Worker
+  isolate before the bound refuses it; do not measure content with `Array.from`.
+  Route longer raw
   documents to bounded `document_fragment` Observations in a document Episode;
   never auto-split them into canonical Memories;
 - `packages/lore-core/src/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
@@ -236,7 +303,11 @@ been removed. Lore now has a native implementation, split into two concepts
   changed chunk may follow its ordinal only when that surrounding sequence still
   matches; equal-count reorder/replacement must abstain as `ambiguous`. Artifact
   pruning must not delete citation anchors. Joint retrieval assesses all result
-  Memories' citations in one read-only transaction (`assessMemoryCitations`);
+  Memories' citations in one read (`assessMemoryCitations`); after the Memory and
+  Code searches, which call providers outside any transaction, every later Code read
+  of one packet (assessment, anchored Artifacts, contextual impact) shares one
+  REPEATABLE READ, READ ONLY snapshot, so a generation activated mid-packet cannot
+  split them;
   identity matching goes through the path-free Symbol Set payload index, not a
   suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
   cut list marks contextual impact `anchors:truncated`, so it is never
@@ -326,10 +397,36 @@ been removed. Lore now has a native implementation, split into two concepts
   UI remains a distinct module within Next.js; it does not need a separate package
   or service. UI, CLI, and MCP depend on the TypeScript SDK, which calls the OSS API;
   the API supplies authorization and tenancy before composing Core and PostgreSQL.
-  `bun run architecture:check` guards these dependency boundaries in CI. Every
-  browser-side file of a domain lives under `src/modules/*/browser/`, and that
-  directory glob — not a list of blessed file names — is what the guard matches.
-  Adding a browser file must never require editing `biome.json`.
+  `bun run architecture:check` guards these dependency boundaries in CI: Biome's
+  restricted imports plus `scripts/checks/check-import-boundaries.ts`, which keeps
+  no baseline of tolerated violations. That script puts every file under `src/`
+  and `packages/` in one layer (Core; SDK/CLI/MCP; server infrastructure; domain
+  modules, split into server and `browser/`; server and UI composition; Next
+  pages), lets a layer import only the layers below it (type-only imports
+  included), and holds cross-domain imports to its declared acyclic `MODULES`
+  graph: a module imports another only when it declares that dependency, and only
+  the files that module exports. Nothing the Cloudflare Worker bundle reaches may
+  import a native or Bun-only package: the check walks from the wrangler `main`
+  entry and from every file OpenNext compiles into it (`src/app/**`,
+  `src/middleware.ts`, `src/instrumentation.ts`), and nothing the Edge middleware
+  reaches may be engine (`packages/lore-core/`) or API-layer (`src/server/api/`) code.
+  Imports come from Bun's TypeScript parser (`Bun.Transpiler.scanImports`), twice:
+  once with inline `type` modifiers blanked, for what loads at run time (under
+  `verbatimModuleSyntax` an all-inline-type clause still loads, as `import {} from`),
+  and once with statement `type` modifiers blanked too, whose extra specifiers are
+  the type-only imports; a comment beside a modifier reads as whitespace. Type-only
+  imports count for the layer and module-graph rules, never for the Worker or Edge
+  walks. No comment, string, regex, or JSX shape can hide one. A file that does not
+  parse (reported at the parser's line:column), an unresolvable in-repo import, an
+  import of an in-repo module that is not `.ts`/`.tsx` (stylesheets and other assets
+  aside), and a declared `MODULES` dependency or export that nothing uses are all
+  findings. A computed specifier
+  (`import("node:" + name)`) is invisible to any scan; the Cloudflare dry run, which
+  sees the real bundle, is the backstop for those. Every browser-side file of a domain lives
+  under `src/modules/*/browser/`, and that directory — not a list of blessed file
+  names — is how both guards recognize browser code. Adding a browser file must
+  never require editing `biome.json`; exposing a file to another module is a
+  deliberate edit to that module's `exports`.
   `browser/data.ts` owns a domain's SDK calls together with its SWR hooks; API
   paths, Workspace headers, serialization, parsing, cancellation, and errors
   belong to the SDK. Do not reintroduce a per-domain `client.ts` layer that only
@@ -354,7 +451,14 @@ been removed. Lore now has a native implementation, split into two concepts
   paged Memories, search, Memory detail, graph reads, and mutations. Keep server
   data in this cache instead of restoring component-level `loaded`, request-id, or
   revision state. Memory writes patch the paged/detail cache and revalidate the
-  paged list plus active search and graph keys. Returning to browse re-reads only
+  paged list plus every cached search and the graph key, all through one path,
+  `applyMemoryChange` (`src/shell/memory-cache.ts`); a domain view reports a write
+  to the shell instead of touching another domain's cache keys. The paused browse
+  list applies a save or forget as an exact patch; a write of unknown extent (an
+  import, a failed review) makes its next resume re-read every page. The Graph
+  read model behind wikilinks and Related (`buildGraphStore`) lives in
+  `src/modules/graph/browser/store.ts`, and browser bounds (Graph nodes, browse page
+  size and window) come from the SDK's `LORE_CONTRACT`. Returning to browse re-reads only
   page 0, plus any later page that is missing from the cache, no longer matches the
   list, or sits behind a page 0 that gained or lost a Memory; every page is re-read
   on resume once the last full read is 5 minutes old
@@ -466,24 +570,40 @@ been removed. Lore now has a native implementation, split into two concepts
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
   their items under the 128,000-character MCP output ceiling and report omitted
   trailing items with `truncated: true`. The SDK and MCP enforce the server's
-  visible-ASCII Idempotency-Key rule client-side.
+  visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, and
+  pattern a client checks before a request comes from `LORE_CONTRACT`, which
+  `sdk:generate` reads out of the OpenAPI document by explicit path, from every
+  endpoint the value guards (failing when one is missing or two disagree;
+  `tools/sdk-codegen/contract.ts`, import-safe so `tests/packages/sdk-contract.test.ts`
+  exercises both failures), and the
+  SDK exports; the SDK, CLI, and MCP restate none of them (standard UUID syntax
+  aside).
+  JSON Schema cannot bound an object's serialized size, so the metadata bound is
+  published as `x-lore-maxSerializedLength`; one Memory `limit` parameter cannot carry
+  a list and a search default, so they are published as `x-lore-listDefault` (50) and
+  `x-lore-searchDefault` (10), with no `default`.
   Clients in other languages use the HTTP API described by OpenAPI.
   Human-only TypeScript SDK Agent administration and Workspace portability methods
   do not imply new CLI commands or MCP tools;
-- `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4.
+- `src/modules/memories/schemas.ts` defines the OSS Memory wire contract with Zod 4;
+  the scope and metadata schemas it shares with Proposals, Episodes, and Workspace
+  archives live in `src/server/api/shared-schemas.ts` so no domain imports another
+  for them.
   HTTP Memory writes validate with these schemas, and OpenAPI generates its
   Memory/create/update components from them. Browser wire types and public content
   limits are imported directly from the generated TypeScript SDK contract; browser
   modules must not import server/Core modules or run canonical chunk previews.
   Keep canonical content validation and chunking in server/Core code.
-  Metadata uses `z.record(z.string(),
-  z.json())` with a serialized-size refinement; do not restore a handwritten JSON
-  walker or separate depth/node-count policies. The shared HTTP input boundary maps
-  Zod/parser stack exhaustion to 400 for excessively nested JSON. PostgreSQL enforces
-  its Unicode restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register
+  Metadata is a JSON record whose refinement calls the engine's
+  `validateMemoryMetadata` (serialized size plus storable text); do not restore a
+  handwritten JSON walker or separate depth/node-count policies. The shared HTTP
+  input boundary maps Zod/parser stack exhaustion to 400 for excessively nested JSON.
+  The engine refuses NUL and unpaired surrogates in metadata, content, Observation
+  text, and Link kinds before PostgreSQL would; HTTP still maps invalid-text
+  SQLSTATEs to 400 as a backstop. Register
   recursive JSON with Zod when generating OpenAPI so references target `#/components/schemas`.
-  The reusable engine retains storage types and content invariants; OSS owns
-  authorization policy and the public wire mapping;
+  The reusable engine owns the domain types and input rules; OSS owns
+  authorization policy and the public wire mapping derived from them;
 - Self-hosting exports privacy-filtered OTLP only when explicitly configured.
   Cloudflare uses Wrangler native observability; never load the Node `@vercel/otel`
   SDK inside workerd. Cloudflare handles `/livez` and `/readyz` before OpenNext so
@@ -685,7 +805,19 @@ row's driver `Date` drops microseconds, so host code returning Memories must
 select through it, and any such `updatedAt` is an exact list cursor. Workspace
 archive and Graph node timestamps stay millisecond and are not cursors.
 Retrieval knobs are read once per process beside the cached providers; changing
-them requires a restart.
+them requires a restart. `RETRIEVAL_KNOBS` (`src/server/providers/retrieval-knobs.ts`)
+defines every knob's variable, default, and bounds once: the server warns about an
+invalid value and falls back (the reranker candidate limit clamps silently), and
+every benchmark runner reads the same table through
+`strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, and hands
+the whole table to the suite, so a benchmark's default run is the deployment
+default; a `LORE_BENCHMARK_*` variable overrides one knob within its bounds. The
+dense distance threshold is the exception where a retrieval suite declares its own
+`thresholds` (retrieval-v1, LongMemEval-S, the LoCoMo retrieval diagnostic, and
+MemoryAgentBench Accurate Retrieval): that sweep, or `LORE_BENCHMARK_THRESHOLDS`,
+replaces `LORE_SEMANTIC_DISTANCE_THRESHOLD`. The LoCoMo QA, MemoryAgentBench Conflict,
+and LongMemEval-V2 answer searches run at the deployment threshold;
+`LORE_BENCHMARK_THRESHOLDS` changes only a LoCoMo QA run's setup retrieval diagnostic.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the
@@ -727,7 +859,9 @@ The restored Dashboard/Graph/Memories interface consumes native `Workspace`,
 tool-shaped compatibility client, page/slug view model, `/api/call`, or any
 generic upstream adapter to support the historical component structure.
 
-The native Graph endpoint caps reads at 5,000 visible Memories. It returns all
+The native Graph endpoint caps reads at 5,000 visible Memories
+(`MEMORY_GRAPH_LIMITS.maximumNodes`); a `limit` that is not an integer from 1 to
+that bound is a 400, not a silent clamp or fallback. It returns all
 RLS-visible Memory Links whose endpoints are in that node set, then derives at most
 three affinities per Memory among the first 500 otherwise isolated nodes. Each
 node reads only a 1,000-code-point content prefix; complete content is fetched
@@ -915,7 +1049,10 @@ database invariant, not a UI convention.
   a text timestamp (as a type-parser override would return it) to RFC 3339 at full
   precision and validates it with import's rules, so export never emits a timestamp
   its own import refuses. Import stores the archive's timestamp text as provenance
-  unchanged.
+  unchanged. The archive checksum (`src/modules/portability/checksum.ts`) is a
+  permanent format that a golden-value test pins; it deliberately does not share
+  request-replay hashing, which may change at any deploy. Change it only with a new
+  archive format.
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.
@@ -1188,7 +1325,10 @@ Benchmark is part of the product quality system even without AutoDream.
 - Retrieval metrics may include Recall@K, MRR, and nDCG; isolation failures are
   hard failures, not a score that can be averaged away. The code-aware and joint
   Memory+Code evaluations exit non-zero on any isolation hard failure without
-  `--strict`; `--strict` only adds the quality thresholds.
+  `--strict`; `--strict` only adds the quality thresholds. The joint evaluation's ablation
+  variants compose production policy steps; contextual impact is measured with the
+  production `contextualDependencyFingerprints` (`src/modules/context/retrieval.ts`),
+  never a copy.
 - Workspace-owned evaluation suites follow the same RLS rules as Memories.
 - Never centralize or export private production Memories for evaluation by default.
 - Evaluation runs are read-only against production data. Any write/replay test uses
@@ -1267,8 +1407,20 @@ returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of t
 URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
 passes even behind a Host-rewriting proxy, and clients that send neither header
 are unaffected. SQLSTATE 40P01/40001 map to a retryable 409
-`transaction_conflict`. The OpenAPI Error `code` enum is closed and
-`openapi.test.ts` asserts the exact emitted set. Domain handlers still authorize
+`transaction_conflict`. The public error vocabulary is `LORE_ERROR_CODES`
+(`src/server/errors.ts`), which the OpenAPI Error `code` enum lists exactly. A
+failure a caller may see extends `DomainError` there and declares its `code`;
+domain modules name no HTTP status. The code-to-status table `HTTP_STATUS` lives
+in `src/server/errors.ts`, which imports nothing, so the Edge admission path in
+`src/server/auth/auth.ts` reads it without pulling the engine into middleware. A
+route throws one too, `NotFoundError` for a
+missing or invisible resource, and never writes `c.json({ code })` itself
+(`error-response.test.ts` scans for it). `src/server/api/errors.ts` imports no domain
+module: it answers each code with the table's status and names the engine's three
+public failure classes, which cannot extend OSS classes. An engine
+`LoreConfigurationError` (an out-of-range deployment option) is deliberately not
+among them and answers 500. Clients must accept an Error `code` they do not know;
+the OpenAPI schema says so. Domain handlers still authorize
 Actors and install RLS. Every JSON request body goes through `jsonObject`
 (`src/server/api/input.ts`), which counts UTF-8 bytes as the body streams and
 returns 413 `payload_too_large`; a declared oversized `Content-Length` is refused

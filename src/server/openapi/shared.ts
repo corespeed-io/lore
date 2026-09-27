@@ -1,3 +1,6 @@
+import { MEMORY_METADATA_LIMITS, MEMORY_SCOPES } from "@corespeed/lore-core";
+import { LORE_ERROR_CODES } from "@/server/errors";
+
 export const errorSchema = {
   type: "object",
   additionalProperties: false,
@@ -5,26 +8,25 @@ export const errorSchema = {
   properties: {
     code: {
       type: "string",
-      enum: [
-        "access_denied",
-        "authentication_required",
-        "idempotency_conflict",
-        "internal_error",
-        "invalid_archive",
-        "invalid_request",
-        "method_not_allowed",
-        "not_found",
-        "payload_too_large",
-        "precondition_required",
-        "proposal_capacity_exceeded",
-        "proposal_review_conflict",
-        "transaction_conflict",
-        "version_conflict",
-        "workspace_export_limit_exceeded",
-      ],
+      description:
+        "Stable failure code. A later release may add codes, so clients must accept a code they do not know and classify it by HTTP status.",
+      enum: [...LORE_ERROR_CODES],
     },
     error: { type: "string" },
   },
+} as const;
+
+/** A Memory scope; Episodes, Proposals, and archives carry the same value. */
+export const memoryScopeSchema = { type: "string", enum: [...MEMORY_SCOPES] } as const;
+
+/**
+ * Metadata as every endpoint validates it: a JSON object whose serialization is
+ * bounded. JSON Schema cannot bound serialized size, so the bound is an extension.
+ */
+export const metadataSchema = {
+  type: "object",
+  additionalProperties: true,
+  "x-lore-maxSerializedLength": MEMORY_METADATA_LIMITS.maximumSerializedLength,
 } as const;
 
 export const timestampProperties = {
@@ -39,15 +41,22 @@ export const workspaceHeader = {
   schema: { type: "string", format: "uuid" },
 } as const;
 
-// The single Idempotency-Key rule (1-128 visible ASCII characters): the published
-// OpenAPI header pattern and the runtime check in src/server/api/input.ts both use it.
-export const IDEMPOTENCY_KEY_PATTERN = "^[\\x21-\\x7e]{1,128}$";
+// The single Idempotency-Key rule (1 to IDEMPOTENCY_KEY_MAXIMUM_LENGTH visible ASCII
+// characters): the published OpenAPI header and the runtime check in
+// src/server/api/input.ts both use it.
+export const IDEMPOTENCY_KEY_MAXIMUM_LENGTH = 128;
+export const IDEMPOTENCY_KEY_PATTERN = `^[\\x21-\\x7e]{1,${IDEMPOTENCY_KEY_MAXIMUM_LENGTH}}$`;
 
 export const idempotencyHeader = {
   name: "Idempotency-Key",
   in: "header",
   required: false,
-  schema: { type: "string", minLength: 1, maxLength: 128, pattern: IDEMPOTENCY_KEY_PATTERN },
+  schema: {
+    type: "string",
+    minLength: 1,
+    maxLength: IDEMPOTENCY_KEY_MAXIMUM_LENGTH,
+    pattern: IDEMPOTENCY_KEY_PATTERN,
+  },
 } as const;
 
 export const ifMatchHeader = {

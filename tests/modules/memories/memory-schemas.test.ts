@@ -3,16 +3,21 @@ import { expect, expectTypeOf, test } from "vitest";
 import type { Memory } from "@/modules/memories/schemas";
 import {
   CreateMemoryInputSchema,
-  MemoryMetadataSchema,
   MemorySchema,
   memoryOpenApiSchemas,
   UpdateMemoryInputSchema,
 } from "@/modules/memories/schemas";
+import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
 import type { Memory as CoreMemory } from "../../../src/modules/memories/service";
 
 test("the inferred wire model stays aligned with the engine and generated SDK", () => {
   expectTypeOf<Memory>().toMatchTypeOf<CoreMemory>();
   expectTypeOf<Memory>().toMatchTypeOf<SdkMemory>();
+  // The same fields in all three: a field the engine adds must reach the Zod wire
+  // schema (and so OpenAPI and the SDK), never only the response body.
+  expectTypeOf<keyof Memory>().toEqualTypeOf<keyof CoreMemory>();
+  expectTypeOf<keyof Memory>().toEqualTypeOf<keyof SdkMemory>();
+  expectTypeOf<Memory["scope"]>().toEqualTypeOf<CoreMemory["scope"]>();
 });
 
 test("writes retain HTTP trimming and code-point bounds without trimming stored responses", () => {
@@ -66,6 +71,27 @@ test("metadata validates JSON values and enforces serialized size", () => {
   ]) {
     expect(MemoryMetadataSchema.safeParse(invalid).success).toBe(false);
   }
+});
+
+test("metadata the engine cannot store is refused at the wire with the engine's message", () => {
+  // Before the wire schema delegated to the engine rule, these reached PostgreSQL.
+  for (const invalid of [
+    { note: "bad\u0000" },
+    { nested: { list: ["ok", "lone \uD800 surrogate"] } },
+    { "key\uDC00": "value" },
+  ]) {
+    const parsed = MemoryMetadataSchema.safeParse(invalid);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((issue) => issue.message)).toEqual([
+      "metadata contains a NUL character or invalid Unicode",
+    ]);
+  }
+  const oversized = MemoryMetadataSchema.safeParse({ text: "x".repeat(100_001) });
+  expect(oversized.error?.issues.map((issue) => issue.message)).toEqual([
+    "metadata exceeds 100000 characters",
+  ]);
+  // A paired surrogate is ordinary text.
+  expect(MemoryMetadataSchema.parse({ emoji: "😀" })).toEqual({ emoji: "😀" });
 });
 
 test("OpenAPI retains portable bounds and does not introduce document-local references", () => {

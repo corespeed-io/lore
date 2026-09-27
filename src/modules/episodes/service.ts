@@ -11,10 +11,11 @@ import {
 import { beginMutation, completeMutation, type IdempotencyRequest } from "@/server/api/idempotency";
 import { type ActorContext, installActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage, memoryStorageInTransaction } from "@/server/database/memory-storage";
+import { DomainError } from "@/server/errors";
 
-export class ObservationAccessDeniedError extends Error {
+export class ObservationAccessDeniedError extends DomainError {
   override name = "ObservationAccessDeniedError";
-  readonly status = 403;
+  readonly code = "access_denied";
 }
 
 export interface Observation extends Omit<StoredObservation, "partitionId"> {

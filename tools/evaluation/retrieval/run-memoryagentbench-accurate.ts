@@ -3,6 +3,7 @@ import { MEMORY_CHUNKING_REVISION } from "@corespeed/lore-core";
 import { createEmbeddingProviderFromEnvironment } from "../../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
+import { strictRetrievalKnobsFromEnvironment } from "../../../src/server/providers/retrieval-knobs";
 import { verifyFile } from "../shared/file-integrity";
 import {
   chunkMemoryAgentBenchAccurateContext,
@@ -76,22 +77,6 @@ function parseArgs(args: string[]): CliOptions {
     }
   }
   return options;
-}
-
-function numericSetting(name: string, fallback: number, minimum: number, maximum: number): number {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(`${name} must be from ${minimum} to ${maximum}`);
-  }
-  return parsed;
-}
-
-function integerSetting(name: string, fallback: number, minimum: number, maximum: number): number {
-  const parsed = numericSetting(name, fallback, minimum, maximum);
-  if (!Number.isInteger(parsed)) throw new Error(`${name} must be an integer`);
-  return parsed;
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -201,20 +186,13 @@ const embeddingProvider = createEmbeddingProviderFromEnvironment(process.env, wa
 if (!embeddingProvider) throw new Error("MemoryAgentBench requires a valid embedding provider");
 const queryPlanningProvider = createQueryPlanningProviderFromEnvironment(process.env, warn);
 const rerankingProvider = createRerankingProviderFromEnvironment(process.env, warn);
+// The deployment's own knob table, strictly: a benchmark refuses an invalid value.
 const report = await runRetrievalBenchmarkSuite({
   databaseUrl: databaseUrl as string,
   embeddingProvider,
-  evidenceNeighborChunks: integerSetting("LORE_EVIDENCE_NEIGHBOR_CHUNKS", 0, 0, 2),
-  evidenceTopChunks: integerSetting("LORE_EVIDENCE_TOP_CHUNKS", 1, 1, 5),
+  knobs: strictRetrievalKnobsFromEnvironment(process.env),
   queryPlanningProvider,
-  queryPlannerMaxQueries: integerSetting("LORE_QUERY_PLANNER_MAX_QUERIES", 3, 1, 5),
-  retrievalFeedbackQueries: integerSetting("LORE_RETRIEVAL_FEEDBACK_QUERIES", 0, 0, 3),
-  retrievalRecencyWeight: numericSetting("LORE_RETRIEVAL_RECENCY_WEIGHT", 0, 0, 1),
   rerankingProvider,
-  rerankCandidateLimit: integerSetting("LORE_RERANK_CANDIDATE_LIMIT", 50, 1, 200),
-  rerankDiversityLambda: numericSetting("LORE_RERANK_DIVERSITY_LAMBDA", 1, 0, 1),
-  rerankMinimumScore: numericSetting("LORE_RERANK_MIN_SCORE", 0, 0, 1),
-  rerankWeight: numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1),
   providerWarnings,
   outputPath: options.outputPath,
   reuseIndexed: options.reuseIndexed,

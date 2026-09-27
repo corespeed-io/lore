@@ -20,7 +20,10 @@ interface MemoryProposalsViewProps {
   workspaceId: string;
   workspaceName: string;
   onOpenMemory: (memoryId: string) => void;
+  /** The review changed canonical Memory; the shell updates every Memory read. */
   onReviewed: (result: MemoryProposalReviewResult) => Promise<void>;
+  /** A failed review may have raced a change to this Memory; the shell re-reads it. */
+  onMemoryStale: (memoryId: string) => Promise<void>;
 }
 
 const FILTERS: Array<{ label: string; status: MemoryProposalStatus }> = [
@@ -52,6 +55,7 @@ export function MemoryProposalsView({
   workspaceName,
   onOpenMemory,
   onReviewed,
+  onMemoryStale,
 }: MemoryProposalsViewProps) {
   const [status, setStatus] = useState<MemoryProposalStatus>("pending");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -163,11 +167,7 @@ export function MemoryProposalsView({
       setActionError(errorMessage(cause));
       const refreshes: Array<Promise<unknown>> = [mutateProposals()];
       if (selected.kind === "update" && selected.targetMemoryId) {
-        refreshes.push(
-          mutations.mutateCache(loreKeys.memory(workspaceId, selected.targetMemoryId), undefined, {
-            revalidate: true,
-          }),
-        );
+        refreshes.push(onMemoryStale(selected.targetMemoryId));
       }
       if (observationIds.length > 0) refreshes.push(mutateObservations());
       await Promise.allSettled(refreshes);
@@ -176,11 +176,6 @@ export function MemoryProposalsView({
 
     setReceipt(result);
     await Promise.allSettled([
-      result.memory
-        ? mutations.mutateCache(loreKeys.memory(workspaceId, result.memory.id), result.memory, {
-            revalidate: false,
-          })
-        : Promise.resolve(undefined),
       mutateProposals(),
       mutations.mutateCache(loreKeys.memoryProposals(workspaceId, result.proposal.status)),
       onReviewed(result),

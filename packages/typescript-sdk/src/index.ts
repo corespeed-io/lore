@@ -1,5 +1,5 @@
 import type { components, operations, paths } from "./generated/openapi.js";
-import { LORE_ERROR_CODES } from "./generated/runtime.ts";
+import { LORE_CONTRACT, LORE_ERROR_CODES } from "./generated/runtime.ts";
 
 export type {
   RepositoryGroundingContext,
@@ -13,7 +13,10 @@ export {
   RETRIEVAL_GROUNDING_POLICY_REVISION,
 } from "./generated/grounding.ts";
 /** Public input guidance; the API performs canonical content validation and chunking. */
-export { MEMORY_CONTENT_LIMITS } from "./generated/runtime.ts";
+export { LORE_CONTRACT, MEMORY_CONTENT_LIMITS } from "./generated/runtime.ts";
+
+const LIMITS = LORE_CONTRACT.limits;
+const COMMIT_OID = new RegExp(LORE_CONTRACT.patterns.commitOid);
 
 export type LoreOpenApiPaths = paths;
 export type LoreOpenApiOperations = operations;
@@ -204,10 +207,10 @@ const MAX_REQUEST_TIMEOUT_MS = 300_000;
 const AGENT_TOKEN_PATTERN = /^lore_agent_[0-9a-f]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /**
- * The server's Idempotency-Key rule (1-128 visible ASCII characters), checked here so
+ * The server's Idempotency-Key rule (visible ASCII characters, bounded), checked here so
  * callers see it before a 400. Adapters built on the SDK reuse it rather than copying it.
  */
-export const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/;
+export const IDEMPOTENCY_KEY_PATTERN = new RegExp(LORE_CONTRACT.patterns.idempotencyKey);
 const VISIBLE_ASCII_PATTERN = /^[\x21-\x7e]+$/;
 /** RFC 9110 `token`: the grammar of a header name. */
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -235,7 +238,11 @@ function normalizedUuid(value: string, name: string): string {
   return normalized;
 }
 
-function normalizedLimit(value: number | undefined, fallback: number, maximum = 100): number {
+function normalizedLimit(
+  value: number | undefined,
+  fallback: number,
+  maximum: number = LIMITS.memoryListLimit,
+): number {
   if (value === undefined) return fallback;
   if (!Number.isInteger(value) || value < 1 || value > maximum) {
     throw new TypeError(`limit must be an integer from 1 to ${maximum}`);
@@ -389,7 +396,9 @@ function normalizedCustomHeaders(input: HeadersInit | undefined): Headers {
 function normalizedIdempotencyKey(value: string | undefined): string {
   if (value === undefined) return crypto.randomUUID();
   if (!IDEMPOTENCY_KEY_PATTERN.test(value)) {
-    throw new TypeError("idempotencyKey must contain 1 to 128 visible ASCII characters");
+    throw new TypeError(
+      `idempotencyKey must contain 1 to ${LIMITS.idempotencyKeyLength} visible ASCII characters`,
+    );
   }
   return value;
 }
@@ -634,8 +643,10 @@ export class LoreClient {
 
   async createWorkspace(name: string, signal?: AbortSignal): Promise<Workspace> {
     const normalizedName = name.trim();
-    if (!normalizedName || normalizedName.length > 120) {
-      throw new TypeError("Workspace name must contain 1 to 120 characters");
+    if (!normalizedName || normalizedName.length > LIMITS.workspaceNameLength) {
+      throw new TypeError(
+        `Workspace name must contain 1 to ${LIMITS.workspaceNameLength} characters`,
+      );
     }
     return (
       await this.#transport.json<Workspace>("api/v1/workspaces", {
@@ -802,9 +813,9 @@ export class LoreWorkspaceClient {
     ).data;
   }
 
-  async graph(limit = 5_000, signal?: AbortSignal): Promise<MemoryGraph> {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 5_000) {
-      throw new TypeError("Graph limit must be an integer from 1 to 5000");
+  async graph(limit: number = LIMITS.graphNodes, signal?: AbortSignal): Promise<MemoryGraph> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > LIMITS.graphNodes) {
+      throw new TypeError(`Graph limit must be an integer from 1 to ${LIMITS.graphNodes}`);
     }
     return (
       await this.transport.json<MemoryGraph>(`api/v1/graph?limit=${limit}`, {
@@ -818,11 +829,17 @@ export class LoreWorkspaceClient {
     if (input.cursor && input.offset !== undefined) {
       throw new TypeError("cursor and offset cannot be combined");
     }
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    const params = new URLSearchParams({
+      limit: String(normalizedLimit(input.limit, LIMITS.memoryListLimitDefault)),
+    });
     if (input.cursor) params.set("cursor", input.cursor);
     if (input.offset !== undefined) {
-      if (!Number.isInteger(input.offset) || input.offset < 0 || input.offset > 1_000_000) {
-        throw new TypeError("offset must be an integer from 0 to 1000000");
+      if (
+        !Number.isInteger(input.offset) ||
+        input.offset < 0 ||
+        input.offset > LIMITS.memoryListOffset
+      ) {
+        throw new TypeError(`offset must be an integer from 0 to ${LIMITS.memoryListOffset}`);
       }
       params.set("offset", String(input.offset));
     }
@@ -836,12 +853,12 @@ export class LoreWorkspaceClient {
 
   async searchMemories(input: MemorySearchInput): Promise<readonly MemorySearchResult[]> {
     const query = input.query.trim();
-    if (!query || query.length > 10_000) {
-      throw new TypeError("query must contain 1 to 10000 characters");
+    if (!query || query.length > LIMITS.memorySearchQueryLength) {
+      throw new TypeError(`query must contain 1 to ${LIMITS.memorySearchQueryLength} characters`);
     }
     const params = new URLSearchParams({
       q: query,
-      limit: String(normalizedLimit(input.limit, 10)),
+      limit: String(normalizedLimit(input.limit, LIMITS.memorySearchLimitDefault)),
     });
     addMemoryFilters(params, input);
     return (
@@ -856,20 +873,22 @@ export class LoreWorkspaceClient {
     const repositoryKey = input.repositoryKey.trim();
     const commitOid = input.commitOid.trim().toLowerCase();
     const query = input.query.trim();
-    if (!repositoryKey || repositoryKey.length > 512) {
-      throw new TypeError("repositoryKey must contain 1 to 512 characters");
+    if (!repositoryKey || repositoryKey.length > LIMITS.repositoryKeyLength) {
+      throw new TypeError(
+        `repositoryKey must contain 1 to ${LIMITS.repositoryKeyLength} characters`,
+      );
     }
-    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commitOid)) {
+    if (!COMMIT_OID.test(commitOid)) {
       throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
     }
-    if (!query || query.length > 2_000) {
-      throw new TypeError("query must contain 1 to 2000 characters");
+    if (!query || query.length > LIMITS.codeQueryLength) {
+      throw new TypeError(`query must contain 1 to ${LIMITS.codeQueryLength} characters`);
     }
     const params = new URLSearchParams({
       repository_key: repositoryKey,
       commit_oid: commitOid,
       q: query,
-      limit: String(normalizedLimit(input.limit, 10)),
+      limit: String(normalizedLimit(input.limit, 10, LIMITS.codeSearchResults)),
     });
     if (input.pathPrefix) params.set("path_prefix", input.pathPrefix);
     return (
@@ -882,22 +901,27 @@ export class LoreWorkspaceClient {
 
   async retrieveContext(input: RetrieveContextInput): Promise<RetrievedContext> {
     const query = input.query.trim();
-    if (!query || query.length > 10_000) {
-      throw new TypeError("query must contain 1 to 10000 characters");
+    if (!query || query.length > LIMITS.memorySearchQueryLength) {
+      throw new TypeError(`query must contain 1 to ${LIMITS.memorySearchQueryLength} characters`);
     }
     const repositoryKey = input.repositoryKey?.trim();
     const commitOid = input.commitOid?.trim().toLowerCase();
     if ((repositoryKey === undefined) !== (commitOid === undefined)) {
       throw new TypeError("repositoryKey and commitOid must be provided together");
     }
-    if (repositoryKey !== undefined && (!repositoryKey || repositoryKey.length > 512)) {
-      throw new TypeError("repositoryKey must contain 1 to 512 characters");
+    if (
+      repositoryKey !== undefined &&
+      (!repositoryKey || repositoryKey.length > LIMITS.repositoryKeyLength)
+    ) {
+      throw new TypeError(
+        `repositoryKey must contain 1 to ${LIMITS.repositoryKeyLength} characters`,
+      );
     }
-    if (commitOid !== undefined && !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commitOid)) {
+    if (commitOid !== undefined && !COMMIT_OID.test(commitOid)) {
       throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
     }
     const route = input.route ?? "auto";
-    if (!(["auto", "both", "code-only", "memory-only"] as const).includes(route)) {
+    if (!(LORE_CONTRACT.vocabularies.contextRoutes as readonly string[]).includes(route)) {
       throw new TypeError("route is invalid");
     }
     if ((route === "both" || route === "code-only") && repositoryKey === undefined) {
@@ -910,12 +934,17 @@ export class LoreWorkspaceClient {
       throw new TypeError("codeQuery requires repositoryKey and commitOid");
     }
     const memoryQuery = input.memoryQuery?.trim();
-    if (memoryQuery !== undefined && (!memoryQuery || memoryQuery.length > 10_000)) {
-      throw new TypeError("memoryQuery must contain 1 to 10000 characters");
+    if (
+      memoryQuery !== undefined &&
+      (!memoryQuery || memoryQuery.length > LIMITS.memorySearchQueryLength)
+    ) {
+      throw new TypeError(
+        `memoryQuery must contain 1 to ${LIMITS.memorySearchQueryLength} characters`,
+      );
     }
     const codeQuery = input.codeQuery?.trim();
-    if (codeQuery !== undefined && (!codeQuery || codeQuery.length > 2_000)) {
-      throw new TypeError("codeQuery must contain 1 to 2000 characters");
+    if (codeQuery !== undefined && (!codeQuery || codeQuery.length > LIMITS.codeQueryLength)) {
+      throw new TypeError(`codeQuery must contain 1 to ${LIMITS.codeQueryLength} characters`);
     }
     const { signal, ...requestInput } = input;
     return (
@@ -929,8 +958,16 @@ export class LoreWorkspaceClient {
           ...(codeQuery === undefined ? {} : { codeQuery }),
           ...(repositoryKey === undefined ? {} : { repositoryKey, commitOid }),
           route,
-          memoryLimit: normalizedLimit(input.memoryLimit, 5, 10),
-          codeLimit: normalizedLimit(input.codeLimit, 10, 20),
+          memoryLimit: normalizedLimit(
+            input.memoryLimit,
+            LIMITS.contextMemoryLimitDefault,
+            LIMITS.contextMemoryLimit,
+          ),
+          codeLimit: normalizedLimit(
+            input.codeLimit,
+            LIMITS.contextCodeLimitDefault,
+            LIMITS.contextCodeLimit,
+          ),
         },
         signal,
       })
@@ -940,14 +977,18 @@ export class LoreWorkspaceClient {
   async queryCodeDependencies(input: CodeDependencyQueryInput): Promise<CodeDependencyQueryResult> {
     const repositoryKey = input.repositoryKey.trim();
     const commitOid = input.commitOid.trim().toLowerCase();
-    if (!repositoryKey || repositoryKey.length > 512) {
-      throw new TypeError("repositoryKey must contain 1 to 512 characters");
+    if (!repositoryKey || repositoryKey.length > LIMITS.repositoryKeyLength) {
+      throw new TypeError(
+        `repositoryKey must contain 1 to ${LIMITS.repositoryKeyLength} characters`,
+      );
     }
-    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(commitOid)) {
+    if (!COMMIT_OID.test(commitOid)) {
       throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
     }
-    if (input.direction !== "callers" && input.direction !== "callees") {
-      throw new TypeError("direction must be callers or callees");
+    if (!LORE_CONTRACT.vocabularies.codeDependencyDirections.includes(input.direction)) {
+      throw new TypeError(
+        `direction must be ${LORE_CONTRACT.vocabularies.codeDependencyDirections.join(" or ")}`,
+      );
     }
     if ((input.symbol === undefined) === (input.path === undefined)) {
       throw new TypeError("Provide exactly one of symbol or path");
@@ -959,8 +1000,8 @@ export class LoreWorkspaceClient {
     });
     if (input.symbol !== undefined) {
       const symbol = input.symbol.trim();
-      if (!symbol || symbol.length > 1_600) {
-        throw new TypeError("symbol must contain 1 to 1600 characters");
+      if (!symbol || symbol.length > LIMITS.codeSymbolLength) {
+        throw new TypeError(`symbol must contain 1 to ${LIMITS.codeSymbolLength} characters`);
       }
       params.set("symbol", symbol);
     } else {
@@ -968,7 +1009,7 @@ export class LoreWorkspaceClient {
       if (
         !path ||
         path !== path.trim() ||
-        path.length > 1_024 ||
+        path.length > LIMITS.repositoryPathLength ||
         path.startsWith("/") ||
         path.includes("\\") ||
         path.split("/").some((part) => !part || part === "." || part === "..")
@@ -977,7 +1018,16 @@ export class LoreWorkspaceClient {
       }
       params.set("path", path);
     }
-    params.set("limit", String(normalizedLimit(input.limit, 50, 200)));
+    params.set(
+      "limit",
+      String(
+        normalizedLimit(
+          input.limit,
+          LIMITS.codeDependencyResultsDefault,
+          LIMITS.codeDependencyResults,
+        ),
+      ),
+    );
     return (
       await this.transport.json<CodeDependencyQueryResult>(`api/v1/code/dependencies?${params}`, {
         workspaceId: this.workspaceId,
@@ -998,7 +1048,11 @@ export class LoreWorkspaceClient {
   async listCodeIndexJobs(
     input: { limit?: number; signal?: AbortSignal } = {},
   ): Promise<readonly CodeIndexJob[]> {
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 20, 100)) });
+    const params = new URLSearchParams({
+      limit: String(
+        normalizedLimit(input.limit, LIMITS.codeIndexJobListDefault, LIMITS.codeIndexJobList),
+      ),
+    });
     return (
       await this.transport.json<readonly CodeIndexJob[]>(`api/v1/code/index-jobs?${params}`, {
         workspaceId: this.workspaceId,
@@ -1072,7 +1126,9 @@ export class LoreWorkspaceClient {
   }
 
   async listEpisodes(input: EpisodeListInput = {}): Promise<EpisodePage> {
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    const params = new URLSearchParams({
+      limit: String(normalizedLimit(input.limit, LIMITS.memoryListLimitDefault)),
+    });
     if (input.cursor) params.set("cursor", input.cursor);
     if (input.kind) params.set("kind", input.kind);
     if (input.scope) params.set("scope", input.scope);
@@ -1109,8 +1165,8 @@ export class LoreWorkspaceClient {
     signal?: AbortSignal,
   ): Promise<readonly Observation[]> {
     const ids = [...new Set(observationIds.map((id) => normalizedUuid(id, "observationId")))];
-    if (ids.length < 1 || ids.length > 50) {
-      throw new TypeError("observationIds must contain 1 to 50 UUIDs");
+    if (ids.length < 1 || ids.length > LIMITS.observationBatchRead) {
+      throw new TypeError(`observationIds must contain 1 to ${LIMITS.observationBatchRead} UUIDs`);
     }
     const params = new URLSearchParams();
     for (const id of ids) params.append("id", id);
@@ -1134,7 +1190,11 @@ export class LoreWorkspaceClient {
   async listMemoryProposals(
     input: MemoryProposalListInput = {},
   ): Promise<readonly MemoryProposal[]> {
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    const params = new URLSearchParams({
+      limit: String(
+        normalizedLimit(input.limit, LIMITS.memoryProposalListDefault, LIMITS.memoryProposalList),
+      ),
+    });
     if (input.status) params.set("status", input.status);
     return (
       await this.transport.json<readonly MemoryProposal[]>(`api/v1/memory-proposals?${params}`, {
@@ -1234,7 +1294,15 @@ function addMemoryFilters(
   if (input.scope) params.set("scope", input.scope);
   if (input.updatedAfter) params.set("updated_after", input.updatedAfter);
   if (input.updatedBefore) params.set("updated_before", input.updatedBefore);
-  if (input.metadata) params.set("metadata", JSON.stringify(input.metadata));
+  if (input.metadata) {
+    const metadata = JSON.stringify(input.metadata);
+    if (metadata.length > LIMITS.memoryMetadataFilterLength) {
+      throw new TypeError(
+        `metadata filter exceeds ${LIMITS.memoryMetadataFilterLength} serialized characters`,
+      );
+    }
+    params.set("metadata", metadata);
+  }
 }
 
 /** Resolve the shared CLI/MCP connection contract without reading global process state. */

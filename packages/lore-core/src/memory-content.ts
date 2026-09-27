@@ -1,4 +1,5 @@
 import { chunkMemoryContent, MemoryChunkingError } from "./memory-chunking";
+import { hasLoneSurrogate, LoreValidationError } from "./validation";
 
 export const MEMORY_CONTENT_LIMITS = {
   recommendedCharacters: 8_000,
@@ -6,31 +7,38 @@ export const MEMORY_CONTENT_LIMITS = {
   maximumChunks: 64,
 } as const;
 
-export class MemoryContentValidationError extends TypeError {
+export class MemoryContentValidationError extends LoreValidationError {
   override name = "MemoryContentValidationError";
-  readonly status = 400;
+
+  /** `field` names the content that failed, `content` unless a batch names its record. */
+  constructor(message: string, options?: ErrorOptions & { field?: string }) {
+    super(options?.field ?? "content", message, options);
+  }
 }
 
 export interface PreparedMemoryContent {
-  content: string;
-  chunks: readonly string[];
+  readonly content: string;
+  readonly chunks: readonly string[];
 }
 
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      // charCodeAt past the end is NaN and every NaN comparison is false, so a
-      // string ENDING in a high surrogate needs the integer guard to be caught.
-      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) return true;
-      index += 1;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return true;
-    }
+/**
+ * Whether `content` holds more than `maximum` code points, without building an array
+ * of them: a code point takes one or two UTF-16 units, so the unit length bounds the
+ * count, and counting stops at the first one past the limit.
+ */
+function exceedsCodePoints(content: string, maximum: number): boolean {
+  if (content.length <= maximum) return false;
+  if (content.length > maximum * 2) return true;
+  let count = 0;
+  for (const _codePoint of content) {
+    count += 1;
+    if (count > maximum) return true;
   }
   return false;
 }
+
+/** Every result prepareMemoryContent returned, so a later write may reuse its chunks. */
+const ENGINE_PREPARED = new WeakSet<PreparedMemoryContent>();
 
 export function prepareMemoryContent(content: string): PreparedMemoryContent {
   if (typeof content !== "string" || !content.trim()) {
@@ -42,7 +50,7 @@ export function prepareMemoryContent(content: string): PreparedMemoryContent {
   if (hasLoneSurrogate(content)) {
     throw new MemoryContentValidationError("Memory content contains invalid Unicode");
   }
-  if (Array.from(content).length > MEMORY_CONTENT_LIMITS.maximumCharacters) {
+  if (exceedsCodePoints(content, MEMORY_CONTENT_LIMITS.maximumCharacters)) {
     throw new MemoryContentValidationError(
       `Memory content may contain at most ${MEMORY_CONTENT_LIMITS.maximumCharacters} Unicode characters`,
     );
@@ -61,5 +69,22 @@ export function prepareMemoryContent(content: string): PreparedMemoryContent {
       `Memory content may produce at most ${MEMORY_CONTENT_LIMITS.maximumChunks} chunks`,
     );
   }
-  return { content, chunks };
+  const prepared = Object.freeze({ content, chunks: Object.freeze(chunks) });
+  ENGINE_PREPARED.add(prepared);
+  return prepared;
+}
+
+/**
+ * The canonical chunks of `content`. A caller that already validated it may pass the
+ * prepareMemoryContent result; its chunks are reused only when this engine produced
+ * them for exactly this text, and the content is chunked again otherwise.
+ */
+export function memoryContentChunks(
+  content: string,
+  prepared?: PreparedMemoryContent,
+): readonly string[] {
+  if (prepared && ENGINE_PREPARED.has(prepared) && prepared.content === content) {
+    return prepared.chunks;
+  }
+  return prepareMemoryContent(content).chunks;
 }

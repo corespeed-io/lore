@@ -5,14 +5,17 @@ while preserving tenant and user-private isolation.
 
 Lore is two concepts in one repository. **Lore Core**
 (`packages/lore-core`, named `@corespeed/lore-core`) is the reusable
-memory engine: it owns Memory storage, chunking, retrieval algorithms, Memory
-Links, Episode/Observation validation and evidence reads, and embedding maintenance
-over PostgreSQL. Its factories bind a host-constrained `MemoryStorageContext`;
+memory engine: it owns the domain contract (the Memory, Episode, and Observation
+types, their vocabularies and limits, and the input rules that refuse, never
+clamp, a value), Memory storage, chunking, retrieval algorithms, Memory Links,
+Episode/Observation validation and evidence reads, and embedding maintenance over
+PostgreSQL. Its factories bind a host-constrained `MemoryStorageContext`;
 `partitionId`, `ownerId`, and `sourceId` are storage and attribution keys, not an
 identity or tenant model. It defines the model capabilities that hosts supply.
 **Lore OSS** is the self-hostable product built on that engine in this repository:
 identity, tenancy and sharing policy, request authorization and idempotency, the
-HTTP API and TypeScript SDK, the web UI, Memory Proposals, code-aware memory,
+HTTP API (whose wire contract derives from the Core domain contract) and TypeScript
+SDK, the web UI, Memory Proposals, code-aware memory,
 portability, evaluation, and deployment profiles, including concrete model adapters
 and their configuration. Its Workspace/User/Agent model and public fields remain unchanged.
 CoreSpeed HaaS retains a separate vendored `packages/memory-core` fork with its own identity

@@ -1,7 +1,17 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { CodeIndexValidationError } from "@/modules/code/indexing/errors";
+import {
+  activeGenerationOf,
+  REVISION_GENERATION_SOURCE,
+} from "@/modules/code/indexing/generation-sql";
+import {
+  type CODE_DEPENDENCY_DIRECTIONS,
+  DEFAULT_CODE_DEPENDENCY_RESULTS,
+  MAXIMUM_CODE_DEPENDENCY_RESULTS,
+} from "@/modules/code/indexing/protocol";
 import type { CodeDependencyKind } from "@/modules/code/indexing/types";
 import {
+  CODE_SYMBOL_MAXIMUM_LENGTH,
   validateCommitOid,
   validatePath,
   validatePlainText,
@@ -10,7 +20,7 @@ import {
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 
-export type CodeDependencyDirection = "callers" | "callees";
+export type CodeDependencyDirection = (typeof CODE_DEPENDENCY_DIRECTIONS)[number];
 export type CodeDependencyResolution = "resolved" | "ambiguous" | "unresolved";
 
 export interface QueryCodeDependenciesInput {
@@ -154,11 +164,15 @@ export function createCodeDependencyGraphModule(
       if (hasSymbol === hasPath) {
         throw new CodeIndexValidationError("Provide exactly one of symbol or path");
       }
-      const symbol = hasSymbol ? validatePlainText(input.symbol ?? "", "symbol", 1_600) : null;
+      const symbol = hasSymbol
+        ? validatePlainText(input.symbol ?? "", "symbol", CODE_SYMBOL_MAXIMUM_LENGTH)
+        : null;
       const path = hasPath ? validatePath(input.path ?? "") : null;
-      const limit = input.limit ?? 50;
-      if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-        throw new CodeIndexValidationError("limit must be an integer from 1 through 200");
+      const limit = input.limit ?? DEFAULT_CODE_DEPENDENCY_RESULTS;
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_CODE_DEPENDENCY_RESULTS) {
+        throw new CodeIndexValidationError(
+          `limit must be an integer from 1 through ${MAXIMUM_CODE_DEPENDENCY_RESULTS}`,
+        );
       }
 
       return database.transaction(async (transaction) => {
@@ -172,18 +186,8 @@ export function createCodeDependencyGraphModule(
             `WITH selected_generation AS MATERIALIZED (
                SELECT repository.id AS repository_id, revision.id AS revision_id,
                  generation.id AS generation_id
-               FROM code_repositories repository
-               JOIN code_revisions revision
-                 ON revision.workspace_id = repository.workspace_id
-                AND revision.repository_id = repository.id
-               JOIN code_index_generations generation
-                 ON generation.workspace_id = revision.workspace_id
-                AND generation.repository_id = revision.repository_id
-                AND generation.revision_id = revision.id
-               WHERE repository.workspace_id = $1
-                 AND repository.repository_key = $2
-                 AND revision.commit_oid = $3
-                 AND generation.status = 'active'
+               FROM ${REVISION_GENERATION_SOURCE}
+               WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$3" })}
              )
              SELECT DISTINCT ON (artifact.path || '#' || indexed_symbol.symbol_key_suffix)
                artifact.id AS artifact_id, artifact.path,
@@ -237,23 +241,13 @@ export function createCodeDependencyGraphModule(
         } else {
           const candidates = await transaction.query<PathCandidateRow>(
             `SELECT artifact.path
-             FROM code_repositories repository
-             JOIN code_revisions revision
-               ON revision.workspace_id = repository.workspace_id
-              AND revision.repository_id = repository.id
-             JOIN code_index_generations generation
-               ON generation.workspace_id = revision.workspace_id
-              AND generation.repository_id = revision.repository_id
-              AND generation.revision_id = revision.id
-              AND generation.status = 'active'
+             FROM ${REVISION_GENERATION_SOURCE}
              JOIN code_artifacts artifact
                ON artifact.workspace_id = generation.workspace_id
               AND artifact.repository_id = generation.repository_id
               AND artifact.revision_id = generation.revision_id
               AND artifact.generation_id = generation.id
-             WHERE repository.workspace_id = $1
-               AND repository.repository_key = $2
-               AND revision.commit_oid = $3
+             WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$3" })}
                AND artifact.path = $4
              ORDER BY artifact.ordinal, artifact.id
              LIMIT 1`,
@@ -303,15 +297,7 @@ export function createCodeDependencyGraphModule(
              dependency.to_symbol_key,
              dependency_payload.site_start_line, dependency_payload.site_start_column,
              dependency_payload.site_end_line, dependency_payload.site_end_column
-           FROM code_repositories repository
-           JOIN code_revisions revision
-             ON revision.workspace_id = repository.workspace_id
-            AND revision.repository_id = repository.id
-           JOIN code_index_generations generation
-             ON generation.workspace_id = revision.workspace_id
-            AND generation.repository_id = revision.repository_id
-            AND generation.revision_id = revision.id
-            AND generation.status = 'active'
+           FROM ${REVISION_GENERATION_SOURCE}
            JOIN code_dependency_edges dependency
              ON dependency.workspace_id = generation.workspace_id
             AND dependency.repository_id = generation.repository_id
@@ -342,9 +328,7 @@ export function createCodeDependencyGraphModule(
             AND to_symbol.symbol_set_id = to_artifact.symbol_set_id
             AND to_artifact.path || '#' || to_symbol.symbol_key_suffix
               = dependency.to_symbol_key
-           WHERE repository.workspace_id = $1
-             AND repository.repository_key = $2
-             AND revision.commit_oid = $3
+           WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$3" })}
              AND ${directionPredicate}
            ORDER BY from_artifact.path, dependency_payload.site_start_line,
              dependency_payload.site_start_column, dependency_payload.kind,

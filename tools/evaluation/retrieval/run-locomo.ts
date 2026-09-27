@@ -14,6 +14,7 @@ import { createPostgresDatabase } from "../../../src/server/database/postgres";
 import { createEmbeddingProviderFromEnvironment } from "../../../src/server/providers/embedding/factory";
 import { createQueryPlanningProviderFromEnvironment } from "../../../src/server/providers/query-planning/factory";
 import { createRerankingProviderFromEnvironment } from "../../../src/server/providers/reranking/factory";
+import { strictRetrievalKnobsFromEnvironment } from "../../../src/server/providers/retrieval-knobs";
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
 import type { BenchmarkReaderRuntimeSnapshot } from "../shared/benchmark-reader";
 import { createBenchmarkReaderFromEnvironment } from "../shared/benchmark-reader";
@@ -232,16 +233,19 @@ if (!reader) throw new Error("LORE_BENCHMARK_READER_PROVIDER is required");
 const readerRuntimeBefore: BenchmarkReaderRuntimeSnapshot | null =
   (await reader.inspectRuntime?.()) ?? null;
 
-const queryPlannerMaxQueries = integerSetting("LORE_QUERY_PLANNER_MAX_QUERIES", 3, 1, 5);
-const rerankCandidateLimit = integerSetting("LORE_RERANK_CANDIDATE_LIMIT", 50, 1, 200);
-const rerankDiversityLambda = numericSetting("LORE_RERANK_DIVERSITY_LAMBDA", 1, 0, 1);
-const rerankMinimumScore = numericSetting("LORE_RERANK_MIN_SCORE", 0, 0, 1);
-const rerankWeight = numericSetting("LORE_RERANK_WEIGHT", 1, 0, 1);
-const retrievalFeedbackQueries = integerSetting("LORE_RETRIEVAL_FEEDBACK_QUERIES", 0, 0, 3);
-const retrievalRecencyWeight = numericSetting("LORE_RETRIEVAL_RECENCY_WEIGHT", 0, 0, 1);
-const evidenceNeighborChunks = integerSetting("LORE_EVIDENCE_NEIGHBOR_CHUNKS", 0, 0, 2);
-const evidenceTopChunks = integerSetting("LORE_EVIDENCE_TOP_CHUNKS", 1, 1, 5);
-const semanticDistanceThreshold = numericSetting("LORE_SEMANTIC_DISTANCE_THRESHOLD", 0.5, 0, 2);
+// The deployment's own knob table, strictly: a benchmark refuses an invalid value.
+const retrievalKnobs = strictRetrievalKnobsFromEnvironment(process.env);
+const queryPlannerMaxQueries = retrievalKnobs.queryPlannerMaxQueries;
+const rerankCandidateLimit = retrievalKnobs.rerankCandidateLimit;
+const rerankDiversityLambda = retrievalKnobs.rerankDiversityLambda;
+const rerankMinimumScore = retrievalKnobs.rerankMinimumScore;
+const rerankWeight = retrievalKnobs.rerankWeight;
+const retrievalFeedbackQueries = retrievalKnobs.retrievalFeedbackQueries;
+const retrievalRecencyWeight = retrievalKnobs.retrievalRecencyWeight;
+const entityAliasRecall = retrievalKnobs.entityAliasRecall;
+const evidenceNeighborChunks = retrievalKnobs.evidenceNeighborChunks;
+const evidenceTopChunks = retrievalKnobs.evidenceTopChunks;
+const semanticDistanceThreshold = retrievalKnobs.semanticDistanceThreshold;
 const contextGroupMetadataKey = process.env.LORE_BENCHMARK_CONTEXT_GROUP_KEY?.trim() || undefined;
 const contextGroupOrdinalMetadataKey =
   process.env.LORE_BENCHMARK_CONTEXT_GROUP_ORDINAL_KEY?.trim() || undefined;
@@ -266,15 +270,9 @@ const retrievalReport = options.skipRetrievalDiagnostic
       databaseUrl,
       embeddingProvider: configuredEmbeddingProvider,
       contextGroupExpansion,
+      knobs: retrievalKnobs,
       queryPlanningProvider: configuredQueryPlanningProvider,
-      queryPlannerMaxQueries,
-      retrievalFeedbackQueries,
-      retrievalRecencyWeight,
       rerankingProvider: configuredRerankingProvider,
-      rerankCandidateLimit,
-      rerankDiversityLambda,
-      rerankMinimumScore,
-      rerankWeight,
       providerWarnings,
       outputPath: retrievalOutputPath,
       printReport: false,
@@ -317,6 +315,7 @@ try {
   const searchModule = createMemoryModule(requestDatabase, {
     contextGroupExpansion,
     embeddingProvider,
+    entityAliasRecall,
     evidenceNeighborChunks,
     evidenceTopChunks,
     queryPlanningProvider,
@@ -588,6 +587,7 @@ try {
     retrieval: {
       limit: options.limit,
       semanticDistanceThreshold,
+      entityAliasRecall,
       evidenceNeighborChunks,
       evidenceTopChunks,
       evidencePolicy: RETRIEVAL_EVIDENCE_POLICY,

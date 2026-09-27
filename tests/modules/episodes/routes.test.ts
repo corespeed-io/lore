@@ -274,3 +274,147 @@ test("Episode metadata budgets use the original JSON representation", async () =
   expect(responses.map((response) => response.status)).toEqual([201, 201]);
   await testContext.close();
 });
+
+test("Episode kinds and wire shapes are refused with the engine's vocabulary", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "episode-http-vocabulary";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Evidence vocabulary" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+
+  const unknownKind = await app.request(
+    new Request("http://lore.local/api/v1/episodes?kind=diary", { headers }),
+  );
+  expect(unknownKind.status).toBe(400);
+  await expect(unknownKind.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "kind must be conversation, workflow, document, or event",
+  });
+  // An empty kind filter is no filter.
+  const unfiltered = await app.request(
+    new Request("http://lore.local/api/v1/episodes?kind=", { headers }),
+  );
+  expect(unfiltered.status).toBe(200);
+
+  const cases: Array<[unknown, string]> = [
+    [
+      { kind: "diary", observations: [{ kind: "message", content: "x" }] },
+      "kind must be conversation, workflow, document, or event",
+    ],
+    [{ kind: "conversation", observations: "x" }, "observations must be an array"],
+    [{ kind: "conversation", observations: [] }, "observations must contain 1 to 100 items"],
+    [
+      { kind: "conversation", observations: [{ kind: "message", content: 42 }] },
+      "observations[0].content must be a string",
+    ],
+    [
+      { kind: "conversation", observations: [{ kind: "thought", content: "x" }] },
+      "observations[0].kind must be message, tool_call, tool_result, document_fragment, or event",
+    ],
+  ];
+  for (const [body, error] of cases) {
+    const response = await app.request(
+      new Request("http://lore.local/api/v1/episodes", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+    expect(response.status, error).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+  await testContext.close();
+});
+
+test("Episode content and text bounds the engine now owns still answer 400 over HTTP", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "episode-http-engine-bounds";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Evidence engine bounds" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id, "idempotency-key": "episode-bounds" };
+  const observation = (content: string) => ({ kind: "message", content });
+
+  // The route used to refuse these itself; each message is unchanged or names its entry.
+  const cases: Array<[unknown[], string]> = [
+    [
+      Array.from({ length: 11 }, () => observation("c".repeat(100_000))),
+      "Episode content exceeds 1000000 characters",
+    ],
+    [
+      [observation("fits"), observation("  ")],
+      "observations[1].content must contain 1 to 100000 characters",
+    ],
+    [
+      [observation("bad\uD800")],
+      "observations[0].content contains a NUL character or invalid Unicode",
+    ],
+    [
+      [{ ...observation("fits"), observedAt: "yesterday" }],
+      "observations[0].observedAt must be an ISO 8601 timestamp",
+    ],
+  ];
+  for (const [observations, error] of cases) {
+    const response = await app.request(
+      new Request("http://lore.local/api/v1/episodes", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ kind: "conversation", observations }),
+      }),
+    );
+    expect(response.status, error).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+  // The engine's rules run before the Idempotency-Key is read and the body hashed, so
+  // an Episode it refuses answers with its own rule even under a malformed key.
+  const refusedFirst = await app.request(
+    new Request("http://lore.local/api/v1/episodes", {
+      method: "POST",
+      headers: { ...headers, "idempotency-key": "not visible ascii" },
+      body: JSON.stringify({
+        kind: "conversation",
+        observations: [observation("fits"), observation("  ")],
+      }),
+    }),
+  );
+  expect(refusedFirst.status).toBe(400);
+  await expect(refusedFirst.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "observations[1].content must contain 1 to 100000 characters",
+  });
+  // A refused request stores no replay, so the same key may carry a valid Episode.
+  const recorded = await app.request(
+    new Request("http://lore.local/api/v1/episodes", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ kind: "conversation", observations: [observation("Valid.")] }),
+    }),
+  );
+  expect(recorded.status).toBe(201);
+  await testContext.close();
+});

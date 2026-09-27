@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import type { ContextGroupExpansionOptions, EmbeddingProvider } from "@corespeed/lore-core";
 import {
   createMemoryMaintenanceModule,
+  MEMORY_SEARCH_LIMITS,
   RETRIEVAL_CJK_LEXICAL_POLICY,
   RETRIEVAL_CONTEXT_GROUP_POLICY,
   RETRIEVAL_ENTITY_ALIAS_POLICY,
@@ -18,6 +19,10 @@ import type {
   ConfiguredQueryPlanningProvider,
   ConfiguredRerankingProvider,
 } from "../../../src/server/providers/metadata";
+import {
+  RETRIEVAL_KNOBS,
+  type RetrievalKnobs,
+} from "../../../src/server/providers/retrieval-knobs";
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
 import {
   drainEmbeddingMaintenance,
@@ -128,10 +133,9 @@ function unitIntervalSweep(name: string, fallback: number): number[] {
   return [...new Set(values)];
 }
 
-// Deployment bound for LORE_RERANK_CANDIDATE_LIMIT; Core clamps to it as well.
-const MAXIMUM_RERANK_CANDIDATE_LIMIT = 200;
-// Core clamps every Memory search limit to this many returned results.
-const MAXIMUM_SEARCH_RESULT_LIMIT = 100;
+const MAXIMUM_RERANK_CANDIDATE_LIMIT = RETRIEVAL_KNOBS.rerankCandidateLimit.maximum;
+// The engine refuses a Memory search limit above this.
+const MAXIMUM_SEARCH_RESULT_LIMIT = MEMORY_SEARCH_LIMITS.maximumLimit;
 
 /**
  * Candidate depths to sweep. Callers invoke it only when a reranker or context
@@ -171,9 +175,13 @@ function retrievalLimitSweep(): number[] {
   const values = configured.split(",").map((value) => Number(value.trim()));
   if (
     values.length === 0 ||
-    values.some((value) => !Number.isInteger(value) || value < 1 || value > 100)
+    values.some(
+      (value) => !Number.isInteger(value) || value < 1 || value > MAXIMUM_SEARCH_RESULT_LIMIT,
+    )
   ) {
-    throw new Error(`${name} must contain comma-separated integers from 1 to 100`);
+    throw new Error(
+      `${name} must contain comma-separated integers from 1 to ${MAXIMUM_SEARCH_RESULT_LIMIT}`,
+    );
   }
   return [...new Set(values)];
 }
@@ -285,86 +293,97 @@ export interface RunRetrievalBenchmarkInput {
   databaseUrl: string;
   suite: RetrievalBenchmarkSuiteSource;
   embeddingProvider: EmbeddingProvider;
-  evidenceNeighborChunks?: number;
-  evidenceTopChunks?: number;
+  /**
+   * The deployment's retrieval knobs (`strictRetrievalKnobsFromEnvironment`), so a
+   * benchmark's default run is the deployment default. `LORE_BENCHMARK_*` variables
+   * override single knobs for an ablation.
+   */
+  knobs: RetrievalKnobs;
   queryPlanningProvider?: ConfiguredQueryPlanningProvider;
-  queryPlannerMaxQueries?: number;
-  retrievalFeedbackQueries?: number;
-  retrievalRecencyWeight?: number;
   rerankingProvider?: ConfiguredRerankingProvider;
-  rerankCandidateLimit?: number;
-  rerankDiversityLambda?: number;
-  rerankMinimumScore?: number;
-  rerankWeight?: number;
   providerWarnings?: string[];
   outputPath?: string;
   printReport?: boolean;
   reuseIndexed?: boolean;
 }
 
+type NumericRetrievalKnob = keyof typeof RETRIEVAL_KNOBS;
+
+/**
+ * One knob for this run: a `LORE_BENCHMARK_*` override, which must lie within the
+ * knob's deployment bounds, or else the deployment value.
+ */
+export function knobOverride(
+  variable: string,
+  knob: NumericRetrievalKnob,
+  knobs: RetrievalKnobs,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): number {
+  const raw = environment[variable]?.trim();
+  if (!raw) return knobs[knob];
+  const spec = RETRIEVAL_KNOBS[knob];
+  const value = Number(raw);
+  if (
+    !(spec.integer ? Number.isInteger(value) : Number.isFinite(value)) ||
+    value < spec.minimum ||
+    value > spec.maximum
+  ) {
+    throw new Error(
+      `${variable} must be ${spec.integer ? "an integer" : "a number"} from ${spec.minimum} to ${spec.maximum}`,
+    );
+  }
+  return value;
+}
+
+/** Entity-alias recall for this run: `LORE_BENCHMARK_ENTITY_ALIAS_RECALL`, or the deployment value. */
+export function entityAliasRecallOverride(
+  knobs: RetrievalKnobs,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  const value = environment.LORE_BENCHMARK_ENTITY_ALIAS_RECALL?.trim().toLowerCase();
+  if (!value) return knobs.entityAliasRecall;
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  throw new Error("LORE_BENCHMARK_ENTITY_ALIAS_RECALL must be 0, 1, false, or true");
+}
+
 export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInput) {
   const thresholds = benchmarkThresholds(input.suite.thresholds);
-  const configuredEvidenceNeighborChunks = Number(
-    process.env.LORE_BENCHMARK_EVIDENCE_NEIGHBOR_CHUNKS ?? input.evidenceNeighborChunks ?? 0,
+  const { knobs } = input;
+  const configuredEvidenceNeighborChunks = knobOverride(
+    "LORE_BENCHMARK_EVIDENCE_NEIGHBOR_CHUNKS",
+    "evidenceNeighborChunks",
+    knobs,
   );
-  if (
-    !Number.isInteger(configuredEvidenceNeighborChunks) ||
-    configuredEvidenceNeighborChunks < 0 ||
-    configuredEvidenceNeighborChunks > 2
-  ) {
-    throw new Error("LORE_BENCHMARK_EVIDENCE_NEIGHBOR_CHUNKS must be an integer from 0 to 2");
-  }
-  const configuredEvidenceTopChunks = Number(
-    process.env.LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS ?? input.evidenceTopChunks ?? 1,
+  const configuredEvidenceTopChunks = knobOverride(
+    "LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS",
+    "evidenceTopChunks",
+    knobs,
   );
-  if (
-    !Number.isInteger(configuredEvidenceTopChunks) ||
-    configuredEvidenceTopChunks < 1 ||
-    configuredEvidenceTopChunks > 5
-  ) {
-    throw new Error("LORE_BENCHMARK_EVIDENCE_TOP_CHUNKS must be an integer from 1 to 5");
-  }
-  const configuredRetrievalFeedbackQueries = Number(
-    process.env.LORE_BENCHMARK_RETRIEVAL_FEEDBACK_QUERIES ?? input.retrievalFeedbackQueries ?? 0,
+  const configuredRetrievalFeedbackQueries = knobOverride(
+    "LORE_BENCHMARK_RETRIEVAL_FEEDBACK_QUERIES",
+    "retrievalFeedbackQueries",
+    knobs,
   );
-  if (
-    !Number.isInteger(configuredRetrievalFeedbackQueries) ||
-    configuredRetrievalFeedbackQueries < 0 ||
-    configuredRetrievalFeedbackQueries > 3
-  ) {
-    throw new Error("LORE_BENCHMARK_RETRIEVAL_FEEDBACK_QUERIES must be an integer from 0 to 3");
-  }
-  const configuredRetrievalRecencyWeight = Number(
-    process.env.LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT ?? input.retrievalRecencyWeight ?? 0,
+  const configuredRetrievalRecencyWeight = knobOverride(
+    "LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT",
+    "retrievalRecencyWeight",
+    knobs,
   );
-  if (
-    !Number.isFinite(configuredRetrievalRecencyWeight) ||
-    configuredRetrievalRecencyWeight < 0 ||
-    configuredRetrievalRecencyWeight > 1
-  ) {
-    throw new Error("LORE_BENCHMARK_RETRIEVAL_RECENCY_WEIGHT must be between 0 and 1");
-  }
-  const configuredEntityAliasValue = (process.env.LORE_BENCHMARK_ENTITY_ALIAS_RECALL ?? "false")
-    .trim()
-    .toLowerCase();
-  if (!["0", "1", "false", "true"].includes(configuredEntityAliasValue)) {
-    throw new Error("LORE_BENCHMARK_ENTITY_ALIAS_RECALL must be 0, 1, false, or true");
-  }
-  const configuredEntityAliasRecall =
-    configuredEntityAliasValue === "1" || configuredEntityAliasValue === "true";
+  const configuredEntityAliasRecall = entityAliasRecallOverride(knobs);
   const indexingConcurrency = embeddingConcurrency();
   const rerankMinimumScores = unitIntervalSweep(
     "LORE_BENCHMARK_RERANK_MIN_SCORES",
-    input.rerankMinimumScore ?? 0,
+    knobs.rerankMinimumScore,
   );
   const rerankDiversityLambdas = unitIntervalSweep(
     "LORE_BENCHMARK_RERANK_DIVERSITY_LAMBDAS",
-    input.rerankDiversityLambda ?? 1,
+    knobs.rerankDiversityLambda,
   );
-  const rerankWeights = unitIntervalSweep("LORE_BENCHMARK_RERANK_WEIGHTS", input.rerankWeight ?? 1);
+  const rerankWeights = unitIntervalSweep("LORE_BENCHMARK_RERANK_WEIGHTS", knobs.rerankWeight);
   const rerankCandidateLimits =
     input.rerankingProvider || input.contextGroupExpansion
-      ? candidateLimitSweep(input.rerankCandidateLimit ?? 50)
+      ? candidateLimitSweep(knobs.rerankCandidateLimit)
       : [];
   const retrievalLimits = retrievalLimitSweep();
   const providerWarnings = input.providerWarnings ?? [];
@@ -753,7 +772,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         queryPlanningProvider: variant.useQueryPlanning
           ? memoizedQueryPlanner?.provider
           : undefined,
-        queryPlannerMaxQueries: input.queryPlannerMaxQueries,
+        queryPlannerMaxQueries: knobs.queryPlannerMaxQueries,
         retrievalFeedbackQueries: variant.useRetrievalFeedback
           ? configuredRetrievalFeedbackQueries
           : 0,
@@ -983,11 +1002,11 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       if (configuredRetrievalRecencyWeight > 0) {
         variants.push(
           await runVariant({
-            label: `hybrid+recency@${threshold}|candidates=${input.rerankCandidateLimit ?? 50}|weight=${configuredRetrievalRecencyWeight}`,
+            label: `hybrid+recency@${threshold}|candidates=${knobs.rerankCandidateLimit}|weight=${configuredRetrievalRecencyWeight}`,
             semanticDistanceThreshold: threshold,
             useEmbeddings: true,
             useRecency: true,
-            rerankCandidateLimit: input.rerankCandidateLimit ?? 50,
+            rerankCandidateLimit: knobs.rerankCandidateLimit,
           }),
         );
       }
@@ -1189,7 +1208,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
             instruction: input.queryPlanningProvider.instruction ?? null,
             decoding: input.queryPlanningProvider.decoding ?? null,
             keepAlive: input.queryPlanningProvider.keepAlive ?? null,
-            maximumQueries: input.queryPlannerMaxQueries ?? 3,
+            maximumQueries: knobs.queryPlannerMaxQueries,
             benchmarkCache: memoizedQueryPlanner?.stats ?? null,
           }
         : null,

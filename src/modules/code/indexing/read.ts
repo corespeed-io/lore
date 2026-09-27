@@ -2,6 +2,12 @@ import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { CodeIndexAccessDeniedError, CodeIndexValidationError } from "./errors";
+import { activeGenerationOf, REVISION_GENERATION_SOURCE } from "./generation-sql";
+import {
+  DEFAULT_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_SEARCH_RESULTS,
+} from "./protocol";
 import type {
   CodeArtifact,
   CodeArtifactSymbol,
@@ -18,7 +24,9 @@ import type {
   SearchCodeIndexInput,
 } from "./types";
 import {
+  CODE_QUERY_MAXIMUM_LENGTH,
   hasControlCharacters,
+  REPOSITORY_PATH_MAXIMUM_LENGTH,
   validateCommitOid,
   validateQueryText,
   validateRepositoryKey,
@@ -47,9 +55,6 @@ export interface GetCodeArtifactsInput extends CodeRevisionSelector {
 export interface ListCodeIndexJobsInput {
   limit?: number;
 }
-
-export const MAXIMUM_CODE_INDEX_JOB_LIST = 100;
-const DEFAULT_CODE_INDEX_JOB_LIST = 20;
 
 export interface CodeArtifactLogicalDigest {
   artifactId: string;
@@ -130,7 +135,7 @@ function validatePathPrefix(path: string): string {
   if (
     !normalized ||
     trimmed !== path ||
-    normalized.length > 1_024 ||
+    normalized.length > REPOSITORY_PATH_MAXIMUM_LENGTH ||
     normalized.startsWith("/") ||
     normalized.includes("\\") ||
     hasControlCharacters(normalized) ||
@@ -233,18 +238,8 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
           `WITH selected_generation AS MATERIALIZED (
              SELECT repository.id AS repository_id, revision.id AS revision_id,
                generation.id AS generation_id, revision.commit_oid
-             FROM code_repositories repository
-             JOIN code_revisions revision
-               ON revision.workspace_id = repository.workspace_id
-              AND revision.repository_id = repository.id
-             JOIN code_index_generations generation
-               ON generation.workspace_id = revision.workspace_id
-              AND generation.repository_id = revision.repository_id
-              AND generation.revision_id = revision.id
-             WHERE repository.workspace_id = $1
-               AND repository.repository_key = $2
-               AND revision.commit_oid = $3
-               AND generation.status = 'active'
+             FROM ${REVISION_GENERATION_SOURCE}
+             WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$3" })}
            )
            SELECT artifact.id, artifact.repository_id, artifact.revision_id,
              artifact.generation_id, selected.commit_oid, artifact.path,
@@ -291,18 +286,8 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
           `WITH selected_generation AS MATERIALIZED (
              SELECT repository.id AS repository_id, revision.id AS revision_id,
                generation.id AS generation_id
-             FROM code_repositories repository
-             JOIN code_revisions revision
-               ON revision.workspace_id = repository.workspace_id
-              AND revision.repository_id = repository.id
-             JOIN code_index_generations generation
-               ON generation.workspace_id = revision.workspace_id
-              AND generation.repository_id = revision.repository_id
-              AND generation.revision_id = revision.id
-             WHERE repository.workspace_id = $1
-               AND repository.repository_key = $2
-               AND revision.commit_oid = $3
-               AND generation.status = 'active'
+             FROM ${REVISION_GENERATION_SOURCE}
+             WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$3" })}
            ), requested AS MATERIALIZED (
              SELECT artifact.*
              FROM selected_generation selected
@@ -428,20 +413,22 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     async search(actor, input) {
       const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
-      const query = validateQueryText(input.query, "query", 2_000);
+      const query = validateQueryText(input.query, "query", CODE_QUERY_MAXIMUM_LENGTH);
       const literalPattern = exactLikePattern(query);
       const contentLiteralPredicate = hasTrigramWord(query)
-        ? `lower(payload.content) LIKE lower($8) ESCAPE chr(92)`
-        : `position(lower($3) in lower(payload.content)) > 0 AND $8::text IS NOT NULL`;
+        ? `lower(payload.content) LIKE lower($7) ESCAPE chr(92)`
+        : `position(lower($3) in lower(payload.content)) > 0 AND $7::text IS NOT NULL`;
       const symbolLiteralPredicate = hasTrigramWord(query)
-        ? `lower(indexed_symbol.symbol) LIKE lower($8) ESCAPE chr(92)`
+        ? `lower(indexed_symbol.symbol) LIKE lower($7) ESCAPE chr(92)`
         : `position(lower($3) in lower(indexed_symbol.symbol)) > 0`;
       const pathLiteralPredicate = hasTrigramWord(query)
-        ? `lower(artifact.path) LIKE lower($8) ESCAPE chr(92)`
+        ? `lower(artifact.path) LIKE lower($7) ESCAPE chr(92)`
         : `position(lower($3) in lower(artifact.path)) > 0`;
       const limit = input.limit ?? 10;
-      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-        throw new CodeIndexValidationError("limit must be an integer from 1 through 100");
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAXIMUM_CODE_SEARCH_RESULTS) {
+        throw new CodeIndexValidationError(
+          `limit must be an integer from 1 through ${MAXIMUM_CODE_SEARCH_RESULTS}`,
+        );
       }
       const pathPrefix = input.pathPrefix ? validatePathPrefix(input.pathPrefix) : null;
       return database.transaction(async (transaction) => {
@@ -450,18 +437,8 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
           `WITH selected_generation AS MATERIALIZED (
              SELECT repository.id AS repository_id, revision.id AS revision_id,
                generation.id AS generation_id, revision.commit_oid
-             FROM code_repositories repository
-             JOIN code_revisions revision
-               ON revision.workspace_id = repository.workspace_id
-              AND revision.repository_id = repository.id
-             JOIN code_index_generations generation
-               ON generation.workspace_id = revision.workspace_id
-              AND generation.repository_id = revision.repository_id
-              AND generation.revision_id = revision.id
-             WHERE repository.workspace_id = $1
-               AND repository.repository_key = $2
-               AND revision.commit_oid = $4
-               AND generation.status = $5
+             FROM ${REVISION_GENERATION_SOURCE}
+             WHERE ${activeGenerationOf({ workspaceId: "$1", repositoryKey: "$2", commitOid: "$4" })}
            ), symbol_matches AS MATERIALIZED (
              SELECT artifact.id, artifact.path, artifact.ordinal,
                indexed_symbol.symbol AS matched_symbol,
@@ -481,8 +458,8 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
                ON indexed_symbol.workspace_id = artifact.workspace_id
               AND indexed_symbol.symbol_set_id = artifact.symbol_set_id
              WHERE ${symbolLiteralPredicate}
-               AND ($6::text IS NULL OR artifact.path = $6
-                 OR left(artifact.path, length($6) + 1) = $6 || '/')
+               AND ($5::text IS NULL OR artifact.path = $5
+                 OR left(artifact.path, length($5) + 1) = $5 || '/')
            ), symbol_candidates AS (
              SELECT id, 'symbol'::text AS channel, 4.0::real AS channel_weight,
                row_number() OVER (ORDER BY
@@ -491,7 +468,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
                matched_symbol, matched_symbol_key, matched_declaration_key
              FROM symbol_matches WHERE artifact_match_rank = 1
              ORDER BY (lower(matched_symbol) = lower($3)) DESC,
-               lower(matched_symbol), path, ordinal, id LIMIT $9
+               lower(matched_symbol), path, ordinal, id LIMIT $8
            ), literal_candidates AS (
              SELECT artifact.id, 'literal'::text AS channel, 2.0::real AS channel_weight,
                row_number() OVER (ORDER BY artifact.path, artifact.ordinal, artifact.id)
@@ -509,9 +486,9 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
               AND payload.id = artifact.payload_id
               AND payload.content_sha256 = artifact.content_sha256
              WHERE ${contentLiteralPredicate}
-               AND ($6::text IS NULL OR artifact.path = $6
-                 OR left(artifact.path, length($6) + 1) = $6 || '/')
-             ORDER BY artifact.path, artifact.ordinal, artifact.id LIMIT $9
+               AND ($5::text IS NULL OR artifact.path = $5
+                 OR left(artifact.path, length($5) + 1) = $5 || '/')
+             ORDER BY artifact.path, artifact.ordinal, artifact.id LIMIT $8
            ), lexical_candidates AS (
              SELECT artifact.id, 'lexical'::text AS channel, 1.0::real AS channel_weight,
                row_number() OVER (ORDER BY ts_rank_cd(
@@ -530,10 +507,10 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
               AND payload.id = artifact.payload_id
               AND payload.content_sha256 = artifact.content_sha256
              WHERE payload.search_vector @@ websearch_to_tsquery('simple', $3)
-               AND ($6::text IS NULL OR artifact.path = $6
-                 OR left(artifact.path, length($6) + 1) = $6 || '/')
+               AND ($5::text IS NULL OR artifact.path = $5
+                 OR left(artifact.path, length($5) + 1) = $5 || '/')
              ORDER BY ts_rank_cd(payload.search_vector, websearch_to_tsquery('simple', $3), 32)
-               DESC, artifact.path, artifact.ordinal, artifact.id LIMIT $9
+               DESC, artifact.path, artifact.ordinal, artifact.id LIMIT $8
            ), path_candidates AS (
              SELECT id, 'path'::text AS channel, 1.5::real AS channel_weight,
                row_number() OVER (ORDER BY (lower(path) = lower($3)) DESC,
@@ -547,10 +524,10 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
               AND artifact.revision_id = selected.revision_id
               AND artifact.generation_id = selected.generation_id
              WHERE ${pathLiteralPredicate}
-               AND ($6::text IS NULL OR artifact.path = $6
-                 OR left(artifact.path, length($6) + 1) = $6 || '/')
+               AND ($5::text IS NULL OR artifact.path = $5
+                 OR left(artifact.path, length($5) + 1) = $5 || '/')
              ORDER BY (lower(path) = lower($3)) DESC,
-               position(lower($3) in lower(path)), path, ordinal, id LIMIT $9
+               position(lower($3) in lower(path)), path, ordinal, id LIMIT $8
            ), candidates AS (
              SELECT * FROM symbol_candidates UNION ALL SELECT * FROM literal_candidates
              UNION ALL SELECT * FROM lexical_candidates UNION ALL SELECT * FROM path_candidates
@@ -594,13 +571,12 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
             AND selected.revision_id = artifact.revision_id
             AND selected.generation_id = artifact.generation_id
            ORDER BY fused.score DESC, artifact.path, artifact.ordinal, artifact.id
-           LIMIT $7`,
+           LIMIT $6`,
           [
             actor.workspaceId,
             repositoryKey,
             query,
             commitOid,
-            "active",
             pathPrefix,
             limit,
             literalPattern,

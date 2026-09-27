@@ -5,6 +5,7 @@ import {
   timestampProperties,
   workspaceHeader,
 } from "@/server/openapi/shared";
+import { WORKSPACE_NAME_MAXIMUM_LENGTH } from "./limits";
 
 export const workspacesPaths = {
   "/api/v1/actor": {
@@ -37,7 +38,9 @@ export const workspacesPaths = {
         type: "object",
         additionalProperties: false,
         required: ["name"],
-        properties: { name: { type: "string", minLength: 1, maxLength: 120 } },
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: WORKSPACE_NAME_MAXIMUM_LENGTH },
+        },
       }),
       responses: {
         "201": jsonResponse("Created Workspace", {

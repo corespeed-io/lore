@@ -1,6 +1,17 @@
+import { MEMORY_LIST_LIMITS } from "@corespeed/lore-core";
+import {
+  EPISODE_KINDS,
+  MAX_EPISODE_OBSERVATIONS,
+  MAX_OBSERVATION_BATCH_READ,
+  MAX_OBSERVATION_CONTENT_CHARACTERS,
+  OBSERVATION_KINDS,
+} from "@corespeed/lore-core/episodes";
+import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
   jsonResponse,
+  memoryScopeSchema,
+  metadataSchema,
   requestBody,
   workspaceHeader,
 } from "@/server/openapi/shared";
@@ -13,11 +24,11 @@ const episodeSummaryProperties = {
   recordedByAgentId: {
     oneOf: [{ type: "string", format: "uuid" }, { type: "null" }],
   },
-  kind: { type: "string", enum: ["conversation", "workflow", "document", "event"] },
-  scope: { type: "string", enum: ["shared", "private"] },
+  kind: { type: "string", enum: [...EPISODE_KINDS] },
+  scope: memoryScopeSchema,
   startedAt: { type: "string", format: "date-time" },
   endedAt: { type: "string", format: "date-time" },
-  observationCount: { type: "integer", minimum: 1, maximum: 100 },
+  observationCount: { type: "integer", minimum: 1, maximum: MAX_EPISODE_OBSERVATIONS },
   createdAt: { type: "string", format: "date-time" },
 } as const;
 
@@ -46,21 +57,30 @@ export const episodesPaths = {
           in: "query",
           schema: {
             type: "string",
-            enum: ["conversation", "workflow", "document", "event"],
+            enum: [...EPISODE_KINDS],
           },
         },
         {
           name: "scope",
           in: "query",
-          schema: { type: "string", enum: ["shared", "private"] },
+          schema: memoryScopeSchema,
         },
         {
           name: "cursor",
           in: "query",
           description: "Opaque Episode browse cursor.",
-          schema: { type: "string" },
+          schema: { type: "string", maxLength: CURSOR_MAXIMUM_LENGTH },
         },
-        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MEMORY_LIST_LIMITS.maximumLimit,
+            default: MEMORY_LIST_LIMITS.defaultLimit,
+          },
+        },
       ],
       responses: {
         "200": jsonResponse(
@@ -137,11 +157,11 @@ export const episodesPaths = {
           name: "id",
           in: "query",
           required: true,
-          description: "Repeat for 1 to 50 RLS-visible Observation ids.",
+          description: `Repeat for 1 to ${MAX_OBSERVATION_BATCH_READ} RLS-visible Observation ids.`,
           schema: {
             type: "array",
             minItems: 1,
-            maxItems: 50,
+            maxItems: MAX_OBSERVATION_BATCH_READ,
             items: { type: "string", format: "uuid" },
           },
           style: "form",
@@ -166,10 +186,10 @@ export const episodesSchemas = {
     properties: {
       kind: {
         type: "string",
-        enum: ["message", "tool_call", "tool_result", "document_fragment", "event"],
+        enum: [...OBSERVATION_KINDS],
       },
-      content: { type: "string", minLength: 1, maxLength: 100_000 },
-      metadata: { type: "object", additionalProperties: true },
+      content: { type: "string", minLength: 1, maxLength: MAX_OBSERVATION_CONTENT_CHARACTERS },
+      metadata: metadataSchema,
       observedAt: { type: "string", format: "date-time" },
     },
   },
@@ -180,13 +200,13 @@ export const episodesSchemas = {
     properties: {
       kind: {
         type: "string",
-        enum: ["conversation", "workflow", "document", "event"],
+        enum: [...EPISODE_KINDS],
       },
-      scope: { type: "string", enum: ["shared", "private"], default: "private" },
+      scope: { ...memoryScopeSchema, default: "private" },
       observations: {
         type: "array",
         minItems: 1,
-        maxItems: 100,
+        maxItems: MAX_EPISODE_OBSERVATIONS,
         items: { $ref: "#/components/schemas/RecordObservationInput" },
       },
     },
@@ -210,15 +230,15 @@ export const episodesSchemas = {
       id: { type: "string", format: "uuid" },
       workspaceId: { type: "string", format: "uuid" },
       episodeId: { type: "string", format: "uuid" },
-      ordinal: { type: "integer", minimum: 0, maximum: 99 },
+      ordinal: { type: "integer", minimum: 0, maximum: MAX_EPISODE_OBSERVATIONS - 1 },
       kind: {
         type: "string",
-        enum: ["message", "tool_call", "tool_result", "document_fragment", "event"],
+        enum: [...OBSERVATION_KINDS],
       },
       observedAt: { type: "string", format: "date-time" },
       payloadSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
-      content: { type: "string", minLength: 1, maxLength: 100_000 },
-      metadata: { type: "object", additionalProperties: true },
+      content: { type: "string", minLength: 1, maxLength: MAX_OBSERVATION_CONTENT_CHARACTERS },
+      metadata: metadataSchema,
       createdAt: { type: "string", format: "date-time" },
     },
   },
@@ -237,7 +257,7 @@ export const episodesSchemas = {
       observations: {
         type: "array",
         minItems: 1,
-        maxItems: 100,
+        maxItems: MAX_EPISODE_OBSERVATIONS,
         items: { $ref: "#/components/schemas/Observation" },
       },
     },

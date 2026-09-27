@@ -1,8 +1,3 @@
-import { PGlite } from "@electric-sql/pglite";
-import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
-import { vector } from "@electric-sql/pglite-pgvector";
-import { expect, test } from "vitest";
-import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
 import {
   createMemoryMaintenanceModule,
   createMemoryModule,
@@ -10,16 +5,21 @@ import {
   type MemoryStorageContext,
   type QueryPlanningProvider,
   type RerankingProvider,
-} from "../src/index";
+} from "@corespeed/lore-core";
 import {
   createDeterministicTestEmbeddingProvider,
   type MemoryCoreContractFixture,
   runMemoryCoreContractSuite,
   testDatabase,
-} from "../src/testing";
+} from "@corespeed/lore-core/testing";
+import { PGlite } from "@electric-sql/pglite";
+import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
+import { vector } from "@electric-sql/pglite-pgvector";
+import { expect, test } from "vitest";
+import { applyMigrationChain } from "../../scripts/database/lib/migration-preflight.ts";
 
 /**
- * The engine's own contract run uses lore oss's migration chain and identity
+ * lore oss hosting the engine's contract suite: it uses lore oss's migration chain and identity
  * model: users/workspaces/memberships rows satisfy the membership-consulting
  * RLS policy bodies. A host with different policy bodies (for example HaaS's
  * pure-GUC comparisons) points the same suite at its own chain and seeds
