@@ -333,6 +333,26 @@ test("an all-inline-type import still loads its module, so the Worker ban counts
   }
 });
 
+test("a comment beside a type modifier changes nothing", () => {
+  assert.deepEqual(
+    scanImports(
+      [
+        'import { /* explanation */ type SpawnOptions } from "node:child_process";',
+        'import { type /* why */ Lang } from "@ast-grep/napi";',
+        'import /* only for types */ type { X } from "./x";',
+        'export // re-exported types\n  type { Y } from "./y";',
+      ].join("\n"),
+      "ts",
+    ).map((item) => [item.specifier, item.typeOnly]),
+    [
+      ["node:child_process", false],
+      ["@ast-grep/napi", false],
+      ["./x", true],
+      ["./y", true],
+    ],
+  );
+});
+
 test("a specifier written with escapes is the module it names", () => {
   assert.deepEqual(
     scanImports('import "\\x62un";\nimport { s } from "node:child\\u005Fprocess";\ns;\n', "ts")

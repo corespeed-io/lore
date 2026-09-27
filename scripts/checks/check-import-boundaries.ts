@@ -195,11 +195,18 @@ const INJECTED = new Set(
 // `import type` and `export type` statements, which the compiler erases, and inline
 // `type` modifiers inside an import or export clause. Under verbatimModuleSyntax an
 // all-inline-type clause still loads its module (`import {} from`), so only the
-// statement form makes an import type-only.
-const STATEMENT_TYPE =
-  /\b(?:import\s+type(?=\s+(?:[{*]|[A-Za-z_$][\w$]*\s*(?:,|from\b)))|export\s+type(?=\s*[{*]))/g;
-const IMPORT_CLAUSE = /\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}/g;
-const INLINE_TYPE = /([{,]\s*)type(?=\s+[A-Za-z_$])/g;
+// statement form makes an import type-only. A comment may sit wherever whitespace
+// does, so the patterns treat one as whitespace.
+const GAP = String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))`;
+const STATEMENT_TYPE = new RegExp(
+  String.raw`\b(?:import${GAP}+type(?=${GAP}+(?:[{*]|[A-Za-z_$][\w$]*${GAP}*(?:,|from\b)))|export${GAP}+type(?=${GAP}*[{*]))`,
+  "g",
+);
+const IMPORT_CLAUSE = new RegExp(
+  String.raw`\b(?:import|export)${GAP}+(?:type${GAP}+)?\{[^}]*\}`,
+  "g",
+);
+const INLINE_TYPE = new RegExp(String.raw`([{,]${GAP}*)type(?=${GAP}+[A-Za-z_$])`, "g");
 
 /** Blank the inline `type` modifiers, keeping every offset. */
 function withoutInlineTypes(source: string): string {
