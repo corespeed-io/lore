@@ -17,7 +17,8 @@ export { CORE_SCHEMA_CONTRACT, type SchemaContractGroupName } from "./schema-con
  * its catalog: a table or column, an insertable NOT NULL column without a default,
  * a generated column, an ON CONFLICT unique key, a cascading foreign key, a type,
  * a function signature, an enum label set, or an enum value the engine compares.
- * An empty result means the schema provides those groups.
+ * An empty result means the schema provides those groups. Names are unqualified, so
+ * they resolve through search_path as the engine's own SQL does.
  */
 export async function missingSchemaContract(
   transaction: PostgresTransaction,
@@ -85,8 +86,6 @@ async function missingTableContract(
   table: string,
   contract: TableContract,
 ): Promise<string[]> {
-  // Unqualified, so the name resolves through search_path as the engine's own SQL does.
-  const relation = table;
   const attributes = await transaction.query<{
     column_name: string;
     not_null: boolean;
@@ -101,7 +100,7 @@ async function missingTableContract(
      WHERE attribute.attrelid = to_regclass($1)
        AND attribute.attnum > 0
        AND NOT attribute.attisdropped`,
-    [relation],
+    [table],
   );
   if (attributes.rows.length === 0) return [`table ${table}`];
   const missing: string[] = [];
@@ -132,7 +131,7 @@ async function missingTableContract(
        ) AS columns
        FROM pg_index index
        WHERE index.indrelid = to_regclass($1) AND index.indisunique AND index.indpred IS NULL`,
-      [relation],
+      [table],
     );
     const unique = indexes.rows.map((row) => [...row.columns].sort().join(","));
     for (const key of contract.uniqueKeys) {
@@ -155,7 +154,7 @@ async function missingTableContract(
            AND constraint_row.confrelid = to_regclass($2)
            AND attribute.attname = $3
        ) AS present`,
-      [relation, cascade.parent, cascade.column],
+      [table, cascade.parent, cascade.column],
     );
     if (!result.rows[0]?.present) {
       missing.push(`cascading foreign key ${table}.${cascade.column} -> ${cascade.parent}`);

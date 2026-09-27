@@ -385,7 +385,12 @@ describe("the engine validates before it writes", () => {
         { ...valid, content: "Valid.", metadata: {} },
         { ...valid, id: "40000000-0000-4000-8000-000000000002", content: "  ", metadata: {} },
       ]),
-    ).rejects.toMatchObject({ field: "records[1].content", message: "Memory content is required" });
+    ).rejects.toSatisfy(
+      (error) =>
+        error instanceof MemoryContentValidationError &&
+        error.field === "records[1].content" &&
+        error.message === "Memory content is required",
+    );
     await expect(
       primitives.insertMemoriesInTransaction(transaction, scope, [
         { ...valid, content: "Valid.", metadata: { note: "bad\u0000" } },

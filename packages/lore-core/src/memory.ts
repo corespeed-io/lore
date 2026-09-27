@@ -49,7 +49,6 @@ import {
   rerankEvidence,
 } from "./retrieval/ranking";
 import { utcTimestampSql } from "./timestamp";
-import { LoreValidationError } from "./validation";
 import { embeddingVectorLiteral } from "./vector";
 
 export * from "./memory-types";
@@ -829,7 +828,10 @@ function batchRecordChunks(record: InsertMemoryRecord, index: number): readonly 
     return memoryContentChunks(record.content, record.preparedContent);
   } catch (error) {
     if (!(error instanceof MemoryContentValidationError)) throw error;
-    throw new LoreValidationError(`records[${index}].content`, error.message, { cause: error });
+    throw new MemoryContentValidationError(error.message, {
+      cause: error,
+      field: `records[${index}].content`,
+    });
   }
 }
 
@@ -1058,9 +1060,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     id: string,
-    expectedVersion?: number,
-    lockedVersion?: number,
+    versions: { expectedVersion?: number | undefined; lockedVersion?: number | undefined } = {},
   ): Promise<boolean> {
+    const { expectedVersion, lockedVersion } = versions;
     let version = lockedVersion;
     if (version === undefined) {
       const current = await transaction.query<{ version: number }>(
@@ -1258,7 +1260,9 @@ export function createMemoryModule(
 
     async forget(id: string, options: MemoryMutationOptions = {}): Promise<boolean> {
       return database.transaction((transaction) =>
-        forgetMemoryInTransaction(transaction, storageScope, id, options.expectedVersion),
+        forgetMemoryInTransaction(transaction, storageScope, id, {
+          expectedVersion: options.expectedVersion,
+        }),
       );
     },
 

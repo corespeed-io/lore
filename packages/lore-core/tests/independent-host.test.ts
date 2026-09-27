@@ -94,6 +94,23 @@ test("an independent storage host runs Memory CRUD and retrieval without OSS ide
   }
 });
 
+test("the schema kit reads a host's tables through search_path, not public", async () => {
+  const postgres = new PGlite({ extensions: { vector } });
+  try {
+    await postgres.exec("CREATE SCHEMA host; SET search_path TO host, public;");
+    await postgres.exec(
+      await readFile(new URL("fixtures/independent-host-schema.sql", import.meta.url), "utf8"),
+    );
+    await expect(missingSchemaContract(postgres, ["memory", "graph"])).resolves.toEqual([]);
+    await postgres.exec("SET search_path TO public;");
+    await expect(missingSchemaContract(postgres, ["memory"])).resolves.toEqual(
+      expect.arrayContaining(["memory: table memories"]),
+    );
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("the independent host provides the memory and graph contract groups", async () => {
   const postgres = new PGlite({ extensions: { vector } });
   try {
@@ -232,14 +249,19 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
 
     await expect(
       postgres.transaction((transaction) =>
-        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, 2),
+        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, {
+          expectedVersion: 2,
+        }),
       ),
     ).rejects.toBeInstanceOf(MemoryVersionConflictError);
     // A host that already locked the row hands over its version, which the engine
     // checks and deletes by without reading the row again.
     await expect(
       postgres.transaction((transaction) =>
-        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, 2, 1),
+        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, {
+          expectedVersion: 2,
+          lockedVersion: 1,
+        }),
       ),
     ).rejects.toBeInstanceOf(MemoryVersionConflictError);
     await expect(
@@ -248,13 +270,10 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
           "SELECT version FROM memories WHERE id = $1 FOR UPDATE",
           [ids[0]],
         );
-        return primitives.forgetMemoryInTransaction(
-          transaction,
-          storage,
-          ids[0] as string,
-          1,
-          locked.rows[0]?.version,
-        );
+        return primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, {
+          expectedVersion: 1,
+          lockedVersion: locked.rows[0]?.version,
+        });
       }),
     ).resolves.toBe(true);
     const links = await postgres.query<{ count: number }>(

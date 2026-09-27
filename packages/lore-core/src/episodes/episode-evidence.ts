@@ -589,11 +589,7 @@ export function createEpisodeEvidenceModule(
     evidenceNeighborChunks: boundedInteger(
       options.evidenceNeighborChunks,
       "evidenceNeighborChunks",
-      {
-        minimum: 0,
-        maximum: 2,
-        fallback: 0,
-      },
+      { minimum: 0, maximum: 2, fallback: 0 },
     ),
     evidenceTopObservations: boundedInteger(
       options.evidenceTopObservations,
@@ -603,11 +599,7 @@ export function createEpisodeEvidenceModule(
     queryPlannerMaxQueries: boundedInteger(
       options.queryPlannerMaxQueries,
       "queryPlannerMaxQueries",
-      {
-        minimum: 1,
-        maximum: 5,
-        fallback: 3,
-      },
+      { minimum: 1, maximum: 5, fallback: 3 },
     ),
     rerankCandidateLimit: boundedInteger(options.rerankCandidateLimit, "rerankCandidateLimit", {
       minimum: 1,

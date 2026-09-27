@@ -121,8 +121,10 @@ its own:
   (including `MemoryContentValidationError`) is a 400 input refusal that names its
   `field`; `MemoryVersionConflictError` is 412; `MemoryAccessDeniedError` is 403.
   A host that read a `.status` property from engine errors now gets none. An
-  out-of-range deployment option (the Episode evidence knobs) throws
-  `LoreConfigurationError`, a server failure that names its `option`, not a 400.
+  out-of-range Episode evidence retrieval knob (neighbor chunks, top Observations,
+  planner queries, rerank candidate limit, minimum score, and weight, and the
+  distance threshold) throws `LoreConfigurationError`, a server failure that names
+  its `option`, not a 400.
 - **Input is refused, never trimmed or clamped.** Link kind (non-blank, at most
   `MEMORY_LINK_LIMITS.maximumKindLength`, stored as given) and weight (0 through 1,
   representable as PostgreSQL `real`), list/search/Graph limits and offsets, scope,

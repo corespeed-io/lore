@@ -10,8 +10,9 @@ export const MEMORY_CONTENT_LIMITS = {
 export class MemoryContentValidationError extends LoreValidationError {
   override name = "MemoryContentValidationError";
 
-  constructor(message: string, options?: ErrorOptions) {
-    super("content", message, options);
+  /** `field` names the content that failed, `content` unless a batch names its record. */
+  constructor(message: string, options?: ErrorOptions & { field?: string }) {
+    super(options?.field ?? "content", message, options);
   }
 }
 
