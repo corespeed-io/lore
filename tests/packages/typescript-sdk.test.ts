@@ -1023,6 +1023,12 @@ describe("client bounds from LORE_CONTRACT", () => {
       /^observationIds must contain 1 to 50 UUIDs$/,
     ],
     [
+      "Memory Proposal list",
+      (client) => workspace(client).listMemoryProposals({ limit: LIMITS.memoryProposalList }),
+      (client) => workspace(client).listMemoryProposals({ limit: LIMITS.memoryProposalList + 1 }),
+      /^limit must be an integer from 1 to 100$/,
+    ],
+    [
       "Workspace name",
       (client) => client.createWorkspace("w".repeat(LIMITS.workspaceNameLength)),
       (client) => client.createWorkspace("w".repeat(LIMITS.workspaceNameLength + 1)),

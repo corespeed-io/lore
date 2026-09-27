@@ -626,6 +626,40 @@ describe("Lore external MCP adapter", () => {
     expect(JSON.stringify(result.structuredContent)).not.toContain("Proposed fact");
   });
 
+  test("counts every Proposal evidence kind against one published total", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    const ids = (prefix: string, count: number) =>
+      Array.from(
+        { length: count },
+        (_, index) => `${prefix}-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      );
+    const propose = (codeEvidenceCount: number) =>
+      client.callTool({
+        name: "lore_propose",
+        arguments: {
+          kind: "create",
+          content: "Proposed fact",
+          evidenceMemoryIds: ids("20000000", 20),
+          evidenceObservationIds: ids("70000000", 10),
+          codeEvidence: ids("80000000", codeEvidenceCount).map((artifactId) => ({
+            artifactId,
+            relationship: "supports",
+          })),
+        },
+      });
+
+    // Each list fits on its own; together they pass the total by one.
+    const crowded = await propose(21);
+    expect(crowded.isError).toBe(true);
+    expect(JSON.stringify(crowded.content)).toContain("proposal evidence exceeds 50 items");
+    expect(memories.proposeMemory).not.toHaveBeenCalled();
+
+    const full = await propose(20);
+    expect(full.isError).not.toBe(true);
+    expect(memories.proposeMemory).toHaveBeenCalledOnce();
+  });
+
   test("rejects document-sized Memory content before calling Lore", async () => {
     const memories = fakeMemories();
     const client = await connect(memories);

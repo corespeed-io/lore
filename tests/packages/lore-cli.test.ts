@@ -548,6 +548,33 @@ test.each<[string, string[], RegExp]>([
     ],
     /--evidence may be repeated at most 50 times/,
   ],
+  [
+    "more evidence in total than one Proposal may cite, though each kind fits",
+    [
+      "memory",
+      "propose",
+      "create",
+      "A proposed fact",
+      ...Array.from({ length: 25 }, (_, index) => [
+        "--evidence",
+        `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      ]).flat(),
+      ...Array.from({ length: 20 }, (_, index) => [
+        "--observation-evidence",
+        `70000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      ]).flat(),
+      ...Array.from({ length: 6 }, (_, index) => [
+        "--code-evidence",
+        `80000000-0000-4000-8000-${String(index).padStart(12, "0")}:supports`,
+      ]).flat(),
+    ],
+    /Proposal evidence may contain at most 50 total items/,
+  ],
+  [
+    "an unknown Memory scope",
+    ["memory", "list", "--scope", "team"],
+    /--scope must be shared or private/,
+  ],
 ])(
   "CLI refuses %s from the published contract before any request",
   async (_name, args, message) => {

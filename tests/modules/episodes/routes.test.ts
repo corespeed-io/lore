@@ -338,3 +338,66 @@ test("Episode kinds and wire shapes are refused with the engine's vocabulary", a
   }
   await testContext.close();
 });
+
+test("Episode content and text bounds the engine now owns still answer 400 over HTTP", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "episode-http-engine-bounds";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Evidence engine bounds" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id, "idempotency-key": "episode-bounds" };
+  const observation = (content: string) => ({ kind: "message", content });
+
+  // The route used to refuse these itself; each message is unchanged or names its entry.
+  const cases: Array<[unknown[], string]> = [
+    [
+      Array.from({ length: 11 }, () => observation("c".repeat(100_000))),
+      "Episode content exceeds 1000000 characters",
+    ],
+    [
+      [observation("fits"), observation("  ")],
+      "observations[1].content must contain 1 to 100000 characters",
+    ],
+    [
+      [observation("bad\uD800")],
+      "observations[0].content contains a NUL character or invalid Unicode",
+    ],
+    [
+      [{ ...observation("fits"), observedAt: "yesterday" }],
+      "observations[0].observedAt must be an ISO 8601 timestamp",
+    ],
+  ];
+  for (const [observations, error] of cases) {
+    const response = await app.request(
+      new Request("http://lore.local/api/v1/episodes", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ kind: "conversation", observations }),
+      }),
+    );
+    expect(response.status, error).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+  // A refused request stores no replay, so the same key may carry a valid Episode.
+  const recorded = await app.request(
+    new Request("http://lore.local/api/v1/episodes", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ kind: "conversation", observations: [observation("Valid.")] }),
+    }),
+  );
+  expect(recorded.status).toBe(201);
+  await testContext.close();
+});

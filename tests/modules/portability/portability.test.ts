@@ -1,6 +1,6 @@
 import type { EmbeddingTask, PostgresDatabase } from "@corespeed/lore-core";
 import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
 import { workspaceArchiveChecksum } from "@/modules/portability/checksum";
@@ -11,8 +11,15 @@ import {
   type WorkspaceArchive,
   WorkspaceExportLimitError,
 } from "@/modules/portability/service";
+import { createApi } from "@/server/api/app";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { createMemoryTestContext, type MemoryTestContext } from "../../support/memory-context";
+
+afterEach(() => {
+  for (const key of ["AUTH_MODE", "ALLOW_INSECURE", "LORE_LOCAL_SUBJECT"]) {
+    delete process.env[key];
+  }
+});
 
 function ownerMapTo(archive: WorkspaceArchive, actor: ActorContext): Record<string, string> {
   return Object.fromEntries(
@@ -642,4 +649,57 @@ test("a timestamp a driver returns as PostgreSQL text exports in the form import
   expect(() => exportedTimestamp("2026-02-30 00:00:00+00")).toThrow(
     "Database returned a timestamp outside the archive format",
   );
+});
+
+test("HTTP import answers an engine Link rule as 400 invalid_archive, dry run or not", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "portability-http-rules";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Import Rules" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const { userId } = (await (
+    await app.request(new Request("http://lore.local/api/v1/actor", { headers }))
+  ).json()) as { userId: string };
+  const archive = await linkedArchive(testContext);
+  // validateMemoryLink owns this rule; the archive must not surface it as the
+  // engine's own invalid_request.
+  archive.links[0].targetMemoryId = archive.links[0].sourceMemoryId;
+  const signed = await resigned(archive);
+  const ownerMap = Object.fromEntries(
+    [...new Set(signed.memories.map((memory) => memory.ownerUserId))].map((owner) => [
+      owner,
+      userId,
+    ]),
+  );
+
+  for (const dryRun of [true, false]) {
+    const response = await app.request(
+      new Request("http://lore.local/api/v1/workspaces/import", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ archive: signed, ownerMap, dryRun }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      code: "invalid_archive",
+      error: "links[0] must connect two different Memories",
+    });
+  }
+  const listed = await app.request(new Request("http://lore.local/api/memories", { headers }));
+  await expect(listed.json()).resolves.toEqual([]);
+  await testContext.close();
 });

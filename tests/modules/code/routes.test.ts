@@ -346,3 +346,71 @@ test("a co-member never receives the Code citations of a private Memory", async 
   await expect(evidence.list(context.bob, { memoryId: secret.id })).rejects.toThrow(/not visible/);
   await expect(evidence.list(context.alice, { memoryId: secret.id })).resolves.toHaveLength(1);
 });
+
+test("HTTP refuses Code read bounds and vocabularies before any read", async () => {
+  // Each route bound now reads the published constant of its own endpoint: search
+  // stops at 100 results, dependencies at 200, and the vocabularies are closed.
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "code-http-alice";
+  const context = await createMemoryTestContext();
+  await context.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO identities (id, user_id, provider, subject)
+       VALUES ($1, $2, 'local', $3)`,
+      [crypto.randomUUID(), context.alice.userId, process.env.LORE_LOCAL_SUBJECT],
+    );
+  });
+  const headers = { "x-lore-workspace-id": context.alice.workspaceId };
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const selector = `repository_key=corespeed%2Fbounds&commit_oid=${COMMIT}`;
+  const get = (path: string) =>
+    app.request(new Request(`http://lore.local/api/v1/code/${path}`, { headers }));
+
+  for (const [path, error] of [
+    [`search?${selector}&q=guard&limit=101`, "limit must be an integer from 1 through 100"],
+    [`search?${selector}&q=guard&limit=0`, "limit must be an integer from 1 through 100"],
+    [
+      `dependencies?${selector}&direction=callees&symbol=guard&limit=201`,
+      "limit must be an integer from 1 through 200",
+    ],
+    [
+      `dependencies?${selector}&direction=upstream&symbol=guard`,
+      "direction must be callers or callees",
+    ],
+    [`search?repository_key=corespeed%2Fbounds&q=guard`, "commit_oid is required"],
+    [`search?${selector}&q=${"q".repeat(2_001)}`, "q is required"],
+  ] as const) {
+    const response = await get(path);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+
+  // Each maximum itself is accepted; an unindexed revision simply has no Code.
+  const search = await get(`search?${selector}&q=guard&limit=100`);
+  expect(search.status).toBe(200);
+  await expect(search.json()).resolves.toEqual([]);
+  const dependencies = await get(
+    `dependencies?${selector}&direction=callers&symbol=guard&limit=200`,
+  );
+  expect(dependencies.status).toBe(200);
+  await expect(dependencies.json()).resolves.toMatchObject({ status: "not_found" });
+
+  const cite = await app.request(
+    new Request(`http://lore.local/api/v1/memories/${crypto.randomUUID()}/code-evidence`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ artifactId: crypto.randomUUID(), relationship: "refutes" }),
+    }),
+  );
+  expect(cite.status).toBe(400);
+  await expect(cite.json()).resolves.toEqual({
+    code: "invalid_request",
+    error: "relationship is invalid",
+  });
+  await context.close();
+});

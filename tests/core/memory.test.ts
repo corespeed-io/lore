@@ -258,6 +258,35 @@ test("Only the Memory owner can forget a Memory", async () => {
   await testContext.close();
 });
 
+test("Forget checks write authority before the expected version", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const created = await memories.remember(testContext.alice, {
+    content: "Versioned launch note.",
+  });
+
+  // A visible Memory Bob may not write reads as absent, never as a stale version.
+  await expect(memories.forget(testContext.bob, created.id, { expectedVersion: 7 })).resolves.toBe(
+    false,
+  );
+  await expect(
+    memories.forget(testContext.alice, created.id, { expectedVersion: 7 }),
+  ).rejects.toMatchObject({
+    name: "MemoryVersionConflictError",
+    expectedVersion: 7,
+    actualVersion: 1,
+  });
+  await expect(memories.retrieve(testContext.alice, created.id)).resolves.toMatchObject({
+    version: 1,
+  });
+  await expect(
+    memories.forget(testContext.alice, created.id, { expectedVersion: 1 }),
+  ).resolves.toBe(true);
+  await expect(memories.forget(testContext.alice, created.id)).resolves.toBe(false);
+
+  await testContext.close();
+});
+
 test("Suspended Membership immediately removes access to shared Memory", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);

@@ -178,6 +178,24 @@ test("HTTP maps every engine rule to 400 invalid_request", async () => {
   );
   expect(graph.status).toBe(400);
   await expect(graph.json()).resolves.toMatchObject({ code: "invalid_request" });
+  // Zero was clamped to one and a non-number fell back to the maximum before.
+  for (const limit of ["0", "abc", "2.5"]) {
+    const refused = await app.request(
+      new Request(`http://lore.local/api/v1/graph?limit=${limit}`, { headers }),
+    );
+    expect(refused.status, limit).toBe(400);
+    await expect(refused.json()).resolves.toEqual({
+      code: "invalid_request",
+      error: "limit must be an integer from 1 to 5000",
+    });
+  }
+  // An omitted or empty limit reads the whole budget.
+  for (const query of ["", "?limit="]) {
+    const read = await app.request(
+      new Request(`http://lore.local/api/v1/graph${query}`, { headers }),
+    );
+    expect(read.status, query).toBe(200);
+  }
 
   // The route checks only wire shapes; the engine refuses the per-Observation bound.
   const episode = await app.request(

@@ -1,6 +1,8 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import type { ScopedMutator } from "swr";
 import { expect, test, vi } from "vitest";
+import { GRAPH_NODE_LIMIT } from "@/modules/graph/browser/types";
+import { MAX_MEMORY_PAGES, MEMORY_PAGE_SIZE } from "@/modules/memories/browser/data";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { applyMemoryChange, type MemoryReadCaches } from "@/shell/memory-cache";
 
@@ -104,4 +106,27 @@ test("an unknown outcome re-reads the Memory, the browse list, searches, and the
   await applyMemoryChange({ kind: "changed" }, imported.targets);
   expect(imported.calls.some((args) => Array.isArray(args[0]))).toBe(false);
   expect(imported.mutateMemories).toHaveBeenCalledWith();
+});
+
+test("a forgotten Memory also refreshes every search of its Workspace, and no other read", async () => {
+  const cache = caches();
+  await applyMemoryChange({ kind: "forgotten", memoryId: "a" }, cache.targets);
+  // Before, a forget refreshed only the search on screen; every cached one may list it.
+  const matches = searchFilter(cache.calls);
+  expect(matches(loreKeys.search(WORKSPACE, "launch", 25))).toBe(true);
+  // The detail entry and browse pages were patched exactly; revalidating them again
+  // through the search filter would discard that patch.
+  expect(matches(loreKeys.memory(WORKSPACE, "a"))).toBe(false);
+  expect(matches(loreKeys.memories(WORKSPACE, 0))).toBe(false);
+  expect(matches(loreKeys.memoryProposals(WORKSPACE, "pending"))).toBe(false);
+  expect(matches(["other", "search", WORKSPACE])).toBe(false);
+  expect(matches("lore")).toBe(false);
+});
+
+test("the browse window is the Graph read window, both derived from the client contract", () => {
+  // Browse fills whole pages at the published list limit up to the Graph budget, so
+  // "Browse is limited to N" and the Graph's capped window name the same Memories.
+  expect(MEMORY_PAGE_SIZE).toBe(100);
+  expect(MAX_MEMORY_PAGES).toBe(50);
+  expect(MEMORY_PAGE_SIZE * MAX_MEMORY_PAGES).toBe(GRAPH_NODE_LIMIT);
 });

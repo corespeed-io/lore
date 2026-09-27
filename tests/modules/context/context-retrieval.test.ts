@@ -743,3 +743,74 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
   expect(isolation.filter((level) => level === "repeatable read")).toHaveLength(1);
   await context.close();
 }, 90_000);
+
+test("HTTP validates packet scope and metadata with the shared Memory rules", async () => {
+  // The route once kept its own scope and metadata checks; it now shares the Memory
+  // wire schemas, so every refusal names the rule a Memory write would name.
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "context-retrieval-alice";
+  const context = await createMemoryTestContext();
+  await context.adminDatabase.transaction(async (transaction) => {
+    await transaction.query(
+      `INSERT INTO identities (id, user_id, provider, subject)
+       VALUES ($1, $2, 'local', $3)`,
+      [crypto.randomUUID(), context.alice.userId, process.env.LORE_LOCAL_SUBJECT],
+    );
+  });
+  const memories = createMemoryModule(context.database);
+  const tagged = await memories.remember(context.alice, {
+    content: "The deployment convention is to ship behind a canary.",
+    metadata: { topic: "deploy" },
+  });
+  await memories.remember(context.alice, {
+    content: "The deployment convention for docs is a direct publish.",
+    metadata: { topic: "docs" },
+  });
+  const app = createApi({
+    database: () => context.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const retrieve = (body: Record<string, unknown>) =>
+    app.request(
+      new Request("http://lore.local/api/v1/context/retrieve", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-lore-workspace-id": context.alice.workspaceId,
+        },
+        body: JSON.stringify({
+          query: "What is our deployment convention?",
+          route: "memory-only",
+          ...body,
+        }),
+      }),
+    );
+
+  for (const [body, error] of [
+    [{ scope: "team" }, "scope must be shared or private"],
+    [{ scope: null }, "scope must be shared or private"],
+    [{ metadata: ["deploy"] }, "metadata must be an object"],
+    [{ metadata: null }, "metadata must be an object"],
+    [{ metadata: { note: "m".repeat(100_000) } }, "metadata exceeds 100000 characters"],
+    // A lone surrogate survives JSON.parse; PostgreSQL would refuse it in JSONB.
+    [{ metadata: { note: "\uD800" } }, "metadata contains a NUL character or invalid Unicode"],
+    [{ metadata: { note: "bad\u0000" } }, "metadata contains a NUL character or invalid Unicode"],
+  ] as const) {
+    const response = await retrieve(body);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+
+  // A valid scope and metadata filter reach the Memory search before top-k.
+  const response = await retrieve({ scope: "shared", metadata: { topic: "deploy" } });
+  expect(response.status).toBe(200);
+  const packet = (await response.json()) as {
+    deliveredRoute: string;
+    memories: Array<{ id: string; scope: string }>;
+  };
+  expect(packet.deliveredRoute).toBe("memory-only");
+  expect(packet.memories).toEqual([expect.objectContaining({ id: tagged.id, scope: "shared" })]);
+  await context.close();
+}, 90_000);

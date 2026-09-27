@@ -51,3 +51,52 @@ test("valid values pass through unchanged", () => {
     entityAliasRecall: true,
   });
 });
+
+test("a benchmark refuses a value the server silently defaults, and empty means what it does on the server", () => {
+  // The server quietly uses the default for a non-positive candidate limit; a
+  // benchmark must not report that run as the configuration it was given.
+  const quiet = retrievalKnobsFromEnvironment({ LORE_RERANK_CANDIDATE_LIMIT: "0" });
+  expect(quiet.knobs.rerankCandidateLimit).toBe(50);
+  expect(quiet.problems).toEqual([
+    {
+      message: "LORE_RERANK_CANDIDATE_LIMIT must be an integer between 1 and 200; using 50",
+      warn: false,
+    },
+  ]);
+  expect(() => strictRetrievalKnobsFromEnvironment({ LORE_RERANK_CANDIDATE_LIMIT: "abc" })).toThrow(
+    "LORE_RERANK_CANDIDATE_LIMIT must be an integer between 1 and 200; using 50",
+  );
+
+  // Empty is zero only for the knobs whose zero is meaningful; elsewhere it is the
+  // default. Benchmarks once read an empty LORE_RERANK_WEIGHT as weight 0.
+  expect(
+    strictRetrievalKnobsFromEnvironment({
+      LORE_EVIDENCE_NEIGHBOR_CHUNKS: "",
+      LORE_RETRIEVAL_FEEDBACK_QUERIES: "",
+      LORE_RERANK_WEIGHT: "",
+      LORE_SEMANTIC_DISTANCE_THRESHOLD: "  ",
+    }),
+  ).toMatchObject({
+    evidenceNeighborChunks: 0,
+    retrievalFeedbackQueries: 0,
+    rerankWeight: 1,
+    semanticDistanceThreshold: 0.5,
+  });
+  // An empty top-chunk count is zero, below its minimum: the server warns, a benchmark stops.
+  expect(
+    retrievalKnobsFromEnvironment({ LORE_EVIDENCE_TOP_CHUNKS: "" }).knobs.evidenceTopChunks,
+  ).toBe(1);
+  expect(() => strictRetrievalKnobsFromEnvironment({ LORE_EVIDENCE_TOP_CHUNKS: "" })).toThrow(
+    "LORE_EVIDENCE_TOP_CHUNKS must be an integer between 1 and 5",
+  );
+
+  // Every problem is named at once, in table order.
+  expect(() =>
+    strictRetrievalKnobsFromEnvironment({
+      LORE_RERANK_WEIGHT: "2",
+      LORE_EVIDENCE_NEIGHBOR_CHUNKS: "1.5",
+    }),
+  ).toThrow(
+    "LORE_EVIDENCE_NEIGHBOR_CHUNKS must be an integer between 0 and 2; using 0; LORE_RERANK_WEIGHT must be between 0 and 1; using 1",
+  );
+});
