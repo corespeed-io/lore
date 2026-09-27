@@ -250,8 +250,6 @@ async function readAnchoredCode(input: {
     evidence,
   } = input;
   const anchors: RetrievedAnchorContext[] = [];
-  // More citations existed than one packet carries, so some were never assessed.
-  let anchorsTruncated = false;
   const anchoredArtifactIds: string[] = [];
   const contextualSubjects: Array<{
     anchorId: string;
@@ -259,49 +257,45 @@ async function readAnchoredCode(input: {
     beforeSubject: DependencySubject;
     afterSubject: DependencySubject;
   }> = [];
-  {
-    // One read lists and assesses the citations of every result Memory, in result
-    // order. Retrieval never persists revalidation. One citation past the cap proves
-    // that the packet is incomplete; it is dropped, never delivered.
-    const assessed = await evidence.assessMemoryCitations(actor, {
-      memoryIds: memoryResults.map((result) => result.memory.id),
-      repositoryKey,
-      commitOid: requestedCommitOid,
-      limit: MAXIMUM_CONTEXT_ANCHORS + 1,
+  // One read lists and assesses the citations of every result Memory, in result
+  // order. Retrieval never persists revalidation. One citation past the cap proves
+  // that the packet is incomplete; it is dropped, never delivered.
+  const assessed = await evidence.assessMemoryCitations(actor, {
+    memoryIds: memoryResults.map((result) => result.memory.id),
+    repositoryKey,
+    commitOid: requestedCommitOid,
+    limit: MAXIMUM_CONTEXT_ANCHORS + 1,
+  });
+  // More citations existed than one packet carries, so some were never assessed.
+  const anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
+  for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
+    anchors.push({
+      id: citation.id,
+      memoryId: citation.memoryId,
+      relationship: citation.relationship,
+      localState: assessment.validationState,
+      citedCommitOid: citation.citedCommitOid,
+      citedPath: citation.citedPath,
+      validatedCommitOid: assessment.validatedCommitOid,
+      validatedPath: assessment.validatedPath,
     });
-    anchorsTruncated = assessed.length > MAXIMUM_CONTEXT_ANCHORS;
-    for (const { citation, assessment } of assessed.slice(0, MAXIMUM_CONTEXT_ANCHORS)) {
-      anchors.push({
-        id: citation.id,
-        memoryId: citation.memoryId,
-        relationship: citation.relationship,
-        localState: assessment.validationState,
-        citedCommitOid: citation.citedCommitOid,
-        citedPath: citation.citedPath,
-        validatedCommitOid: assessment.validatedCommitOid,
-        validatedPath: assessment.validatedPath,
+    if (
+      assessment.validatedArtifactId &&
+      !anchoredArtifactIds.includes(assessment.validatedArtifactId)
+    ) {
+      anchoredArtifactIds.push(assessment.validatedArtifactId);
+    }
+    if (assessment.validatedRevisionId) {
+      contextualSubjects.push({
+        anchorId: citation.id,
+        baseCommitOid: citation.citedCommitOid,
+        beforeSubject: dependencySubject(citation, citation.citedPath),
+        afterSubject: dependencySubject(citation, assessment.validatedPath ?? citation.citedPath),
       });
-      if (
-        assessment.validatedArtifactId &&
-        !anchoredArtifactIds.includes(assessment.validatedArtifactId)
-      ) {
-        anchoredArtifactIds.push(assessment.validatedArtifactId);
-      }
-      if (assessment.validatedRevisionId) {
-        contextualSubjects.push({
-          anchorId: citation.id,
-          baseCommitOid: citation.citedCommitOid,
-          beforeSubject: dependencySubject(citation, citation.citedPath),
-          afterSubject: dependencySubject(citation, assessment.validatedPath ?? citation.citedPath),
-        });
-      }
     }
   }
-
   const anchoredArtifacts =
-    anchoredArtifactIds.length > 0 &&
-    repositoryKey !== undefined &&
-    requestedCommitOid !== undefined
+    anchoredArtifactIds.length > 0
       ? await code.getArtifacts(actor, {
           repositoryKey,
           commitOid: requestedCommitOid,

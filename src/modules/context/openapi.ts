@@ -11,6 +11,7 @@ import {
 import {
   jsonResponse,
   memoryScopeSchema,
+  metadataSchema,
   requestBody,
   workspaceHeader,
 } from "@/server/openapi/shared";
@@ -78,7 +79,7 @@ export const contextSchemas = {
         default: CONTEXT_RETRIEVAL_LIMITS.defaultCodeLimit,
       },
       scope: memoryScopeSchema,
-      metadata: { type: "object", additionalProperties: true },
+      metadata: metadataSchema,
       pathPrefix: repositoryPathSchema,
     },
   },
@@ -251,12 +252,12 @@ export const contextSchemas = {
       },
       memories: {
         type: "array",
-        maxItems: 10,
+        maxItems: CONTEXT_RETRIEVAL_LIMITS.maximumMemoryLimit,
         items: { $ref: "#/components/schemas/RetrievedMemoryContext" },
       },
       code: {
         type: "array",
-        maxItems: 20,
+        maxItems: CONTEXT_RETRIEVAL_LIMITS.maximumCodeLimit,
         items: { $ref: "#/components/schemas/RetrievedCodeContext" },
       },
       anchors: {

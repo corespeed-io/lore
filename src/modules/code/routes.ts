@@ -1,5 +1,10 @@
 import { Hono } from "hono";
-import { MAXIMUM_CODE_INDEX_JOB_LIST } from "@/modules/code/indexing/protocol";
+import {
+  CODE_DEPENDENCY_DIRECTIONS,
+  MAXIMUM_CODE_DEPENDENCY_RESULTS,
+  MAXIMUM_CODE_INDEX_JOB_LIST,
+  MAXIMUM_CODE_SEARCH_RESULTS,
+} from "@/modules/code/indexing/protocol";
 import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
 import { createCodeIndexReadModule } from "@/modules/code/indexing/read";
 import {
@@ -22,7 +27,7 @@ function requiredQuery(url: URL, name: string, maximumLength: number): string {
   return value;
 }
 
-function optionalLimit(url: URL, maximum = 100): number | undefined {
+function optionalLimit(url: URL, maximum: number): number | undefined {
   const value = url.searchParams.get("limit");
   if (value === null) return undefined;
   const parsed = Number(value);
@@ -34,10 +39,11 @@ function optionalLimit(url: URL, maximum = 100): number | undefined {
 
 function dependencyDirection(url: URL): CodeDependencyDirection {
   const value = requiredQuery(url, "direction", 16);
-  if (value !== "callers" && value !== "callees") {
-    throw new BadRequestError("direction must be callers or callees");
+  const direction = CODE_DEPENDENCY_DIRECTIONS.find((candidate) => candidate === value);
+  if (!direction) {
+    throw new BadRequestError(`direction must be ${CODE_DEPENDENCY_DIRECTIONS.join(" or ")}`);
   }
-  return value;
+  return direction;
 }
 
 function requiredBodyString(
@@ -64,7 +70,7 @@ export const code = new Hono<ApiEnv>()
         repositoryKey: requiredQuery(url, "repository_key", REPOSITORY_KEY_MAXIMUM_LENGTH),
         commitOid: requiredQuery(url, "commit_oid", 64),
         query: requiredQuery(url, "q", CODE_QUERY_MAXIMUM_LENGTH),
-        limit: optionalLimit(url),
+        limit: optionalLimit(url, MAXIMUM_CODE_SEARCH_RESULTS),
         pathPrefix,
       }),
     );
@@ -84,7 +90,7 @@ export const code = new Hono<ApiEnv>()
         direction: dependencyDirection(url),
         symbol,
         path,
-        limit: optionalLimit(url, 200),
+        limit: optionalLimit(url, MAXIMUM_CODE_DEPENDENCY_RESULTS),
       }),
     );
     return c.json(result);

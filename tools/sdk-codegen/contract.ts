@@ -188,6 +188,7 @@ export function clientContract(document: unknown) {
       cursorLength: same(integer, document, [
         `${memories}/[cursor]/schema/maxLength`,
         "/paths/~1api~1v1~1evaluations~1suites/get/parameters/[cursor]/schema/maxLength",
+        "/paths/~1api~1v1~1episodes/get/parameters/[cursor]/schema/maxLength",
       ]),
       idempotencyKeyLength: same(
         integer,

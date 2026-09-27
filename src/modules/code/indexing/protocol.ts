@@ -17,6 +17,8 @@ export const MAXIMUM_CODE_INDEX_JOB_LIST = 100;
 export const DEFAULT_CODE_INDEX_JOB_LIST = 20;
 /** The most Code Artifacts one search returns. */
 export const MAXIMUM_CODE_SEARCH_RESULTS = 100;
+/** Which side of a Code Dependency a read follows. */
+export const CODE_DEPENDENCY_DIRECTIONS = ["callers", "callees"] as const;
 /** The most dependency edges (and ambiguity candidates) one read returns, and the default. */
 export const MAXIMUM_CODE_DEPENDENCY_RESULTS = 200;
 export const DEFAULT_CODE_DEPENDENCY_RESULTS = 50;

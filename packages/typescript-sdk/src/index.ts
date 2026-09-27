@@ -983,8 +983,10 @@ export class LoreWorkspaceClient {
     if (!COMMIT_OID.test(commitOid)) {
       throw new TypeError("commitOid must be a full 40- or 64-character Git OID");
     }
-    if (input.direction !== "callers" && input.direction !== "callees") {
-      throw new TypeError("direction must be callers or callees");
+    if (!LORE_CONTRACT.vocabularies.codeDependencyDirections.includes(input.direction)) {
+      throw new TypeError(
+        `direction must be ${LORE_CONTRACT.vocabularies.codeDependencyDirections.join(" or ")}`,
+      );
     }
     if ((input.symbol === undefined) === (input.path === undefined)) {
       throw new TypeError("Provide exactly one of symbol or path");
@@ -1184,7 +1186,9 @@ export class LoreWorkspaceClient {
   async listMemoryProposals(
     input: MemoryProposalListInput = {},
   ): Promise<readonly MemoryProposal[]> {
-    const params = new URLSearchParams({ limit: String(normalizedLimit(input.limit, 50)) });
+    const params = new URLSearchParams({
+      limit: String(normalizedLimit(input.limit, 50, LIMITS.memoryProposalList)),
+    });
     if (input.status) params.set("status", input.status);
     return (
       await this.transport.json<readonly MemoryProposal[]>(`api/v1/memory-proposals?${params}`, {

@@ -17,6 +17,7 @@ export const graphPaths = {
         "200": jsonResponse("Actor-visible graph with authorized endpoints", {
           $ref: "#/components/schemas/MemoryGraph",
         }),
+        "400": { $ref: "#/components/responses/Error" },
       },
     },
   },

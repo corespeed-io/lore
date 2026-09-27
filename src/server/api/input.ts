@@ -168,22 +168,6 @@ export function parseMemoryInput<Schema extends z.ZodType>(
   }
 }
 
-export function requiredRawString(value: unknown, name: string, maximumLength: number): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new BadRequestError(`${name} is required`);
-  }
-  if (value.includes("\0")) {
-    throw new BadRequestError(`${name} contains an invalid null character`);
-  }
-  if (hasLoneSurrogate(value)) {
-    throw new BadRequestError(`${name} contains invalid Unicode`);
-  }
-  if (value.length > maximumLength) {
-    throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
-  }
-  return value;
-}
-
 export function positiveInteger(value: unknown, name: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {

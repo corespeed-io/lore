@@ -1,8 +1,9 @@
-import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-core";
+import { MEMORY_CONTENT_LIMITS, MEMORY_LINK_LIMITS } from "@corespeed/lore-core";
 import {
   humanSecurity,
   jsonResponse,
   memoryScopeSchema,
+  metadataSchema,
   requestBody,
   timestampProperties,
   workspaceHeader,
@@ -62,7 +63,7 @@ export const portabilitySchemas = {
         minLength: 1,
         maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
       },
-      metadata: { type: "object", additionalProperties: true },
+      metadata: metadataSchema,
       version: { type: "integer", minimum: 1 },
       ...timestampProperties,
     },
@@ -84,9 +85,13 @@ export const portabilitySchemas = {
       id: { type: "string", format: "uuid" },
       sourceMemoryId: { type: "string", format: "uuid" },
       targetMemoryId: { type: "string", format: "uuid" },
-      kind: { type: "string", minLength: 1, maxLength: 64 },
-      weight: { type: "number", minimum: 0, maximum: 1 },
-      metadata: { type: "object", additionalProperties: true },
+      kind: { type: "string", minLength: 1, maxLength: MEMORY_LINK_LIMITS.maximumKindLength },
+      weight: {
+        type: "number",
+        minimum: MEMORY_LINK_LIMITS.minimumWeight,
+        maximum: MEMORY_LINK_LIMITS.maximumWeight,
+      },
+      metadata: metadataSchema,
       ...timestampProperties,
     },
   },

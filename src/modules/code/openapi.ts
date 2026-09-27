@@ -7,6 +7,7 @@ import {
 } from "@/server/openapi/shared";
 import { CODE_EVIDENCE_RELATIONSHIPS, CODE_EVIDENCE_VALIDATION_STATES } from "./evidence-contract";
 import {
+  CODE_DEPENDENCY_DIRECTIONS,
   DEFAULT_CODE_DEPENDENCY_RESULTS,
   DEFAULT_CODE_INDEX_JOB_LIST,
   MAXIMUM_CODE_DEPENDENCY_RESULTS,
@@ -116,7 +117,7 @@ export const codePaths = {
           name: "direction",
           in: "query",
           required: true,
-          schema: { type: "string", enum: ["callers", "callees"] },
+          schema: { type: "string", enum: [...CODE_DEPENDENCY_DIRECTIONS] },
         },
         {
           name: "symbol",
@@ -379,11 +380,11 @@ export const codeSchemas = {
       status: { const: "ok" },
       repositoryKey: { type: "string" },
       commitOid: commitOidSchema,
-      direction: { type: "string", enum: ["callers", "callees"] },
+      direction: { type: "string", enum: [...CODE_DEPENDENCY_DIRECTIONS] },
       subject: { $ref: "#/components/schemas/CodeGraphLocator" },
       edges: {
         type: "array",
-        maxItems: 200,
+        maxItems: MAXIMUM_CODE_DEPENDENCY_RESULTS,
         items: { $ref: "#/components/schemas/CodeDependencyEdge" },
       },
       truncated: { type: "boolean" },
@@ -397,11 +398,11 @@ export const codeSchemas = {
       status: { const: "ambiguous" },
       repositoryKey: { type: "string" },
       commitOid: commitOidSchema,
-      direction: { type: "string", enum: ["callers", "callees"] },
+      direction: { type: "string", enum: [...CODE_DEPENDENCY_DIRECTIONS] },
       candidates: {
         type: "array",
         minItems: 2,
-        maxItems: 200,
+        maxItems: MAXIMUM_CODE_DEPENDENCY_RESULTS,
         items: { $ref: "#/components/schemas/CodeGraphLocator" },
       },
       truncated: { type: "boolean" },
@@ -415,7 +416,7 @@ export const codeSchemas = {
       status: { const: "not_found" },
       repositoryKey: { type: "string" },
       commitOid: commitOidSchema,
-      direction: { type: "string", enum: ["callers", "callees"] },
+      direction: { type: "string", enum: [...CODE_DEPENDENCY_DIRECTIONS] },
       candidates: {
         type: "array",
         maxItems: 0,

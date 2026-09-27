@@ -2104,6 +2104,7 @@ export interface operations {
                     readonly "application/json": components["schemas"]["MemoryGraph"];
                 };
             };
+            readonly 400: components["responses"]["Error"];
         };
     };
     readonly listOrSearchMemories: {

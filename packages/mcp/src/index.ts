@@ -103,6 +103,8 @@ const scopeSchema = z.enum(VOCABULARIES.memoryScopes);
 const MAX_METADATA_CHARACTERS = LIMITS.memoryMetadataSerializedLength;
 const MAX_PROPOSAL_EVIDENCE = LIMITS.memoryProposalEvidence;
 const MAX_MCP_OUTPUT_CHARACTERS = 128_000;
+/** Tool-description guidance for retries, stated with the published key bound. */
+const IDEMPOTENCY_HINT = `Reuse idempotencyKey, 1 to ${LIMITS.idempotencyKeyLength} visible ASCII characters, when retrying an unknown outcome.`;
 const LIST_CONTENT_BUDGET = 2_800;
 const SEARCH_EVIDENCE_BUDGET = 2_800;
 const SUMMARY_METADATA_BUDGET = 900;
@@ -480,8 +482,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_remember",
     {
       title: "Remember in Lore",
-      description:
-        "Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
+      description: `Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. ${IDEMPOTENCY_HINT}`,
       inputSchema: z.object({
         content: memoryContentSchema,
         scope: scopeSchema.default("shared"),
@@ -511,8 +512,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_observe",
     {
       title: "Record a Lore Episode",
-      description:
-        "Record an ordered Episode of durable, immutable Observation evidence. This does not create searchable Memory. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
+      description: `Record an ordered Episode of durable, immutable Observation evidence. This does not create searchable Memory. ${IDEMPOTENCY_HINT}`,
       inputSchema: z
         .object({
           kind: z.enum(VOCABULARIES.episodeKinds),
@@ -581,8 +581,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_propose",
     {
       title: "Propose a Lore Memory",
-      description:
-        "Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
+      description: `Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. ${IDEMPOTENCY_HINT}`,
       inputSchema: z.discriminatedUnion("kind", [
         z
           .object({
@@ -675,8 +674,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_update",
     {
       title: "Update a Lore Memory",
-      description:
-        "Replace fields on one owned Memory using its current version. This may overwrite content, metadata, or visibility. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
+      description: `Replace fields on one owned Memory using its current version. This may overwrite content, metadata, or visibility. ${IDEMPOTENCY_HINT}`,
       inputSchema: z
         .object({
           memoryId: z.string().uuid(),
@@ -719,8 +717,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_forget",
     {
       title: "Forget a Lore Memory",
-      description:
-        "Permanently delete one owned Memory using its current version. This is destructive and cannot be undone. Reuse idempotencyKey, 1 to 128 visible ASCII characters, when retrying an unknown outcome.",
+      description: `Permanently delete one owned Memory using its current version. This is destructive and cannot be undone. ${IDEMPOTENCY_HINT}`,
       inputSchema: z.object({
         memoryId: z.string().uuid(),
         version: z.number().int().positive(),

@@ -5,6 +5,7 @@ import {
   REVISION_GENERATION_SOURCE,
 } from "@/modules/code/indexing/generation-sql";
 import {
+  type CODE_DEPENDENCY_DIRECTIONS,
   DEFAULT_CODE_DEPENDENCY_RESULTS,
   MAXIMUM_CODE_DEPENDENCY_RESULTS,
 } from "@/modules/code/indexing/protocol";
@@ -19,7 +20,7 @@ import {
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 
-export type CodeDependencyDirection = "callers" | "callees";
+export type CodeDependencyDirection = (typeof CODE_DEPENDENCY_DIRECTIONS)[number];
 export type CodeDependencyResolution = "resolved" | "ambiguous" | "unresolved";
 
 export interface QueryCodeDependenciesInput {

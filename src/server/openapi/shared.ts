@@ -1,4 +1,4 @@
-import { MEMORY_SCOPES } from "@corespeed/lore-core";
+import { MEMORY_METADATA_LIMITS, MEMORY_SCOPES } from "@corespeed/lore-core";
 import { LORE_ERROR_CODES } from "@/server/errors";
 
 export const errorSchema = {
@@ -16,6 +16,16 @@ export const errorSchema = {
 
 /** A Memory scope; Episodes, Proposals, and archives carry the same value. */
 export const memoryScopeSchema = { type: "string", enum: [...MEMORY_SCOPES] } as const;
+
+/**
+ * Metadata as every endpoint validates it: a JSON object whose serialization is
+ * bounded. JSON Schema cannot bound serialized size, so the bound is an extension.
+ */
+export const metadataSchema = {
+  type: "object",
+  additionalProperties: true,
+  "x-lore-maxSerializedLength": MEMORY_METADATA_LIMITS.maximumSerializedLength,
+} as const;
 
 export const timestampProperties = {
   createdAt: { type: "string", format: "date-time" },

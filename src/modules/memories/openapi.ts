@@ -1,4 +1,4 @@
-import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
+import { MEMORY_LINK_LIMITS, MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
@@ -185,7 +185,11 @@ export const memoriesSchemas = {
       source: { type: "string", format: "uuid" },
       target: { type: "string", format: "uuid" },
       kind: { type: "string" },
-      weight: { type: "number", minimum: 0, maximum: 1 },
+      weight: {
+        type: "number",
+        minimum: MEMORY_LINK_LIMITS.minimumWeight,
+        maximum: MEMORY_LINK_LIMITS.maximumWeight,
+      },
     },
   },
 };

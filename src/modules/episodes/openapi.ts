@@ -6,10 +6,12 @@ import {
   MAX_OBSERVATION_CONTENT_CHARACTERS,
   OBSERVATION_KINDS,
 } from "@corespeed/lore-core/episodes";
+import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
   jsonResponse,
   memoryScopeSchema,
+  metadataSchema,
   requestBody,
   workspaceHeader,
 } from "@/server/openapi/shared";
@@ -67,7 +69,7 @@ export const episodesPaths = {
           name: "cursor",
           in: "query",
           description: "Opaque Episode browse cursor.",
-          schema: { type: "string" },
+          schema: { type: "string", maxLength: CURSOR_MAXIMUM_LENGTH },
         },
         {
           name: "limit",
@@ -182,7 +184,7 @@ export const episodesSchemas = {
         enum: [...OBSERVATION_KINDS],
       },
       content: { type: "string", minLength: 1, maxLength: MAX_OBSERVATION_CONTENT_CHARACTERS },
-      metadata: { type: "object", additionalProperties: true },
+      metadata: metadataSchema,
       observedAt: { type: "string", format: "date-time" },
     },
   },
@@ -199,7 +201,7 @@ export const episodesSchemas = {
       observations: {
         type: "array",
         minItems: 1,
-        maxItems: 100,
+        maxItems: MAX_EPISODE_OBSERVATIONS,
         items: { $ref: "#/components/schemas/RecordObservationInput" },
       },
     },
@@ -223,7 +225,7 @@ export const episodesSchemas = {
       id: { type: "string", format: "uuid" },
       workspaceId: { type: "string", format: "uuid" },
       episodeId: { type: "string", format: "uuid" },
-      ordinal: { type: "integer", minimum: 0, maximum: 99 },
+      ordinal: { type: "integer", minimum: 0, maximum: MAX_EPISODE_OBSERVATIONS - 1 },
       kind: {
         type: "string",
         enum: [...OBSERVATION_KINDS],
@@ -231,7 +233,7 @@ export const episodesSchemas = {
       observedAt: { type: "string", format: "date-time" },
       payloadSha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
       content: { type: "string", minLength: 1, maxLength: MAX_OBSERVATION_CONTENT_CHARACTERS },
-      metadata: { type: "object", additionalProperties: true },
+      metadata: metadataSchema,
       createdAt: { type: "string", format: "date-time" },
     },
   },
@@ -250,7 +252,7 @@ export const episodesSchemas = {
       observations: {
         type: "array",
         minItems: 1,
-        maxItems: 100,
+        maxItems: MAX_EPISODE_OBSERVATIONS,
         items: { $ref: "#/components/schemas/Observation" },
       },
     },

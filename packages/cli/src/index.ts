@@ -242,8 +242,11 @@ function optionInteger(value: string | undefined, name: string): number | undefi
 
 function optionScope(value: string | undefined): MemoryScope | undefined {
   if (value === undefined) return undefined;
-  if (value === "shared" || value === "private") return value;
-  throw new CliUsageError("--scope must be shared or private");
+  const scope = LORE_CONTRACT.vocabularies.memoryScopes.find((candidate) => candidate === value);
+  if (scope) return scope;
+  throw new CliUsageError(
+    `--scope must be ${LORE_CONTRACT.vocabularies.memoryScopes.join(" or ")}`,
+  );
 }
 
 function optionMetadata(value: string | undefined): Record<string, unknown> | undefined {
@@ -368,9 +371,13 @@ export async function runLoreCli(
         "code dependencies callers|callees --repository KEY --commit OID (--symbol SYMBOL|--path PATH)",
       );
       allowedOptions(parsed.values, ["commit", "limit", "path", "repository", "symbol"]);
-      const direction = parsed.positionals[2];
-      if (direction !== "callers" && direction !== "callees") {
-        throw new CliUsageError("Code Dependency direction must be callers or callees");
+      const direction = LORE_CONTRACT.vocabularies.codeDependencyDirections.find(
+        (candidate) => candidate === parsed.positionals[2],
+      );
+      if (!direction) {
+        throw new CliUsageError(
+          `Code Dependency direction must be ${LORE_CONTRACT.vocabularies.codeDependencyDirections.join(" or ")}`,
+        );
       }
       const repositoryKey = parsed.values.repository?.trim();
       const commitOid = parsed.values.commit?.trim();

@@ -15,8 +15,8 @@ SDK exports standard ESM and declarations and remains usable by other compatible
 hosts and browsers.
 
 The canonical OpenAPI document is implemented by `src/server/openapi/document.ts` and served at
-`/openapi.json`. The generator commits TypeScript types/runtime error codes and
-CLI/MCP versions:
+`/openapi.json`. The generator commits TypeScript types, runtime error codes, the
+`LORE_CONTRACT` client contract, and CLI/MCP versions:
 
 ```bash
 bun run sdk:generate
@@ -24,7 +24,13 @@ bun run sdk:check
 bun run build:packages
 ```
 
-`sdk:check` fails when the OpenAPI document and any generated artifact differ. The
+`sdk:check` fails when the OpenAPI document and any generated artifact differ.
+`LORE_CONTRACT`, exported by `@corespeed/lore-sdk`, holds every vocabulary, bound, and
+pattern the API publishes that a client may check before sending a request (Memory
+scopes, list and search limits, the metadata serialized-size bound, commit OID and
+Idempotency-Key patterns, and so on). The generator reads each value from every
+endpoint that shares it and fails when two disagree, so read bounds from it instead of
+restating them. The
 handwritten SDK runtime wraps those types with the behavior OpenAPI alone cannot provide:
 authentication, `x-lore-workspace-id`, opaque cursors, strong Memory ETags,
 idempotency keys, bounded response reads, a default 30-second request deadline, and
@@ -142,7 +148,9 @@ a replay-safe idempotency key unless the caller supplies one; a supplied key mus
 1 to 128 visible ASCII characters, as the API requires. A `LoreApiError` with status
 409 is either `idempotency_conflict` (do not retry with that key) or
 `transaction_conflict` (retry after `Retry-After` with the same key); branch on its
-`code`, not the status. Direct update/forget and update
+`code`, not the status. A code the installed SDK does not know (one a newer server
+added, such as `agent_not_disabled` for deleting an Agent that is still active)
+arrives as `http_error`; its `status` still classifies it. Direct update/forget and update
 proposals require the current positive Memory version. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
