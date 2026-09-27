@@ -660,6 +660,17 @@ describe("Lore external MCP adapter", () => {
     expect(memories.proposeMemory).toHaveBeenCalledOnce();
   });
 
+  test("lore_search and lore_list apply their documented default limits", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    await client.callTool({ name: "lore_search", arguments: { query: "authorized" } });
+    expect(memories.searchMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "authorized", limit: 10 }),
+    );
+    await client.callTool({ name: "lore_list", arguments: {} });
+    expect(memories.listMemories).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+  });
+
   test("lore_search refuses a metadata filter past the query-string bound", async () => {
     const memories = fakeMemories();
     const client = await connect(memories);

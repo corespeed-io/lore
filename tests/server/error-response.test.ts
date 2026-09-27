@@ -164,13 +164,14 @@ test("an error that only looks public is reported as internal without its messag
 const PUBLIC_ERROR_BODY =
   /\bc\.(?:json|body|text)\([^;]*?,\s*[45]\d\d\s*[,)]|\b(?:c\.(?:json|body|text)|Response\.json|new Response)\([^;]*?\bstatus\s*:\s*[45]\d\d\b|json\(\s*\{[^}]*\bcode\s*:/;
 
-// errors.ts is the table itself, and the Edge admission path in auth.ts builds its
-// bodies from the same table without pulling the engine into middleware. The
-// development Graph benchmark route is outside the public contract (AGENTS.md).
-const PUBLIC_ERROR_OWNERS = new Set([
-  join("src", "server", "api", "errors.ts"),
-  join("src", "server", "auth", "auth.ts"),
-  join("src", "app", "api", "prototype", "graph-scale", "route.ts"),
+// The shared responder builds every error body from HTTP_STATUS. The Edge admission
+// path in auth.ts builds its one body (in `denial`) from the same table so the
+// engine stays out of middleware. The development Graph benchmark route is outside
+// the public contract (AGENTS.md).
+const PUBLIC_ERROR_OWNERS = new Map([
+  [join("src", "server", "api", "errors.ts"), Number.POSITIVE_INFINITY],
+  [join("src", "server", "auth", "auth.ts"), 1],
+  [join("src", "app", "api", "prototype", "graph-scale", "route.ts"), Number.POSITIVE_INFINITY],
 ]);
 
 test("the public-error-body guard catches reordered, code-less, and init-status bodies", () => {
@@ -210,12 +211,9 @@ test("no route writes a public error body itself", () => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
-      else if (
-        /\.tsx?$/.test(entry.name) &&
-        !PUBLIC_ERROR_OWNERS.has(path) &&
-        PUBLIC_ERROR_BODY.test(readFileSync(path, "utf8"))
-      ) {
-        offenders.push(path);
+      else if (/\.tsx?$/.test(entry.name)) {
+        const bodies = readFileSync(path, "utf8").match(new RegExp(PUBLIC_ERROR_BODY.source, "g"));
+        if ((bodies?.length ?? 0) > (PUBLIC_ERROR_OWNERS.get(path) ?? 0)) offenders.push(path);
       }
     }
   };

@@ -1,7 +1,8 @@
-// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file, ./config, and
-// @/server/errors run in the Edge runtime — use only Web APIs (atob, fetch, jose), never Node-only
-// ones (Buffer, node:*, fs). A Node API pulled in here poisons the middleware
-// bundle: it passes typecheck and breaks only at build/deploy.
+// EDGE-RUNTIME MODULE. middleware.ts imports this, so this file, @/server/config,
+// and @/server/errors run in the Edge runtime — use only Web APIs (atob, fetch,
+// jose), never Node-only ones (Buffer, node:*, fs). A Node API pulled in here
+// poisons the middleware bundle: it passes typecheck and breaks only at
+// build/deploy. architecture:check refuses a path from middleware to the engine.
 import { parse as parseCookies } from "hono/utils/cookie";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { loadConfig } from "@/server/config";

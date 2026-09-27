@@ -1,7 +1,8 @@
 /**
  * The public error vocabulary: every `code` an API error response may carry. The
- * SDK, CLI, and MCP switch on these; `src/server/api/errors.ts` maps each to its
- * HTTP status, and the OpenAPI Error schema enumerates exactly this list.
+ * SDK, CLI, and MCP switch on these; `HTTP_STATUS` below maps each to its HTTP
+ * status, `src/server/api/errors.ts` answers with it, and the OpenAPI Error schema
+ * enumerates exactly this list.
  */
 export const LORE_ERROR_CODES = [
   "access_denied",

@@ -344,7 +344,7 @@ test("the Memory list and search share one published limit bound", () => {
   const document = loreOpenApiDocument() as {
     paths: {
       "/api/v1/memories": {
-        get: { parameters: Array<{ name?: string; schema?: { maximum?: number } }> };
+        get: { parameters: Array<{ name?: string; schema?: Record<string, unknown> }> };
       };
     };
   };
@@ -352,4 +352,8 @@ test("the Memory list and search share one published limit bound", () => {
     (parameter) => parameter.name === "limit",
   );
   expect(limit?.schema?.maximum).toBe(MEMORY_SEARCH_LIMITS.maximumLimit);
+  // One `default` would be wrong for one of the two modes, so neither uses it.
+  expect(limit?.schema).not.toHaveProperty("default");
+  expect(limit?.schema?.["x-lore-listDefault"]).toBe(MEMORY_LIST_LIMITS.defaultLimit);
+  expect(limit?.schema?.["x-lore-searchDefault"]).toBe(MEMORY_SEARCH_LIMITS.defaultLimit);
 });

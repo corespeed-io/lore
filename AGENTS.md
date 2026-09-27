@@ -398,10 +398,16 @@ been removed. Lore now has a native implementation, split into two concepts
   the files that module exports. Nothing the Cloudflare Worker bundle reaches may
   import a native or Bun-only package: the check walks from the wrangler `main`
   entry and from every file OpenNext compiles into it (`src/app/**`,
-  `src/middleware.ts`, `src/instrumentation.ts`). Value imports come from Bun's
-  TypeScript parser (`Bun.Transpiler.scanImports`), so no comment, string, regex, or
-  JSX shape can hide one; a regex lexer only adds the type-only imports Bun drops,
-  and a file that does not parse is a finding. Every browser-side file of a domain lives
+  `src/middleware.ts`, `src/instrumentation.ts`), and nothing the Edge middleware
+  reaches may be engine (`packages/lore-core/`) or API-layer (`src/server/api/`) code.
+  Imports come from Bun's TypeScript parser (`Bun.Transpiler.scanImports`), twice:
+  once as written, for what loads at run time (an all-inline-type clause still does,
+  as `import {} from` under `verbatimModuleSyntax`), and once with every `type`
+  modifier blanked, whose extra specifiers are the type-only imports. No comment,
+  string, regex, or JSX shape can hide one. A file that does not parse, or an import
+  of an in-repo module that is not `.ts`/`.tsx`, is a finding. A computed specifier
+  (`import("node:" + name)`) is invisible to any scan; the Cloudflare dry run, which
+  sees the real bundle, is the backstop for those. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a

@@ -103,6 +103,8 @@ const scopeSchema = z.enum(VOCABULARIES.memoryScopes);
 const MAX_METADATA_CHARACTERS = LIMITS.memoryMetadataSerializedLength;
 const MAX_PROPOSAL_EVIDENCE = LIMITS.memoryProposalEvidence;
 const MAX_MCP_OUTPUT_CHARACTERS = 128_000;
+/** The most Memories one list or search returns, so the page fits the output ceiling. */
+const MAX_MCP_MEMORY_PAGE = 25;
 /** Tool-description guidance for retries, stated with the published key bound. */
 const IDEMPOTENCY_HINT = `Reuse idempotencyKey, 1 to ${LIMITS.idempotencyKeyLength} visible ASCII characters, when retrying an unknown outcome.`;
 const LIST_CONTENT_BUDGET = 2_800;
@@ -398,7 +400,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
       description:
         "List Memories visible to the configured Lore Actor and Workspace. Content is a bounded preview; contentTruncated and metadataTruncated identify omitted data. Use the returned cursor to continue browsing.",
       inputSchema: z.object({
-        limit: z.number().int().min(1).max(25).default(25),
+        limit: z.number().int().min(1).max(MAX_MCP_MEMORY_PAGE).default(MAX_MCP_MEMORY_PAGE),
         cursor: z.string().max(LIMITS.cursorLength).optional(),
         scope: scopeSchema.optional(),
       }),
@@ -435,8 +437,8 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
           .number()
           .int()
           .min(1)
-          .max(25)
-          .default(Math.min(LIMITS.memorySearchLimitDefault, 25)),
+          .max(MAX_MCP_MEMORY_PAGE)
+          .default(Math.min(LIMITS.memorySearchLimitDefault, MAX_MCP_MEMORY_PAGE)),
         scope: scopeSchema.optional(),
         metadata: metadataFilterSchema.optional(),
       }),
