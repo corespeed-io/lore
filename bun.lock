@@ -52,12 +52,12 @@
     },
     "packages/cli": {
       "name": "@corespeed/lore-cli",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "lore": "./dist/bin.js",
       },
       "dependencies": {
-        "@corespeed/lore-sdk": "^0.1.0",
+        "@corespeed/lore-sdk": "^0.2.0",
       },
     },
     "packages/lore-core": {
@@ -82,19 +82,19 @@
     },
     "packages/mcp": {
       "name": "@corespeed/lore-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "lore-mcp": "./dist/bin.js",
       },
       "dependencies": {
-        "@corespeed/lore-sdk": "^0.1.0",
+        "@corespeed/lore-sdk": "^0.2.0",
         "@modelcontextprotocol/server": "^2.0.0",
         "zod": "^4.6.5",
       },
     },
     "packages/typescript-sdk": {
       "name": "@corespeed/lore-sdk",
-      "version": "0.1.0",
+      "version": "0.2.0",
     },
     "tools/sdk-codegen": {
       "name": "@corespeed/lore-sdk-codegen",
