@@ -9,12 +9,6 @@ export const MEMORY_GRAPH_LIMITS = {
   maximumNodes: 5_000,
 } as const;
 
-/**
- * Link weights are stored as PostgreSQL `real` (a 32-bit float), which refuses a
- * non-zero value that would round to zero; this is its smallest positive value.
- */
-const SMALLEST_STORABLE_WEIGHT = 2 ** -149;
-
 export const MEMORY_LINK_LIMITS = {
   /** Link kind length, in UTF-16 code units. */
   maximumKindLength: 64,
@@ -73,10 +67,13 @@ export function validateMemoryLink(
       `${field}.weight must be a number from ${MEMORY_LINK_LIMITS.minimumWeight} through ${MEMORY_LINK_LIMITS.maximumWeight}`,
     );
   }
-  if (weight !== 0 && weight < SMALLEST_STORABLE_WEIGHT) {
+  // Weights are stored as PostgreSQL `real` (a 32-bit float), which refuses a
+  // non-zero value that would round to zero. Test the rounding itself: PostgreSQL
+  // prints the smallest real as 1e-45, below 2 ** -149, and that must import again.
+  if (weight !== 0 && Math.fround(weight) === 0) {
     throw new LoreValidationError(
       `${field}.weight`,
-      `${field}.weight must be 0 or at least ${SMALLEST_STORABLE_WEIGHT}`,
+      `${field}.weight must be 0 or a value PostgreSQL real does not round to zero`,
     );
   }
   const metadata =

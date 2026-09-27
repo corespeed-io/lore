@@ -176,6 +176,9 @@ test("a schema that drifts from the contract is reported item by item", async ()
       ALTER TABLE memory_links DROP CONSTRAINT ${unique.rows[0]?.name};
       CREATE UNIQUE INDEX memory_links_partial ON memory_links
         (workspace_id, source_memory_id, target_memory_id, kind) WHERE kind <> '';
+      -- An extra expression key cannot serve the four-column ON CONFLICT target either.
+      CREATE UNIQUE INDEX memory_links_expression ON memory_links
+        (workspace_id, source_memory_id, target_memory_id, kind, lower(kind));
     `);
 
     await expect(missingSchemaContract(postgres, ["memory", "graph"])).resolves.toEqual([

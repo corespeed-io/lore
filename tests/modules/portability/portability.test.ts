@@ -457,7 +457,7 @@ test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
     (archive) => {
       archive.links[0].weight = 1e-50;
     },
-    /links\[0\]\.weight must be 0 or at least/,
+    /links\[0\]\.weight must be 0 or a value PostgreSQL real does not round to zero/,
   ],
   [
     "an unknown Memory scope",

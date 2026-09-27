@@ -177,9 +177,11 @@ describe("shared input rules", () => {
     // PostgreSQL stores the weight as real, which refuses a value that rounds to zero.
     expect(refusal(() => validateMemoryLink({ ...endpoints, weight: 1e-50 }))).toMatchObject({
       field: "link.weight",
-      message: `link.weight must be 0 or at least ${2 ** -149}`,
+      message: "link.weight must be 0 or a value PostgreSQL real does not round to zero",
     });
     expect(validateMemoryLink({ ...endpoints, weight: 2 ** -149 }).weight).toBe(2 ** -149);
+    // PostgreSQL prints the smallest real as 1e-45, which must import again.
+    expect(validateMemoryLink({ ...endpoints, weight: 1e-45 }).weight).toBe(1e-45);
     // Endpoint ids that differ only in case name the same Memory.
     const id = "40000000-0000-4000-8000-00000000000a";
     expect(

@@ -122,15 +122,21 @@ async function missingTableContract(
     }
   }
   if (contract.uniqueKeys?.length) {
+    // An ON CONFLICT target matches only a whole, non-partial unique index on plain
+    // columns: an expression key or a predicate leaves the target unmatched.
     const indexes = await transaction.query<{ columns: string[] }>(
       `SELECT ARRAY(
          SELECT attribute.attname
-         FROM unnest(index.indkey) AS key(attnum)
+         FROM generate_series(0, index.indnkeyatts - 1) AS position(key)
          JOIN pg_attribute attribute
-           ON attribute.attrelid = index.indrelid AND attribute.attnum = key.attnum
+           ON attribute.attrelid = index.indrelid
+          AND attribute.attnum = index.indkey[position.key]
        ) AS columns
        FROM pg_index index
-       WHERE index.indrelid = to_regclass($1) AND index.indisunique AND index.indpred IS NULL`,
+       WHERE index.indrelid = to_regclass($1)
+         AND index.indisunique
+         AND index.indpred IS NULL
+         AND index.indexprs IS NULL`,
       [table],
     );
     const unique = indexes.rows.map((row) => [...row.columns].sort().join(","));
