@@ -235,10 +235,27 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
         primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, 2),
       ),
     ).rejects.toBeInstanceOf(MemoryVersionConflictError);
+    // A host that already locked the row hands over its version, which the engine
+    // checks and deletes by without reading the row again.
     await expect(
       postgres.transaction((transaction) =>
-        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, 1),
+        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, 2, 1),
       ),
+    ).rejects.toBeInstanceOf(MemoryVersionConflictError);
+    await expect(
+      postgres.transaction(async (transaction) => {
+        const locked = await transaction.query<{ version: number }>(
+          "SELECT version FROM memories WHERE id = $1 FOR UPDATE",
+          [ids[0]],
+        );
+        return primitives.forgetMemoryInTransaction(
+          transaction,
+          storage,
+          ids[0] as string,
+          1,
+          locked.rows[0]?.version,
+        );
+      }),
     ).resolves.toBe(true);
     const links = await postgres.query<{ count: number }>(
       "SELECT count(*)::integer AS count FROM memory_links",

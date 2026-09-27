@@ -1,8 +1,8 @@
 import type { MemoryStorageContext, PostgresTransaction } from "../db";
 import type { MemoryScope } from "../memory";
-import { MEMORY_LIST_LIMITS, validateMemoryMetadata, validateMemoryScope } from "../memory-input";
+import { memoryListLimit, validateMemoryMetadata, validateMemoryScope } from "../memory-input";
 import { utcTimestampSql } from "../timestamp";
-import { boundedInteger, isStorableText, LoreValidationError } from "../validation";
+import { isStorableText, LoreValidationError } from "../validation";
 
 export const MAX_EPISODE_OBSERVATIONS = 100;
 export const MAX_EPISODE_CONTENT_CHARACTERS = 1_000_000;
@@ -336,11 +336,7 @@ export function createObservationModule(storage: MemoryStorageContext) {
     },
 
     async list(input: ListEpisodes = {}): Promise<EpisodeSummary[]> {
-      const limit = boundedInteger(input.limit, "limit", {
-        minimum: 1,
-        maximum: MEMORY_LIST_LIMITS.maximumLimit,
-        fallback: MEMORY_LIST_LIMITS.defaultLimit,
-      });
+      const limit = memoryListLimit(input.limit);
       if (input.kind !== undefined) validateEpisodeKind(input.kind);
       if (input.scope !== undefined) validateMemoryScope(input.scope);
       return database.transaction(async (transaction) => {

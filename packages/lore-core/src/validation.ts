@@ -52,6 +52,35 @@ export function boundedNumber(
   return value;
 }
 
+/**
+ * A deployment option outside its bounds. It is operator configuration, not request
+ * input, so hosts report it as a server failure rather than a caller's 400.
+ */
+export class LoreConfigurationError extends Error {
+  override name = "LoreConfigurationError";
+
+  constructor(
+    /** The option that failed, for example `rerankWeight`. */
+    readonly option: string,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
+/** Read a deployment option with the input bounds, refusing it as configuration. */
+export function configurationOption<Value>(read: () => Value): Value {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof LoreValidationError) {
+      throw new LoreConfigurationError(error.field, error.message, { cause: error });
+    }
+    throw error;
+  }
+}
+
 /** An integer from `minimum` through `maximum`, or `fallback` when omitted. */
 export function boundedInteger(
   value: number | undefined,

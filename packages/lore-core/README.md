@@ -111,3 +111,22 @@ applies host transaction initialization; it chooses no database role.
 Package tests also exercise real CRUD/retrieval against a minimal independent
 PGlite schema without OSS identity tables or authorization functions, alongside
 the OSS schema's isolation and embedding-maintenance contract.
+
+### Behavior a port must carry
+
+These engine rules changed the public API in ways a hand port does not surface on
+its own:
+
+- **Errors carry no HTTP status.** Map them by class: `LoreValidationError`
+  (including `MemoryContentValidationError`) is a 400 input refusal that names its
+  `field`; `MemoryVersionConflictError` is 412; `MemoryAccessDeniedError` is 403.
+  A host that read a `.status` property from engine errors now gets none. An
+  out-of-range deployment option (the Episode evidence knobs) throws
+  `LoreConfigurationError`, a server failure that names its `option`, not a 400.
+- **Input is refused, never trimmed or clamped.** Link kind (non-blank, at most
+  `MEMORY_LINK_LIMITS.maximumKindLength`, stored as given) and weight (0 through 1,
+  representable as PostgreSQL `real`), list/search/Graph limits and offsets, scope,
+  metadata, and Episode evidence search inputs all throw `LoreValidationError`.
+  `graph.connect` used to trim its kind and clamp its weight.
+- **Batch primitives validate every record before any statement**, and a refusal
+  names the record: `records[i].content`, `links[i].weight`.

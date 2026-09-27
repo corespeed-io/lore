@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  createEpisodeEvidenceModule,
   createObservationModule,
   MAX_EPISODE_CONTENT_CHARACTERS,
   MAX_EPISODE_OBSERVATIONS,
@@ -13,10 +14,14 @@ import {
   createMemoryModule,
   createMemoryMutationPrimitives,
   insertMemoryLinksInTransaction,
+  LoreConfigurationError,
   LoreValidationError,
   MEMORY_METADATA_LIMITS,
+  MemoryContentValidationError,
   type MemoryStorageContext,
+  memoryContentChunks,
   type PostgresTransaction,
+  prepareMemoryContent,
   queryInRecordBatches,
   RECORD_BATCH_LIMITS,
   validateMemoryLink,
@@ -237,6 +242,59 @@ describe("Episode admission and reads", () => {
     ).rejects.toThrow("the engine must refuse before any query");
     await expect(episodes.retrieveObservations([])).resolves.toEqual([]);
   });
+
+  test("Episode evidence options and search inputs are refused by field before any query", async () => {
+    // Deployment options are operator configuration: an out-of-range one is a
+    // configuration failure naming the option, never a caller's input refusal.
+    for (const [options, field] of [
+      [{ evidenceNeighborChunks: 3 }, "evidenceNeighborChunks"],
+      [{ evidenceTopObservations: 0 }, "evidenceTopObservations"],
+      [{ queryPlannerMaxQueries: 1.5 }, "queryPlannerMaxQueries"],
+      [{ rerankCandidateLimit: 201 }, "rerankCandidateLimit"],
+      [{ rerankMinimumScore: 1.01 }, "rerankMinimumScore"],
+      [{ rerankWeight: Number.NaN }, "rerankWeight"],
+      [{ semanticDistanceThreshold: -0.1 }, "semanticDistanceThreshold"],
+    ] as const) {
+      let failure: unknown;
+      try {
+        createEpisodeEvidenceModule(untouchedStorage, options);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(LoreConfigurationError);
+      expect(failure).not.toBeInstanceOf(LoreValidationError);
+      expect(failure).toMatchObject({ option: field });
+    }
+    const evidence = createEpisodeEvidenceModule(untouchedStorage);
+    for (const limit of [0, 101, 2.5]) {
+      expect((await asyncRefusal(evidence.search({ query: "trajectory", limit }))).field).toBe(
+        "limit",
+      );
+    }
+    expect(
+      await asyncRefusal(evidence.search({ query: "trajectory", sourceKeys: ["a"] })),
+    ).toMatchObject({ field: "sourceKeys", message: "sourceKeys require groupMetadataKey" });
+    const keys = Array.from({ length: 1_001 }, (_, index) => `source-${index}`);
+    expect(
+      await asyncRefusal(
+        evidence.search({ query: "trajectory", groupMetadataKey: "id", sourceKeys: keys }),
+      ),
+    ).toMatchObject({ field: "sourceKeys", message: "At most 1000 source keys may be searched" });
+    // Repeated keys count once, and a blank query searches nothing, but only after its
+    // other inputs pass, as Memory search does.
+    await expect(
+      evidence.search({
+        query: "trajectory",
+        groupMetadataKey: "id",
+        sourceKeys: [...keys.slice(0, 1_000), "source-0"],
+      }),
+    ).rejects.toThrow("the engine must refuse before any query");
+    expect((await asyncRefusal(evidence.search({ query: "   ", limit: 0 }))).field).toBe("limit");
+    expect((await asyncRefusal(evidence.search({ query: 42 as unknown as string }))).field).toBe(
+      "query",
+    );
+    await expect(evidence.search({ query: "   " })).resolves.toEqual([]);
+  });
 });
 
 describe("the engine validates before it writes", () => {
@@ -279,6 +337,43 @@ describe("the engine validates before it writes", () => {
     expect(statements).toEqual([]);
   });
 
+  test("an update's scope and a search's query obey the rules before any statement", async () => {
+    const primitives = createMemoryMutationPrimitives();
+    const { statements, transaction } = watchedTransaction();
+    const scope = { partitionId: untouchedStorage.partitionId, ownerId: untouchedStorage.ownerId };
+    expect(
+      await asyncRefusal(
+        primitives.updateMemoryInTransaction(transaction, scope, "id", {
+          scope: "team" as "shared",
+        }),
+      ),
+    ).toMatchObject({ field: "scope", message: "scope must be shared or private" });
+    expect(statements).toEqual([]);
+
+    const memories = createMemoryModule(untouchedStorage, { embeddingDimensions: 8 });
+    expect(await asyncRefusal(memories.search({ query: 42 as unknown as string }))).toMatchObject({
+      field: "query",
+      message: "query must be a string",
+    });
+    // The bound applies to the trimmed query, so surrounding whitespace is free.
+    await expect(memories.search({ query: `  ${"q".repeat(10_000)}  `, limit: 1 })).rejects.toThrow(
+      "the engine must refuse before any query",
+    );
+    for (const limit of [0, 101, 1.5]) {
+      expect((await asyncRefusal(memories.search({ query: "fact", limit }))).field).toBe("limit");
+    }
+  });
+
+  test("a batch reuses prepared chunks only when the engine produced them for that text", () => {
+    const prepared = prepareMemoryContent("Prepared harbor fact.");
+    expect(memoryContentChunks("Prepared harbor fact.", prepared)).toBe(prepared.chunks);
+    // A lookalike the engine did not produce, or one for other text, is chunked again.
+    const forged = { content: "Prepared harbor fact.", chunks: ["forged"] };
+    expect(memoryContentChunks("Prepared harbor fact.", forged)).toEqual(["Prepared harbor fact."]);
+    expect(memoryContentChunks("Other text.", prepared)).toEqual(["Other text."]);
+    expect(() => memoryContentChunks("  ", prepared)).toThrow(MemoryContentValidationError);
+  });
+
   test("a batch with one invalid record writes none of them", async () => {
     const primitives = createMemoryMutationPrimitives();
     const { statements, transaction } = watchedTransaction();
@@ -290,12 +385,18 @@ describe("the engine validates before it writes", () => {
         { ...valid, content: "Valid.", metadata: {} },
         { ...valid, id: "40000000-0000-4000-8000-000000000002", content: "  ", metadata: {} },
       ]),
-    ).rejects.toMatchObject({ field: "content" });
+    ).rejects.toMatchObject({ field: "records[1].content", message: "Memory content is required" });
     await expect(
       primitives.insertMemoriesInTransaction(transaction, scope, [
         { ...valid, content: "Valid.", metadata: { note: "bad\u0000" } },
       ]),
-    ).rejects.toMatchObject({ field: "metadata" });
+    ).rejects.toMatchObject({ field: "records[0].metadata" });
+    await expect(
+      primitives.insertMemoriesInTransaction(transaction, scope, [
+        { ...valid, content: "Valid.", metadata: {} },
+        { ...valid, scope: "team" as "shared", content: "Valid.", metadata: {} },
+      ]),
+    ).rejects.toMatchObject({ field: "records[1].scope" });
     expect(
       (
         await asyncRefusal(

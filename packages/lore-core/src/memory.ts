@@ -3,7 +3,11 @@ import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabili
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "./db";
 import { isPostgresAccessDenied } from "./db";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
-import { prepareMemoryContent } from "./memory-content";
+import {
+  MemoryContentValidationError,
+  memoryContentChunks,
+  prepareMemoryContent,
+} from "./memory-content";
 import {
   memoryListLimit,
   memoryListOffset,
@@ -45,6 +49,7 @@ import {
   rerankEvidence,
 } from "./retrieval/ranking";
 import { utcTimestampSql } from "./timestamp";
+import { LoreValidationError } from "./validation";
 import { embeddingVectorLiteral } from "./vector";
 
 export * from "./memory-types";
@@ -818,6 +823,16 @@ async function enqueueEmbeddingJob(
   return inserted.rows.length > 0 ? jobId : null;
 }
 
+/** A batch record's chunks; a content refusal names the record that broke the rule. */
+function batchRecordChunks(record: InsertMemoryRecord, index: number): readonly string[] {
+  try {
+    return memoryContentChunks(record.content, record.preparedContent);
+  } catch (error) {
+    if (!(error instanceof MemoryContentValidationError)) throw error;
+    throw new LoreValidationError(`records[${index}].content`, error.message, { cause: error });
+  }
+}
+
 /** List and search filters obey the same rules as the values they match. */
 function validateReadFilters(input: {
   scope?: MemoryScope | undefined;
@@ -1036,20 +1051,26 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
    * Delete one Memory under its row lock. Returns false when the store shows no
    * such Memory; throws MemoryVersionConflictError on a stale expected version.
    * Chunks, vectors, jobs, and Links go with it through the schema's cascades.
+   * A host that already read the row's version under `FOR UPDATE` in this
+   * transaction passes it as `lockedVersion`, and the engine skips its own read.
    */
   async function forgetMemoryInTransaction(
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     id: string,
     expectedVersion?: number,
+    lockedVersion?: number,
   ): Promise<boolean> {
-    const current = await transaction.query<{ version: number }>(
-      `SELECT version FROM memories
-       WHERE id = $1 AND workspace_id = $2
-       FOR UPDATE`,
-      [id, storageScope.partitionId],
-    );
-    const version = current.rows[0]?.version;
+    let version = lockedVersion;
+    if (version === undefined) {
+      const current = await transaction.query<{ version: number }>(
+        `SELECT version FROM memories
+         WHERE id = $1 AND workspace_id = $2
+         FOR UPDATE`,
+        [id, storageScope.partitionId],
+      );
+      version = current.rows[0]?.version;
+    }
     if (version === undefined) return false;
     if (expectedVersion !== undefined && version !== expectedVersion) {
       throw new MemoryVersionConflictError(expectedVersion, version);
@@ -1072,13 +1093,13 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     storageScope: MemoryStorageScope,
     records: readonly InsertMemoryRecord[],
   ): Promise<{ jobIds: string[]; memories: Array<{ id: string; version: number }> }> {
-    const prepared = records.map((record) => ({
+    const prepared = records.map((record, index) => ({
       // PostgreSQL returns uuid in lowercase; match RETURNING rows in that form.
       id: record.id.toLowerCase(),
-      scope: validateMemoryScope(record.scope),
+      scope: validateMemoryScope(record.scope, `records[${index}].scope`),
       content: record.content,
-      metadata: validateMemoryMetadata(record.metadata),
-      chunks: prepareMemoryContent(record.content).chunks,
+      metadata: validateMemoryMetadata(record.metadata, `records[${index}].metadata`),
+      chunks: batchRecordChunks(record, index),
     }));
     const inserted = await queryInRecordBatches<{ id: string; version: number | string }>(
       transaction,

@@ -48,7 +48,7 @@ export async function missingSchemaContract(
       if (!result.rows[0]?.present) missing.push(`${name}: function ${signature}`);
     }
     for (const [type, labels] of Object.entries(group.enums)) {
-      const present = (await enumLabels(transaction, `public.${type}`)).sort();
+      const present = (await enumLabels(transaction, type)).sort();
       if (present.join(",") !== [...labels].sort().join(",")) {
         missing.push(`${name}: enum ${type} (${[...labels].join(", ")})`);
       }
@@ -59,7 +59,7 @@ export async function missingSchemaContract(
         `SELECT format_type(attribute.atttypid, NULL) AS type_name
          FROM pg_attribute attribute
          WHERE attribute.attrelid = to_regclass($1) AND attribute.attname = $2`,
-        [`public.${table}`, attribute],
+        [table, attribute],
       );
       const typeName = result.rows[0]?.type_name;
       if (!typeName) continue;
@@ -85,7 +85,8 @@ async function missingTableContract(
   table: string,
   contract: TableContract,
 ): Promise<string[]> {
-  const relation = `public.${table}`;
+  // Unqualified, so the name resolves through search_path as the engine's own SQL does.
+  const relation = table;
   const attributes = await transaction.query<{
     column_name: string;
     not_null: boolean;
@@ -154,7 +155,7 @@ async function missingTableContract(
            AND constraint_row.confrelid = to_regclass($2)
            AND attribute.attname = $3
        ) AS present`,
-      [relation, `public.${cascade.parent}`, cascade.column],
+      [relation, cascade.parent, cascade.column],
     );
     if (!result.rows[0]?.present) {
       missing.push(`cascading foreign key ${table}.${cascade.column} -> ${cascade.parent}`);

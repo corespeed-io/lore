@@ -6,8 +6,13 @@ import {
 } from "../capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "../db";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
-import { MEMORY_SEARCH_LIMITS } from "../memory-input";
-import { boundedInteger, boundedNumber, LoreValidationError } from "../validation";
+import { memorySearchLimit, memorySearchQuery } from "../memory-input";
+import {
+  boundedInteger,
+  boundedNumber,
+  configurationOption,
+  LoreValidationError,
+} from "../validation";
 import { embeddingVectorLiteral, embeddingVectorLiterals } from "../vector";
 
 export const EPISODE_EVIDENCE_INDEX_REVISION =
@@ -571,41 +576,60 @@ export function createEpisodeEvidenceModule(
   options: EpisodeEvidenceModuleOptions = {},
 ) {
   const { database } = storage;
-  const evidenceNeighborChunks = boundedInteger(
-    options.evidenceNeighborChunks,
-    "evidenceNeighborChunks",
-    { minimum: 0, maximum: 2, fallback: 0 },
-  );
-  const evidenceTopObservations = boundedInteger(
-    options.evidenceTopObservations,
-    "evidenceTopObservations",
-    { minimum: 1, maximum: 5, fallback: 1 },
-  );
-  const queryPlannerMaxQueries = boundedInteger(
-    options.queryPlannerMaxQueries,
-    "queryPlannerMaxQueries",
-    { minimum: 1, maximum: 5, fallback: 3 },
-  );
-  const rerankCandidateLimit = boundedInteger(
-    options.rerankCandidateLimit,
-    "rerankCandidateLimit",
-    { minimum: 1, maximum: 200, fallback: 50 },
-  );
-  const rerankMinimumScore = boundedNumber(options.rerankMinimumScore, "rerankMinimumScore", {
-    minimum: 0,
-    maximum: 1,
-    fallback: 0,
-  });
-  const rerankWeight = boundedNumber(options.rerankWeight, "rerankWeight", {
-    minimum: 0,
-    maximum: 1,
-    fallback: 1,
-  });
-  const semanticDistanceThreshold = boundedNumber(
-    options.semanticDistanceThreshold,
-    "semanticDistanceThreshold",
-    { minimum: 0, maximum: 2, fallback: 0.5 },
-  );
+  // Deployment options, so an out-of-range value is a configuration failure.
+  const {
+    evidenceNeighborChunks,
+    evidenceTopObservations,
+    queryPlannerMaxQueries,
+    rerankCandidateLimit,
+    rerankMinimumScore,
+    rerankWeight,
+    semanticDistanceThreshold,
+  } = configurationOption(() => ({
+    evidenceNeighborChunks: boundedInteger(
+      options.evidenceNeighborChunks,
+      "evidenceNeighborChunks",
+      {
+        minimum: 0,
+        maximum: 2,
+        fallback: 0,
+      },
+    ),
+    evidenceTopObservations: boundedInteger(
+      options.evidenceTopObservations,
+      "evidenceTopObservations",
+      { minimum: 1, maximum: 5, fallback: 1 },
+    ),
+    queryPlannerMaxQueries: boundedInteger(
+      options.queryPlannerMaxQueries,
+      "queryPlannerMaxQueries",
+      {
+        minimum: 1,
+        maximum: 5,
+        fallback: 3,
+      },
+    ),
+    rerankCandidateLimit: boundedInteger(options.rerankCandidateLimit, "rerankCandidateLimit", {
+      minimum: 1,
+      maximum: 200,
+      fallback: 50,
+    }),
+    rerankMinimumScore: boundedNumber(options.rerankMinimumScore, "rerankMinimumScore", {
+      minimum: 0,
+      maximum: 1,
+      fallback: 0,
+    }),
+    rerankWeight: boundedNumber(options.rerankWeight, "rerankWeight", {
+      minimum: 0,
+      maximum: 1,
+      fallback: 1,
+    }),
+    semanticDistanceThreshold: boundedNumber(
+      options.semanticDistanceThreshold,
+      "semanticDistanceThreshold",
+      { minimum: 0, maximum: 2, fallback: 0.5 },
+    ),
+  }));
   const embeddingProvider = options.embeddingProvider;
   const embeddingDimensions = validatedEmbeddingDimensions(
     options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
@@ -763,19 +787,16 @@ export function createEpisodeEvidenceModule(
     },
 
     async search(input: SearchEpisodeEvidence): Promise<EpisodeEvidenceSearchResult[]> {
-      const query = input.query.trim();
-      if (!query) return [];
-      const limit = boundedInteger(input.limit, "limit", {
-        minimum: 1,
-        maximum: MEMORY_SEARCH_LIMITS.maximumLimit,
-        fallback: MEMORY_SEARCH_LIMITS.defaultLimit,
-      });
+      const query = memorySearchQuery(input.query);
+      const limit = memorySearchLimit(input.limit);
       const sourceKeys = [...new Set(input.sourceKeys ?? [])];
       if (sourceKeys.length && !input.groupMetadataKey) {
         throw new LoreValidationError("sourceKeys", "sourceKeys require groupMetadataKey");
       }
       if (sourceKeys.length > 1_000)
         throw new LoreValidationError("sourceKeys", "At most 1000 source keys may be searched");
+      // A blank query searches nothing, but only after its other inputs pass.
+      if (!query) return [];
       const resultLimit = options.rerankingProvider ? Math.max(limit, rerankCandidateLimit) : limit;
       const candidateLimit = Math.min(resultLimit * 4, 800);
       let planned: string[] = [];

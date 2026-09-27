@@ -16,9 +16,12 @@ export class MemoryContentValidationError extends LoreValidationError {
 }
 
 export interface PreparedMemoryContent {
-  content: string;
-  chunks: readonly string[];
+  readonly content: string;
+  readonly chunks: readonly string[];
 }
+
+/** Every result prepareMemoryContent returned, so a later write may reuse its chunks. */
+const ENGINE_PREPARED = new WeakSet<PreparedMemoryContent>();
 
 export function prepareMemoryContent(content: string): PreparedMemoryContent {
   if (typeof content !== "string" || !content.trim()) {
@@ -49,5 +52,22 @@ export function prepareMemoryContent(content: string): PreparedMemoryContent {
       `Memory content may produce at most ${MEMORY_CONTENT_LIMITS.maximumChunks} chunks`,
     );
   }
-  return { content, chunks };
+  const prepared = Object.freeze({ content, chunks: Object.freeze(chunks) });
+  ENGINE_PREPARED.add(prepared);
+  return prepared;
+}
+
+/**
+ * The canonical chunks of `content`. A caller that already validated it may pass the
+ * prepareMemoryContent result; its chunks are reused only when this engine produced
+ * them for exactly this text, and the content is chunked again otherwise.
+ */
+export function memoryContentChunks(
+  content: string,
+  prepared?: PreparedMemoryContent,
+): readonly string[] {
+  if (prepared && ENGINE_PREPARED.has(prepared) && prepared.content === content) {
+    return prepared.chunks;
+  }
+  return prepareMemoryContent(content).chunks;
 }

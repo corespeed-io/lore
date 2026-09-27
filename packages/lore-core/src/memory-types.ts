@@ -1,4 +1,5 @@
 import type { EmbeddingProvider, QueryPlanningProvider, RerankingProvider } from "./capabilities";
+import type { PreparedMemoryContent } from "./memory-content";
 
 /** Who may read a Memory: every member of its Workspace, or only its owner User. */
 export const MEMORY_SCOPES = ["shared", "private"] as const;
@@ -29,6 +30,11 @@ export interface InsertMemoryRecord {
   scope: MemoryScope;
   content: string;
   metadata: Record<string, unknown>;
+  /**
+   * `prepareMemoryContent(content)`, when the host already validated this content;
+   * the insert then reuses its chunks instead of chunking the content again.
+   */
+  preparedContent?: PreparedMemoryContent;
 }
 
 export interface UpdateMemory {
