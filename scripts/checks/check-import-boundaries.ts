@@ -144,8 +144,11 @@ const IMPORT_PATTERN =
 
 // A regex literal starts where an expression may: after an operator, an opening
 // bracket, a separator, or a keyword that takes an expression. A `/` elsewhere is
-// division, which is left in place like any other code.
-const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%<>~^]|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[dgimsuvy]*`;
+// division, which is left in place like any other code. `<` and `>` are left out,
+// and so is `/>`, so a JSX closing or self-closing tag never opens one. A regex
+// literal never holds a backtick, so a misread one cannot swallow a template
+// literal's opening and shift every later string and comment.
+const REGEX_LITERAL = String.raw`(?<=(?:^|[\n=(,:;!&|?{}[+\-*%~^]|\breturn|\btypeof|\bcase|\byield|\bawait|\bvoid)[ \t]*)\/(?![*/>])(?:\\[^\n\x60]|\[(?:\\[^\n\x60]|[^\]\\\n\x60])*\]|[^/\\\n[\x60])+\/[dgimsuvy]*`;
 
 // One left-to-right pass over comments, strings, template literals, and regex
 // literals, so a `/*` or `//` inside a string, a regex, or a line comment never
@@ -164,8 +167,8 @@ const COMMENT_OR_STRING = new RegExp(
 
 function stripComments(source: string): string {
   // Replace comment characters with spaces so offsets (and so line numbers) survive.
-  // Strings and regex literals stay in place, so misreading one can only leave a
-  // comment in place (a loud false finding), never hide an import.
+  // Strings and regex literals stay in place. A misread regex ends at the next `/` on
+  // its line and holds no backtick, so it cannot shift template literals below it.
   return source.replace(COMMENT_OR_STRING, (token) =>
     token.startsWith("/*") || token.startsWith("//") ? token.replace(/[^\n]/g, " ") : token,
   );

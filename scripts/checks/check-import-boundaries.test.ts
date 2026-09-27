@@ -198,6 +198,44 @@ test("a comment opener inside a regex literal hides no later import", () => {
   );
 });
 
+test("a JSX tag before a template literal hides no later import", () => {
+  const closing = scanImports(
+    [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+      "export const A = ({ x }: { x: string }) => <p><b>a</b>{`${x}/y`}</p>;",
+      "const glob = `src/*`;",
+      'export const load = () => import("bun");',
+      "const end = `*/`;",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    closing.map((item) => item.specifier),
+    ["bun"],
+  );
+  const selfClosing = scanImports(
+    [
+      "export const B = ({ x }: { x: string }) => <p><b>a</b> <a href={`/x`}>x</a><i {...x} /></p>;",
+      'const docs = `https://example.com`; void import("bun");',
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    selfClosing.map((item) => item.specifier),
+    ["bun"],
+  );
+  const fragment = scanImports(
+    [
+      "export const C = () => <><p>x</p><b>{`a/b`}</b></>;",
+      "const glob = `src/*`;",
+      'import { Database } from "bun:sqlite";',
+      "const end = `*/`;",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    fragment.map((item) => item.specifier),
+    ["bun:sqlite"],
+  );
+});
+
 test("template-literal imports and require() are scanned", () => {
   const imports = scanImports(
     [
