@@ -28,7 +28,7 @@ export type LoreErrorCode = (typeof LORE_ERROR_CODES)[number];
  * The HTTP status of every public error code, in one table. It imports nothing, so
  * the Edge-runtime admission path (src/server/auth/auth.ts) reads it too.
  */
-export const HTTP_STATUS: Record<LoreErrorCode, number> = {
+export const HTTP_STATUS: Readonly<Record<LoreErrorCode, number>> = Object.freeze({
   access_denied: 403,
   agent_not_disabled: 409,
   authentication_required: 401,
@@ -45,7 +45,7 @@ export const HTTP_STATUS: Record<LoreErrorCode, number> = {
   transaction_conflict: 409,
   version_conflict: 412,
   workspace_export_limit_exceeded: 409,
-};
+});
 
 /**
  * A failure a caller may see, named by its public code. Its message is shown to the

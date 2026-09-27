@@ -96,6 +96,21 @@ function workerEntrypoint(root: string): { entrypoint: string; declared: boolean
   const main = /"main"\s*:\s*"([^"]+)"/.exec(readFileSync(config, "utf8"))?.[1];
   return { entrypoint: (main ?? "").replace(/^\.\//, ""), declared: true };
 }
+/** Bun's parse errors, with their positions, or the error itself. */
+function parseFailure(error: unknown): string {
+  const errors = (
+    error as {
+      errors?: Array<{ message?: string; position?: { line?: number; column?: number } | null }>;
+    }
+  )?.errors;
+  if (!Array.isArray(errors) || errors.length === 0) return String(error);
+  return errors
+    .map((item) =>
+      `${item.position?.line ?? "?"}:${item.position?.column ?? "?"} ${item.message ?? ""}`.trim(),
+    )
+    .join("; ");
+}
+
 /** The Edge middleware entry, and what nothing it reaches may be. */
 const EDGE_ENTRYPOINT = "src/middleware.ts";
 const EDGE_FORBIDDEN_PREFIXES = ["packages/lore-core/", "src/server/api/"];
@@ -433,7 +448,8 @@ export function checkImportBoundaries(
         file.endsWith(".tsx") ? "tsx" : "ts",
       );
     } catch (error) {
-      findings.push(`${file}: cannot be parsed for imports (${String(error)})`);
+      // Fail closed: a file whose imports cannot be read could hide any of them.
+      findings.push(`${file}: cannot be parsed for imports: ${parseFailure(error)}`);
       continue;
     }
     for (const record of records) {

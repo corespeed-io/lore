@@ -303,10 +303,12 @@ test("type-only imports stay type-only, and an unparsable file is a finding", ()
     fixture({ ...CLEAN, "src/modules/beta/broken.ts": "export const = ;\n" }),
     TWO_MODULES,
   );
+  // The finding names the parser's position, not only that parsing failed.
   assert.ok(
     findings.some((item) =>
-      item.startsWith("src/modules/beta/broken.ts: cannot be parsed for imports"),
+      /^src\/modules\/beta\/broken\.ts: cannot be parsed for imports: 1:\d+ /.test(item),
     ),
+    findings.join("\n"),
   );
 });
 

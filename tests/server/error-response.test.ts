@@ -161,8 +161,14 @@ test("an error that only looks public is reported as internal without its messag
 // A 4xx/5xx status handed to c.json/c.body/c.text (as an argument or a `status`
 // in its init), a `status` 4xx/5xx init on a raw Response, or a `code` key in any
 // `json({ ... })` object literal. Each alternative is linear: no nested repeat.
-const PUBLIC_ERROR_BODY =
-  /\bc\.(?:json|body|text)\([^;]*?,\s*[45]\d\d\s*[,)]|\b(?:c\.(?:json|body|text)|Response\.json|new Response)\([^;]*?\bstatus\s*:\s*[45]\d\d\b|json\(\s*\{[^}]*\bcode\s*:/;
+const PUBLIC_ERROR_BODY = new RegExp(
+  [
+    // The argument list up to the statement's end; a quoted `;` does not end it.
+    String.raw`\bc\.(?:json|body|text)\((?:[^;"']|"[^"\n]*"|'[^'\n]*')*?,\s*(?:[45]\d\d|HTTP_STATUS\b)`,
+    String.raw`(?:\bc\.(?:json|body|text)|\b(?:Next)?Response\.json|\bnew (?:Next)?Response)\((?:[^;"']|"[^"\n]*"|'[^'\n]*')*?\bstatus\s*:\s*(?:[45]\d\d|HTTP_STATUS\b)`,
+    String.raw`json\(\s*\{[^}]*\bcode\s*:`,
+  ].join("|"),
+);
 
 // The shared responder builds every error body from HTTP_STATUS. The Edge admission
 // path in auth.ts builds its one body (in `denial`) from the same table so the
@@ -182,6 +188,9 @@ test("the public-error-body guard catches reordered, code-less, and init-status 
     'c.json({ error: "gone" }, { status: 404 })',
     'Response.json({ error: "not found" }, { status: 404 })',
     'Response.json({ code: "not_found", error: "gone" })',
+    'c.json({ error: "gone" }, HTTP_STATUS.not_found)',
+    'NextResponse.json({ error: "gone" }, { status: 404 })',
+    'c.json({ error: "busy; retry" }, 409)',
   ]) {
     expect(PUBLIC_ERROR_BODY.test(source), source).toBe(true);
   }
