@@ -395,8 +395,10 @@ been removed. Lore now has a native implementation, split into two concepts
   pages), lets a layer import only the layers below it (type-only imports
   included), and holds cross-domain imports to its declared acyclic `MODULES`
   graph: a module imports another only when it declares that dependency, and only
-  the files that module exports. Nothing the Cloudflare Worker entry reaches may
-  import a native or Bun-only package. Every browser-side file of a domain lives
+  the files that module exports. Nothing the Cloudflare Worker bundle reaches may
+  import a native or Bun-only package: the check walks from the wrangler `main`
+  entry and from every file OpenNext compiles into it (`src/app/**`,
+  `src/middleware.ts`, `src/instrumentation.ts`). Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
@@ -566,11 +568,13 @@ been removed. Lore now has a native implementation, split into two concepts
   limits are imported directly from the generated TypeScript SDK contract; browser
   modules must not import server/Core modules or run canonical chunk previews.
   Keep canonical content validation and chunking in server/Core code.
-  Metadata uses `z.record(z.string(),
-  z.json())` with a serialized-size refinement; do not restore a handwritten JSON
-  walker or separate depth/node-count policies. The shared HTTP input boundary maps
-  Zod/parser stack exhaustion to 400 for excessively nested JSON. PostgreSQL enforces
-  its Unicode restrictions and HTTP maps invalid-text SQLSTATEs to 400. Register
+  Metadata is a JSON record whose refinement calls the engine's
+  `validateMemoryMetadata` (serialized size plus storable text); do not restore a
+  handwritten JSON walker or separate depth/node-count policies. The shared HTTP
+  input boundary maps Zod/parser stack exhaustion to 400 for excessively nested JSON.
+  The engine refuses NUL and unpaired surrogates in metadata, content, Observation
+  text, and Link kinds before PostgreSQL would; HTTP still maps invalid-text
+  SQLSTATEs to 400 as a backstop. Register
   recursive JSON with Zod when generating OpenAPI so references target `#/components/schemas`.
   The reusable engine owns the domain types and input rules; OSS owns
   authorization policy and the public wire mapping derived from them;
@@ -781,7 +785,10 @@ invalid value and falls back (the reranker candidate limit clamps silently), and
 every benchmark runner reads the same table through
 `strictRetrievalKnobsFromEnvironment`, which refuses any invalid value, and hands
 the whole table to the suite, so a benchmark's default run is the deployment
-default; a `LORE_BENCHMARK_*` variable overrides one knob within its bounds.
+default; a `LORE_BENCHMARK_*` variable overrides one knob within its bounds. The
+dense distance threshold is the exception: a suite sweeps its own `thresholds` (or
+`LORE_BENCHMARK_THRESHOLDS`), so `LORE_SEMANTIC_DISTANCE_THRESHOLD` is validated but
+not used.
 Dense candidate cosine distance defaults to `0.5`; a deployment may calibrate
 `LORE_SEMANTIC_DISTANCE_THRESHOLD` from `0` through `2` without re-indexing. Do not
 raise it merely to inflate candidate recall: no-answer false results are part of the
@@ -1374,9 +1381,14 @@ are unaffected. SQLSTATE 40P01/40001 map to a retryable 409
 `transaction_conflict`. The public error vocabulary is `LORE_ERROR_CODES`
 (`src/server/errors.ts`), which the OpenAPI Error `code` enum lists exactly. A
 failure a caller may see extends `DomainError` there and declares its `code`;
-domain modules name no HTTP status. `src/server/api/errors.ts` imports no domain
+domain modules name no HTTP status. A route throws one too, `NotFoundError` for a
+missing or invisible resource, and never writes `c.json({ code })` itself
+(`error-response.test.ts` scans for it). `src/server/api/errors.ts` imports no domain
 module: it maps each code to its status in one table and names the engine's three
-public failure classes, which cannot extend OSS classes. Domain handlers still authorize
+public failure classes, which cannot extend OSS classes. An engine
+`LoreConfigurationError` (an out-of-range deployment option) is deliberately not
+among them and answers 500. Clients must accept an Error `code` they do not know;
+the OpenAPI schema says so. Domain handlers still authorize
 Actors and install RLS. Every JSON request body goes through `jsonObject`
 (`src/server/api/input.ts`), which counts UTF-8 bytes as the body streams and
 returns 413 `payload_too_large`; a declared oversized `Content-Length` is refused

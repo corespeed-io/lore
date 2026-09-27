@@ -9,6 +9,7 @@ import {
 } from "@/server/api/input";
 import type { AgentGrantPermission, AgentStatus } from "@/server/auth/access";
 import { AgentNotDisabledError, createAccessModule } from "@/server/auth/access";
+import { NotFoundError } from "@/server/errors";
 
 function agentPermission(
   value: unknown,
@@ -61,7 +62,8 @@ export const agents = new Hono<ApiEnv>()
       name: body.name === undefined ? undefined : requiredString(body.name, "name", 120),
       status: body.status === undefined ? undefined : agentStatus(body.status),
     });
-    return agent ? c.json(agent) : c.json({ code: "not_found", error: "Agent not found" }, 404);
+    if (!agent) throw new NotFoundError("Agent not found");
+    return c.json(agent);
   })
   .delete("/:id", async (c) => {
     const access = createAccessModule(await c.var.database());
@@ -73,7 +75,7 @@ export const agents = new Hono<ApiEnv>()
       return c.body(null, 204);
     }
     if (result === "must_disable") throw new AgentNotDisabledError();
-    return c.json({ code: "not_found", error: "Agent not found" }, 404);
+    throw new NotFoundError("Agent not found");
   })
   .get("/:id/credentials", async (c) => {
     const access = createAccessModule(await c.var.database());
@@ -108,9 +110,8 @@ export const agents = new Hono<ApiEnv>()
     const normalizedAgentId = uuidString(agentId, "agentId");
     const actor = requireHumanActor(await c.var.resolveActor());
     const revoked = await access.revokeAgentGrant(actor, normalizedAgentId);
-    return revoked
-      ? c.body(null, 204)
-      : c.json({ code: "not_found", error: "Active Agent grant not found" }, 404);
+    if (!revoked) throw new NotFoundError("Active Agent grant not found");
+    return c.body(null, 204);
   });
 
 export const agentCredentials = new Hono<ApiEnv>().delete("/:id", async (c) => {
@@ -119,7 +120,6 @@ export const agentCredentials = new Hono<ApiEnv>().delete("/:id", async (c) => {
   const normalizedCredentialId = uuidString(credentialId, "credentialId");
   const actor = requireHumanActor(await c.var.resolveActor());
   const revoked = await access.revokeAgentCredential(actor, normalizedCredentialId);
-  return revoked
-    ? c.body(null, 204)
-    : c.json({ code: "not_found", error: "Agent credential not found" }, 404);
+  if (!revoked) throw new NotFoundError("Agent credential not found");
+  return c.body(null, 204);
 });

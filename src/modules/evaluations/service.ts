@@ -7,6 +7,7 @@ import { createMemoryModule } from "@/modules/memories/service";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
+import { EVALUATION_LIMITS } from "./limits";
 
 export type EvaluationRunStatus = "running" | "completed" | "failed";
 
@@ -416,7 +417,13 @@ export function createEvaluationModule(
               evaluationCase.query,
               unique(evaluationCase.expectedMemoryIds),
               unique(evaluationCase.forbiddenMemoryIds ?? []),
-              Math.max(1, Math.min(evaluationCase.limit ?? 10, 100)),
+              Math.max(
+                1,
+                Math.min(
+                  evaluationCase.limit ?? EVALUATION_LIMITS.defaultCaseLimit,
+                  EVALUATION_LIMITS.maximumCaseLimit,
+                ),
+              ),
             ],
           );
           cases.push(toCase(result.rows[0]));
@@ -431,7 +438,13 @@ export function createEvaluationModule(
       actor: ActorContext,
       input: ListEvaluationSuites = {},
     ): Promise<EvaluationSuitePage> {
-      const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? 50), 100));
+      const limit = Math.max(
+        1,
+        Math.min(
+          Math.trunc(input.limit ?? EVALUATION_LIMITS.defaultSuiteList),
+          EVALUATION_LIMITS.maximumSuiteList,
+        ),
+      );
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         // Microsecond cursor text keeps pages exact across equal millisecond updates.

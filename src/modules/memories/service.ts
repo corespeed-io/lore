@@ -107,17 +107,21 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       id: string,
       expectedVersion?: number,
     ): Promise<boolean> {
-      const writable = await transaction.query<{ id: string }>(
-        `SELECT id FROM memories WHERE id = $1 AND workspace_id = $2
+      // One locking read proves write authority before the version check and hands
+      // the engine the locked version, so it does not lock the row again.
+      const writable = await transaction.query<{ version: number }>(
+        `SELECT version FROM memories WHERE id = $1 AND workspace_id = $2
          AND lore.can_write_memory(workspace_id, owner_user_id) FOR UPDATE`,
         [id, actor.workspaceId],
       );
-      if (!writable.rows[0]) return false;
+      const lockedVersion = writable.rows[0]?.version;
+      if (lockedVersion === undefined) return false;
       return primitives.forgetMemoryInTransaction(
         transaction,
         memoryStorageInTransaction(transaction, actor),
         id,
         expectedVersion,
+        lockedVersion,
       );
     },
   };

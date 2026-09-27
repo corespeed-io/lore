@@ -1,3 +1,4 @@
+import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { LORE_ERROR_CODES } from "@/server/errors";
 import { loreOpenApiDocument } from "@/server/openapi/document";
@@ -334,4 +335,21 @@ test("OpenAPI publishes the Idempotency-Key pattern the server enforces", () => 
   for (const rejected of ["", "with space", "tab\t", "é", "x".repeat(129)]) {
     expect(pattern.test(rejected), rejected).toBe(false);
   }
+});
+
+test("the Memory list and search share one published limit bound", () => {
+  // GET /api/v1/memories lists or searches through one `limit` parameter, so it can
+  // publish only one maximum; the route enforces each mode's own engine bound.
+  expect(MEMORY_SEARCH_LIMITS.maximumLimit).toBe(MEMORY_LIST_LIMITS.maximumLimit);
+  const document = loreOpenApiDocument() as {
+    paths: {
+      "/api/v1/memories": {
+        get: { parameters: Array<{ name?: string; schema?: { maximum?: number } }> };
+      };
+    };
+  };
+  const limit = document.paths["/api/v1/memories"].get.parameters.find(
+    (parameter) => parameter.name === "limit",
+  );
+  expect(limit?.schema?.maximum).toBe(MEMORY_SEARCH_LIMITS.maximumLimit);
 });

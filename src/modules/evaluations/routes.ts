@@ -11,6 +11,7 @@ import {
   uuidArray,
   uuidString,
 } from "@/server/api/input";
+import { NotFoundError } from "@/server/errors";
 import { EVALUATION_LIMITS } from "./limits";
 import type { EvaluationCaseInput } from "./service";
 import { createEvaluationModule } from "./service";
@@ -137,7 +138,6 @@ export const evaluations = new Hono<ApiEnv>()
     const normalizedRunId = uuidString(runId, "runId");
     const actor = requireHumanActor(await c.var.resolveActor());
     const run = await evaluations.getRun(actor, normalizedRunId);
-    return run
-      ? c.json(run)
-      : c.json({ code: "not_found", error: "Evaluation run not found" }, 404);
+    if (!run) throw new NotFoundError("Evaluation run not found");
+    return c.json(run);
   });

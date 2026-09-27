@@ -129,7 +129,12 @@ export function clientContract(document: unknown) {
         `${context}/query/maxLength`,
         `${context}/memoryQuery/maxLength`,
       ]),
-      memoryListLimit: integer(document, `${memories}/[limit]/schema/maximum`),
+      // One bound serves the Memory list and search, and the Episode list.
+      memoryListLimit: same(integer, document, [
+        `${memories}/[limit]/schema/maximum`,
+        "/paths/~1api~1v1~1episodes/get/parameters/[limit]/schema/maximum",
+      ]),
+      memoryMetadataFilterLength: integer(document, `${memories}/[metadata]/schema/maxLength`),
       memoryListOffset: integer(document, `${memories}/[offset]/schema/maximum`),
       graphNodes: integer(
         document,
@@ -137,6 +142,10 @@ export function clientContract(document: unknown) {
       ),
       memoryProposalEvidence: integer(document, `${limits}/memoryProposalEvidence/const`),
       memoryProposalList: integer(document, `${limits}/memoryProposalList/const`),
+      memoryProposalListDefault: integer(
+        document,
+        "/paths/~1api~1v1~1memory-proposals/get/parameters/[limit]/schema/default",
+      ),
       episodeObservations: integer(document, `${limits}/episodeObservations/const`),
       episodeContentCharacters: integer(document, `${limits}/episodeContentCharacters/const`),
       episodeMetadataCharacters: integer(document, `${limits}/episodeMetadataCharacters/const`),

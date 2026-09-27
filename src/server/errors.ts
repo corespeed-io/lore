@@ -31,3 +31,15 @@ export type LoreErrorCode = (typeof LORE_ERROR_CODES)[number];
 export abstract class DomainError extends Error {
   abstract readonly code: LoreErrorCode;
 }
+
+/** A resource the caller named does not exist or is not visible to it. */
+export class NotFoundError extends DomainError {
+  override name = "NotFoundError";
+  readonly code = "not_found";
+}
+
+/** The route exists, but not for this method. */
+export class MethodNotAllowedError extends DomainError {
+  override name = "MethodNotAllowedError";
+  readonly code = "method_not_allowed";
+}

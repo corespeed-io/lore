@@ -4,6 +4,7 @@ import {
   MAX_EPISODE_CONTENT_CHARACTERS,
   MAX_EPISODE_METADATA_CHARACTERS,
   MAX_OBSERVATION_BATCH_READ,
+  normalizedEpisode,
   validateEpisodeKind,
   validateObservationCount,
   validateObservationKind,
@@ -22,6 +23,7 @@ import {
   uuidString,
 } from "@/server/api/input";
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
+import { NotFoundError } from "@/server/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";
 
 /**
@@ -101,6 +103,9 @@ export const episodes = new Hono<ApiEnv>()
       scope: memoryScope(body.scope) ?? "private",
       observations: episodeObservations(body.observations),
     };
+    // Refuse an Episode the engine would refuse before hashing up to the whole body
+    // for replay; the service applies the same rules again when it records.
+    normalizedEpisode(input);
     const episode = await observeOperation("episode.record", async () =>
       observations.record(actor, input, {
         idempotency: await idempotencyRequest(request, "episode.record", input),
@@ -116,9 +121,8 @@ export const episodes = new Hono<ApiEnv>()
     const episode = await observeOperation("episode.retrieve", () =>
       observations.retrieve(actor, episodeId),
     );
-    return episode
-      ? c.json(episode)
-      : c.json({ code: "not_found", error: "Episode not found" }, 404);
+    if (!episode) throw new NotFoundError("Episode not found");
+    return c.json(episode);
   })
   .delete("/:id", async (c) => {
     const observations = createObservationModule(await c.var.database());
@@ -131,9 +135,8 @@ export const episodes = new Hono<ApiEnv>()
         idempotency: await idempotencyRequest(request, "episode.forget", { episodeId }),
       }),
     );
-    return deleted
-      ? c.body(null, 204)
-      : c.json({ code: "not_found", error: "Episode not found" }, 404);
+    if (!deleted) throw new NotFoundError("Episode not found");
+    return c.body(null, 204);
   });
 
 export const observations = new Hono<ApiEnv>().get("/", async (c) => {

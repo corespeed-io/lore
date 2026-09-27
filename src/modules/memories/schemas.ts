@@ -10,8 +10,7 @@ import {
   MemoryScopeSchema,
 } from "@/server/api/shared-schemas";
 
-/** The OSS wire contract. The engine continues to own content and authorization invariants. */
-
+// The OSS Memory wire schemas. Each delegates to the engine's input rules.
 // Zod string lengths count UTF-16 units. Lore's validator counts Unicode code points
 // and checks reconstructable chunk limits; JSON Schema maxLength uses code points.
 const MemoryContentSchema = z
@@ -56,7 +55,6 @@ export const UpdateMemoryInputSchema = CreateMemoryInputSchema.partial()
   .meta({ minProperties: 1 });
 
 export type Memory = z.infer<typeof MemorySchema>;
-export type MemoryScope = z.infer<typeof MemoryScopeSchema>;
 export type CreateMemoryInput = z.infer<typeof CreateMemoryInputSchema>;
 export type UpdateMemoryInput = z.infer<typeof UpdateMemoryInputSchema>;
 

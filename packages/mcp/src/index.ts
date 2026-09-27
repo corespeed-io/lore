@@ -122,6 +122,12 @@ const metadataSchema = z
   .refine((value) => JSON.stringify(value).length <= MAX_METADATA_CHARACTERS, {
     message: `metadata exceeds ${MAX_METADATA_CHARACTERS} characters`,
   });
+/** A list/search filter travels in the query string, under its own tighter bound. */
+const metadataFilterSchema = z
+  .record(z.string(), z.json())
+  .refine((value) => JSON.stringify(value).length <= LIMITS.memoryMetadataFilterLength, {
+    message: `metadata filter exceeds ${LIMITS.memoryMetadataFilterLength} characters`,
+  });
 const memoryContentSchema = z
   .string()
   .trim()
@@ -427,7 +433,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         query: z.string().trim().min(1).max(LIMITS.memorySearchQueryLength),
         limit: z.number().int().min(1).max(25).default(10),
         scope: scopeSchema.optional(),
-        metadata: metadataSchema.optional(),
+        metadata: metadataFilterSchema.optional(),
       }),
       outputSchema: z.object({ results: z.array(searchResultSchema) }),
       annotations: { readOnlyHint: true, openWorldHint: false },

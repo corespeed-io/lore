@@ -16,6 +16,7 @@ import {
   uuidString,
 } from "@/server/api/input";
 import { memoryScope } from "@/server/api/shared-schemas";
+import { NotFoundError } from "@/server/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";
 import { memoryEtag, metadataFilter } from "./input";
 import { CreateMemoryInputSchema, UpdateMemoryInputSchema } from "./schemas";
@@ -47,7 +48,7 @@ export const memories = new Hono<ApiEnv>()
       "limit",
       MEMORY_LIST_LIMITS.defaultLimit,
       1,
-      MEMORY_LIST_LIMITS.maximumLimit,
+      query ? MEMORY_SEARCH_LIMITS.maximumLimit : MEMORY_LIST_LIMITS.maximumLimit,
     );
     const offset = queryInteger(url, "offset", 0, 0, MEMORY_LIST_LIMITS.maximumOffset);
     const cursor = decodeCursor(url.searchParams.get("cursor"));
@@ -121,9 +122,8 @@ export const memories = new Hono<ApiEnv>()
     const memory = await observeOperation("memory.retrieve", () =>
       memories.retrieve(actor, memoryId),
     );
-    return memory
-      ? c.json(memory, { headers: { etag: memoryEtag(memory.version) } })
-      : c.json({ code: "not_found", error: "Memory not found" }, 404);
+    if (!memory) throw new NotFoundError("Memory not found");
+    return c.json(memory, { headers: { etag: memoryEtag(memory.version) } });
   })
   .patch("/:id", async (c) => {
     const memories = createMemoryModule(await c.var.database(), c.var.memoryOptions());
@@ -144,9 +144,8 @@ export const memories = new Hono<ApiEnv>()
         }),
       }),
     );
-    return memory
-      ? c.json(memory, { headers: { etag: memoryEtag(memory.version) } })
-      : c.json({ code: "not_found", error: "Memory not found" }, 404);
+    if (!memory) throw new NotFoundError("Memory not found");
+    return c.json(memory, { headers: { etag: memoryEtag(memory.version) } });
   })
   .delete("/:id", async (c) => {
     const memories = createMemoryModule(await c.var.database());
@@ -164,7 +163,6 @@ export const memories = new Hono<ApiEnv>()
         }),
       }),
     );
-    return forgotten
-      ? c.body(null, 204)
-      : c.json({ code: "not_found", error: "Memory not found" }, 404);
+    if (!forgotten) throw new NotFoundError("Memory not found");
+    return c.body(null, 204);
   });

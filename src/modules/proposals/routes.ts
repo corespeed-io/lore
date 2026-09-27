@@ -16,8 +16,10 @@ import {
   uuidString,
 } from "@/server/api/input";
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
+import { NotFoundError } from "@/server/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";
 import {
+  DEFAULT_MEMORY_PROPOSAL_LIST,
   MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
   MAXIMUM_MEMORY_PROPOSAL_LIST,
   MEMORY_PROPOSAL_KINDS,
@@ -66,7 +68,13 @@ export const proposals = new Hono<ApiEnv>()
     const url = new URL(request.url);
     const proposalList = await observeOperation("memory-proposal.list", () =>
       proposals.listProposals(actor, {
-        limit: queryInteger(url, "limit", 50, 1, MAXIMUM_MEMORY_PROPOSAL_LIST),
+        limit: queryInteger(
+          url,
+          "limit",
+          DEFAULT_MEMORY_PROPOSAL_LIST,
+          1,
+          MAXIMUM_MEMORY_PROPOSAL_LIST,
+        ),
         status: memoryProposalStatus(url.searchParams.get("status")),
       }),
     );
@@ -143,9 +151,8 @@ export const proposals = new Hono<ApiEnv>()
     const reviewed = await observeOperation("memory-proposal.review", () =>
       proposals.reviewProposal(actor, proposalId, decision),
     );
-    return reviewed
-      ? c.json(reviewed, {
-          headers: { ...(reviewed.memory ? { etag: memoryEtag(reviewed.memory.version) } : {}) },
-        })
-      : c.json({ code: "not_found", error: "Memory Proposal not found" }, 404);
+    if (!reviewed) throw new NotFoundError("Memory Proposal not found");
+    return c.json(reviewed, {
+      headers: { ...(reviewed.memory ? { etag: memoryEtag(reviewed.memory.version) } : {}) },
+    });
   });

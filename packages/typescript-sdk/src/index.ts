@@ -1187,7 +1187,9 @@ export class LoreWorkspaceClient {
     input: MemoryProposalListInput = {},
   ): Promise<readonly MemoryProposal[]> {
     const params = new URLSearchParams({
-      limit: String(normalizedLimit(input.limit, 50, LIMITS.memoryProposalList)),
+      limit: String(
+        normalizedLimit(input.limit, LIMITS.memoryProposalListDefault, LIMITS.memoryProposalList),
+      ),
     });
     if (input.status) params.set("status", input.status);
     return (
@@ -1288,7 +1290,15 @@ function addMemoryFilters(
   if (input.scope) params.set("scope", input.scope);
   if (input.updatedAfter) params.set("updated_after", input.updatedAfter);
   if (input.updatedBefore) params.set("updated_before", input.updatedBefore);
-  if (input.metadata) params.set("metadata", JSON.stringify(input.metadata));
+  if (input.metadata) {
+    const metadata = JSON.stringify(input.metadata);
+    if (metadata.length > LIMITS.memoryMetadataFilterLength) {
+      throw new TypeError(
+        `metadata filter exceeds ${LIMITS.memoryMetadataFilterLength} serialized characters`,
+      );
+    }
+    params.set("metadata", metadata);
+  }
 }
 
 /** Resolve the shared CLI/MCP connection contract without reading global process state. */

@@ -1,4 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
+  LoreConfigurationError,
   LoreValidationError,
   MemoryAccessDeniedError,
   MemoryContentValidationError,
@@ -26,6 +29,7 @@ import {
   MemoryProposalAccessDeniedError,
   MemoryProposalCapacityError,
   MemoryProposalReviewConflictError,
+  MemoryProposalValidationError,
 } from "@/modules/proposals/service";
 import { errorResponse } from "@/server/api/errors";
 import { IdempotencyConflictError } from "@/server/api/idempotency";
@@ -40,6 +44,7 @@ import {
   RequestInputError,
   WorkspaceAccessError,
 } from "@/server/auth/request-context";
+import { MethodNotAllowedError, NotFoundError } from "@/server/errors";
 
 /**
  * Each public failure keeps the status and code it had when every error class
@@ -56,6 +61,12 @@ test.each<[string, Error, number, string]>([
   [
     "ContextRetrievalValidationError",
     new ContextRetrievalValidationError("bad"),
+    400,
+    "invalid_request",
+  ],
+  [
+    "MemoryProposalValidationError",
+    new MemoryProposalValidationError("evidence", "bad"),
     400,
     "invalid_request",
   ],
@@ -86,6 +97,8 @@ test.each<[string, Error, number, string]>([
   ["CodeEvidenceAccessDeniedError", new CodeEvidenceAccessDeniedError("no"), 403, "access_denied"],
   ["PortabilityAccessDeniedError", new PortabilityAccessDeniedError("no"), 403, "access_denied"],
   ["EvaluationSuiteNotFoundError", new EvaluationSuiteNotFoundError("none"), 404, "not_found"],
+  ["NotFoundError", new NotFoundError("none"), 404, "not_found"],
+  ["MethodNotAllowedError", new MethodNotAllowedError("no"), 405, "method_not_allowed"],
   [
     "MemoryProposalCapacityError",
     new MemoryProposalCapacityError("full"),
@@ -135,7 +148,32 @@ test("an error that only looks public is reported as internal without its messag
     });
     // A bare TypeError is no longer an engine validation failure.
     expect(errorResponse(new TypeError("limit must be positive")).status).toBe(500);
+    // A bad deployment option is the operator's failure, not the caller's.
+    expect(
+      errorResponse(new LoreConfigurationError("rerankWeight", "rerankWeight is out of range"))
+        .status,
+    ).toBe(500);
   } finally {
     log.mockRestore();
   }
+});
+
+test("no route writes a public error body itself", () => {
+  // A literal `c.json({ code: ... }, status)` would pair a code with a status the
+  // one table does not own; routes throw a DomainError instead.
+  const offenders: string[] = [];
+  const visit = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (
+        /\.tsx?$/.test(entry.name) &&
+        /c\.json\(\s*\{\s*code:/.test(readFileSync(path, "utf8"))
+      ) {
+        offenders.push(path);
+      }
+    }
+  };
+  visit("src");
+  expect(offenders).toEqual([]);
 });

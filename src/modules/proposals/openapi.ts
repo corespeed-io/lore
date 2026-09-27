@@ -14,6 +14,7 @@ import {
   workspaceHeader,
 } from "@/server/openapi/shared";
 import {
+  DEFAULT_MEMORY_PROPOSAL_LIST,
   MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
   MAXIMUM_MEMORY_PROPOSAL_LIST,
   MEMORY_PROPOSAL_KINDS,
@@ -79,7 +80,12 @@ export const proposalsPaths = {
         {
           name: "limit",
           in: "query",
-          schema: { type: "integer", minimum: 1, maximum: MAXIMUM_MEMORY_PROPOSAL_LIST },
+          schema: {
+            type: "integer",
+            minimum: 1,
+            maximum: MAXIMUM_MEMORY_PROPOSAL_LIST,
+            default: DEFAULT_MEMORY_PROPOSAL_LIST,
+          },
         },
       ],
       responses: {

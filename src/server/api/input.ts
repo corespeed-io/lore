@@ -6,7 +6,7 @@ import { AccessDeniedError } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
 import { DomainError } from "@/server/errors";
-import { IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
+import { IDEMPOTENCY_KEY_MAXIMUM_LENGTH, IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
 
 // One source for the check and the published OpenAPI header pattern.
 const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
@@ -56,7 +56,9 @@ export async function idempotencyRequest(
   const key = request.headers.get("idempotency-key")?.trim();
   if (!key) return undefined;
   if (!IDEMPOTENCY_KEY.test(key)) {
-    throw new BadRequestError("Idempotency-Key must contain 1 to 128 visible ASCII characters");
+    throw new BadRequestError(
+      `Idempotency-Key must contain 1 to ${IDEMPOTENCY_KEY_MAXIMUM_LENGTH} visible ASCII characters`,
+    );
   }
   return {
     key,

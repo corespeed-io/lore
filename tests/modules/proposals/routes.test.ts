@@ -1,4 +1,8 @@
 import { afterEach, expect, test } from "vitest";
+import {
+  createMemoryProposalsModule,
+  MemoryProposalValidationError,
+} from "@/modules/proposals/service";
 import { createApi } from "@/server/api/app";
 
 import { createMemoryTestContext } from "../../support/memory-context";
@@ -459,5 +463,99 @@ test("the Proposal rules the service owns answer HTTP as 400 invalid_request", a
     new Request("http://lore.local/api/v1/memory-proposals", { headers }),
   );
   await expect(listed.json()).resolves.toEqual([]);
+  await testContext.close();
+});
+
+test("Proposal route refusals name each published vocabulary and bound exactly", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "proposal-http-vocabulary";
+  const testContext = await createMemoryTestContext();
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Proposal Vocabulary" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const propose = (body: Record<string, unknown>) =>
+    app.request(
+      new Request("http://lore.local/api/v1/memory-proposals", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+  const artifactId = "80000000-0000-4000-8000-000000000001";
+
+  // Each message is built from the vocabulary or bound it enforces.
+  for (const [response, error] of [
+    [
+      await app.request(
+        new Request("http://lore.local/api/v1/memory-proposals?status=archived", { headers }),
+      ),
+      "status must be pending, accepted, or rejected",
+    ],
+    [await propose({ kind: "delete", content: "Unknown kind" }), "kind must be create or update"],
+    [
+      await propose({
+        kind: "create",
+        content: "Unknown relationship",
+        codeEvidence: [
+          { artifactId, relationship: "supports" },
+          { artifactId, relationship: "cites" },
+        ],
+      }),
+      "codeEvidence[1].relationship must be supports, contradicts, implements, or rationale",
+    ],
+    [
+      await propose({
+        kind: "create",
+        content: "Too much Code evidence",
+        codeEvidence: Array.from({ length: 51 }, () => ({ artifactId, relationship: "supports" })),
+      }),
+      "codeEvidence exceeds 50 items",
+    ],
+  ] as const) {
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "invalid_request", error });
+  }
+  await testContext.close();
+});
+
+test("a direct Proposal caller gets the relationship rule by its own entry, before any write", async () => {
+  const testContext = await createMemoryTestContext();
+  const proposals = createMemoryProposalsModule(testContext.database);
+  const artifactId = "80000000-0000-4000-8000-000000000002";
+
+  // The Proposal rule reports the requested index even when an earlier entry
+  // repeats the same artifact, and it refuses before the Code Artifact lookup.
+  const refused = await proposals
+    .propose(testContext.alice, {
+      kind: "create",
+      content: "A direct caller's invalid relationship",
+      codeEvidence: [
+        { artifactId, relationship: "supports" },
+        { artifactId, relationship: "supports" },
+        { artifactId, relationship: "endorses" as "supports" },
+      ],
+    })
+    .then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+  expect(refused).toBeInstanceOf(MemoryProposalValidationError);
+  expect(refused).toMatchObject({
+    field: "codeEvidence[2].relationship",
+    message: "codeEvidence[2].relationship must be supports, contradicts, implements, or rationale",
+  });
+  await expect(proposals.listProposals(testContext.alice)).resolves.toEqual([]);
   await testContext.close();
 });

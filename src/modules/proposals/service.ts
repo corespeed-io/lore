@@ -8,7 +8,6 @@ import type {
 } from "@corespeed/lore-core";
 import {
   isPostgresAccessDenied,
-  LoreValidationError,
   MemoryVersionConflictError,
   memorySelectColumns,
   prepareMemoryContent,
@@ -32,6 +31,7 @@ import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
 import {
+  DEFAULT_MEMORY_PROPOSAL_LIST,
   MAXIMUM_MEMORY_PROPOSAL_EVIDENCE,
   MAXIMUM_MEMORY_PROPOSAL_LIST,
   type MEMORY_PROPOSAL_KINDS,
@@ -61,6 +61,19 @@ export class MemoryProposalReviewConflictError extends DomainError {
 export class MemoryProposalCapacityError extends DomainError {
   override name = "MemoryProposalCapacityError";
   readonly code = "proposal_capacity_exceeded";
+}
+
+/** A Proposal rule this module owns, naming the field that broke it. */
+export class MemoryProposalValidationError extends DomainError {
+  override name = "MemoryProposalValidationError";
+  readonly code = "invalid_request";
+
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export type MemoryProposalKind = (typeof MEMORY_PROPOSAL_KINDS)[number];
@@ -328,7 +341,7 @@ export function createMemoryProposalsModule(
       // Indexes name the request's own entries, before de-duplication.
       for (const [index, evidence] of (input.codeEvidence ?? []).entries()) {
         if (!isCodeEvidenceRelationship(evidence.relationship)) {
-          throw new LoreValidationError(
+          throw new MemoryProposalValidationError(
             `codeEvidence[${index}].relationship`,
             `codeEvidence[${index}].${CODE_EVIDENCE_RELATIONSHIP_MESSAGE}`,
           );
@@ -342,7 +355,7 @@ export function createMemoryProposalsModule(
           (input.codeEvidence?.length ?? 0) >
         MAXIMUM_MEMORY_PROPOSAL_EVIDENCE
       ) {
-        throw new LoreValidationError(
+        throw new MemoryProposalValidationError(
           "evidence",
           `A Memory Proposal may cite at most ${MAXIMUM_MEMORY_PROPOSAL_EVIDENCE} evidence records`,
         );
@@ -353,8 +366,8 @@ export function createMemoryProposalsModule(
         input.scope === undefined &&
         input.metadata === undefined
       ) {
-        throw new LoreValidationError(
-          "content",
+        throw new MemoryProposalValidationError(
+          "proposal",
           "An update proposal must change content, scope, or metadata",
         );
       }
@@ -591,7 +604,10 @@ export function createMemoryProposalsModule(
       if (actor.agentId) {
         throw new MemoryProposalAccessDeniedError("Only a human User can review Memory Proposals");
       }
-      const limit = Math.max(1, Math.min(input.limit ?? 50, MAXIMUM_MEMORY_PROPOSAL_LIST));
+      const limit = Math.max(
+        1,
+        Math.min(input.limit ?? DEFAULT_MEMORY_PROPOSAL_LIST, MAXIMUM_MEMORY_PROPOSAL_LIST),
+      );
       return database.transaction(async (transaction) => {
         await installActorContext(transaction, actor);
         const result = await transaction.query<MemoryProposalRow>(

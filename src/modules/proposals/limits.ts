@@ -3,8 +3,9 @@ export const MEMORY_PROPOSAL_STATUSES = ["pending", "accepted", "rejected"] as c
 
 /** Memory, Observation, and Code evidence records one Proposal may cite, in total. */
 export const MAXIMUM_MEMORY_PROPOSAL_EVIDENCE = 50;
-/** The most Proposals one list read returns. */
+/** The most Proposals one list read returns, and the page it returns by default. */
 export const MAXIMUM_MEMORY_PROPOSAL_LIST = 100;
+export const DEFAULT_MEMORY_PROPOSAL_LIST = 50;
 /**
  * Unexpired pending Proposals one owner may hold in a Workspace. The
  * `lore.validate_memory_proposal_target` trigger enforces it.

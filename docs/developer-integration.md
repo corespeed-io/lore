@@ -27,10 +27,10 @@ bun run build:packages
 `sdk:check` fails when the OpenAPI document and any generated artifact differ.
 `LORE_CONTRACT`, exported by `@corespeed/lore-sdk`, holds every vocabulary, bound, and
 pattern the API publishes that a client may check before sending a request (Memory
-scopes, list and search limits, the metadata serialized-size bound, commit OID and
-Idempotency-Key patterns, and so on). The generator reads each value from every
-endpoint that shares it and fails when two disagree, so read bounds from it instead of
-restating them. The
+scopes, list limits and the search query length, the metadata serialized-size and
+filter bounds, commit OID and Idempotency-Key patterns, and so on). The generator
+reads each value from every endpoint that shares it and fails when two disagree, so
+read bounds from it instead of restating them. The
 handwritten SDK runtime wraps those types with the behavior OpenAPI alone cannot provide:
 authentication, `x-lore-workspace-id`, opaque cursors, strong Memory ETags,
 idempotency keys, bounded response reads, a default 30-second request deadline, and
@@ -150,8 +150,12 @@ a replay-safe idempotency key unless the caller supplies one; a supplied key mus
 `transaction_conflict` (retry after `Retry-After` with the same key); branch on its
 `code`, not the status. A code the installed SDK does not know (one a newer server
 added, such as `agent_not_disabled` for deleting an Agent that is still active)
-arrives as `http_error`; its `status` still classifies it. Direct update/forget and update
-proposals require the current positive Memory version. Proposal listing and review
+arrives as `http_error`; its `status` still classifies it. Clients generated from
+OpenAPI in other languages must likewise accept an Error `code` outside the enum they
+were built from. The API refuses an out-of-range value instead of clamping it: a list,
+search, or Graph `limit` or `offset` outside its published bounds answers 400
+`invalid_request`. Direct update/forget and
+update proposals require the current positive Memory version. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
 effect, while the opposite decision returns a conflict.

@@ -3,6 +3,7 @@ import type {
   MemoryScope,
   PostgresDatabase,
   PostgresTransaction,
+  PreparedMemoryContent,
 } from "@corespeed/lore-core";
 import {
   insertMemoryLinksInTransaction,
@@ -134,9 +135,14 @@ interface ExportLinkRow {
   running_bytes: number | string;
 }
 
+interface NormalizedArchiveMemory extends WorkspaceArchiveMemory {
+  /** Validated once, before the import transaction; the insert reuses its chunks. */
+  preparedContent: PreparedMemoryContent;
+}
+
 interface NormalizedArchive {
   manifest: WorkspaceArchive["manifest"];
-  memories: WorkspaceArchiveMemory[];
+  memories: NormalizedArchiveMemory[];
   links: WorkspaceArchiveLink[];
 }
 
@@ -374,7 +380,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     throw new PortabilityValidationError("archive manifest counts do not match its records");
   }
   const memoryIds = new Set<string>();
-  const normalizedMemories: WorkspaceArchiveMemory[] = [];
+  const normalizedMemories: NormalizedArchiveMemory[] = [];
   for (const [index, memory] of archive.memories.entries()) {
     if (!memory || typeof memory !== "object" || Array.isArray(memory)) {
       throw new PortabilityValidationError(`memories[${index}] must be an object`);
@@ -384,9 +390,10 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     memoryIds.add(id);
     const ownerUserId = uuid(memory.ownerUserId, `memories[${index}].ownerUserId`);
     const scope = archiveRule(() => validateMemoryScope(memory.scope, `memories[${index}].scope`));
-    // Chunking is the content rule; the insert chunks again, so keep no result here.
+    // Chunking is the content rule. Keep the result so the insert does not chunk again.
+    let preparedContent: PreparedMemoryContent;
     try {
-      prepareMemoryContent(memory.content);
+      preparedContent = prepareMemoryContent(memory.content);
     } catch (error) {
       if (error instanceof MemoryContentValidationError) {
         throw new PortabilityValidationError(`memories[${index}].content: ${error.message}`, {
@@ -406,6 +413,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
       ownerUserId,
       scope,
       content: memory.content,
+      preparedContent,
       metadata: normalizedMetadata,
       version: memory.version,
       createdAt,
@@ -781,6 +789,7 @@ export function createPortabilityModule(
             id: targetId,
             scope: memory.scope,
             content: memory.content,
+            preparedContent: memory.preparedContent,
             metadata: memory.metadata,
           })),
         );

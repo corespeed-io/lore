@@ -58,8 +58,9 @@ function reorderedSplitDeclaration(marker: string, targetBeforeBeta: boolean): s
 }
 
 test("cite, Proposal acceptance, and assessment agree on the masked declaration fingerprint", async () => {
-  // The fingerprint is written by three SQL copies (evidence cite, Proposal submit,
-  // assessment). Stored anchors are immutable, so the algorithm itself is pinned too.
+  // Cite, the Proposal snapshot, and assessment all build the fingerprint through
+  // declarationContextSha256Sql. Stored anchors are immutable, so the algorithm itself
+  // is pinned too.
   const context = await createMemoryTestContext();
   const memories = createMemoryModule(context.database);
   const proposals = createMemoryProposalsModule(context.database);
