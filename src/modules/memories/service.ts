@@ -173,7 +173,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           await completeMutation(
             transaction,
             claim.requestId,
-            201,
+            "created",
             { memory: inserted.memory },
             Boolean(options.idempotency),
           );
@@ -230,7 +230,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           await completeMutation(
             transaction,
             claim.requestId,
-            404,
+            "not_found",
             { memory: null },
             Boolean(options.idempotency),
           );
@@ -239,7 +239,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         await completeMutation(
           transaction,
           claim.requestId,
-          200,
+          "ok",
           { memory: updated.memory },
           Boolean(options.idempotency),
         );
@@ -275,7 +275,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         await completeMutation(
           transaction,
           claim.requestId,
-          deleted ? 204 : 404,
+          deleted ? "deleted" : "not_found",
           { deleted },
           Boolean(options.idempotency),
         );

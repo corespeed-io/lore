@@ -131,15 +131,30 @@ been removed. Lore now has a native implementation, split into two concepts
   `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
   idempotent writes never wait on the build. Each index is dropped (`DROP INDEX
   CONCURRENTLY IF EXISTS`) and then built, so a rerun after a stopped build
-  replaces any `INVALID` leftover. The forget triggers find replay bodies by those
-  JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
-  `{proposal,acceptedMemoryId}`, `{episode,id}`), so renaming one in a replayed
-  response needs a forward migration. `ReplayBody` (`src/server/api/idempotency.ts`)
-  is the only type `completeMutation` accepts and names exactly those keys, so a
-  rename fails typecheck, and `tests/server/replay-scrub.test.ts` proves by content,
-  not by those paths, that forgetting removes every such body. Moving the scrub to
-  an explicit subject column is a two-release migration (the JSON-path triggers must
-  outlive every older app instance) and has not been scheduled.
+  replaces any `INVALID` leftover. The baseline forget triggers find replay bodies
+  by those JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
+  `{proposal,acceptedMemoryId}`, `{episode,id}`). Moving that scrub to explicit
+  subject columns is a two-release migration, and this release is the first:
+  `0007_record_replay_subjects.sql` adds `subject_memory_id`, `subject_proposal_id`,
+  `proposal_target_memory_id`, `proposal_accepted_memory_id`, and
+  `subject_episode_id`, backfills the ledger's rows from the JSON paths, and adds one
+  BEFORE/AFTER DELETE trigger per subject table that scrubs by column;
+  `0008_index_replay_subjects_concurrently.sql` indexes those columns concurrently.
+  `completeMutation` writes the columns from its `ReplayBody`, the only type it
+  accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
+  content. The JSON-path triggers and their 0005 indexes stay until the second
+  release, because app instances older than revision 7 still write rows without the
+  columns during a rolling deploy; until then renaming a replayed key still needs a
+  forward migration. The second release, once every instance writes the columns and
+  the 24-hour ledger has turned over, drops the JSON-path scrub from
+  `lore.append_memory_event`, `lore.remove_proposals_for_deleted_memory`,
+  `lore.scrub_deleted_episode_replay`, and `lore.scrub_deleted_memory_proposal`, with
+  the five 0005 expression indexes. Services report a `MutationOutcome`
+  (`created`/`ok`/`deleted`/`not_found`), never an HTTP status, and replay derives
+  its response from the stored body alone. The ledger's `response_status` is still
+  written, from the outcome, only because older instances require it on replay; the
+  second release stops writing it and drops it, relaxing
+  `request_idempotency_records_check` first.
   `0006_publish_memory_link_capabilities.sql` replaces
   `lore.portable_core_capabilities()` with the baseline body plus the `memoryLinks`
   feature and the Link bounds (`memoryLinkMetadataCharacters`,
@@ -153,13 +168,13 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 6) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 8) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (6), and
+  `tests/integration/api.test.ts` pin the current revision (8), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block

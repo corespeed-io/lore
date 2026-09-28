@@ -105,7 +105,7 @@ export function createObservationModule(database: PostgresDatabase) {
           await completeMutation(
             transaction,
             claim.requestId,
-            201,
+            "created",
             { episode },
             Boolean(options.idempotency),
           );
@@ -174,7 +174,7 @@ export function createObservationModule(database: PostgresDatabase) {
           await completeMutation(
             transaction,
             claim.requestId,
-            deleted ? 204 : 404,
+            deleted ? "deleted" : "not_found",
             { deleted },
             Boolean(options.idempotency),
           );

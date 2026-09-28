@@ -574,7 +574,7 @@ export function createMemoryProposalsModule(
           await completeMutation(
             transaction,
             claim.requestId,
-            201,
+            "created",
             { proposal },
             Boolean(options.idempotency),
           );

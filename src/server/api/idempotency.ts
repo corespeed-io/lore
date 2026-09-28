@@ -12,18 +12,30 @@ interface IdempotencyRow {
   id: string;
   request_sha256: string;
   status: "in_progress" | "completed";
-  response_status: number | null;
   response_body: unknown;
   expires_at: string;
 }
 
 export interface MutationClaim<Result> {
   requestId: string;
-  replay?: {
-    body: Result;
-    status: number;
-  };
+  /** The stored result of the first attempt; the route derives its response from it. */
+  replay?: { body: Result };
 }
+
+/** What a completed mutation did, in domain terms. Routes choose the HTTP status. */
+export type MutationOutcome = "created" | "ok" | "deleted" | "not_found";
+
+/**
+ * The ledger's `response_status` column, which replay no longer reads. App
+ * instances from before schema revision 7 still require it on every completed row
+ * they replay, so it is written until the release that drops it.
+ */
+const LEGACY_RESPONSE_STATUS: Readonly<Record<MutationOutcome, number>> = {
+  created: 201,
+  ok: 200,
+  deleted: 204,
+  not_found: 404,
+};
 
 export class IdempotencyConflictError extends DomainError {
   override name = "IdempotencyConflictError";
@@ -79,7 +91,7 @@ export async function beginMutation<Result>(
   }
 
   const existing = await transaction.query<IdempotencyRow>(
-    `SELECT id, request_sha256, status, response_status, response_body, expires_at
+    `SELECT id, request_sha256, status, response_body, expires_at
      FROM request_idempotency_records
      WHERE workspace_id = $1
        AND actor_kind = $2
@@ -99,6 +111,11 @@ export async function beginMutation<Result>(
            status = 'in_progress',
            response_status = NULL,
            response_body = NULL,
+           subject_memory_id = NULL,
+           subject_proposal_id = NULL,
+           proposal_target_memory_id = NULL,
+           proposal_accepted_memory_id = NULL,
+           subject_episode_id = NULL,
            completed_at = NULL,
            created_at = now(),
            expires_at = now() + interval '24 hours'
@@ -114,24 +131,23 @@ export async function beginMutation<Result>(
       "Idempotency-Key was already used with a different request payload",
     );
   }
-  if (row.status !== "completed" || row.response_status === null) {
+  if (row.status !== "completed" || row.response_body === null) {
     throw new Error("Idempotent mutation did not reach a terminal state");
   }
   await installRequestId(transaction, row.id);
-  return {
-    requestId: row.id,
-    replay: { body: row.response_body as Result, status: row.response_status },
-  };
+  return { requestId: row.id, replay: { body: row.response_body as Result } };
 }
 
 /**
- * Every replay body a mutation may store. Bodies that carry canonical content are
- * deleted when their subject is forgotten, by triggers that read these exact JSON
- * paths (0001_v1_baseline.sql: `{memory,id}`, `{proposal,id}`,
- * `{proposal,targetMemoryId}`, `{proposal,acceptedMemoryId}`, `{episode,id}`; 0005
- * indexes the same paths). The key names are therefore a storage contract: renaming
- * one needs a forward migration, and a new content-carrying body needs a new scrub
- * path. tests/server/replay-scrub.test.ts proves the scrub end to end.
+ * Every replay body a mutation may store. A body that carries canonical content is
+ * deleted when its subject is forgotten. `completeMutation` records each subject in
+ * its own column, and 0007's triggers scrub by those columns. Until the release that
+ * retires them, the baseline triggers also scrub by these JSON paths
+ * (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
+ * `{proposal,acceptedMemoryId}`, `{episode,id}`), which is what finds rows older app
+ * instances write, so the key names stay a storage contract until then. A new
+ * content-carrying body needs a subject column. tests/server/replay-scrub.test.ts
+ * proves the scrub end to end.
  */
 export type ReplayBody =
   | { memory: { id: string } | null }
@@ -145,10 +161,24 @@ export type ReplayBody =
   | { episode: { id: string } }
   | { deleted: boolean };
 
+/** The subjects whose deletion must scrub a stored body, one column each. */
+function replaySubjects(body: ReplayBody): (string | null)[] {
+  const memory = "memory" in body ? (body.memory?.id ?? null) : null;
+  const proposal = "proposal" in body ? body.proposal : null;
+  const episode = "episode" in body ? body.episode.id : null;
+  return [
+    memory,
+    proposal?.id ?? null,
+    proposal?.targetMemoryId ?? null,
+    proposal?.acceptedMemoryId ?? null,
+    episode,
+  ];
+}
+
 export async function completeMutation(
   transaction: PostgresTransaction,
   requestId: string,
-  status: number,
+  outcome: MutationOutcome,
   body: ReplayBody,
   idempotent: boolean,
 ): Promise<void> {
@@ -158,11 +188,16 @@ export async function completeMutation(
      SET status = 'completed',
          response_status = $2,
          response_body = $3::jsonb,
+         subject_memory_id = $4,
+         subject_proposal_id = $5,
+         proposal_target_memory_id = $6,
+         proposal_accepted_memory_id = $7,
+         subject_episode_id = $8,
          completed_at = now()
      WHERE id = $1
        AND status = 'in_progress'
      RETURNING id`,
-    [requestId, status, JSON.stringify(body)],
+    [requestId, LEGACY_RESPONSE_STATUS[outcome], JSON.stringify(body), ...replaySubjects(body)],
   );
   if (!completed.rows[0]) throw new Error("Idempotency record completion failed");
 }

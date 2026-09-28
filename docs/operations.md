@@ -539,8 +539,12 @@ migrations or replace a production database to bypass preflight.
 A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
 statement at a time. dbmate would send the whole file as one query, and PostgreSQL
 runs a multi-statement query as one transaction block, which `CREATE INDEX
-CONCURRENTLY` refuses. `0005` is such a migration: it builds the replay-scrub and
-import-provenance indexes concurrently so writes keep flowing during the build.
+CONCURRENTLY` refuses. `0005` and `0008` are such migrations: they build the
+replay-scrub and import-provenance indexes concurrently so writes keep flowing
+during the build. `0007`, just before `0008`, adds the replay ledger's subject
+columns and their scrub triggers under a 5-second `lock_timeout`; on a busy
+database it may fail to take its locks, and a rerun of `bun run db:migrate` repeats
+it safely, because a stopped transactional migration records nothing.
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous
