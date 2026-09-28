@@ -3,7 +3,7 @@ import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/te
 import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 5;
+export const LORE_SCHEMA_REVISION = 6;
 
 /**
  * The only public tables that hold no tenant data and so carry no RLS: the
@@ -84,6 +84,7 @@ export interface DeploymentCapabilities {
     codeIndex: boolean;
     codeDependencies: boolean;
     codeEvidence: boolean;
+    memoryLinks: boolean;
   };
   limits: typeof DEPLOYMENT_LIMITS;
   activeEmbeddingGeneration: {

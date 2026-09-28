@@ -28,7 +28,8 @@ bun run build:packages
 `LORE_CONTRACT`, exported by `@corespeed/lore-sdk`, holds every vocabulary, bound, and
 pattern the API publishes that a client may check before sending a request (Memory
 scopes, list limits and the search query length, the metadata serialized-size and
-filter bounds, commit OID and Idempotency-Key patterns, and so on). The generator
+filter bounds, commit OID and Idempotency-Key patterns, and so on), plus the defaults
+a client sends or reports (the Memory Link kind and weight). The generator
 reads each value from every endpoint that shares it and fails when two disagree, so
 read bounds from it instead of restating them. The
 handwritten SDK runtime wraps those types with the behavior OpenAPI alone cannot provide:
@@ -157,10 +158,95 @@ search, or Graph `limit` or `offset` outside its published bounds answers 400
 `invalid_request`. A Memory list without `limit` returns up to 50 Memories and a
 search (`q`) up to 10, as the SDK does; MCP `lore_search` also defaults to 10, while
 `lore_list` defaults to and caps at 25 to fit its output budget. Direct update/forget and
-update proposals require the current positive Memory version. Proposal listing and review
+update proposals require the current positive Memory version. `linkMemories` and `unlinkMemories`
+write and delete a Memory Link by its natural key (source, target, kind; kind
+defaults to `related`) through `PUT`/`DELETE /api/v1/memories/{memoryId}/links/{targetMemoryId}`.
+They need no version or Idempotency-Key: `PUT` answers 201 when it created the Link
+and 200 when one existed (its weight and metadata replaced, or left unchanged), and a
+retried `DELETE` answers 404. The source must be writable and the target visible to
+the Actor; a missing, invisible, or unwritable endpoint is one indistinguishable
+404. Creating a Link past 16 kinds from one Memory to another or 1,000 Links from one
+source, or, counting only Links from the Actor's User's own Memories, 1,000 to one
+target or 50,000 in the Workspace, is a 409 `memory_link_capacity_exceeded`;
+replacing an existing Link never is. Link metadata is limited to 1,000 serialized
+characters (`LORE_CONTRACT.limits.memoryLinkMetadataSerializedLength`).
+`listMemoryLinks` reads one page of a visible Memory's Links with their metadata
+(`GET /api/v1/memories/{memoryId}/links`), outbound by default or inbound, newest
+first, and returns `nextCursor` for the next page. `graph()` returns at most 40,000
+durable Links, taking each source owner's newest in turn when more exist, with
+`linksTruncated`, and each link's `derived` tells a Memory Affinity from a durable
+Link. SDK 0.3.0 adds those two Graph fields to `/api/v1`; a v1 response may gain
+properties in a later release, so a client generated from OpenAPI must ignore
+properties it does not know. `/api/v1/capabilities` reports `features.memoryLinks`
+and every Link bound (`memoryLinkMetadataCharacters`, `memoryLinkKindsPerPair`,
+`memoryLinksPerSource`, `memoryLinksPerTarget`, `memoryLinksPerOwner`,
+`memoryLinkList`, `graphLinks`) from schema revision 6. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
 effect, while the opposite decision returns a conflict.
+
+### Working with Memory Links
+
+```ts
+import { LoreApiError, LoreClient } from "@corespeed/lore-sdk";
+
+const workspace = new LoreClient({
+  baseUrl: process.env.LORE_URL ?? "http://127.0.0.1:3000",
+  auth: { type: "agent", token: process.env.LORE_AGENT_TOKEN ?? "" },
+}).workspace(process.env.LORE_WORKSPACE_ID ?? "");
+const [decisionId, evidenceId, otherId] = ["DECISION_UUID", "EVIDENCE_UUID", "OTHER_UUID"];
+
+// PUT is an upsert by (source, target, kind). Repeating it is safe, and a repeat
+// with different weight or metadata replaces them; omitted fields reset to defaults.
+const { link, created } = await workspace.linkMemories({
+  sourceMemoryId: decisionId,
+  targetMemoryId: evidenceId,
+  kind: "supports",
+  weight: 0.8,
+  metadata: { note: "benchmark run 42" },
+});
+
+try {
+  await workspace.linkMemories({ sourceMemoryId: decisionId, targetMemoryId: otherId });
+} catch (error) {
+  if (error instanceof LoreApiError && error.code === "not_found") {
+    // The source is not writable by this Actor, or the target is missing or invisible.
+  } else if (error instanceof LoreApiError && error.code === "memory_link_capacity_exceeded") {
+    // A bound on new Links was reached; remove a Link or replace an existing one.
+  } else {
+    throw error;
+  }
+}
+
+// Page through a Memory's inbound Links, newest first.
+let cursor: string | undefined;
+do {
+  const page = await workspace.listMemoryLinks({
+    memoryId: evidenceId,
+    direction: "inbound",
+    cursor,
+  });
+  for (const inbound of page.links) console.log(inbound.sourceMemoryId, inbound.kind);
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+
+// DELETE by the same key. not_found after a retry means it is already gone.
+await workspace.unlinkMemories({
+  sourceMemoryId: decisionId,
+  targetMemoryId: evidenceId,
+  kind: "supports",
+});
+
+// A Graph read may cut Links; counts derived from it are then lower bounds.
+const graph = await workspace.graph();
+const durable = graph.links.filter((edge) => !edge.derived);
+const degreeLabel = graph.linksTruncated ? `${durable.length}+` : String(durable.length);
+```
+
+An MCP host that lets an agent link freely but wants a human to confirm deletions
+can allow `lore_link` and `lore_links` and require approval only for `lore_unlink`;
+the three are separate tools for that reason. `lore_link` is still marked
+destructive, because a repeat replaces an existing Link's weight and metadata.
 
 For human administration, the Workspace client also provides
 `getCurrentHumanActor`, Agent list/create/update/delete methods, grant and
@@ -217,6 +303,10 @@ printf %s "new fact" | bun --no-env-file packages/cli/dist/bin.js memory update 
   --version 2 --stdin --idempotency-key fact-update-1
 bun --no-env-file packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3 \
   --idempotency-key fact-forget-1
+bun --no-env-file packages/cli/dist/bin.js memory link SOURCE_UUID TARGET_UUID \
+  --kind supports --weight 0.8
+bun --no-env-file packages/cli/dist/bin.js memory links TARGET_UUID --direction inbound --limit 20
+bun --no-env-file packages/cli/dist/bin.js memory unlink SOURCE_UUID TARGET_UUID --kind supports
 bun --no-env-file packages/cli/dist/bin.js capabilities
 bun --no-env-file packages/cli/dist/bin.js readiness
 ```
@@ -244,7 +334,12 @@ It exposes:
 - `lore_remember` as a non-destructive mutation tool;
 - `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, metadata, or visibility;
-- `lore_forget` as an explicitly destructive tool.
+- `lore_forget` as an explicitly destructive tool;
+- `lore_link` as a destructive, idempotent Memory Link write by natural key
+  (destructive because it replaces an existing Link's weight and metadata), and
+  `lore_unlink` as its separate destructive deletion, so a host can gate the two
+  independently, and `lore_links` as the read-only list of one Memory's Links (at
+  most 50 per call, each Link's metadata bounded to 1,000 characters);
 - `lore_retrieve_context` as the read-only joint Memory/Code orchestration tool;
 - `lore_code_search`, `lore_code_dependencies`, and `lore_code_index_status` as
   bounded exact-revision Code reads;
@@ -254,7 +349,8 @@ It exposes:
 
 The Workspace id is process configuration, not tool input, so a model cannot ask
 the adapter to cross a Workspace boundary. Returned Memory objects omit internal
-top-level Workspace, owner User, and creating Agent ids. Lore still applies the credential's
+top-level Workspace, owner User, and creating Agent ids, and returned Links omit their
+Workspace id. Lore still applies the credential's
 read/write grant and RLS to every operation. The adapter neither stores nor logs
 the credential, Memory content, or query text.
 
@@ -331,10 +427,13 @@ Metadata inputs have one bound, the same 100,000 serialized characters the HTTP
 Memory schemas enforce with Zod JSON validation; neither surface limits nesting
 depth or value count separately.
 
-All five mutation tools accept an optional `idempotencyKey` of 1 to 128 visible
-ASCII characters, the HTTP `Idempotency-Key` rule; the adapter and SDK reject any
-other key before sending the request. A caller retrying an operation after losing
-the response must reuse the same key; omitting it creates a fresh operation.
+The five Memory and Episode mutation tools `lore_observe`, `lore_remember`,
+`lore_propose`, `lore_update`, and `lore_forget` accept an optional `idempotencyKey`
+of 1 to 128 visible ASCII characters, the HTTP `Idempotency-Key` rule; the adapter
+and SDK reject any other key before sending the request. A caller retrying an
+operation after losing the response must reuse the same key; omitting it creates a
+fresh operation. `lore_link` and `lore_unlink` take no key: a Link's natural key
+already makes a retry safe.
 
 AutoDream is not part of this adapter. A future AutoDream process must remain an
 explicit opt-in extension outside Portable Core; it may record Observations and

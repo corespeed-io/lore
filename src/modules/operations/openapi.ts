@@ -113,6 +113,7 @@ export const operationsSchemas = {
           "codeIndex",
           "codeDependencies",
           "codeEvidence",
+          "memoryLinks",
         ],
         properties: {
           idempotency: { const: true },
@@ -126,6 +127,7 @@ export const operationsSchemas = {
           codeIndex: { const: true },
           codeDependencies: { const: true },
           codeEvidence: { const: true },
+          memoryLinks: { const: true },
         },
       },
       limits: {

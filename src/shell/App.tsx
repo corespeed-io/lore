@@ -377,6 +377,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
   const selectedGraphContext = memoryGraphContext({
     state: graphState,
     capped: isGraphCapped(graphData),
+    linksTruncated: graphData.linksTruncated === true,
     inGraph: Boolean(selectedMemory && graph.byId[selectedMemory.id]),
     relatedCount: selectedRelated.length,
   });

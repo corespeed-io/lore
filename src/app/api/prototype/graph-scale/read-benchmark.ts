@@ -67,7 +67,9 @@ export async function readGraphScaleBenchmark(): Promise<MemoryGraph> {
         target: link.target,
         kind: "affinity",
         weight: link.weight,
+        derived: true,
       })),
+      linksTruncated: false,
     };
   } finally {
     await client.end();

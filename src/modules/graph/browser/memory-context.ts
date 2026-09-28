@@ -12,7 +12,10 @@ const GRAPH_WINDOW = `the Graph's ${displayCount(GRAPH_NODE_LIMIT, "ready")}-Mem
  */
 export function memoryGraphContext(input: {
   state: ReadState;
+  /** The read may have omitted visible Memories. */
   capped: boolean;
+  /** The read cut durable Links, so neighbors are a lower bound and affinity is off. */
+  linksTruncated?: boolean;
   inGraph: boolean;
   relatedCount: number;
 }): MemoryGraphContext {
@@ -42,10 +45,17 @@ export function memoryGraphContext(input: {
       unresolvedWikilinkTitle,
     };
   }
+  const linksPartial = input.capped || input.linksTruncated === true;
   return {
-    connections: displayCount(input.relatedCount, "ready", input.capped),
+    connections: displayCount(input.relatedCount, "ready", linksPartial),
     relatedNotice:
-      input.capped && input.relatedCount === 0 ? `No affinities inside ${GRAPH_WINDOW}.` : null,
+      input.relatedCount !== 0
+        ? null
+        : input.linksTruncated
+          ? "The Graph reached its Link budget, so its Links are incomplete and it derives no affinities."
+          : input.capped
+            ? `No affinities inside ${GRAPH_WINDOW}.`
+            : null,
     unresolvedWikilinkTitle,
   };
 }

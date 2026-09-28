@@ -460,6 +460,13 @@ test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
     /links\[0\]\.weight must be 0 or a value PostgreSQL real does not round to zero/,
   ],
   [
+    "Link metadata past the Link bound, though within a Memory's",
+    (archive) => {
+      archive.links[0].metadata = { note: "m".repeat(1_000) };
+    },
+    /links\[0\]\.metadata exceeds 1000 characters/,
+  ],
+  [
     "an unknown Memory scope",
     (archive) => {
       (archive.memories[1] as { scope: string }).scope = "team";

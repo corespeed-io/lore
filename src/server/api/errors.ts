@@ -1,6 +1,7 @@
 import {
   LoreValidationError,
   MemoryAccessDeniedError,
+  MemoryLinkCapacityError,
   MemoryVersionConflictError,
 } from "@corespeed/lore-core";
 import { DomainError, HTTP_STATUS, type LoreErrorCode } from "@/server/errors";
@@ -10,6 +11,7 @@ const ENGINE_ERRORS = [
   [LoreValidationError, "invalid_request"],
   [MemoryAccessDeniedError, "access_denied"],
   [MemoryVersionConflictError, "version_conflict"],
+  [MemoryLinkCapacityError, "memory_link_capacity_exceeded"],
 ] as const;
 
 /** The public code of a failure a caller may see, or undefined for any other error. */

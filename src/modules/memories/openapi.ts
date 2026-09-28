@@ -1,4 +1,9 @@
-import { MEMORY_LINK_LIMITS, MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
+import {
+  MEMORY_GRAPH_LIMITS,
+  MEMORY_LINK_LIMITS,
+  MEMORY_LIST_LIMITS,
+  MEMORY_SEARCH_LIMITS,
+} from "@corespeed/lore-core";
 import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
@@ -166,10 +171,19 @@ export const memoriesSchemas = {
   MemoryGraph: {
     type: "object",
     additionalProperties: false,
-    required: ["nodes", "links"],
+    required: ["nodes", "links", "linksTruncated"],
     properties: {
       nodes: { type: "array", items: { $ref: "#/components/schemas/MemoryGraphNode" } },
-      links: { type: "array", items: { $ref: "#/components/schemas/MemoryGraphLink" } },
+      links: {
+        type: "array",
+        description: `The newest ${MEMORY_GRAPH_LIMITS.maximumLinks} durable Memory Links at most, in creation order, followed by any derived affinity edges.`,
+        items: { $ref: "#/components/schemas/MemoryGraphLink" },
+      },
+      linksTruncated: {
+        type: "boolean",
+        description:
+          "True when the read cut durable Links at the budget. Isolation is then unknown, so no affinity edge is derived.",
+      },
     },
   },
   MemoryGraphNode: {
@@ -189,11 +203,16 @@ export const memoriesSchemas = {
   MemoryGraphLink: {
     type: "object",
     additionalProperties: false,
-    required: ["source", "target", "kind", "weight"],
+    required: ["source", "target", "kind", "weight", "derived"],
     properties: {
       source: { type: "string", format: "uuid" },
       target: { type: "string", format: "uuid" },
       kind: { type: "string" },
+      derived: {
+        type: "boolean",
+        description:
+          "True for an affinity edge derived from content, false for a durable Memory Link. Only a durable Link can be deleted; tell them apart by this field, never by kind.",
+      },
       weight: {
         type: "number",
         minimum: MEMORY_LINK_LIMITS.minimumWeight,

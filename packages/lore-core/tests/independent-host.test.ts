@@ -227,9 +227,32 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
     });
 
     const graph = createMemoryGraphModule(storage);
+    const endpoints = { sourceMemoryId: ids[0] as string, targetMemoryId: ids[1] as string };
+    const connected = await graph.connect(endpoints);
+    expect(connected).toMatchObject({ created: true, link: { kind: "related", weight: 1 } });
+    expect(connected?.link.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+    // A repeat with the same values is the same Link, unchanged.
+    await expect(graph.connect(endpoints)).resolves.toEqual({
+      link: connected?.link,
+      created: false,
+    });
+    const reweighted = await graph.connect({
+      ...endpoints,
+      weight: 0.25,
+      metadata: { by: "host" },
+    });
+    expect(reweighted).toMatchObject({
+      created: false,
+      link: { id: connected?.link.id, weight: 0.25, metadata: { by: "host" } },
+    });
+    // An endpoint the store cannot see answers null, not a foreign-key failure.
     await expect(
-      graph.connect({ sourceMemoryId: ids[0] as string, targetMemoryId: ids[1] as string }),
-    ).resolves.toMatchObject({ kind: "related", weight: 1 });
+      graph.connect({ ...endpoints, targetMemoryId: "40000000-0000-4000-8000-0000000000ff" }),
+    ).resolves.toBeNull();
+    await expect(graph.disconnect({ ...endpoints, kind: "cites" })).resolves.toBe(false);
+    await expect(graph.disconnect(endpoints)).resolves.toBe(true);
+    await expect(graph.disconnect(endpoints)).resolves.toBe(false);
+    await expect(graph.connect(endpoints)).resolves.toMatchObject({ created: true });
     await expect(
       postgres.transaction((transaction) =>
         insertMemoryLinksInTransaction(transaction, storage.partitionId, [

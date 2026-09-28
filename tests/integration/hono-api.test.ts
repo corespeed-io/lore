@@ -135,14 +135,18 @@ test("routing covers every OpenAPI operation and preserves HEAD, OPTIONS and 405
   vi.stubEnv("ALLOW_INSECURE", "1");
   vi.stubEnv("AUTH_MODE", "none");
   const { app } = noDatabaseApi();
-  const routes = new Set(app.routes.map((route) => `${route.method} ${route.path}`));
+  // Parameter names differ between the two (`:id` routes `{memoryId}`), so compare
+  // path shapes, which keeps each parameter's position.
+  const routes = new Set(
+    app.routes.map((route) => `${route.method} ${route.path.replace(/:[^/]+/g, ":param")}`),
+  );
   for (const [path, operations] of Object.entries(
     loreOpenApiDocument().paths as Record<string, Record<string, unknown>>,
   )) {
     for (const method of Object.keys(operations)) {
       if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
       expect(
-        routes.has(`${method.toUpperCase()} ${path.replace(/\{([^}]+)\}/g, ":id")}`),
+        routes.has(`${method.toUpperCase()} ${path.replace(/\{[^}]+\}/g, ":param")}`),
         `${method} ${path}`,
       ).toBe(true);
     }
@@ -178,6 +182,7 @@ test("subrouter mounts keep versioned-only resources private to v1 and reject wr
     "/api/code/search",
     "/api/episodes",
     "/api/memories/example/code-evidence",
+    "/api/memories/example/links/other",
     "/api/workspaces/export",
     "/api/v1/v1/memories",
   ]) {
@@ -190,6 +195,8 @@ test("subrouter mounts keep versioned-only resources private to v1 and reject wr
     ["/api/v1/agents/example/credentials", "PATCH", ["GET", "HEAD", "POST", "OPTIONS"]],
     ["/api/v1/code-evidence/example/revalidate", "GET", ["POST", "OPTIONS"]],
     ["/api/v1/memories/example/code-evidence", "DELETE", ["GET", "HEAD", "POST", "OPTIONS"]],
+    ["/api/v1/memories/example/links/other", "GET", ["DELETE", "PUT", "OPTIONS"]],
+    ["/api/v1/memories/example/links/other", "PATCH", ["DELETE", "PUT", "OPTIONS"]],
     ["/livez", "POST", ["GET", "HEAD", "OPTIONS"]],
   ] as const) {
     const response = await app.request(path, { method });

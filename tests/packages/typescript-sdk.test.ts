@@ -285,6 +285,173 @@ describe("Lore TypeScript SDK", () => {
     expect(init.body).toBe(JSON.stringify({ content: "Updated" }));
   });
 
+  test("refuses a Link kind that URL encoding would turn into another kind", async () => {
+    const fetchMock = vi.fn();
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    const key = { sourceMemoryId: MEMORY_ID, targetMemoryId: WORKSPACE_ID };
+
+    for (const kind of ["\uD800", "cites\uDC00", "\uDC00\uD800"]) {
+      await expect(workspace.unlinkMemories({ ...key, kind })).rejects.toThrow(
+        "kind must be well-formed Unicode",
+      );
+      await expect(workspace.linkMemories({ ...key, kind })).rejects.toThrow(
+        "kind must be well-formed Unicode",
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    // A paired surrogate is well formed and is sent.
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await workspace.unlinkMemories({ ...key, kind: "cites \uD83D\uDE00" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  test("sends an empty Link kind as given, so the server's rule decides it", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ code: "invalid_request", error: "link.kind" }, { status: 400 }),
+      );
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(
+      workspace.unlinkMemories({
+        sourceMemoryId: MEMORY_ID,
+        targetMemoryId: WORKSPACE_ID,
+        kind: "",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "invalid_request" });
+    const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.search).toBe("?kind=");
+  });
+
+  test("writes and deletes a Memory Link by its natural key without an idempotency key", async () => {
+    const TARGET_ID = "10000000-0000-4000-8000-000000000002";
+    const link = {
+      id: "60000000-0000-4000-8000-000000000001",
+      workspaceId: WORKSPACE_ID,
+      sourceMemoryId: MEMORY_ID,
+      targetMemoryId: TARGET_ID,
+      kind: "cites & quotes",
+      weight: 0.5,
+      metadata: { why: "evidence" },
+      createdAt: "2026-08-09T00:00:00.000000Z",
+      updatedAt: "2026-08-09T00:00:00.000000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(link, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(link))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    const key = {
+      sourceMemoryId: MEMORY_ID.toUpperCase(),
+      targetMemoryId: TARGET_ID,
+      kind: "cites & quotes",
+    };
+
+    await expect(
+      workspace.linkMemories({ ...key, weight: 0.5, metadata: { why: "evidence" } }),
+    ).resolves.toEqual({ link, created: true });
+    await expect(
+      workspace.linkMemories({ sourceMemoryId: MEMORY_ID, targetMemoryId: TARGET_ID }),
+    ).resolves.toEqual({ link, created: false });
+    await expect(workspace.unlinkMemories(key)).resolves.toBeUndefined();
+
+    const [putUrl, putInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(putUrl.pathname).toBe(`/api/v1/memories/${MEMORY_ID}/links/${TARGET_ID}`);
+    expect(putUrl.searchParams.get("kind")).toBe("cites & quotes");
+    expect(putInit.method).toBe("PUT");
+    expect(putInit.body).toBe(JSON.stringify({ weight: 0.5, metadata: { why: "evidence" } }));
+    expect(new Headers(putInit.headers).get("idempotency-key")).toBeNull();
+    const [defaultUrl, defaultInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(defaultUrl.search).toBe("");
+    expect(defaultInit.body).toBe("{}");
+    const [deleteUrl, deleteInit] = fetchMock.mock.calls[2] as [URL, RequestInit];
+    expect(deleteUrl.href).toBe(putUrl.href);
+    expect(deleteInit.method).toBe("DELETE");
+    expect(deleteInit.body).toBeUndefined();
+  });
+
+  test("lists one page of a Memory's Links and hands back the next cursor", async () => {
+    const TARGET_ID = "10000000-0000-4000-8000-000000000002";
+    const link = {
+      id: "60000000-0000-4000-8000-000000000001",
+      workspaceId: WORKSPACE_ID,
+      sourceMemoryId: TARGET_ID,
+      targetMemoryId: MEMORY_ID,
+      kind: "related",
+      weight: 1,
+      metadata: {},
+      createdAt: "2026-08-09T00:00:00.000000Z",
+      updatedAt: "2026-08-09T00:00:00.000000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json([link], { headers: { "x-lore-next-cursor": "next" } }))
+      .mockResolvedValueOnce(Response.json([]));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(
+      workspace.listMemoryLinks({ memoryId: MEMORY_ID.toUpperCase(), direction: "inbound" }),
+    ).resolves.toEqual({ links: [link], nextCursor: "next" });
+    await expect(
+      workspace.listMemoryLinks({ memoryId: MEMORY_ID, limit: 2, cursor: "next" }),
+    ).resolves.toEqual({ links: [], nextCursor: null });
+    await expect(
+      workspace.listMemoryLinks({ memoryId: MEMORY_ID, direction: "sideways" as "inbound" }),
+    ).rejects.toThrow(/^direction must be outbound or inbound$/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const [firstUrl, firstInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(firstUrl.pathname).toBe(`/api/v1/memories/${MEMORY_ID}/links`);
+    expect(Object.fromEntries(firstUrl.searchParams)).toEqual({
+      limit: String(LORE_CONTRACT.limits.memoryLinkListDefault),
+      direction: "inbound",
+    });
+    expect(firstInit.method ?? "GET").toBe("GET");
+    const [secondUrl] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(Object.fromEntries(secondUrl.searchParams)).toEqual({ limit: "2", cursor: "next" });
+  });
+
+  test("Memory Link calls refuse a malformed endpoint before any request and surface not_found", async () => {
+    const TARGET_ID = "10000000-0000-4000-8000-000000000002";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ code: "not_found", error: "Memory Link not found" }, { status: 404 }),
+      );
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(
+      workspace.linkMemories({ sourceMemoryId: "not-a-uuid", targetMemoryId: TARGET_ID }),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      workspace.unlinkMemories({ sourceMemoryId: MEMORY_ID, targetMemoryId: "../graph" }),
+    ).rejects.toThrow(TypeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const refusal = await workspace
+      .unlinkMemories({ sourceMemoryId: MEMORY_ID, targetMemoryId: TARGET_ID })
+      .catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(LoreApiError);
+    expect(refusal).toMatchObject({ status: 404, code: "not_found" });
+  });
+
   test("submits and reviews owner-private Memory Proposals over stable v1 routes", async () => {
     const pending = proposal();
     const accepted = proposal({
@@ -1041,6 +1208,65 @@ describe("client bounds from LORE_CONTRACT", () => {
       (client) => workspace(client).listMemoryProposals({ limit: LIMITS.memoryProposalList }),
       (client) => workspace(client).listMemoryProposals({ limit: LIMITS.memoryProposalList + 1 }),
       /^limit must be an integer from 1 to 100$/,
+    ],
+    [
+      "Memory Link kind",
+      (client) =>
+        workspace(client).unlinkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          kind: "k".repeat(LIMITS.memoryLinkKindLength),
+        }),
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          kind: "k".repeat(LIMITS.memoryLinkKindLength + 1),
+        }),
+      /^kind may contain at most 64 characters$/,
+    ],
+    [
+      "Memory Link weight",
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          weight: LIMITS.memoryLinkWeightMaximum,
+        }),
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          weight: LIMITS.memoryLinkWeightMaximum + 0.5,
+        }),
+      /^weight must be a number from 0 through 1$/,
+    ],
+    [
+      "Memory Link list",
+      (client) =>
+        workspace(client).listMemoryLinks({ memoryId: MEMORY_ID, limit: LIMITS.memoryLinkList }),
+      (client) =>
+        workspace(client).listMemoryLinks({
+          memoryId: MEMORY_ID,
+          limit: LIMITS.memoryLinkList + 1,
+        }),
+      /^limit must be an integer from 1 to 100$/,
+    ],
+    [
+      "Memory Link metadata",
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          metadata: { note: "m".repeat(LIMITS.memoryLinkMetadataSerializedLength - 11) },
+        }),
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          metadata: { note: "m".repeat(LIMITS.memoryLinkMetadataSerializedLength - 10) },
+        }),
+      /^metadata exceeds 1000 serialized characters$/,
     ],
     [
       "Workspace name",

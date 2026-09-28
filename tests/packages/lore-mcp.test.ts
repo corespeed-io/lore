@@ -10,9 +10,11 @@ import type {
   CodeDependencyQueryResult,
   Episode,
   Memory,
+  MemoryLink,
   MemoryProposal,
   RetrievedContext,
 } from "@corespeed/lore-sdk";
+import { LoreApiError } from "@corespeed/lore-sdk";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -91,11 +93,28 @@ function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
   };
 }
 
+function memoryLink(): MemoryLink {
+  return {
+    id: "90000000-0000-4000-8000-000000000001",
+    workspaceId: WORKSPACE_ID,
+    sourceMemoryId: MEMORY_ID,
+    targetMemoryId: "20000000-0000-4000-8000-000000000002",
+    kind: "cites",
+    weight: 0.5,
+    metadata: { why: "evidence" },
+    createdAt: "2026-08-09T00:00:00.000000Z",
+    updatedAt: "2026-08-09T00:00:00.000000Z",
+  };
+}
+
 function fakeMemories(): LoreMcpMemoryClient {
   return {
     recordEpisode: vi.fn().mockResolvedValue(episode()),
     forgetMemory: vi.fn().mockResolvedValue(undefined),
     getMemory: vi.fn().mockResolvedValue(memory()),
+    linkMemories: vi.fn().mockResolvedValue({ link: memoryLink(), created: true }),
+    unlinkMemories: vi.fn().mockResolvedValue(undefined),
+    listMemoryLinks: vi.fn().mockResolvedValue({ links: [memoryLink()], nextCursor: "next" }),
     listMemories: vi.fn().mockResolvedValue({ memories: [memory()], nextCursor: null }),
     proposeMemory: vi.fn().mockResolvedValue(proposal()),
     remember: vi.fn().mockResolvedValue(memory({ version: 1 })),
@@ -368,6 +387,9 @@ describe("Lore external MCP adapter", () => {
       "lore_propose",
       "lore_update",
       "lore_forget",
+      "lore_link",
+      "lore_links",
+      "lore_unlink",
       "lore_retrieve_context",
       "lore_code_search",
       "lore_code_dependencies",
@@ -386,6 +408,18 @@ describe("Lore external MCP adapter", () => {
     });
     expect(tools.find((tool) => tool.name === "lore_update")?.annotations).toMatchObject({
       destructiveHint: true,
+    });
+    // Linking and unlinking are separate tools, so a host can gate only the deletion.
+    expect(tools.find((tool) => tool.name === "lore_link")?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+    });
+    expect(tools.find((tool) => tool.name === "lore_unlink")?.annotations).toMatchObject({
+      destructiveHint: true,
+      idempotentHint: true,
+    });
+    expect(tools.find((tool) => tool.name === "lore_links")?.annotations).toMatchObject({
+      readOnlyHint: true,
     });
     for (const tool of tools) {
       expect(JSON.stringify(tool.inputSchema)).not.toContain("workspaceId");
@@ -787,6 +821,145 @@ describe("Lore external MCP adapter", () => {
       idempotencyKey: "forget-1",
     });
     expect(result.structuredContent).toEqual({ deleted: true });
+  });
+
+  test("links and unlinks by natural key and omits the Workspace id", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    const key = {
+      sourceMemoryId: MEMORY_ID,
+      targetMemoryId: "20000000-0000-4000-8000-000000000002",
+      kind: "cites",
+    };
+
+    const linked = await client.callTool({
+      name: "lore_link",
+      arguments: { ...key, weight: 0.5, metadata: { why: "evidence" } },
+    });
+    const unlinked = await client.callTool({ name: "lore_unlink", arguments: key });
+    const outOfRange = await client.callTool({
+      name: "lore_link",
+      arguments: { ...key, weight: 1.5 },
+    });
+    // An empty kind never reaches the SDK; any other kind rule is the server's.
+    const emptyKind = await client.callTool({
+      name: "lore_unlink",
+      arguments: { ...key, kind: "" },
+    });
+
+    expect(memories.linkMemories).toHaveBeenCalledWith({
+      ...key,
+      weight: 0.5,
+      metadata: { why: "evidence" },
+    });
+    expect(linked.structuredContent).toEqual({
+      link: {
+        id: memoryLink().id,
+        sourceMemoryId: key.sourceMemoryId,
+        targetMemoryId: key.targetMemoryId,
+        kind: "cites",
+        weight: 0.5,
+        metadata: { why: "evidence" },
+        metadataTruncated: false,
+        createdAt: memoryLink().createdAt,
+        updatedAt: memoryLink().updatedAt,
+      },
+      created: true,
+    });
+    expect(JSON.stringify(linked.structuredContent)).not.toContain(WORKSPACE_ID);
+    expect(memories.unlinkMemories).toHaveBeenCalledWith(key);
+    expect(unlinked.structuredContent).toEqual({ deleted: true });
+    expect(outOfRange.isError).toBe(true);
+    expect(memories.linkMemories).toHaveBeenCalledOnce();
+    expect(emptyKind.isError).toBe(true);
+    expect(memories.unlinkMemories).toHaveBeenCalledOnce();
+  });
+
+  test("lists a page of a Memory's Links with bounded metadata and no Workspace id", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.listMemoryLinks).mockResolvedValueOnce({
+      links: [
+        { ...memoryLink(), metadata: { why: "evidence" } },
+        // A Link imported before the Link metadata bound may still hold more.
+        { ...memoryLink(), metadata: { note: "m".repeat(20_000) } },
+      ],
+      nextCursor: "next",
+    });
+    const client = await connect(memories);
+
+    const listed = await client.callTool({
+      name: "lore_links",
+      arguments: { memoryId: MEMORY_ID, direction: "inbound", cursor: "prev" },
+    });
+    const tooMany = await client.callTool({
+      name: "lore_links",
+      arguments: { memoryId: MEMORY_ID, limit: 51 },
+    });
+
+    expect(memories.listMemoryLinks).toHaveBeenCalledWith({
+      memoryId: MEMORY_ID,
+      direction: "inbound",
+      limit: 50,
+      cursor: "prev",
+    });
+    expect(listed.structuredContent).toMatchObject({
+      links: [
+        { metadata: { why: "evidence" }, metadataTruncated: false },
+        { metadata: {}, metadataTruncated: true },
+      ],
+      nextCursor: "next",
+    });
+    expect(JSON.stringify(listed.structuredContent)).not.toContain(WORKSPACE_ID);
+    expect(tooMany.isError).toBe(true);
+    expect(memories.listMemoryLinks).toHaveBeenCalledOnce();
+  });
+
+  test("reports an unreachable Link endpoint as not_found", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.unlinkMemories).mockRejectedValueOnce(
+      new LoreApiError("Memory Link not found", 404, "not_found"),
+    );
+    const client = await connect(memories);
+
+    const result = await client.callTool({
+      name: "lore_unlink",
+      arguments: {
+        sourceMemoryId: MEMORY_ID,
+        targetMemoryId: "20000000-0000-4000-8000-000000000002",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "not_found (404): Memory Link not found" },
+    ]);
+  });
+
+  test("lore_link reports a refused endpoint and bounds a large Link's metadata", async () => {
+    const memories = fakeMemories();
+    const key = {
+      sourceMemoryId: MEMORY_ID,
+      targetMemoryId: "20000000-0000-4000-8000-000000000002",
+    };
+    vi.mocked(memories.linkMemories)
+      .mockRejectedValueOnce(new LoreApiError("Memory not found", 404, "not_found"))
+      .mockResolvedValueOnce({
+        link: { ...memoryLink(), metadata: { note: "m".repeat(20_000) } },
+        created: false,
+      });
+    const client = await connect(memories);
+
+    const refused = await client.callTool({ name: "lore_link", arguments: key });
+    const existing = await client.callTool({ name: "lore_link", arguments: key });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toEqual([{ type: "text", text: "not_found (404): Memory not found" }]);
+    // The kind is left to the server's default rather than restated by the tool.
+    expect(memories.linkMemories).toHaveBeenNthCalledWith(1, key);
+    expect(existing.structuredContent).toMatchObject({
+      created: false,
+      link: { id: memoryLink().id, metadata: {}, metadataTruncated: true },
+    });
   });
 
   test("does not reflect unexpected internal failures to the MCP client", async () => {

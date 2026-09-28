@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import { GRAPH_NODE_LIMIT, type GraphData, isGraphCapped } from "@/modules/graph/browser/types";
+import {
+  areGraphLinksPartial,
+  GRAPH_NODE_LIMIT,
+  type GraphData,
+  isGraphCapped,
+} from "@/modules/graph/browser/types";
 
 function graphOf(nodeCount: number): GraphData {
   return {
@@ -23,4 +28,13 @@ test("a Graph that fills the read budget is capped, and one node fewer is comple
   expect(isGraphCapped(graphOf(GRAPH_NODE_LIMIT))).toBe(true);
   expect(isGraphCapped(graphOf(GRAPH_NODE_LIMIT - 1))).toBe(false);
   expect(isGraphCapped(graphOf(0))).toBe(false);
+});
+
+test("cut Links make Link counts partial without claiming Memories were omitted", () => {
+  const cut = { ...graphOf(1), linksTruncated: true };
+  expect(isGraphCapped(cut)).toBe(false);
+  expect(areGraphLinksPartial(cut)).toBe(true);
+  expect(areGraphLinksPartial({ ...graphOf(1), linksTruncated: false })).toBe(false);
+  // A full node budget makes Link counts partial too.
+  expect(areGraphLinksPartial(graphOf(GRAPH_NODE_LIMIT))).toBe(true);
 });

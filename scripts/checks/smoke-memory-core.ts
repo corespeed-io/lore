@@ -127,6 +127,34 @@ function jsonRequest(
   });
 }
 
+/**
+ * Wait until `count` sessions queue behind a lock this client's own session holds,
+ * so an unrelated waiter on a shared server cannot satisfy it. A second waiter on a
+ * row queues behind the first one's tuple lock, not the holder's, so the count
+ * follows the whole wait chain. `pg_locks` is read live and needs no statistics
+ * privileges, unlike `pg_stat_activity`, whose snapshot an open transaction would
+ * also freeze.
+ */
+async function waitForLockWaiters(client: Client, count: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const result = await client.query<{ waiting: number }>(
+      `WITH RECURSIVE queued(pid) AS (
+         SELECT pg_backend_pid()
+         UNION
+         SELECT waiting.pid
+         FROM pg_locks waiting
+         JOIN queued ON queued.pid = ANY (pg_blocking_pids(waiting.pid))
+         WHERE NOT waiting.granted
+       )
+       SELECT (count(*) - 1)::integer AS waiting FROM queued`,
+    );
+    if ((result.rows[0]?.waiting ?? 0) >= count) return;
+    if (Date.now() > deadline) throw new Error(`Expected ${count} sessions waiting on a lock`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function expectStatus(response: Response, status: number, operation: string): Promise<void> {
   if (response.status === status) return;
   let code = "unknown_error";
@@ -535,6 +563,114 @@ try {
   assert.equal(
     aliceIsolatedGraph.nodes.some((node) => node.id === bobPrivate.id),
     false,
+  );
+
+  // Memory Links are written by natural key under the same RLS roles.
+  const linkTarget = await expectJson<Memory>(
+    await app.request(
+      jsonRequest("/api/v1/memories", {
+        method: "POST",
+        headers: aliceHeaders,
+        body: { content: "Release notes cite the lantern review." },
+      }),
+    ),
+    201,
+    "create Link target",
+  );
+  const racePath = `/api/v1/memories/${acceptedMemory.id}/links/${linkTarget.id}?kind=race`;
+  // Hold the source row so both PUTs queue behind it and reach their Link writes
+  // together: one must create the Link and the other replace that same Link, never
+  // fail on the natural key.
+  const blocker = new Client({ connectionString: smokeDatabaseUrl });
+  await blocker.connect();
+  let raced: Response[];
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT 1 FROM memories WHERE id = $1 FOR UPDATE", [acceptedMemory.id]);
+    const pending: Array<Response | Promise<Response>> = [];
+    for (const waiting of [1, 2]) {
+      pending.push(
+        app.request(jsonRequest(racePath, { method: "PUT", headers: aliceHeaders, body: {} })),
+      );
+      await waitForLockWaiters(blocker, waiting);
+    }
+    await blocker.query("COMMIT");
+    raced = await Promise.all(pending);
+  } finally {
+    await blocker.end();
+  }
+  assert.deepEqual(
+    raced.map((response) => response.status).sort(),
+    [200, 201],
+    "concurrent PUTs of one new Link must create it once and replace it once",
+  );
+  const racedIds = await Promise.all(
+    raced.map(async (response) => ((await response.json()) as { id: string }).id),
+  );
+  assert.equal(racedIds[0], racedIds[1], "one natural key must be one Link");
+  await expectStatus(
+    await app.request(jsonRequest(racePath, { method: "DELETE", headers: aliceHeaders })),
+    204,
+    "delete the raced Memory Link",
+  );
+  const linkPath = `/api/v1/memories/${acceptedMemory.id}/links/${linkTarget.id}?kind=cites`;
+  const createdLink = await expectJson<{ id: string; weight: number }>(
+    await app.request(
+      jsonRequest(linkPath, { method: "PUT", headers: aliceHeaders, body: { weight: 0.3 } }),
+    ),
+    201,
+    "create Memory Link",
+  );
+  assert.equal(createdLink.weight, 0.3, "a real Link weight must round-trip exactly");
+  const repeatedLink = await expectJson<{ id: string }>(
+    await app.request(
+      jsonRequest(linkPath, { method: "PUT", headers: aliceHeaders, body: { weight: 0.3 } }),
+    ),
+    200,
+    "repeat Memory Link",
+  );
+  assert.deepEqual(repeatedLink, createdLink, "a repeated Link PUT must change nothing");
+  const inboundLinks = await expectJson<Array<{ id: string }>>(
+    await app.request(
+      jsonRequest(`/api/v1/memories/${linkTarget.id}/links?direction=inbound`, {
+        headers: aliceHeaders,
+      }),
+    ),
+    200,
+    "list the target's inbound Memory Links",
+  );
+  assert.deepEqual(
+    inboundLinks.map((link) => link.id),
+    [createdLink.id],
+    "the target must list exactly the Link just written",
+  );
+  await expectStatus(
+    await app.request(
+      jsonRequest(`/api/v1/memories/${bobPrivate.id}/links`, { headers: aliceHeaders }),
+    ),
+    404,
+    "refuse to list Bob private Memory's Links",
+  );
+  await expectStatus(
+    await app.request(
+      jsonRequest(`/api/v1/memories/${acceptedMemory.id}/links/${bobPrivate.id}`, {
+        method: "PUT",
+        headers: aliceHeaders,
+        body: {},
+      }),
+    ),
+    404,
+    "refuse a Link to Bob private Memory",
+  );
+  await expectStatus(
+    await app.request(jsonRequest(linkPath, { method: "DELETE", headers: agentHeaders })),
+    204,
+    "delete Memory Link through Alice's write-granted Agent",
+  );
+  await expectStatus(
+    await app.request(jsonRequest(linkPath, { method: "DELETE", headers: aliceHeaders })),
+    404,
+    "repeat Memory Link deletion",
   );
 
   await expectStatus(

@@ -76,3 +76,29 @@ test("a Memory missing from an uncapped Graph is stale, not unconnected", () => 
   expect(stale.connections).toBe("—");
   expect(stale.relatedNotice).toBe("This Memory is not in the loaded Graph yet.");
 });
+
+test("a Graph whose Links were cut keeps exact wikilinks but no absent connections", () => {
+  // Every Memory was read, so a wikilink that resolves to none is genuinely missing,
+  // while neighbors are a lower bound and affinity was never derived.
+  const cut = memoryGraphContext({
+    state: "ready",
+    capped: false,
+    linksTruncated: true,
+    inGraph: true,
+    relatedCount: 0,
+  });
+  expect(cut.connections).toBe("0+");
+  expect(cut.relatedNotice).toContain("Link budget");
+  expect(cut.relatedNotice).not.toContain("5,000-Memory read window");
+  expect(cut.unresolvedWikilinkTitle).toBe("Memory reference not found");
+
+  const connected = memoryGraphContext({
+    state: "ready",
+    capped: false,
+    linksTruncated: true,
+    inGraph: true,
+    relatedCount: 3,
+  });
+  expect(connected.connections).toBe("3+");
+  expect(connected.relatedNotice).toBeNull();
+});

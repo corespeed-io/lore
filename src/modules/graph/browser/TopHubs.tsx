@@ -2,13 +2,15 @@
 
 import { degrees } from "@/modules/graph/browser/rendering/graph";
 import type { GraphData } from "@/modules/graph/browser/types";
-import type { ReadState } from "@/shared/browser/read-state";
+import { displayCount, type ReadState } from "@/shared/browser/read-state";
 
 interface TopHubsProps {
   nodes: GraphData["nodes"];
   links: GraphData["links"];
   // Until the graph read succeeds, "no hubs" is unknown, not empty.
   state: ReadState;
+  /** Degrees are lower bounds when the read may have omitted Memories or Links. */
+  linksPartial: boolean;
   onOpen: (memoryId: string) => void;
 }
 
@@ -17,7 +19,7 @@ const UNKNOWN_HUBS: Record<Exclude<ReadState, "ready">, string> = {
   error: "Affinity data is currently unavailable.",
 };
 
-export function TopHubs({ nodes, links, state, onOpen }: TopHubsProps) {
+export function TopHubs({ nodes, links, state, linksPartial, onOpen }: TopHubsProps) {
   const deg = degrees(links);
   const hubs =
     state === "ready"
@@ -33,7 +35,7 @@ export function TopHubs({ nodes, links, state, onOpen }: TopHubsProps) {
       {hubs.map((n) => (
         <button key={n.id} type="button" className="hub-row" onClick={() => onOpen(n.id)}>
           <span className="hub-label">{n.label}</span>
-          <span className="hub-degree">{deg[n.id] ?? 0}</span>
+          <span className="hub-degree">{displayCount(deg[n.id] ?? 0, "ready", linksPartial)}</span>
         </button>
       ))}
       {hubs.length === 0 && (

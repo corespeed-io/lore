@@ -11,7 +11,7 @@ import {
 } from "@/modules/graph/browser/legend";
 import type { GraphInstance } from "@/modules/graph/browser/rendering/graph";
 import type { GraphData, GraphNode } from "@/modules/graph/browser/types";
-import { isGraphCapped } from "@/modules/graph/browser/types";
+import { areGraphLinksPartial, isGraphCapped } from "@/modules/graph/browser/types";
 import { WorkerCanvasGraph } from "@/modules/graph/browser/WorkerCanvasGraph";
 import { useLoreSearch } from "@/modules/memories/browser/data";
 import { displayCount } from "@/shared/browser/read-state";
@@ -313,14 +313,19 @@ export function GraphView({
             {selectedType && <span className="type-badge">{selectedType}</span>}
             <span className="graph-node-preview-count">
               {selectedNode.scope} ·{" "}
-              {displayCount(selectedSummary.links.length, "ready", isGraphCapped(data))} links
+              {displayCount(selectedSummary.links.length, "ready", areGraphLinksPartial(data))}{" "}
+              links
             </span>
           </div>
           <h2 className="graph-node-preview-title">{selectedNode.label}</h2>
           <div className="graph-node-preview-id">{selectedNode.id}</div>
           <div className="graph-node-preview-stats">
-            <span>{selectedSummary.incoming} in</span>
-            <span>{selectedSummary.outgoing} out</span>
+            <span>
+              {displayCount(selectedSummary.incoming, "ready", areGraphLinksPartial(data))} in
+            </span>
+            <span>
+              {displayCount(selectedSummary.outgoing, "ready", areGraphLinksPartial(data))} out
+            </span>
           </div>
           {selectedSummary.related.length > 0 && (
             <div className="graph-node-preview-related">

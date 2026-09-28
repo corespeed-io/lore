@@ -3,7 +3,7 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import { GraphHealth } from "@/modules/graph/browser/GraphHealth";
 import { TopHubs } from "@/modules/graph/browser/TopHubs";
-import { type GraphData, isGraphCapped } from "@/modules/graph/browser/types";
+import { areGraphLinksPartial, type GraphData } from "@/modules/graph/browser/types";
 import { memoryType } from "@/modules/memories/browser/presentation";
 import type { ReadState } from "@/shared/browser/read-state";
 import { ActivityChart } from "@/shell/overview/ActivityChart";
@@ -75,7 +75,8 @@ export function Overview({
     memoriesComplete,
     linkCount: graphData.links.length,
     graphState,
-    graphCapped: isGraphCapped(graphData),
+    // The only Graph figure among these stats is the Link total.
+    graphCapped: areGraphLinksPartial(graphData),
   });
   const memoryNotice = memoryPanelNotice(memoriesState);
 
@@ -114,6 +115,7 @@ export function Overview({
           nodes={graphData.nodes}
           links={graphData.links}
           state={graphState}
+          linksPartial={areGraphLinksPartial(graphData)}
           onOpen={onOpen}
         />
         <Sources sources={sources} notice={memoryNotice} lowerBound={!memoriesComplete} />

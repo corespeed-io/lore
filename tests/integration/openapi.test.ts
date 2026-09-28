@@ -95,6 +95,8 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
       "/api/v1/memories",
       "/api/v1/memories/{memoryId}",
       "/api/v1/memories/{memoryId}/code-evidence",
+      "/api/v1/memories/{memoryId}/links",
+      "/api/v1/memories/{memoryId}/links/{targetMemoryId}",
       "/api/v1/memory-proposals",
       "/api/v1/memory-proposals/{proposalId}/review",
       "/api/v1/observations",
@@ -118,6 +120,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     "internal_error",
     "invalid_archive",
     "invalid_request",
+    "memory_link_capacity_exceeded",
     "method_not_allowed",
     "not_found",
     "payload_too_large",
@@ -169,6 +172,13 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     episodeContentCharacters: { const: 1_000_000 },
     episodeMetadataCharacters: { const: 1_000_000 },
     episodeObservations: { const: 100 },
+    graphLinks: { const: 40_000 },
+    memoryLinkKindsPerPair: { const: 16 },
+    memoryLinkList: { const: 100 },
+    memoryLinkMetadataCharacters: { const: 1_000 },
+    memoryLinksPerOwner: { const: 50_000 },
+    memoryLinksPerSource: { const: 1_000 },
+    memoryLinksPerTarget: { const: 1_000 },
     memoryProposalEvidence: { const: 50 },
     memoryProposalList: { const: 100 },
     memoryProposalPending: { const: 100 },
@@ -203,6 +213,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     codeDependencies: { const: true },
     codeEvidence: { const: true },
     codeIndex: { const: true },
+    memoryLinks: { const: true },
   });
   expect(document.components.schemas.CreateMemoryProposalUpdateInput.anyOf).toEqual([
     { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
@@ -287,6 +298,27 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     operationId: "setAgentGrant",
     requestBody: { required: true },
   });
+  // A Link is addressed by its natural key, so its writes are idempotent without a key.
+  const linkPath = document.paths["/api/v1/memories/{memoryId}/links/{targetMemoryId}"];
+  expect(linkPath.put).toMatchObject({
+    operationId: "putMemoryLink",
+    requestBody: { required: true },
+    responses: { "200": expect.any(Object), "201": expect.any(Object), "404": expect.any(Object) },
+  });
+  expect(linkPath.delete).toMatchObject({
+    operationId: "deleteMemoryLink",
+    responses: { "204": expect.any(Object), "404": expect.any(Object) },
+  });
+  for (const operation of [linkPath.put, linkPath.delete]) {
+    const parameters = operation.parameters as Array<{ name: string; schema: unknown }>;
+    expect(parameters.map((parameter) => parameter.name)).not.toContain("Idempotency-Key");
+    expect(parameters.find((parameter) => parameter.name === "kind")?.schema).toEqual({
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      default: "related",
+    });
+  }
   expect(document.components.schemas.IssuedAgentCredential.properties.token).toEqual({
     type: "string",
     readOnly: true,

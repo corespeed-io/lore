@@ -56,6 +56,8 @@ export type WorkspaceArchive = Schema<"WorkspaceArchive">;
 export type ImportWorkspaceInput = Schema<"ImportWorkspaceInput">;
 export type WorkspaceImportResult = Schema<"WorkspaceImportResult">;
 export type MemoryGraph = Schema<"MemoryGraph">;
+export type MemoryLink = Schema<"MemoryLink">;
+export type PutMemoryLinkInput = Schema<"PutMemoryLinkInput">;
 export type CodeArtifact = Schema<"CodeArtifact">;
 export type CodeDependencyEdge = Schema<"CodeDependencyEdge">;
 export type CodeDependencyQueryResult = Schema<"CodeDependencyQueryResult">;
@@ -152,6 +154,43 @@ export interface CodeDependencyQueryInput {
   repositoryKey: string;
   signal?: AbortSignal;
   symbol?: string;
+}
+
+/**
+ * The natural key of one Memory Link. `kind` defaults to
+ * `LORE_CONTRACT.defaults.memoryLinkKind` and is sent exactly as given.
+ */
+export interface MemoryLinkKey {
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  kind?: string;
+  signal?: AbortSignal;
+}
+
+/** A PUT replaces the whole Link: an omitted weight or metadata takes its default. */
+export interface LinkMemoriesInput extends MemoryLinkKey, PutMemoryLinkInput {}
+
+export type MemoryLinkDirection = (typeof LORE_CONTRACT.vocabularies.memoryLinkDirections)[number];
+
+export interface MemoryLinkListInput {
+  memoryId: string;
+  /** Links from (`outbound`, the default) or to (`inbound`) the Memory. */
+  direction?: MemoryLinkDirection;
+  limit?: number;
+  cursor?: string;
+  signal?: AbortSignal;
+}
+
+export interface MemoryLinkPage {
+  /** Newest first. */
+  links: readonly MemoryLink[];
+  nextCursor: string | null;
+}
+
+export interface LinkedMemories {
+  link: MemoryLink;
+  /** False when a Link with this natural key already existed. */
+  created: boolean;
 }
 
 export interface MemoryPage {
@@ -1266,6 +1305,73 @@ export class LoreWorkspaceClient {
     ).data;
   }
 
+  /**
+   * Create the Link with this natural key, or replace an existing one's weight and
+   * metadata. It is idempotent by construction, so it sends no Idempotency-Key.
+   */
+  async linkMemories(input: LinkMemoriesInput): Promise<LinkedMemories> {
+    const { memoryLinkWeightMinimum: minimum, memoryLinkWeightMaximum: maximum } = LIMITS;
+    if (
+      input.weight !== undefined &&
+      (!Number.isFinite(input.weight) || input.weight < minimum || input.weight > maximum)
+    ) {
+      throw new TypeError(`weight must be a number from ${minimum} through ${maximum}`);
+    }
+    if (
+      input.metadata !== undefined &&
+      JSON.stringify(input.metadata).length > LIMITS.memoryLinkMetadataSerializedLength
+    ) {
+      throw new TypeError(
+        `metadata exceeds ${LIMITS.memoryLinkMetadataSerializedLength} serialized characters`,
+      );
+    }
+    const { data, response } = await this.transport.json<MemoryLink>(memoryLinkPath(input), {
+      method: "PUT",
+      workspaceId: this.workspaceId,
+      body: {
+        ...(input.weight === undefined ? {} : { weight: input.weight }),
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      },
+      signal: input.signal,
+    });
+    return { link: data, created: response.status === 201 };
+  }
+
+  /** One page of a Memory's visible Links, newest first. */
+  async listMemoryLinks(input: MemoryLinkListInput): Promise<MemoryLinkPage> {
+    const params = new URLSearchParams({
+      limit: String(
+        normalizedLimit(input.limit, LIMITS.memoryLinkListDefault, LIMITS.memoryLinkList),
+      ),
+    });
+    if (input.direction !== undefined) {
+      const directions: readonly string[] = LORE_CONTRACT.vocabularies.memoryLinkDirections;
+      if (!directions.includes(input.direction)) {
+        throw new TypeError(`direction must be ${directions.join(" or ")}`);
+      }
+      params.set("direction", input.direction);
+    }
+    if (input.cursor) params.set("cursor", input.cursor);
+    const { data, response } = await this.transport.json<readonly MemoryLink[]>(
+      `api/v1/memories/${normalizedUuid(input.memoryId, "memoryId")}/links?${params}`,
+      { workspaceId: this.workspaceId, signal: input.signal },
+    );
+    return { links: data, nextCursor: response.headers.get("x-lore-next-cursor") };
+  }
+
+  /**
+   * Delete the Link with this natural key. A `not_found` error means this Actor has
+   * no such Link to delete (none exists, its source is not writable, or its target
+   * is not visible), which after a retried call includes one already deleted.
+   */
+  async unlinkMemories(input: MemoryLinkKey): Promise<void> {
+    await this.transport.json<void>(memoryLinkPath(input), {
+      method: "DELETE",
+      workspaceId: this.workspaceId,
+      signal: input.signal,
+    });
+  }
+
   async forgetMemory(memoryId: string, options: VersionedMutationOptions): Promise<void> {
     const version = positiveVersion(options.expectedVersion);
     await this.transport.json<void>(`api/v1/memories/${normalizedUuid(memoryId, "memoryId")}`, {
@@ -1278,6 +1384,21 @@ export class LoreWorkspaceClient {
       signal: options.signal,
     });
   }
+}
+
+/** An unpaired UTF-16 surrogate, which URL encoding would silently replace with U+FFFD. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+function memoryLinkPath(input: MemoryLinkKey): string {
+  const path = `api/v1/memories/${normalizedUuid(input.sourceMemoryId, "sourceMemoryId")}/links/${normalizedUuid(input.targetMemoryId, "targetMemoryId")}`;
+  if (input.kind === undefined) return path;
+  if (input.kind.length > LIMITS.memoryLinkKindLength) {
+    throw new TypeError(`kind may contain at most ${LIMITS.memoryLinkKindLength} characters`);
+  }
+  // The kind is the Link's identity, so a value the URL cannot carry exactly is
+  // refused rather than sent as a different, possibly existing, kind.
+  if (LONE_SURROGATE.test(input.kind)) throw new TypeError("kind must be well-formed Unicode");
+  return `${path}?${new URLSearchParams({ kind: input.kind })}`;
 }
 
 function positiveVersion(value: number): number {

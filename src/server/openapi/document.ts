@@ -3,7 +3,7 @@ import { codePaths, codeSchemas } from "@/modules/code/openapi";
 import { contextPaths, contextSchemas } from "@/modules/context/openapi";
 import { episodesPaths, episodesSchemas } from "@/modules/episodes/openapi";
 import { evaluationsPaths, evaluationsSchemas } from "@/modules/evaluations/openapi";
-import { graphPaths } from "@/modules/graph/openapi";
+import { graphPaths, graphSchemas } from "@/modules/graph/openapi";
 import { memoriesPaths, memoriesSchemas } from "@/modules/memories/openapi";
 import { operationsPaths, operationsSchemas } from "@/modules/operations/openapi";
 import { LORE_API_VERSION } from "@/modules/operations/service";
@@ -19,7 +19,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
       title: "Lore Portable Core",
       version: LORE_API_VERSION,
       description:
-        "RLS-enforced Memory storage, retrieval, portability, and revision-bound Code Evidence. Human authentication is deployment-selected; Agent credentials use Lore bearer tokens.",
+        "RLS-enforced Memory storage, retrieval, portability, and revision-bound Code Evidence. Human authentication is deployment-selected; Agent credentials use Lore bearer tokens. A v1 response may gain properties in a later release, so clients must ignore response properties they do not know, as they must accept an unknown Error code.",
     },
     servers: [{ url: "/" }],
     security: actorSecurity,
@@ -40,6 +40,7 @@ export function loreOpenApiDocument(): Record<string, unknown> {
       schemas: {
         ...operationsSchemas,
         ...memoriesSchemas,
+        ...graphSchemas,
         ...episodesSchemas,
         ...proposalsSchemas,
         ...contextSchemas,

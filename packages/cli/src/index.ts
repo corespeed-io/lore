@@ -46,6 +46,9 @@ Commands:
   memory get <memory-id>
   memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
   memory forget <memory-id> --version N [--idempotency-key KEY]
+  memory link <source-memory-id> <target-memory-id> [--kind KIND] [--weight N] [--metadata JSON]
+  memory unlink <source-memory-id> <target-memory-id> [--kind KIND]
+  memory links <memory-id> [--direction outbound|inbound] [--limit N] [--cursor CURSOR]
   episode list [--limit N] [--cursor CURSOR] [--kind conversation|workflow|document|event] [--scope shared|private]
   episode record --stdin [--idempotency-key KEY]
   episode get <episode-id>
@@ -68,7 +71,10 @@ Connection environment:
 
 Secrets are intentionally accepted only through environment variables. Prefer
 --stdin for private query, Memory content, or Episode JSON. Reuse --idempotency-key when retrying
-a mutation after an unknown response outcome.
+a mutation after an unknown response outcome. A Link is addressed by its source,
+target, and --kind (default: ${LORE_CONTRACT.defaults.memoryLinkKind}), so link is safe to repeat; it replaces an
+existing Link, so an omitted --weight becomes ${LORE_CONTRACT.defaults.memoryLinkWeight} and omitted --metadata becomes {}.
+A repeated unlink reports not_found once the Link is gone.
 `;
 
 class CliUsageError extends Error {
@@ -240,6 +246,20 @@ function optionInteger(value: string | undefined, name: string): number | undefi
   return parsed;
 }
 
+/** An option given at most once; a repeat is refused rather than resolved to one value. */
+function singleOption(values: readonly string[] | undefined, name: string): string | undefined {
+  if (values !== undefined && values.length > 1)
+    throw new CliUsageError(`${name} may be given once`);
+  return values?.[0];
+}
+
+function optionNumber(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed)) throw new CliUsageError(`${name} must be a number`);
+  return parsed;
+}
+
 function optionScope(value: string | undefined): MemoryScope | undefined {
   if (value === undefined) return undefined;
   const scope = LORE_CONTRACT.vocabularies.memoryScopes.find((candidate) => candidate === value);
@@ -293,9 +313,10 @@ export async function runLoreCli(
         commit: { type: "string" },
         "code-evidence": { type: "string", multiple: true },
         cursor: { type: "string" },
+        direction: { type: "string" },
         evidence: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
-        kind: { type: "string" },
+        kind: { type: "string", multiple: true },
         "idempotency-key": { type: "string" },
         limit: { type: "string" },
         metadata: { type: "string" },
@@ -309,6 +330,7 @@ export async function runLoreCli(
         symbol: { type: "string" },
         url: { type: "string" },
         version: { type: "string", short: "v" },
+        weight: { type: "string" },
         workspace: { type: "string", short: "w" },
       },
     });
@@ -404,7 +426,7 @@ export async function runLoreCli(
     if (group === "episode" && action === "list") {
       exactPositionals(parsed.positionals, 2, "episode list");
       allowedOptions(parsed.values, ["cursor", "kind", "limit", "scope"]);
-      const kind = parsed.values.kind;
+      const kind = singleOption(parsed.values.kind, "--kind");
       if (kind !== undefined && !isEpisodeKind(kind)) {
         throw new CliUsageError(`--kind must be ${listOf(EPISODE_KINDS)}`);
       }
@@ -676,6 +698,59 @@ export async function runLoreCli(
         idempotencyKey: parsed.values["idempotency-key"],
       });
       output(io, { deleted: true }, pretty);
+      return 0;
+    }
+
+    if (group === "memory" && action === "links") {
+      exactPositionals(parsed.positionals, 3, "memory links <memory-id>");
+      allowedOptions(parsed.values, ["cursor", "direction", "limit"]);
+      const directions = LORE_CONTRACT.vocabularies.memoryLinkDirections;
+      const direction = directions.find((candidate) => candidate === parsed.values.direction);
+      if (parsed.values.direction !== undefined && direction === undefined) {
+        throw new CliUsageError(`--direction must be ${directions.join(" or ")}`);
+      }
+      output(
+        io,
+        await workspace.listMemoryLinks({
+          memoryId: requiredPosition(parsed.positionals, 2, "memory id"),
+          ...(direction === undefined ? {} : { direction }),
+          limit: optionInteger(parsed.values.limit, "--limit"),
+          cursor: parsed.values.cursor,
+        }),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "memory" && (action === "link" || action === "unlink")) {
+      exactPositionals(
+        parsed.positionals,
+        4,
+        `memory ${action} <source-memory-id> <target-memory-id>`,
+      );
+      allowedOptions(parsed.values, action === "link" ? ["kind", "metadata", "weight"] : ["kind"]);
+      // The kind is part of the Link's identity and is sent exactly as given.
+      const kind = singleOption(parsed.values.kind, "--kind");
+      const key = {
+        sourceMemoryId: requiredPosition(parsed.positionals, 2, "source memory id"),
+        targetMemoryId: requiredPosition(parsed.positionals, 3, "target memory id"),
+        ...(kind === undefined ? {} : { kind }),
+      };
+      if (action === "link") {
+        const weight = optionNumber(parsed.values.weight, "--weight");
+        const linkMetadata = optionMetadata(parsed.values.metadata);
+        output(
+          io,
+          await workspace.linkMemories({
+            ...key,
+            ...(weight === undefined ? {} : { weight }),
+            ...(linkMetadata === undefined ? {} : { metadata: linkMetadata }),
+          }),
+          pretty,
+        );
+      } else {
+        await workspace.unlinkMemories(key);
+        output(io, { deleted: true }, pretty);
+      }
       return 0;
     }
 

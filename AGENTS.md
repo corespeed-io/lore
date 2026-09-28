@@ -140,6 +140,12 @@ been removed. Lore now has a native implementation, split into two concepts
   not by those paths, that forgetting removes every such body. Moving the scrub to
   an explicit subject column is a two-release migration (the JSON-path triggers must
   outlive every older app instance) and has not been scheduled.
+  `0006_publish_memory_link_capabilities.sql` replaces
+  `lore.portable_core_capabilities()` with the baseline body plus the `memoryLinks`
+  feature and the Link bounds (`memoryLinkMetadataCharacters`,
+  `memoryLinkKindsPerPair`, `memoryLinksPerSource`, `memoryLinksPerTarget`,
+  `memoryLinksPerOwner`, `memoryLinkList`, `graphLinks`); `CREATE OR REPLACE` keeps
+  its grants.
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
   CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities
@@ -147,14 +153,14 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 5) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 6) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts`, and `scripts/checks/smoke-memory-core.ts` pin the current
-  revision (5);
+  `tests/integration/api.test.ts` pin the current revision (6), and
+  `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
   (`CREATE`/`DROP INDEX CONCURRENTLY`) goes in its own `-- migrate:up
@@ -492,6 +498,70 @@ been removed. Lore now has a native implementation, split into two concepts
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
   the Memory UUID) for native wikilink navigation;
+- Memory Links are written after creation through `PUT`/`DELETE
+  /api/v1/memories/{memoryId}/links/{targetMemoryId}` (versioned-only, the
+  `memoryLinks` subrouter in `src/modules/graph/routes.ts`), addressed by the
+  natural key (source, target, `?kind=`, default `related`, never trimmed), so they
+  take no Idempotency-Key or If-Match. Core `connect` is an upsert returning
+  `{ link, created }` (PUT 201/200; a PUT replaces the whole Link, and an unchanged
+  repeat writes nothing and emits no event) and `disconnect` deletes by the key
+  (DELETE 204, or 404 when this Actor has no such Link to delete: none exists, its
+  source is not writable, or its target is not visible). Both lock the source `FOR
+  NO KEY UPDATE`, which under RLS admits only a writable source, and read the target
+  through RLS; a missing, invisible, or unwritable endpoint answers one identical
+  404. A target that vanishes mid-write is the same 404: `connect` returns null when
+  RLS filters a replacement, and OSS maps an insert's 42501/23503 to null.
+  A Link whose target later turns private stays stored but invisible, and its author
+  can neither rewrite nor delete it until the target is visible again. `connect`
+  refuses to create a Link past a `MEMORY_LINK_LIMITS` bound, with
+  `MemoryLinkCapacityError` (409 `memory_link_capacity_exceeded`): 16 kinds from one
+  Memory to another (directed; the reverse is its own pair), 1,000 Links from one
+  source, and, counting only Links from the writer's own Memories (the Actor's
+  User's, `storage.ownerId`), 1,000 to one target and 50,000 in the Workspace
+  (`maximumLinksPerOwner`, held equal to `MAX_WORKSPACE_ARCHIVE_LINKS` by a test).
+  Per-owner counting (the user's 2026-09-28 decision) means no member's Links spend
+  another's quota and the total count reads only the writer's own Links; the cost is
+  that a Workspace, or one target, may hold one quota per owner. One owner's Links
+  alone always fit one archive, but several owners' visible Links together can
+  exceed it, and export then fails closed with `WorkspaceExportLimitError`, as it
+  already does past 10,000 visible Memories. Replacing an existing Link never counts.
+  Each count stops at its bound and sees only the Links the writer's RLS shows, so
+  these bound each write rather than every stored row: a Link hidden by a target
+  turned private is not counted, because counting it would reveal the target. The
+  source and pair counts are exact among connects, which serialize on the source
+  lock; the target and owner counts may overshoot by concurrent writes from the same
+  owner's other sources. Workspace import's batch insert is bounded by the archive
+  limits instead. Link metadata is limited to 1,000 `JSON.stringify` characters
+  (`maximumMetadataSerializedLength`) by `validateMemoryLink`, so direct writes and
+  Workspace import (400 `invalid_archive`) share it; OpenAPI publishes it as
+  `x-lore-maxSerializedLength` on every Link metadata schema through
+  `linkMetadataSchema` (`src/server/openapi/shared.ts`). Links stored before this
+  bound, by an earlier import, keep their metadata. `scripts/checks/smoke-memory-core.ts` holds the source row from another
+  session so two PUTs of one new key reach their writes together, and requires one
+  201 and one 200 for the same Link; it counts only sessions whose `pg_blocking_pids` chain leads
+  back to that holder (a second waiter queues behind the first one's tuple lock),
+  read from `pg_locks` (a `pg_stat_activity` poll inside the holder's open
+  transaction would see one frozen snapshot). The engine relies on READ COMMITTED:
+  each statement's fresh snapshot is what lets a writer queued on the source lock
+  see the Link its predecessor committed. A new Link's insert is `ON CONFLICT DO
+  NOTHING`, then a re-read replaces a Link the first read could not see (a target
+  briefly invisible, or a batch insert since), so neither race answers 500. The route
+  refuses any query parameter but one `kind`, so a misspelled parameter cannot make a
+  DELETE fall back to the default kind; the SDK refuses a kind with an unpaired
+  surrogate, which URL encoding would turn into U+FFFD.
+  `GET /api/v1/memories/{memoryId}/links` (core `list`) returns one page of a visible
+  Memory's Links with their metadata, `direction=outbound` (default) or `inbound`,
+  newest first by `(createdAt, id)`, 1 to 100 per page (default 50), continued by
+  `x-lore-next-cursor`, whose shared cursor carries the last Link's `createdAt` in its
+  `updatedAt` field. RLS lists a Link only when both endpoints are visible; a missing
+  or invisible Memory is 404. The SDK
+  (`linkMemories`/`unlinkMemories`/`listMemoryLinks`), CLI (`memory link`/`memory
+  unlink`/`memory links`), and MCP (`lore_link` and `lore_unlink`, both destructive
+  because a link replaces an existing Link's fields, and separate so a host can gate
+  deletion on its own; read-only `lore_links`, at most 50 Links per call, each
+  Link's metadata bounded to 1,000 characters with `metadataTruncated`) take the
+  kind, weight, metadata, and list bounds, the directions, and the default kind and
+  weight from `LORE_CONTRACT`;
 - `src/modules/memories/browser/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
@@ -567,11 +637,13 @@ been removed. Lore now has a native implementation, split into two concepts
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
   scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
   MCP outside Portable Core and never accept a model-supplied Workspace override.
+  `lore_link`/`lore_unlink` write and delete Memory Links by natural key, and
+  `lore_links` lists one Memory's Links.
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
   their items under the 128,000-character MCP output ceiling and report omitted
   trailing items with `truncated: true`. The SDK and MCP enforce the server's
-  visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, and
-  pattern a client checks before a request comes from `LORE_CONTRACT`, which
+  visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, default,
+  and pattern a client checks or sends before a request comes from `LORE_CONTRACT`, which
   `sdk:generate` reads out of the OpenAPI document by explicit path, from every
   endpoint the value guards (failing when one is missing or two disagree;
   `tools/sdk-codegen/contract.ts`, import-safe so `tests/packages/sdk-contract.test.ts`
@@ -861,9 +933,23 @@ generic upstream adapter to support the historical component structure.
 
 The native Graph endpoint caps reads at 5,000 visible Memories
 (`MEMORY_GRAPH_LIMITS.maximumNodes`); a `limit` that is not an integer from 1 to
-that bound is a 400, not a silent clamp or fallback. It returns all
-RLS-visible Memory Links whose endpoints are in that node set, then derives at most
-three affinities per Memory among the first 500 otherwise isolated nodes. Each
+that bound is a 400, not a silent clamp or fallback. It returns at most 40,000
+(`MEMORY_GRAPH_LIMITS.maximumLinks`) of the RLS-visible Memory Links whose endpoints
+are in that node set, in creation order, and reads only their endpoints, kind, and
+weight, never metadata. When more exist, a cut takes each source owner's newest
+Link in turn (`row_number()` per owner, then across owners), so each owner keeps
+at least an equal share and one member's Links cannot crowd another's out of every
+member's Graph; within one owner the newest survive, so a Link just written stays
+visible. Owners are ranked only inside the query and never reach the response. The
+bound limits the response, not the sort, which still ranks every candidate Link. A cut sets
+`linksTruncated` and suppresses affinity, because isolation is then unknown. The
+browser keeps `isGraphCapped` for the node budget (wikilink and in-graph wording) and
+uses `areGraphLinksPartial` for Link-derived counts, which a cut makes lower bounds;
+Memory detail says the Link budget was reached instead of blaming the node window.
+Otherwise it derives at
+most three affinities per Memory among the first 500 otherwise isolated nodes. Every
+Graph link carries `derived` (true only for affinity), so a durable Link whose kind is
+the string `affinity` is never mistaken for a derived edge. Each
 node reads only a 1,000-code-point content prefix; complete content is fetched
 only for the ≤500 isolated affinity candidates and for a node whose prefix cannot
 decide its preview or label, and a version mismatch between those statements
@@ -1416,7 +1502,7 @@ in `src/server/errors.ts`, which imports nothing, so the Edge admission path in
 route throws one too, `NotFoundError` for a
 missing or invisible resource, and never writes `c.json({ code })` itself
 (`error-response.test.ts` scans for it). `src/server/api/errors.ts` imports no domain
-module: it answers each code with the table's status and names the engine's three
+module: it answers each code with the table's status and names the engine's four
 public failure classes, which cannot extend OSS classes. An engine
 `LoreConfigurationError` (an out-of-range deployment option) is deliberately not
 among them and answers 500. Clients must accept an Error `code` they do not know;
