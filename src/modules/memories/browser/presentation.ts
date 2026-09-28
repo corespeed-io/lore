@@ -5,11 +5,56 @@ function compact(value: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
 }
 
-export function memoryTitle(memory: Memory): string {
+const TITLE_LIMIT = 96;
+
+/**
+ * Text with the inline Markdown that Memory detail renders (bold, code spans,
+ * links, wikilinks) reduced to its words, for places that show plain text. Every
+ * `**` goes, paired or not, because a label cut short may keep only the opening one.
+ */
+export function plainInline(text: string): string {
+  return text
+    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, "$1")
+    .replace(/\*\*/g, "")
+    .replace(/`([^`\n]+)`/g, "$1");
+}
+
+function configuredTitle(memory: Memory): string | null {
   const configured = memory.metadata.title;
-  if (typeof configured === "string" && configured.trim()) return configured.trim();
-  const firstLine = memory.content.split(/\r?\n/, 1)[0] ?? memory.content;
-  return compact(firstLine.replace(/^#+\s*/, ""), 96) || "Untitled memory";
+  return typeof configured === "string" && configured.trim() ? configured.trim() : null;
+}
+
+function firstLine(memory: Memory): string {
+  return memory.content.split(/\r?\n/, 1)[0] ?? memory.content;
+}
+
+function titleText(line: string): string {
+  return plainInline(line.replace(/^#+\s*/, ""));
+}
+
+export function memoryTitle(memory: Memory): string {
+  return (
+    configuredTitle(memory) ??
+    (compact(titleText(firstLine(memory)), TITLE_LIMIT) || "Untitled memory")
+  );
+}
+
+/** A first line written as a title: it opens with a heading, a bold run, or a 【…】 run. */
+const TITLE_START = /^(?:#{1,6}\s|\*\*[^*\n]+\*\*|(?:\*\*)?【[^】\n]+】)/;
+
+/**
+ * The content Memory detail renders under its title. When the title shows the
+ * whole of a first line written as a title, the body starts after that line
+ * rather than repeating it. A line the title cuts short stays, and so does a
+ * plain first line, which may open a paragraph.
+ */
+export function memoryBody(memory: Memory): string {
+  const line = firstLine(memory);
+  if (configuredTitle(memory) !== null || !TITLE_START.test(line)) return memory.content;
+  if (titleText(line).replace(/\s+/g, " ").trim().length > TITLE_LIMIT) return memory.content;
+  return memory.content.slice(line.length).replace(/^(?:\r?\n)+/, "");
 }
 
 /** The `metadata.type` a Memory actually carries, or null when it has none. */

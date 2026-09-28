@@ -145,7 +145,13 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   version-conflict state, and explicit proposal acceptance or rejection.
 - `MemoryView.tsx` owns the Memory detail workspace, including the Memory's Code
   citations and their six-state drift assessment. `src/modules/code/browser/evidence-presentation.ts`
-  owns that pure presentation model.
+  owns that pure presentation model. The body renders through
+  `src/modules/memories/browser/markdown.ts`:
+  - A blank line ends a paragraph. A single line break inside one stays a line break, because a Memory's line breaks carry meaning.
+  - Headings, list items (two-space indent per level, up to three levels), and fences stand on their own lines.
+  - Inline markup never spans a line.
+- A title taken from the first line (`memoryTitle`) shows that line's text without its Markdown. That title, Graph labels, and Graph previews all go through `plainInline`.
+- When the title shows the whole of a first line written as a title (a heading, or a line that opens with a bold or 【…】 run), `memoryBody` starts the body after that line instead of repeating it.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, read-only deployment readiness/capabilities, and
   read-only Code Index job state. `src/modules/code/browser/job-presentation.ts` owns that pure
@@ -362,6 +368,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
+| 2026-09-28 | Render Memory detail as paragraphs with kept line breaks, and show first-line titles without Markdown or repetition | The renderer had relied on a `white-space: pre-wrap` rule that the editorial redesign dropped, so every Memory body collapsed into one paragraph, and `**title**` first lines showed their asterisks and repeated under the title | Newline handling left to CSS |
 | 2026-08-15 | Surface Memory Code citations in the Memory detail context and Code Index jobs in Operations, both read-only | Make the six-state drift assessment and the indexing queue observable to the human who owns the Memory without building a code browser Lore does not need | Code-aware Memory reachable only through HTTP/SDK/CLI/MCP |
 | 2026-08-10 | Promote the measured Worker + Canvas renderer to the native Graph and keep labels interaction-driven | Keep ~1,000-node layout and drag responsive while making centrality visible without persistent annotation clutter | Main-thread SVG production renderer and always-on labels |
 | 2026-08-09 | Add Operations as the human-only Workspace portability and deployment-health destination | Keep high-consequence export/import behind checksum validation, owner remap, and dry-run while making lexical-safe degradation visible | CLI/API-only Workspace portability |

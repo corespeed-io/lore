@@ -63,3 +63,30 @@ test("renderMarkdown can safely resolve a reference named like an object propert
 test("plain uses wikilink labels", () => {
   expect(plain("# H\n**b** [[a/b|c]] `x`")).toBe("H b c x");
 });
+
+test("renderMarkdown keeps paragraphs and line breaks as written", () => {
+  expect(renderMarkdown("First.\n\nSecond.")).toBe("<p>First.</p><p>Second.</p>");
+  expect(renderMarkdown("Line one\nline two")).toBe("<p>Line one<br>line two</p>");
+  expect(renderMarkdown("A\r\n\r\n\r\nB")).toBe("<p>A</p><p>B</p>");
+});
+
+test("renderMarkdown sets headings, lists, and fences apart from paragraphs", () => {
+  expect(renderMarkdown("# Heading\nText")).toBe("<h3>Heading</h3><p>Text</p>");
+  expect(renderMarkdown("Methods:\n- one\n  - nested\n      - deep\nAfter")).toBe(
+    '<p>Methods:</p><span class="li">one</span><span class="li li-1">nested</span>' +
+      '<span class="li li-3">deep</span><p>After</p>',
+  );
+  expect(renderMarkdown("Before\n```\nx < y\n```\nAfter")).toBe(
+    '<p>Before</p><pre class="fence">\nx &lt; y\n</pre><p>After</p>',
+  );
+});
+
+test("renderMarkdown keeps inline markup inside one line", () => {
+  expect(renderMarkdown("**bold** and `code`")).toBe("<p><b>bold</b> and <code>code</code></p>");
+  // A bold or code marker never pairs across a line break.
+  expect(renderMarkdown("**open\nclose**")).toBe("<p>**open<br>close**</p>");
+  expect(renderMarkdown("- *a* item")).toBe('<span class="li"><i>a</i> item</span>');
+  expect(renderMarkdown("<script>alert(1)</script>\n\n- <img src=x>")).toBe(
+    '<p>&lt;script&gt;alert(1)&lt;/script&gt;</p><span class="li">&lt;img src=x&gt;</span>',
+  );
+});

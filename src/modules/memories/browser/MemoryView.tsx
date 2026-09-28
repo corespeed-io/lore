@@ -15,6 +15,7 @@ import {
 import { renderMarkdown } from "@/modules/memories/browser/markdown";
 import {
   type MemoryGraphContext,
+  memoryBody,
   memoryTitle,
   memoryType,
 } from "@/modules/memories/browser/presentation";
@@ -202,10 +203,11 @@ export function MemoryView({
   const title = memoryTitle(memory);
   const type = memoryType(memory);
   const { unresolvedWikilinkTitle } = graphContext;
+  // A Memory whose only line is its title has nothing more to show under it.
+  const bodyText = memoryBody(memory);
   const bodyHtml = useMemo(
-    () =>
-      renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""), wikilinkTargets, unresolvedWikilinkTitle),
-    [body, wikilinkTargets, unresolvedWikilinkTitle],
+    () => renderMarkdown(bodyText, wikilinkTargets, unresolvedWikilinkTitle),
+    [bodyText, wikilinkTargets, unresolvedWikilinkTitle],
   );
   const bodyRef = useRef<HTMLDivElement>(null);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
@@ -248,10 +250,10 @@ export function MemoryView({
               {codeEvidenceSummary.attentionMessage}
             </p>
           )}
-          {body.trim() ? (
+          {bodyText.trim() ? (
             <div ref={bodyRef} className="detail-body" />
           ) : (
-            <p className="detail-placeholder">No content available</p>
+            !body.trim() && <p className="detail-placeholder">No content available</p>
           )}
         </article>
 

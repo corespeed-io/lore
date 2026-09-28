@@ -1,8 +1,11 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import { expect, test, vi } from "vitest";
 import {
+  memoryBody,
   memoryConfiguredType,
+  memoryTitle,
   memoryType,
+  plainInline,
   shortMemoryDate,
 } from "@/modules/memories/browser/presentation";
 
@@ -61,4 +64,51 @@ test.each(["Pacific/Kiritimati", "Pacific/Pago_Pago"])(
 
 test("an unparseable row date renders nothing", () => {
   expect(shortMemoryDate("not a date")).toBe("");
+});
+
+test("a title taken from the first line shows its text, not its Markdown", () => {
+  const titleOf = (content: string) => memoryTitle(memory({ content }));
+
+  expect(titleOf("**corespeed-haas ClickHouse 托管与运维参考**\n\n现状")).toBe(
+    "corespeed-haas ClickHouse 托管与运维参考",
+  );
+  expect(titleOf("## Use `bun run ch:migrate` for [[ops/clickhouse|ClickHouse]]")).toBe(
+    "Use bun run ch:migrate for ClickHouse",
+  );
+  expect(titleOf("See [the runbook](https://example.test/runbook) first")).toBe(
+    "See the runbook first",
+  );
+  // Markup the renderer does not treat as emphasis is text, and stays.
+  expect(titleOf("__init__.py loads a * b")).toBe("__init__.py loads a * b");
+  // A configured title is shown exactly as set.
+  expect(memoryTitle(memory({ content: "**x**", metadata: { title: "**Kept**" } }))).toBe(
+    "**Kept**",
+  );
+});
+
+test("a label cut short loses its unpaired bold marker too", () => {
+  expect(plainInline("**ci-runner controller service-account key: org-policy exception…")).toBe(
+    "ci-runner controller service-account key: org-policy exception…",
+  );
+});
+
+test("Memory detail does not repeat a first line written as its title", () => {
+  const bodyOf = (content: string, metadata: Memory["metadata"] = {}) =>
+    memoryBody(memory({ content, metadata }));
+
+  expect(bodyOf("**Title**\n\nFirst paragraph.")).toBe("First paragraph.");
+  expect(bodyOf("### Title\r\n\r\nBody")).toBe("Body");
+  expect(bodyOf("【memory 统一用 Lore】\n- one")).toBe("- one");
+  expect(bodyOf("**Title**")).toBe("");
+  // A title with a trailing note is still shown whole by the title.
+  expect(bodyOf("**Spencer wants code** (2026-09-18, Fixo)\nBody")).toBe("Body");
+  expect(bodyOf("【规范】（适用范围）\n正文")).toBe("正文");
+  // A plain first line may open a paragraph, so it stays.
+  expect(bodyOf("A durable fact.\nMore.")).toBe("A durable fact.\nMore.");
+  expect(bodyOf("Use **bold** later\nMore.")).toBe("Use **bold** later\nMore.");
+  // A title line too long to show whole stays in the body.
+  const long = `**${"x".repeat(97)}**\nBody`;
+  expect(bodyOf(long)).toBe(long);
+  // A configured title leaves the content whole.
+  expect(bodyOf("# Heading\nBody", { title: "Configured" })).toBe("# Heading\nBody");
 });

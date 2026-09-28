@@ -792,6 +792,31 @@ body {
   color: var(--faint);
 }
 
+.detail-body .li-1 {
+  padding-left: 2.6em;
+}
+
+.detail-body .li-2 {
+  padding-left: 3.9em;
+}
+
+.detail-body .li-3 {
+  padding-left: 5.2em;
+}
+
+.detail-body p {
+  margin: 0 0 0.8em;
+}
+
+.detail-body .li + p,
+.detail-body .li + h3 {
+  margin-top: 0.8em;
+}
+
+.detail-body > :last-child {
+  margin-bottom: 0;
+}
+
 /* ── Page context rail (Obsidian-style note context, Lore visual language) ─── */
 .page-context {
   position: sticky;
