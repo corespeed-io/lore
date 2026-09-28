@@ -91,6 +91,8 @@ test("a Memory body links only to http(s) with a host, and to mailto", () => {
   expect(html("[x](javascript:alert(1)) [y](https:/api) ![z](data:image/png;base64,AA)")).toBe(
     "<p>[x](javascript:alert(1)) [y](https:/api) ![z](data:image/png;base64,AA)</p>\n",
   );
+  // markdown-it skips the check for an empty target, so the renderer checks again.
+  expect(html("[a]() [b]( ) ![c]() x![]()y")).toBe("<p>a b c xy</p>\n");
 });
 
 test("a link opens in a new tab, mailto in place, and a title shows on hover", () => {

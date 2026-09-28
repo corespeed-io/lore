@@ -13,7 +13,8 @@ export const MAXIMUM_TABLE_CELLS = 5_000;
 interface MemoryEnv extends Env {
   targets?: Readonly<Record<string, string>>;
   unresolvedTitle?: string;
-  links?: number;
+  /** For each open link, whether it rendered an anchor. */
+  anchors?: boolean[];
   tableCells?: number;
   tablesOff?: boolean;
 }
@@ -132,27 +133,29 @@ function linkAttributes(href: string, title: string | number | null): string {
   return ` class="ext" href="${escapeHtml(href)}"${hover}${tab}`;
 }
 
-// markdown-it keeps links out of link labels, but not an autolink: it renders as text.
+function insideAnchor(env: MemoryEnv): boolean {
+  return env.anchors?.includes(true) ?? false;
+}
+
+// One anchor at a time: an autolink in a link label renders as text. So does a link
+// whose target markdown-it could not parse, since an empty one skips `validateLink`.
 rules.link_open = (tokens, index, _options, env) => {
   const memory = env as MemoryEnv;
-  memory.links = (memory.links ?? 0) + 1;
   const token = tokens[index] as Token;
-  return memory.links > 1
-    ? ""
-    : `<a${linkAttributes(String(token.attrGet("href")), token.attrGet("title"))}>`;
+  const href = String(token.attrGet("href") ?? "");
+  const open = !insideAnchor(memory) && allowedHref(href);
+  memory.anchors?.push(open);
+  return open ? `<a${linkAttributes(href, token.attrGet("title"))}>` : "";
 };
-rules.link_close = (_tokens, _index, _options, env) => {
-  const memory = env as MemoryEnv;
-  memory.links = (memory.links ?? 1) - 1;
-  return memory.links > 0 ? "" : "</a>";
-};
+rules.link_close = (_tokens, _index, _options, env) =>
+  (env as MemoryEnv).anchors?.pop() ? "</a>" : "";
 
 // An image is a link to its source, never a remote load; inside a link, its words.
 rules.image = (tokens, index, options, env, renderer) => {
   const token = tokens[index] as Token;
   const alt = renderer.renderInlineAsText(token.children ?? [], options, env);
-  if (((env as MemoryEnv).links ?? 0) > 0) return escapeHtml(revealHidden(alt));
-  const src = String(token.attrGet("src"));
+  const src = String(token.attrGet("src") ?? "");
+  if (insideAnchor(env as MemoryEnv) || !allowedHref(src)) return escapeHtml(revealHidden(alt));
   const text = alt.trim() ? revealHidden(alt) : src;
   return `<a${linkAttributes(src, token.attrGet("title"))}>${escapeHtml(text)}</a>`;
 };
@@ -164,7 +167,7 @@ rules.wikilink = (tokens, index, _options, env) => {
     label: string;
   };
   const shown = escapeHtml(revealHidden(label));
-  if ((memory.links ?? 0) > 0) return shown;
+  if (insideAnchor(memory)) return shown;
   const memoryId = wikilinkTarget(memory.targets ?? {}, reference);
   const referenceText = escapeHtml(revealHidden(reference));
   if (!memoryId) {
@@ -228,7 +231,7 @@ export function renderMemoryMarkdown(
   targets: Readonly<Record<string, string>>,
   unresolvedTitle: string,
 ): string {
-  const env: MemoryEnv = { targets, unresolvedTitle };
+  const env: MemoryEnv = { targets, unresolvedTitle, anchors: [] };
   return memoryMarkdown.renderer.render(tokens, memoryMarkdown.options, env);
 }
 
