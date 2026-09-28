@@ -2,7 +2,28 @@ import type { Memory } from "@corespeed/lore-sdk";
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
-  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+  if (text.length <= limit) return text;
+  // Never cut between the two halves of a character outside the Basic Multilingual Plane.
+  const end = /[\uD800-\uDBFF]/.test(text[limit - 2] ?? "") ? limit - 2 : limit - 1;
+  return `${text.slice(0, end).trimEnd()}…`;
+}
+
+/**
+ * Characters that would make the text a reader sees differ from the text an agent
+ * reads: the bidirectional embedding, override, and isolate controls, which reorder
+ * what follows them, and the Unicode tag characters, which show as nothing. The one
+ * use of tags a reader sees, an emoji flag's tag sequence, is matched first and kept.
+ */
+const HIDDEN_CHARACTERS =
+  /\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,6}\u{E007F}|[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
+
+/** Text with each hidden control shown as a marker that names it, such as `⟨U+202E⟩`. */
+export function revealHidden(text: string): string {
+  return text.replace(HIDDEN_CHARACTERS, (match) => {
+    if (match.codePointAt(0) === 0x1f3f4) return match;
+    const code = match.codePointAt(0) ?? 0;
+    return `⟨U+${code.toString(16).toUpperCase().padStart(4, "0")}⟩`;
+  });
 }
 
 const TITLE_LIMIT = 96;
@@ -25,14 +46,15 @@ const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "g");
  * strikethrough, whose markers are the only sign the words are struck. A backslash
  * escape reads as the character it escapes, and so do `&amp;`, `&lt;`, `&gt;`,
  * `&quot;`, and numeric entities; other named entities stay as written. Every `**`
- * goes, paired or not, because a label cut short may keep only the opening one. An
- * underscore inside a word is never emphasis. No pattern can match `[` inside
- * brackets, so a run of brackets costs linear time.
+ * goes, paired or not, because a label cut short may keep only the opening one, but
+ * one with space on both sides is text. An underscore inside a word is never
+ * emphasis. Hidden controls show as markers (`revealHidden`). No pattern can match
+ * `[` inside brackets, so a run of brackets costs linear time.
  */
 export function plainInline(text: string): string {
   const code: string[] = [];
   const stash = (kept: string) => `\u0000${code.push(kept) - 1}\u0000`;
-  return (
+  return revealHidden(
     text
       .replace(/`([^`\n]+)`/g, (_match, span: string) => stash(span))
       .replace(/\\([!-/:-@[-`{-~])/g, (_match, character: string) => stash(character))
@@ -41,17 +63,18 @@ export function plainInline(text: string): string {
         (match, name: string, decimal: string | undefined, hex: string | undefined) =>
           stash(entity(match, name, decimal, hex)),
       )
-      .replace(/^#{1,6}\s+/, "")
+      .replace(/^#{1,6}[ \t]+/, "")
       .replace(/\[\[([^[\]|\n]+)\|([^[\]\n]+)\]\]/g, "$2")
       .replace(/\[\[([^[\]\n]+)\]\]/g, "$1")
       .replace(IMAGE, "$1")
       .replace(LINK, "$1")
-      .replace(/\*\*/g, "")
+      // A `**` with space on both sides is text, not a marker.
+      .replace(/(?<!\s)\*\*|\*\*(?!\s)/g, "")
       .replace(/(^|[^\w*])\*(?=\S)([^*\n]+)\*(?!\w)/g, "$1$2")
       .replace(/(^|[^\p{L}\p{N}_])__(?=\S)([^_\n]+)__(?![\p{L}\p{N}_])/gu, "$1$2")
       .replace(/(^|[^\p{L}\p{N}_])_(?=\S)([^_\n]+)_(?![\p{L}\p{N}_])/gu, "$1$2")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: Memory text never holds NUL, so NUL marks what was stashed.
-      .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => code[Number(index)] ?? "")
+      .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => code[Number(index)] ?? ""),
   );
 }
 
@@ -83,6 +106,10 @@ function configuredTitle(memory: Memory): string | null {
   return typeof configured === "string" && configured.trim() ? configured.trim() : null;
 }
 
+function count(text: string, marker: string): number {
+  return text.split(marker).length - 1;
+}
+
 /** A text's first line. The split stops there, however long the body. */
 function firstLine(text: string): string {
   return text.split(/\r\n?|\n/, 1)[0] ?? "";
@@ -103,7 +130,7 @@ export function memoryTitle(memory: Memory): string {
 }
 
 /** A first line written as a title: it opens with a heading, a bold run, or a 【…】 run. */
-const TITLE_START = /^(?:#{1,6}\s|\*\*[^*\n]+\*\*|__[^_\n]+__|(?:\*\*)?【[^】\n]+】)/;
+const TITLE_START = /^(?:#{1,6}[ \t]|\*\*[^*\n]+\*\*|__[^_\n]+__|(?:\*\*)?【[^】\n]+】)/;
 /**
  * Markup a title cannot carry: a link or autolink, which only the body can follow,
  * and strikethrough, escapes, or entities, whose plain text reads differently.
@@ -141,11 +168,14 @@ export function memoryBody(memory: Memory): string {
   const line = firstLine(memory.content);
   if (configuredTitle(memory) !== null || !TITLE_START.test(line)) return memory.content;
   if (line.length > TITLE_SOURCE_LIMIT || BODY_ONLY_MARKUP.test(line)) return memory.content;
+  // An odd backtick opens a code span the next line continues, and an odd `**` is text;
+  // either way the title cannot stand for the line.
+  if (count(line, "`") % 2 === 1 || count(line, "**") % 2 === 1) return memory.content;
   const title = titleText(line).replace(/\s+/g, " ").trim();
   if (title.length > TITLE_LIMIT || title.includes("*")) return memory.content;
   const rest = memory.content.slice(line.length).replace(/^(?:\r\n?|\n)/, "");
   // An ATX heading always ends at its line; any other title line can be continued.
-  if (!/^#{1,6}\s/.test(line) && continuesTitle(firstLine(rest))) return memory.content;
+  if (!/^#{1,6}[ \t]/.test(line) && continuesTitle(firstLine(rest))) return memory.content;
   return rest.replace(/^(?:\r\n?|\n)+/, "");
 }
 

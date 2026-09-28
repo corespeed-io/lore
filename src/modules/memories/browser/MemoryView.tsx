@@ -26,6 +26,7 @@ import {
   memoryBody,
   memoryTitle,
   memoryType,
+  revealHidden,
 } from "@/modules/memories/browser/presentation";
 
 type MarkdownRenderer = ComponentType<
@@ -67,7 +68,7 @@ class PlainTextFallback extends Component<{ text: string; children: ReactNode }>
 
   render() {
     return this.state.failed ? (
-      <p className="detail-plain">{this.props.text}</p>
+      <p className="detail-plain">{revealHidden(this.props.text)}</p>
     ) : (
       this.props.children
     );
@@ -288,7 +289,7 @@ export function MemoryView({
           {bodyText.trim() ? (
             <div className="detail-body">
               <PlainTextFallback key={`${id}:${version}`} text={bodyText}>
-                <Suspense fallback={<p className="detail-plain">{bodyText}</p>}>
+                <Suspense fallback={<p className="detail-plain">{revealHidden(bodyText)}</p>}>
                   <MemoryMarkdown
                     content={bodyText}
                     wikilinkTargets={wikilinkTargets}

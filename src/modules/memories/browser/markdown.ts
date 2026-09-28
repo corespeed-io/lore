@@ -1,4 +1,5 @@
 import MarkdownIt, { type Env, type StateBlock, type StateInline, type Token } from "markdown-it";
+import { revealHidden } from "@/modules/memories/browser/presentation";
 
 /**
  * How deep blocks and inline markup may nest before markdown-it stops nesting:
@@ -209,11 +210,11 @@ export function parseMemoryMarkdown(content: string): Token[] | null {
 }
 
 /**
- * A character a reader can see: a letter, digit, punctuation, or symbol, but not one
- * a font draws as nothing (a default-ignorable one, such as the Hangul fillers, or a
- * blank Braille pattern).
+ * A character a reader can see: a letter, mark, digit, punctuation, or symbol, but
+ * not one a font draws as nothing (a default-ignorable one, such as the Hangul
+ * fillers or a variation selector, or a blank Braille pattern).
  */
-const VISIBLE = /(?![\p{Default_Ignorable_Code_Point}\u2800])[\p{L}\p{N}\p{P}\p{S}]/u;
+const VISIBLE = /(?![\p{Default_Ignorable_Code_Point}\u2800])[\p{L}\p{M}\p{N}\p{P}\p{S}]/u;
 
 /** Whether text shows anything, where spaces and zero-width characters show nothing. */
 export function hasVisibleText(text: string): boolean {
@@ -293,6 +294,12 @@ function attribute(token: Token, name: string): string | null {
   return typeof value === "string" && value ? value : null;
 }
 
+/** A link's or image's title as its hover shows it, hidden controls included. */
+function hoverTitle(token: Token): string | null {
+  const title = attribute(token, "title");
+  return title && revealHidden(title);
+}
+
 function target(token: Token, name: "href" | "src"): string | null {
   const value = attribute(token, name);
   return value && allowedHref(value) ? value : null;
@@ -325,22 +332,24 @@ export function nodeText(nodes: readonly MarkdownNode[]): string {
     .join("");
 }
 
+/** Markup whose meaning plain alt text would lose: a target, a reference, or a strike. */
+const ALT_AS_WRITTEN = new Set(["image", "link_open", "wikilink", "s_open"]);
+
 /**
- * An image's alt text as it reads. Alt text that holds an image, a link, or a
- * wikilink shows as written: flattened to words, it would hide their targets,
- * titles, and references, which only its source still carries.
+ * An image's alt text as it reads. Alt text that holds an image, a link, a wikilink,
+ * or strikethrough shows as written: flattened to words, it would hide their targets,
+ * titles, and references, or read struck words as current.
  */
 function altText(image: Token): string {
   const children = image.children ?? [];
-  const nested = children.some(
-    (child) => child.type === "image" || child.type === "link_open" || child.type === "wikilink",
+  if (children.some((child) => ALT_AS_WRITTEN.has(child.type))) return revealHidden(image.content);
+  return revealHidden(
+    children
+      .map((child) =>
+        child.type === "softbreak" || child.type === "hardbreak" ? " " : child.content,
+      )
+      .join(""),
   );
-  if (nested) return image.content;
-  return children
-    .map((child) =>
-      child.type === "softbreak" || child.type === "hardbreak" ? " " : child.content,
-    )
-    .join("");
 }
 
 function append(target: MarkdownNode[], nodes: readonly MarkdownNode[]): void {
@@ -373,7 +382,7 @@ function closed({ token, children, inLink }: Frame): MarkdownNode[] {
       if (!href) return children;
       // A link that shows no text of its own shows its target.
       const shown = hasVisibleText(nodeText(children)) ? children : [href];
-      return [element("a", shown, linkProps(href, attribute(token, "title")))];
+      return [element("a", shown, linkProps(href, hoverTitle(token)))];
     }
     default: {
       const tag = token ? CONTAINERS[token.type] : undefined;
@@ -388,7 +397,7 @@ function leaf(token: Token, inLink: boolean): MarkdownNode[] {
     case "inline":
       return tree(token.children ?? []);
     case "code_inline":
-      return [element("code", [token.content])];
+      return [element("code", [revealHidden(token.content)])];
     case "softbreak":
     case "hardbreak":
       return [element("br", [])];
@@ -397,11 +406,10 @@ function leaf(token: Token, inLink: boolean): MarkdownNode[] {
     case "fence":
     case "code_block": {
       // A fence's info string is text of the body too, so it shows above the code.
-      const info = token.info.trim();
+      const info = revealHidden(token.info.trim());
       const caption = info ? [element("span", [info], { className: "fence-info" })] : [];
-      return [
-        element("pre", [...caption, element("code", [token.content])], { className: "fence" }),
-      ];
+      const code = element("code", [revealHidden(token.content)]);
+      return [element("pre", [...caption, code], { className: "fence" })];
     }
     case "image": {
       // An image is a link to its source, never a remote load. Inside a link, where
@@ -409,7 +417,7 @@ function leaf(token: Token, inLink: boolean): MarkdownNode[] {
       const alt = altText(token);
       const src = target(token, "src");
       if (!src) return [alt];
-      const title = attribute(token, "title");
+      const title = hoverTitle(token);
       const shown = hasVisibleText(alt) ? alt : src;
       if (inLink) return [element("span", [shown], { title: title ? `${src} — ${title}` : src })];
       return [element("a", [shown], linkProps(src, title))];
@@ -418,11 +426,12 @@ function leaf(token: Token, inLink: boolean): MarkdownNode[] {
       const reference = token.meta?.reference;
       const label = token.meta?.label;
       if (typeof reference !== "string" || typeof label !== "string") return [];
-      const shown = hasVisibleText(label) ? label : reference;
+      const shown = revealHidden(hasVisibleText(label) ? label : reference);
       return inLink ? [shown] : [{ kind: "wikilink", reference, label: shown }];
     }
     default:
-      return token.content ? [token.content] : [];
+      // Text as it reads, with any control that would reorder or hide it shown.
+      return token.content ? [revealHidden(token.content)] : [];
   }
 }
 
@@ -492,9 +501,10 @@ export function wikilinkView(
   unresolvedTitle: string,
 ): WikilinkView {
   const memoryId = wikilinkTarget(targets, reference);
-  if (!memoryId) return { title: `${reference} — ${unresolvedTitle}` };
+  const shown = revealHidden(reference);
+  if (!memoryId) return { title: `${shown} — ${unresolvedTitle}` };
   const href = `/memory/${encodeURIComponent(memoryId)}`;
-  return label === reference ? { memoryId, href } : { memoryId, href, title: reference };
+  return label === shown ? { memoryId, href } : { memoryId, href, title: shown };
 }
 
 /** The parts of a click that decide whether the page or the browser handles it. */

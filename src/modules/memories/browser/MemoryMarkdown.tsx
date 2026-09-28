@@ -7,6 +7,7 @@ import {
   memoryMarkdownTree,
   wikilinkView,
 } from "@/modules/memories/browser/markdown";
+import { revealHidden } from "@/modules/memories/browser/presentation";
 
 interface Wikilinks {
   /** Visible Memory ids by Memory Reference; a reference missing here stays inert. */
@@ -85,7 +86,7 @@ export default function MemoryMarkdown({
 }: MemoryMarkdownProps) {
   const body = useMemo(() => {
     const tree = memoryMarkdownTree(content);
-    return tree ? elements(tree) : <p className="detail-plain">{content}</p>;
+    return tree ? elements(tree) : <p className="detail-plain">{revealHidden(content)}</p>;
   }, [content]);
   const wikilinks = useMemo(
     () => ({ targets: wikilinkTargets, unresolvedTitle, onOpen }),

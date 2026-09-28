@@ -7,6 +7,7 @@ import {
   memoryType,
   plain,
   plainInline,
+  revealHidden,
   shortMemoryDate,
 } from "@/modules/memories/browser/presentation";
 
@@ -301,11 +302,63 @@ test("the title shows a first line whole only up to the limit, and the body agre
 test("only a heading, a bold run, or a 【…】 run opens a title line", () => {
   const bodyOf = (content: string) => memoryBody(memory({ content }));
 
-  expect(bodyOf("**【规范】 适用范围\n正文")).toBe("正文");
+  expect(bodyOf("**【规范】** 适用范围\n正文")).toBe("正文");
+  // An unclosed bold marker is text the title cannot show, so the line stays.
+  expect(bodyOf("**【规范】 适用范围\n正文")).toBe("**【规范】 适用范围\n正文");
   expect(bodyOf("#\tTabbed heading\nBody")).toBe("Body");
   // A hashtag, or seven hashes, is not a Markdown heading.
   expect(bodyOf("#tag first\nBody")).toBe("#tag first\nBody");
   expect(bodyOf("####### seven\nBody")).toBe("####### seven\nBody");
   // An unclosed bold run is not a title.
   expect(bodyOf("**unclosed title\nBody")).toBe("**unclosed title\nBody");
+});
+
+test("controls that reorder or hide text show as markers, and emoji stay whole", () => {
+  expect(revealHidden("a\u202Eb\u2066c\u{E0049}d\u202C")).toBe(
+    "a⟨U+202E⟩b⟨U+2066⟩c⟨U+E0049⟩d⟨U+202C⟩",
+  );
+  // A family (zero-width joiners), a heart (a variation selector), a subdivision
+  // flag (a tag sequence), and right-to-left marks are ordinary text.
+  for (const text of [
+    "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+    "\u2764\uFE0F",
+    "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+    "שלום\u200F!",
+  ]) {
+    expect(revealHidden(text)).toBe(text);
+  }
+  // Written as entities, they show the same way in titles, labels, and snippets.
+  const encoded = memory({ content: "# Pay &#x202E;4321&#x202C; now &#xE0049;\nBody" });
+  expect(memoryTitle(encoded)).toBe("Pay ⟨U+202E⟩4321⟨U+202C⟩ now ⟨U+E0049⟩");
+  expect(plain("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
+});
+
+test("the body keeps a title line whose code span or bold marker runs past it", () => {
+  const bodyOf = (content: string) => memoryBody(memory({ content }));
+  const kept = (content: string) => expect(bodyOf(content)).toBe(content);
+
+  // An odd backtick opens a code span the next lines continue.
+  kept('**Example** `\n[approved](https://example.test "hidden")\n`');
+  // An unpaired or spaced `**` is text the title reduces away.
+  kept("# Compute 2**3\nBody");
+  kept("# Passing **kwargs to the client\nBody");
+  kept("# Retry delay 2 ** attempt\nBody");
+  kept("**Note** a ** b\nBody");
+  expect(memoryTitle(memory({ content: "# Retry delay 2 ** attempt\nBody" }))).toBe(
+    "Retry delay 2 ** attempt",
+  );
+  // Paired markers and code spans still read as a title.
+  expect(bodyOf("## Use `bun run ch:migrate` for **ClickHouse**\nBody")).toBe("Body");
+});
+
+test("only a space or tab after the hashes makes a heading", () => {
+  const content = "#\u00a0Title\nBody";
+  expect(memoryBody(memory({ content }))).toBe(content);
+  expect(memoryTitle(memory({ content }))).toBe("# Title");
+});
+
+test("a title cut short never splits a character in two", () => {
+  const title = memoryTitle(memory({ content: `# ${"x".repeat(94)}\u{1F600}tail\nBody` }));
+  expect(title).toBe(`${"x".repeat(94)}…`);
+  expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(title)).toBe(false);
 });

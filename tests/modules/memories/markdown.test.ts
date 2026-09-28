@@ -595,3 +595,39 @@ test("inline and block markup render as their own elements", () => {
     el("hr", []),
   ]);
 });
+
+test("controls that reorder or hide body text show as markers, written raw or as entities", () => {
+  expect(nodeText(paragraphOf("Pay account &#x202E;4321&#x202C; now &#xE0049; end"))).toBe(
+    "Pay account ⟨U+202E⟩4321⟨U+202C⟩ now ⟨U+E0049⟩ end",
+  );
+  expect(paragraphOf("`a\u202Eb`")).toEqual([el("code", ["a⟨U+202E⟩b"])]);
+  expect(memoryMarkdownTree("```\u2066x\nb\u202E\n```")).toEqual([
+    el(
+      "pre",
+      [el("span", ["⟨U+2066⟩x"], { className: "fence-info" }), el("code", ["b⟨U+202E⟩\n"])],
+      {
+        className: "fence",
+      },
+    ),
+  ]);
+  // A link title and an unresolved reference show them on hover too.
+  expect(paragraphOf('[a](https://y.test "x\u202Ey")')).toEqual([
+    el("a", ["a"], web("https://y.test", "x⟨U+202E⟩y")),
+  ]);
+  expect(wikilinkView({}, "ref\u202E", "label", "not found")).toEqual({
+    title: "ref⟨U+202E⟩ — not found",
+  });
+});
+
+test("alt text with strikethrough shows as written, and a mark alone is visible text", () => {
+  expect(nodeText(paragraphOf("![~~Disable authentication~~](https://x.test/i.png)"))).toBe(
+    "~~Disable authentication~~",
+  );
+  // A Devanagari vowel sign is a mark a font draws, not padding.
+  expect(hasVisibleText("\u093E")).toBe(true);
+  expect(paragraphOf("[\u093E](https://y.test)")).toEqual([
+    el("a", ["\u093E"], web("https://y.test")),
+  ]);
+  // A variation selector alone still draws nothing.
+  expect(hasVisibleText("\uFE0F")).toBe(false);
+});
