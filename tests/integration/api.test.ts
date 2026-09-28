@@ -1,6 +1,7 @@
 import { MEMORY_LINK_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi } from "@/server/api/app";
 import { createAccessModule } from "@/server/auth/access";
@@ -399,7 +400,7 @@ test("Capabilities verifies Agent credentials and Workspace grants in the handle
 
   expect(accepted.status).toBe(200);
   expect(accepted.headers.get("cache-control")).toBe("private, no-store");
-  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 5 });
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 6 });
   expect(shapeOnly.status).toBe(403);
   await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
   expect(revoked.status).toBe(403);
@@ -866,11 +867,12 @@ test("Memory Link HTTP bodies carry exactly the published fields and keep the ki
     await send("PUT", `${exact}?kind=cites%00`, "{}"),
     await send("PUT", exact, JSON.stringify({ metadata: ["not", "an", "object"] })),
     await send("PUT", exact, JSON.stringify({ weight: 1e-50 })),
+    await send("PUT", exact, JSON.stringify({ metadata: { note: "m".repeat(1_000) } })),
     await send("PUT", exact, "[]"),
     await send("PUT", exact, "{"),
   ];
   expect(refused.map((response) => response.status)).toEqual([
-    400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400,
   ]);
   for (const response of refused) {
     await expect(response.json()).resolves.toMatchObject({ code: "invalid_request" });
@@ -921,6 +923,77 @@ test("Memory Link HTTP answers a new Link past its bound with 409 memory_link_ca
     error: `A Memory may link to another Memory with at most ${MEMORY_LINK_LIMITS.maximumKindsPerPair} kinds`,
   });
   expect(replaced.status).toBe(200);
+});
+
+test("Memory Link HTTP lists a Memory's visible Links newest first with a cursor", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const agent = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Link List Agent",
+    permission: "read",
+  });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const hub = await memories.remember(testContext.alice, { content: "Listed hub." });
+  const targets = [];
+  for (const content of ["First target.", "Second target.", "Third target."]) {
+    const target = await memories.remember(testContext.alice, { content });
+    targets.push(target.id);
+    await graph.connect(testContext.alice, { sourceMemoryId: hub.id, targetMemoryId: target.id });
+  }
+  const bobPrivate = await memories.remember(testContext.bob, {
+    content: "Bob private.",
+    scope: "private",
+  });
+  const list = (memoryId: string, query = "", prefix = "/api/v1") =>
+    app.request(
+      new Request(`http://lore.local${prefix}/memories/${memoryId}/links${query}`, {
+        headers: {
+          authorization: `Bearer ${credential.token}`,
+          "x-lore-workspace-id": testContext.alice.workspaceId,
+        },
+      }),
+    );
+
+  const first = await list(hub.id, "?limit=2");
+  expect(first.status).toBe(200);
+  expect(first.headers.get("cache-control")).toBe("private, no-store");
+  const firstPage = (await first.json()) as Array<{ targetMemoryId: string }>;
+  const cursor = first.headers.get("x-lore-next-cursor");
+  expect(cursor).toBeTruthy();
+  const second = await list(hub.id, `?limit=2&cursor=${cursor}`);
+  expect(second.headers.get("x-lore-next-cursor")).toBeNull();
+  const secondPage = (await second.json()) as Array<{ targetMemoryId: string }>;
+  expect([...firstPage, ...secondPage].map((link) => link.targetMemoryId)).toEqual(
+    [...targets].reverse(),
+  );
+  const inbound = await list(targets[0] ?? "", "?direction=inbound");
+  await expect(inbound.json()).resolves.toMatchObject([
+    { sourceMemoryId: hub.id, targetMemoryId: targets[0] },
+  ]);
+  // The unversioned alias has no Link resource.
+  expect((await list(hub.id, "", "/api")).status).toBe(404);
+
+  // A missing Memory and one this Actor cannot see are the same 404.
+  const hidden = [await list(bobPrivate.id), await list("40000000-0000-4000-8000-0000000000ff")];
+  expect(hidden.map((response) => response.status)).toEqual([404, 404]);
+  const [hiddenBody, missingBody] = await Promise.all(hidden.map((response) => response.json()));
+  expect(hiddenBody).toEqual(missingBody);
+
+  const refused = await Promise.all([
+    list(hub.id, "?direction=sideways"),
+    list(hub.id, "?limit=0"),
+    list(hub.id, `?limit=${MEMORY_LINK_LIMITS.maximumListLimit + 1}`),
+    list(hub.id, "?cursor=not!base64"),
+    list("not-a-uuid"),
+  ]);
+  expect(refused.map((response) => response.status)).toEqual([400, 400, 400, 400, 400]);
 });
 
 test("Memory HTTP input rejects null characters in queries, content, and metadata", async () => {

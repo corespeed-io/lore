@@ -12,8 +12,9 @@ exact repository commit and accepts exactly one symbol or repository-relative
 source path. `memory link` and `memory unlink` write and delete a Memory Link by its
 source, target, and `--kind`: repeating a link is safe, and it replaces an existing
 Link whole (an omitted `--weight` becomes 1 and omitted `--metadata` becomes `{}`); a
-repeated unlink reports `not_found` once the Link is gone. Run `lore --help` for the
-command surface.
+repeated unlink reports `not_found` once the Link is gone. `memory links <memory-id>`
+prints one page of that Memory's Links (`--direction outbound|inbound`, `--limit`,
+`--cursor`) with the next cursor. Run `lore --help` for the command surface.
 
 Requires Bun 1.4.2 or newer. Install with `bun add --global @corespeed/lore-cli`
 and run `lore --help`. The executable disables automatic `.env` loading; pass

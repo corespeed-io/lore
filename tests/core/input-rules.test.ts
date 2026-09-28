@@ -105,6 +105,28 @@ test("Memory Links are stored exactly as given or refused", async () => {
   expect((await rejection(connect({ weight: 1.5 }))).field).toBe("link.weight");
   expect((await rejection(connect({ weight: Number.NaN }))).field).toBe("link.weight");
   expect((await rejection(connect({ targetMemoryId: source.id }))).field).toBe("link");
+  // Link metadata has its own bound, far below a Memory's; `{"note":"…"}` adds 11.
+  const note = (length: number) => ({ note: "m".repeat(length - 11) });
+  const bound = MEMORY_LINK_LIMITS.maximumMetadataSerializedLength;
+  const oversized = await rejection(
+    graph.connect(testContext.alice, {
+      sourceMemoryId: source.id,
+      targetMemoryId: target.id,
+      metadata: note(bound + 1),
+    }),
+  );
+  expect([oversized.field, oversized.message]).toEqual([
+    "link.metadata",
+    `link.metadata exceeds ${bound} characters`,
+  ]);
+  await expect(
+    graph.connect(testContext.alice, {
+      sourceMemoryId: source.id,
+      targetMemoryId: target.id,
+      kind: "at-bound",
+      metadata: note(bound),
+    }),
+  ).resolves.toMatchObject({ created: true });
 
   await expect(connect({})).resolves.toMatchObject({ link: { kind: "related", weight: 1 } });
   await expect(connect({ kind: " cites ", weight: 0.25 })).resolves.toMatchObject({

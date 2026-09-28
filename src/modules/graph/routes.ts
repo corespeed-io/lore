@@ -1,10 +1,16 @@
-import { MEMORY_GRAPH_LIMITS } from "@corespeed/lore-core";
+import {
+  MEMORY_GRAPH_LIMITS,
+  MEMORY_LINK_DIRECTIONS,
+  MEMORY_LINK_LIMITS,
+} from "@corespeed/lore-core";
 import { Hono } from "hono";
 import { z } from "zod/v4";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
   BadRequestError,
+  decodeCursor,
+  encodeCursor,
   jsonObject,
   parseMemoryInput,
   queryInteger,
@@ -62,6 +68,44 @@ function linkKey(request: Request, sourceId: string, targetId: string) {
 
 // Addressed by natural key, so a repeated PUT or DELETE needs no Idempotency-Key.
 export const memoryLinks = new Hono<ApiEnv>()
+  .get("/:id/links", async (c) => {
+    const graph = createMemoryGraphModule(await c.var.database());
+    const memoryId = uuidString(c.req.param("id"), "memoryId");
+    const url = new URL(c.req.url);
+    const limit = queryInteger(
+      url,
+      "limit",
+      MEMORY_LINK_LIMITS.defaultListLimit,
+      1,
+      MEMORY_LINK_LIMITS.maximumListLimit,
+    );
+    const direction = parseMemoryInput(
+      z
+        .enum(MEMORY_LINK_DIRECTIONS, {
+          error: `direction must be ${MEMORY_LINK_DIRECTIONS.join(" or ")}`,
+        })
+        .optional(),
+      url.searchParams.get("direction") ?? undefined,
+    );
+    // Link pages carry the last Link's createdAt in the shared cursor's timestamp.
+    const cursor = decodeCursor(url.searchParams.get("cursor"));
+    const actor = await c.var.resolveActor();
+    const links = await observeOperation("memory-link.list", () =>
+      graph.list(actor, {
+        memoryId,
+        limit,
+        ...(direction === undefined ? {} : { direction }),
+        ...(cursor ? { cursor: { createdAt: cursor.updatedAt, id: cursor.id } } : {}),
+      }),
+    );
+    if (!links) throw new NotFoundError("Memory not found");
+    const headers = new Headers({ "cache-control": "private, no-store" });
+    const last = links.length === limit ? links.at(-1) : undefined;
+    if (last) {
+      headers.set("x-lore-next-cursor", encodeCursor({ id: last.id, updatedAt: last.createdAt }));
+    }
+    return c.json(links, { headers });
+  })
   .put("/:id/links/:targetId", async (c) => {
     const graph = createMemoryGraphModule(await c.var.database());
     const request = c.req.raw;

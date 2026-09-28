@@ -580,6 +580,48 @@ test("CLI links with the default kind and reports a missing Link as not_found", 
   });
 });
 
+test("CLI lists one page of a Memory's Links with its next cursor", async () => {
+  const memoryId = "20000000-0000-4000-8000-000000000001";
+  const link = {
+    id: "90000000-0000-4000-8000-000000000001",
+    workspaceId: WORKSPACE_ID,
+    sourceMemoryId: "20000000-0000-4000-8000-000000000002",
+    targetMemoryId: memoryId,
+    kind: "cites",
+    weight: 1,
+    metadata: { why: "evidence" },
+    createdAt: "2026-08-09T00:00:00.000000Z",
+    updatedAt: "2026-08-09T00:00:00.000000Z",
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(Response.json([link], { headers: { "x-lore-next-cursor": "next" } }));
+  const captured = captureIo();
+
+  const exitCode = await runLoreCli(
+    ["memory", "links", memoryId, "--direction", "inbound", "--limit", "1", "--cursor", "prev"],
+    {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    },
+  );
+
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(captured.stdout.join(""))).toEqual({ links: [link], nextCursor: "next" });
+  const [url] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(url.pathname).toBe(`/api/v1/memories/${memoryId}/links`);
+  expect(Object.fromEntries(url.searchParams)).toEqual({
+    limit: "1",
+    direction: "inbound",
+    cursor: "prev",
+  });
+});
+
 test("CLI accepts private query text through stdin instead of argv", async () => {
   const captured = captureIo("private launch date\n");
   const fetchMock = vi.fn().mockResolvedValue(Response.json([]));
@@ -771,6 +813,17 @@ test.each<[string, string[], RegExp]>([
     ["memory", "link", "20000000-0000-4000-8000-000000000001"],
     /Usage: lore memory link <source-memory-id> <target-memory-id>/,
   ],
+  [
+    "an unknown Link list direction",
+    ["memory", "links", "20000000-0000-4000-8000-000000000001", "--direction", "sideways"],
+    /--direction must be outbound or inbound/,
+  ],
+  [
+    "a Link list page past the published bound",
+    ["memory", "links", "20000000-0000-4000-8000-000000000001", "--limit", "101"],
+    /limit must be an integer from 1 to 100/,
+  ],
+  ["a Link list without its Memory", ["memory", "links"], /Usage: lore memory links <memory-id>/],
   [
     "Link metadata on unlink",
     [

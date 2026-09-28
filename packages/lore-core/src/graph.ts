@@ -9,8 +9,9 @@ export const MEMORY_GRAPH_LIMITS = {
   /** Visible Memories one Graph read returns at most. */
   maximumNodes: 5_000,
   /**
-   * Durable Memory Links one Graph read returns at most: the newest, in creation
-   * order. A read that cut older ones off says so.
+   * Durable Memory Links one Graph read returns at most, in creation order. A cut
+   * takes each source owner's newest Links in turn, so no owner's Links crowd out
+   * another's, and says it cut.
    */
   maximumLinks: 40_000,
 } as const;
@@ -22,23 +23,33 @@ export const MEMORY_LINK_LIMITS = {
   minimumWeight: 0,
   maximumWeight: 1,
   defaultWeight: 1,
-  // `connect` refuses a new Link past each bound below. It counts the Links its
-  // writer can see, so under RLS these bound each write, not every stored row.
+  /** `JSON.stringify` length of one Link's metadata, in UTF-16 code units. */
+  maximumMetadataSerializedLength: 1_000,
+  // `connect` refuses a new Link past each bound below. Each counts only Links
+  // from the writer's own Memories, so no writer's Links spend another's quota, and
+  // only those the writer can see, so under RLS these bound each write rather than
+  // every stored row.
   /** Links from one source Memory. */
   maximumLinksPerSource: 1_000,
-  /** Links to one target Memory. */
+  /** Links from one owner's Memories to one target Memory. */
   maximumLinksPerTarget: 1_000,
   /** Kinds from one Memory to another; the reverse direction is a separate pair. */
   maximumKindsPerPair: 16,
-  /** Links in one partition, the most a Lore OSS Workspace archive carries. */
-  maximumLinksPerPartition: 50_000,
+  /** Links from one owner's Memories in a partition, a Lore OSS Workspace archive's worth. */
+  maximumLinksPerOwner: 50_000,
+  defaultListLimit: 50,
+  maximumListLimit: 100,
 } as const;
+
+/** Which end of its Links a listed Memory is. */
+export const MEMORY_LINK_DIRECTIONS = ["outbound", "inbound"] as const;
+export type MemoryLinkDirection = (typeof MEMORY_LINK_DIRECTIONS)[number];
 
 type MemoryLinkBound =
   | "maximumLinksPerSource"
   | "maximumLinksPerTarget"
   | "maximumKindsPerPair"
-  | "maximumLinksPerPartition";
+  | "maximumLinksPerOwner";
 
 /**
  * `connect` refused to create a Link past one of the `MEMORY_LINK_LIMITS` bounds,
@@ -59,8 +70,8 @@ export class MemoryLinkCapacityError extends Error {
 const MEMORY_LINK_BOUND_MESSAGES: Readonly<Record<MemoryLinkBound, string>> = {
   maximumKindsPerPair: `A Memory may link to another Memory with at most ${MEMORY_LINK_LIMITS.maximumKindsPerPair} kinds`,
   maximumLinksPerSource: `A Memory may be the source of at most ${MEMORY_LINK_LIMITS.maximumLinksPerSource} Memory Links`,
-  maximumLinksPerTarget: `A Memory may be the target of at most ${MEMORY_LINK_LIMITS.maximumLinksPerTarget} Memory Links`,
-  maximumLinksPerPartition: `A Workspace may hold at most ${MEMORY_LINK_LIMITS.maximumLinksPerPartition} Memory Links`,
+  maximumLinksPerTarget: `One owner's Memories may link to one Memory at most ${MEMORY_LINK_LIMITS.maximumLinksPerTarget} times`,
+  maximumLinksPerOwner: `One owner's Memories may be the source of at most ${MEMORY_LINK_LIMITS.maximumLinksPerOwner} Memory Links in a Workspace`,
 };
 
 export interface ValidMemoryLink {
@@ -135,6 +146,14 @@ export function validateMemoryLink(
   }
   const metadata =
     input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata, `${field}.metadata`);
+  // A Link annotates a relationship; its metadata stays small enough that Links
+  // cannot spend a Workspace archive's byte budget faster than its Link count.
+  if (JSON.stringify(metadata).length > MEMORY_LINK_LIMITS.maximumMetadataSerializedLength) {
+    throw new LoreValidationError(
+      `${field}.metadata`,
+      `${field}.metadata exceeds ${MEMORY_LINK_LIMITS.maximumMetadataSerializedLength} characters`,
+    );
+  }
   return { kind, weight, metadata };
 }
 
@@ -197,6 +216,19 @@ export interface DisconnectMemories {
   sourceMemoryId: string;
   targetMemoryId: string;
   kind?: string;
+}
+
+/** Where one page of a Link list ends: its last Link's creation time and id. */
+export interface MemoryLinkCursor {
+  createdAt: string;
+  id: string;
+}
+
+export interface ListMemoryLinks {
+  memoryId: string;
+  direction?: MemoryLinkDirection;
+  limit?: number;
+  cursor?: MemoryLinkCursor;
 }
 
 export interface ReadMemoryGraph {
@@ -584,25 +616,45 @@ async function readGraphRows(
   }
   const memoryIds = memoryResult.rows.map((memory) => memory.id);
   // Reading one Link past the budget tells a complete set from a cut one. A cut
-  // keeps the newest Links, as the node read keeps the newest Memories, so a Link
-  // just written stays visible. The bound limits the response, not the sort.
-  const linkResult = await transaction.query<GraphLinkRow>(
-    `SELECT source_memory_id, target_memory_id, kind, weight
-     FROM memory_links
-     WHERE workspace_id = $1
-       AND source_memory_id = ANY($2::uuid[])
-       AND target_memory_id = ANY($2::uuid[])
-     ORDER BY created_at DESC, id DESC
-     LIMIT $3`,
+  // takes each source owner's newest Link, then each owner's next newest, and so
+  // on, so every owner keeps at least an equal share and no owner's Links crowd
+  // out another's; a Link just written is its owner's first choice. The bound
+  // limits the response, not the ranking, which still reads every candidate.
+  const linkResult = await transaction.query<GraphLinkRow & { priority: number }>(
+    `WITH ranked AS (
+       SELECT link.source_memory_id, link.target_memory_id, link.kind, link.weight,
+              link.created_at, link.id,
+              row_number() OVER (
+                PARTITION BY owned.owner_user_id ORDER BY link.created_at DESC, link.id DESC
+              ) AS owner_rank
+       FROM memory_links link
+       JOIN memories owned
+         ON owned.workspace_id = link.workspace_id
+        AND owned.id = link.source_memory_id
+       WHERE link.workspace_id = $1
+         AND link.source_memory_id = ANY($2::uuid[])
+         AND link.target_memory_id = ANY($2::uuid[])
+     ),
+     chosen AS (
+       SELECT ranked.*,
+              (row_number() OVER (ORDER BY owner_rank, created_at DESC, id DESC))::integer
+                AS priority
+       FROM ranked
+       ORDER BY priority
+       LIMIT $3
+     )
+     SELECT source_memory_id, target_memory_id, kind, weight, priority
+     FROM chosen
+     ORDER BY created_at, id`,
     [partitionId, memoryIds, MEMORY_GRAPH_LIMITS.maximumLinks + 1],
   );
   const truncated = linkResult.rows.length > MEMORY_GRAPH_LIMITS.maximumLinks;
-  const newest = truncated
-    ? linkResult.rows.slice(0, MEMORY_GRAPH_LIMITS.maximumLinks)
-    : linkResult.rows;
+  const links = linkResult.rows
+    .filter((row) => row.priority <= MEMORY_GRAPH_LIMITS.maximumLinks)
+    .map(({ priority: _priority, ...link }) => link);
   return {
     memories: memoryResult.rows.map(toMemory),
-    stored: { links: newest.reverse(), truncated },
+    stored: { links, truncated },
   };
 }
 
@@ -733,11 +785,13 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
         };
         const current = await readExisting();
         if (current) return replace(current);
-        // Bound only new Links. Each count stops at its bound, however many Links an
-        // import left behind; the partition count is the costly one, reading up to
-        // its whole bound. The source lock makes the source and pair counts exact
-        // among connects; target and partition counts may overshoot by concurrent
-        // writes from other sources.
+        // Bound only new Links, counting only Links from this owner's own Memories so
+        // no writer spends another's quota. Each count stops at its bound, however
+        // many Links an import left behind; the owner's total reads up to its whole
+        // bound, so its cost falls only on a writer who owns that many Links. The
+        // source lock makes the source and pair counts exact among connects; the
+        // target and owner counts may overshoot by concurrent writes from the same
+        // owner's other Memories.
         const counts = await transaction.query<Record<MemoryLinkBound, number>>(
           `SELECT
              (SELECT count(*) FROM (
@@ -749,13 +803,24 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
                 WHERE workspace_id = $1 AND source_memory_id = $2
                 LIMIT $5) AS outbound)::integer AS "maximumLinksPerSource",
              (SELECT count(*) FROM (
-                SELECT 1 FROM memory_links
-                WHERE workspace_id = $1 AND target_memory_id = $3
+                SELECT 1
+                FROM memory_links link
+                JOIN memories owned
+                  ON owned.workspace_id = link.workspace_id
+                 AND owned.id = link.source_memory_id
+                WHERE link.workspace_id = $1
+                  AND link.target_memory_id = $3
+                  AND owned.owner_user_id = $8
                 LIMIT $6) AS inbound)::integer AS "maximumLinksPerTarget",
              (SELECT count(*) FROM (
-                SELECT 1 FROM memory_links
-                WHERE workspace_id = $1
-                LIMIT $7) AS everything)::integer AS "maximumLinksPerPartition"`,
+                SELECT 1
+                FROM memories owned
+                JOIN memory_links link
+                  ON link.workspace_id = owned.workspace_id
+                 AND link.source_memory_id = owned.id
+                WHERE owned.workspace_id = $1
+                  AND owned.owner_user_id = $8
+                LIMIT $7) AS everything)::integer AS "maximumLinksPerOwner"`,
           [
             storage.partitionId,
             input.sourceMemoryId,
@@ -763,7 +828,8 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
             MEMORY_LINK_LIMITS.maximumKindsPerPair,
             MEMORY_LINK_LIMITS.maximumLinksPerSource,
             MEMORY_LINK_LIMITS.maximumLinksPerTarget,
-            MEMORY_LINK_LIMITS.maximumLinksPerPartition,
+            MEMORY_LINK_LIMITS.maximumLinksPerOwner,
+            storage.ownerId,
           ],
         );
         const counted = counts.rows[0];
@@ -816,6 +882,61 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
           [storage.partitionId, input.sourceMemoryId, input.targetMemoryId, kind],
         );
         return deleted.rows.length === 1;
+      });
+    },
+
+    /**
+     * One page of the Links from (`outbound`) or to (`inbound`) a Memory, newest
+     * first, with their metadata; the store's policy decides which Links are
+     * visible. Returns null when the store cannot see the Memory. Pass the last
+     * Link's `createdAt` and `id` as the next page's cursor.
+     */
+    async list(input: ListMemoryLinks): Promise<MemoryLink[] | null> {
+      const direction = input.direction ?? "outbound";
+      if (!MEMORY_LINK_DIRECTIONS.includes(direction)) {
+        throw new LoreValidationError(
+          "direction",
+          `direction must be ${MEMORY_LINK_DIRECTIONS.join(" or ")}`,
+        );
+      }
+      const limit = boundedInteger(input.limit, "limit", {
+        minimum: 1,
+        maximum: MEMORY_LINK_LIMITS.maximumListLimit,
+        fallback: MEMORY_LINK_LIMITS.defaultListLimit,
+      });
+      const cursor = input.cursor;
+      if (
+        cursor !== undefined &&
+        (typeof cursor.createdAt !== "string" ||
+          typeof cursor.id !== "string" ||
+          !Number.isFinite(Date.parse(cursor.createdAt)))
+      ) {
+        throw new LoreValidationError("cursor", "cursor must name a Link's createdAt and id");
+      }
+      const anchorColumn = direction === "outbound" ? "source_memory_id" : "target_memory_id";
+      return database.transaction(async (transaction) => {
+        const anchor = await transaction.query<{ id: string }>(
+          "SELECT id FROM memories WHERE workspace_id = $1 AND id = $2",
+          [storage.partitionId, input.memoryId],
+        );
+        if (!anchor.rows[0]) return null;
+        const links = await transaction.query<MemoryLinkRow>(
+          `SELECT ${MEMORY_LINK_COLUMNS}
+           FROM memory_links
+           WHERE workspace_id = $1
+             AND ${anchorColumn} = $2
+             AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+           ORDER BY created_at DESC, id DESC
+           LIMIT $5`,
+          [
+            storage.partitionId,
+            input.memoryId,
+            cursor?.createdAt ?? null,
+            cursor?.id ?? null,
+            limit,
+          ],
+        );
+        return links.rows.map(toMemoryLink);
       });
     },
 

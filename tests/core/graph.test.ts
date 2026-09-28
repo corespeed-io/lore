@@ -674,6 +674,71 @@ test("a Memory Link is one row per natural key, replaced in place and deleted by
   });
 });
 
+test("a Memory lists its outbound or inbound Links newest first, one page at a time", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const hub = await memories.remember(testContext.alice, { content: "Listed hub." });
+  const others = [];
+  for (const content of ["Listed one.", "Listed two.", "Listed three."]) {
+    const other = await memories.remember(testContext.alice, { content });
+    others.push(other.id);
+    await graph.connect(testContext.alice, {
+      sourceMemoryId: hub.id,
+      targetMemoryId: other.id,
+      metadata: { why: content },
+    });
+  }
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: others[0] ?? "",
+    targetMemoryId: hub.id,
+  });
+
+  const outbound = await graph.list(testContext.alice, { memoryId: hub.id });
+  expect(outbound?.map((listed) => listed.targetMemoryId)).toEqual([...others].reverse());
+  // Unlike a Graph Link, a listed Link carries its metadata.
+  expect(outbound?.[0]).toMatchObject({
+    workspaceId: testContext.alice.workspaceId,
+    sourceMemoryId: hub.id,
+    metadata: { why: "Listed three." },
+  });
+  await expect(
+    graph.list(testContext.alice, { memoryId: hub.id, direction: "inbound" }),
+  ).resolves.toMatchObject([{ sourceMemoryId: others[0], targetMemoryId: hub.id }]);
+
+  // Pages continue after the last Link's (createdAt, id) and never repeat one.
+  const first = await graph.list(testContext.alice, { memoryId: hub.id, limit: 2 });
+  const last = first?.at(-1);
+  if (!last) throw new Error("Expected a first page");
+  const second = await graph.list(testContext.alice, {
+    memoryId: hub.id,
+    limit: 2,
+    cursor: { createdAt: last.createdAt, id: last.id },
+  });
+  expect([...(first ?? []), ...(second ?? [])].map((listed) => listed.id)).toEqual(
+    outbound?.map((listed) => listed.id),
+  );
+
+  const refused = [
+    graph.list(testContext.alice, { memoryId: hub.id, limit: 0 }),
+    graph.list(testContext.alice, {
+      memoryId: hub.id,
+      limit: MEMORY_LINK_LIMITS.maximumListLimit + 1,
+    }),
+    graph.list(testContext.alice, {
+      memoryId: hub.id,
+      direction: "sideways" as "outbound",
+    }),
+    graph.list(testContext.alice, {
+      memoryId: hub.id,
+      cursor: { createdAt: "not a time", id: hub.id },
+    }),
+  ];
+  for (const [index, field] of ["limit", "limit", "direction", "cursor"].entries()) {
+    await expect(refused[index]).rejects.toMatchObject({ name: "LoreValidationError", field });
+  }
+});
+
 /** Seed Memories and Links past RLS, with row triggers off, for budget tests. */
 async function seedPastRls(testContext: MemoryTestContext, sql: string, params: unknown[]) {
   await testContext.adminDatabase.transaction(async (transaction) => {
@@ -759,24 +824,29 @@ test("connect creates a source's last allowed Link and refuses the next", async 
   ).resolves.toMatchObject({ created: true });
 });
 
-test("connect refuses a new Link to a target that already has the most", async () => {
+test("connect refuses one owner's next Link to a target, never another owner's", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const graph = createMemoryGraphModule(testContext.database);
   const hub = await memories.remember(testContext.alice, { content: "Popular hub." });
   const source = await memories.remember(testContext.alice, { content: "Late source." });
+  const bobSource = await memories.remember(testContext.bob, { content: "Bob's source." });
   await seedLinkedMemories(testContext, hub.id, MEMORY_LINK_LIMITS.maximumLinksPerTarget, "to");
 
   await expect(
     graph.connect(testContext.alice, { sourceMemoryId: source.id, targetMemoryId: hub.id }),
   ).rejects.toMatchObject({ name: "MemoryLinkCapacityError", limit: "maximumLinksPerTarget" });
+  // Alice's Links use only Alice's share of the hub, so Bob may still link to it.
+  await expect(
+    graph.connect(testContext.bob, { sourceMemoryId: bobSource.id, targetMemoryId: hub.id }),
+  ).resolves.toMatchObject({ created: true });
   // The hub may still link out, and the late source may link elsewhere.
   await expect(
     graph.connect(testContext.alice, { sourceMemoryId: hub.id, targetMemoryId: source.id }),
   ).resolves.toMatchObject({ created: true });
 });
 
-test("connect refuses a new Link once the Workspace holds its archive's worth", async () => {
+test("connect refuses one owner's Link past their Workspace total, never another owner's", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
   const graph = createMemoryGraphModule(testContext.database);
@@ -786,24 +856,33 @@ test("connect refuses a new Link once the Workspace holds its archive's worth", 
     ),
   );
   if (!first || !second || !third || !fourth) throw new Error("Expected four Memories");
-  // The engine bound is the Workspace archive's Link bound, so one writer's view fits.
-  expect(MEMORY_LINK_LIMITS.maximumLinksPerPartition).toBe(MAX_WORKSPACE_ARCHIVE_LINKS);
+  const bobSource = await memories.remember(testContext.bob, { content: "Bob's source." });
+  // One owner's Links alone always fit one Workspace archive.
+  expect(MEMORY_LINK_LIMITS.maximumLinksPerOwner).toBe(MAX_WORKSPACE_ARCHIVE_LINKS);
   await seedPastRls(
     testContext,
     `INSERT INTO memory_links (id, workspace_id, source_memory_id, target_memory_id, kind)
      SELECT gen_random_uuid(), $1, $2, $3, 'kind-' || index
      FROM generate_series(1, $4::integer) AS index`,
-    [
-      testContext.alice.workspaceId,
-      first.id,
-      second.id,
-      MEMORY_LINK_LIMITS.maximumLinksPerPartition,
-    ],
+    [testContext.alice.workspaceId, first.id, second.id, MEMORY_LINK_LIMITS.maximumLinksPerOwner],
   );
 
   await expect(
     graph.connect(testContext.alice, { sourceMemoryId: third.id, targetMemoryId: fourth.id }),
-  ).rejects.toMatchObject({ name: "MemoryLinkCapacityError", limit: "maximumLinksPerPartition" });
+  ).rejects.toMatchObject({ name: "MemoryLinkCapacityError", limit: "maximumLinksPerOwner" });
+  // Bob's Links count against Bob's own total, even to Alice's Memories.
+  await expect(
+    graph.connect(testContext.bob, { sourceMemoryId: bobSource.id, targetMemoryId: fourth.id }),
+  ).resolves.toMatchObject({ created: true });
+  // Replacing one of Alice's Links adds none, so her total does not apply.
+  await expect(
+    graph.connect(testContext.alice, {
+      sourceMemoryId: first.id,
+      targetMemoryId: second.id,
+      kind: "kind-1",
+      weight: 0.5,
+    }),
+  ).resolves.toMatchObject({ created: false, link: { weight: 0.5 } });
 });
 
 test("a Graph read past the link budget keeps the newest Links, says so, and derives none", async () => {
@@ -851,6 +930,42 @@ test("a Graph read past the link budget keeps the newest Links, says so, and der
     MEMORY_GRAPH_LIMITS.maximumLinks,
   );
   expect(complete.links.some((link) => link.derived)).toBe(true);
+});
+
+test("a Graph read past the link budget takes each owner's newest Links in turn", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const source = await memories.remember(testContext.alice, { content: "Prolific source." });
+  const target = await memories.remember(testContext.alice, { content: "Shared target." });
+  const bobSource = await memories.remember(testContext.bob, { content: "Quiet source." });
+  // Bob's three Links are older than every one of Alice's budget-and-more.
+  await seedPastRls(
+    testContext,
+    `INSERT INTO memory_links (id, workspace_id, source_memory_id, target_memory_id, kind, created_at)
+     SELECT gen_random_uuid(), $1, $2, $3, 'bob-' || index, now() - interval '1 day' + make_interval(secs => index)
+     FROM generate_series(1, 3) AS index`,
+    [testContext.alice.workspaceId, bobSource.id, target.id],
+  );
+  await seedPastRls(
+    testContext,
+    `INSERT INTO memory_links (id, workspace_id, source_memory_id, target_memory_id, kind, created_at)
+     SELECT gen_random_uuid(), $1, $2, $3, 'alice-' || index,
+            now() - make_interval(secs => $4::integer - index)
+     FROM generate_series(1, $4::integer) AS index`,
+    [testContext.alice.workspaceId, source.id, target.id, MEMORY_GRAPH_LIMITS.maximumLinks + 1],
+  );
+
+  for (const reader of [testContext.alice, testContext.bob]) {
+    const cut = await graph.read(reader);
+    const kinds = cut.links.map((link) => link.kind);
+
+    expect(cut.linksTruncated).toBe(true);
+    expect(cut.links).toHaveLength(MEMORY_GRAPH_LIMITS.maximumLinks);
+    // Newest-first alone would cut Bob's three; turns keep them and cut Alice's oldest.
+    expect(kinds.slice(0, 4)).toEqual(["bob-1", "bob-2", "bob-3", "alice-5"]);
+    expect(kinds.at(-1)).toBe(`alice-${MEMORY_GRAPH_LIMITS.maximumLinks + 1}`);
+  }
 });
 
 test("a durable Link named affinity is still a durable Link", async () => {

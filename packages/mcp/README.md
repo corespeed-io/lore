@@ -13,7 +13,8 @@ Memory-to-Code evidence without accepting a Workspace or filesystem path.
 `lore_link` writes a durable Memory Link by its natural key (source, target, kind),
 replacing an existing Link's weight and metadata, and `lore_unlink` deletes one. Both
 are marked destructive, and they are separate tools so a host can allow one and gate
-the other.
+the other. Read-only `lore_links` lists up to 50 of one Memory's Links per call,
+outbound or inbound, with each Link's metadata bounded to 1,000 characters.
 It delegates all access control to Lore/Postgres RLS and stores no Memory or
 authorization state.
 

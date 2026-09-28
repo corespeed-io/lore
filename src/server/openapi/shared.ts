@@ -1,4 +1,4 @@
-import { MEMORY_METADATA_LIMITS, MEMORY_SCOPES } from "@corespeed/lore-core";
+import { MEMORY_LINK_LIMITS, MEMORY_METADATA_LIMITS, MEMORY_SCOPES } from "@corespeed/lore-core";
 import { LORE_ERROR_CODES } from "@/server/errors";
 
 export const errorSchema = {
@@ -27,6 +27,12 @@ export const metadataSchema = {
   type: "object",
   additionalProperties: true,
   "x-lore-maxSerializedLength": MEMORY_METADATA_LIMITS.maximumSerializedLength,
+} as const;
+
+/** A Memory Link's metadata, held to the Link's own, smaller serialized bound. */
+export const linkMetadataSchema = {
+  ...metadataSchema,
+  "x-lore-maxSerializedLength": MEMORY_LINK_LIMITS.maximumMetadataSerializedLength,
 } as const;
 
 export const timestampProperties = {

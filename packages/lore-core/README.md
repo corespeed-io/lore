@@ -150,10 +150,18 @@ its own:
   OSS, an RLS refusal or a foreign-key violation) surfaces for the host to map.
   `connect` throws `MemoryLinkCapacityError` (a fourth public failure class, a 409,
   whose `limit` names the bound) rather than create a Link past a
-  `MEMORY_LINK_LIMITS` bound: kinds per directed pair, Links per source, Links per
-  target, and Links per partition. Each count stops at its bound and runs through
-  the host store, so under RLS it counts only the writer's visible Links. Replacing
-  an existing Link never counts.
+  `MEMORY_LINK_LIMITS` bound: kinds per directed pair, Links per source, and,
+  counting only Links whose source the storage context's `ownerId` owns, Links per
+  target and Links per partition (`maximumLinksPerOwner`, formerly a partition-wide
+  count). Each count stops at its bound and runs through the host store, so under
+  RLS it counts only the writer's visible Links. Replacing an existing Link never
+  counts. `validateMemoryLink` now also refuses Link metadata longer than
+  `maximumMetadataSerializedLength` (1,000) serialized characters, so a port's
+  import refuses it too.
+- **`list({ memoryId, direction?, limit?, cursor? })` pages through one Memory's
+  Links**, with metadata, newest first by `(createdAt, id)`; the cursor is the last
+  Link's `createdAt` and `id`. It returns `null` when the host store cannot see the
+  Memory, and only the Links the store shows.
   Both assume READ COMMITTED, so a writer queued on the source lock sees the Link
   its predecessor committed; under a stricter default isolation level a queued
   `connect` would miss it. A new Link's insert conflicts silently on the natural key,
@@ -162,9 +170,10 @@ its own:
   `memories`, which `missingSchemaContract` cannot check: under RLS the source lock
   applies the `memories` UPDATE policy, and a Link's rewrite or deletion applies the
   `memory_links` UPDATE or DELETE policy.
-- **A Graph read is bounded in links as well as nodes.** `read()` returns the newest
-  `MEMORY_GRAPH_LIMITS.maximumLinks` durable Links at most (in creation order, no
-  metadata) and `linksTruncated`; a cut suppresses affinity. Every `MemoryGraphLink` carries
+- **A Graph read is bounded in links as well as nodes.** `read()` returns at most
+  `MEMORY_GRAPH_LIMITS.maximumLinks` durable Links (in creation order, no metadata)
+  and `linksTruncated`; a cut takes each source owner's newest Link in turn, so every
+  owner keeps an equal share, and suppresses affinity. Every `MemoryGraphLink` carries
   `derived`, true only for affinity edges. A port that read every Link, or told
   affinity apart by `kind`, must adopt both.
 - **Batch primitives validate every record before any statement**, and a refusal

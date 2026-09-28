@@ -22,6 +22,8 @@ import {
   type MemoryCodeEvidence,
   type MemoryLink,
   type MemoryLinkKey,
+  type MemoryLinkListInput,
+  type MemoryLinkPage,
   type MemoryPage,
   type MemoryProposal,
   type MemorySearchInput,
@@ -47,6 +49,7 @@ export interface LoreMcpMemoryClient {
   getMemory(memoryId: string, signal?: AbortSignal): Promise<Memory>;
   linkMemories(input: LinkMemoriesInput): Promise<LinkedMemories>;
   unlinkMemories(input: MemoryLinkKey): Promise<void>;
+  listMemoryLinks(input: MemoryLinkListInput): Promise<MemoryLinkPage>;
   listMemories(input?: {
     limit?: number;
     cursor?: string;
@@ -231,6 +234,13 @@ const episodeSubmissionSchema = z.object({
 });
 
 const memoryLinkKindSchema = z.string().min(1).max(LIMITS.memoryLinkKindLength);
+const linkMetadataSchema = z
+  .record(z.string(), z.json())
+  .refine((value) => JSON.stringify(value).length <= LIMITS.memoryLinkMetadataSerializedLength, {
+    message: `metadata exceeds ${LIMITS.memoryLinkMetadataSerializedLength} characters`,
+  });
+/** The most Links one list returns; every Link's metadata is bounded, so the page fits. */
+const MAX_MCP_LINK_PAGE = 50;
 const memoryLinkWeightSchema = z
   .number()
   .min(LIMITS.memoryLinkWeightMinimum)
@@ -303,15 +313,21 @@ function mcpMemory(memory: Memory, contentBudget: number, metadataBudget: number
   };
 }
 
-/** A Link without its Workspace id, which is process configuration here. */
-function mcpMemoryLink(link: MemoryLink): z.infer<typeof memoryLinkSchema> {
+/**
+ * A Link without its Workspace id, which is process configuration here. Metadata
+ * past `metadataBudget` (a Link imported before its bound) is reported truncated.
+ */
+function mcpMemoryLink(
+  link: MemoryLink,
+  metadataBudget = DETAIL_METADATA_BUDGET,
+): z.infer<typeof memoryLinkSchema> {
   return {
     id: link.id,
     sourceMemoryId: link.sourceMemoryId,
     targetMemoryId: link.targetMemoryId,
     kind: link.kind,
     weight: link.weight,
-    ...boundedMetadata(link.metadata, DETAIL_METADATA_BUDGET),
+    ...boundedMetadata(link.metadata, metadataBudget),
     createdAt: link.createdAt,
     updatedAt: link.updatedAt,
   };
@@ -803,7 +819,7 @@ function registerLinkTools(server: McpServer, memories: LoreMcpMemoryClient): vo
       description: `Create a durable, directed Link from a Memory this Actor may write to any Memory it can see. ${LINK_KEY_HINT} Repeating a call is safe. If the Link already exists, its weight and metadata are replaced: an omitted weight becomes ${LORE_CONTRACT.defaults.memoryLinkWeight} and omitted metadata becomes empty. not_found means an endpoint is missing, invisible, or not writable; memory_link_capacity_exceeded means a new Link would pass a bound on Links per source, per target, kinds per pair, or per Workspace.`,
       inputSchema: memoryLinkKeySchema.extend({
         weight: memoryLinkWeightSchema.optional(),
-        metadata: metadataSchema.optional(),
+        metadata: linkMetadataSchema.optional(),
       }),
       outputSchema: z.object({ link: memoryLinkSchema, created: z.boolean() }),
       // Destructive because it replaces an existing Link's weight and metadata.
@@ -818,6 +834,38 @@ function registerLinkTools(server: McpServer, memories: LoreMcpMemoryClient): vo
       try {
         const { link, created } = await memories.linkMemories(input);
         return success({ link: mcpMemoryLink(link), created });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_links",
+    {
+      title: "List a Lore Memory's Links",
+      description: `List the durable Links from (outbound, the default) or to (inbound) one visible Memory, newest first, with their weight and metadata. Only Links whose two endpoints this Actor can see are listed. Use the returned cursor to continue.`,
+      inputSchema: z.object({
+        memoryId: z.string().uuid(),
+        direction: z.enum(VOCABULARIES.memoryLinkDirections).optional(),
+        limit: z.number().int().min(1).max(MAX_MCP_LINK_PAGE).default(MAX_MCP_LINK_PAGE),
+        cursor: z.string().max(LIMITS.cursorLength).optional(),
+      }),
+      outputSchema: z.object({
+        links: z.array(memoryLinkSchema),
+        nextCursor: z.string().nullable(),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (input) => {
+      try {
+        const page = await memories.listMemoryLinks(input);
+        return success({
+          links: page.links.map((link) =>
+            mcpMemoryLink(link, LIMITS.memoryLinkMetadataSerializedLength),
+          ),
+          nextCursor: page.nextCursor,
+        });
       } catch (error) {
         return failure(error);
       }

@@ -165,16 +165,88 @@ They need no version or Idempotency-Key: `PUT` answers 201 when it created the L
 and 200 when one existed (its weight and metadata replaced, or left unchanged), and a
 retried `DELETE` answers 404. The source must be writable and the target visible to
 the Actor; a missing, invisible, or unwritable endpoint is one indistinguishable
-404. Creating a Link past 16 kinds from one Memory to another, 1,000 Links from one
-source or to one target, or 50,000 in the Workspace is a 409
-`memory_link_capacity_exceeded`; replacing an existing Link never is. `graph()` returns
-the newest 40,000 durable Links at most, with `linksTruncated`, and each link's
-`derived` tells a Memory Affinity from a durable Link. SDK 0.3.0 adds those two Graph
-fields to `/api/v1`; a v1 response may gain properties in a later release, so a client
-generated from OpenAPI must ignore properties it does not know. Proposal listing and review
+404. Creating a Link past 16 kinds from one Memory to another or 1,000 Links from one
+source, or, counting only Links from the Actor's User's own Memories, 1,000 to one
+target or 50,000 in the Workspace, is a 409 `memory_link_capacity_exceeded`;
+replacing an existing Link never is. Link metadata is limited to 1,000 serialized
+characters (`LORE_CONTRACT.limits.memoryLinkMetadataSerializedLength`).
+`listMemoryLinks` reads one page of a visible Memory's Links with their metadata
+(`GET /api/v1/memories/{memoryId}/links`), outbound by default or inbound, newest
+first, and returns `nextCursor` for the next page. `graph()` returns at most 40,000
+durable Links, taking each source owner's newest in turn when more exist, with
+`linksTruncated`, and each link's `derived` tells a Memory Affinity from a durable
+Link. SDK 0.3.0 adds those two Graph fields to `/api/v1`; a v1 response may gain
+properties in a later release, so a client generated from OpenAPI must ignore
+properties it does not know. `/api/v1/capabilities` reports `features.memoryLinks`
+and every Link bound (`memoryLinkMetadataCharacters`, `memoryLinkKindsPerPair`,
+`memoryLinksPerSource`, `memoryLinksPerTarget`, `memoryLinksPerOwner`,
+`memoryLinkList`, `graphLinks`) from schema revision 6. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
 effect, while the opposite decision returns a conflict.
+
+### Working with Memory Links
+
+```ts
+import { LoreApiError, LoreClient } from "@corespeed/lore-sdk";
+
+const workspace = new LoreClient({
+  baseUrl: process.env.LORE_URL ?? "http://127.0.0.1:3000",
+  auth: { type: "agent", token: process.env.LORE_AGENT_TOKEN ?? "" },
+}).workspace(process.env.LORE_WORKSPACE_ID ?? "");
+const [decisionId, evidenceId, otherId] = ["DECISION_UUID", "EVIDENCE_UUID", "OTHER_UUID"];
+
+// PUT is an upsert by (source, target, kind). Repeating it is safe, and a repeat
+// with different weight or metadata replaces them; omitted fields reset to defaults.
+const { link, created } = await workspace.linkMemories({
+  sourceMemoryId: decisionId,
+  targetMemoryId: evidenceId,
+  kind: "supports",
+  weight: 0.8,
+  metadata: { note: "benchmark run 42" },
+});
+
+try {
+  await workspace.linkMemories({ sourceMemoryId: decisionId, targetMemoryId: otherId });
+} catch (error) {
+  if (error instanceof LoreApiError && error.code === "not_found") {
+    // The source is not writable by this Actor, or the target is missing or invisible.
+  } else if (error instanceof LoreApiError && error.code === "memory_link_capacity_exceeded") {
+    // A bound on new Links was reached; remove a Link or replace an existing one.
+  } else {
+    throw error;
+  }
+}
+
+// Page through a Memory's inbound Links, newest first.
+let cursor: string | undefined;
+do {
+  const page = await workspace.listMemoryLinks({
+    memoryId: evidenceId,
+    direction: "inbound",
+    cursor,
+  });
+  for (const inbound of page.links) console.log(inbound.sourceMemoryId, inbound.kind);
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+
+// DELETE by the same key. not_found after a retry means it is already gone.
+await workspace.unlinkMemories({
+  sourceMemoryId: decisionId,
+  targetMemoryId: evidenceId,
+  kind: "supports",
+});
+
+// A Graph read may cut Links; counts derived from it are then lower bounds.
+const graph = await workspace.graph();
+const durable = graph.links.filter((edge) => !edge.derived);
+const degreeLabel = graph.linksTruncated ? `${durable.length}+` : String(durable.length);
+```
+
+An MCP host that lets an agent link freely but wants a human to confirm deletions
+can allow `lore_link` and `lore_links` and require approval only for `lore_unlink`;
+the three are separate tools for that reason. `lore_link` is still marked
+destructive, because a repeat replaces an existing Link's weight and metadata.
 
 For human administration, the Workspace client also provides
 `getCurrentHumanActor`, Agent list/create/update/delete methods, grant and
@@ -233,6 +305,7 @@ bun --no-env-file packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3
   --idempotency-key fact-forget-1
 bun --no-env-file packages/cli/dist/bin.js memory link SOURCE_UUID TARGET_UUID \
   --kind supports --weight 0.8
+bun --no-env-file packages/cli/dist/bin.js memory links TARGET_UUID --direction inbound --limit 20
 bun --no-env-file packages/cli/dist/bin.js memory unlink SOURCE_UUID TARGET_UUID --kind supports
 bun --no-env-file packages/cli/dist/bin.js capabilities
 bun --no-env-file packages/cli/dist/bin.js readiness
@@ -265,7 +338,8 @@ It exposes:
 - `lore_link` as a destructive, idempotent Memory Link write by natural key
   (destructive because it replaces an existing Link's weight and metadata), and
   `lore_unlink` as its separate destructive deletion, so a host can gate the two
-  independently;
+  independently, and `lore_links` as the read-only list of one Memory's Links (at
+  most 50 per call, each Link's metadata bounded to 1,000 characters);
 - `lore_retrieve_context` as the read-only joint Memory/Code orchestration tool;
 - `lore_code_search`, `lore_code_dependencies`, and `lore_code_index_status` as
   bounded exact-revision Code reads;

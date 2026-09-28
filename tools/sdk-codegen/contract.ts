@@ -84,6 +84,7 @@ export function clientContract(document: unknown) {
   const codeSearch = "/paths/~1api~1v1~1code~1search/get/parameters";
   const codeDependencies = "/paths/~1api~1v1~1code~1dependencies/get/parameters";
   const memoryLink = "/paths/~1api~1v1~1memories~1{memoryId}~1links~1{targetMemoryId}";
+  const memoryLinkList = "/paths/~1api~1v1~1memories~1{memoryId}~1links/get/parameters";
   const linkWeights = [
     `${schemas}/PutMemoryLinkInput/properties/weight`,
     `${schemas}/MemoryLink/properties/weight`,
@@ -127,6 +128,7 @@ export function clientContract(document: unknown) {
         document,
         `${schemas}/CodeArtifact/properties/matchedChannels/items`,
       ),
+      memoryLinkDirections: stringEnum(document, `${memoryLinkList}/[direction]/schema`),
       contextRoutes: stringEnum(document, `${context}/route`),
       contextPlanRoutes: stringEnum(document, `${schemas}/ContextRetrievalPlan/properties/route`),
       contextIntents: stringEnum(document, `${schemas}/ContextRetrievalPlan/properties/intent`),
@@ -223,6 +225,7 @@ export function clientContract(document: unknown) {
         `${memories}/[cursor]/schema/maxLength`,
         "/paths/~1api~1v1~1evaluations~1suites/get/parameters/[cursor]/schema/maxLength",
         "/paths/~1api~1v1~1episodes/get/parameters/[cursor]/schema/maxLength",
+        `${memoryLinkList}/[cursor]/schema/maxLength`,
       ]),
       idempotencyKeyLength: same(
         integer,
@@ -242,6 +245,13 @@ export function clientContract(document: unknown) {
         document,
         linkWeights.map((path) => `${path}/minimum`),
       ),
+      memoryLinkMetadataSerializedLength: same(integer, document, [
+        `${schemas}/PutMemoryLinkInput/properties/metadata/x-lore-maxSerializedLength`,
+        `${schemas}/MemoryLink/properties/metadata/x-lore-maxSerializedLength`,
+        `${schemas}/WorkspaceArchiveLink/properties/metadata/x-lore-maxSerializedLength`,
+      ]),
+      memoryLinkList: integer(document, `${memoryLinkList}/[limit]/schema/maximum`),
+      memoryLinkListDefault: integer(document, `${memoryLinkList}/[limit]/schema/default`),
       memoryLinkWeightMaximum: same(
         finiteNumber,
         document,

@@ -381,6 +381,50 @@ describe("Lore TypeScript SDK", () => {
     expect(deleteInit.body).toBeUndefined();
   });
 
+  test("lists one page of a Memory's Links and hands back the next cursor", async () => {
+    const TARGET_ID = "10000000-0000-4000-8000-000000000002";
+    const link = {
+      id: "60000000-0000-4000-8000-000000000001",
+      workspaceId: WORKSPACE_ID,
+      sourceMemoryId: TARGET_ID,
+      targetMemoryId: MEMORY_ID,
+      kind: "related",
+      weight: 1,
+      metadata: {},
+      createdAt: "2026-08-09T00:00:00.000000Z",
+      updatedAt: "2026-08-09T00:00:00.000000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json([link], { headers: { "x-lore-next-cursor": "next" } }))
+      .mockResolvedValueOnce(Response.json([]));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+
+    await expect(
+      workspace.listMemoryLinks({ memoryId: MEMORY_ID.toUpperCase(), direction: "inbound" }),
+    ).resolves.toEqual({ links: [link], nextCursor: "next" });
+    await expect(
+      workspace.listMemoryLinks({ memoryId: MEMORY_ID, limit: 2, cursor: "next" }),
+    ).resolves.toEqual({ links: [], nextCursor: null });
+    await expect(
+      workspace.listMemoryLinks({ memoryId: MEMORY_ID, direction: "sideways" as "inbound" }),
+    ).rejects.toThrow(/^direction must be outbound or inbound$/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const [firstUrl, firstInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(firstUrl.pathname).toBe(`/api/v1/memories/${MEMORY_ID}/links`);
+    expect(Object.fromEntries(firstUrl.searchParams)).toEqual({
+      limit: String(LORE_CONTRACT.limits.memoryLinkListDefault),
+      direction: "inbound",
+    });
+    expect(firstInit.method ?? "GET").toBe("GET");
+    const [secondUrl] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(Object.fromEntries(secondUrl.searchParams)).toEqual({ limit: "2", cursor: "next" });
+  });
+
   test("Memory Link calls refuse a malformed endpoint before any request and surface not_found", async () => {
     const TARGET_ID = "10000000-0000-4000-8000-000000000002";
     const fetchMock = vi
@@ -1196,6 +1240,33 @@ describe("client bounds from LORE_CONTRACT", () => {
           weight: LIMITS.memoryLinkWeightMaximum + 0.5,
         }),
       /^weight must be a number from 0 through 1$/,
+    ],
+    [
+      "Memory Link list",
+      (client) =>
+        workspace(client).listMemoryLinks({ memoryId: MEMORY_ID, limit: LIMITS.memoryLinkList }),
+      (client) =>
+        workspace(client).listMemoryLinks({
+          memoryId: MEMORY_ID,
+          limit: LIMITS.memoryLinkList + 1,
+        }),
+      /^limit must be an integer from 1 to 100$/,
+    ],
+    [
+      "Memory Link metadata",
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          metadata: { note: "m".repeat(LIMITS.memoryLinkMetadataSerializedLength - 11) },
+        }),
+      (client) =>
+        workspace(client).linkMemories({
+          sourceMemoryId: MEMORY_ID,
+          targetMemoryId: WORKSPACE_ID,
+          metadata: { note: "m".repeat(LIMITS.memoryLinkMetadataSerializedLength - 10) },
+        }),
+      /^metadata exceeds 1000 serialized characters$/,
     ],
     [
       "Workspace name",

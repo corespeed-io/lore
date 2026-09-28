@@ -3,6 +3,8 @@ import {
   MEMORY_CHUNK_OVERLAP_CHARACTERS,
   MEMORY_CHUNKING_REVISION,
   MEMORY_CONTENT_LIMITS,
+  MEMORY_GRAPH_LIMITS,
+  MEMORY_LINK_LIMITS,
 } from "@corespeed/lore-core";
 import {
   MAX_EPISODE_CONTENT_CHARACTERS,
@@ -51,6 +53,13 @@ export const DEPLOYMENT_LIMITS = {
   codeIndexArtifacts: CODE_INDEX_LIMITS.maximumArtifacts,
   codeDependencyResults: MAXIMUM_CODE_DEPENDENCY_RESULTS,
   codeSearchResults: MAXIMUM_CODE_SEARCH_RESULTS,
+  memoryLinkMetadataCharacters: MEMORY_LINK_LIMITS.maximumMetadataSerializedLength,
+  memoryLinkKindsPerPair: MEMORY_LINK_LIMITS.maximumKindsPerPair,
+  memoryLinksPerSource: MEMORY_LINK_LIMITS.maximumLinksPerSource,
+  memoryLinksPerTarget: MEMORY_LINK_LIMITS.maximumLinksPerTarget,
+  memoryLinksPerOwner: MEMORY_LINK_LIMITS.maximumLinksPerOwner,
+  memoryLinkList: MEMORY_LINK_LIMITS.maximumListLimit,
+  graphLinks: MEMORY_GRAPH_LIMITS.maximumLinks,
 } as const;
 
 export const MEMORY_CHUNKING_CAPABILITY = {

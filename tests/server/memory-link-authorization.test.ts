@@ -9,8 +9,9 @@ import type { MemoryTestContext } from "../support/memory-context";
 import { createMemoryTestContext } from "../support/memory-context";
 
 // Link writes (connect/disconnect) authorize through RLS alone: the source must be
-// writable by the Actor and the target readable. Each case pairs what an Actor may
-// do with what it may not, and a refusal never reveals whether the Link exists.
+// writable by the Actor and the target readable. A Link list shows a Link only when
+// both endpoints are readable. Each case pairs what an Actor may do with what it may
+// not, and a refusal never reveals whether the Link exists.
 
 async function fixture() {
   const context = await createMemoryTestContext();
@@ -240,6 +241,65 @@ test("a revoked grant or suspended Membership stops Link writes at the database"
   await expect(link(graph, context.bob, ids.bobShared, ids.aliceShared)).resolves.toBeNull();
   await expect(unlink(graph, context.bob, ids.bobShared, ids.bobPrivate)).resolves.toBe(false);
   expect(await storedLinks(context)).toHaveLength(2);
+});
+
+/** The ids of the Links a Memory lists for an Actor, or null when it lists none. */
+async function listedLinks(
+  graph: Fixture["graph"],
+  actor: ActorContext,
+  memoryId: string,
+  direction: "outbound" | "inbound",
+) {
+  const links = await graph.list(actor, { memoryId, direction });
+  return links?.map((listed) => [listed.sourceMemoryId, listed.targetMemoryId]) ?? null;
+}
+
+test("a Link list shows a Link only when both its endpoints are visible", async () => {
+  const { access, context, graph, ids, memories } = await fixture();
+  await link(graph, context.alice, ids.aliceShared, ids.aliceSharedTwo);
+  await link(graph, context.alice, ids.alicePrivate, ids.aliceSharedTwo);
+  await link(graph, context.bob, ids.bobShared, ids.aliceSharedTwo);
+  await link(graph, context.bob, ids.bobPrivate, ids.aliceSharedTwo);
+
+  // Each owner sees their own private Link and every shared one, never the other's.
+  await expect(listedLinks(graph, context.alice, ids.aliceSharedTwo, "inbound")).resolves.toEqual([
+    [ids.bobShared, ids.aliceSharedTwo],
+    [ids.alicePrivate, ids.aliceSharedTwo],
+    [ids.aliceShared, ids.aliceSharedTwo],
+  ]);
+  await expect(listedLinks(graph, context.bob, ids.aliceSharedTwo, "inbound")).resolves.toEqual([
+    [ids.bobPrivate, ids.aliceSharedTwo],
+    [ids.bobShared, ids.aliceSharedTwo],
+    [ids.aliceShared, ids.aliceSharedTwo],
+  ]);
+  // A Memory the Actor cannot see lists nothing, the same as a missing one.
+  await expect(listedLinks(graph, context.bob, ids.alicePrivate, "outbound")).resolves.toBeNull();
+  await expect(
+    listedLinks(graph, context.bob, "40000000-0000-4000-8000-0000000000ff", "outbound"),
+  ).resolves.toBeNull();
+  // Another Workspace sees nothing, whether it names the Memory or binds to it.
+  await expect(
+    listedLinks(graph, context.carol, ids.aliceSharedTwo, "inbound"),
+  ).resolves.toBeNull();
+  const aliceInResearch = { ...context.alice, workspaceId: context.carol.workspaceId };
+  await expect(
+    listedLinks(graph, aliceInResearch, ids.aliceSharedTwo, "inbound"),
+  ).resolves.toBeNull();
+
+  // A read-granted Agent lists what its User sees; revoked, it lists nothing.
+  const reader = await agentActor(access, context.alice, "read");
+  await expect(listedLinks(graph, reader.actor, ids.alicePrivate, "outbound")).resolves.toEqual([
+    [ids.alicePrivate, ids.aliceSharedTwo],
+  ]);
+  await access.revokeAgentGrant(context.alice, reader.agent.id);
+  await expect(listedLinks(graph, reader.actor, ids.alicePrivate, "outbound")).resolves.toBeNull();
+
+  // A source made private leaves the list for everyone but its owner.
+  await memories.update(context.bob, ids.bobShared, { scope: "private" });
+  await expect(listedLinks(graph, context.alice, ids.aliceSharedTwo, "inbound")).resolves.toEqual([
+    [ids.alicePrivate, ids.aliceSharedTwo],
+    [ids.aliceShared, ids.aliceSharedTwo],
+  ]);
 });
 
 test("forgetting either endpoint removes the Link and refuses writes to it", async () => {

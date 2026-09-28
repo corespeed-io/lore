@@ -630,6 +630,27 @@ try {
     "repeat Memory Link",
   );
   assert.deepEqual(repeatedLink, createdLink, "a repeated Link PUT must change nothing");
+  const inboundLinks = await expectJson<Array<{ id: string }>>(
+    await app.request(
+      jsonRequest(`/api/v1/memories/${linkTarget.id}/links?direction=inbound`, {
+        headers: aliceHeaders,
+      }),
+    ),
+    200,
+    "list the target's inbound Memory Links",
+  );
+  assert.deepEqual(
+    inboundLinks.map((link) => link.id),
+    [createdLink.id],
+    "the target must list exactly the Link just written",
+  );
+  await expectStatus(
+    await app.request(
+      jsonRequest(`/api/v1/memories/${bobPrivate.id}/links`, { headers: aliceHeaders }),
+    ),
+    404,
+    "refuse to list Bob private Memory's Links",
+  );
   await expectStatus(
     await app.request(
       jsonRequest(`/api/v1/memories/${acceptedMemory.id}/links/${bobPrivate.id}`, {

@@ -48,6 +48,7 @@ Commands:
   memory forget <memory-id> --version N [--idempotency-key KEY]
   memory link <source-memory-id> <target-memory-id> [--kind KIND] [--weight N] [--metadata JSON]
   memory unlink <source-memory-id> <target-memory-id> [--kind KIND]
+  memory links <memory-id> [--direction outbound|inbound] [--limit N] [--cursor CURSOR]
   episode list [--limit N] [--cursor CURSOR] [--kind conversation|workflow|document|event] [--scope shared|private]
   episode record --stdin [--idempotency-key KEY]
   episode get <episode-id>
@@ -312,6 +313,7 @@ export async function runLoreCli(
         commit: { type: "string" },
         "code-evidence": { type: "string", multiple: true },
         cursor: { type: "string" },
+        direction: { type: "string" },
         evidence: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
         kind: { type: "string", multiple: true },
@@ -699,6 +701,26 @@ export async function runLoreCli(
       return 0;
     }
 
+    if (group === "memory" && action === "links") {
+      exactPositionals(parsed.positionals, 3, "memory links <memory-id>");
+      allowedOptions(parsed.values, ["cursor", "direction", "limit"]);
+      const directions = LORE_CONTRACT.vocabularies.memoryLinkDirections;
+      const direction = directions.find((candidate) => candidate === parsed.values.direction);
+      if (parsed.values.direction !== undefined && direction === undefined) {
+        throw new CliUsageError(`--direction must be ${directions.join(" or ")}`);
+      }
+      output(
+        io,
+        await workspace.listMemoryLinks({
+          memoryId: requiredPosition(parsed.positionals, 2, "memory id"),
+          ...(direction === undefined ? {} : { direction }),
+          limit: optionInteger(parsed.values.limit, "--limit"),
+          cursor: parsed.values.cursor,
+        }),
+        pretty,
+      );
+      return 0;
+    }
     if (group === "memory" && (action === "link" || action === "unlink")) {
       exactPositionals(
         parsed.positionals,

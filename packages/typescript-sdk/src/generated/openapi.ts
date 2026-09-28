@@ -354,6 +354,23 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/memories/{memoryId}/links": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /** @description One page of the Links from (outbound) or to (inbound) a Memory, newest first, with their metadata. Only Links whose two endpoints the Actor can read are listed; a Memory it cannot read is a 404. */
+        readonly get: operations["listMemoryLinks"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/memories/{memoryId}/links/{targetMemoryId}": {
         readonly parameters: {
             readonly query?: never;
@@ -362,7 +379,7 @@ export interface paths {
             readonly cookie?: never;
         };
         readonly get?: never;
-        /** @description Create the Link with this natural key, or replace an existing one's weight and metadata; repeating it is safe. The source must be writable and the target visible to the Actor; a missing, invisible, or unwritable endpoint is one 404. Creating a Link past 16 kinds from one Memory to another, 1000 Links from one source, 1000 Links to one target, or 50000 Links in the Workspace, counted as the Actor can see them, is a 409 memory_link_capacity_exceeded; replacing an existing Link never is. */
+        /** @description Create the Link with this natural key, or replace an existing one's weight and metadata; repeating it is safe. The source must be writable and the target visible to the Actor; a missing, invisible, or unwritable endpoint is one 404. Creating a Link past 16 kinds from one Memory to another, 1000 Links from one source, or, counting only Links from the Actor's User's own Memories, 1000 Links to one target or 50000 in the Workspace, is a 409 memory_link_capacity_exceeded; replacing an existing Link never is. Counts include only Links the Actor can see. Link metadata is limited to 1000 serialized characters. */
         readonly put: operations["putMemoryLink"];
         readonly post?: never;
         /** @description Delete the Link with this natural key. A Link that does not exist, or whose source this Actor may not write or target it cannot see, is one 404. */
@@ -555,6 +572,8 @@ export interface components {
                 /** @constant */
                 readonly idempotency: true;
                 /** @constant */
+                readonly memoryLinks: true;
+                /** @constant */
                 readonly memoryProposals: true;
                 /** @constant */
                 readonly observationEvidence: true;
@@ -583,9 +602,23 @@ export interface components {
                 /** @constant */
                 readonly episodeObservations: 100;
                 /** @constant */
+                readonly graphLinks: 40000;
+                /** @constant */
                 readonly memoryContentMaximumCharacters: 32000;
                 /** @constant */
                 readonly memoryContentRecommendedCharacters: 8000;
+                /** @constant */
+                readonly memoryLinkKindsPerPair: 16;
+                /** @constant */
+                readonly memoryLinkList: 100;
+                /** @constant */
+                readonly memoryLinkMetadataCharacters: 1000;
+                /** @constant */
+                readonly memoryLinksPerOwner: 50000;
+                /** @constant */
+                readonly memoryLinksPerSource: 1000;
+                /** @constant */
+                readonly memoryLinksPerTarget: 1000;
                 /** @constant */
                 readonly memoryMaximumChunks: 64;
                 /** @constant */
@@ -2363,6 +2396,39 @@ export interface operations {
                     readonly "application/json": components["schemas"]["MemoryCodeEvidence"];
                 };
             };
+        };
+    };
+    readonly listMemoryLinks: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description Opaque cursor from the previous page's x-lore-next-cursor. */
+                readonly cursor?: string;
+                readonly direction?: "outbound" | "inbound";
+                readonly limit?: number;
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description The Memory's visible Links, newest first */
+            readonly 200: {
+                headers: {
+                    /** @description Present on a full page; opaque to clients. */
+                    readonly "x-lore-next-cursor"?: string;
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["MemoryLink"][];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
         };
     };
     readonly putMemoryLink: {

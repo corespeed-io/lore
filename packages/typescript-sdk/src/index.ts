@@ -170,6 +170,23 @@ export interface MemoryLinkKey {
 /** A PUT replaces the whole Link: an omitted weight or metadata takes its default. */
 export interface LinkMemoriesInput extends MemoryLinkKey, PutMemoryLinkInput {}
 
+export type MemoryLinkDirection = (typeof LORE_CONTRACT.vocabularies.memoryLinkDirections)[number];
+
+export interface MemoryLinkListInput {
+  memoryId: string;
+  /** Links from (`outbound`, the default) or to (`inbound`) the Memory. */
+  direction?: MemoryLinkDirection;
+  limit?: number;
+  cursor?: string;
+  signal?: AbortSignal;
+}
+
+export interface MemoryLinkPage {
+  /** Newest first. */
+  links: readonly MemoryLink[];
+  nextCursor: string | null;
+}
+
 export interface LinkedMemories {
   link: MemoryLink;
   /** False when a Link with this natural key already existed. */
@@ -1300,6 +1317,14 @@ export class LoreWorkspaceClient {
     ) {
       throw new TypeError(`weight must be a number from ${minimum} through ${maximum}`);
     }
+    if (
+      input.metadata !== undefined &&
+      JSON.stringify(input.metadata).length > LIMITS.memoryLinkMetadataSerializedLength
+    ) {
+      throw new TypeError(
+        `metadata exceeds ${LIMITS.memoryLinkMetadataSerializedLength} serialized characters`,
+      );
+    }
     const { data, response } = await this.transport.json<MemoryLink>(memoryLinkPath(input), {
       method: "PUT",
       workspaceId: this.workspaceId,
@@ -1310,6 +1335,28 @@ export class LoreWorkspaceClient {
       signal: input.signal,
     });
     return { link: data, created: response.status === 201 };
+  }
+
+  /** One page of a Memory's visible Links, newest first. */
+  async listMemoryLinks(input: MemoryLinkListInput): Promise<MemoryLinkPage> {
+    const params = new URLSearchParams({
+      limit: String(
+        normalizedLimit(input.limit, LIMITS.memoryLinkListDefault, LIMITS.memoryLinkList),
+      ),
+    });
+    if (input.direction !== undefined) {
+      const directions: readonly string[] = LORE_CONTRACT.vocabularies.memoryLinkDirections;
+      if (!directions.includes(input.direction)) {
+        throw new TypeError(`direction must be ${directions.join(" or ")}`);
+      }
+      params.set("direction", input.direction);
+    }
+    if (input.cursor) params.set("cursor", input.cursor);
+    const { data, response } = await this.transport.json<readonly MemoryLink[]>(
+      `api/v1/memories/${normalizedUuid(input.memoryId, "memoryId")}/links?${params}`,
+      { workspaceId: this.workspaceId, signal: input.signal },
+    );
+    return { links: data, nextCursor: response.headers.get("x-lore-next-cursor") };
   }
 
   /**

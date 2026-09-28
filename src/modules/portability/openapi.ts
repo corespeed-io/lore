@@ -2,6 +2,7 @@ import { MEMORY_CONTENT_LIMITS, MEMORY_LINK_LIMITS } from "@corespeed/lore-core"
 import {
   humanSecurity,
   jsonResponse,
+  linkMetadataSchema,
   memoryScopeSchema,
   metadataSchema,
   requestBody,
@@ -91,7 +92,7 @@ export const portabilitySchemas = {
         minimum: MEMORY_LINK_LIMITS.minimumWeight,
         maximum: MEMORY_LINK_LIMITS.maximumWeight,
       },
-      metadata: metadataSchema,
+      metadata: linkMetadataSchema,
       ...timestampProperties,
     },
   },

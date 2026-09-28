@@ -3,6 +3,7 @@ import {
   createMemoryGraphModule as createCoreMemoryGraphModule,
   type DisconnectMemories,
   isPostgresAccessDenied,
+  type ListMemoryLinks,
   type MemoryGraph,
   type PostgresDatabase,
   type ReadMemoryGraph,
@@ -62,6 +63,14 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
     /** False when no such Link is visible to this Actor through a source it may write. */
     async disconnect(actor: ActorContext, input: DisconnectMemories): Promise<boolean> {
       return coreFor(actor).disconnect(input);
+    },
+
+    /** One page of a Memory's visible Links; null when the Memory is not visible. */
+    async list(actor: ActorContext, input: ListMemoryLinks): Promise<MemoryLink[] | null> {
+      const links = await coreFor(actor).list(input);
+      return (
+        links?.map(({ partitionId, ...link }) => ({ ...link, workspaceId: partitionId })) ?? null
+      );
     },
 
     read(actor: ActorContext, input: ReadMemoryGraph = {}): Promise<MemoryGraph> {

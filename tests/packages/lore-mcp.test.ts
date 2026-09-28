@@ -114,6 +114,7 @@ function fakeMemories(): LoreMcpMemoryClient {
     getMemory: vi.fn().mockResolvedValue(memory()),
     linkMemories: vi.fn().mockResolvedValue({ link: memoryLink(), created: true }),
     unlinkMemories: vi.fn().mockResolvedValue(undefined),
+    listMemoryLinks: vi.fn().mockResolvedValue({ links: [memoryLink()], nextCursor: "next" }),
     listMemories: vi.fn().mockResolvedValue({ memories: [memory()], nextCursor: null }),
     proposeMemory: vi.fn().mockResolvedValue(proposal()),
     remember: vi.fn().mockResolvedValue(memory({ version: 1 })),
@@ -387,6 +388,7 @@ describe("Lore external MCP adapter", () => {
       "lore_update",
       "lore_forget",
       "lore_link",
+      "lore_links",
       "lore_unlink",
       "lore_retrieve_context",
       "lore_code_search",
@@ -415,6 +417,9 @@ describe("Lore external MCP adapter", () => {
     expect(tools.find((tool) => tool.name === "lore_unlink")?.annotations).toMatchObject({
       destructiveHint: true,
       idempotentHint: true,
+    });
+    expect(tools.find((tool) => tool.name === "lore_links")?.annotations).toMatchObject({
+      readOnlyHint: true,
     });
     for (const tool of tools) {
       expect(JSON.stringify(tool.inputSchema)).not.toContain("workspaceId");
@@ -868,6 +873,45 @@ describe("Lore external MCP adapter", () => {
     expect(memories.linkMemories).toHaveBeenCalledOnce();
     expect(emptyKind.isError).toBe(true);
     expect(memories.unlinkMemories).toHaveBeenCalledOnce();
+  });
+
+  test("lists a page of a Memory's Links with bounded metadata and no Workspace id", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.listMemoryLinks).mockResolvedValueOnce({
+      links: [
+        { ...memoryLink(), metadata: { why: "evidence" } },
+        // A Link imported before the Link metadata bound may still hold more.
+        { ...memoryLink(), metadata: { note: "m".repeat(20_000) } },
+      ],
+      nextCursor: "next",
+    });
+    const client = await connect(memories);
+
+    const listed = await client.callTool({
+      name: "lore_links",
+      arguments: { memoryId: MEMORY_ID, direction: "inbound", cursor: "prev" },
+    });
+    const tooMany = await client.callTool({
+      name: "lore_links",
+      arguments: { memoryId: MEMORY_ID, limit: 51 },
+    });
+
+    expect(memories.listMemoryLinks).toHaveBeenCalledWith({
+      memoryId: MEMORY_ID,
+      direction: "inbound",
+      limit: 50,
+      cursor: "prev",
+    });
+    expect(listed.structuredContent).toMatchObject({
+      links: [
+        { metadata: { why: "evidence" }, metadataTruncated: false },
+        { metadata: {}, metadataTruncated: true },
+      ],
+      nextCursor: "next",
+    });
+    expect(JSON.stringify(listed.structuredContent)).not.toContain(WORKSPACE_ID);
+    expect(tooMany.isError).toBe(true);
+    expect(memories.listMemoryLinks).toHaveBeenCalledOnce();
   });
 
   test("reports an unreachable Link endpoint as not_found", async () => {

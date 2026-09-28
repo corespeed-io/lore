@@ -94,6 +94,10 @@ export const LORE_CONTRACT = {
       "lexical",
       "path"
     ],
+    "memoryLinkDirections": [
+      "outbound",
+      "inbound"
+    ],
     "contextRoutes": [
       "auto",
       "both",
@@ -156,6 +160,9 @@ export const LORE_CONTRACT = {
     "idempotencyKeyLength": 128,
     "memoryLinkKindLength": 64,
     "memoryLinkWeightMinimum": 0,
+    "memoryLinkMetadataSerializedLength": 1000,
+    "memoryLinkList": 100,
+    "memoryLinkListDefault": 50,
     "memoryLinkWeightMaximum": 1,
     "workspaceNameLength": 120
   },
