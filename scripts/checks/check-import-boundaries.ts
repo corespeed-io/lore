@@ -183,17 +183,13 @@ export interface ImportRecord {
   typeOnly: boolean;
 }
 
-const TRANSPILERS = {
-  ts: new Bun.Transpiler({ loader: "ts" }),
-  tsx: new Bun.Transpiler({ loader: "tsx" }),
-};
-
 /**
- * The JavaScript `computedImports` lexes keeps every branch: by default Bun inlines
- * `process.env.NODE_ENV` and drops the branch it proves dead, which would hide an
- * import there depending on the environment the check runs in.
+ * Without dead-code elimination: by default Bun inlines `process.env.NODE_ENV` and
+ * drops the branch it proves dead, so the JavaScript `computedImports` lexes would
+ * hide an import there depending on the environment the check runs in. The import
+ * scan never removed dead code, so it reports the same either way.
  */
-const EMITTERS = {
+const TRANSPILERS = {
   ts: new Bun.Transpiler({ loader: "ts", deadCodeElimination: false }),
   tsx: new Bun.Transpiler({ loader: "tsx", deadCodeElimination: false }),
 };
@@ -259,7 +255,7 @@ initModuleLexer();
 export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
   const scanned = new Set(TRANSPILERS[loader].scanImports(parsable).map((item) => item.path));
-  const javascript = EMITTERS[loader].transformSync(parsable);
+  const javascript = TRANSPILERS[loader].transformSync(parsable);
   const [imports] = lexModule(javascript);
   return imports
     .filter((item) => item.d >= 0 && (item.n === undefined || !scanned.has(item.n)))

@@ -586,23 +586,19 @@ test("an import() whose literal parts Bun folds into one specifier is still a fi
 });
 
 test("a computed import() in a branch Bun would prove dead is found in every environment", () => {
+  // Bun reads NODE_ENV once, when the process starts, and prunes whichever branch that
+  // makes dead; with an import in each branch, a pruning transpile misses one of them
+  // whatever the environment the suite started in.
   const source = [
     "export async function load(name: string) {",
     '  if (process.env.NODE_ENV === "production") return import(name);',
-    '  return import("./development");',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+    '  if (process.env.NODE_ENV !== "production") return import(`${name}.dev`);',
+    '  return import("./fallback");',
     "}",
   ].join("\n");
-  const previous = process.env.NODE_ENV;
-  try {
-    for (const environment of [undefined, "production", "development"]) {
-      if (environment === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = environment;
-      assert.deepEqual(computedImports(source, "ts"), ["import(name)"], String(environment));
-    }
-  } finally {
-    if (previous === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previous;
-  }
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+  assert.deepEqual(computedImports(source, "ts"), ["import(name)", "import(`${name}.dev`)"]);
 });
 
 test("import.meta, a type-position import(), and a shebang are not computed imports", () => {
