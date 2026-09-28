@@ -4,8 +4,8 @@ import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi } from "@/server/api/app";
-import { createAccessModule } from "@/server/auth/access";
 import { loreOpenApiDocument } from "@/server/openapi/document";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 afterEach(() => {

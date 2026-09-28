@@ -19,9 +19,9 @@ import { createCodeIndexQueueModule } from "@/modules/code/indexing/queue";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import type { PreparedArtifact } from "@/modules/code/indexing/types";
 import type { ConfiguredCodeRepository } from "@/server/api/dependencies";
-import { createAccessModule } from "@/server/auth/access";
 import type { ActorContext } from "../../../src/server/auth/actor-context";
 import { installActorContext } from "../../../src/server/auth/actor-context";
+import { createAccessModule } from "../../support/access";
 import { createMemoryTestContext } from "../../support/memory-context";
 
 const COMMIT_A = "a".repeat(40);

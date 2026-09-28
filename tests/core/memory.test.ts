@@ -5,10 +5,10 @@ import {
   RETRIEVAL_ENTITY_ALIAS_POLICY,
 } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
-import { createAccessModule } from "@/server/auth/access";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import type { ActorContext } from "../../src/server/auth/actor-context";
 import { installActorContext } from "../../src/server/auth/actor-context";
+import { createAccessModule } from "../support/access";
 import type { MemoryTestContext } from "../support/memory-context";
 import { createMemoryTestContext } from "../support/memory-context";
 

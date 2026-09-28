@@ -29,9 +29,9 @@ import {
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createApi } from "@/server/api/app";
 import type { ConfiguredCodeRepositories } from "@/server/api/dependencies";
-import { createAccessModule } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { installActorContext } from "@/server/auth/actor-context";
+import { createAccessModule } from "../../support/access";
 import type { MemoryTestContext } from "../../support/memory-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
@@ -345,7 +345,7 @@ test("a disabled then deleted Agent's job never runs and a human member can re-e
   });
   await expect(maintenance.run()).resolves.toEqual({ status: "idle" });
 
-  await expect(access.deleteAgent(context.alice, agent.id)).resolves.toBe("deleted");
+  await expect(access.deleteAgent(context.alice, agent.id)).resolves.toBe(true);
   // The foreign key cleared the Agent, but the job stays cancelled rather than
   // becoming a request by the Agent's human owner.
   await expect(jobRow(context, queued.id)).resolves.toMatchObject({

@@ -79,7 +79,7 @@ SDK retain portable module contracts for other hosts.
 | `src/middleware.ts` | Next.js middleware, which Next expects inside `src/` when `src/app` is used |
 | `src/shell/` | App routing, Sidebar, and workflows that compose multiple domains |
 | `src/modules/` | Product domains, each owning its implementation and interfaces |
-| `src/server/auth/` | Authentication, identity storage, access policy, and Actor request context |
+| `src/server/auth/` | Authentication, identity storage, Agent credential verification, and Actor request context |
 | `src/server/database/` | OSS role selection, database construction, and identity-bound engine stores |
 | `src/server/providers/` | Concrete model adapters, SDK/protocol handling, model configuration, factories, and runtime provider instances |
 | `src/server/api/` | Hono composition and request context, Next.js/workerd hosts, input handling, idempotency headers, and error responses |

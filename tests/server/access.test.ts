@@ -1,10 +1,12 @@
 import { expect, test } from "vitest";
+import { AgentNotDisabledError } from "@/modules/agents/service";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createApi } from "@/server/api/app";
-import { AccessDeniedError, createAccessModule } from "@/server/auth/access";
+import { AccessDeniedError } from "@/server/errors";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import { installActorContext } from "../../src/server/auth/actor-context";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("User can create an Agent and grant it write access to their Workspace", async () => {
@@ -281,7 +283,7 @@ test("Agent lifecycle updates require ownership and a grant in the active Worksp
   await expect(
     access.updateAgent(testContext.bob, agent.id, { status: "disabled" }),
   ).resolves.toBeNull();
-  await expect(access.deleteAgent(testContext.bob, agent.id)).resolves.toBe("not_found");
+  await expect(access.deleteAgent(testContext.bob, agent.id)).resolves.toBe(false);
 
   await access.addMember(testContext.carol, testContext.alice.userId, { role: "member" });
   const researchAlice = {
@@ -291,7 +293,7 @@ test("Agent lifecycle updates require ownership and a grant in the active Worksp
   await expect(
     access.updateAgent(researchAlice, agent.id, { status: "disabled" }),
   ).resolves.toBeNull();
-  await expect(access.deleteAgent(researchAlice, agent.id)).resolves.toBe("not_found");
+  await expect(access.deleteAgent(researchAlice, agent.id)).resolves.toBe(false);
 
   const disabled = await access.updateAgent(testContext.alice, agent.id, {
     status: "disabled",
@@ -365,9 +367,11 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
     scope: "private",
   });
 
-  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("must_disable");
+  await expect(access.deleteAgent(testContext.alice, agent.id)).rejects.toBeInstanceOf(
+    AgentNotDisabledError,
+  );
   await access.updateAgent(testContext.alice, agent.id, { status: "disabled" });
-  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("deleted");
+  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe(true);
 
   await expect(access.listAgents(testContext.alice)).resolves.toEqual([]);
   await expect(access.listAgents(researchAlice)).resolves.toEqual([]);
@@ -473,7 +477,7 @@ test("Deleting a disabled Agent that cited Code Evidence keeps the citation with
   }
 
   await access.updateAgent(testContext.alice, agent.id, { status: "disabled" });
-  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("deleted");
+  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe(true);
 
   const surviving = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{

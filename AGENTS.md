@@ -383,10 +383,15 @@ been removed. Lore now has a native implementation, split into two concepts
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
 - the `workspaces` module owns the active-session surface: Workspace list/create
-  plus `GET /api/v1/actor`, which resolves the verified human Actor *inside* the
-  active Workspace. There is no separate `identity` module — the Identity
-  aggregate's storage and policy live in `src/server/auth/`, and a four-file domain
-  folder for one workspace-scoped endpoint was scaffolding, not a seam;
+  and Memberships (`src/modules/workspaces/service.ts`) plus `GET /api/v1/actor`,
+  which resolves the verified human Actor *inside* the active Workspace. The
+  `agents` module (`src/modules/agents/service.ts`) owns a User's Agents, their
+  Workspace grants, and issuing and revoking their credentials. `src/server/auth/`
+  keeps only authentication: Identity storage, request admission, Actor context,
+  and proving an Agent bearer token (`agent-credentials.ts`, which also defines the
+  token format and stored hash the `agents` module issues). There is no separate
+  `identity` module, and a four-file domain folder for one workspace-scoped endpoint
+  was scaffolding, not a seam;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   Hono subrouters exported directly by `src/modules/*/routes.ts` and composed by
   `src/server/api/app.ts` through `app.route()`. Route handlers call domain services

@@ -3,8 +3,8 @@ import { MEMORY_LINK_LIMITS } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
-import { createAccessModule } from "@/server/auth/access";
 import { type ActorContext, installActorContext } from "@/server/auth/actor-context";
+import { createAccessModule } from "../support/access";
 import type { MemoryTestContext } from "../support/memory-context";
 import { createMemoryTestContext } from "../support/memory-context";
 
