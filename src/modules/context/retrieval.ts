@@ -3,6 +3,7 @@ import {
   type MemoryModuleOptions,
   type MemoryScope,
   type PostgresDatabase,
+  type PostgresTransactionOptions,
 } from "@corespeed/lore-core";
 import type { MemoryCodeEvidence } from "@/modules/code/evidence";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
@@ -348,6 +349,13 @@ async function readAnchoredCode(input: {
   return { anchors, anchoredArtifacts, contextualImpact };
 }
 
+/**
+ * Every Code read after the searches sees one snapshot, so a generation activated
+ * mid-packet cannot split them. The modes start the transaction, before the host's
+ * setup, which may itself read.
+ */
+const SNAPSHOT: PostgresTransactionOptions = { isolation: "repeatable read", readOnly: true };
+
 export function createContextRetrievalModule(
   database: PostgresDatabase,
   memoryOptions: MemoryModuleOptions = {},
@@ -435,8 +443,9 @@ export function createContextRetrievalModule(
           : [],
       ]);
 
-      // The searches above call providers outside any transaction; every later Code
-      // read shares one snapshot. Only anchor expansion reads Code after the search.
+      // Memory search calls providers, so it runs outside any transaction, and Code
+      // search runs beside it. Every later Code read shares one snapshot; only anchor
+      // expansion reads Code after the searches.
       const { anchors, anchoredArtifacts, contextualImpact } =
         plan.needsAnchorExpansion &&
         plan.needsLocalAssessment &&
@@ -444,7 +453,6 @@ export function createContextRetrievalModule(
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
           ? await database.transaction(async (transaction) => {
-              await transaction.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
               const snapshot: PostgresDatabase = { transaction: (use) => use(transaction) };
               return readAnchoredCode({
                 actor,
@@ -456,7 +464,7 @@ export function createContextRetrievalModule(
                 dependencies: createCodeDependencyGraphModule(snapshot),
                 evidence: createCodeEvidenceModule(snapshot),
               });
-            })
+            }, SNAPSHOT)
           : {
               anchors: [] as RetrievedAnchorContext[],
               anchoredArtifacts: [],

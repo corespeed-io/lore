@@ -7,13 +7,40 @@ export interface PostgresTransaction {
 }
 
 /**
+ * How a transaction starts. Without options it runs at the server's default
+ * isolation (READ COMMITTED), read-write.
+ */
+export interface PostgresTransactionOptions {
+  isolation?: "repeatable read" | "serializable";
+  readOnly?: boolean;
+}
+
+/**
  * The narrow Postgres transaction seam used by domain modules and PGlite tests.
  * Lore does not support interchangeable storage engines: SQL and transactional
  * consistency are part of this contract. Hosts establish database access policy
  * before engine operations; Lore OSS uses RLS for that policy.
+ *
+ * An implementation must start the transaction with `options` before any host
+ * setup runs, and a wrapper must pass them on: once a statement has taken a
+ * snapshot, PostgreSQL can no longer change the isolation level.
  */
 export interface PostgresDatabase {
-  transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>): Promise<Result>;
+  transaction<Result>(
+    use: (transaction: PostgresTransaction) => Promise<Result>,
+    options?: PostgresTransactionOptions,
+  ): Promise<Result>;
+}
+
+/**
+ * The transaction modes `options` ask for, as `BEGIN` or `SET TRANSACTION` takes
+ * them (for example "ISOLATION LEVEL REPEATABLE READ, READ ONLY"), or "" for none.
+ */
+export function transactionModes(options: PostgresTransactionOptions = {}): string {
+  const modes: string[] = [];
+  if (options.isolation) modes.push(`ISOLATION LEVEL ${options.isolation.toUpperCase()}`);
+  if (options.readOnly) modes.push("READ ONLY");
+  return modes.join(", ");
 }
 
 /** Opaque storage keys. They carry attribution, never membership or permissions. */

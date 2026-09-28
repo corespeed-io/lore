@@ -1,3 +1,4 @@
+import type { PostgresTransaction } from "@corespeed/lore-core";
 import {
   createPostgresDatabase as createCorePostgresDatabase,
   createRequestPostgresDatabase as createCoreRequestPostgresDatabase,
@@ -135,6 +136,41 @@ test.each(adapters)(
     await expect(postgres.query("SELECT current_user AS name")).resolves.toMatchObject({
       rows: [{ name: "postgres" }],
     });
+    await database.close();
+  },
+);
+
+test.each(adapters)(
+  "$name starts a transaction in the requested modes before host setup reads",
+  async ({ createCore }) => {
+    // Host setup that reads takes a snapshot, after which PostgreSQL refuses to
+    // change the isolation level, so the modes must be part of BEGIN.
+    const database = createCore(
+      {},
+      {
+        async initializeTransaction(transaction) {
+          await transaction.query("SET LOCAL ROLE host_reader");
+          await transaction.query("SELECT id FROM role_evidence");
+        },
+      },
+    );
+    const modes = (transaction: PostgresTransaction) =>
+      transaction.query(
+        "SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only",
+      );
+
+    await expect(
+      database.transaction(modes, { isolation: "repeatable read", readOnly: true }),
+    ).resolves.toEqual({ rows: [{ isolation: "repeatable read", read_only: "on" }] });
+    await expect(database.transaction(modes)).resolves.toEqual({
+      rows: [{ isolation: "read committed", read_only: "off" }],
+    });
+    await expect(
+      database.transaction(
+        (transaction) => transaction.query("INSERT INTO role_evidence VALUES ('x', 'host_reader')"),
+        { readOnly: true },
+      ),
+    ).rejects.toThrow(/read-only transaction/);
     await database.close();
   },
 );

@@ -1,4 +1,4 @@
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type PostgresDatabase, transactionModes } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -80,8 +80,11 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
 
   function databaseForRole(role: "lore_app" | "lore_maintenance" | "NONE"): PostgresDatabase {
     return {
-      transaction: (use) =>
+      // PGlite begins its own transaction, so the modes are its first statement.
+      transaction: (use, options) =>
         postgres.transaction(async (transaction) => {
+          const modes = transactionModes(options);
+          if (modes) await transaction.query(`SET TRANSACTION ${modes}`);
           await transaction.query(`SET LOCAL ROLE ${role}`);
           return use({
             query: (sql, params) => transaction.query(sql, params),

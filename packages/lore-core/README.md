@@ -28,7 +28,11 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
   Metadata filters and context-group expansion only narrow or group eligible
   evidence; they never authorize access.
 - **PostgreSQL remains part of the engine.** Core owns SQL persistence and the
-  narrow `PostgresDatabase` transaction interface. Its storage schema still uses
+  narrow `PostgresDatabase` transaction interface. `transaction(use, options)`
+  may ask for an isolation level and read-only mode; an implementation starts the
+  transaction in them before its host setup (the `pg` adapters put them in `BEGIN`),
+  and a wrapper must pass `options` on, because PostgreSQL refuses to change the
+  isolation level once a statement has taken a snapshot. Its storage schema still uses
   physical names such as `workspace_id`, `owner_user_id`, and
   `created_by_agent_id`; the module maps opaque keys to those existing columns.
   Memory tables, lexical helper
@@ -109,7 +113,8 @@ Lore remains upstream; HaaS ports selected changes manually and records their
 provenance. The packages are not assumed to be semantically identical, and Lore
 tasks do not require automatic changes to the HaaS fork. Hosts adopting this
 package can run `./testing` against their own schema. Its `testDatabase` helper
-applies host transaction initialization; it chooses no database role.
+applies host transaction initialization, after the requested transaction modes;
+it chooses no database role.
 Package tests also exercise real CRUD/retrieval against a minimal independent
 PGlite schema without OSS identity tables or authorization functions, alongside
 the OSS schema's isolation and embedding-maintenance contract.
