@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { initSync as initModuleLexer, parse as lexModule } from "es-module-lexer";
 
 /**
  * Layered import boundaries for src/ and packages/. Every file belongs to exactly
@@ -242,6 +243,24 @@ function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: 
  * those count for the layer rules but never for the Worker ban. Lines come from the
  * first written occurrence of each specifier. Throws when the source does not parse.
  */
+initModuleLexer();
+
+/**
+ * Every `import()` whose specifier is not a string literal, such as
+ * `import("node:" + name)`. No scan can resolve one, so each is a finding rather than
+ * an edge the guard silently misses. The JavaScript Bun emits for the source has no
+ * types or comments, and es-module-lexer reads it as a real lexer, so a string or
+ * comment that merely mentions `import(` is not counted.
+ */
+export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
+  const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
+  const javascript = TRANSPILERS[loader].transformSync(parsable);
+  const [imports] = lexModule(javascript);
+  return imports
+    .filter((item) => item.d >= 0 && item.n === undefined)
+    .map((item) => javascript.slice(item.ss, item.se).replace(/\s+/g, " "));
+}
+
 export function scanImports(source: string, loader: "ts" | "tsx" = "tsx"): ImportRecord[] {
   // Bun's parser refuses a shebang line; blank it so offsets and lines survive.
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
@@ -450,10 +469,14 @@ export function checkImportBoundaries(
     const edges: Resolution[] = [];
     let records: ImportRecord[];
     try {
-      records = scanImports(
-        readFileSync(join(root, file), "utf8"),
-        file.endsWith(".tsx") ? "tsx" : "ts",
-      );
+      const text = readFileSync(join(root, file), "utf8");
+      const loader = file.endsWith(".tsx") ? "tsx" : "ts";
+      records = scanImports(text, loader);
+      for (const expression of computedImports(text, loader)) {
+        findings.push(
+          `${file}: ${expression} has a computed specifier that no scan can check; import a string literal`,
+        );
+      }
     } catch (error) {
       // Fail closed: a file whose imports cannot be read could hide any of them.
       findings.push(`${file}: cannot be parsed for imports: ${parseFailure(error)}`);

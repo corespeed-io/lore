@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { checkImportBoundaries, classify, scanImports } from "./check-import-boundaries.ts";
+import {
+  checkImportBoundaries,
+  classify,
+  computedImports,
+  scanImports,
+} from "./check-import-boundaries.ts";
 
 const fixtureRoots = new Set<string>();
 
@@ -494,5 +499,37 @@ test("a Worker entry fails closed on Bun built-ins, unresolved imports, and a mi
   );
   assert.ok(
     withoutMain.includes('wrangler.jsonc: the Worker entry "" is not a scanned source file'),
+  );
+});
+
+test("an import() with a computed specifier is a finding, and one merely mentioned is not", () => {
+  assert.deepEqual(
+    computedImports(
+      [
+        'const name = "fs";',
+        'await import("node:" + name);',
+        "await import(`./plugins/${name}.ts`);",
+        "await import( /* dynamic */ name );",
+        'await import("./literal");',
+        "await import(`./template-without-substitutions`);",
+        'const note = "use import(name) sparingly";',
+        "// await import(name)",
+        "const pattern = /import\\(x\\)/;",
+      ].join("\n"),
+    ),
+    ['import("node:" + name)', "import(`./plugins/${name}.ts`)", "import(name)"],
+  );
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/modules/beta/service.ts":
+        'export const beta = 1;\nexport const load = (name: string) => import("./" + name);\n',
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.includes(
+      'src/modules/beta/service.ts: import("./" + name) has a computed specifier that no scan can check; import a string literal',
+    ),
   );
 });
