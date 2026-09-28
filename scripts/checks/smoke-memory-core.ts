@@ -613,6 +613,63 @@ try {
     204,
     "delete the raced Memory Link",
   );
+  // A forget that is under way when an update Proposal is submitted must not leave
+  // that Proposal, which copies the Memory's content, or its replay body behind: the
+  // submission waits for the forget and then finds no target.
+  const forgetRaceTarget = await expectJson<{ id: string }>(
+    await app.request(
+      jsonRequest("/api/v1/memories", {
+        method: "POST",
+        headers: aliceHeaders,
+        body: { content: "Forget race target: amber heron." },
+      }),
+    ),
+    201,
+    "create forget-race target",
+  );
+  const forgetter = new Client({ connectionString: smokeDatabaseUrl });
+  await forgetter.connect();
+  let racedProposal: Response;
+  try {
+    await forgetter.query("BEGIN");
+    await forgetter.query("DELETE FROM memories WHERE id = $1", [forgetRaceTarget.id]);
+    const submitting = app.request(
+      jsonRequest("/api/v1/memory-proposals", {
+        method: "POST",
+        headers: { ...aliceHeaders, "idempotency-key": "smoke-proposal-forget-race-1" },
+        body: {
+          kind: "update",
+          targetMemoryId: forgetRaceTarget.id,
+          expectedVersion: 1,
+          content: "Forget race proposal: amber heron.",
+        },
+      }),
+    );
+    await waitForLockWaiters(forgetter, 1);
+    await forgetter.query("COMMIT");
+    racedProposal = await submitting;
+  } finally {
+    await forgetter.end();
+  }
+  await expectStatus(racedProposal, 403, "refuse a Proposal whose target was forgotten meanwhile");
+  const forgetRaceLeftovers = new Client({ connectionString: smokeDatabaseUrl });
+  await forgetRaceLeftovers.connect();
+  try {
+    const leftovers = await forgetRaceLeftovers.query<{ proposals: number; replays: number }>(
+      `SELECT
+         (SELECT count(*)::integer FROM memory_proposals WHERE target_memory_id = $1) AS proposals,
+         (SELECT count(*)::integer FROM request_idempotency_records
+          WHERE idempotency_key = 'smoke-proposal-forget-race-1') AS replays`,
+      [forgetRaceTarget.id],
+    );
+    assert.deepEqual(
+      leftovers.rows[0],
+      { proposals: 0, replays: 0 },
+      "a forget racing a Proposal submission must leave neither the Proposal nor its replay",
+    );
+  } finally {
+    await forgetRaceLeftovers.end();
+  }
   const linkPath = `/api/v1/memories/${acceptedMemory.id}/links/${linkTarget.id}?kind=cites`;
   const createdLink = await expectJson<{ id: string; weight: number }>(
     await app.request(

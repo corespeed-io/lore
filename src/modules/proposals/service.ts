@@ -412,12 +412,17 @@ export function createMemoryProposalsModule(
             changesScope = true;
             changesMetadata = true;
           } else {
+            // Hold the target until this Proposal commits. A forget already under way
+            // makes this wait and then find no row; a later one waits for this commit,
+            // so its scrub sees this Proposal and its replay row. The target has no
+            // foreign key that would take this lock on the insert.
             const target = await transaction.query<MemoryRow>(
               `SELECT *
                FROM memories
                WHERE id = $1
                  AND workspace_id = $2
-                 AND lore.can_write_memory(workspace_id, owner_user_id)`,
+                 AND lore.can_write_memory(workspace_id, owner_user_id)
+               FOR KEY SHARE`,
               [input.targetMemoryId, actor.workspaceId],
             );
             const current = target.rows[0];
