@@ -227,6 +227,14 @@ test("an escaped or encoded title reads as the body renders it", () => {
   expect(memoryTitle(memory({ content: "# AT&amp;T \\*escaped\\*\nBody" }))).toBe("AT&T *escaped*");
 });
 
+test("an entity past Unicode, or a lone surrogate, reads as a replacement character", () => {
+  // String.fromCodePoint throws on these, and labels of every Graph node pass through here.
+  expect(plainInline("a &#9999999; b &#xFFFFFF; c &#xD800; d &#1114112;")).toBe(
+    "a \ufffd b \ufffd c \ufffd d \ufffd",
+  );
+  expect(memoryTitle(memory({ content: "# &#1114112;\nBody" }))).toBe("\ufffd");
+});
+
 test("the body keeps a first line longer than the title reads", () => {
   const content = `## ${"**".repeat(500)}${"real text ".repeat(100)}\nBody`;
   expect(memoryBody(memory({ content }))).toBe(content);

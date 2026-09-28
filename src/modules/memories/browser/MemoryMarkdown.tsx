@@ -1,10 +1,11 @@
 "use client";
 
-import { createContext, createElement, type MouseEvent, type ReactNode, use, useMemo } from "react";
+import { createContext, createElement, type ReactNode, use, useMemo } from "react";
 import {
+  keepsBrowserClick,
   type MarkdownNode,
   memoryMarkdownTree,
-  wikilinkTarget,
+  wikilinkView,
 } from "@/modules/memories/browser/markdown";
 
 interface Wikilinks {
@@ -29,25 +30,13 @@ const WikilinkContext = createContext<Wikilinks>({
   onOpen: () => {},
 });
 
-/** A click the browser should keep: modified, not the main button, or already handled. */
-function keepsBrowserClick(event: MouseEvent): boolean {
-  return (
-    event.defaultPrevented ||
-    event.button !== 0 ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    event.altKey
-  );
-}
-
 function Wikilink({ reference, label }: { reference: string; label: string }) {
   const { targets, unresolvedTitle, onOpen } = use(WikilinkContext);
-  const target = wikilinkTarget(targets, reference);
-  if (!target) {
-    // The reference shows on hover, as a link's target does.
+  const view = wikilinkView(targets, reference, label, unresolvedTitle);
+  const { memoryId } = view;
+  if (memoryId === undefined) {
     return (
-      <span className="wl-unresolved" title={`${reference} — ${unresolvedTitle}`}>
+      <span className="wl-unresolved" title={view.title}>
         {label}
       </span>
     );
@@ -55,12 +44,12 @@ function Wikilink({ reference, label }: { reference: string; label: string }) {
   return (
     <a
       className="wl"
-      href={`/memory/${encodeURIComponent(target)}`}
-      title={label === reference ? undefined : reference}
+      href={view.href}
+      title={view.title}
       onClick={(event) => {
         if (keepsBrowserClick(event)) return;
         event.preventDefault();
-        onOpen(target);
+        onOpen(memoryId);
       }}
     >
       {label}

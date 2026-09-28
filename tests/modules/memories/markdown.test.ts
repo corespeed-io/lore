@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import {
   allowedHref,
   hasVisibleText,
+  keepsBrowserClick,
   MAXIMUM_MARKDOWN_NESTING,
   MAXIMUM_TABLE_CELLS,
   type MarkdownNode,
@@ -14,6 +15,7 @@ import {
   parseMemoryMarkdown,
   tableRowCells,
   wikilinkTarget,
+  wikilinkView,
 } from "@/modules/memories/browser/markdown";
 
 const TARGET_MEMORY_ID = "e6f22a12-8b29-57ef-bbdf-ce11121303c7";
@@ -444,5 +446,67 @@ test("visible text is a letter, digit, punctuation, or symbol", () => {
   for (const text of ["a", "中", "—", "😀", "1"]) expect(hasVisibleText(text)).toBe(true);
   for (const text of ["", " ", "\u00a0", "\u200b", "\u00ad", "\u2060"]) {
     expect(hasVisibleText(text)).toBe(false);
+  }
+});
+
+test("a line break inside a paragraph renders as a line break, whatever wrote it", () => {
+  for (const markdown of ["one\ntwo", "one\r\ntwo", "one\rtwo", "one  \ntwo", "one\\\ntwo"]) {
+    expect(memoryMarkdownTree(markdown)).toEqual([el("p", ["one", el("br", []), "two"])]);
+  }
+});
+
+test("a body of tables dropped for their cells parses in linear time", () => {
+  // Each block is a valid table until its last row, which is one cell too long.
+  const body = `${"|-|\n".repeat(4_999)}|a|b|\n\n${"|-|\n".repeat(2_999)}|a|b|\n`.slice(0, 32_000);
+  const started = performance.now();
+  const tree = memoryMarkdownTree(body);
+
+  expect(performance.now() - started).toBeLessThan(500);
+  expect(nodeText(tree ?? [])).toContain("|a|b|");
+  // A table after a dropped one still renders.
+  const later = memoryMarkdownTree(
+    "| a |\n|---|\n| b | extra |\n\n| c | d |\n|---|---|\n| 1 | 2 |",
+  );
+  expect(JSON.stringify(later)).toContain('"table"');
+});
+
+test("a resolved wikilink links to its Memory, and an unresolved one names its reference", () => {
+  const targets = { "ops/ch": TARGET_MEMORY_ID, "a b/c?": "id with space" };
+
+  expect(wikilinkView(targets, "ops/ch", "ClickHouse", "not found")).toEqual({
+    memoryId: TARGET_MEMORY_ID,
+    href: `/memory/${TARGET_MEMORY_ID}`,
+    title: "ops/ch",
+  });
+  // A label that is the reference needs no hover; the href encodes the id.
+  expect(wikilinkView(targets, "a b/c?", "a b/c?", "not found")).toEqual({
+    memoryId: "id with space",
+    href: "/memory/id%20with%20space",
+  });
+  expect(wikilinkView(targets, "missing", "the docs", "Memory reference not found")).toEqual({
+    title: "missing — Memory reference not found",
+  });
+});
+
+test("a modified, secondary, or handled click stays the browser's", () => {
+  const click = {
+    defaultPrevented: false,
+    button: 0,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  };
+
+  expect(keepsBrowserClick(click)).toBe(false);
+  for (const change of [
+    { metaKey: true },
+    { ctrlKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { button: 1 },
+    { defaultPrevented: true },
+  ]) {
+    expect(keepsBrowserClick({ ...click, ...change })).toBe(true);
   }
 });

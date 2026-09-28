@@ -68,6 +68,8 @@ memoryMarkdown.block.ruler.disable("reference");
 interface TableBudget extends Env {
   tableCells?: number;
   tablesOff?: boolean;
+  /** The line after the last table dropped for its cells; no table starts before it. */
+  droppedUntil?: number;
 }
 
 type BlockRule = (
@@ -125,12 +127,14 @@ function dropsCells(state: StateBlock, start: number): boolean {
  * `MAXIMUM_TABLE_CELLS`, the first table past it is parsed once and dropped, and it
  * and every later table stay paragraph text. The rule also silently drops the cells
  * a long row has past its header, so such a table stays paragraph text too, and no
- * text of the body goes unseen.
+ * text of the body goes unseen. markdown-it would then try a table again at each of
+ * the dropped table's lines, parsing its remaining rows every time, so no table may
+ * start inside it: each row is parsed at most once.
  */
 function boundedTable(table: BlockRule): BlockRule {
   return (state, startLine, endLine, silent) => {
     const budget = state.env as TableBudget;
-    if (budget.tablesOff) return false;
+    if (budget.tablesOff || startLine < (budget.droppedUntil ?? 0)) return false;
     if (silent) return table(state, startLine, endLine, true);
     const start = state.tokens.length;
     if (!table(state, startLine, endLine, false)) return false;
@@ -141,6 +145,7 @@ function boundedTable(table: BlockRule): BlockRule {
     }
     const overBudget = cells > MAXIMUM_TABLE_CELLS;
     if (overBudget || dropsCells(state, start)) {
+      budget.droppedUntil = state.line;
       state.tokens.length = start;
       state.line = startLine;
       if (overBudget) budget.tablesOff = true;
@@ -450,4 +455,48 @@ export function wikilinkTarget(
   if (!Object.hasOwn(targets, reference)) return undefined;
   const target: unknown = targets[reference];
   return typeof target === "string" && target ? target : undefined;
+}
+
+/** How a wikilink renders: a link to the Memory it resolves to, or inert text. */
+export type WikilinkView =
+  | { memoryId: string; href: string; title?: string }
+  | { memoryId?: undefined; title: string };
+
+/**
+ * A resolved wikilink links to its Memory and names its reference on hover when the
+ * label differs; an unresolved one names its reference and why it did not resolve,
+ * as a link's target shows on hover.
+ */
+export function wikilinkView(
+  targets: Readonly<Record<string, string>>,
+  reference: string,
+  label: string,
+  unresolvedTitle: string,
+): WikilinkView {
+  const memoryId = wikilinkTarget(targets, reference);
+  if (!memoryId) return { title: `${reference} — ${unresolvedTitle}` };
+  const href = `/memory/${encodeURIComponent(memoryId)}`;
+  return label === reference ? { memoryId, href } : { memoryId, href, title: reference };
+}
+
+/** The parts of a click that decide whether the page or the browser handles it. */
+export interface LinkClick {
+  defaultPrevented: boolean;
+  button: number;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}
+
+/** A click the browser should keep: modified, not the main button, or already handled. */
+export function keepsBrowserClick(click: LinkClick): boolean {
+  return (
+    click.defaultPrevented ||
+    click.button !== 0 ||
+    click.metaKey ||
+    click.ctrlKey ||
+    click.shiftKey ||
+    click.altKey
+  );
 }
