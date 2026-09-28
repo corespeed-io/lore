@@ -50,6 +50,19 @@ test.each([
   ).resolves.toBe(checksum);
 });
 
+test("v2 orders keys outside the BMP by UTF-16 code unit, not code point", async () => {
+  // A surrogate pair (U+1F600 is D83D DE00) sorts before U+FF61 by code unit, but
+  // after it by code point, so this pins the comparator exactly.
+  const canonical = '{"z":4,"é":3,"\u{1F600}":2,"｡":1}';
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  const expected = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  await expect(
+    workspaceArchiveChecksum({ "｡": 1, "\u{1F600}": 2, é: 3, z: 4 }, "lore-workspace-v2"),
+  ).resolves.toBe(expected);
+});
+
 test("v2 orders keys by UTF-16 code unit, so it disagrees with v1 on mixed-case keys", async () => {
   const archive = payload("lore-workspace-v2");
   await expect(workspaceArchiveChecksum(archive, "lore-workspace-v2")).resolves.not.toBe(

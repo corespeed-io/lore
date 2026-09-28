@@ -549,6 +549,24 @@ test.each<[string, (archive: WorkspaceArchive) => void]>([
   );
 });
 
+// The format picks the checksum's key order, so it is checked before the checksum is
+// computed: an unknown one is an archive failure, never a failure to hash it.
+test.each<[string, unknown]>([
+  ["a later format", "lore-workspace-v3"],
+  ["a format in the wrong case", "LORE-WORKSPACE-V2"],
+  ["no format", undefined],
+])("import dry-run refuses %s, as the real import does", async (_name, format) => {
+  const testContext = await createMemoryTestContext();
+  const archive = await linkedArchive(testContext);
+  (archive.manifest as { format: unknown }).format = format;
+
+  await expectRefusedBeforeWrites(
+    testContext,
+    archive,
+    /^archive format must be lore-workspace-v1 or lore-workspace-v2$/,
+  );
+});
+
 test("export writes lore-workspace-v2, and a lore-workspace-v1 archive still imports", async () => {
   const testContext = await createMemoryTestContext();
   const portability = createPortabilityModule(testContext.database);
