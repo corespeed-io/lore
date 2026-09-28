@@ -139,13 +139,17 @@ been removed. Lore now has a native implementation, split into two concepts
   `subject_proposal_id`, `proposal_target_memory_id`, `proposal_accepted_memory_id`,
   and `subject_episode_id` (catalog-only; existing rows are not rewritten, because a
   backfill under ADD COLUMN's ACCESS EXCLUSIVE lock would block every idempotent write
-  and the JSON-path triggers already scrub those rows);
+  and the JSON-path triggers already scrub those rows), plus a ledger trigger that
+  clears them whenever a row returns to `in_progress`, so an older instance reclaiming
+  an expired key cannot leave a stale subject behind;
   `0008_index_replay_subjects_concurrently.sql` indexes them concurrently; and
   `0009_scrub_replays_by_subject.sql` then adds one BEFORE/AFTER DELETE trigger per
-  subject table that scrubs by column, plus a trigger that clears the columns whenever
-  a row returns to `in_progress`, so an older instance reclaiming an expired key cannot
-  leave a stale subject behind. The triggers come after their indexes, so no forget
-  scans the ledger. `completeMutation` writes the columns from its `ReplayBody`, the only type it
+  subject table that scrubs by column. The triggers come after their indexes, so no
+  forget scans the ledger, and 0009 locks episodes, memories, and memory_proposals, in
+  the order Agent deletion's foreign keys and forget reach them, but never the ledger,
+  which every keyed write locks first: a migration holding a subject table while it
+  waits for the ledger deadlocks with them. `tests/server/replay-subject-upgrade.test.ts`
+  checks the tables each migration locks. `completeMutation` writes the columns from its `ReplayBody`, the only type it
   accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
@@ -342,8 +346,9 @@ been removed. Lore now has a native implementation, split into two concepts
   `PostgresDatabase.transaction(use, { isolation, readOnly })`, which starts the
   transaction in them (`BEGIN ISOLATION LEVEL …`, or `SET TRANSACTION` as PGlite's
   first statement) before host setup runs; every wrapper must pass `options` on,
-  and the packet asks for them again inside, which is a no-op when they took effect
-  and fails, rather than reading at READ COMMITTED, when a wrapper dropped them;
+  and the packet asks for them again inside: a no-op when they took effect, applying
+  them when a wrapper dropped them but host setup took no snapshot, and failing
+  (500) when setup already read, so the packet never reads at READ COMMITTED;
   identity matching goes through the path-free Symbol Set payload index, not a
   suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
   cut list marks contextual impact `anchors:truncated`, so it is never
@@ -467,8 +472,9 @@ been removed. Lore now has a native implementation, split into two concepts
   found by es-module-lexer over the JavaScript Bun emits for the file, which has no
   types or comments, so a string, comment, or regex that mentions `import(` is not.
   Bun folds a specifier built only from literals (`"node:" + "fs"`) into one literal
-  that no scan of the source reports, so a lexed specifier the source never writes
-  quoted is a finding too. Every browser-side file of a domain lives
+  that its import scan does not report, so a lexed specifier the scan did not report
+  is a finding too; the lexed JavaScript is emitted without dead-code elimination, so
+  no `NODE_ENV` branch can hide one. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
@@ -508,7 +514,8 @@ been removed. Lore now has a native implementation, split into two concepts
   `src/modules/graph/browser/store.ts`, and browser bounds (Graph nodes, browse page
   size and window) come from the SDK's `LORE_CONTRACT`. Returning to browse re-reads only
   page 0, plus any later page that is missing from the cache, no longer matches the
-  list, or sits behind a page 0 that gained or lost a Memory; every page is re-read
+  list, a local patch left a different length than the server returned, or sits
+  behind a page 0 that gained or lost a Memory; every page is re-read
   on resume once the last full read is 5 minutes old
   (`MEMORY_RESUME_FULL_REFRESH_MS`). Only a refresh in which every page was read
   resets that age (`fullReadAfterResume`): SWR resolves `mutate()` with cached pages
@@ -661,7 +668,11 @@ been removed. Lore now has a native implementation, split into two concepts
   Proposal content expires after 30 days, and hard-deleting a target or accepted
   Memory removes its associated proposals and replay bodies immediately.
   Accepting an update locks the target Memory before the Proposal, the same order
-  as forget's BEFORE DELETE trigger; keep it;
+  as forget's BEFORE DELETE trigger; keep it. Submitting an update holds its target
+  `FOR KEY SHARE` until commit, because the target has no foreign key to take that
+  lock: a forget under way makes the submission wait and then find no target, and a
+  later forget waits for it and then scrubs the Proposal and its replay body
+  (`scripts/checks/smoke-memory-core.ts` races the two on PostgreSQL);
 - Episodes are bounded, ordered evidence envelopes; their immutable Observations
   preserve message, tool, document-fragment, or event content until the owner User
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary

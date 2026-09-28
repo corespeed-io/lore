@@ -142,9 +142,10 @@ export function SearchResults({
       complete,
     });
     const emptyNote = browseFilterEmptyNote({
+      type: typeFilter,
       matching: filtered.length,
-      filtered: typeFilter !== "all",
       complete,
+      capped,
     });
 
     return (
@@ -164,6 +165,7 @@ export function SearchResults({
               key={key}
               type="button"
               className={`chip${typeFilter === key ? " chip-active" : ""}`}
+              aria-pressed={typeFilter === key}
               onClick={() => onTypeFilter(key)}
             >
               {label}{" "}

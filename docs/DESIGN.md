@@ -317,8 +317,9 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 
 - Initial loading uses the plain `Opening Lore…` status.
 - Empty collection invites the first Memory; empty search suggests changing the phrase.
-- A browse type filter that matches no loaded Memory keeps its chip and says so
-  ("yet" while pages are still loading), instead of rendering a blank list.
+- A browse type filter that matches no loaded Memory keeps its chip (pressed, not
+  only colored) and names the type in a note instead of rendering a blank list: "yet"
+  while pages are still loading, and a pointer to search at the browse cap.
 - Recoverable request errors appear inline with a Dismiss action and `role=alert`.
 - A failed Workspace-list read renders an error with Retry (`role=alert`), never
   first-run onboarding: the User may already belong to Workspaces.

@@ -100,12 +100,20 @@ export function browseTypeChips(
   ];
 }
 
-/** What browse says when a type filter matches no loaded Memory, or null. */
+/**
+ * What browse says when a type filter matches no loaded Memory, or null. It names
+ * the type, so it reads on its own, and says "yet" only while pages still load: at
+ * the browse cap no more will arrive, and only search reaches the rest.
+ */
 export function browseFilterEmptyNote(input: {
+  type: string;
   matching: number;
-  filtered: boolean;
   complete: boolean;
+  capped: boolean;
 }): string | null {
-  if (!input.filtered || input.matching > 0) return null;
-  return input.complete ? "No Memories of this type." : "No Memories of this type have loaded yet.";
+  if (input.type === "all" || input.matching > 0) return null;
+  const memories = `No “${typeLabel(input.type)}” Memories`;
+  if (input.complete) return `${memories}.`;
+  if (input.capped) return `${memories} in the browse window. Search covers the Workspace.`;
+  return `${memories} have loaded yet.`;
 }

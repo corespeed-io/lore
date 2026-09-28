@@ -7,7 +7,6 @@ import {
   memoryConfiguredType,
   memoryType,
   shortMemoryDate,
-  typeSort,
 } from "@/modules/memories/browser/presentation";
 
 function memory(overrides: Partial<Memory> = {}): Memory {
@@ -102,22 +101,35 @@ test("an unfiltered browse header is a lower bound while pages load or at the br
 });
 
 test("the active type filter keeps its chip even when no loaded Memory has that type", () => {
-  expect(browseTypeChips(["concept", "private", "concept"], "all").map(([key]) => key)).toEqual([
+  const keys = (types: string[], filter: string) =>
+    browseTypeChips(types, filter).map(([key]) => key);
+  // Preferred types first, then the rest alphabetically, each once.
+  expect(keys(["private", "concept", "private"], "all")).toEqual(["all", "concept", "private"]);
+  // An unloaded active filter joins the list in the same order.
+  expect(keys(["private", "concept"], "field_note")).toEqual([
     "all",
-    ...["concept", "private"].sort(typeSort),
+    "concept",
+    "field_note",
+    "private",
   ]);
-  const chips = browseTypeChips(["concept"], "field_note");
-  expect(chips.map(([key]) => key)).toContain("field_note");
-  expect(chips.find(([key]) => key === "field_note")?.[1]).toBe("field note");
+  // A loaded active filter is not added twice.
+  expect(keys(["concept", "field_note"], "concept")).toEqual(["all", "concept", "field_note"]);
+  expect(browseTypeChips([], "field_note").at(-1)).toEqual(["field_note", "field note"]);
 });
 
-test("a type filter with no loaded match says so, and says 'yet' while pages load", () => {
-  expect(browseFilterEmptyNote({ matching: 0, filtered: true, complete: true })).toBe(
-    "No Memories of this type.",
+test("a type filter with no loaded match names the type, and says 'yet' only while pages load", () => {
+  const note = (input: { matching: number; complete: boolean; capped: boolean }) =>
+    browseFilterEmptyNote({ type: "field_note", ...input });
+  expect(note({ matching: 0, complete: true, capped: false })).toBe("No “field note” Memories.");
+  expect(note({ matching: 0, complete: false, capped: false })).toBe(
+    "No “field note” Memories have loaded yet.",
   );
-  expect(browseFilterEmptyNote({ matching: 0, filtered: true, complete: false })).toBe(
-    "No Memories of this type have loaded yet.",
+  // At the browse cap loading has stopped, so the note points at search instead.
+  expect(note({ matching: 0, complete: false, capped: true })).toBe(
+    "No “field note” Memories in the browse window. Search covers the Workspace.",
   );
-  expect(browseFilterEmptyNote({ matching: 3, filtered: true, complete: true })).toBeNull();
-  expect(browseFilterEmptyNote({ matching: 0, filtered: false, complete: true })).toBeNull();
+  expect(note({ matching: 3, complete: true, capped: false })).toBeNull();
+  expect(
+    browseFilterEmptyNote({ type: "all", matching: 0, complete: true, capped: false }),
+  ).toBeNull();
 });

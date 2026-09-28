@@ -8,7 +8,7 @@ import {
   type MemorySearchResult,
   type UpdateMemoryInput,
 } from "@corespeed/lore-sdk";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import useSWRInfinite from "swr/infinite";
 import { loreKeys } from "@/shared/browser/cache-keys";
@@ -152,6 +152,24 @@ export function browseWindowState(input: {
   };
 }
 
+/**
+ * Each browse page's length as the server last returned it, by Workspace and page
+ * index. A local patch re-slices the cached pages but leaves these alone.
+ */
+export function createFetchedPageLengths() {
+  const lengths = new Map<string, number>();
+  const key = (workspaceId: string, pageIndex: number) => `${workspaceId}\u0000${pageIndex}`;
+  return {
+    record(workspaceId: string, pageIndex: number, length: number): void {
+      lengths.set(key(workspaceId, pageIndex), length);
+    },
+    /** The page's fetched length, or undefined when this hook never fetched it. */
+    page(workspaceId: string, pageIndex: number): number | undefined {
+      return pageIndex < 0 ? undefined : lengths.get(key(workspaceId, pageIndex));
+    },
+  };
+}
+
 /** The page index of a paged-browse cache key, or null for any other key. */
 export function memoryPageIndex(key: unknown): number | null {
   return Array.isArray(key) &&
@@ -193,6 +211,8 @@ interface MemoryPageResumeState {
   firstPageBefore: readonly Memory[] | undefined;
   /** Page 0 as just re-read by this resume; pages are read in order. */
   firstPageAfter: readonly Memory[] | undefined;
+  /** The page's length as the server last returned it, when known. */
+  fetchedLength?: number | undefined;
 }
 
 /**
@@ -200,13 +220,18 @@ interface MemoryPageResumeState {
  * newest page instead of every loaded page, which is up to 50 sequential
  * full-content requests. A later page is read again only when it is missing,
  * when the list diverged from its page cache (a local write whose refresh never
- * finished), or when page 0 gained or lost a Memory: a write elsewhere shifts
- * every page boundary behind it. Explicit writes and imports still revalidate
- * every page.
+ * finished), when a local patch left it a different length than the server returned
+ * (a forget re-slices the pages, so the last one comes out short and the Memory that
+ * moved onto it was never read), or when page 0 gained or lost a Memory: a write
+ * elsewhere shifts every page boundary behind it. Explicit writes and imports still
+ * revalidate every page.
  */
 export function shouldRevalidateMemoryPageOnResume(state: MemoryPageResumeState): boolean {
   if (state.pageIndex === null || state.pageIndex === 0) return true;
   if (!sameMemoryPage(state.cachedPage, state.listedPage)) return true;
+  if (state.fetchedLength !== undefined && state.cachedPage?.length !== state.fetchedLength) {
+    return true;
+  }
   return !sameMemoryPageMembership(state.firstPageBefore, state.firstPageAfter);
 }
 
@@ -274,9 +299,7 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
   // it actually re-read every page.
   const pageFailures = useRef(0);
   const resumeProbe = useRef<MemoryResumeProbe | null>(null);
-  // Each page's length as the server returned it, by Workspace and page index; a
-  // local patch changes the cached pages but not these.
-  const fetchedPageLengths = useRef(new Map<string, number>());
+  const [fetchedPageLengths] = useState(createFetchedPageLengths);
   useLayoutEffect(() => {
     demand.current = { workspaceId, enabled };
     return () => {
@@ -311,7 +334,7 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
       });
       const probe = resumeProbe.current;
       if (pageIndex === 0 && probe) probe.firstPageAfter = page;
-      fetchedPageLengths.current.set(`${scopedWorkspaceId}\u0000${pageIndex}`, page.length);
+      fetchedPageLengths.record(scopedWorkspaceId, pageIndex, page.length);
       return page;
     },
     {
@@ -363,10 +386,12 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
           listedPage: pageIndex === null ? undefined : probe.listedPages?.[pageIndex],
           firstPageBefore: probe.listedPages?.[0],
           firstPageAfter: probe.firstPageAfter,
+          fetchedLength:
+            pageIndex === null ? undefined : fetchedPageLengths.page(workspaceId, pageIndex),
         });
       },
     });
-  }, [swr.data, swr.mutate, workspaceId]);
+  }, [fetchedPageLengths, swr.data, swr.mutate, workspaceId]);
   const resuming = useRevalidateOnResume(
     workspaceId,
     enabled,
@@ -456,7 +481,7 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
       hasData: Boolean(swr.data),
       pageCount,
       lastPageLength,
-      fetchedLastPageLength: fetchedPageLengths.current.get(`${workspaceId}\u0000${pageCount - 1}`),
+      fetchedLastPageLength: fetchedPageLengths.page(workspaceId, pageCount - 1),
     }),
   };
 }
