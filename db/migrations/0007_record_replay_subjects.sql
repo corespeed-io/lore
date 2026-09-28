@@ -70,13 +70,14 @@ CREATE FUNCTION lore.scrub_replays_of_deleted_memory() RETURNS trigger
     SET search_path TO 'pg_catalog', 'public'
     AS $$
 BEGIN
+  -- One statement per column, so each matches its own 0008 partial index; an OR
+  -- across them plans as a scan of the Workspace's whole ledger.
   DELETE FROM public.request_idempotency_records replay
-  WHERE replay.workspace_id = OLD.workspace_id
-    AND (
-      replay.subject_memory_id = OLD.id
-      OR replay.proposal_target_memory_id = OLD.id
-      OR replay.proposal_accepted_memory_id = OLD.id
-    );
+  WHERE replay.workspace_id = OLD.workspace_id AND replay.subject_memory_id = OLD.id;
+  DELETE FROM public.request_idempotency_records replay
+  WHERE replay.workspace_id = OLD.workspace_id AND replay.proposal_target_memory_id = OLD.id;
+  DELETE FROM public.request_idempotency_records replay
+  WHERE replay.workspace_id = OLD.workspace_id AND replay.proposal_accepted_memory_id = OLD.id;
   RETURN OLD;
 END
 $$;
