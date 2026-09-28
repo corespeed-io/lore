@@ -148,8 +148,10 @@ been removed. Lore now has a native implementation, split into two concepts
   forget scans the ledger, and 0009 locks episodes, memories, and memory_proposals, in
   the order Agent deletion's foreign keys and forget reach them, but never the ledger,
   which every keyed write locks first: a migration holding a subject table while it
-  waits for the ledger deadlocks with them. `tests/server/replay-subject-upgrade.test.ts`
-  checks the tables each migration locks. `completeMutation` writes the columns from its `ReplayBody`, the only type it
+  waits for the ledger deadlocks with them. A rare three-way collision with a Proposal's
+  evidence check and a concurrent forget or update of that evidence can still abort one
+  side with a retryable deadlock error. `tests/server/replay-subject-upgrade.test.ts`
+  checks the tables each migration locks and the order 0009 creates its triggers in. `completeMutation` writes the columns from its `ReplayBody`, the only type it
   accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
@@ -514,8 +516,7 @@ been removed. Lore now has a native implementation, split into two concepts
   `src/modules/graph/browser/store.ts`, and browser bounds (Graph nodes, browse page
   size and window) come from the SDK's `LORE_CONTRACT`. Returning to browse re-reads only
   page 0, plus any later page that is missing from the cache, no longer matches the
-  list, a local patch left a different length than the server returned, or sits
-  behind a page 0 that gained or lost a Memory; every page is re-read
+  list, or sits behind a page 0 that gained or lost a Memory; every page is re-read
   on resume once the last full read is 5 minutes old
   (`MEMORY_RESUME_FULL_REFRESH_MS`). Only a refresh in which every page was read
   resets that age (`fullReadAfterResume`): SWR resolves `mutate()` with cached pages
@@ -671,8 +672,13 @@ been removed. Lore now has a native implementation, split into two concepts
   as forget's BEFORE DELETE trigger; keep it. Submitting an update holds its target
   `FOR KEY SHARE` until commit, because the target has no foreign key to take that
   lock: a forget under way makes the submission wait and then find no target, and a
-  later forget waits for it and then scrubs the Proposal and its replay body
-  (`scripts/checks/smoke-memory-core.ts` races the two on PostgreSQL);
+  later forget waits for it and then scrubs the Proposal and its replay body. Evidence
+  forgotten after its visibility check is refused by its foreign key and answers the
+  same 403 as invisible evidence (`scripts/checks/smoke-memory-core.ts` races a forget
+  under way against both on PostgreSQL). The lock makes an update or acceptance of the
+  target, which locks it `FOR UPDATE`, wait for the submission, and a submission that
+  reclaimed an expired key naming the same target can deadlock with a forget of it
+  (a retryable 409); moving updates to `FOR NO KEY UPDATE` is a follow-up;
 - Episodes are bounded, ordered evidence envelopes; their immutable Observations
   preserve message, tool, document-fragment, or event content until the owner User
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary

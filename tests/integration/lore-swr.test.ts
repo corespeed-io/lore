@@ -271,29 +271,26 @@ test("resuming browse re-reads a page whose list copy diverged from its page cac
   expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: undefined })).toBe(true);
 });
 
-test("resuming browse re-reads a page a local forget left shorter than the server returned it", () => {
+test("after a paused forget, resume re-reads every page the patch re-sliced", () => {
   const pages = Array.from({ length: 3 }, (_, pageIndex) =>
     Array.from({ length: MEMORY_PAGE_SIZE }, (_, index) =>
       memory(pageIndex * MEMORY_PAGE_SIZE + index),
     ),
   );
-  // A forget deep in the list re-slices the pages; the last one comes out short, and
-  // the Memory that moved onto it on the server was never read.
+  // The paused patch writes only the list; each page's own cache keeps the page as
+  // it was fetched, so every page behind the forgotten Memory diverges from it.
   const patched = removeMemoryFromPages(pages, memory(150).id) ?? [];
-  const resume = (pageIndex: number, fetchedLength: number | undefined) =>
+  const resume = (pageIndex: number) =>
     shouldRevalidateMemoryPageOnResume({
       pageIndex,
-      cachedPage: patched[pageIndex],
+      cachedPage: pages[pageIndex],
       listedPage: patched[pageIndex],
       firstPageBefore: patched[0],
-      firstPageAfter: patched[0],
-      fetchedLength,
+      firstPageAfter: pages[0],
     });
-  expect(resume(2, MEMORY_PAGE_SIZE)).toBe(true);
-  // A shifted page that kept its length matches the server's shift, so it stays cached.
-  expect(resume(1, MEMORY_PAGE_SIZE)).toBe(false);
-  // Without a fetched length (pages from an earlier mount), the other rules decide.
-  expect(resume(2, undefined)).toBe(false);
+  expect(resume(1)).toBe(true);
+  // The short last page is re-read too, so the Memory that moved onto it arrives.
+  expect(resume(2)).toBe(true);
 });
 
 test("a write elsewhere that shifts page 0 re-reads every later page on resume", () => {

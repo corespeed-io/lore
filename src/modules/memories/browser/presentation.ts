@@ -1,4 +1,4 @@
-import type { Memory } from "@corespeed/lore-sdk";
+import { LORE_CONTRACT, type Memory } from "@corespeed/lore-sdk";
 import { displayCount } from "@/shared/browser/read-state";
 
 function compact(value: string, limit: number): string {
@@ -102,18 +102,26 @@ export function browseTypeChips(
 
 /**
  * What browse says when a type filter matches no loaded Memory, or null. It names
- * the type, so it reads on its own, and says "yet" only while pages still load: at
- * the browse cap no more will arrive, and only search reaches the rest.
+ * the type, so it reads on its own; a scope bucket (an untyped Memory's type is its
+ * scope) is named as untyped. It says "yet" only while pages still load: at the
+ * browse cap, or after a page failed, no more will arrive.
  */
 export function browseFilterEmptyNote(input: {
   type: string;
   matching: number;
   complete: boolean;
   capped: boolean;
+  /** A browse page failed, so loading stopped short of the window. */
+  stopped: boolean;
+  /** How many Memories browse reads at most. */
+  window: number;
 }): string | null {
   if (input.type === "all" || input.matching > 0) return null;
-  const memories = `No “${typeLabel(input.type)}” Memories`;
+  const scopes: readonly string[] = LORE_CONTRACT.vocabularies.memoryScopes;
+  const label = `“${typeLabel(input.type)}”`;
+  const memories = `No ${scopes.includes(input.type) ? `untyped ${label}` : label} Memories`;
   if (input.complete) return `${memories}.`;
-  if (input.capped) return `${memories} in the browse window. Search covers the Workspace.`;
+  if (input.capped) return `${memories} in the first ${input.window.toLocaleString("en-US")}.`;
+  if (input.stopped) return `${memories} among those loaded.`;
   return `${memories} have loaded yet.`;
 }

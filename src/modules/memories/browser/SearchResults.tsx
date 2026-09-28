@@ -24,7 +24,7 @@ interface SearchResultsProps {
   /** Every browse page was read, so the counts are exact. */
   complete: boolean;
   loading: boolean;
-  /** The browse read failed before any Memory arrived. */
+  /** The browse read failed: before any Memory arrived, or on a later page. */
   browseError: string | null;
   error: string | null;
   query: string;
@@ -146,6 +146,8 @@ export function SearchResults({
       matching: filtered.length,
       complete,
       capped,
+      stopped: Boolean(browseError),
+      window: BROWSE_WINDOW,
     });
 
     return (

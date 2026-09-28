@@ -115,21 +115,32 @@ test("the active type filter keeps its chip even when no loaded Memory has that 
   // A loaded active filter is not added twice.
   expect(keys(["concept", "field_note"], "concept")).toEqual(["all", "concept", "field_note"]);
   expect(browseTypeChips([], "field_note").at(-1)).toEqual(["field_note", "field note"]);
+  // Preferred types keep their fixed order ahead of the rest, even against the alphabet.
+  expect(keys(["alpha", "company", "concept", "product"], "all")).toEqual([
+    "all",
+    "concept",
+    "product",
+    "company",
+    "alpha",
+  ]);
+  expect(keys(["alpha"], "person")).toEqual(["all", "person", "alpha"]);
 });
 
 test("a type filter with no loaded match names the type, and says 'yet' only while pages load", () => {
-  const note = (input: { matching: number; complete: boolean; capped: boolean }) =>
-    browseFilterEmptyNote({ type: "field_note", ...input });
-  expect(note({ matching: 0, complete: true, capped: false })).toBe("No “field note” Memories.");
-  expect(note({ matching: 0, complete: false, capped: false })).toBe(
-    "No “field note” Memories have loaded yet.",
-  );
-  // At the browse cap loading has stopped, so the note points at search instead.
-  expect(note({ matching: 0, complete: false, capped: true })).toBe(
-    "No “field note” Memories in the browse window. Search covers the Workspace.",
-  );
-  expect(note({ matching: 3, complete: true, capped: false })).toBeNull();
+  const note = (
+    input: { complete: boolean; capped: boolean; stopped: boolean },
+    type = "field_note",
+  ) => browseFilterEmptyNote({ type, matching: 0, window: 5000, ...input });
+  const loading = { complete: false, capped: false, stopped: false };
+  expect(note({ ...loading, complete: true })).toBe("No “field note” Memories.");
+  expect(note(loading)).toBe("No “field note” Memories have loaded yet.");
+  // At the cap, or after a page failed, loading has stopped, so there is no "yet".
+  expect(note({ ...loading, capped: true })).toBe("No “field note” Memories in the first 5,000.");
+  expect(note({ ...loading, stopped: true })).toBe("No “field note” Memories among those loaded.");
+  // An untyped Memory's type is its scope, so a scope bucket is named as untyped.
+  expect(note({ ...loading, complete: true }, "private")).toBe("No untyped “private” Memories.");
   expect(
-    browseFilterEmptyNote({ type: "all", matching: 0, complete: true, capped: false }),
+    browseFilterEmptyNote({ type: "field_note", matching: 3, window: 5000, ...loading }),
   ).toBeNull();
+  expect(browseFilterEmptyNote({ type: "all", matching: 0, window: 5000, ...loading })).toBeNull();
 });

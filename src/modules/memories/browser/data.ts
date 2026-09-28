@@ -211,8 +211,6 @@ interface MemoryPageResumeState {
   firstPageBefore: readonly Memory[] | undefined;
   /** Page 0 as just re-read by this resume; pages are read in order. */
   firstPageAfter: readonly Memory[] | undefined;
-  /** The page's length as the server last returned it, when known. */
-  fetchedLength?: number | undefined;
 }
 
 /**
@@ -220,18 +218,13 @@ interface MemoryPageResumeState {
  * newest page instead of every loaded page, which is up to 50 sequential
  * full-content requests. A later page is read again only when it is missing,
  * when the list diverged from its page cache (a local write whose refresh never
- * finished), when a local patch left it a different length than the server returned
- * (a forget re-slices the pages, so the last one comes out short and the Memory that
- * moved onto it was never read), or when page 0 gained or lost a Memory: a write
- * elsewhere shifts every page boundary behind it. Explicit writes and imports still
- * revalidate every page.
+ * finished, as after a paused forget re-slices the pages), or when page 0 gained or
+ * lost a Memory: a write elsewhere shifts every page boundary behind it. Explicit
+ * writes and imports still revalidate every page.
  */
 export function shouldRevalidateMemoryPageOnResume(state: MemoryPageResumeState): boolean {
   if (state.pageIndex === null || state.pageIndex === 0) return true;
   if (!sameMemoryPage(state.cachedPage, state.listedPage)) return true;
-  if (state.fetchedLength !== undefined && state.cachedPage?.length !== state.fetchedLength) {
-    return true;
-  }
   return !sameMemoryPageMembership(state.firstPageBefore, state.firstPageAfter);
 }
 
@@ -386,12 +379,10 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
           listedPage: pageIndex === null ? undefined : probe.listedPages?.[pageIndex],
           firstPageBefore: probe.listedPages?.[0],
           firstPageAfter: probe.firstPageAfter,
-          fetchedLength:
-            pageIndex === null ? undefined : fetchedPageLengths.page(workspaceId, pageIndex),
         });
       },
     });
-  }, [fetchedPageLengths, swr.data, swr.mutate, workspaceId]);
+  }, [swr.data, swr.mutate, workspaceId]);
   const resuming = useRevalidateOnResume(
     workspaceId,
     enabled,
