@@ -1,7 +1,12 @@
-import type { EmbeddingProvider, PostgresDatabase } from "@corespeed/lore-core";
+import type {
+  EmbeddingProvider,
+  PostgresDatabase,
+  PostgresTransaction,
+} from "@corespeed/lore-core";
 import { expect, test, vi } from "vitest";
 import { createMemoryModule } from "@/modules/memories/service";
 import { mutationRequestHash } from "@/server/api/idempotency";
+import { createMemoryStorage } from "@/server/database/memory-storage";
 import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
@@ -226,4 +231,26 @@ test("OSS initializes every retrieval pass before visible evidence reaches feedb
   expect(results.every((result) => result.memory.workspaceId === context.alice.workspaceId)).toBe(
     true,
   );
+});
+
+test("OSS Memory storage starts the engine's transaction in its modes, then installs the Actor", async () => {
+  const context = await createMemoryTestContext();
+  const storage = createMemoryStorage(context.database, context.alice);
+  // Installing the Actor is a SELECT, which takes the snapshot, so the modes reach
+  // the transaction only if the wrapper passes them to the host database.
+  const settings = (transaction: PostgresTransaction) =>
+    transaction.query<{ isolation: string; read_only: string; user_id: string }>(
+      `SELECT current_setting('transaction_isolation') AS isolation,
+              current_setting('transaction_read_only') AS read_only,
+              current_setting('lore.user_id') AS user_id`,
+    );
+
+  await expect(
+    storage.database.transaction(settings, { isolation: "repeatable read", readOnly: true }),
+  ).resolves.toMatchObject({
+    rows: [{ isolation: "repeatable read", read_only: "on", user_id: context.alice.userId }],
+  });
+  await expect(storage.database.transaction(settings)).resolves.toMatchObject({
+    rows: [{ isolation: "read committed", read_only: "off", user_id: context.alice.userId }],
+  });
 });

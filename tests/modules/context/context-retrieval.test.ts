@@ -751,6 +751,24 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
     { isolation: "repeatable read", readOnly: true },
   ]);
   expect(isolation.filter((level) => level === "repeatable read/on")).toHaveLength(1);
+
+  // A host that drops the modes but reads during setup would once have read the Code
+  // at READ COMMITTED; the snapshot now refuses instead.
+  const dropping: PostgresDatabase = {
+    transaction: (use) =>
+      context.database.transaction(async (transaction) => {
+        await transaction.query("SELECT 1");
+        return use(transaction);
+      }),
+  };
+  await expect(
+    createContextRetrievalModule(dropping).retrieve(context.alice, {
+      query: "What changed about the snapshot policy rationale?",
+      memoryQuery: "snapshot policy rationale",
+      repositoryKey,
+      commitOid: CURRENT_COMMIT,
+    }),
+  ).rejects.toThrow(/before any query/);
   await context.close();
 }, 90_000);
 

@@ -4,6 +4,7 @@ import {
   type MemoryScope,
   type PostgresDatabase,
   type PostgresTransactionOptions,
+  transactionModes,
 } from "@corespeed/lore-core";
 import type { MemoryCodeEvidence } from "@/modules/code/evidence";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
@@ -453,6 +454,9 @@ export function createContextRetrievalModule(
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
           ? await database.transaction(async (transaction) => {
+              // Asking again is a no-op when the transaction began in these modes, and
+              // fails, rather than reading at READ COMMITTED, when a wrapper dropped them.
+              await transaction.query(`SET TRANSACTION ${transactionModes(SNAPSHOT)}`);
               const snapshot: PostgresDatabase = { transaction: (use) => use(transaction) };
               return readAnchoredCode({
                 actor,

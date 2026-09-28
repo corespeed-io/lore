@@ -1,3 +1,5 @@
+import { LoreConfigurationError } from "./validation";
+
 export interface PostgresQueryResult<Row> {
   rows: Row[];
 }
@@ -32,13 +34,30 @@ export interface PostgresDatabase {
   ): Promise<Result>;
 }
 
+/** SQL for each isolation level, so the statement never carries the option's text. */
+const ISOLATION_LEVELS = {
+  "repeatable read": "REPEATABLE READ",
+  serializable: "SERIALIZABLE",
+} as const satisfies Record<NonNullable<PostgresTransactionOptions["isolation"]>, string>;
+
 /**
  * The transaction modes `options` ask for, as `BEGIN` or `SET TRANSACTION` takes
  * them (for example "ISOLATION LEVEL REPEATABLE READ, READ ONLY"), or "" for none.
  */
 export function transactionModes(options: PostgresTransactionOptions = {}): string {
   const modes: string[] = [];
-  if (options.isolation) modes.push(`ISOLATION LEVEL ${options.isolation.toUpperCase()}`);
+  if (options.isolation !== undefined) {
+    // The type admits only the table's keys, but a JavaScript caller can pass anything.
+    const levels: Readonly<Record<string, string>> = ISOLATION_LEVELS;
+    const level = Object.hasOwn(levels, options.isolation) ? levels[options.isolation] : undefined;
+    if (!level) {
+      throw new LoreConfigurationError(
+        "isolation",
+        "isolation must be repeatable read or serializable",
+      );
+    }
+    modes.push(`ISOLATION LEVEL ${level}`);
+  }
   if (options.readOnly) modes.push("READ ONLY");
   return modes.join(", ");
 }
