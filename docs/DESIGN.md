@@ -228,6 +228,11 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 - Entry: Graph navigation in the active Workspace.
 - Nodes are only Memories returned by the Actor-specific native Graph API.
 - Affinity links are derived from the current authorized node set and never name a hidden endpoint.
+- A read that reaches its Link budget (`linksTruncated`) derives no affinity. Its
+  Link-derived figures (neighbor, in/out, hub-degree, and Link-total counts) render
+  as `N+` lower bounds, as they do when the node window is full; the Dashboard hides
+  its isolated-Memory list, and a Memory detail with no neighbors says the Link
+  budget was reached instead of blaming the node window.
 - Search dims non-matches; selection keeps the chosen Memory and its neighbors prominent.
 - The graph supports free node drag, background pan, wheel/buttons zoom, fit-to-view,
   hover focus, and empty-canvas/Escape deselection.

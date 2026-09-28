@@ -28,7 +28,8 @@ bun run build:packages
 `LORE_CONTRACT`, exported by `@corespeed/lore-sdk`, holds every vocabulary, bound, and
 pattern the API publishes that a client may check before sending a request (Memory
 scopes, list limits and the search query length, the metadata serialized-size and
-filter bounds, commit OID and Idempotency-Key patterns, and so on). The generator
+filter bounds, commit OID and Idempotency-Key patterns, and so on), plus the defaults
+a client sends or reports (the Memory Link kind and weight). The generator
 reads each value from every endpoint that shares it and fails when two disagree, so
 read bounds from it instead of restating them. The
 handwritten SDK runtime wraps those types with the behavior OpenAPI alone cannot provide:
@@ -260,7 +261,7 @@ It exposes:
 - `lore_remember` as a non-destructive mutation tool;
 - `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, metadata, or visibility;
-- `lore_forget` as an explicitly destructive tool.
+- `lore_forget` as an explicitly destructive tool;
 - `lore_link` as a destructive, idempotent Memory Link write by natural key
   (destructive because it replaces an existing Link's weight and metadata), and
   `lore_unlink` as its separate destructive deletion, so a host can gate the two
@@ -274,7 +275,8 @@ It exposes:
 
 The Workspace id is process configuration, not tool input, so a model cannot ask
 the adapter to cross a Workspace boundary. Returned Memory objects omit internal
-top-level Workspace, owner User, and creating Agent ids. Lore still applies the credential's
+top-level Workspace, owner User, and creating Agent ids, and returned Links omit their
+Workspace id. Lore still applies the credential's
 read/write grant and RLS to every operation. The adapter neither stores nor logs
 the credential, Memory content, or query text.
 
@@ -351,10 +353,13 @@ Metadata inputs have one bound, the same 100,000 serialized characters the HTTP
 Memory schemas enforce with Zod JSON validation; neither surface limits nesting
 depth or value count separately.
 
-All five mutation tools accept an optional `idempotencyKey` of 1 to 128 visible
-ASCII characters, the HTTP `Idempotency-Key` rule; the adapter and SDK reject any
-other key before sending the request. A caller retrying an operation after losing
-the response must reuse the same key; omitting it creates a fresh operation.
+The five Memory and Episode mutation tools `lore_observe`, `lore_remember`,
+`lore_propose`, `lore_update`, and `lore_forget` accept an optional `idempotencyKey`
+of 1 to 128 visible ASCII characters, the HTTP `Idempotency-Key` rule; the adapter
+and SDK reject any other key before sending the request. A caller retrying an
+operation after losing the response must reuse the same key; omitting it creates a
+fresh operation. `lore_link` and `lore_unlink` take no key: a Link's natural key
+already makes a retry safe.
 
 AutoDream is not part of this adapter. A future AutoDream process must remain an
 explicit opt-in extension outside Portable Core; it may record Observations and

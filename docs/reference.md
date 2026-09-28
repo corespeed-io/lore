@@ -581,6 +581,9 @@ accepted only while both the credential and Workspace grant remain active.
 
 - `/api/workspaces`
 - `/api/memories` and `/api/memories/:id`
+- `/api/graph` for the bounded Actor-visible Memory Graph, and versioned-only
+  `PUT`/`DELETE /api/v1/memories/:id/links/:targetId` to write or delete one Memory
+  Link by its natural key (source, target, `?kind=`)
 - `/api/v1/episodes`, `/api/v1/episodes/:id`, and bounded Observation evidence reads
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
 - `/api/evaluations/suites`, suite runs, and run results. The Suite list is paged:
@@ -651,7 +654,8 @@ printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":
 ```
 
 The stdio MCP adapter exposes bounded list/search/get, direct version-safe
-remember/update/forget, `lore_observe` for non-canonical Episode evidence, and
+remember/update/forget, `lore_link`/`lore_unlink` for Memory Links by natural key,
+`lore_observe` for non-canonical Episode evidence, and
 `lore_propose` for owner-reviewed suggestions in exactly the configured Actor and
 Workspace. Supply the same `idempotencyKey` when retrying a mutation whose response
 was lost:

@@ -539,7 +539,7 @@ been removed. Lore now has a native implementation, split into two concepts
   (`linkMemories`/`unlinkMemories`), CLI (`memory link`/`memory unlink`), and MCP
   (`lore_link` and `lore_unlink`, both destructive because a link replaces an
   existing Link's fields, and separate so a host can gate deletion on its own) take
-  kind and weight bounds and the default kind from `LORE_CONTRACT`. There is no Link
+  kind and weight bounds and the default kind and weight from `LORE_CONTRACT`. There is no Link
   read surface besides the Graph yet;
 - `src/modules/memories/browser/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
   when that reference resolves to one visible graph node. `MemoryView` intercepts
@@ -620,8 +620,8 @@ been removed. Lore now has a native implementation, split into two concepts
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
   their items under the 128,000-character MCP output ceiling and report omitted
   trailing items with `truncated: true`. The SDK and MCP enforce the server's
-  visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, and
-  pattern a client checks before a request comes from `LORE_CONTRACT`, which
+  visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, default,
+  and pattern a client checks or sends before a request comes from `LORE_CONTRACT`, which
   `sdk:generate` reads out of the OpenAPI document by explicit path, from every
   endpoint the value guards (failing when one is missing or two disagree;
   `tools/sdk-codegen/contract.ts`, import-safe so `tests/packages/sdk-contract.test.ts`
