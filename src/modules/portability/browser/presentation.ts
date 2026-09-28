@@ -1,4 +1,8 @@
-import type { ImportWorkspaceInput, WorkspaceArchive } from "@corespeed/lore-sdk";
+import {
+  type ImportWorkspaceInput,
+  LORE_CONTRACT,
+  type WorkspaceArchive,
+} from "@corespeed/lore-sdk";
 
 export const MAX_WORKSPACE_ARCHIVE_FILE_BYTES = 50_000_000;
 export const UUID_PATTERN =
@@ -39,8 +43,9 @@ export function parseWorkspaceArchiveText(text: string): WorkspaceArchive {
   if (!archive || !manifest || !Array.isArray(memories) || !Array.isArray(links)) {
     throw new WorkspaceArchiveParseError("This is not a Lore Workspace archive.");
   }
-  if (manifest.format !== "lore-workspace-v1") {
-    throw new WorkspaceArchiveParseError("Archive format must be lore-workspace-v1.");
+  const formats: readonly string[] = LORE_CONTRACT.vocabularies.workspaceArchiveFormats;
+  if (typeof manifest.format !== "string" || !formats.includes(manifest.format)) {
+    throw new WorkspaceArchiveParseError(`Archive format must be ${formats.join(" or ")}.`);
   }
   if (typeof manifest.checksum !== "string" || !/^[0-9a-f]{64}$/.test(manifest.checksum)) {
     throw new WorkspaceArchiveParseError("Archive checksum must be a lowercase SHA-256 value.");

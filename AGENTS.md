@@ -1146,9 +1146,14 @@ database invariant, not a UI convention.
   precision and validates it with import's rules, so export never emits a timestamp
   its own import refuses. Import stores the archive's timestamp text as provenance
   unchanged. The archive checksum (`src/modules/portability/checksum.ts`) is a
-  permanent format that a golden-value test pins; it deliberately does not share
-  request-replay hashing, which may change at any deploy. Change it only with a new
-  archive format.
+  permanent format that golden-value tests pin, one per archive format; it
+  deliberately does not share request-replay hashing, which may change at any
+  deploy. Change it only with a new archive format. Export writes
+  `lore-workspace-v2`, whose checksum orders object keys by UTF-16 code unit, the
+  same in every runtime; import also accepts `lore-workspace-v1`, whose checksum
+  orders them with the default-locale `localeCompare`, and verifies each archive in
+  the format its manifest names (`WORKSPACE_ARCHIVE_FORMATS`, published as the
+  manifest's `format` enum and `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`).
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.

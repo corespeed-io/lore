@@ -101,6 +101,10 @@ export function clientContract(document: unknown) {
   ];
   return {
     vocabularies: {
+      workspaceArchiveFormats: stringEnum(
+        document,
+        `${schemas}/WorkspaceArchiveManifest/properties/format`,
+      ),
       memoryScopes: stringEnum(document, `${schemas}/Memory/properties/scope`),
       episodeKinds: stringEnum(document, `${schemas}/Episode/properties/kind`),
       observationKinds: stringEnum(document, `${schemas}/Observation/properties/kind`),

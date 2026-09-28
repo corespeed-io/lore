@@ -26,6 +26,8 @@ import {
   MAX_WORKSPACE_ARCHIVE_LINKS,
   MAX_WORKSPACE_ARCHIVE_MEMORIES,
   WORKSPACE_ARCHIVE_FORMAT,
+  WORKSPACE_ARCHIVE_FORMATS,
+  type WorkspaceArchiveFormat,
 } from "./limits";
 
 /** Embedding jobs an import wakes directly: ten Queue batches, like one sweep. */
@@ -78,7 +80,7 @@ export interface WorkspaceArchive {
   manifest: {
     checksum: string;
     exportedAt: string;
-    format: typeof WORKSPACE_ARCHIVE_FORMAT;
+    format: WorkspaceArchiveFormat;
     memoryCount: number;
     linkCount: number;
     sourceDeploymentId: string;
@@ -324,7 +326,7 @@ function archivePayload(archive: WorkspaceArchive): Omit<WorkspaceArchive, "mani
 }
 
 async function archiveChecksum(archive: WorkspaceArchive): Promise<string> {
-  return workspaceArchiveChecksum(archivePayload(archive));
+  return workspaceArchiveChecksum(archivePayload(archive), archive.manifest.format);
 }
 
 /** The checksum of an archive supplied for import, whose fields may be arbitrarily deep. */
@@ -345,8 +347,10 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
   if (!archive || typeof archive !== "object") {
     throw new PortabilityValidationError("archive is required");
   }
-  if (archive.manifest?.format !== WORKSPACE_ARCHIVE_FORMAT) {
-    throw new PortabilityValidationError(`archive format must be ${WORKSPACE_ARCHIVE_FORMAT}`);
+  if (!WORKSPACE_ARCHIVE_FORMATS.includes(archive.manifest?.format)) {
+    throw new PortabilityValidationError(
+      `archive format must be ${WORKSPACE_ARCHIVE_FORMATS.join(" or ")}`,
+    );
   }
   const sourceDeploymentId = uuid(
     archive.manifest.sourceDeploymentId,

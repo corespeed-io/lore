@@ -67,6 +67,11 @@ connection resets) is 400 `invalid_request`, not a server error.
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
 
+Export writes the `lore-workspace-v2` format. Import accepts it and the earlier
+`lore-workspace-v1`; the two differ only in how the checksum orders object keys
+(v2 by code unit, identically in every runtime; v1 by the runtime's default-locale
+collation), so an archive exported by an earlier release still imports.
+
 An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
 48,000,000 serialized bytes, so every archive export produces fits the
 50,000,000-byte import request limit. Export keeps a running size sum and reads only

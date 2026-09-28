@@ -27,6 +27,10 @@ export const MEMORY_CONTENT_LIMITS = {
 /** Published vocabularies, bounds, defaults, and patterns; clients never restate them. */
 export const LORE_CONTRACT = {
   "vocabularies": {
+    "workspaceArchiveFormats": [
+      "lore-workspace-v1",
+      "lore-workspace-v2"
+    ],
     "memoryScopes": [
       "shared",
       "private"
