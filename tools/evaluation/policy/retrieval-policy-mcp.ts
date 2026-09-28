@@ -107,6 +107,8 @@ function fixtureMemories(): LoreMcpMemoryClient {
     recordEpisode: async () => unavailable(),
     forgetMemory: async () => unavailable(),
     getMemory: async () => memory,
+    linkMemories: async () => unavailable(),
+    unlinkMemories: async () => unavailable(),
     listMemories: async () => ({ memories: [memory], nextCursor: null }),
     proposeMemory: async () => unavailable(),
     remember: async () => unavailable(),

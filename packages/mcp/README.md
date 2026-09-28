@@ -10,6 +10,10 @@ Its separate `lore_code_*` family searches exact revisions, queries bounded
 callers/callees with explicit ambiguous or unresolved targets, queues only
 operator-configured repositories, reads safe job status, and manages typed
 Memory-to-Code evidence without accepting a Workspace or filesystem path.
+`lore_link` writes a durable Memory Link by its natural key (source, target, kind),
+replacing an existing Link's weight and metadata, and `lore_unlink` deletes one. Both
+are marked destructive, and they are separate tools so a host can allow one and gate
+the other.
 It delegates all access control to Lore/Postgres RLS and stores no Memory or
 authorization state.
 

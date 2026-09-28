@@ -10,6 +10,8 @@ import {
   type EnqueueCodeIndexInput,
   type Episode,
   IDEMPOTENCY_KEY_PATTERN,
+  type LinkedMemories,
+  type LinkMemoriesInput,
   LORE_CONTRACT,
   LoreApiError,
   LoreClient,
@@ -18,6 +20,8 @@ import {
   MEMORY_CONTENT_LIMITS,
   type Memory,
   type MemoryCodeEvidence,
+  type MemoryLink,
+  type MemoryLinkKey,
   type MemoryPage,
   type MemoryProposal,
   type MemorySearchInput,
@@ -41,6 +45,8 @@ export interface LoreMcpMemoryClient {
   recordEpisode(input: RecordEpisodeInput, options?: MutationOptions): Promise<Episode>;
   forgetMemory(memoryId: string, options: VersionedMutationOptions): Promise<void>;
   getMemory(memoryId: string, signal?: AbortSignal): Promise<Memory>;
+  linkMemories(input: LinkMemoriesInput): Promise<LinkedMemories>;
+  unlinkMemories(input: MemoryLinkKey): Promise<void>;
   listMemories(input?: {
     limit?: number;
     cursor?: string;
@@ -224,6 +230,30 @@ const episodeSubmissionSchema = z.object({
   createdAt: z.string(),
 });
 
+const memoryLinkKindSchema = z.string().min(1).max(LIMITS.memoryLinkKindLength);
+const memoryLinkWeightSchema = z
+  .number()
+  .min(LIMITS.memoryLinkWeightMinimum)
+  .max(LIMITS.memoryLinkWeightMaximum);
+const memoryLinkKeySchema = z.object({
+  sourceMemoryId: z.string().uuid(),
+  targetMemoryId: z.string().uuid(),
+  kind: memoryLinkKindSchema.optional(),
+});
+const memoryLinkSchema = z.object({
+  id: z.string().uuid(),
+  sourceMemoryId: z.string().uuid(),
+  targetMemoryId: z.string().uuid(),
+  kind: memoryLinkKindSchema,
+  weight: memoryLinkWeightSchema,
+  metadata: metadataSchema,
+  metadataTruncated: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+/** How a Link is named in tool descriptions: its natural key and the kind default. */
+const LINK_KEY_HINT = `A Link is identified by (sourceMemoryId, targetMemoryId, kind); kind defaults to "${LORE_CONTRACT.defaults.memoryLinkKind}" and is matched exactly.`;
+
 type McpMemory = z.infer<typeof memorySchema>;
 type McpMemorySummary = z.infer<typeof memorySummarySchema>;
 
@@ -270,6 +300,20 @@ function mcpMemory(memory: Memory, contentBudget: number, metadataBudget: number
     ...mcpMemorySummary(memory, metadataBudget),
     content: content.value,
     contentTruncated: content.truncated,
+  };
+}
+
+/** A Link without its Workspace id, which is process configuration here. */
+function mcpMemoryLink(link: MemoryLink): z.infer<typeof memoryLinkSchema> {
+  return {
+    id: link.id,
+    sourceMemoryId: link.sourceMemoryId,
+    targetMemoryId: link.targetMemoryId,
+    kind: link.kind,
+    weight: link.weight,
+    ...boundedMetadata(link.metadata, DETAIL_METADATA_BUDGET),
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt,
   };
 }
 
@@ -742,6 +786,61 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     async ({ memoryId, version, idempotencyKey }) => {
       try {
         await memories.forgetMemory(memoryId, versionedMutationOptions(version, idempotencyKey));
+        return success({ deleted: true });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+}
+
+function registerLinkTools(server: McpServer, memories: LoreMcpMemoryClient): void {
+  // Separate tools, so a host can allow replacing Links while gating their deletion.
+  server.registerTool(
+    "lore_link",
+    {
+      title: "Link two Lore Memories",
+      description: `Create a durable, directed Link from a Memory this Actor may write to any Memory it can see. ${LINK_KEY_HINT} Repeating a call is safe. If the Link already exists, its weight and metadata are replaced: an omitted weight becomes ${LORE_CONTRACT.defaults.memoryLinkWeight} and omitted metadata becomes empty. not_found means an endpoint is missing, invisible, or not writable; memory_link_capacity_exceeded means a new Link would pass a bound on Links per source, per target, kinds per pair, or per Workspace.`,
+      inputSchema: memoryLinkKeySchema.extend({
+        weight: memoryLinkWeightSchema.optional(),
+        metadata: metadataSchema.optional(),
+      }),
+      outputSchema: z.object({ link: memoryLinkSchema, created: z.boolean() }),
+      // Destructive because it replaces an existing Link's weight and metadata.
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const { link, created } = await memories.linkMemories(input);
+        return success({ link: mcpMemoryLink(link), created });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "lore_unlink",
+    {
+      title: "Unlink two Lore Memories",
+      description: `Delete one durable Link from a Memory this Actor may write. ${LINK_KEY_HINT} This is destructive. not_found means this Actor has no Link with that key to delete: none exists, its source is not writable, or its target is not visible. A retry after an unknown outcome also gets not_found when the first call already deleted it.`,
+      inputSchema: memoryLinkKeySchema,
+      outputSchema: z.object({ deleted: z.literal(true) }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        await memories.unlinkMemories(input);
         return success({ deleted: true });
       } catch (error) {
         return failure(error);
@@ -1270,6 +1369,7 @@ export function createLoreMcpServer(options: LoreMcpServerOptions): McpServer {
     { capabilities: { tools: {} } },
   );
   registerTools(server, options.memories);
+  registerLinkTools(server, options.memories);
   registerContextTools(server, options.context);
   registerCodeTools(server, options.code);
   return server;

@@ -466,6 +466,120 @@ test("CLI rejects mutation options that do not belong to the selected command", 
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
+test("CLI links and unlinks Memories by natural key", async () => {
+  const source = "20000000-0000-4000-8000-000000000001";
+  const target = "20000000-0000-4000-8000-000000000002";
+  const link = {
+    id: "90000000-0000-4000-8000-000000000001",
+    workspaceId: WORKSPACE_ID,
+    sourceMemoryId: source,
+    targetMemoryId: target,
+    kind: "cites",
+    weight: 0.25,
+    metadata: { source: "cli" },
+    createdAt: "2026-08-09T00:00:00.000000Z",
+    updatedAt: "2026-08-09T00:00:00.000000Z",
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json(link, { status: 201 }))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+  const run = (args: string[]) => {
+    const captured = captureIo();
+    return runLoreCli(args, {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    }).then((exitCode) => ({ exitCode, stdout: captured.stdout.join("") }));
+  };
+
+  const linked = await run([
+    "memory",
+    "link",
+    source,
+    target,
+    "--kind",
+    "cites",
+    "--weight",
+    "0.25",
+    "--metadata",
+    '{"source":"cli"}',
+  ]);
+  const unlinked = await run(["memory", "unlink", source, target, "--kind", "cites"]);
+
+  expect(linked.exitCode).toBe(0);
+  expect(JSON.parse(linked.stdout)).toEqual({ link, created: true });
+  expect(unlinked.exitCode).toBe(0);
+  expect(JSON.parse(unlinked.stdout)).toEqual({ deleted: true });
+  const [putUrl, putInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(`${putUrl.pathname}${putUrl.search}`).toBe(
+    `/api/v1/memories/${source}/links/${target}?kind=cites`,
+  );
+  expect(putInit.method).toBe("PUT");
+  expect(JSON.parse(String(putInit.body))).toEqual({ weight: 0.25, metadata: { source: "cli" } });
+  const [deleteUrl, deleteInit] = fetchMock.mock.calls[1] as [URL, RequestInit];
+  expect(deleteUrl.href).toBe(putUrl.href);
+  expect(deleteInit.method).toBe("DELETE");
+});
+
+test("CLI links with the default kind and reports a missing Link as not_found", async () => {
+  const source = "20000000-0000-4000-8000-000000000001";
+  const target = "20000000-0000-4000-8000-000000000002";
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      Response.json(
+        {
+          id: "90000000-0000-4000-8000-000000000001",
+          workspaceId: WORKSPACE_ID,
+          sourceMemoryId: source,
+          targetMemoryId: target,
+          kind: "related",
+          weight: 1,
+          metadata: {},
+          createdAt: "2026-08-09T00:00:00.000000Z",
+          updatedAt: "2026-08-09T00:00:00.000000Z",
+        },
+        { status: 200 },
+      ),
+    )
+    .mockResolvedValueOnce(
+      Response.json({ code: "not_found", error: "Memory Link not found" }, { status: 404 }),
+    );
+  const run = async (args: string[]) => {
+    const captured = captureIo();
+    const exitCode = await runLoreCli(args, {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    });
+    return { exitCode, stdout: captured.stdout.join(""), stderr: captured.stderr.join("") };
+  };
+
+  const linked = await run(["memory", "link", source, target]);
+  const unlinked = await run(["memory", "unlink", source, target]);
+
+  expect(linked.exitCode).toBe(0);
+  // An existing Link answers 200, which the CLI reports as not created.
+  expect(JSON.parse(linked.stdout)).toMatchObject({ created: false, link: { kind: "related" } });
+  const [putUrl, putInit] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(putUrl.search).toBe("");
+  expect(JSON.parse(String(putInit.body))).toEqual({});
+  expect(unlinked).toEqual({
+    exitCode: 1,
+    stdout: "",
+    stderr: "lore: not_found (404): Memory Link not found\n",
+  });
+});
+
 test("CLI accepts private query text through stdin instead of argv", async () => {
   const captured = captureIo("private launch date\n");
   const fetchMock = vi.fn().mockResolvedValue(Response.json([]));
@@ -574,6 +688,81 @@ test.each<[string, string[], RegExp]>([
     "an unknown Memory scope",
     ["memory", "list", "--scope", "team"],
     /--scope must be shared or private/,
+  ],
+  [
+    "a Link weight outside the published range",
+    [
+      "memory",
+      "link",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--weight",
+      "1.5",
+    ],
+    /^lore: weight must be a number from 0 through 1\n$/,
+  ],
+  [
+    "a Link weight on unlink",
+    [
+      "memory",
+      "unlink",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--weight",
+      "1",
+    ],
+    /--weight is not valid for this command/,
+  ],
+  [
+    "a Link weight that is not a number",
+    [
+      "memory",
+      "link",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--weight",
+      "heavy",
+    ],
+    /--weight must be a number$/m,
+  ],
+  [
+    "a blank Link weight",
+    [
+      "memory",
+      "link",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--weight= ",
+    ],
+    /--weight must be a number$/m,
+  ],
+  [
+    "a negative Link weight",
+    [
+      "memory",
+      "link",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--weight=-0.1",
+    ],
+    /^lore: weight must be a number from 0 through 1\n$/,
+  ],
+  [
+    "a Link without its target",
+    ["memory", "link", "20000000-0000-4000-8000-000000000001"],
+    /Usage: lore memory link <source-memory-id> <target-memory-id>/,
+  ],
+  [
+    "Link metadata on unlink",
+    [
+      "memory",
+      "unlink",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--metadata",
+      "{}",
+    ],
+    /--metadata is not valid for this command/,
   ],
 ])(
   "CLI refuses %s from the published contract before any request",

@@ -9,7 +9,11 @@ Memory, and Observation evidence share one 50-item limit.
 `episode record --stdin` durably records raw evidence without exposing private
 content in process arguments. `code dependencies callers|callees` queries one
 exact repository commit and accepts exactly one symbol or repository-relative
-source path; run `lore --help` for the command surface.
+source path. `memory link` and `memory unlink` write and delete a Memory Link by its
+source, target, and `--kind`: repeating a link is safe, and it replaces an existing
+Link whole (an omitted `--weight` becomes 1 and omitted `--metadata` becomes `{}`); a
+repeated unlink reports `not_found` once the Link is gone. Run `lore --help` for the
+command surface.
 
 Requires Bun 1.4.2 or newer. Install with `bun add --global @corespeed/lore-cli`
 and run `lore --help`. The executable disables automatic `.env` loading; pass

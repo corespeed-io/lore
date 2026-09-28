@@ -157,7 +157,20 @@ search, or Graph `limit` or `offset` outside its published bounds answers 400
 `invalid_request`. A Memory list without `limit` returns up to 50 Memories and a
 search (`q`) up to 10, as the SDK does; MCP `lore_search` also defaults to 10, while
 `lore_list` defaults to and caps at 25 to fit its output budget. Direct update/forget and
-update proposals require the current positive Memory version. Proposal listing and review
+update proposals require the current positive Memory version. `linkMemories` and `unlinkMemories`
+write and delete a Memory Link by its natural key (source, target, kind; kind
+defaults to `related`) through `PUT`/`DELETE /api/v1/memories/{memoryId}/links/{targetMemoryId}`.
+They need no version or Idempotency-Key: `PUT` answers 201 when it created the Link
+and 200 when one existed (its weight and metadata replaced, or left unchanged), and a
+retried `DELETE` answers 404. The source must be writable and the target visible to
+the Actor; a missing, invisible, or unwritable endpoint is one indistinguishable
+404. Creating a Link past 16 kinds from one Memory to another, 1,000 Links from one
+source or to one target, or 50,000 in the Workspace is a 409
+`memory_link_capacity_exceeded`; replacing an existing Link never is. `graph()` returns
+the newest 40,000 durable Links at most, with `linksTruncated`, and each link's
+`derived` tells a Memory Affinity from a durable Link. SDK 0.3.0 adds those two Graph
+fields to `/api/v1`; a v1 response may gain properties in a later release, so a client
+generated from OpenAPI must ignore properties it does not know. Proposal listing and review
 require a human Actor; a write-granted Agent may submit a proposal but cannot accept
 it. Review is status-idempotent: repeating the same decision has no additional
 effect, while the opposite decision returns a conflict.
@@ -217,6 +230,9 @@ printf %s "new fact" | bun --no-env-file packages/cli/dist/bin.js memory update 
   --version 2 --stdin --idempotency-key fact-update-1
 bun --no-env-file packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3 \
   --idempotency-key fact-forget-1
+bun --no-env-file packages/cli/dist/bin.js memory link SOURCE_UUID TARGET_UUID \
+  --kind supports --weight 0.8
+bun --no-env-file packages/cli/dist/bin.js memory unlink SOURCE_UUID TARGET_UUID --kind supports
 bun --no-env-file packages/cli/dist/bin.js capabilities
 bun --no-env-file packages/cli/dist/bin.js readiness
 ```
@@ -245,6 +261,10 @@ It exposes:
 - `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, metadata, or visibility;
 - `lore_forget` as an explicitly destructive tool.
+- `lore_link` as a destructive, idempotent Memory Link write by natural key
+  (destructive because it replaces an existing Link's weight and metadata), and
+  `lore_unlink` as its separate destructive deletion, so a host can gate the two
+  independently;
 - `lore_retrieve_context` as the read-only joint Memory/Code orchestration tool;
 - `lore_code_search`, `lore_code_dependencies`, and `lore_code_index_status` as
   bounded exact-revision Code reads;
