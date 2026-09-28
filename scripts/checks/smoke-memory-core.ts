@@ -613,62 +613,76 @@ try {
     204,
     "delete the raced Memory Link",
   );
-  // A forget that is under way when an update Proposal is submitted must not leave
-  // that Proposal, which copies the Memory's content, or its replay body behind: the
-  // submission waits for the forget and then finds no target.
-  const forgetRaceTarget = await expectJson<{ id: string }>(
-    await app.request(
-      jsonRequest("/api/v1/memories", {
-        method: "POST",
-        headers: aliceHeaders,
-        body: { content: "Forget race target: amber heron." },
+  // A forget under way when a Proposal is submitted must not leave that Proposal, or
+  // its replay body, behind. An update's target is locked, so the submission waits
+  // and then finds no target; an evidence Memory's foreign key waits the same way and
+  // then refuses the row. Both answer 403, and nothing is stored.
+  const forgetRaces: Array<{ key: string; body: (memoryId: string) => Record<string, unknown> }> = [
+    {
+      key: "smoke-proposal-forget-race-target",
+      body: (memoryId) => ({
+        kind: "update",
+        targetMemoryId: memoryId,
+        expectedVersion: 1,
+        content: "Forget race proposal: amber heron.",
       }),
-    ),
-    201,
-    "create forget-race target",
-  );
-  const forgetter = new Client({ connectionString: smokeDatabaseUrl });
-  await forgetter.connect();
-  let racedProposal: Response;
-  try {
-    await forgetter.query("BEGIN");
-    await forgetter.query("DELETE FROM memories WHERE id = $1", [forgetRaceTarget.id]);
-    const submitting = app.request(
-      jsonRequest("/api/v1/memory-proposals", {
-        method: "POST",
-        headers: { ...aliceHeaders, "idempotency-key": "smoke-proposal-forget-race-1" },
-        body: {
-          kind: "update",
-          targetMemoryId: forgetRaceTarget.id,
-          expectedVersion: 1,
-          content: "Forget race proposal: amber heron.",
-        },
+    },
+    {
+      key: "smoke-proposal-forget-race-evidence",
+      body: (memoryId) => ({
+        kind: "create",
+        content: "Forget race proposal citing forgotten evidence: amber heron.",
+        evidenceMemoryIds: [memoryId],
       }),
+    },
+  ];
+  for (const race of forgetRaces) {
+    const forgotten = await expectJson<{ id: string }>(
+      await app.request(
+        jsonRequest("/api/v1/memories", {
+          method: "POST",
+          headers: aliceHeaders,
+          body: { content: `Forget race Memory for ${race.key}.` },
+        }),
+      ),
+      201,
+      `create Memory for ${race.key}`,
     );
-    await waitForLockWaiters(forgetter, 1);
-    await forgetter.query("COMMIT");
-    racedProposal = await submitting;
-  } finally {
-    await forgetter.end();
-  }
-  await expectStatus(racedProposal, 403, "refuse a Proposal whose target was forgotten meanwhile");
-  const forgetRaceLeftovers = new Client({ connectionString: smokeDatabaseUrl });
-  await forgetRaceLeftovers.connect();
-  try {
-    const leftovers = await forgetRaceLeftovers.query<{ proposals: number; replays: number }>(
-      `SELECT
-         (SELECT count(*)::integer FROM memory_proposals WHERE target_memory_id = $1) AS proposals,
-         (SELECT count(*)::integer FROM request_idempotency_records
-          WHERE idempotency_key = 'smoke-proposal-forget-race-1') AS replays`,
-      [forgetRaceTarget.id],
-    );
-    assert.deepEqual(
-      leftovers.rows[0],
-      { proposals: 0, replays: 0 },
-      "a forget racing a Proposal submission must leave neither the Proposal nor its replay",
-    );
-  } finally {
-    await forgetRaceLeftovers.end();
+    const forgetter = new Client({ connectionString: smokeDatabaseUrl });
+    await forgetter.connect();
+    try {
+      await forgetter.query("BEGIN");
+      await forgetter.query("DELETE FROM memories WHERE id = $1", [forgotten.id]);
+      const submitting = app.request(
+        jsonRequest("/api/v1/memory-proposals", {
+          method: "POST",
+          headers: { ...aliceHeaders, "idempotency-key": race.key },
+          body: race.body(forgotten.id),
+        }),
+      );
+      await waitForLockWaiters(forgetter, 1);
+      await forgetter.query("COMMIT");
+      await expectStatus(
+        await submitting,
+        403,
+        `refuse ${race.key} after its Memory was forgotten`,
+      );
+      const leftovers = await forgetter.query<{ proposals: number; replays: number }>(
+        `SELECT
+           (SELECT count(*)::integer FROM memory_proposals
+            WHERE target_memory_id = $1 OR proposed_content LIKE 'Forget race proposal%') AS proposals,
+           (SELECT count(*)::integer FROM request_idempotency_records
+            WHERE idempotency_key = $2) AS replays`,
+        [forgotten.id, race.key],
+      );
+      assert.deepEqual(
+        leftovers.rows[0],
+        { proposals: 0, replays: 0 },
+        `${race.key}: a forget racing a Proposal submission must leave neither behind`,
+      );
+    } finally {
+      await forgetter.end();
+    }
   }
   const linkPath = `/api/v1/memories/${acceptedMemory.id}/links/${linkTarget.id}?kind=cites`;
   const createdLink = await expectJson<{ id: string; weight: number }>(

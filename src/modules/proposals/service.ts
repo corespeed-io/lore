@@ -53,6 +53,20 @@ export class MemoryProposalAccessDeniedError extends DomainError {
   readonly code = "access_denied";
 }
 
+/**
+ * Evidence visible when checked but forgotten before its row was inserted: the
+ * foreign key waited for the forget and then refused the row. That reads exactly
+ * like evidence that was never visible.
+ */
+function refuseForgottenEvidence(error: unknown): never {
+  if (error instanceof Error && "code" in error && error.code === "23503") {
+    throw new MemoryProposalAccessDeniedError(
+      "Proposal evidence must be visible in the current Workspace",
+    );
+  }
+  throw error;
+}
+
 export class MemoryProposalReviewConflictError extends DomainError {
   override name = "MemoryProposalReviewConflictError";
   readonly code = "proposal_review_conflict";
@@ -415,7 +429,11 @@ export function createMemoryProposalsModule(
             // Hold the target until this Proposal commits. A forget already under way
             // makes this wait and then find no row; a later one waits for this commit,
             // so its scrub sees this Proposal and its replay row. The target has no
-            // foreign key that would take this lock on the insert.
+            // foreign key that would take this lock on the insert (evidence does). The
+            // lock also makes an update or acceptance of the target, which locks it FOR
+            // UPDATE, wait for this commit. When this request reclaimed an expired key
+            // whose stored body names the same target, a forget already holding the
+            // target waits on that ledger row too, and one side gets a retryable 409.
             const target = await transaction.query<MemoryRow>(
               `SELECT *
                FROM memories
@@ -503,20 +521,24 @@ export function createMemoryProposalsModule(
           );
           const id = inserted.rows[0].id;
           for (const [ordinal, memoryId] of evidenceMemoryIds.entries()) {
-            await transaction.query(
-              `INSERT INTO memory_proposal_evidence (
-                 workspace_id, proposal_id, memory_id, ordinal
-               ) VALUES ($1, $2, $3, $4)`,
-              [actor.workspaceId, id, memoryId, ordinal],
-            );
+            await transaction
+              .query(
+                `INSERT INTO memory_proposal_evidence (
+                   workspace_id, proposal_id, memory_id, ordinal
+                 ) VALUES ($1, $2, $3, $4)`,
+                [actor.workspaceId, id, memoryId, ordinal],
+              )
+              .catch(refuseForgottenEvidence);
           }
           for (const [ordinal, observationId] of evidenceObservationIds.entries()) {
-            await transaction.query(
-              `INSERT INTO memory_proposal_observation_evidence (
-                 workspace_id, proposal_id, observation_id, observation_reference_id, ordinal
-               ) VALUES ($1, $2, $3, $3, $4)`,
-              [actor.workspaceId, id, observationId, ordinal],
-            );
+            await transaction
+              .query(
+                `INSERT INTO memory_proposal_observation_evidence (
+                   workspace_id, proposal_id, observation_id, observation_reference_id, ordinal
+                 ) VALUES ($1, $2, $3, $3, $4)`,
+                [actor.workspaceId, id, observationId, ordinal],
+              )
+              .catch(refuseForgottenEvidence);
           }
           const storedCodeEvidence: MemoryProposalCodeEvidence[] = [];
           for (const [ordinal, requestedEvidence] of codeEvidence.entries()) {
