@@ -121,7 +121,8 @@ its own:
 
 - **Errors carry no HTTP status.** Map them by class: `LoreValidationError`
   (including `MemoryContentValidationError`) is a 400 input refusal that names its
-  `field`; `MemoryVersionConflictError` is 412; `MemoryAccessDeniedError` is 403.
+  `field`; `MemoryVersionConflictError` is 412; `MemoryAccessDeniedError` is 403;
+  `MemoryLinkCapacityError` is 409 and names the `limit` it hit.
   A host that read a `.status` property from engine errors now gets none. An
   out-of-range Episode evidence retrieval knob (neighbor chunks, top Observations,
   planner queries, rerank candidate limit, minimum score, and weight, and the
@@ -134,6 +135,34 @@ its own:
   limits and offsets, scope, metadata, and Episode evidence search inputs all throw
   `LoreValidationError`.
   `graph.connect` used to trim its kind and clamp its weight.
+- **`graph.connect` is an upsert by natural key; `graph.disconnect` deletes by it.**
+  A Link is identified by (source, target, kind). `connect` creates it, or replaces
+  an existing one's weight and metadata (omitted fields return to their defaults),
+  and returns `{ link, created }`; a repeat with the same values writes nothing and
+  emits no Link event. `disconnect({ sourceMemoryId, targetMemoryId, kind? })`
+  returns whether it deleted a Link. Both lock the source Memory `FOR NO KEY UPDATE`
+  and read the target through the host store, and answer `null`/`false`, not an
+  error, when the store cannot lock the source or see the target; under RLS that
+  lock admits only a source the caller may write. `connect` used to insert only,
+  failing on a duplicate natural key or an unreachable endpoint. If the store stops
+  showing an existing Link before its replacement lands, `connect` answers `null`;
+  if the target vanishes before a new Link's insert, the database's error (under
+  OSS, an RLS refusal or a foreign-key violation) surfaces for the host to map.
+  `connect` throws `MemoryLinkCapacityError` (a fourth public failure class, a 409,
+  whose `limit` names the bound) rather than create a Link past a
+  `MEMORY_LINK_LIMITS` bound: kinds per directed pair, Links per source, Links per
+  target, and Links per partition. Each count stops at its bound and runs through
+  the host store, so under RLS it counts only the writer's visible Links. Replacing
+  an existing Link never counts.
+  These writes need UPDATE and DELETE on `memory_links` and a row-lockable
+  `memories`, which `missingSchemaContract` cannot check: under RLS the source lock
+  applies the `memories` UPDATE policy, and a Link's rewrite or deletion applies the
+  `memory_links` UPDATE or DELETE policy.
+- **A Graph read is bounded in links as well as nodes.** `read()` returns the newest
+  `MEMORY_GRAPH_LIMITS.maximumLinks` durable Links at most (in creation order, no
+  metadata) and `linksTruncated`; a cut suppresses affinity. Every `MemoryGraphLink` carries
+  `derived`, true only for affinity edges. A port that read every Link, or told
+  affinity apart by `kind`, must adopt both.
 - **Batch primitives validate every record before any statement**, and a refusal
   names the record: `records[i].content`, `links[i].weight`. `insertMemoriesInTransaction`
   takes the ids it inserts; give it fresh UUIDs, never ids from an archive, or a

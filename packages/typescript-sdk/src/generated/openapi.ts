@@ -354,6 +354,24 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/memories/{memoryId}/links/{targetMemoryId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        /** @description Create the Link with this natural key, or replace an existing one's weight and metadata; repeating it is safe. The source must be writable and the target visible to the Actor; a missing, invisible, or unwritable endpoint is one 404. Creating a Link past 16 kinds from one Memory to another, 1000 Links from one source, 1000 Links to one target, or 50000 Links in the Workspace, counted as the Actor can see them, is a 409 memory_link_capacity_exceeded; replacing an existing Link never is. */
+        readonly put: operations["putMemoryLink"];
+        readonly post?: never;
+        /** @description Delete the Link with this natural key. A Link that does not exist, or whose source this Actor may not write or target it cannot see, is one 404. */
+        readonly delete: operations["deleteMemoryLink"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/memory-proposals": {
         readonly parameters: {
             readonly query?: never;
@@ -834,7 +852,7 @@ export interface components {
              * @description Stable failure code. A later release may add codes, so clients must accept a code they do not know and classify it by HTTP status.
              * @enum {string}
              */
-            readonly code: "access_denied" | "agent_not_disabled" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
+            readonly code: "access_denied" | "agent_not_disabled" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "memory_link_capacity_exceeded" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
             readonly error: string;
         };
         readonly EvaluationCase: {
@@ -988,10 +1006,15 @@ export interface components {
             readonly validationState: "current" | "moved" | "changed" | "deleted" | "ambiguous" | "unverifiable";
         };
         readonly MemoryGraph: {
+            /** @description The newest 40000 durable Memory Links at most, in creation order, followed by any derived affinity edges. */
             readonly links: readonly components["schemas"]["MemoryGraphLink"][];
+            /** @description True when the read cut durable Links at the budget. Isolation is then unknown, so no affinity edge is derived. */
+            readonly linksTruncated: boolean;
             readonly nodes: readonly components["schemas"]["MemoryGraphNode"][];
         };
         readonly MemoryGraphLink: {
+            /** @description True for an affinity edge derived from content, false for a durable Memory Link. Only a durable Link can be deleted; tell them apart by this field, never by kind. */
+            readonly derived: boolean;
             readonly kind: string;
             /** Format: uuid */
             readonly source: string;
@@ -1010,6 +1033,25 @@ export interface components {
             readonly type: string;
             /** Format: date-time */
             readonly updatedAt: string;
+        };
+        readonly MemoryLink: {
+            /** Format: date-time */
+            readonly createdAt: string;
+            /** Format: uuid */
+            readonly id: string;
+            readonly kind: string;
+            readonly metadata: {
+                readonly [key: string]: unknown;
+            };
+            /** Format: uuid */
+            readonly sourceMemoryId: string;
+            /** Format: uuid */
+            readonly targetMemoryId: string;
+            /** Format: date-time */
+            readonly updatedAt: string;
+            readonly weight: number;
+            /** Format: uuid */
+            readonly workspaceId: string;
         };
         readonly MemoryProposal: {
             readonly acceptedMemoryId: string | null;
@@ -1155,6 +1197,15 @@ export interface components {
             readonly artifactId: string;
             /** @enum {string} */
             readonly relationship: "supports" | "contradicts" | "implements" | "rationale";
+        };
+        /** @description Omitted fields take their defaults, as a PUT replaces the whole Link. */
+        readonly PutMemoryLinkInput: {
+            /** @default {} */
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /** @default 1 */
+            readonly weight?: number;
         };
         readonly RankingMetrics: {
             readonly forbiddenRetrievedIds: readonly string[];
@@ -2312,6 +2363,78 @@ export interface operations {
                     readonly "application/json": components["schemas"]["MemoryCodeEvidence"];
                 };
             };
+        };
+    };
+    readonly putMemoryLink: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. */
+                readonly kind?: string;
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+                readonly targetMemoryId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["PutMemoryLinkInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Existing Memory Link, replaced or unchanged */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryLink"];
+                };
+            };
+            /** @description Created Memory Link */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryLink"];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
+            readonly 409: components["responses"]["Error"];
+        };
+    };
+    readonly deleteMemoryLink: {
+        readonly parameters: {
+            readonly query?: {
+                /** @description The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. */
+                readonly kind?: string;
+            };
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+                readonly targetMemoryId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Deleted */
+            readonly 204: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
         };
     };
     readonly listMemoryProposals: {

@@ -36,6 +36,14 @@ function integer(document: unknown, path: string): number {
   return value;
 }
 
+function finiteNumber(document: unknown, path: string): number {
+  const value = at(document, path);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(`OpenAPI ${path} must be a finite number`);
+  }
+  return value;
+}
+
 function text(document: unknown, path: string): string {
   const value = at(document, path);
   if (typeof value !== "string" || !value) throw new TypeError(`OpenAPI ${path} must be a string`);
@@ -64,8 +72,9 @@ export function same<T>(
 }
 
 /**
- * The published vocabularies, bounds, and patterns clients enforce before a
- * request, read from the canonical document so they can never drift from it.
+ * The published vocabularies, bounds, defaults, and patterns clients enforce or
+ * send before a request, read from the canonical document so they can never
+ * drift from it.
  */
 export function clientContract(document: unknown) {
   const schemas = "/components/schemas";
@@ -74,6 +83,13 @@ export function clientContract(document: unknown) {
   const context = `${schemas}/RetrieveContextInput/properties`;
   const codeSearch = "/paths/~1api~1v1~1code~1search/get/parameters";
   const codeDependencies = "/paths/~1api~1v1~1code~1dependencies/get/parameters";
+  const memoryLink = "/paths/~1api~1v1~1memories~1{memoryId}~1links~1{targetMemoryId}";
+  const linkWeights = [
+    `${schemas}/PutMemoryLinkInput/properties/weight`,
+    `${schemas}/MemoryLink/properties/weight`,
+    `${schemas}/MemoryGraphLink/properties/weight`,
+    `${schemas}/WorkspaceArchiveLink/properties/weight`,
+  ];
   const idempotentWrites = [
     "/paths/~1api~1v1~1memories/post",
     "/paths/~1api~1v1~1memories~1{memoryId}/patch",
@@ -215,9 +231,35 @@ export function clientContract(document: unknown) {
           (operation) => `${operation}/parameters/[Idempotency-Key]/schema/maxLength`,
         ),
       ),
+      memoryLinkKindLength: same(integer, document, [
+        `${memoryLink}/put/parameters/[kind]/schema/maxLength`,
+        `${memoryLink}/delete/parameters/[kind]/schema/maxLength`,
+        `${schemas}/MemoryLink/properties/kind/maxLength`,
+        `${schemas}/WorkspaceArchiveLink/properties/kind/maxLength`,
+      ]),
+      memoryLinkWeightMinimum: same(
+        finiteNumber,
+        document,
+        linkWeights.map((path) => `${path}/minimum`),
+      ),
+      memoryLinkWeightMaximum: same(
+        finiteNumber,
+        document,
+        linkWeights.map((path) => `${path}/maximum`),
+      ),
       workspaceNameLength: integer(
         document,
         "/paths/~1api~1v1~1workspaces/post/requestBody/content/application~1json/schema/properties/name/maxLength",
+      ),
+    },
+    defaults: {
+      memoryLinkKind: same(text, document, [
+        `${memoryLink}/put/parameters/[kind]/schema/default`,
+        `${memoryLink}/delete/parameters/[kind]/schema/default`,
+      ]),
+      memoryLinkWeight: finiteNumber(
+        document,
+        `${schemas}/PutMemoryLinkInput/properties/weight/default`,
       ),
     },
     patterns: {

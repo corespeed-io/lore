@@ -7,6 +7,7 @@ export const LORE_ERROR_CODES = [
   "internal_error",
   "invalid_archive",
   "invalid_request",
+  "memory_link_capacity_exceeded",
   "method_not_allowed",
   "not_found",
   "payload_too_large",
@@ -23,7 +24,7 @@ export const MEMORY_CONTENT_LIMITS = {
   "maximumCharacters": 32000
 } as const;
 
-/** Published vocabularies, bounds, and patterns; clients never restate them. */
+/** Published vocabularies, bounds, defaults, and patterns; clients never restate them. */
 export const LORE_CONTRACT = {
   "vocabularies": {
     "memoryScopes": [
@@ -153,7 +154,14 @@ export const LORE_CONTRACT = {
     "codeIndexJobListDefault": 20,
     "cursorLength": 512,
     "idempotencyKeyLength": 128,
+    "memoryLinkKindLength": 64,
+    "memoryLinkWeightMinimum": 0,
+    "memoryLinkWeightMaximum": 1,
     "workspaceNameLength": 120
+  },
+  "defaults": {
+    "memoryLinkKind": "related",
+    "memoryLinkWeight": 1
   },
   "patterns": {
     "commitOid": "^[0-9a-f]{40}([0-9a-f]{24})?$",

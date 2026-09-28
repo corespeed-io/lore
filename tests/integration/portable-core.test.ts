@@ -322,11 +322,13 @@ test("Memory Link mutations append content-free events in the same transaction",
   const graph = createMemoryGraphModule(testContext.database);
   const source = await memories.remember(testContext.alice, { content: "Source" });
   const target = await memories.remember(testContext.alice, { content: "Target" });
-  const link = await graph.connect(testContext.alice, {
-    sourceMemoryId: source.id,
-    targetMemoryId: target.id,
-    kind: "supports",
-  });
+  const endpoints = { sourceMemoryId: source.id, targetMemoryId: target.id, kind: "supports" };
+  const connected = await graph.connect(testContext.alice, endpoints);
+  if (!connected) throw new Error("Expected the Link to be created");
+  const { link } = connected;
+  // A repeat with the same values writes nothing; a replaced weight is one update.
+  await graph.connect(testContext.alice, endpoints);
+  await graph.connect(testContext.alice, { ...endpoints, weight: 0.5 });
 
   await testContext.database.transaction(async (transaction) => {
     await installActorContext(transaction, testContext.alice);
@@ -336,11 +338,12 @@ test("Memory Link mutations append content-free events in the same transaction",
     transaction.query<{
       after_content_sha256: string | null;
       before_content_sha256: string | null;
+      changed_fields: string[];
       event_type: string;
       resource_id: string;
       resource_type: string;
     }>(
-      `SELECT resource_type, resource_id, event_type,
+      `SELECT resource_type, resource_id, event_type, changed_fields,
               before_content_sha256, after_content_sha256
        FROM memory_events
        WHERE resource_type = 'memory_link'
@@ -352,6 +355,15 @@ test("Memory Link mutations append content-free events in the same transaction",
       resource_type: "memory_link",
       resource_id: link.id,
       event_type: "memory_link.created",
+      changed_fields: ["endpoints", "kind", "metadata", "weight"],
+      before_content_sha256: null,
+      after_content_sha256: null,
+    },
+    {
+      resource_type: "memory_link",
+      resource_id: link.id,
+      event_type: "memory_link.updated",
+      changed_fields: ["weight"],
       before_content_sha256: null,
       after_content_sha256: null,
     },
@@ -359,6 +371,7 @@ test("Memory Link mutations append content-free events in the same transaction",
       resource_type: "memory_link",
       resource_id: link.id,
       event_type: "memory_link.deleted",
+      changed_fields: ["endpoints", "kind", "metadata", "weight"],
       before_content_sha256: null,
       after_content_sha256: null,
     },

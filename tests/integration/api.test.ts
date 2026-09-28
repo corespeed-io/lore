@@ -1,8 +1,10 @@
-import { MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
+import { MEMORY_LINK_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
+import { createMemoryModule } from "@/modules/memories/service";
 import { createApi } from "@/server/api/app";
 import { createAccessModule } from "@/server/auth/access";
+import { loreOpenApiDocument } from "@/server/openapi/document";
 import { createMemoryTestContext } from "../support/memory-context";
 
 afterEach(() => {
@@ -686,6 +688,235 @@ test("HTTP routes reject malformed UUIDs before Postgres", async () => {
   ]);
 
   expect(responses.map((response) => response.status)).toEqual([400, 400, 400, 400, 400, 400, 400]);
+});
+
+test("Memory Link HTTP writes by natural key with one 404 for any unreachable endpoint", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const agent = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Link Agent",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const source = await memories.remember(testContext.alice, { content: "Link source." });
+  const target = await memories.remember(testContext.alice, { content: "Link target." });
+  const bobShared = await memories.remember(testContext.bob, { content: "Bob shared." });
+  const bobPrivate = await memories.remember(testContext.bob, {
+    content: "Bob private.",
+    scope: "private",
+  });
+  const send = (method: string, sourceId: string, targetId: string, body?: unknown, query = "") =>
+    app.request(
+      new Request(`http://lore.local/api/v1/memories/${sourceId}/links/${targetId}${query}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${credential.token}`,
+          "x-lore-workspace-id": testContext.alice.workspaceId,
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+
+  const created = await send("PUT", source.id, target.id, { metadata: { why: "evidence" } });
+  const repeated = await send("PUT", source.id, target.id, { metadata: { why: "evidence" } });
+  const replaced = await send("PUT", source.id, target.id, { weight: 0.5 });
+  const cites = await send("PUT", source.id, target.id, {}, "?kind=cites");
+  expect([created.status, repeated.status, replaced.status, cites.status]).toEqual([
+    201, 200, 200, 201,
+  ]);
+  const createdLink = (await created.json()) as { id: string; updatedAt: string };
+  expect(createdLink).toMatchObject({
+    workspaceId: testContext.alice.workspaceId,
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: "related",
+    weight: 1,
+    metadata: { why: "evidence" },
+  });
+  await expect(repeated.json()).resolves.toEqual(createdLink);
+  await expect(replaced.json()).resolves.toMatchObject({
+    id: createdLink.id,
+    weight: 0.5,
+    metadata: {},
+  });
+  await expect(cites.json()).resolves.toMatchObject({ kind: "cites" });
+
+  // A missing target, an invisible one, and a source this Actor may not write are
+  // indistinguishable, for PUT and for DELETE.
+  const missing = "40000000-0000-4000-8000-0000000000ff";
+  const unreachable = [
+    await send("PUT", source.id, missing, {}),
+    await send("PUT", source.id, bobPrivate.id, {}),
+    await send("PUT", bobShared.id, target.id, {}),
+    await send("PUT", missing, target.id, {}),
+  ];
+  const unreachableBodies = await Promise.all(unreachable.map((response) => response.json()));
+  expect(unreachable.map((response) => response.status)).toEqual([404, 404, 404, 404]);
+  expect(new Set(unreachableBodies.map((body) => JSON.stringify(body))).size).toBe(1);
+  const absent = [
+    await send("DELETE", source.id, missing),
+    await send("DELETE", source.id, bobPrivate.id),
+    await send("DELETE", bobShared.id, target.id),
+    await send("DELETE", source.id, target.id, undefined, "?kind=supports"),
+  ];
+  const absentBodies = await Promise.all(absent.map((response) => response.json()));
+  expect(absent.map((response) => response.status)).toEqual([404, 404, 404, 404]);
+  expect(new Set(absentBodies.map((body) => JSON.stringify(body))).size).toBe(1);
+
+  const invalid = await Promise.all([
+    send("PUT", source.id, source.id, {}),
+    send("PUT", source.id, target.id, { weight: 2 }),
+    send("PUT", source.id, target.id, { weight: "1" }),
+    send("PUT", source.id, target.id, { kind: "cites" }),
+    send("PUT", source.id, target.id, {}, "?kind="),
+    send("PUT", source.id, target.id, {}, `?kind=${"k".repeat(65)}`),
+    send("PUT", source.id, target.id),
+    send("PUT", "not-a-uuid", target.id, {}),
+    send("DELETE", source.id, "not-a-uuid"),
+  ]);
+  expect(invalid.map((response) => response.status)).toEqual([
+    400, 400, 400, 400, 400, 400, 400, 400, 400,
+  ]);
+
+  const deleted = await send("DELETE", source.id, target.id);
+  const deletedAgain = await send("DELETE", source.id, target.id);
+  expect(deleted.status).toBe(204);
+  expect(deletedAgain.status).toBe(404);
+  // Link writes are versioned-only resources.
+  const unversioned = await app.request(
+    new Request(`http://lore.local/api/memories/${source.id}/links/${target.id}?kind=cites`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${credential.token}`,
+        "x-lore-workspace-id": testContext.alice.workspaceId,
+      },
+    }),
+  );
+  expect(unversioned.status).toBe(404);
+  expect((await send("DELETE", source.id, target.id, undefined, "?kind=cites")).status).toBe(204);
+});
+
+test("Memory Link HTTP bodies carry exactly the published fields and keep the kind as sent", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const agent = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Link Shape Agent",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const source = await memories.remember(testContext.alice, { content: "Shape source." });
+  const target = await memories.remember(testContext.alice, { content: "Shape target." });
+  const send = (method: string, path: string, body?: string) =>
+    app.request(
+      new Request(`http://lore.local/api/v1/memories/${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${credential.token}`,
+          "x-lore-workspace-id": testContext.alice.workspaceId,
+        },
+        ...(body === undefined ? {} : { body }),
+      }),
+    );
+  const upper = `${source.id.toUpperCase()}/links/${target.id.toUpperCase()}`;
+  const exact = `${source.id}/links/${target.id}`;
+
+  const created = await send("PUT", `${upper}?kind=%20cites%20`, JSON.stringify({ weight: 0.25 }));
+  expect(created.status).toBe(201);
+  const link = (await created.json()) as Record<string, unknown>;
+  const schema = (
+    loreOpenApiDocument() as {
+      components: { schemas: { MemoryLink: { required: string[] } } };
+    }
+  ).components.schemas.MemoryLink;
+  // The schema forbids additional properties, so the body must name exactly these.
+  expect(Object.keys(link).sort()).toEqual([...schema.required].sort());
+  expect(link).toMatchObject({
+    sourceMemoryId: source.id,
+    targetMemoryId: target.id,
+    kind: " cites ",
+    weight: 0.25,
+  });
+  expect(link.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+  expect(link.updatedAt).toBe(link.createdAt);
+
+  // The trimmed kind names a different Link; the exact one deletes it.
+  expect((await send("DELETE", `${exact}?kind=cites`)).status).toBe(404);
+  expect((await send("DELETE", `${exact}?kind=%20cites%20`)).status).toBe(204);
+
+  const refused = [
+    await send("DELETE", `${source.id}/links/${source.id.toUpperCase()}`),
+    await send("DELETE", `${exact}?kind=%20`),
+    await send("DELETE", `${exact}?kind=${"k".repeat(65)}`),
+    await send("PUT", `${exact}?kind=cites%00`, "{}"),
+    await send("PUT", exact, JSON.stringify({ metadata: ["not", "an", "object"] })),
+    await send("PUT", exact, JSON.stringify({ weight: 1e-50 })),
+    await send("PUT", exact, "[]"),
+    await send("PUT", exact, "{"),
+  ];
+  expect(refused.map((response) => response.status)).toEqual([
+    400, 400, 400, 400, 400, 400, 400, 400,
+  ]);
+  for (const response of refused) {
+    await expect(response.json()).resolves.toMatchObject({ code: "invalid_request" });
+  }
+  await testContext.close();
+});
+
+test("Memory Link HTTP answers a new Link past its bound with 409 memory_link_capacity_exceeded", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const memories = createMemoryModule(testContext.database);
+  const agent = await access.createAgentForWorkspace(testContext.alice, {
+    name: "Bounded Link Agent",
+    permission: "write",
+  });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const source = await memories.remember(testContext.alice, { content: "Bounded source." });
+  const target = await memories.remember(testContext.alice, { content: "Bounded target." });
+  const put = (kind: string, body: unknown = {}) =>
+    app.request(
+      new Request(
+        `http://lore.local/api/v1/memories/${source.id}/links/${target.id}?kind=${kind}`,
+        {
+          method: "PUT",
+          headers: {
+            authorization: `Bearer ${credential.token}`,
+            "x-lore-workspace-id": testContext.alice.workspaceId,
+          },
+          body: JSON.stringify(body),
+        },
+      ),
+    );
+  for (let index = 0; index < MEMORY_LINK_LIMITS.maximumKindsPerPair; index += 1) {
+    expect((await put(`kind-${index}`)).status).toBe(201);
+  }
+
+  const refused = await put("one-too-many");
+  const replaced = await put("kind-0", { weight: 0.25 });
+
+  expect(refused.status).toBe(409);
+  await expect(refused.json()).resolves.toEqual({
+    code: "memory_link_capacity_exceeded",
+    error: `A Memory may link to another Memory with at most ${MEMORY_LINK_LIMITS.maximumKindsPerPair} kinds`,
+  });
+  expect(replaced.status).toBe(200);
 });
 
 test("Memory HTTP input rejects null characters in queries, content, and metadata", async () => {

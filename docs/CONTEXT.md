@@ -267,7 +267,14 @@ _Avoid_: Workspace graph, global graph, gbrain graph
 
 **Memory Link**:
 A durable, directed relationship from one Memory to another Memory in the same
-Workspace, visible only when the Actor can read both endpoints.
+Workspace, visible only when the Actor can read both endpoints. Its natural key is
+(source, target, kind), so at most one Link of a kind joins two Memories. Writing
+or deleting one requires write authority over the source and visibility of the
+target; the target's owner gains no authority over Links that point at it. A
+write may not create a Link past 16 kinds from one Memory to another, 1,000 Links
+from one source or to one target, or 50,000 in the Workspace, counted over the
+Links the writer can see. In a Memory Graph a Memory Link has `derived: false`; a
+Memory Affinity has `derived: true`.
 _Avoid_: Edge, gbrain link, Memory Affinity
 
 **Memory Affinity**:

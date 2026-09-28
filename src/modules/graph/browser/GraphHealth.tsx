@@ -1,7 +1,7 @@
 "use client";
 
 import { degrees } from "@/modules/graph/browser/rendering/graph";
-import type { GraphData } from "@/modules/graph/browser/types";
+import { areGraphLinksPartial, type GraphData } from "@/modules/graph/browser/types";
 
 const SHOW = 5;
 
@@ -12,6 +12,8 @@ export function GraphHealth({
   data: GraphData;
   onOpen: (memoryId: string) => void;
 }) {
+  // A read that cut its Links, or its Memories, cannot prove any Memory isolated.
+  if (areGraphLinksPartial(data)) return null;
   const degree = degrees(data.links);
   const isolated = data.nodes.filter((node) => (degree[node.id] ?? 0) === 0);
   if (!isolated.length) return null;

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { GraphView } from "@/modules/graph/browser/GraphView";
-import type { GraphData } from "@/modules/graph/browser/types";
+import { areGraphLinksPartial, type GraphData } from "@/modules/graph/browser/types";
 
 interface LocalGraphModalProps {
   workspaceId: string;
@@ -61,6 +61,9 @@ function localGraphData(data: GraphData, focusId: string): GraphData {
   return {
     nodes: data.nodes.filter((node) => ids.has(node.id)),
     links: data.links.filter((link) => ids.has(link.source) && ids.has(link.target)),
+    // A neighborhood of a partial read may miss Links too, whether the full read cut
+    // its Links or filled its node window.
+    linksTruncated: areGraphLinksPartial(data),
   };
 }
 

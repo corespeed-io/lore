@@ -106,11 +106,48 @@ test("Memory Links are stored exactly as given or refused", async () => {
   expect((await rejection(connect({ weight: Number.NaN }))).field).toBe("link.weight");
   expect((await rejection(connect({ targetMemoryId: source.id }))).field).toBe("link");
 
-  await expect(connect({})).resolves.toMatchObject({ kind: "related", weight: 1 });
+  await expect(connect({})).resolves.toMatchObject({ link: { kind: "related", weight: 1 } });
   await expect(connect({ kind: " cites ", weight: 0.25 })).resolves.toMatchObject({
-    kind: " cites ",
-    weight: 0.25,
+    link: { kind: " cites ", weight: 0.25 },
   });
+  // The natural key is exact: a differently spaced kind is a different Link.
+  await expect(
+    graph.disconnect(testContext.alice, {
+      sourceMemoryId: source.id,
+      targetMemoryId: target.id,
+      kind: "cites",
+    }),
+  ).resolves.toBe(false);
+  await testContext.close();
+});
+
+test("Memory Link deletion is refused by the same key rules as creation", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const source = await memories.remember(testContext.alice, { content: "Unlink source." });
+  const target = await memories.remember(testContext.alice, { content: "Unlink target." });
+  const disconnect = (input: { kind?: string; targetMemoryId?: string }) =>
+    graph.disconnect(testContext.alice, {
+      sourceMemoryId: source.id,
+      targetMemoryId: input.targetMemoryId ?? target.id,
+      ...(input.kind === undefined ? {} : { kind: input.kind }),
+    });
+
+  // UUIDs compare as PostgreSQL compares them, so case does not make a new endpoint.
+  expect((await rejection(disconnect({ targetMemoryId: source.id.toUpperCase() }))).field).toBe(
+    "link",
+  );
+  expect((await rejection(disconnect({ kind: "\t" }))).field).toBe("link.kind");
+  expect((await rejection(disconnect({ kind: "cites\u0000" }))).field).toBe("link.kind");
+  expect(
+    (await rejection(disconnect({ kind: "k".repeat(MEMORY_LINK_LIMITS.maximumKindLength + 1) })))
+      .field,
+  ).toBe("link.kind");
+  // A kind at the bound is a valid key, and no such Link exists.
+  await expect(
+    disconnect({ kind: "k".repeat(MEMORY_LINK_LIMITS.maximumKindLength) }),
+  ).resolves.toBe(false);
   await testContext.close();
 });
 

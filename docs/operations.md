@@ -73,7 +73,12 @@ An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
 a one-row sentinel beyond each bound, so a Worker never materializes an unbounded
 number of Workspace rows. If any bound is exceeded, export returns
 `workspace_export_limit_exceeded` (409) and does not emit a partial archive. The
-row limits are published by `/api/v1/capabilities`.
+row limits are published by `/api/v1/capabilities`. Memory Link writes stop at the
+same 50,000 Links per Workspace, counted over the Links the writer can see, so
+another member's view may still hold more. Memories are not write-bounded, and each
+Memory or Link may carry up to 100,000 characters of metadata that counts toward the
+48,000,000-byte budget, so a Workspace can still outgrow an archive until it is
+pruned or split.
 
 It never includes another member's private Memory, credentials, Memberships,
 Agents, embeddings, jobs, evaluations, idempotency records, or mutation events.

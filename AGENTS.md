@@ -492,6 +492,46 @@ been removed. Lore now has a native implementation, split into two concepts
   that native read model without a gbrain dependency. Graph nodes expose an
   Actor-visible Memory Reference (`metadata.reference`, imported legacy slug, or
   the Memory UUID) for native wikilink navigation;
+- Memory Links are written after creation through `PUT`/`DELETE
+  /api/v1/memories/{memoryId}/links/{targetMemoryId}` (versioned-only, the
+  `memoryLinks` subrouter in `src/modules/graph/routes.ts`), addressed by the
+  natural key (source, target, `?kind=`, default `related`, never trimmed), so they
+  take no Idempotency-Key or If-Match. Core `connect` is an upsert returning
+  `{ link, created }` (PUT 201/200; a PUT replaces the whole Link, and an unchanged
+  repeat writes nothing and emits no event) and `disconnect` deletes by the key
+  (DELETE 204, or 404 when this Actor has no such Link to delete: none exists, its
+  source is not writable, or its target is not visible). Both lock the source `FOR
+  NO KEY UPDATE`, which under RLS admits only a writable source, and read the target
+  through RLS; a missing, invisible, or unwritable endpoint answers one identical
+  404. A target that vanishes mid-write is the same 404: `connect` returns null when
+  RLS filters a replacement, and OSS maps an insert's 42501/23503 to null.
+  A Link whose target later turns private stays stored but invisible, and its author
+  can neither rewrite nor delete it until the target is visible again. `connect`
+  refuses to create a Link past a `MEMORY_LINK_LIMITS` bound, with
+  `MemoryLinkCapacityError` (409 `memory_link_capacity_exceeded`): 16 kinds from one
+  Memory to another (directed; the reverse is its own pair), 1,000 Links from one
+  source, 1,000 to one target, and 50,000 in the Workspace
+  (`maximumLinksPerPartition`, held equal to `MAX_WORKSPACE_ARCHIVE_LINKS` by a test so
+  one writer's own view of Links fits one archive; another member's view, a concurrent
+  overshoot, an import, or Link metadata counted against the archive byte budget can
+  still make export fail). Replacing an existing Link never counts. Under RLS the
+  partition count reads up to 50,000 policy-checked rows on every new Link, measured
+  at about 150 ms in PGlite at the bound. Shared Links count toward every member's
+  target and Workspace quotas, and only their author can remove them. Each count stops at its bound and sees only the Links the writer's
+  RLS shows, so these bound each write rather than every stored row: a Link hidden by
+  a target turned private is not counted, because counting it would reveal the
+  target. The source and pair counts are exact among connects, which serialize on the
+  source lock; target and Workspace counts may overshoot by concurrent writes from
+  other sources. Workspace import's batch insert is bounded by the archive limits
+  instead. `scripts/checks/smoke-memory-core.ts` holds the source row from another
+  session so two PUTs of one new key must meet at that lock, and fails if they do
+  not serialize; it clears the statistics snapshot on each `pg_stat_activity` poll,
+  which an open transaction would otherwise freeze. The SDK
+  (`linkMemories`/`unlinkMemories`), CLI (`memory link`/`memory unlink`), and MCP
+  (`lore_link` and `lore_unlink`, both destructive because a link replaces an
+  existing Link's fields, and separate so a host can gate deletion on its own) take
+  kind and weight bounds and the default kind from `LORE_CONTRACT`. There is no Link
+  read surface besides the Graph yet;
 - `src/modules/memories/browser/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
   when that reference resolves to one visible graph node. `MemoryView` intercepts
   the resulting native Memory-id link for client routing; unresolved or ambiguous
@@ -567,6 +607,7 @@ been removed. Lore now has a native implementation, split into two concepts
   stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
   scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
   MCP outside Portable Core and never accept a model-supplied Workspace override.
+  `lore_link`/`lore_unlink` write and delete Memory Links by natural key.
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
   their items under the 128,000-character MCP output ceiling and report omitted
   trailing items with `truncated: true`. The SDK and MCP enforce the server's
@@ -861,9 +902,19 @@ generic upstream adapter to support the historical component structure.
 
 The native Graph endpoint caps reads at 5,000 visible Memories
 (`MEMORY_GRAPH_LIMITS.maximumNodes`); a `limit` that is not an integer from 1 to
-that bound is a 400, not a silent clamp or fallback. It returns all
-RLS-visible Memory Links whose endpoints are in that node set, then derives at most
-three affinities per Memory among the first 500 otherwise isolated nodes. Each
+that bound is a 400, not a silent clamp or fallback. It returns the newest 40,000
+(`MEMORY_GRAPH_LIMITS.maximumLinks`) of the RLS-visible Memory Links whose endpoints
+are in that node set, in creation order, so a Link just written stays visible, and
+reads only their endpoints, kind, and weight, never metadata. The bound limits the
+response, not the sort, which still ranks every candidate Link. A cut sets
+`linksTruncated` and suppresses affinity, because isolation is then unknown. The
+browser keeps `isGraphCapped` for the node budget (wikilink and in-graph wording) and
+uses `areGraphLinksPartial` for Link-derived counts, which a cut makes lower bounds;
+Memory detail says the Link budget was reached instead of blaming the node window.
+Otherwise it derives at
+most three affinities per Memory among the first 500 otherwise isolated nodes. Every
+Graph link carries `derived` (true only for affinity), so a durable Link whose kind is
+the string `affinity` is never mistaken for a derived edge. Each
 node reads only a 1,000-code-point content prefix; complete content is fetched
 only for the ≤500 isolated affinity candidates and for a node whose prefix cannot
 decide its preview or label, and a version mismatch between those statements
@@ -1416,7 +1467,7 @@ in `src/server/errors.ts`, which imports nothing, so the Edge admission path in
 route throws one too, `NotFoundError` for a
 missing or invisible resource, and never writes `c.json({ code })` itself
 (`error-response.test.ts` scans for it). `src/server/api/errors.ts` imports no domain
-module: it answers each code with the table's status and names the engine's three
+module: it answers each code with the table's status and names the engine's four
 public failure classes, which cannot extend OSS classes. An engine
 `LoreConfigurationError` (an out-of-range deployment option) is deliberately not
 among them and answers 500. Clients must accept an Error `code` they do not know;

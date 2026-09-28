@@ -9,7 +9,11 @@ import { GRAPH_NODE_LIMIT, type GraphData } from "./types";
 
 export async function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
   const graph = await getBrowserClient().workspace(workspaceId).graph(GRAPH_NODE_LIMIT, signal);
-  return { nodes: [...graph.nodes], links: [...graph.links] };
+  return {
+    nodes: [...graph.nodes],
+    links: [...graph.links],
+    linksTruncated: graph.linksTruncated,
+  };
 }
 
 export function useLoreGraph(workspaceId: string, enabled = true) {

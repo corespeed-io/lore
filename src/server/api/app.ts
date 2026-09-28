@@ -5,7 +5,7 @@ import { code, codeEvidence, memoryCodeEvidence } from "@/modules/code/routes";
 import { context } from "@/modules/context/routes";
 import { episodes, observations } from "@/modules/episodes/routes";
 import { evaluations } from "@/modules/evaluations/routes";
-import { graph } from "@/modules/graph/routes";
+import { graph, memoryLinks } from "@/modules/graph/routes";
 import { memories } from "@/modules/memories/routes";
 import { capabilities, operations } from "@/modules/operations/routes";
 import { portability } from "@/modules/portability/routes";
@@ -61,6 +61,7 @@ export function createApi(dependencies: ApiDependencies) {
     .route("/episodes", episodes)
     .route("/observations", observations)
     .route("/memories", memoryCodeEvidence)
+    .route("/memories", memoryLinks)
     .route("/memory-proposals", proposals)
     .route("/workspaces", portability);
 
