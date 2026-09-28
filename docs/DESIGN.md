@@ -148,7 +148,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   owns that pure presentation model. The body renders through `MemoryMarkdown.tsx`,
   which renders markdown-it tokens as React elements:
   - It supports CommonMark plus tables and strikethrough. Task-list markers and bare URLs stay text.
-  - It never hides text of the body, because agents write Memories that humans review here while other agents read them word for word. Reference definitions are off, so `[x]: url "title"` and `[a][x]` show as written; a fence's info string shows above its code (`fence-info`); a link with no text shows its target. A link's target and title show on hover only, as for any link.
+  - It never hides text of the body, because agents write Memories that humans review here while other agents read them word for word. Reference definitions are off, so `[x]: url "title"` and `[a][x]` show as written; a fence's info string shows above its code (`fence-info`); a link or image with no visible text shows its target; a table with a row longer than its header stays text. A link's or image's target and title, and an unresolved wikilink's reference, show on hover only, as for any link.
   - A single line break stays a line break, because a Memory's line breaks carry meaning.
   - Raw HTML shows as text.
   - Only http(s) links with a host open, in a new tab; mailto links open in place (`allowedHref`).
@@ -158,7 +158,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   - `[[reference]]` (`src/modules/memories/browser/markdown.ts`) becomes a link in prose, never in code, that routes in the client when the reference resolves. A modified or middle click keeps the browser's own behavior.
   - The renderer loads apart from the shell, once the shell is idle. Until it loads, or if it fails, the body shows as its text (`detail-plain`), as does a body whose blocks or inline markup nest too deeply to render whole.
   - The tables of one body render at most 5,000 cells together; a table past that shows as paragraph text.
-- A title taken from the first line (`memoryTitle`) shows that line's text without its Markdown, except strikethrough, which keeps its `~~` so struck words never read as current. That title, configured titles, and Graph labels all go through `plainInline`.
+- A title taken from the first line (`memoryTitle`) shows that line's text without its Markdown, except strikethrough, which keeps its `~~` so struck words never read as current. Escapes read as the character they escape, as do `&amp;`, `&lt;`, `&gt;`, `&quot;`, and numeric entities. That title, configured titles, and Graph labels all go through `plainInline`.
 - When the title shows the whole of a first line written as a title (a heading, or a line that opens with a bold or 【…】 run), `memoryBody` starts the body after that line instead of repeating it. The line stays whenever dropping it would lose something: a link only the body can follow, markup the title cannot show, or a next line that would parse differently without it.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, read-only deployment readiness/capabilities, and

@@ -1,7 +1,16 @@
 "use client";
 
 import type { Memory } from "@corespeed/lore-sdk";
-import { Component, lazy, type ReactNode, Suspense, useMemo } from "react";
+import {
+  Component,
+  type ComponentProps,
+  type ComponentType,
+  lazy,
+  type ReactNode,
+  Suspense,
+  useMemo,
+  useState,
+} from "react";
 import { useLoreMemoryCodeEvidence } from "@/modules/code/browser/data";
 import type {
   CodeEvidenceRow,
@@ -19,9 +28,23 @@ import {
   memoryType,
 } from "@/modules/memories/browser/presentation";
 
+type MarkdownRenderer = ComponentType<
+  ComponentProps<typeof import("@/modules/memories/browser/MemoryMarkdown").default>
+>;
+
 /** The Markdown renderer and its parser load apart from the shell, once it is idle. */
-const loadMemoryMarkdown = () => import("@/modules/memories/browser/MemoryMarkdown");
-const MemoryMarkdown = lazy(loadMemoryMarkdown);
+let loadedMarkdown: MarkdownRenderer | null = null;
+const loadMemoryMarkdown = () =>
+  import("@/modules/memories/browser/MemoryMarkdown").then((module) => {
+    loadedMarkdown = module.default;
+    return module;
+  });
+/**
+ * Only for a body that renders before the preload finishes. `React.lazy` suspends on
+ * its first render even when the module is loaded, and React then holds its fallback
+ * for 300 ms, so a loaded renderer is used directly instead.
+ */
+const LazyMarkdown = lazy(loadMemoryMarkdown);
 if (typeof window !== "undefined") {
   // A failed load surfaces when a body renders, through the fallback below.
   const preload = () => void loadMemoryMarkdown().catch(() => {});
@@ -236,6 +259,8 @@ export function MemoryView({
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
   const bodyText = useMemo(() => memoryBody(memory), [memory]);
+  // Chosen once per mount, so the element type never changes under a rendered body.
+  const [MemoryMarkdown] = useState<MarkdownRenderer>(() => loadedMarkdown ?? LazyMarkdown);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),

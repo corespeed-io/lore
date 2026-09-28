@@ -110,6 +110,13 @@ test("plain text keeps a code span as written and drops the rest of the inline m
   expect(plainInline('See [docs](https://example.test "Docs") now')).toBe("See docs now");
   expect(plainInline("See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now")).toBe("See Foo now");
   expect(plainInline("See [x](<https://example.test/a>) now")).toBe("See x now");
+  // An escape reads as the character it escapes, and common entities decode.
+  expect(plainInline("Use \\*args\\* and \\_x\\_ or \\[[not a link]]")).toBe(
+    "Use *args* and _x_ or [[not a link]]",
+  );
+  expect(plainInline("AT&amp;T &lt;tag&gt; &#8212; &#x41; &#0; &nbsp;")).toBe(
+    "AT&T <tag> — A \ufffd &nbsp;",
+  );
   // A heading marker goes only at the start, and a link to another scheme stays.
   expect(plainInline("# Title # not a marker")).toBe("Title # not a marker");
   expect(plainInline("[x](javascript:alert(1))")).toBe("[x](javascript:alert(1))");
@@ -205,11 +212,19 @@ test("the body keeps a title line the renderer reads as more than a title", () =
   kept("【标题】\n\t缩进");
   kept("**Owners**\n2. Alice\n3. Bob");
   kept("**Owners**\n1.\nnext");
+  kept("**Owners**\n2) Bob");
+  kept("**Owners**\n1)\nnext");
+  kept("**Owners**\n*\nnext");
+  kept("**Owners**\n+");
   // A line shaped like a reference definition is text either way.
   expect(bodyOf("**Links**\n[rb]: https://example.test/rb")).toBe("[rb]: https://example.test/rb");
   // A list that may interrupt a paragraph parses the same either way.
   expect(bodyOf("**Owners**\n1. Alice")).toBe("1. Alice");
   expect(bodyOf("__Title__\nBody")).toBe("Body");
+});
+
+test("an escaped or encoded title reads as the body renders it", () => {
+  expect(memoryTitle(memory({ content: "# AT&amp;T \\*escaped\\*\nBody" }))).toBe("AT&T *escaped*");
 });
 
 test("the body keeps a first line longer than the title reads", () => {

@@ -22,16 +22,25 @@ const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "g");
  * Text with the inline Markdown that Memory detail renders reduced to its words,
  * for places that show plain text: a leading heading marker, wikilinks, links and
  * images, bold, and emphasis. Code spans keep their text as written, and so does
- * strikethrough, whose markers are the only sign the words are struck. Every `**`
+ * strikethrough, whose markers are the only sign the words are struck. A backslash
+ * escape reads as the character it escapes, and so do `&amp;`, `&lt;`, `&gt;`,
+ * `&quot;`, and numeric entities; other named entities stay as written. Every `**`
  * goes, paired or not, because a label cut short may keep only the opening one. An
  * underscore inside a word is never emphasis. No pattern can match `[` inside
  * brackets, so a run of brackets costs linear time.
  */
 export function plainInline(text: string): string {
   const code: string[] = [];
+  const stash = (kept: string) => `\u0000${code.push(kept) - 1}\u0000`;
   return (
     text
-      .replace(/`([^`\n]+)`/g, (_match, span: string) => `\u0000${code.push(span) - 1}\u0000`)
+      .replace(/`([^`\n]+)`/g, (_match, span: string) => stash(span))
+      .replace(/\\([!-/:-@[-`{-~])/g, (_match, character: string) => stash(character))
+      .replace(
+        /&(amp|lt|gt|quot|#(\d{1,7})|#[xX]([\da-fA-F]{1,6}));/g,
+        (match, name: string, decimal: string | undefined, hex: string | undefined) =>
+          stash(entity(match, name, decimal, hex)),
+      )
       .replace(/^#{1,6}\s+/, "")
       .replace(/\[\[([^[\]|\n]+)\|([^[\]\n]+)\]\]/g, "$2")
       .replace(/\[\[([^[\]\n]+)\]\]/g, "$1")
@@ -41,7 +50,7 @@ export function plainInline(text: string): string {
       .replace(/(^|[^\w*])\*(?=\S)([^*\n]+)\*(?!\w)/g, "$1$2")
       .replace(/(^|[^\p{L}\p{N}_])__(?=\S)([^_\n]+)__(?![\p{L}\p{N}_])/gu, "$1$2")
       .replace(/(^|[^\p{L}\p{N}_])_(?=\S)([^_\n]+)_(?![\p{L}\p{N}_])/gu, "$1$2")
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: Memory text never holds NUL, so NUL marks a code span.
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: Memory text never holds NUL, so NUL marks what was stashed.
       .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => code[Number(index)] ?? "")
   );
 }
@@ -56,6 +65,17 @@ export function plain(s: string): string {
     .replace(/[#*`>]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+const ENTITIES: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"' };
+
+function entity(match: string, name: string, decimal?: string, hex?: string): string {
+  const code = decimal ? Number(decimal) : hex ? Number.parseInt(hex, 16) : null;
+  if (code === null) return ENTITIES[name] ?? match;
+  // Only a Unicode scalar value that is not NUL, as CommonMark decodes it.
+  return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+    ? String.fromCodePoint(code)
+    : "\ufffd";
 }
 
 function configuredTitle(memory: Memory): string | null {

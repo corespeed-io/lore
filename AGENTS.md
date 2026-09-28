@@ -563,12 +563,13 @@ been removed. Lore now has a native implementation, split into two concepts
   kind, weight, metadata, and list bounds, the directions, and the default kind and
   weight from `LORE_CONTRACT`;
 - `src/modules/memories/browser/MemoryMarkdown.tsx` renders a Memory body: `markdown.ts` parses
-  it with markdown-it (CommonMark plus tables and strikethrough), and the component
-  turns the tokens into React elements itself. No body HTML goes through
-  `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
+  it with markdown-it (CommonMark plus tables and strikethrough) and turns the tokens
+  into a plain tree of fixed tags and attributes (`memoryMarkdownTree`), and the
+  component maps that tree to React elements. Every rendering decision lives in the
+  tree, so tests pin them without rendering. No body HTML goes through `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
   body of nested quotes or lists overflowed its stack, and a 6 KB table took 1.5 s.
   - Raw HTML and bare URLs show as text.
-  - No text of the body renders as nothing: reference definitions are disabled so they stay text, a fence's info string shows above it, and a link with no text shows its target. A human reviews agent-written Memories here while other agents read them verbatim.
+  - No text of the body renders as nothing: reference definitions are disabled so they stay text, a fence's info string shows above it, a link or image with no visible text (`hasVisibleText`: spaces and zero-width characters show nothing) shows its target, and a table with a row longer than its header, whose extra cells markdown-it would drop, stays paragraph text. Targets, titles, and an unresolved wikilink's reference show on hover. A human reviews agent-written Memories here while other agents read them verbatim.
   - `allowedHref` allows only http(s) links with a host, and mailto.
   - Images render as links, so a body never loads a remote URL.
   - A single line break is kept.
@@ -579,7 +580,7 @@ been removed. Lore now has a native implementation, split into two concepts
     in the cells a short row leaves out; a table past it stays paragraph text.
   - An autolink inside a link label, or an image or wikilink inside a link, renders as text, so anchors never nest.
   - An inline rule turns `[[reference]]` and `[[reference|label]]` into `wikilink` tokens before links or emphasis can claim the brackets, never in code. They resolve only when the reference names one visible graph node (`wikilinkTarget` reads own properties only), and a resolved one routes in the client unless the click carries a modifier. Unresolved or ambiguous references stay inert.
-  - `MemoryView.tsx` loads the renderer apart from the shell, once the shell is idle, and shows the body as text while it loads or if it fails.
+  - `MemoryView.tsx` loads the renderer apart from the shell, once the shell is idle, and renders a loaded renderer directly: `React.lazy` suspends on its first render even with the module loaded, and React holds a fallback for 300 ms. The body shows as text while the renderer loads or if it fails.
   - `memoryTitle`/`memoryBody` (`presentation.ts`) show a first-line title without its Markdown and without repeating it under the title. `memoryBody` keeps the line whenever dropping it would lose something: the title cuts it short or loses markup (links, strikethrough, escapes, entities), or the next line would parse differently without it. Configured titles and Graph labels go through the same `plainInline`, and search snippets through `plain`; every pattern in them is linear, which `presentation.test.ts` measures on hostile input.
 - `src/modules/graph/browser/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on

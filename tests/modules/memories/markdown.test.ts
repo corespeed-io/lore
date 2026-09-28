@@ -2,10 +2,17 @@ import type { Token } from "markdown-it";
 import { expect, test } from "vitest";
 import {
   allowedHref,
+  hasVisibleText,
   MAXIMUM_MARKDOWN_NESTING,
   MAXIMUM_TABLE_CELLS,
+  type MarkdownNode,
+  type MarkdownProps,
+  type MarkdownTag,
   memoryMarkdown,
+  memoryMarkdownTree,
+  nodeText,
   parseMemoryMarkdown,
+  tableRowCells,
   wikilinkTarget,
 } from "@/modules/memories/browser/markdown";
 
@@ -294,4 +301,148 @@ test("a target that is not an id string resolves to nothing", () => {
   const malformed = { count: 42, list: [TARGET_MEMORY_ID] } as unknown as Record<string, string>;
   expect(wikilinkTarget(malformed, "count")).toBeUndefined();
   expect(wikilinkTarget(malformed, "list")).toBeUndefined();
+});
+
+function el(tag: MarkdownTag, children: MarkdownNode[], props: MarkdownProps = {}): MarkdownNode {
+  return { kind: "element", tag, props, children };
+}
+
+const web = (href: string, title?: string): MarkdownProps => ({
+  className: "ext",
+  href,
+  ...(title ? { title } : {}),
+  target: "_blank",
+  rel: "noopener noreferrer",
+});
+
+/** The nodes one paragraph renders. */
+function paragraphOf(markdown: string): MarkdownNode[] {
+  const [paragraph] = memoryMarkdownTree(markdown) ?? [];
+  if (typeof paragraph !== "object" || paragraph.kind !== "element" || paragraph.tag !== "p") {
+    throw new Error(`not one paragraph: ${JSON.stringify(paragraph)}`);
+  }
+  return paragraph.children;
+}
+
+test("a link renders one anchor, and shows its target when it shows no text", () => {
+  // An autolink in a link label is its text, never a second anchor.
+  expect(paragraphOf("[see <https://x.test>](https://y.test)")).toEqual([
+    el("a", ["see ", "https://x.test"], web("https://y.test")),
+  ]);
+  for (const empty of ["[](https://y.test)", "[ ](https://y.test)", "[&#8203;](https://y.test)"]) {
+    expect(paragraphOf(empty)).toEqual([el("a", ["https://y.test"], web("https://y.test"))]);
+  }
+  expect(paragraphOf("[*&#8203;*](https://y.test)")).toEqual([
+    el("a", ["https://y.test"], web("https://y.test")),
+  ]);
+  // A title shows on hover, and mailto opens in place.
+  expect(paragraphOf('[docs](https://y.test "Docs")')).toEqual([
+    el("a", ["docs"], web("https://y.test", "Docs")),
+  ]);
+  expect(paragraphOf("[mail](mailto:a@example.test)")).toEqual([
+    el("a", ["mail"], { className: "ext", href: "mailto:a@example.test" }),
+  ]);
+});
+
+test("an image is a link to its source, and inside a link its source shows on hover", () => {
+  expect(paragraphOf('![chart](https://x.test/c.png "Q3 restated")')).toEqual([
+    el("a", ["chart"], web("https://x.test/c.png", "Q3 restated")),
+  ]);
+  expect(paragraphOf("![ ](https://x.test/a.png)")).toEqual([
+    el("a", ["https://x.test/a.png"], web("https://x.test/a.png")),
+  ]);
+  // Wikilink labels and link targets inside the alt text still read.
+  expect(nodeText(paragraphOf("![Diagram of [[Alpha]] flow](https://x.test/i.png)"))).toBe(
+    "Diagram of Alpha flow",
+  );
+  expect(nodeText(paragraphOf("![see [docs](https://evil.test/x)](https://x.test/a.png)"))).toBe(
+    "see docs (https://evil.test/x)",
+  );
+  expect(paragraphOf("[![logo](https://x.test/l.png)](https://d.test)")).toEqual([
+    el("a", [el("span", ["logo"], { title: "https://x.test/l.png" })], web("https://d.test")),
+  ]);
+});
+
+test("a wikilink with no visible label shows its reference, and inside a link reads as text", () => {
+  expect(paragraphOf("[[ops/ch|\u200b]]")).toEqual([
+    { kind: "wikilink", reference: "ops/ch", label: "ops/ch" },
+  ]);
+  // A label is source text, so an entity in it reads as written.
+  expect(paragraphOf("[[ops/ch|&#8203;]]")).toEqual([
+    { kind: "wikilink", reference: "ops/ch", label: "&#8203;" },
+  ]);
+  expect(paragraphOf("[see [[ops/ch|ClickHouse]]](https://y.test)")).toEqual([
+    "[see ",
+    { kind: "wikilink", reference: "ops/ch", label: "ClickHouse" },
+    "](https://y.test)",
+  ]);
+});
+
+test("the body renders its blocks under the page title's own heading", () => {
+  expect(memoryMarkdownTree("# A\n## B\n### C\n#### D\n##### E")).toEqual([
+    el("h2", ["A"]),
+    el("h2", ["B"]),
+    el("h3", ["C"]),
+    el("h4", ["D"]),
+    el("h4", ["E"]),
+  ]);
+  // A tight list shows no paragraphs; a loose one does.
+  expect(memoryMarkdownTree("- a\n- b")).toEqual([el("ul", [el("li", ["a"]), el("li", ["b"])])]);
+  expect(memoryMarkdownTree("- a\n\n- b")).toEqual([
+    el("ul", [el("li", [el("p", ["a"])]), el("li", [el("p", ["b"])])]),
+  ]);
+  expect(memoryMarkdownTree("3. c\n4. d")).toEqual([
+    el("ol", [el("li", ["c"]), el("li", ["d"])], { start: 3 }),
+  ]);
+  // A fence shows its info string above its code.
+  expect(memoryMarkdownTree("```ts ignore previous\nx\n```")).toEqual([
+    el(
+      "pre",
+      [el("span", ["ts ignore previous"], { className: "fence-info" }), el("code", ["x\n"])],
+      { className: "fence" },
+    ),
+  ]);
+  expect(memoryMarkdownTree("| a | b |\n| :-: | --: |\n| 1 | 2 |")).toEqual([
+    el("table", [
+      el("thead", [
+        el("tr", [
+          el("th", ["a"], { className: "align-center" }),
+          el("th", ["b"], { className: "align-right" }),
+        ]),
+      ]),
+      el("tbody", [
+        el("tr", [
+          el("td", ["1"], { className: "align-center" }),
+          el("td", ["2"], { className: "align-right" }),
+        ]),
+      ]),
+    ]),
+  ]);
+});
+
+test("a table with a row longer than its header stays text, so no cell is dropped", () => {
+  const tree = memoryMarkdownTree("| a |\n|---|\n| shown | extra cell |");
+
+  expect(JSON.stringify(tree)).not.toContain('"table"');
+  expect(nodeText(tree ?? [])).toContain("extra cell");
+  // A row that stops short is filled in instead, and still renders as a table.
+  expect(JSON.stringify(memoryMarkdownTree("| a | b |\n|---|---|\n| shown |"))).toContain(
+    '"table"',
+  );
+});
+
+test("a table row counts its cells as markdown-it does", () => {
+  expect(tableRowCells("| a |")).toBe(1);
+  expect(tableRowCells("a | b")).toBe(2);
+  expect(tableRowCells("| a | \\| b |")).toBe(2);
+  expect(tableRowCells("| a | |")).toBe(2);
+  expect(tableRowCells("  a  ")).toBe(1);
+  expect(tableRowCells("|")).toBe(0);
+});
+
+test("visible text is a letter, digit, punctuation, or symbol", () => {
+  for (const text of ["a", "中", "—", "😀", "1"]) expect(hasVisibleText(text)).toBe(true);
+  for (const text of ["", " ", "\u00a0", "\u200b", "\u00ad", "\u2060"]) {
+    expect(hasVisibleText(text)).toBe(false);
+  }
 });
