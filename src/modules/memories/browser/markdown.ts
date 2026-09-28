@@ -151,9 +151,35 @@ rules.link_close = (_tokens, _index, _options, env) =>
   (env as MemoryEnv).anchors?.pop() ? "</a>" : "";
 
 // An image is a link to its source, never a remote load; inside a link, its words.
-rules.image = (tokens, index, options, env, renderer) => {
+/**
+ * An image's alt text as it reads. markdown-it's own `renderInlineAsText` skips
+ * wikilinks and strikethrough, which would lose a label or read struck words as
+ * current, so this keeps each wikilink's label and each strike's `~~`.
+ */
+function altText(tokens: readonly Token[]): string {
+  return tokens
+    .map((token) => {
+      switch (token.type) {
+        case "image":
+          return altText(token.children ?? []);
+        case "wikilink":
+          return String(token.meta?.label ?? "");
+        case "s_open":
+        case "s_close":
+          return "~~";
+        case "softbreak":
+        case "hardbreak":
+          return " ";
+        default:
+          return token.content;
+      }
+    })
+    .join("");
+}
+
+rules.image = (tokens, index, _options, env) => {
   const token = tokens[index] as Token;
-  const alt = renderer.renderInlineAsText(token.children ?? [], options, env);
+  const alt = altText(token.children ?? []);
   const src = String(token.attrGet("src") ?? "");
   if (insideAnchor(env as MemoryEnv) || !allowedHref(src)) return escapeHtml(revealHidden(alt));
   const text = alt.trim() ? revealHidden(alt) : src;

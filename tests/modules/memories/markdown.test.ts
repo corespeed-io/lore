@@ -118,6 +118,9 @@ test("an image is a link to its source, never a remote load", () => {
     `<p><a class="ext" href="https://d.test" ${EXTERNAL}>logo</a></p>\n`,
   );
   expect(html("![x](https://x.test/p.png)")).not.toContain("<img");
+  // Alt text keeps a wikilink's label and a strike's markers, as the body does.
+  expect(html("![see [[ops/ch]] x](https://x.test/p.png)")).toContain(">see ops/ch x</a>");
+  expect(html("![old ~~price~~ new](https://x.test/p.png)")).toContain(">old ~~price~~ new</a>");
 });
 
 test("an image's alt text and a link's title and target are escaped wherever they reach the page", () => {
