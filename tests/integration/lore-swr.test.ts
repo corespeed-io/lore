@@ -4,6 +4,7 @@ import {
   isLoreAgentsCacheKey,
 } from "@/modules/agents/browser/data";
 import {
+  browseWindowState,
   fullReadAfterResume,
   MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
@@ -124,6 +125,55 @@ test("removing a Memory compacts cached pages", () => {
   expect(updated?.[0]).toHaveLength(MEMORY_PAGE_SIZE);
   expect(updated?.[0]?.at(-1)?.id).toBe(memory(MEMORY_PAGE_SIZE).id);
   expect(updated?.[1]).toEqual([]);
+});
+
+test("a forget at the browse cap keeps the window capped and incomplete", () => {
+  // The cap: every page full, so more Memories may exist on the server.
+  const pages = Array.from({ length: MAX_MEMORY_PAGES }, (_, pageIndex) =>
+    Array.from({ length: MEMORY_PAGE_SIZE }, (_, index) =>
+      memory(pageIndex * MEMORY_PAGE_SIZE + index),
+    ),
+  );
+  const patched = removeMemoryFromPages(pages, memory(0).id) ?? [];
+  // The re-slice leaves the last page one short, which alone would read as the end.
+  expect(patched.at(-1)).toHaveLength(MEMORY_PAGE_SIZE - 1);
+  const window = (fetchedLastPageLength: number | undefined) =>
+    browseWindowState({
+      hasData: true,
+      pageCount: patched.length,
+      lastPageLength: patched.at(-1)?.length ?? 0,
+      fetchedLastPageLength,
+    });
+  expect(window(MEMORY_PAGE_SIZE)).toEqual({ isCapped: true, isComplete: false });
+  // Without a fetched length (pages from an earlier mount's cache), the cached page decides.
+  expect(window(undefined)).toEqual({ isCapped: false, isComplete: true });
+});
+
+test("the browse window is complete once the server returns a short last page", () => {
+  expect(
+    browseWindowState({
+      hasData: true,
+      pageCount: 2,
+      lastPageLength: 29,
+      fetchedLastPageLength: 30,
+    }),
+  ).toEqual({ isCapped: false, isComplete: true });
+  expect(
+    browseWindowState({
+      hasData: true,
+      pageCount: 3,
+      lastPageLength: MEMORY_PAGE_SIZE - 1,
+      fetchedLastPageLength: MEMORY_PAGE_SIZE,
+    }),
+  ).toEqual({ isCapped: false, isComplete: false });
+  expect(
+    browseWindowState({
+      hasData: false,
+      pageCount: 0,
+      lastPageLength: 0,
+      fetchedLastPageLength: undefined,
+    }),
+  ).toEqual({ isCapped: false, isComplete: false });
 });
 
 test("Memory pagination advances only from a settled full page inside the browse budget", () => {

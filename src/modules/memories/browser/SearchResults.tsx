@@ -6,12 +6,12 @@ import { MAX_MEMORY_PAGES, MEMORY_PAGE_SIZE } from "@/modules/memories/browser/d
 import { plain } from "@/modules/memories/browser/markdown";
 import {
   browseCounts,
+  browseFilterEmptyNote,
+  browseTypeChips,
   memoryConfiguredType,
   memoryTitle,
   memoryType,
   shortMemoryDate,
-  typeLabel,
-  typeSort,
 } from "@/modules/memories/browser/presentation";
 
 const BROWSE_WINDOW = MEMORY_PAGE_SIZE * MAX_MEMORY_PAGES;
@@ -129,19 +129,20 @@ export function SearchResults({
       const type = memoryType(memory);
       typeCounts[type] = (typeCounts[type] ?? 0) + 1;
     }
-    const types = Object.keys(typeCounts).sort(typeSort);
-    const chips: [string, string][] = [
-      ["all", "All"],
-      ...types.map((type): [string, string] => [type, typeLabel(type)]),
-    ];
+    const chips = browseTypeChips(Object.keys(typeCounts), typeFilter);
     const filtered =
       typeFilter === "all"
         ? memories
         : memories.filter((memory) => memoryType(memory) === typeFilter);
     const shown = filtered.slice(0, rowLimit);
     const counts = browseCounts({
-      shown: filtered.length,
+      matching: filtered.length,
       total: memories.length,
+      filtered: typeFilter !== "all",
+      complete,
+    });
+    const emptyNote = browseFilterEmptyNote({
+      matching: filtered.length,
       filtered: typeFilter !== "all",
       complete,
     });
@@ -172,6 +173,7 @@ export function SearchResults({
             </button>
           ))}
         </div>
+        {emptyNote && <p className="muted-note">{emptyNote}</p>}
         <div className="search-list">
           {shown.map((memory) => (
             <button

@@ -128,6 +128,30 @@ export function shouldLoadNextMemoryPage(state: MemoryPageAdvanceState): boolean
   );
 }
 
+/**
+ * Whether the browse window stopped at the browse cap, and whether it holds every
+ * visible Memory. Both are judged by the last page as the server returned it: a
+ * local forget re-slices the cached pages, so a full last page can come out one
+ * short, which read as the end of the list would show an exact count and drop the
+ * cap note while more Memories exist.
+ */
+export function browseWindowState(input: {
+  hasData: boolean;
+  pageCount: number;
+  /** The last cached page's length, after any local patch. */
+  lastPageLength: number;
+  /** The same page's length as the server last returned it, when known. */
+  fetchedLastPageLength: number | undefined;
+}): { isCapped: boolean; isComplete: boolean } {
+  const lastPageLength = input.fetchedLastPageLength ?? input.lastPageLength;
+  return {
+    isCapped: input.pageCount === MAX_MEMORY_PAGES && lastPageLength === MEMORY_PAGE_SIZE,
+    // Every visible Memory is loaded: the last page came back short. Until then a
+    // count over the loaded Memories is only a lower bound.
+    isComplete: input.hasData && lastPageLength < MEMORY_PAGE_SIZE,
+  };
+}
+
 /** The page index of a paged-browse cache key, or null for any other key. */
 export function memoryPageIndex(key: unknown): number | null {
   return Array.isArray(key) &&
@@ -250,6 +274,9 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
   // it actually re-read every page.
   const pageFailures = useRef(0);
   const resumeProbe = useRef<MemoryResumeProbe | null>(null);
+  // Each page's length as the server returned it, by Workspace and page index; a
+  // local patch changes the cached pages but not these.
+  const fetchedPageLengths = useRef(new Map<string, number>());
   useLayoutEffect(() => {
     demand.current = { workspaceId, enabled };
     return () => {
@@ -284,6 +311,7 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
       });
       const probe = resumeProbe.current;
       if (pageIndex === 0 && probe) probe.firstPageAfter = page;
+      fetchedPageLengths.current.set(`${scopedWorkspaceId}\u0000${pageIndex}`, page.length);
       return page;
     },
     {
@@ -424,10 +452,12 @@ export function useLoreMemories(workspaceId: string, enabled = true) {
       Boolean(swr.data) &&
       pageCount < MAX_MEMORY_PAGES &&
       (swr.isValidating || lastPageLength === MEMORY_PAGE_SIZE),
-    isCapped: pageCount === MAX_MEMORY_PAGES && lastPageLength === MEMORY_PAGE_SIZE,
-    // Every visible Memory is loaded: the last page came back short. Until then a
-    // count over `memories` is only a lower bound.
-    isComplete: Boolean(swr.data) && lastPageLength < MEMORY_PAGE_SIZE,
+    ...browseWindowState({
+      hasData: Boolean(swr.data),
+      pageCount,
+      lastPageLength,
+      fetchedLastPageLength: fetchedPageLengths.current.get(`${workspaceId}\u0000${pageCount - 1}`),
+    }),
   };
 }
 

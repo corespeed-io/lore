@@ -68,14 +68,44 @@ export interface MemoryGraphContext {
  * still loading, or it stopped at the browse cap) each is a lower bound, "N+".
  */
 export function browseCounts(input: {
-  shown: number;
+  /** Loaded Memories that match the type filter, however many rows are rendered. */
+  matching: number;
   total: number;
   filtered: boolean;
   complete: boolean;
 }): { heading: string; count: (value: number) => string } {
   const count = (value: number) => displayCount(value, "ready", !input.complete);
+  // The noun agrees with the count beside it; a lower bound such as "1+" is plural.
+  const noun = (value: number) => (input.complete && value === 1 ? "memory" : "memories");
   const heading = input.filtered
-    ? `Showing ${count(input.shown)} of ${count(input.total)} memories`
-    : `Showing ${count(input.shown)} memories`;
+    ? `Showing ${count(input.matching)} of ${count(input.total)} ${noun(input.total)}`
+    : `Showing ${count(input.matching)} ${noun(input.matching)}`;
   return { heading, count };
+}
+
+/**
+ * The browse type chips: "All", then every loaded type in the preferred order. The
+ * active filter keeps its chip even when no loaded Memory has that type (a deep link,
+ * or its last Memory was forgotten), so the applied filter stays visible.
+ */
+export function browseTypeChips(
+  loadedTypes: readonly string[],
+  typeFilter: string,
+): [key: string, label: string][] {
+  const types = [...new Set(loadedTypes)];
+  if (typeFilter !== "all" && !types.includes(typeFilter)) types.push(typeFilter);
+  return [
+    ["all", "All"],
+    ...types.sort(typeSort).map((type): [string, string] => [type, typeLabel(type)]),
+  ];
+}
+
+/** What browse says when a type filter matches no loaded Memory, or null. */
+export function browseFilterEmptyNote(input: {
+  matching: number;
+  filtered: boolean;
+  complete: boolean;
+}): string | null {
+  if (!input.filtered || input.matching > 0) return null;
+  return input.complete ? "No Memories of this type." : "No Memories of this type have loaded yet.";
 }

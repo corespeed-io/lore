@@ -2,9 +2,12 @@ import type { Memory } from "@corespeed/lore-sdk";
 import { expect, test, vi } from "vitest";
 import {
   browseCounts,
+  browseFilterEmptyNote,
+  browseTypeChips,
   memoryConfiguredType,
   memoryType,
   shortMemoryDate,
+  typeSort,
 } from "@/modules/memories/browser/presentation";
 
 function memory(overrides: Partial<Memory> = {}): Memory {
@@ -65,13 +68,56 @@ test("an unparseable row date renders nothing", () => {
 });
 
 test("browse counts are lower bounds until every browse page is read", () => {
-  expect(browseCounts({ shown: 1200, total: 1200, filtered: false, complete: true }).heading).toBe(
-    "Showing 1,200 memories",
-  );
-  const filling = browseCounts({ shown: 40, total: 300, filtered: true, complete: false });
+  expect(
+    browseCounts({ matching: 1200, total: 1200, filtered: false, complete: true }).heading,
+  ).toBe("Showing 1,200 memories");
+  const filling = browseCounts({ matching: 40, total: 300, filtered: true, complete: false });
   expect(filling.heading).toBe("Showing 40+ of 300+ memories");
   expect(filling.count(300)).toBe("300+");
-  const done = browseCounts({ shown: 40, total: 300, filtered: true, complete: true });
+  const done = browseCounts({ matching: 40, total: 300, filtered: true, complete: true });
   expect(done.heading).toBe("Showing 40 of 300 memories");
   expect(done.count(0)).toBe("0");
+});
+
+test("the browse header's noun agrees with the count beside it", () => {
+  expect(browseCounts({ matching: 1, total: 1, filtered: false, complete: true }).heading).toBe(
+    "Showing 1 memory",
+  );
+  expect(browseCounts({ matching: 1, total: 1, filtered: true, complete: true }).heading).toBe(
+    "Showing 1 of 1 memory",
+  );
+  expect(browseCounts({ matching: 0, total: 3, filtered: true, complete: true }).heading).toBe(
+    "Showing 0 of 3 memories",
+  );
+  // "1+" is a lower bound, so it stays plural.
+  expect(browseCounts({ matching: 1, total: 1, filtered: false, complete: false }).heading).toBe(
+    "Showing 1+ memories",
+  );
+});
+
+test("an unfiltered browse header is a lower bound while pages load or at the browse cap", () => {
+  const capped = browseCounts({ matching: 5000, total: 5000, filtered: false, complete: false });
+  expect(capped.heading).toBe("Showing 5,000+ memories");
+  expect(capped.count(5000)).toBe("5,000+");
+});
+
+test("the active type filter keeps its chip even when no loaded Memory has that type", () => {
+  expect(browseTypeChips(["concept", "private", "concept"], "all").map(([key]) => key)).toEqual([
+    "all",
+    ...["concept", "private"].sort(typeSort),
+  ]);
+  const chips = browseTypeChips(["concept"], "field_note");
+  expect(chips.map(([key]) => key)).toContain("field_note");
+  expect(chips.find(([key]) => key === "field_note")?.[1]).toBe("field note");
+});
+
+test("a type filter with no loaded match says so, and says 'yet' while pages load", () => {
+  expect(browseFilterEmptyNote({ matching: 0, filtered: true, complete: true })).toBe(
+    "No Memories of this type.",
+  );
+  expect(browseFilterEmptyNote({ matching: 0, filtered: true, complete: false })).toBe(
+    "No Memories of this type have loaded yet.",
+  );
+  expect(browseFilterEmptyNote({ matching: 3, filtered: true, complete: true })).toBeNull();
+  expect(browseFilterEmptyNote({ matching: 0, filtered: false, complete: true })).toBeNull();
 });
