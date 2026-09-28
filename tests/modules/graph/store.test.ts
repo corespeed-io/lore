@@ -90,3 +90,19 @@ test("a Graph read shows label text without markup, and references still resolve
   // A reference is matched as written, so the read leaves it alone.
   expect(buildGraphStore(graph).byReference["ops/**clickhouse**"]).toBe("a");
 });
+
+test("a Graph label that is only markup keeps its text rather than going blank", async () => {
+  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
+  const nodes = [node("a", "a", "![](https://example.test/a.png)"), node("b", "b", "**")];
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(Response.json({ nodes, links: [], linksTruncated: false }));
+  vi.stubGlobal("fetch", fetcher);
+
+  const graph = await readGraph("10000000-0000-4000-8000-000000000001");
+
+  expect(graph.nodes.map((entry) => entry.label)).toEqual([
+    "![](https://example.test/a.png)",
+    "**",
+  ]);
+});

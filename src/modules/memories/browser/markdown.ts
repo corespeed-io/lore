@@ -61,7 +61,7 @@ export function allowedHref(url: string): boolean {
  * claim its brackets. With `html: false`, every character of the body reaches the
  * page escaped, so its HTML is safe to set as `innerHTML`.
  */
-export const memoryMarkdown = new MarkdownIt({
+const memoryMarkdown = new MarkdownIt({
   html: false,
   breaks: true,
   linkify: false,
@@ -93,16 +93,31 @@ type BlockRule = (
 /**
  * markdown-it's table rule, held to `MAXIMUM_TABLE_CELLS` across one body. The rule
  * fills in every cell a short row leaves out, so a 32,000-character body could
- * otherwise parse to millions of cells. The table that goes past the budget is
- * parsed once and dropped, and it and every later table stay paragraph text.
+ * otherwise parse to millions of cells before the budget could drop them. A table is
+ * parsed no further than one row past what is left of the budget; the table that
+ * goes past it, and every later table, stays paragraph text.
  */
 function boundedTable(table: BlockRule): BlockRule {
   return (state, startLine, endLine, silent) => {
     const env = state.env as MemoryEnv;
     if (env.tablesOff) return false;
-    if (silent) return table(state, startLine, endLine, true);
+    // Silently, markdown-it checks only the header and delimiter lines.
+    if (!table(state, startLine, endLine, true)) return false;
+    if (silent) return true;
+    const delimiter = startLine + 1;
+    const row = state.src.slice(
+      state.bMarks[delimiter] + state.tShift[delimiter],
+      state.eMarks[delimiter],
+    );
+    const columns = row.split("|").filter((cell) => cell.trim()).length;
+    const rows = Math.floor((MAXIMUM_TABLE_CELLS - (env.tableCells ?? 0)) / Math.max(columns, 1));
+    if (rows < 1) {
+      env.tablesOff = true;
+      return false;
+    }
     const start = state.tokens.length;
-    if (!table(state, startLine, endLine, false)) return false;
+    // Rows count from the header, so this stop parses one body row past the budget.
+    if (!table(state, startLine, Math.min(endLine, startLine + 2 + rows), false)) return false;
     let cells = env.tableCells ?? 0;
     for (let index = start; index < state.tokens.length; index += 1) {
       const type = state.tokens[index]?.type;
@@ -137,20 +152,32 @@ function insideAnchor(env: MemoryEnv): boolean {
   return env.anchors?.includes(true) ?? false;
 }
 
+/** Whether the link opened at `index` shows any words before it closes. */
+function linkShowsText(tokens: readonly Token[], index: number): boolean {
+  for (let next = index + 1; next < tokens.length; next += 1) {
+    const token = tokens[next] as Token;
+    if (token.type === "link_close") return false;
+    if (token.type === "image" || token.type === "wikilink" || token.content.trim()) return true;
+  }
+  return false;
+}
+
 // One anchor at a time: an autolink in a link label renders as text. So does a link
 // whose target markdown-it could not parse, since an empty one skips `validateLink`.
+// A link with no words of its own shows its target, so it is never an empty anchor.
 rules.link_open = (tokens, index, _options, env) => {
   const memory = env as MemoryEnv;
   const token = tokens[index] as Token;
   const href = String(token.attrGet("href") ?? "");
   const open = !insideAnchor(memory) && allowedHref(href);
   memory.anchors?.push(open);
-  return open ? `<a${linkAttributes(href, token.attrGet("title"))}>` : "";
+  if (!open) return "";
+  const target = linkShowsText(tokens, index) ? "" : escapeHtml(href);
+  return `<a${linkAttributes(href, token.attrGet("title"))}>${target}`;
 };
 rules.link_close = (_tokens, _index, _options, env) =>
   (env as MemoryEnv).anchors?.pop() ? "</a>" : "";
 
-// An image is a link to its source, never a remote load; inside a link, its words.
 /**
  * An image's alt text as it reads. markdown-it's own `renderInlineAsText` skips
  * wikilinks and strikethrough, which would lose a label or read struck words as
@@ -177,6 +204,7 @@ function altText(tokens: readonly Token[]): string {
     .join("");
 }
 
+// An image is a link to its source, never a remote load; inside a link, its words.
 rules.image = (tokens, index, _options, env) => {
   const token = tokens[index] as Token;
   const alt = altText(token.children ?? []);
@@ -272,7 +300,7 @@ export function wikilinkTarget(
 }
 
 /** The parts of a click that decide whether the page or the browser handles it. */
-export type LinkClick = Pick<
+type LinkClick = Pick<
   MouseEvent,
   "defaultPrevented" | "button" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"
 >;

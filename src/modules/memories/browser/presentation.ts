@@ -11,11 +11,12 @@ function compact(value: string, limit: number): string {
 /**
  * Characters that would make the text a reader sees differ from the text an agent
  * reads: the bidirectional embedding, override, and isolate controls, which reorder
- * what follows them, and the Unicode tag characters, which show as nothing. The one
- * use of tags a reader sees, an emoji flag's tag sequence, is matched first and kept.
+ * what follows them, and the Unicode tag characters, which show as nothing. The only
+ * tags a reader sees are the three subdivision flags (England, Scotland, and Wales),
+ * which are matched first and kept; any other tag run, flag-shaped or not, shows.
  */
 const HIDDEN_CHARACTERS =
-  /\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,6}\u{E007F}|[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
+  /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
 
 /** Text with each hidden control shown as a marker that names it, such as `⟨U+202E⟩`. */
 export function revealHidden(text: string): string {
@@ -31,11 +32,12 @@ const TITLE_LIMIT = 96;
 const TITLE_SOURCE_LIMIT = 1_000;
 
 /**
- * A link target that Memory detail renders: http(s) or mailto, optionally in angle
- * brackets, with one level of parentheses inside it and an optional quoted title.
- * Its alternatives start with different characters, so it never backtracks far.
+ * A link target that Memory detail renders (see `allowedHref`): http(s) with a host,
+ * or mailto with an address, optionally in angle brackets, with one level of
+ * parentheses inside it and an optional quoted title. Its alternatives start with
+ * different characters, so it never backtracks far.
  */
-const LINK_TARGET = String.raw`\(<?(?:https?:\/\/|mailto:)(?:[^()\s<>]|\([^()\s]*\))*>?(?:\s+"[^"\n]*")?\)`;
+const LINK_TARGET = String.raw`\(<?(?:https?:\/\/[^\s/\\?#()<>]|mailto:[^\s()<>])(?:[^()\s<>]|\([^()\s]*\))*>?(?:\s+"[^"\n]*")?\)`;
 const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]${LINK_TARGET}`, "g");
 const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "g");
 
@@ -103,7 +105,7 @@ export function memoryTitle(memory: Memory): string {
   if (configured !== null) {
     // Metadata may hold a title of 100,000 characters; only the first ones can show.
     const source = configured.slice(0, TITLE_SOURCE_LIMIT);
-    return compact(plainInline(source), TITLE_LIMIT) || compact(source, TITLE_LIMIT);
+    return compact(plainInline(source), TITLE_LIMIT) || compact(revealHidden(source), TITLE_LIMIT);
   }
   return compact(titleText(firstLine(memory.content)), TITLE_LIMIT) || "Untitled memory";
 }
@@ -132,7 +134,8 @@ export function memoryBody(memory: Memory): string {
   if (configuredTitle(memory) !== null || !TITLE_START.test(line)) return memory.content;
   const words = line.replace(/^#{1,6}[ \t]+/, "").replace(/^\*\*([^*\n]+)\*\*/, "$1");
   if (line.length > TITLE_SOURCE_LIMIT || MARKUP.test(words)) return memory.content;
-  if (words.replace(/\s+/g, " ").trim().length > TITLE_LIMIT) return memory.content;
+  // Measured as the title shows it, with any hidden control grown into its marker.
+  if (titleText(line).replace(/\s+/g, " ").trim().length > TITLE_LIMIT) return memory.content;
   const rest = memory.content.slice(line.length).replace(/^(?:\r\n?|\n)/, "");
   // An ATX heading always ends at its line; any other title line could continue.
   if (!line.startsWith("#") && !OPENS_BLOCK.test(firstLine(rest))) return memory.content;

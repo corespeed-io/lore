@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreAgents } from "@/modules/agents/browser/data";
 import { useLoreObservations } from "@/modules/episodes/browser/data";
 import { useLoreMemory } from "@/modules/memories/browser/data";
-import { memoryTitle } from "@/modules/memories/browser/presentation";
+import { memoryTitle, revealHidden } from "@/modules/memories/browser/presentation";
 import {
   useLoreMemoryProposalMutations,
   useLoreMemoryProposals,
@@ -257,7 +257,7 @@ export function MemoryProposalsView({
                       <span>{proposal.kind === "create" ? "New Memory" : "Update"}</span>
                       <time dateTime={proposal.createdAt}>{utcDate(proposal.createdAt)} UTC</time>
                     </span>
-                    <strong>{compact(proposal.proposedContent)}</strong>
+                    <strong>{compact(revealHidden(proposal.proposedContent))}</strong>
                     <span className="proposal-row-foot">
                       {submitter(proposal)} · {proposal.proposedScope}
                     </span>
@@ -358,18 +358,18 @@ export function MemoryProposalsView({
               {selected.kind === "update" && targetMemory && (
                 <section className="proposal-content-block proposal-current-content">
                   <h3>Current content</h3>
-                  <div>{targetMemory.content}</div>
+                  <div>{revealHidden(targetMemory.content)}</div>
                 </section>
               )}
 
               <section className="proposal-content-block">
                 <h3>Proposed content</h3>
-                <div>{selected.proposedContent}</div>
+                <div>{revealHidden(selected.proposedContent)}</div>
               </section>
 
               <details className="proposal-metadata">
                 <summary>Proposed metadata</summary>
-                <pre>{JSON.stringify(selected.proposedMetadata, null, 2)}</pre>
+                <pre>{revealHidden(JSON.stringify(selected.proposedMetadata, null, 2))}</pre>
               </details>
 
               <section className="proposal-evidence" aria-labelledby="proposal-evidence-title">
@@ -431,7 +431,7 @@ export function MemoryProposalsView({
                               </header>
                               {observation ? (
                                 <>
-                                  <div>{observation.content}</div>
+                                  <div>{revealHidden(observation.content)}</div>
                                   <small>
                                     SHA-256 {observation.payloadSha256} · {observationId}
                                   </small>

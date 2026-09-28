@@ -288,7 +288,6 @@ export function MemoryView({
               <button
                 type="button"
                 className="property-action detail-source-toggle"
-                aria-pressed={showSource}
                 onClick={() => setSourceOf(showSource ? null : id)}
               >
                 {showSource ? "Show rendered" : "Show source"}

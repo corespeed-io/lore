@@ -291,3 +291,58 @@ test("a modified, secondary, or handled click stays the browser's", () => {
     expect(keepsBrowserClick({ ...click, ...change })).toBe(true);
   }
 });
+
+test("code spans and fence info strings are escaped before they reach the page", () => {
+  const payload = "<img src=x onerror=alert(1)>";
+  expect(html(`\`${payload}\``)).toBe("<p><code>&lt;img src=x onerror=alert(1)&gt;</code></p>\n");
+  expect(html(`\`\`\`${payload}\ncode\n\`\`\``)).toBe(
+    '<pre class="fence"><span class="fence-info">&lt;img src=x onerror=alert(1)&gt;</span><code>code\n</code></pre>\n',
+  );
+});
+
+test("hidden controls show as markers in code blocks, fence info, wikilink labels, and alt text", () => {
+  expect(html("```ts‮\nif (admin) {‮ } else {⁦\n```")).toBe(
+    '<pre class="fence"><span class="fence-info">ts⟨U+202E⟩</span><code>if (admin) {⟨U+202E⟩ } else {⟨U+2066⟩\n</code></pre>\n',
+  );
+  expect(html("[[ref|a‮b]]")).toContain(">a⟨U+202E⟩b</span>");
+  expect(html("![a‮b]()")).toBe("<p>a⟨U+202E⟩b</p>\n");
+  expect(html("[![c‮d](https://x.test/i.png)](https://d.test)")).toContain(">c⟨U+202E⟩d</a>");
+});
+
+test("a resolved wikilink escapes its target id, and an unresolved one its reason", () => {
+  const id = '"><img src=x onerror=alert(1)>';
+  const rendered = html("[[r]]", { r: id }) ?? "";
+  expect(rendered).not.toContain("<img");
+  expect(rendered).toContain('href="/memory/%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E"');
+  expect(rendered).toContain('data-memory-id="&quot;&gt;&lt;img src=x onerror=alert(1)&gt;"');
+  const tokens = parseMemoryMarkdown("[[m]]") ?? [];
+  expect(renderMemoryMarkdown(tokens, {}, '"><b>x</b>')).toContain(
+    'title="m — &quot;&gt;&lt;b&gt;x&lt;/b&gt;"',
+  );
+});
+
+test("an image whose alt is only spaces shows its source, and a line break keeps alt words apart", () => {
+  expect(html("![ ](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
+  expect(html("![two\nwords](https://x.test/a.png)")).toContain(">two words</a>");
+});
+
+test("a link with no words of its own shows its target", () => {
+  expect(html("[](https://y.test) and [ ](https://z.test)")).toBe(
+    `<p><a class="ext" href="https://y.test" ${EXTERNAL}>https://y.test</a> and <a class="ext" href="https://z.test" ${EXTERNAL}>https://z.test </a></p>\n`,
+  );
+  // A link whose words are an image or a wikilink keeps them.
+  expect(html("[![logo](https://x.test/l.png)](https://d.test)")).toContain(">logo</a>");
+});
+
+test("a table past the budget is parsed no further than one row past it", () => {
+  // Without the stop, markdown-it would fill in 65,536 cells before the table is dropped.
+  const wide = `|${"a|".repeat(4_000)}\n|${"-|".repeat(4_000)}\n${"a\n".repeat(4_000)}`;
+  const long = `|${"a|".repeat(200)}\n|${"-|".repeat(200)}\n${"a\n".repeat(10_000)}`;
+  for (const input of [wide, long]) {
+    const started = performance.now();
+    const tokens = parseMemoryMarkdown(input.slice(0, 32_000)) ?? [];
+    expect(tokens.filter((token) => token.type === "td_open")).toHaveLength(0);
+    expect(tokens.length).toBeLessThan(1_000);
+    expect(performance.now() - started).toBeLessThan(100);
+  }
+});

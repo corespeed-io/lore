@@ -745,7 +745,7 @@ body {
   font-size: 12px;
 }
 
-/* A Memory's text exactly as written, beside its rendering. */
+/* A Memory's text as written, hidden controls as markers, beside its rendering. */
 .detail-source {
   margin: 0;
   font-family: var(--font-mono);
@@ -776,7 +776,8 @@ body {
   margin: 1.4em 0 0.4em;
 }
 
-.detail-body code {
+/* Inline code only; code in a fence takes the fence's font. :where keeps both at (0,1,1). */
+.detail-body :where(:not(pre)) > code {
   font-family: var(--font-mono);
   background: var(--hairline-soft);
   padding: 1px 5px;
@@ -800,12 +801,8 @@ body {
   line-height: 1.6;
 }
 
-/* :where keeps this rule, and the list rule below, at the specificity they override. */
-.detail-body :where(pre.fence) code {
-  background: none;
-  padding: 0;
-  border-radius: 0;
-  font-size: inherit;
+.detail-body :where(pre) code {
+  font: inherit;
 }
 
 .detail-body h3,
@@ -846,6 +843,7 @@ body {
   color: var(--faint);
 }
 
+/* :where keeps this rule at the specificity of the margin rule it overrides. */
 .detail-body :where(li) > :is(ul, ol, p) {
   margin: 0;
 }
