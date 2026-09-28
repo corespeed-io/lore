@@ -1,2 +1,2 @@
 // Generated from packages/cli/package.json. Do not edit by hand.
-export const LORE_CLI_VERSION = "0.2.0";
+export const LORE_CLI_VERSION = "0.3.0";

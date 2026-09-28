@@ -1,6 +1,6 @@
 {
   "name": "@corespeed/lore-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "External Model Context Protocol adapter for Lore.",
   "license": "MIT",
   "type": "module",
@@ -26,7 +26,7 @@
     "prepack": "bun --no-env-file run --cwd ../.. sdk:check && bun --no-env-file run --cwd ../typescript-sdk build && bun --no-env-file run build"
   },
   "dependencies": {
-    "@corespeed/lore-sdk": "^0.2.0",
+    "@corespeed/lore-sdk": "^0.3.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "zod": "^4.6.5"
   },
