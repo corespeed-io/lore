@@ -112,46 +112,61 @@ function dropsCells(state: StateBlock, start: number): boolean {
     if (token?.type === "th_open") columns += 1;
     if (token?.type === "tbody_open") body = true;
     if (body && token?.type === "tr_open" && token.map) {
-      const line = token.map[0];
-      const text = state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
-      if (tableRowCells(text) > columns) return true;
+      if (tableRowCells(lineText(state, token.map[0])) > columns) return true;
     }
   }
   return false;
 }
 
+function lineText(state: StateBlock, line: number): string {
+  return state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
+}
+
 /**
  * markdown-it's table rule, held to what Memory detail can show. The rule fills in
  * every cell a short row leaves out, so without a bound a 32,000-character body
- * parses to millions of cells before anything renders: the tables of one body share
- * `MAXIMUM_TABLE_CELLS`, the first table past it is parsed once and dropped, and it
- * and every later table stay paragraph text. The rule also silently drops the cells
- * a long row has past its header, so such a table stays paragraph text too, and no
+ * parses to millions of cells before anything renders. Every table of one body,
+ * kept or dropped, spends one `MAXIMUM_TABLE_CELLS` budget; a table is parsed no
+ * further than one row past what is left of it, and the table that goes past it and
+ * every later table stay paragraph text. The rule also silently drops the cells a
+ * long row has past its header, so such a table stays paragraph text too, and no
  * text of the body goes unseen. markdown-it would then try a table again at each of
- * the dropped table's lines, parsing its remaining rows every time, so no table may
- * start inside it: each row is parsed at most once.
+ * the dropped table's lines, so no table may start inside it: each row is parsed at
+ * most once.
  */
 function boundedTable(table: BlockRule): BlockRule {
   return (state, startLine, endLine, silent) => {
     const budget = state.env as TableBudget;
     if (budget.tablesOff || startLine < (budget.droppedUntil ?? 0)) return false;
-    if (silent) return table(state, startLine, endLine, true);
+    // Silently, markdown-it checks only the header and delimiter lines.
+    if (!table(state, startLine, endLine, true)) return false;
+    if (silent) return true;
+    const spent = budget.tableCells ?? 0;
+    const rowsLeft = Math.floor(
+      (MAXIMUM_TABLE_CELLS - spent) / tableRowCells(lineText(state, startLine)),
+    );
+    if (rowsLeft < 1) {
+      budget.tablesOff = true;
+      return false;
+    }
+    // Rows start at the header; one row past the budget is enough to know it is over.
+    const stop = Math.min(endLine, startLine + rowsLeft + 2);
     const start = state.tokens.length;
-    if (!table(state, startLine, endLine, false)) return false;
-    let cells = budget.tableCells ?? 0;
+    if (!table(state, startLine, stop, false)) return false;
+    let cells = spent;
     for (let index = start; index < state.tokens.length; index += 1) {
       const type = state.tokens[index]?.type;
       if (type === "td_open" || type === "th_open") cells += 1;
     }
+    budget.tableCells = cells;
     const overBudget = cells > MAXIMUM_TABLE_CELLS;
     if (overBudget || dropsCells(state, start)) {
       budget.droppedUntil = state.line;
       state.tokens.length = start;
       state.line = startLine;
-      if (overBudget) budget.tablesOff = true;
+      if (cells >= MAXIMUM_TABLE_CELLS) budget.tablesOff = true;
       return false;
     }
-    budget.tableCells = cells;
     return true;
   };
 }
@@ -193,8 +208,12 @@ export function parseMemoryMarkdown(content: string): Token[] | null {
   return tokens;
 }
 
-/** A character a reader can see: a letter, digit, punctuation, or symbol. */
-const VISIBLE = /[\p{L}\p{N}\p{P}\p{S}]/u;
+/**
+ * A character a reader can see: a letter, digit, punctuation, or symbol, but not one
+ * a font draws as nothing (a default-ignorable one, such as the Hangul fillers, or a
+ * blank Braille pattern).
+ */
+const VISIBLE = /(?![\p{Default_Ignorable_Code_Point}\u2800])[\p{L}\p{N}\p{P}\p{S}]/u;
 
 /** Whether text shows anything, where spaces and zero-width characters show nothing. */
 export function hasVisibleText(text: string): boolean {
@@ -307,23 +326,21 @@ export function nodeText(nodes: readonly MarkdownNode[]): string {
 }
 
 /**
- * An image's alt text as it reads: its words, the labels of wikilinks in it, and
- * the target of any link in it, which the image's own link would otherwise hide.
+ * An image's alt text as it reads. Alt text that holds an image, a link, or a
+ * wikilink shows as written: flattened to words, it would hide their targets,
+ * titles, and references, which only its source still carries.
  */
-export function altText(tokens: readonly Token[] | null): string {
-  let text = "";
-  const targets: (string | null)[] = [];
-  for (const token of tokens ?? []) {
-    if (token.type === "image") text += altText(token.children);
-    else if (token.type === "wikilink") text += String(token.meta?.label ?? "");
-    else if (token.type === "link_open") targets.push(target(token, "href"));
-    else if (token.type === "link_close") {
-      const href = targets.pop();
-      if (href) text += ` (${href})`;
-    } else if (token.type === "softbreak" || token.type === "hardbreak") text += " ";
-    else text += token.content;
-  }
-  return text;
+function altText(image: Token): string {
+  const children = image.children ?? [];
+  const nested = children.some(
+    (child) => child.type === "image" || child.type === "link_open" || child.type === "wikilink",
+  );
+  if (nested) return image.content;
+  return children
+    .map((child) =>
+      child.type === "softbreak" || child.type === "hardbreak" ? " " : child.content,
+    )
+    .join("");
 }
 
 function append(target: MarkdownNode[], nodes: readonly MarkdownNode[]): void {
@@ -389,12 +406,13 @@ function leaf(token: Token, inLink: boolean): MarkdownNode[] {
     case "image": {
       // An image is a link to its source, never a remote load. Inside a link, where
       // it cannot be a link, its source shows on hover as a link's target does.
-      const alt = altText(token.children);
+      const alt = altText(token);
       const src = target(token, "src");
       if (!src) return [alt];
       const title = attribute(token, "title");
-      if (inLink) return [element("span", [alt], { title: title ? `${src} — ${title}` : src })];
-      return [element("a", [hasVisibleText(alt) ? alt : src], linkProps(src, title))];
+      const shown = hasVisibleText(alt) ? alt : src;
+      if (inLink) return [element("span", [shown], { title: title ? `${src} — ${title}` : src })];
+      return [element("a", [shown], linkProps(src, title))];
     }
     case "wikilink": {
       const reference = token.meta?.reference;
@@ -439,8 +457,8 @@ function tree(tokens: readonly Token[]): MarkdownNode[] {
 
 /**
  * A Memory body as the tree Memory detail renders, or null when it must show as
- * its text (see `parseMemoryMarkdown`). Every rendering decision lives here, so
- * tests can pin them without rendering React.
+ * its text (see `parseMemoryMarkdown`). Every rendering decision but a wikilink's
+ * resolution (`wikilinkView`) lives here, so tests pin them without rendering React.
  */
 export function memoryMarkdownTree(content: string): MarkdownNode[] | null {
   const tokens = parseMemoryMarkdown(content);

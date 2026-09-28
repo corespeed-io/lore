@@ -565,19 +565,25 @@ been removed. Lore now has a native implementation, split into two concepts
 - `src/modules/memories/browser/MemoryMarkdown.tsx` renders a Memory body: `markdown.ts` parses
   it with markdown-it (CommonMark plus tables and strikethrough) and turns the tokens
   into a plain tree of fixed tags and attributes (`memoryMarkdownTree`), and the
-  component maps that tree to React elements. Every rendering decision lives in the
-  tree, so tests pin them without rendering. No body HTML goes through `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
+  component maps that tree to React elements. Every rendering decision is a pure
+  function in `markdown.ts`, so tests pin them without rendering: the tree for the
+  body, and `wikilinkView`/`keepsBrowserClick` for wikilinks, which resolve against
+  the Graph at render time so a Graph refresh never rebuilds the tree. No body HTML
+  goes through `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
   body of nested quotes or lists overflowed its stack, and a 6 KB table took 1.5 s.
   - Raw HTML and bare URLs show as text.
-  - No text of the body renders as nothing: reference definitions are disabled so they stay text, a fence's info string shows above it, a link or image with no visible text (`hasVisibleText`: spaces and zero-width characters show nothing) shows its target, and a table with a row longer than its header, whose extra cells markdown-it would drop, stays paragraph text. Targets, titles, and an unresolved wikilink's reference show on hover. A human reviews agent-written Memories here while other agents read them verbatim.
+  - No text of the body renders as nothing: reference definitions are disabled so they stay text, a fence's info string shows above it, a link or image with no visible text (`hasVisibleText`: spaces, zero-width and other default-ignorable characters, and a blank Braille pattern show nothing) shows its target, alt text holding an image, link, or wikilink shows as written, and a table with a row longer than its header, whose extra cells markdown-it would drop, stays paragraph text. Targets, titles, and an unresolved wikilink's reference show on hover. A human reviews agent-written Memories here while other agents read them verbatim.
   - `allowedHref` allows only http(s) links with a host, and mailto.
   - Images render as links, so a body never loads a remote URL.
   - A single line break is kept.
   - A body whose blocks or inline markup nest past `MAXIMUM_MARKDOWN_NESTING`
     renders as text (`parseMemoryMarkdown`), because markdown-it drops the blocks
-    past it and never bounds emphasis. The tables of one body share
-    `MAXIMUM_TABLE_CELLS` while parsing (`boundedTable`), because markdown-it fills
-    in the cells a short row leaves out; a table past it stays paragraph text.
+    past it and never bounds emphasis. The tables of one body, kept or dropped,
+    share `MAXIMUM_TABLE_CELLS` while parsing (`boundedTable`), because markdown-it
+    fills in the cells a short row leaves out; a table is parsed no further than one
+    row past what is left, and the table that goes past it and every later table
+    stay paragraph text. No table may start inside a dropped table's lines, so
+    markdown-it's retries parse each row once.
   - An autolink inside a link label, or an image or wikilink inside a link, renders as text, so anchors never nest.
   - An inline rule turns `[[reference]]` and `[[reference|label]]` into `wikilink` tokens before links or emphasis can claim the brackets, never in code. They resolve only when the reference names one visible graph node (`wikilinkTarget` reads own properties only), and a resolved one routes in the client unless the click carries a modifier. Unresolved or ambiguous references stay inert.
   - `MemoryView.tsx` loads the renderer apart from the shell, once the shell is idle, and renders a loaded renderer directly: `React.lazy` suspends on its first render even with the module loaded, and React holds a fallback for 300 ms. The body shows as text while the renderer loads or if it fails.

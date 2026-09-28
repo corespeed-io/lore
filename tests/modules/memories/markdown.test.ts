@@ -353,15 +353,29 @@ test("an image is a link to its source, and inside a link its source shows on ho
   expect(paragraphOf("![ ](https://x.test/a.png)")).toEqual([
     el("a", ["https://x.test/a.png"], web("https://x.test/a.png")),
   ]);
-  // Wikilink labels and link targets inside the alt text still read.
-  expect(nodeText(paragraphOf("![Diagram of [[Alpha]] flow](https://x.test/i.png)"))).toBe(
-    "Diagram of Alpha flow",
-  );
-  expect(nodeText(paragraphOf("![see [docs](https://evil.test/x)](https://x.test/a.png)"))).toBe(
-    "see docs (https://evil.test/x)",
-  );
+  // Alt text holding a wikilink, a link, or an image shows as written, so their
+  // references, targets, and titles still read.
+  for (const alt of [
+    "Diagram of [[secret-ref|Alpha]] flow",
+    'see [docs](https://evil.test/x "hidden title")',
+    'a ![b](https://x.test/inner "t2")',
+    "[[secret-ref|\u200b]]",
+  ]) {
+    expect(nodeText(paragraphOf(`![${alt}](https://x.test/i.png)`))).toBe(alt);
+  }
+  // Other markup in alt text reads as its words.
+  expect(nodeText(paragraphOf("![alt *b* `c`](https://x.test/i.png)"))).toBe("alt b c");
   expect(paragraphOf("[![logo](https://x.test/l.png)](https://d.test)")).toEqual([
     el("a", [el("span", ["logo"], { title: "https://x.test/l.png" })], web("https://d.test")),
+  ]);
+  // An image with no visible alt inside a link shows its source, which keeps the link
+  // from reading as empty and replacing the image with its own target.
+  expect(paragraphOf('[![](https://x.test/payload "note")](https://d.test)')).toEqual([
+    el(
+      "a",
+      [el("span", ["https://x.test/payload"], { title: "https://x.test/payload — note" })],
+      web("https://d.test"),
+    ),
   ]);
 });
 
@@ -444,9 +458,26 @@ test("a table row counts its cells as markdown-it does", () => {
 
 test("visible text is a letter, digit, punctuation, or symbol", () => {
   for (const text of ["a", "中", "—", "😀", "1"]) expect(hasVisibleText(text)).toBe(true);
-  for (const text of ["", " ", "\u00a0", "\u200b", "\u00ad", "\u2060"]) {
+  // Spaces, zero-width and other default-ignorable characters such as the Hangul
+  // fillers, and a blank Braille pattern, all draw nothing.
+  for (const text of [
+    "",
+    " ",
+    "\u00a0",
+    "\u200b",
+    "\u00ad",
+    "\u2060",
+    "\u115f",
+    "\u1160",
+    "\u3164",
+    "\uffa0",
+    "\u2800",
+  ]) {
     expect(hasVisibleText(text)).toBe(false);
   }
+  expect(paragraphOf("[\u3164](https://y.test)")).toEqual([
+    el("a", ["https://y.test"], web("https://y.test")),
+  ]);
 });
 
 test("a line break inside a paragraph renders as a line break, whatever wrote it", () => {
@@ -509,4 +540,58 @@ test("a modified, secondary, or handled click stays the browser's", () => {
   ]) {
     expect(keepsBrowserClick({ ...click, ...change })).toBe(true);
   }
+});
+
+test("tables dropped for a long row spend the shared cell budget", () => {
+  // 50 columns, a 51-cell row, then 95 more rows: 4,850 cells, then dropped.
+  const dropped = `${"|a".repeat(50)}|\n${"|-".repeat(50)}|\n${"|a".repeat(51)}|\n${"a\n".repeat(95)}\n`;
+  const tokens = parseMemoryMarkdown(`${dropped}${dropped}${table(2, 2)}`);
+
+  // The second dropped table goes past what is left, so the small one after stays text.
+  expect(tokens?.filter((token) => token.type === "table_open")).toHaveLength(0);
+  // One dropped table leaves budget for the next.
+  expect(
+    parseMemoryMarkdown(`${dropped}${table(2, 2)}`)?.filter((t) => t.type === "table_open"),
+  ).toHaveLength(1);
+});
+
+test("a table past the budget is parsed no further than one row past it", () => {
+  // Without the stop, markdown-it would fill in 65,536 cells before the table is dropped.
+  const long = `|${"a|".repeat(200)}\n|${"-|".repeat(200)}\n${"a\n".repeat(10_000)}`;
+  const started = performance.now();
+  const tokens = parseMemoryMarkdown(long.slice(0, 32_000));
+
+  expect(tableCells(tokens)).toBe(0);
+  expect(performance.now() - started).toBeLessThan(200);
+});
+
+test("a table may follow a paragraph line directly", () => {
+  const tree = memoryMarkdownTree("Owners:\n| name | role |\n|---|---|\n| Alice | lead |");
+
+  expect(tree?.[0]).toEqual(el("p", ["Owners:"]));
+  expect(tree?.[1]).toMatchObject({ kind: "element", tag: "table" });
+});
+
+test("an ordered list keeps its first number, 0 and 1 included", () => {
+  expect(memoryMarkdownTree("1. a\n2. b")).toEqual([el("ol", [el("li", ["a"]), el("li", ["b"])])]);
+  expect(memoryMarkdownTree("0. a\n1. b")).toEqual([
+    el("ol", [el("li", ["a"]), el("li", ["b"])], { start: 0 }),
+  ]);
+});
+
+test("inline and block markup render as their own elements", () => {
+  // Strikethrough and quotes carry meaning a reader needs: struck text is not current.
+  expect(memoryMarkdownTree("~~old~~ **b** *e* `c`\n\n> q\n\n---")).toEqual([
+    el("p", [
+      el("s", ["old"]),
+      " ",
+      el("strong", ["b"]),
+      " ",
+      el("em", ["e"]),
+      " ",
+      el("code", ["c"]),
+    ]),
+    el("blockquote", [el("p", ["q"])]),
+    el("hr", []),
+  ]);
 });

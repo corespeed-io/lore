@@ -73,8 +73,9 @@ function elements(nodes: readonly MarkdownNode[]): ReactNode[] {
 /**
  * A Memory body as CommonMark plus tables and strikethrough, parsed by markdown-it
  * and rendered as React elements, so no body HTML reaches the page. Every decision
- * about what renders, and how, is `memoryMarkdownTree`'s; a body it cannot render
- * whole shows as its text.
+ * about what renders is a pure function in `markdown.ts`: `memoryMarkdownTree` for
+ * the body, which shows as its text when it cannot render whole, and `wikilinkView`
+ * for wikilinks, which resolve against the Graph at render time.
  */
 export default function MemoryMarkdown({
   content,

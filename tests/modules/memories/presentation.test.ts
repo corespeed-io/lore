@@ -238,6 +238,17 @@ test("an entity past Unicode, or a lone surrogate, reads as a replacement charac
 test("the body keeps a first line longer than the title reads", () => {
   const content = `## ${"**".repeat(500)}${"real text ".repeat(100)}\nBody`;
   expect(memoryBody(memory({ content }))).toBe(content);
+  // Without markup the title shows only the words before the bound, so the rest stays.
+  const padded = `# Deploy${" ".repeat(1_000)}only after the freeze lifts\nBody`;
+  expect(memoryBody(memory({ content: padded }))).toBe(padded);
+});
+
+test("spaced asterisks and underscores are not emphasis in a title", () => {
+  expect(plainInline("Budget = 2 * 3 * 4 hours")).toBe("Budget = 2 * 3 * 4 hours");
+  expect(plainInline("a _ b _ c and a __ b __ c")).toBe("a _ b _ c and a __ b __ c");
+  const content = "# Budget = 2 * 3 * 4 hours\nBody";
+  expect(memoryTitle(memory({ content }))).toBe("Budget = 2 * 3 * 4 hours");
+  expect(memoryBody(memory({ content }))).toBe(content);
 });
 
 test("deciding whether a title line continues takes linear time", () => {
