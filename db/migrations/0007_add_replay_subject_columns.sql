@@ -22,8 +22,9 @@
 -- the older reset leaves the columns the newer instance wrote, since it does not know
 -- them, and a stale column would delete the new body when an unrelated subject is
 -- forgotten. A trigger here clears the columns whenever a row returns to in_progress,
--- whichever release resets it. It lives in this migration, which locks only the
--- ledger, so 0009 need not lock the ledger after the tables keyed writes lock later.
+-- whichever release resets it. It lives in this migration, which locks the ledger
+-- and no subject table, so 0009 need not lock the ledger after the tables keyed
+-- writes lock later.
 --
 -- Adding nullable columns without defaults changes only the catalog, so the lock is
 -- brief; under load it still queues behind open transactions, so fail fast and let

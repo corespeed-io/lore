@@ -162,3 +162,16 @@ test.each([
   },
   60_000,
 );
+
+// CREATE FUNCTION takes no table lock and each CREATE TRIGGER locks its table until
+// commit, so 0009 takes its locks in the order its triggers are created; the test
+// above proves nothing else is locked.
+test("0009 creates its triggers in the order Agent deletion and forget reach the tables", async () => {
+  const migration = (await migrationFiles()).find((file) => file.version === "0009");
+  const targets = [
+    ...(migration?.sql ?? "").matchAll(
+      /^CREATE TRIGGER \S+ (?:BEFORE|AFTER) \w+ ON public\.(\w+)/gm,
+    ),
+  ].map((match) => match[1]);
+  expect(targets).toEqual(["episodes", "memories", "memory_proposals"]);
+});

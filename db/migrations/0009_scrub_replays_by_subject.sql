@@ -12,10 +12,14 @@
 -- foreign keys reach them, and the order forget, Proposal acceptance, and the
 -- maintenance sweep reach the last two. It never locks the replay ledger, which every
 -- keyed write locks first (its claim) before it writes a Memory, Proposal, or
--- Episode, so it cannot form a cycle with one; the ledger's own trigger is in 0007,
--- where ADD COLUMN already holds that table alone. Under load a
--- lock may still queue behind open transactions, so fail fast and let the deploy
--- retry; this migration rewrites no rows, so a retry repeats nothing costly.
+-- Episode; the ledger's own trigger is in 0007. That order avoids the cycles every
+-- such write would form. A rarer three-way collision remains, because this holds
+-- episodes and memories while it waits for memory_proposals: a Proposal whose
+-- evidence check waits on a Memory that a forget or update holds, while that forget
+-- or update waits on this. PostgreSQL then aborts one of the three with a retryable
+-- deadlock error. Under load a lock may also queue behind open transactions, so fail
+-- fast and let the deploy retry; this migration rewrites no rows, so a retry repeats
+-- nothing costly.
 SET LOCAL lock_timeout = '5s';
 
 CREATE FUNCTION lore.scrub_replays_of_deleted_memory() RETURNS trigger
