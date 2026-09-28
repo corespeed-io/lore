@@ -44,23 +44,23 @@ COMMENT ON COLUMN public.request_idempotency_records.subject_episode_id IS
 -- would abort the migration, so the backfill casts only well-formed ones.
 UPDATE public.request_idempotency_records replay
 SET subject_memory_id = CASE
-      WHEN replay.response_body #>> '{memory,id}' ~ '^[0-9a-fA-F-]{36}$'
+      WHEN replay.response_body #>> '{memory,id}' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       THEN (replay.response_body #>> '{memory,id}')::uuid
     END,
     subject_proposal_id = CASE
-      WHEN replay.response_body #>> '{proposal,id}' ~ '^[0-9a-fA-F-]{36}$'
+      WHEN replay.response_body #>> '{proposal,id}' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       THEN (replay.response_body #>> '{proposal,id}')::uuid
     END,
     proposal_target_memory_id = CASE
-      WHEN replay.response_body #>> '{proposal,targetMemoryId}' ~ '^[0-9a-fA-F-]{36}$'
+      WHEN replay.response_body #>> '{proposal,targetMemoryId}' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       THEN (replay.response_body #>> '{proposal,targetMemoryId}')::uuid
     END,
     proposal_accepted_memory_id = CASE
-      WHEN replay.response_body #>> '{proposal,acceptedMemoryId}' ~ '^[0-9a-fA-F-]{36}$'
+      WHEN replay.response_body #>> '{proposal,acceptedMemoryId}' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       THEN (replay.response_body #>> '{proposal,acceptedMemoryId}')::uuid
     END,
     subject_episode_id = CASE
-      WHEN replay.response_body #>> '{episode,id}' ~ '^[0-9a-fA-F-]{36}$'
+      WHEN replay.response_body #>> '{episode,id}' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
       THEN (replay.response_body #>> '{episode,id}')::uuid
     END
 WHERE replay.response_body IS NOT NULL;
