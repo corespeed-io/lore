@@ -1339,12 +1339,18 @@ export class LoreWorkspaceClient {
   }
 }
 
+/** An unpaired UTF-16 surrogate, which URL encoding would silently replace with U+FFFD. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 function memoryLinkPath(input: MemoryLinkKey): string {
   const path = `api/v1/memories/${normalizedUuid(input.sourceMemoryId, "sourceMemoryId")}/links/${normalizedUuid(input.targetMemoryId, "targetMemoryId")}`;
   if (input.kind === undefined) return path;
   if (input.kind.length > LIMITS.memoryLinkKindLength) {
     throw new TypeError(`kind may contain at most ${LIMITS.memoryLinkKindLength} characters`);
   }
+  // The kind is the Link's identity, so a value the URL cannot carry exactly is
+  // refused rather than sent as a different, possibly existing, kind.
+  if (LONE_SURROGATE.test(input.kind)) throw new TypeError("kind must be well-formed Unicode");
   return `${path}?${new URLSearchParams({ kind: input.kind })}`;
 }
 

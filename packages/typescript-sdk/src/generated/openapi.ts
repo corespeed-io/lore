@@ -2368,7 +2368,7 @@ export interface operations {
     readonly putMemoryLink: {
         readonly parameters: {
             readonly query?: {
-                /** @description The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. */
+                /** @description The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. The query is form-encoded, so a literal + must be sent as %2B. No other query parameter is accepted, and kind may be given once. */
                 readonly kind?: string;
             };
             readonly header: {
@@ -2412,7 +2412,7 @@ export interface operations {
     readonly deleteMemoryLink: {
         readonly parameters: {
             readonly query?: {
-                /** @description The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. */
+                /** @description The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. The query is form-encoded, so a literal + must be sent as %2B. No other query parameter is accepted, and kind may be given once. */
                 readonly kind?: string;
             };
             readonly header: {

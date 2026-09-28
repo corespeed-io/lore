@@ -128,20 +128,26 @@ function jsonRequest(
 }
 
 /**
- * Wait until `count` other sessions of this database wait on a lock. `pg_locks` is
- * read live and needs no statistics privileges, unlike `pg_stat_activity`, whose
- * snapshot an open transaction would also freeze.
+ * Wait until `count` sessions queue behind a lock this client's own session holds,
+ * so an unrelated waiter on a shared server cannot satisfy it. A second waiter on a
+ * row queues behind the first one's tuple lock, not the holder's, so the count
+ * follows the whole wait chain. `pg_locks` is read live and needs no statistics
+ * privileges, unlike `pg_stat_activity`, whose snapshot an open transaction would
+ * also freeze.
  */
 async function waitForLockWaiters(client: Client, count: number): Promise<void> {
   const deadline = Date.now() + 10_000;
   for (;;) {
     const result = await client.query<{ waiting: number }>(
-      `SELECT count(DISTINCT pid)::integer AS waiting
-       FROM pg_locks
-       WHERE NOT granted
-         AND pid <> pg_backend_pid()
-         AND (database IS NULL
-              OR database = (SELECT oid FROM pg_database WHERE datname = current_database()))`,
+      `WITH RECURSIVE queued(pid) AS (
+         SELECT pg_backend_pid()
+         UNION
+         SELECT waiting.pid
+         FROM pg_locks waiting
+         JOIN queued ON queued.pid = ANY (pg_blocking_pids(waiting.pid))
+         WHERE NOT waiting.granted
+       )
+       SELECT (count(*) - 1)::integer AS waiting FROM queued`,
     );
     if ((result.rows[0]?.waiting ?? 0) >= count) return;
     if (Date.now() > deadline) throw new Error(`Expected ${count} sessions waiting on a lock`);
@@ -573,8 +579,8 @@ try {
   );
   const racePath = `/api/v1/memories/${acceptedMemory.id}/links/${linkTarget.id}?kind=race`;
   // Hold the source row so both PUTs queue behind it and reach their Link writes
-  // together: without the engine's source lock, the second would fail on the
-  // natural key instead of reading the first one's Link.
+  // together: one must create the Link and the other replace that same Link, never
+  // fail on the natural key.
   const blocker = new Client({ connectionString: smokeDatabaseUrl });
   await blocker.connect();
   let raced: Response[];
@@ -596,7 +602,7 @@ try {
   assert.deepEqual(
     raced.map((response) => response.status).sort(),
     [200, 201],
-    "concurrent PUTs of one new Link must serialize on the source lock",
+    "concurrent PUTs of one new Link must create it once and replace it once",
   );
   const racedIds = await Promise.all(
     raced.map(async (response) => ((await response.json()) as { id: string }).id),

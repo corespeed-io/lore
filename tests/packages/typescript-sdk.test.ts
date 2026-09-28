@@ -285,6 +285,29 @@ describe("Lore TypeScript SDK", () => {
     expect(init.body).toBe(JSON.stringify({ content: "Updated" }));
   });
 
+  test("refuses a Link kind that URL encoding would turn into another kind", async () => {
+    const fetchMock = vi.fn();
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    const key = { sourceMemoryId: MEMORY_ID, targetMemoryId: WORKSPACE_ID };
+
+    for (const kind of ["\uD800", "cites\uDC00", "\uDC00\uD800"]) {
+      await expect(workspace.unlinkMemories({ ...key, kind })).rejects.toThrow(
+        "kind must be well-formed Unicode",
+      );
+      await expect(workspace.linkMemories({ ...key, kind })).rejects.toThrow(
+        "kind must be well-formed Unicode",
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    // A paired surrogate is well formed and is sent.
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await workspace.unlinkMemories({ ...key, kind: "cites \uD83D\uDE00" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   test("sends an empty Link kind as given, so the server's rule decides it", async () => {
     const fetchMock = vi
       .fn()

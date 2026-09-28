@@ -3,7 +3,13 @@ import { Hono } from "hono";
 import { z } from "zod/v4";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import type { ApiEnv } from "@/server/api/dependencies";
-import { jsonObject, parseMemoryInput, queryInteger, uuidString } from "@/server/api/input";
+import {
+  BadRequestError,
+  jsonObject,
+  parseMemoryInput,
+  queryInteger,
+  uuidString,
+} from "@/server/api/input";
 import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
 import { NotFoundError } from "@/server/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";
@@ -33,14 +39,24 @@ const PutMemoryLinkInputSchema = z.strictObject(
   { error: "Memory Link input must be an object with only weight and metadata" },
 );
 
-/** The natural key (source, target, kind) of the Link a request addresses. */
+/**
+ * The natural key (source, target, kind) of the Link a request addresses. A
+ * misspelled or repeated parameter is refused: falling back to the default kind
+ * would make a DELETE remove a different Link.
+ */
 function linkKey(request: Request, sourceId: string, targetId: string) {
+  const query = new URL(request.url).searchParams;
+  if ([...query.keys()].some((name) => name !== "kind")) {
+    throw new BadRequestError("kind is the only query parameter a Memory Link accepts");
+  }
+  const kinds = query.getAll("kind");
+  if (kinds.length > 1) throw new BadRequestError("kind may be given once");
   // The kind is stored exactly as given, so it is not trimmed here.
-  const kind = new URL(request.url).searchParams.get("kind");
+  const [kind] = kinds;
   return {
     sourceMemoryId: uuidString(sourceId, "memoryId"),
     targetMemoryId: uuidString(targetId, "targetMemoryId"),
-    ...(kind === null ? {} : { kind }),
+    ...(kind === undefined ? {} : { kind }),
   };
 }
 

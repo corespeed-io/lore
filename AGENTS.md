@@ -524,9 +524,18 @@ been removed. Lore now has a native implementation, split into two concepts
   source lock; target and Workspace counts may overshoot by concurrent writes from
   other sources. Workspace import's batch insert is bounded by the archive limits
   instead. `scripts/checks/smoke-memory-core.ts` holds the source row from another
-  session so two PUTs of one new key must meet at that lock, and fails if they do
-  not serialize; it clears the statistics snapshot on each `pg_stat_activity` poll,
-  which an open transaction would otherwise freeze. The SDK
+  session so two PUTs of one new key reach their writes together, and requires one
+  201 and one 200 for the same Link; it counts only sessions whose `pg_blocking_pids` chain leads
+  back to that holder (a second waiter queues behind the first one's tuple lock),
+  read from `pg_locks` (a `pg_stat_activity` poll inside the holder's open
+  transaction would see one frozen snapshot). The engine relies on READ COMMITTED:
+  each statement's fresh snapshot is what lets a writer queued on the source lock
+  see the Link its predecessor committed. A new Link's insert is `ON CONFLICT DO
+  NOTHING`, then a re-read replaces a Link the first read could not see (a target
+  briefly invisible, or a batch insert since), so neither race answers 500. The route
+  refuses any query parameter but one `kind`, so a misspelled parameter cannot make a
+  DELETE fall back to the default kind; the SDK refuses a kind with an unpaired
+  surrogate, which URL encoding would turn into U+FFFD. The SDK
   (`linkMemories`/`unlinkMemories`), CLI (`memory link`/`memory unlink`), and MCP
   (`lore_link` and `lore_unlink`, both destructive because a link replaces an
   existing Link's fields, and separate so a host can gate deletion on its own) take

@@ -693,26 +693,30 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
       const { kind, weight, metadata } = validateMemoryLink(input);
       return database.transaction(async (transaction) => {
         if (!(await lockLinkEndpoints(transaction, storage.partitionId, input))) return null;
-        const existing = await transaction.query<MemoryLinkRow & { unchanged: boolean }>(
-          `SELECT ${MEMORY_LINK_COLUMNS},
-                  (weight, metadata) IS NOT DISTINCT FROM ($5::real, $6::jsonb) AS unchanged
-           FROM memory_links
-           WHERE workspace_id = $1
-             AND source_memory_id = $2
-             AND target_memory_id = $3
-             AND kind = $4
-           FOR UPDATE`,
-          [
-            storage.partitionId,
-            input.sourceMemoryId,
-            input.targetMemoryId,
-            kind,
-            weight,
-            JSON.stringify(metadata),
-          ],
-        );
-        const current = existing.rows[0];
-        if (current) {
+        const readExisting = async () =>
+          (
+            await transaction.query<MemoryLinkRow & { unchanged: boolean }>(
+              `SELECT ${MEMORY_LINK_COLUMNS},
+                      (weight, metadata) IS NOT DISTINCT FROM ($5::real, $6::jsonb) AS unchanged
+               FROM memory_links
+               WHERE workspace_id = $1
+                 AND source_memory_id = $2
+                 AND target_memory_id = $3
+                 AND kind = $4
+               FOR UPDATE`,
+              [
+                storage.partitionId,
+                input.sourceMemoryId,
+                input.targetMemoryId,
+                kind,
+                weight,
+                JSON.stringify(metadata),
+              ],
+            )
+          ).rows[0];
+        const replace = async (
+          current: MemoryLinkRow & { unchanged: boolean },
+        ): Promise<ConnectedMemoryLink | null> => {
           // An unchanged repeat writes nothing, so it emits no Link event either.
           if (current.unchanged) return { link: toMemoryLink(current), created: false };
           const updated = await transaction.query<MemoryLinkRow>(
@@ -726,7 +730,9 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
           // (under RLS, its target turned invisible after the read): unreachable.
           const row = updated.rows[0];
           return row ? { link: toMemoryLink(row), created: false } : null;
-        }
+        };
+        const current = await readExisting();
+        if (current) return replace(current);
         // Bound only new Links. Each count stops at its bound, however many Links an
         // import left behind; the partition count is the costly one, reading up to
         // its whole bound. The source lock makes the source and pair counts exact
@@ -770,6 +776,7 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
           `INSERT INTO memory_links (
              id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
            ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+           ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
            RETURNING ${MEMORY_LINK_COLUMNS}`,
           [
             crypto.randomUUID(),
@@ -782,8 +789,12 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
           ],
         );
         const row = inserted.rows[0];
-        if (!row) throw new Error("Memory link insert returned no row");
-        return { link: toMemoryLink(row), created: true };
+        if (row) return { link: toMemoryLink(row), created: true };
+        // The key is taken by a Link the first read could not see: its target was
+        // invisible for that statement, or a writer that skips the source lock (a
+        // batch insert) added it since. Replace it if it is visible now.
+        const taken = await readExisting();
+        return taken ? replace(taken) : null;
       });
     },
 

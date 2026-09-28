@@ -702,6 +702,25 @@ test.each<[string, string[], RegExp]>([
     /^lore: weight must be a number from 0 through 1\n$/,
   ],
   [
+    "a repeated Link kind",
+    [
+      "memory",
+      "unlink",
+      "20000000-0000-4000-8000-000000000001",
+      "20000000-0000-4000-8000-000000000002",
+      "--kind",
+      "cites",
+      "--kind",
+      "related",
+    ],
+    /--kind may be given once/,
+  ],
+  [
+    "a repeated Episode kind",
+    ["episode", "list", "--kind", "workflow", "--kind", "event"],
+    /--kind may be given once/,
+  ],
+  [
     "a Link weight on unlink",
     [
       "memory",

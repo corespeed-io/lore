@@ -245,6 +245,13 @@ function optionInteger(value: string | undefined, name: string): number | undefi
   return parsed;
 }
 
+/** An option given at most once; a repeat is refused rather than resolved to one value. */
+function singleOption(values: readonly string[] | undefined, name: string): string | undefined {
+  if (values !== undefined && values.length > 1)
+    throw new CliUsageError(`${name} may be given once`);
+  return values?.[0];
+}
+
 function optionNumber(value: string | undefined, name: string): number | undefined {
   if (value === undefined) return undefined;
   const parsed = value.trim() ? Number(value) : Number.NaN;
@@ -307,7 +314,7 @@ export async function runLoreCli(
         cursor: { type: "string" },
         evidence: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
-        kind: { type: "string" },
+        kind: { type: "string", multiple: true },
         "idempotency-key": { type: "string" },
         limit: { type: "string" },
         metadata: { type: "string" },
@@ -417,7 +424,7 @@ export async function runLoreCli(
     if (group === "episode" && action === "list") {
       exactPositionals(parsed.positionals, 2, "episode list");
       allowedOptions(parsed.values, ["cursor", "kind", "limit", "scope"]);
-      const kind = parsed.values.kind;
+      const kind = singleOption(parsed.values.kind, "--kind");
       if (kind !== undefined && !isEpisodeKind(kind)) {
         throw new CliUsageError(`--kind must be ${listOf(EPISODE_KINDS)}`);
       }
@@ -700,10 +707,11 @@ export async function runLoreCli(
       );
       allowedOptions(parsed.values, action === "link" ? ["kind", "metadata", "weight"] : ["kind"]);
       // The kind is part of the Link's identity and is sent exactly as given.
+      const kind = singleOption(parsed.values.kind, "--kind");
       const key = {
         sourceMemoryId: requiredPosition(parsed.positionals, 2, "source memory id"),
         targetMemoryId: requiredPosition(parsed.positionals, 3, "target memory id"),
-        ...(parsed.values.kind === undefined ? {} : { kind: parsed.values.kind }),
+        ...(kind === undefined ? {} : { kind }),
       };
       if (action === "link") {
         const weight = optionNumber(parsed.values.weight, "--weight");

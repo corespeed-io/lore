@@ -380,6 +380,45 @@ test("a target made private after the read but before the update reads as missin
   ]);
 });
 
+test("a Link hidden from the first read by a flickering target is replaced, not a 500", async () => {
+  const { context, graph, ids } = await fixture();
+  await link(graph, context.bob, ids.bobShared, ids.aliceShared);
+  const setTargetScope =
+    (scope: "shared" | "private") => async (transaction: PostgresTransaction) => {
+      await installActorContext(transaction, context.alice);
+      await transaction.query("UPDATE memories SET scope = $2 WHERE id = $1", [
+        ids.aliceShared,
+        scope,
+      ]);
+      await installActorContext(transaction, context.bob);
+    };
+  let hidden = false;
+  const flickering = createMemoryGraphModule(
+    // Alice makes the target private just before Bob's Link read, and shared again
+    // just before his insert, so the insert finds the natural key already taken.
+    interleaved(
+      interleaved(context.database, /^\s*INSERT INTO memory_links/, setTargetScope("shared")),
+      /FROM memory_links\s+WHERE[\s\S]*FOR UPDATE/,
+      async (transaction) => {
+        if (hidden) return;
+        hidden = true;
+        await setTargetScope("private")(transaction);
+      },
+    ),
+  );
+
+  await expect(
+    flickering.connect(context.bob, {
+      sourceMemoryId: ids.bobShared,
+      targetMemoryId: ids.aliceShared,
+      weight: 0.5,
+    }),
+  ).resolves.toMatchObject({ created: false, link: { weight: 0.5 } });
+  expect(await storedLinks(context)).toEqual([
+    { source: ids.bobShared, target: ids.aliceShared, weight: 0.5 },
+  ]);
+});
+
 test("a target deleted past the lock reads as missing, while any other failure surfaces", async () => {
   const { context, ids } = await fixture();
   const failing = (error: Error) =>

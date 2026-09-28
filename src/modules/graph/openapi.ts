@@ -21,7 +21,7 @@ const memoryLinkParameters = [
     name: "kind",
     in: "query",
     description:
-      "The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units.",
+      "The Link kind, part of its natural key (source, target, kind). Stored exactly as given: not blank, at most maxLength UTF-16 code units. The query is form-encoded, so a literal + must be sent as %2B. No other query parameter is accepted, and kind may be given once.",
     schema: {
       type: "string",
       minLength: 1,

@@ -779,9 +779,13 @@ test("Memory Link HTTP writes by natural key with one 404 for any unreachable en
     send("PUT", source.id, target.id),
     send("PUT", "not-a-uuid", target.id, {}),
     send("DELETE", source.id, "not-a-uuid"),
+    // A misspelled or repeated parameter never falls back to the default kind.
+    send("DELETE", source.id, target.id, undefined, "?Kind=cites"),
+    send("DELETE", source.id, target.id, undefined, "?kind=cites&kind=related"),
+    send("PUT", source.id, target.id, {}, "?kind=cites&weight=1"),
   ]);
   expect(invalid.map((response) => response.status)).toEqual([
-    400, 400, 400, 400, 400, 400, 400, 400, 400,
+    400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
   ]);
 
   const deleted = await send("DELETE", source.id, target.id);

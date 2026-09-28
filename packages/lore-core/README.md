@@ -154,6 +154,10 @@ its own:
   target, and Links per partition. Each count stops at its bound and runs through
   the host store, so under RLS it counts only the writer's visible Links. Replacing
   an existing Link never counts.
+  Both assume READ COMMITTED, so a writer queued on the source lock sees the Link
+  its predecessor committed; under a stricter default isolation level a queued
+  `connect` would miss it. A new Link's insert conflicts silently on the natural key,
+  and `connect` then re-reads and replaces the Link if it is visible.
   These writes need UPDATE and DELETE on `memory_links` and a row-lockable
   `memories`, which `missingSchemaContract` cannot check: under RLS the source lock
   applies the `memories` UPDATE policy, and a Link's rewrite or deletion applies the
