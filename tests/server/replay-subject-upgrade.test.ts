@@ -2,7 +2,10 @@ import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
-import { migrationFiles } from "../../scripts/database/lib/migration-preflight.ts";
+import {
+  LATEST_SCHEMA_REVISION,
+  migrationFiles,
+} from "../../scripts/database/lib/migration-preflight.ts";
 import { migrationQueries } from "../../scripts/database/lib/migration-statements.ts";
 
 // Revision 7 adds the replay ledger's subject columns without rewriting the ledger:
@@ -40,7 +43,7 @@ async function subjects(postgres: PGlite) {
   return result.rows;
 }
 
-test("an upgrade leaves older replay rows to the JSON-path scrub, and a reclaim clears stale subjects", async () => {
+test("an upgrade does not backfill older replay rows, and a reclaim clears stale subjects", async () => {
   const postgres = await PGlite.create({ extensions: { pg_trgm, vector } });
   onTestFinished(() => postgres.close());
   await applyMigrations(postgres, (number) => number <= 6);
@@ -63,16 +66,18 @@ test("an upgrade leaves older replay rows to the JSON-path scrub, and a reclaim 
   const revision = await postgres.query<{ schema_revision: number }>(
     "SELECT schema_revision FROM lore_system_state WHERE singleton",
   );
-  expect(revision.rows).toEqual([{ schema_revision: 9 }]);
+  expect(revision.rows).toEqual([{ schema_revision: LATEST_SCHEMA_REVISION }]);
 
-  // A newer instance completes a key and records its subject.
+  // A newer instance completes a key and records its subjects, one value in every
+  // column so the reclaim below must clear each of them.
   await postgres.query(
     `INSERT INTO request_idempotency_records (
        id, workspace_id, actor_user_id, actor_kind, actor_id, operation,
        idempotency_key, request_sha256, status, response_status, response_body, completed_at,
-       subject_memory_id, expires_at
+       subject_memory_id, subject_proposal_id, proposal_target_memory_id,
+       proposal_accepted_memory_id, subject_episode_id, expires_at
      ) VALUES (gen_random_uuid(), $1, $2, 'user', $2, 'memory.create', 'reclaimed', $3,
-               'completed', 201, $4, now(), $5, now() - interval '1 second')`,
+               'completed', 201, $4, now(), $5, $5, $5, $5, $5, now() - interval '1 second')`,
     [
       WORKSPACE_ID,
       USER_ID,
@@ -81,6 +86,19 @@ test("an upgrade leaves older replay rows to the JSON-path scrub, and a reclaim 
       MEMORY_ID,
     ],
   );
+  const every = {
+    subject_memory_id: MEMORY_ID,
+    subject_proposal_id: MEMORY_ID,
+    proposal_target_memory_id: MEMORY_ID,
+    proposal_accepted_memory_id: MEMORY_ID,
+    subject_episode_id: MEMORY_ID,
+  };
+  // An update that leaves a completed row completed keeps its subjects.
+  await postgres.query(
+    "UPDATE request_idempotency_records SET expires_at = expires_at WHERE idempotency_key = $1",
+    ["reclaimed"],
+  );
+  expect((await subjects(postgres)).at(1)).toEqual({ idempotency_key: "reclaimed", ...every });
   // After it expires, an instance from before revision 7 reclaims and completes it with
   // the statements that release runs, which name no subject column.
   await postgres.query(
@@ -102,10 +120,45 @@ test("an upgrade leaves older replay rows to the JSON-path scrub, and a reclaim 
     ["reclaimed", 201, JSON.stringify({ memory: { id: OTHER_MEMORY_ID } })],
   );
 
-  // The row now carries another Memory; the stale column is gone, so forgetting the
-  // first Memory cannot delete it, and the JSON paths still find the Memory it carries.
+  // The row now carries another Memory and names no subject in a column, so the
+  // column scrub cannot delete it when the first Memory is forgotten; the JSON-path
+  // scrub (proved alone in replay-scrub.test.ts) finds the Memory it carries.
   expect(await subjects(postgres)).toEqual([
     { idempotency_key: "older", ...NO_SUBJECTS },
     { idempotency_key: "reclaimed", ...NO_SUBJECTS },
   ]);
 }, 60_000);
+
+// Every keyed write claims its ledger row before it writes a Memory, Proposal, or
+// Episode, and Agent deletion's foreign keys reach Episodes before Memories, so a
+// migration that holds a subject table while it waits for the ledger, or takes the
+// subject tables out of that order, can deadlock with live writes. This applies each
+// migration inside a transaction and reads the table locks it took before rolling back.
+test.each([
+  ["0007", ["lore_system_state", "request_idempotency_records"]],
+  ["0009", ["episodes", "lore_system_state", "memories", "memory_proposals"]],
+])(
+  "%s locks only the tables it must",
+  async (version, expected) => {
+    const postgres = await PGlite.create({ extensions: { pg_trgm, vector } });
+    onTestFinished(() => postgres.close());
+    const target = Number.parseInt(version, 10);
+    await applyMigrations(postgres, (number) => number < target);
+    const migration = (await migrationFiles()).find((file) => file.version === version);
+    if (!migration) throw new Error(`missing migration ${version}`);
+
+    await postgres.exec("BEGIN");
+    for (const query of migrationQueries(migration.sql, migration.id)) await postgres.exec(query);
+    const locked = await postgres.query<{ relname: string }>(
+      `SELECT DISTINCT class.relname
+     FROM pg_locks lock
+     JOIN pg_class class ON class.oid = lock.relation
+     JOIN pg_namespace namespace ON namespace.oid = class.relnamespace
+     WHERE lock.pid = pg_backend_pid() AND namespace.nspname = 'public' AND class.relkind = 'r'
+     ORDER BY class.relname`,
+    );
+    await postgres.exec("ROLLBACK");
+    expect(locked.rows.map((row) => row.relname)).toEqual(expected);
+  },
+  60_000,
+);

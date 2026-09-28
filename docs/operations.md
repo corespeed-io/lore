@@ -545,11 +545,7 @@ statement at a time. dbmate would send the whole file as one query, and PostgreS
 runs a multi-statement query as one transaction block, which `CREATE INDEX
 CONCURRENTLY` refuses. `0005` and `0008` are such migrations: they build the
 replay-scrub and import-provenance indexes concurrently so writes keep flowing
-during the build. `0007`, just before `0008`, adds the replay ledger's subject
-columns, and `0009`, just after it, adds the triggers that scrub by them; both run
-under a 5-second `lock_timeout` and rewrite no rows, so on a busy database either
-may fail to take its locks, and a rerun of `bun run db:migrate` repeats it safely,
-because a stopped transactional migration records nothing.
+during the build.
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous
@@ -558,6 +554,19 @@ each index is dropped and rebuilt, which replaces any `INVALID` index a cancelle
 build left behind. A concurrent build also waits for transactions that were already
 open when it started, so a long-running transaction delays the migration, not
 application writes.
+
+`0007` and `0009`, on either side of `0008`, are ordinary transactional migrations:
+`0007` adds the replay ledger's subject columns and locks only the ledger, and
+`0009` then adds the triggers that scrub by them and locks only Episodes, Memories,
+and Proposals, in the order Agent deletion and forget reach them, never the ledger
+that every keyed write locks first. Both run under a
+5-second `lock_timeout` and rewrite no rows, so
+on a busy database either may fail to take its locks, and a rerun of `bun run
+db:migrate` repeats it safely, because a stopped transactional migration records
+nothing. Readiness requires the exact schema revision, so until the chain reaches
+revision 9 `/readyz` reports the schema incompatible on old and new instances alike;
+let the migration job retry to completion before the rollout proceeds. Replay bodies
+stay scrubbed meanwhile, by the baseline JSON-path triggers.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

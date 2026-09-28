@@ -18,6 +18,13 @@
 -- every instance writes the columns and the 24-hour ledger has turned over, drops
 -- the JSON-path scrub and its 0005 indexes.
 --
+-- When an older instance reclaims an expired row that a newer instance completed,
+-- the older reset leaves the columns the newer instance wrote, since it does not know
+-- them, and a stale column would delete the new body when an unrelated subject is
+-- forgotten. A trigger here clears the columns whenever a row returns to in_progress,
+-- whichever release resets it. It lives in this migration, which locks only the
+-- ledger, so 0009 need not lock the ledger after the tables keyed writes lock later.
+--
 -- Adding nullable columns without defaults changes only the catalog, so the lock is
 -- brief; under load it still queues behind open transactions, so fail fast and let
 -- the deploy retry.
@@ -40,6 +47,27 @@ COMMENT ON COLUMN public.request_idempotency_records.proposal_accepted_memory_id
   'The Memory an accepted Proposal created or updated; forgetting it deletes this row.';
 COMMENT ON COLUMN public.request_idempotency_records.subject_episode_id IS
   'The Episode a replayed Episode response carries; forgetting it deletes this row.';
+
+CREATE FUNCTION lore.clear_replay_subjects_on_reclaim() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  NEW.subject_memory_id := NULL;
+  NEW.subject_proposal_id := NULL;
+  NEW.proposal_target_memory_id := NULL;
+  NEW.proposal_accepted_memory_id := NULL;
+  NEW.subject_episode_id := NULL;
+  RETURN NEW;
+END
+$$;
+
+REVOKE ALL ON FUNCTION lore.clear_replay_subjects_on_reclaim() FROM PUBLIC;
+
+CREATE TRIGGER request_idempotency_records_clear_subjects_on_reclaim
+  BEFORE UPDATE ON public.request_idempotency_records
+  FOR EACH ROW WHEN (NEW.status = 'in_progress')
+  EXECUTE FUNCTION lore.clear_replay_subjects_on_reclaim();
 
 UPDATE public.lore_system_state
 SET schema_revision = 7, updated_at = now()
