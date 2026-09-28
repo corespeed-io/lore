@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { MAX_MEMORY_PAGES, MEMORY_PAGE_SIZE } from "@/modules/memories/browser/data";
 import { plain } from "@/modules/memories/browser/markdown";
 import {
+  browseCounts,
   memoryConfiguredType,
   memoryTitle,
   memoryType,
@@ -20,6 +21,8 @@ interface SearchResultsProps {
   results: readonly MemorySearchResult[];
   memories: Memory[];
   capped: boolean;
+  /** Every browse page was read, so the counts are exact. */
+  complete: boolean;
   loading: boolean;
   /** The browse read failed before any Memory arrived. */
   browseError: string | null;
@@ -70,6 +73,7 @@ export function SearchResults({
   results,
   memories,
   capped,
+  complete,
   loading,
   browseError,
   error,
@@ -120,12 +124,12 @@ export function SearchResults({
       );
     }
 
-    const counts = Object.create(null) as Record<string, number>;
+    const typeCounts = Object.create(null) as Record<string, number>;
     for (const memory of memories) {
       const type = memoryType(memory);
-      counts[type] = (counts[type] ?? 0) + 1;
+      typeCounts[type] = (typeCounts[type] ?? 0) + 1;
     }
-    const types = Object.keys(counts).sort(typeSort);
+    const types = Object.keys(typeCounts).sort(typeSort);
     const chips: [string, string][] = [
       ["all", "All"],
       ...types.map((type): [string, string] => [type, typeLabel(type)]),
@@ -135,14 +139,17 @@ export function SearchResults({
         ? memories
         : memories.filter((memory) => memoryType(memory) === typeFilter);
     const shown = filtered.slice(0, rowLimit);
+    const counts = browseCounts({
+      shown: filtered.length,
+      total: memories.length,
+      filtered: typeFilter !== "all",
+      complete,
+    });
 
     return (
       <div className="page-wrap">
         <div className="memories-head">
-          <p>
-            Showing {filtered.length}
-            {typeFilter !== "all" ? ` of ${memories.length}` : ""} memories
-          </p>
+          <p>{counts.heading}</p>
           {capped && (
             <span>
               Browse is limited to {BROWSE_WINDOW.toLocaleString("en-US")} Memories. Search covers
@@ -159,7 +166,9 @@ export function SearchResults({
               onClick={() => onTypeFilter(key)}
             >
               {label}{" "}
-              <span className="chip-count">{key === "all" ? memories.length : counts[key]}</span>
+              <span className="chip-count">
+                {counts.count(key === "all" ? memories.length : (typeCounts[key] ?? 0))}
+              </span>
             </button>
           ))}
         </div>

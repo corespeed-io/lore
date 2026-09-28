@@ -1,4 +1,5 @@
 import type { Memory } from "@corespeed/lore-sdk";
+import { displayCount } from "@/shared/browser/read-state";
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -60,4 +61,21 @@ export interface MemoryGraphContext {
   relatedNotice: string | null;
   /** Title of a wikilink that did not resolve to one visible Graph node. */
   unresolvedWikilinkTitle: string;
+}
+
+/**
+ * The browse header's counts. Until the browse window is read in full (pages are
+ * still loading, or it stopped at the browse cap) each is a lower bound, "N+".
+ */
+export function browseCounts(input: {
+  shown: number;
+  total: number;
+  filtered: boolean;
+  complete: boolean;
+}): { heading: string; count: (value: number) => string } {
+  const count = (value: number) => displayCount(value, "ready", !input.complete);
+  const heading = input.filtered
+    ? `Showing ${count(input.shown)} of ${count(input.total)} memories`
+    : `Showing ${count(input.shown)} memories`;
+  return { heading, count };
 }

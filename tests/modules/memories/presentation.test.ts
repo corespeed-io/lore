@@ -1,6 +1,7 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import { expect, test, vi } from "vitest";
 import {
+  browseCounts,
   memoryConfiguredType,
   memoryType,
   shortMemoryDate,
@@ -61,4 +62,16 @@ test.each(["Pacific/Kiritimati", "Pacific/Pago_Pago"])(
 
 test("an unparseable row date renders nothing", () => {
   expect(shortMemoryDate("not a date")).toBe("");
+});
+
+test("browse counts are lower bounds until every browse page is read", () => {
+  expect(browseCounts({ shown: 1200, total: 1200, filtered: false, complete: true }).heading).toBe(
+    "Showing 1,200 memories",
+  );
+  const filling = browseCounts({ shown: 40, total: 300, filtered: true, complete: false });
+  expect(filling.heading).toBe("Showing 40+ of 300+ memories");
+  expect(filling.count(300)).toBe("300+");
+  const done = browseCounts({ shown: 40, total: 300, filtered: true, complete: true });
+  expect(done.heading).toBe("Showing 40 of 300 memories");
+  expect(done.count(0)).toBe("0");
 });
