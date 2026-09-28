@@ -508,6 +508,7 @@ test("an import() with a computed specifier is a finding, and one merely mention
       [
         'const name = "fs";',
         'await import("node:" + name);',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
         "await import(`./plugins/${name}.ts`);",
         "await import( /* dynamic */ name );",
         'await import("./literal");',
@@ -517,7 +518,12 @@ test("an import() with a computed specifier is a finding, and one merely mention
         "const pattern = /import\\(x\\)/;",
       ].join("\n"),
     ),
-    ['import("node:" + name)', "import(`./plugins/${name}.ts`)", "import(name)"],
+    [
+      'import("node:" + name)',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+      "import(`./plugins/${name}.ts`)",
+      "import(name)",
+    ],
   );
   const findings = checkImportBoundaries(
     fixture({
