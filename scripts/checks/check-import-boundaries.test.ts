@@ -539,3 +539,88 @@ test("an import() with a computed specifier is a finding, and one merely mention
     ),
   );
 });
+
+test("an import() whose literal parts Bun folds into one specifier is still a finding", () => {
+  const folded = [
+    'await import("@/modules/beta/" + "internal");',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+    'await import(`node:${"child_process"}`);',
+  ];
+  const found = computedImports(folded.join("\n"));
+  assert.equal(found.length, 2);
+  assert.ok(found.every((expression) => expression.startsWith("import(")));
+  // The folded edge is invisible to the scan too, which is why it must be refused.
+  assert.deepEqual(scanImports(folded.join("\n")), []);
+  // The same text quoted elsewhere, as a decoy, does not make the folded import an edge.
+  assert.equal(
+    computedImports(
+      ['// see "@/modules/beta/internal"', 'const decoy = "node:child_process";', ...folded].join(
+        "\n",
+      ),
+    ).length,
+    2,
+  );
+
+  const findings = checkImportBoundaries(
+    fixture({
+      ...CLEAN,
+      "src/modules/alpha/service.ts": [
+        'import { beta } from "@/modules/beta/service";',
+        "export const alpha = beta;",
+        'export const load = () => import("@/modules/beta/" + "internal");',
+        "",
+      ].join("\n"),
+    }),
+    TWO_MODULES,
+  );
+  assert.ok(
+    findings.some(
+      (finding) =>
+        finding.startsWith("src/modules/alpha/service.ts: import(") &&
+        finding.endsWith(
+          "has a computed specifier that no scan can check; import a string literal",
+        ),
+    ),
+    findings.join("\n"),
+  );
+});
+
+test("a computed import() in a branch Bun would prove dead is found in every environment", () => {
+  const source = [
+    "export async function load(name: string) {",
+    '  if (process.env.NODE_ENV === "production") return import(name);',
+    '  return import("./development");',
+    "}",
+  ].join("\n");
+  const previous = process.env.NODE_ENV;
+  try {
+    for (const environment of [undefined, "production", "development"]) {
+      if (environment === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = environment;
+      assert.deepEqual(computedImports(source, "ts"), ["import(name)"], String(environment));
+    }
+  } finally {
+    if (previous === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previous;
+  }
+});
+
+test("import.meta, a type-position import(), and a shebang are not computed imports", () => {
+  assert.deepEqual(
+    computedImports(
+      [
+        "#!/usr/bin/env bun",
+        'const here = new URL("./data.json", import.meta.url);',
+        'type Loaded = typeof import("./literal-type");',
+        "let loaded: Loaded | undefined;",
+        "export { here, loaded };",
+      ].join("\n"),
+      "ts",
+    ),
+    [],
+  );
+  // The shebang is blanked, not the line after it, so a computed import there counts.
+  assert.deepEqual(computedImports("#!/usr/bin/env bun\nawait import(process.argv[2]);", "ts"), [
+    "import(process.argv[2])",
+  ]);
+});

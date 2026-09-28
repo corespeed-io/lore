@@ -188,6 +188,16 @@ const TRANSPILERS = {
   tsx: new Bun.Transpiler({ loader: "tsx" }),
 };
 
+/**
+ * The JavaScript `computedImports` lexes keeps every branch: by default Bun inlines
+ * `process.env.NODE_ENV` and drops the branch it proves dead, which would hide an
+ * import there depending on the environment the check runs in.
+ */
+const EMITTERS = {
+  ts: new Bun.Transpiler({ loader: "ts", deadCodeElimination: false }),
+  tsx: new Bun.Transpiler({ loader: "tsx", deadCodeElimination: false }),
+};
+
 /** The JSX runtime Bun reports for a TSX file that never names it. */
 const INJECTED = new Set(
   TRANSPILERS.tsx.scanImports("export const a = <a />;").map((item) => item.path),
@@ -235,6 +245,27 @@ function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: 
     .filter((specifier) => !INJECTED.has(specifier) || quotedIn(original, specifier));
 }
 
+initModuleLexer();
+
+/**
+ * Every `import()` whose specifier is not a string literal, such as
+ * `import("node:" + name)`. No scan can resolve one, so each is a finding rather than
+ * an edge the guard silently misses. The JavaScript Bun emits for the source has no
+ * types or comments, and es-module-lexer reads it as a real lexer, so a string or
+ * comment that merely mentions `import(` is not counted. Bun folds a specifier built
+ * only from literals (`"node:" + "fs"`) into one that the parser's scan never
+ * reports, so a lexed specifier the scan did not report counts as computed too.
+ */
+export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
+  const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
+  const scanned = new Set(TRANSPILERS[loader].scanImports(parsable).map((item) => item.path));
+  const javascript = EMITTERS[loader].transformSync(parsable);
+  const [imports] = lexModule(javascript);
+  return imports
+    .filter((item) => item.d >= 0 && (item.n === undefined || !scanned.has(item.n)))
+    .map((item) => javascript.slice(item.ss, item.se).replace(/\s+/g, " "));
+}
+
 /**
  * The imports of one source file, all from Bun's TypeScript parser, so no comment,
  * string, regex, or JSX shape can hide one. Bun reports only what loads at run
@@ -243,24 +274,6 @@ function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: 
  * those count for the layer rules but never for the Worker ban. Lines come from the
  * first written occurrence of each specifier. Throws when the source does not parse.
  */
-initModuleLexer();
-
-/**
- * Every `import()` whose specifier is not a string literal, such as
- * `import("node:" + name)`. No scan can resolve one, so each is a finding rather than
- * an edge the guard silently misses. The JavaScript Bun emits for the source has no
- * types or comments, and es-module-lexer reads it as a real lexer, so a string or
- * comment that merely mentions `import(` is not counted.
- */
-export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
-  const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
-  const javascript = TRANSPILERS[loader].transformSync(parsable);
-  const [imports] = lexModule(javascript);
-  return imports
-    .filter((item) => item.d >= 0 && item.n === undefined)
-    .map((item) => javascript.slice(item.ss, item.se).replace(/\s+/g, " "));
-}
-
 export function scanImports(source: string, loader: "ts" | "tsx" = "tsx"): ImportRecord[] {
   // Bun's parser refuses a shebang line; blank it so offsets and lines survive.
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
