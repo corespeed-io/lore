@@ -1,110 +1,98 @@
-const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
-export function esc(value: unknown): string {
-  return String(value ?? "").replace(/[&<>"]/g, (character) => ESC[character]);
-}
-
-export function plain(s: string): string {
-  return (s ?? "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
-    .replace(/\[\[([^\]]+)\]\]/g, "$1")
-    .replace(/[#*`>]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-interface Wikilink {
-  reference: string;
-  label: string;
-}
-
-/** Inline markup within one line of escaped text; no tag spans a line break. */
-function inline(text: string): string {
-  return text
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
-    .replace(/(^|[^*\s])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>")
-    .replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-      '<a class="ext" href="$2" target="_blank" rel="noopener">$1</a>',
-    );
-}
-
-const MAXIMUM_LIST_DEPTH = 3;
+import MarkdownIt, { type StateInline, type Token } from "markdown-it";
 
 /**
- * Block structure of escaped text. A blank line ends a paragraph, and a single
- * line break inside one is kept as `<br>`, since Memories are notes whose line
- * breaks carry meaning. Headings, list items (indented two spaces per level),
- * and fenced code stand on their own lines.
+ * How deep blocks and inline markup may nest before markdown-it stops nesting:
+ * its own default, named because a body that reaches it renders as text.
  */
-function blocks(escaped: string): string {
-  const html: string[] = [];
-  let paragraph: string[] = [];
-  const endParagraph = () => {
-    if (paragraph.length) html.push(`<p>${paragraph.map(inline).join("<br>")}</p>`);
-    paragraph = [];
-  };
-  for (const line of escaped.split(/\r?\n/)) {
-    const heading = /^#{1,6}\s+(.*)$/.exec(line);
-    const item = /^([ \t]*)[-*]\s+(.*)$/.exec(line);
-    if (!line.trim()) {
-      endParagraph();
-    } else if (heading) {
-      endParagraph();
-      html.push(`<h3>${inline(heading[1] ?? "")}</h3>`);
-    } else if (item) {
-      endParagraph();
-      const indent = (item[1] ?? "").replace(/\t/g, "  ").length;
-      const depth = Math.min(Math.floor(indent / 2), MAXIMUM_LIST_DEPTH);
-      html.push(`<span class="li${depth ? ` li-${depth}` : ""}">${inline(item[2] ?? "")}</span>`);
-    } else if (/^\s*@@FENCE\d+@@\s*$/.test(line)) {
-      endParagraph();
-      html.push(line.trim());
-    } else {
-      paragraph.push(line);
-    }
+export const MAXIMUM_MARKDOWN_NESTING = 100;
+/** The cells one body's tables may render together; a table past them shows as its source. */
+export const MAXIMUM_TABLE_CELLS = 5_000;
+
+/**
+ * `[[reference]]` or `[[reference|label]]` at the parser's position. Sticky, so a
+ * body full of `[[` is matched in place instead of copying the rest of the text at
+ * each one, and neither part may contain `[`, so a run of brackets fails at once.
+ */
+const WIKILINK = /\[\[([^[\]|\n]+)(?:\|([^[\]\n]+))?\]\]/y;
+
+function wikilink(state: StateInline, silent: boolean): boolean {
+  if (state.src.charCodeAt(state.pos) !== 0x5b || state.src.charCodeAt(state.pos + 1) !== 0x5b) {
+    return false;
   }
-  endParagraph();
-  return html.join("");
+  WIKILINK.lastIndex = state.pos;
+  const match = WIKILINK.exec(state.src);
+  if (!match || match.index + match[0].length > state.posMax) return false;
+  // In a table cell the label's pipe is written `\|`, which leaves the backslash here.
+  const reference = match[1]?.replace(/\\$/, "").trim();
+  if (!reference) return false;
+  if (!silent) {
+    const token = state.push("wikilink", "", 0);
+    token.meta = { reference, label: match[2]?.trim() || reference };
+  }
+  state.pos += match[0].length;
+  return true;
 }
 
 /**
- * `unresolvedTitle` explains an inert wikilink. Callers pass a different reason
- * while the Graph that resolves references is loading, failed, or capped, since
- * "not found" is only true once a complete Graph read says so.
+ * The only link targets a Memory body renders: http(s) with a host, or mailto.
+ * Anything else, including `javascript:`, `data:`, a relative path, or an
+ * `https:/path` without a host, stays plain text.
  */
-export function renderMarkdown(
-  md: string,
-  wikilinkTargets: Readonly<Record<string, string>> = {},
-  unresolvedTitle = "Memory reference not found",
-): string {
-  const fences: string[] = [];
-  const withoutFences = (md ?? "").replace(/```([\s\S]*?)```/g, (_m, c) => {
-    fences.push(c);
-    return `@@FENCE${fences.length - 1}@@`;
-  });
-  const wikilinks: Wikilink[] = [];
-  const stashed = withoutFences.replace(
-    /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g,
-    (_match, rawReference: string, rawLabel: string | undefined) => {
-      const reference = rawReference.trim();
-      wikilinks.push({ reference, label: rawLabel?.trim() || reference });
-      return `@@WIKILINK${wikilinks.length - 1}@@`;
-    },
+export function allowedHref(url: string): boolean {
+  return /^(?:https?:\/\/[^\s/\\?#]|mailto:\S)/i.test(url);
+}
+
+/**
+ * The Memory Markdown parser: CommonMark plus tables and strikethrough. Raw HTML
+ * stays text, bare URLs stay text, a single line break stays a line break, and
+ * `[[reference]]` becomes a `wikilink` token before links or emphasis can claim
+ * its brackets. Every rule it runs is linear in the input.
+ */
+export const memoryMarkdown = new MarkdownIt({
+  html: false,
+  breaks: true,
+  linkify: false,
+  typographer: false,
+  maxNesting: MAXIMUM_MARKDOWN_NESTING,
+});
+memoryMarkdown.validateLink = allowedHref;
+memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
+
+/**
+ * A Memory body's tokens, or null when its blocks nest past the bound. A quote or
+ * list item opened at the last level parses nothing inside it, so markdown-it
+ * would drop the rest of that block; such a body shows as its text instead.
+ */
+export function parseMemoryMarkdown(content: string): Token[] | null {
+  const tokens = memoryMarkdown.parse(content, {});
+  const dropsText = tokens.some(
+    (token) =>
+      (token.type === "blockquote_open" || token.type === "list_item_open") &&
+      token.level >= MAXIMUM_MARKDOWN_NESTING - 1,
   );
-  let h = blocks(esc(stashed));
-  h = h.replace(/@@WIKILINK(\d+)@@/g, (_match, rawIndex: string) => {
-    const wikilink = wikilinks[Number(rawIndex)];
-    if (!wikilink) return "";
-    const targetMemoryId = Object.hasOwn(wikilinkTargets, wikilink.reference)
-      ? wikilinkTargets[wikilink.reference]
-      : undefined;
-    if (typeof targetMemoryId !== "string" || !targetMemoryId) {
-      return `<span class="wl-unresolved" data-reference="${esc(wikilink.reference)}" title="${esc(unresolvedTitle)}">${esc(wikilink.label)}</span>`;
-    }
-    return `<a class="wl" href="/memory/${encodeURIComponent(targetMemoryId)}" data-memory-id="${esc(targetMemoryId)}" data-reference="${esc(wikilink.reference)}">${esc(wikilink.label)}</a>`;
-  });
-  h = h.replace(/@@FENCE(\d+)@@/g, (_m, i) => `<pre class="fence">${esc(fences[+i])}</pre>`);
-  return h;
+  return dropsText ? null : tokens;
+}
+
+/** Where the table opened at `start` closes, and how many cells it holds. */
+export function tableExtent(
+  tokens: readonly Token[],
+  start: number,
+): { end: number; cells: number } {
+  let cells = 0;
+  for (let index = start + 1; index < tokens.length; index += 1) {
+    const type = tokens[index]?.type;
+    if (type === "td_open" || type === "th_open") cells += 1;
+    if (type === "table_close") return { end: index, cells };
+  }
+  return { end: tokens.length - 1, cells };
+}
+
+/** The Memory id a reference resolves to, read only from the map's own properties. */
+export function wikilinkTarget(
+  targets: Readonly<Record<string, string>>,
+  reference: string,
+): string | undefined {
+  if (!Object.hasOwn(targets, reference)) return undefined;
+  const target: unknown = targets[reference];
+  return typeof target === "string" && target ? target : undefined;
 }

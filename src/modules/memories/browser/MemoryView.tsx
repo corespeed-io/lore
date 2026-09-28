@@ -1,7 +1,7 @@
 "use client";
 
 import type { Memory } from "@corespeed/lore-sdk";
-import { useEffect, useMemo, useRef } from "react";
+import { Component, lazy, type ReactNode, Suspense, useMemo } from "react";
 import { useLoreMemoryCodeEvidence } from "@/modules/code/browser/data";
 import type {
   CodeEvidenceRow,
@@ -12,13 +12,47 @@ import {
   shortCommitOid,
   summarizeCodeEvidence,
 } from "@/modules/code/browser/evidence-presentation";
-import { renderMarkdown } from "@/modules/memories/browser/markdown";
 import {
   type MemoryGraphContext,
   memoryBody,
   memoryTitle,
   memoryType,
 } from "@/modules/memories/browser/presentation";
+
+/** The Markdown renderer and its parser load with the first Memory detail, not the shell. */
+const MemoryMarkdown = lazy(() => import("@/modules/memories/browser/MemoryMarkdown"));
+
+interface PlainTextFallbackProps {
+  text: string;
+  children: ReactNode;
+}
+
+/**
+ * A Memory body that cannot render as Markdown, or whose renderer failed to load,
+ * still shows its text. A different body gets a fresh attempt.
+ */
+class PlainTextFallback extends Component<
+  PlainTextFallbackProps,
+  { failed: boolean; text: string }
+> {
+  state = { failed: false, text: this.props.text };
+
+  static getDerivedStateFromProps(props: PlainTextFallbackProps, state: { text: string }) {
+    return props.text === state.text ? null : { failed: false, text: props.text };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? (
+      <p className="detail-plain">{this.props.text}</p>
+    ) : (
+      this.props.children
+    );
+  }
+}
 
 interface MemoryLink {
   id: string;
@@ -205,32 +239,11 @@ export function MemoryView({
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
   const bodyText = memoryBody(memory);
-  const bodyHtml = useMemo(
-    () => renderMarkdown(bodyText, wikilinkTargets, unresolvedWikilinkTitle),
-    [bodyText, wikilinkTargets, unresolvedWikilinkTitle],
-  );
-  const bodyRef = useRef<HTMLDivElement>(null);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),
     [codeEvidence.data],
   );
-
-  useEffect(() => {
-    const bodyElement = bodyRef.current;
-    if (!bodyElement) return;
-    bodyElement.innerHTML = bodyHtml;
-    const handleClick = (event: globalThis.MouseEvent) => {
-      if (!(event.target instanceof Element)) return;
-      const anchor = event.target.closest<HTMLAnchorElement>("a.wl[data-memory-id]");
-      const memoryId = anchor?.dataset.memoryId;
-      if (!memoryId) return;
-      event.preventDefault();
-      onOpen(memoryId);
-    };
-    bodyElement.addEventListener("click", handleClick);
-    return () => bodyElement.removeEventListener("click", handleClick);
-  }, [bodyHtml, onOpen]);
 
   return (
     <div className="page-wrap page-wrap-wide">
@@ -251,7 +264,18 @@ export function MemoryView({
             </p>
           )}
           {bodyText.trim() ? (
-            <div ref={bodyRef} className="detail-body" />
+            <div className="detail-body">
+              <PlainTextFallback text={bodyText}>
+                <Suspense fallback={<p className="detail-plain">{bodyText}</p>}>
+                  <MemoryMarkdown
+                    content={bodyText}
+                    wikilinkTargets={wikilinkTargets}
+                    unresolvedTitle={unresolvedWikilinkTitle}
+                    onOpen={onOpen}
+                  />
+                </Suspense>
+              </PlainTextFallback>
+            </div>
           ) : (
             !body.trim() && <p className="detail-placeholder">No content available</p>
           )}

@@ -562,10 +562,21 @@ been removed. Lore now has a native implementation, split into two concepts
   Link's metadata bounded to 1,000 characters with `metadataTruncated`) take the
   kind, weight, metadata, and list bounds, the directions, and the default kind and
   weight from `LORE_CONTRACT`;
-- `src/modules/memories/browser/markdown.ts` renders `[[reference]]` and `[[reference|label]]` only
-  when that reference resolves to one visible graph node. `MemoryView` intercepts
-  the resulting native Memory-id link for client routing; unresolved or ambiguous
-  references remain inert, and raw HTML stays escaped;
+- `src/modules/memories/browser/MemoryMarkdown.tsx` renders a Memory body: `markdown.ts` parses
+  it with markdown-it (CommonMark plus tables and strikethrough), and the component
+  turns the tokens into React elements itself. No body HTML goes through
+  `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
+  body of nested quotes or lists overflowed its stack, and a 6 KB table took 1.5 s.
+  - Raw HTML and bare URLs show as text.
+  - `allowedHref` allows only http(s) links with a host, and mailto.
+  - Images render as links, so a body never loads a remote URL.
+  - A single line break is kept.
+  - A body that nests past `MAXIMUM_MARKDOWN_NESTING` renders as text
+    (`parseMemoryMarkdown`), because markdown-it drops what lies past it. The tables
+    of one body share `MAXIMUM_TABLE_CELLS`, and a table past it shows its source.
+  - An inline rule turns `[[reference]]` and `[[reference|label]]` into `wikilink` tokens before links or emphasis can claim the brackets, never in code. They resolve only when the reference names one visible graph node (`wikilinkTarget` reads own properties only), and a resolved one routes in the client unless the click carries a modifier. Unresolved or ambiguous references stay inert.
+  - `MemoryView.tsx` loads the renderer lazily and shows the body as text while it loads or if it fails.
+  - `memoryTitle`/`memoryBody` (`presentation.ts`) show a first-line title without its Markdown and without repeating it under the title. Configured titles, Graph labels, and Graph previews go through the same `plainInline`, and search snippets through `plain`; every pattern in them is linear.
 - `src/modules/graph/browser/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
   one Canvas, cold layout reveals progressively, and interaction frames transfer

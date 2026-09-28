@@ -3,11 +3,11 @@
 import type { Memory, MemorySearchResult } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useState } from "react";
 import { MAX_MEMORY_PAGES, MEMORY_PAGE_SIZE } from "@/modules/memories/browser/data";
-import { plain } from "@/modules/memories/browser/markdown";
 import {
   memoryConfiguredType,
   memoryTitle,
   memoryType,
+  plain,
   shortMemoryDate,
   typeLabel,
   typeSort,

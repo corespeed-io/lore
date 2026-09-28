@@ -1,6 +1,11 @@
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { readGraph } from "@/modules/graph/browser/data";
 import { buildGraphStore, graphNeighbors } from "@/modules/graph/browser/store";
 import type { GraphData, GraphNode } from "@/modules/graph/browser/types";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function node(id: string, reference: string, label = id): GraphNode {
   return {
@@ -56,4 +61,33 @@ test("an ambiguous reference stays ambiguous however many nodes share it", () =>
   // An empty reference is no reference; the node still answers to its id.
   expect(store.byReference[""]).toBeUndefined();
   expect(store.byReference.d).toBe("d");
+});
+
+test("a Graph read shows label and preview text without markup, and references still resolve", async () => {
+  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
+  const wire = {
+    ...node("a", "ops/**clickhouse**", "## **ClickHouse** runbook"),
+    preview: "Use `bun run ch:migrate` with [[ops/ch|ClickHouse]] and [docs](https://example.test)",
+  };
+  const links = [{ source: "a", target: "a", kind: "related", weight: 1, derived: false }];
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(Response.json({ nodes: [wire], links, linksTruncated: true }));
+  vi.stubGlobal("fetch", fetcher);
+
+  const graph = await readGraph("10000000-0000-4000-8000-000000000001");
+
+  expect(graph).toEqual({
+    nodes: [
+      {
+        ...wire,
+        label: "ClickHouse runbook",
+        preview: "Use bun run ch:migrate with ClickHouse and docs",
+      },
+    ],
+    links,
+    linksTruncated: true,
+  });
+  // A reference is matched as written, so the read leaves it alone.
+  expect(buildGraphStore(graph).byReference["ops/**clickhouse**"]).toBe("a");
 });

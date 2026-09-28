@@ -121,8 +121,9 @@ src/modules/memories/
   openapi.ts        # Memory paths and schema components
   browser/
     data.ts         # SDK calls plus their SWR hooks and cache behavior
-    presentation.ts # Memory title/type presentation
-    markdown.ts     # Memory content rendering
+    presentation.ts # Memory title/type presentation and plain text for labels and snippets
+    markdown.ts     # markdown-it parser: wikilinks, line breaks, allowed URLs, bounds
+    MemoryMarkdown.tsx # markdown-it tokens rendered as React elements
     MemoryView.tsx  # Views, colocated with the data they read
     SearchResults.tsx
 ```

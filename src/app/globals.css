@@ -764,7 +764,6 @@ body {
   font-size: 13px;
 }
 
-.detail-body i,
 .detail-body em {
   font-style: normal;
   font-weight: 500;
@@ -781,36 +780,105 @@ body {
   line-height: 1.6;
 }
 
-.detail-body .li {
-  display: block;
-  padding-left: 1.3em;
-  text-indent: -1.3em;
+/* :where keeps this rule, and the list rule below, at the specificity they override. */
+.detail-body :where(pre.fence) code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
 }
 
-.detail-body .li::before {
-  content: "–  ";
-  color: var(--faint);
+.detail-body h4,
+.detail-body h5 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--ink);
+  margin: 1.2em 0 0.3em;
 }
 
-.detail-body .li-1 {
-  padding-left: 2.6em;
+.detail-body h4 {
+  font-size: 1.05em;
 }
 
-.detail-body .li-2 {
-  padding-left: 3.9em;
+.detail-body h5 {
+  font-size: 1em;
 }
 
-.detail-body .li-3 {
-  padding-left: 5.2em;
-}
-
-.detail-body p {
+.detail-body p,
+.detail-body ul,
+.detail-body ol,
+.detail-body blockquote,
+.detail-body pre.fence {
   margin: 0 0 0.8em;
 }
 
-.detail-body .li + p,
-.detail-body .li + h3 {
-  margin-top: 0.8em;
+.detail-body ul,
+.detail-body ol {
+  padding-left: 1.3em;
+}
+
+.detail-body ul {
+  list-style-type: "–  ";
+}
+
+.detail-body li::marker {
+  color: var(--faint);
+}
+
+.detail-body :where(li) > :is(ul, ol, p) {
+  margin: 0;
+}
+
+.detail-body blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--hairline);
+  color: var(--mute);
+}
+
+.detail-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 0.8em;
+  font-size: 13px;
+}
+
+.detail-body th,
+.detail-body td {
+  border: 1px solid var(--hairline);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.detail-body th {
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--hairline-soft);
+}
+
+.detail-body .align-center {
+  text-align: center;
+}
+
+.detail-body .align-right {
+  text-align: right;
+}
+
+/* A body shown as its text: while the renderer loads, or when it cannot render. */
+.detail-body .detail-plain {
+  white-space: pre-wrap;
+}
+
+.detail-body hr {
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  margin: 1.2em 0;
+}
+
+.detail-body > :first-child {
+  margin-top: 0;
 }
 
 .detail-body > :last-child {
