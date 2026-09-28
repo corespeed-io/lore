@@ -562,32 +562,22 @@ been removed. Lore now has a native implementation, split into two concepts
   Link's metadata bounded to 1,000 characters with `metadataTruncated`) take the
   kind, weight, metadata, and list bounds, the directions, and the default kind and
   weight from `LORE_CONTRACT`;
-- `src/modules/memories/browser/MemoryMarkdown.tsx` renders a Memory body: `markdown.ts` parses
-  it with markdown-it (CommonMark plus tables and strikethrough) and turns the tokens
-  into a plain tree of fixed tags and attributes (`memoryMarkdownTree`), and the
-  component maps that tree to React elements. Every rendering decision is a pure
-  function in `markdown.ts`, so tests pin them without rendering: the tree for the
-  body, and `wikilinkView`/`keepsBrowserClick` for wikilinks, which resolve against
-  the Graph at render time so a Graph refresh never rebuilds the tree. No body HTML
-  goes through `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
-  body of nested quotes or lists overflowed its stack, and a 6 KB table took 1.5 s.
-  - Raw HTML and bare URLs show as text.
-  - No text of the body renders as nothing: reference definitions are disabled so they stay text, a fence's info string shows above it, a link or image with no visible text (`hasVisibleText`: spaces, zero-width and other default-ignorable characters, and a blank Braille pattern show nothing) shows its target, alt text holding an image, link, wikilink, or strikethrough shows as written, and a table with a row longer than its header, whose extra cells markdown-it would drop, stays paragraph text. Targets, titles, and an unresolved wikilink's reference show on hover. Bidirectional embedding/override/isolate controls and Unicode tag characters, written raw or as entities, show as markers such as `⟨U+202E⟩` in the body, titles, labels, and snippets (`revealHidden`, `presentation.ts`); emoji sequences and right-to-left marks stay as they are. A human reviews agent-written Memories here while other agents read them verbatim.
-  - `allowedHref` allows only http(s) links with a host, and mailto.
-  - Images render as links, so a body never loads a remote URL.
-  - A single line break is kept.
-  - A body whose blocks or inline markup nest past `MAXIMUM_MARKDOWN_NESTING`
-    renders as text (`parseMemoryMarkdown`), because markdown-it drops the blocks
-    past it and never bounds emphasis. The tables of one body, kept or dropped,
-    share `MAXIMUM_TABLE_CELLS` while parsing (`boundedTable`), because markdown-it
-    fills in the cells a short row leaves out; a table is parsed no further than one
-    row past what is left, and the table that goes past it and every later table
-    stay paragraph text. No table may start inside a dropped table's lines, so
-    markdown-it's retries parse each row once.
-  - An autolink inside a link label, or an image or wikilink inside a link, renders as text, so anchors never nest.
-  - An inline rule turns `[[reference]]` and `[[reference|label]]` into `wikilink` tokens before links or emphasis can claim the brackets, never in code. They resolve only when the reference names one visible graph node (`wikilinkTarget` reads own properties only), and a resolved one routes in the client unless the click carries a modifier. Unresolved or ambiguous references stay inert.
+- `src/modules/memories/browser/markdown.ts` parses a Memory body with markdown-it
+  (CommonMark plus tables and strikethrough, `html: false`, no linkify, single line
+  breaks kept) and renders it with markdown-it's own renderer plus a few rules;
+  `MemoryMarkdown.tsx` sets that HTML as the element's `innerHTML` and routes
+  wikilink clicks. With `html: false` markdown-it escapes every character of the
+  body; every rule that writes HTML escapes its text through `escapeHtml`. Tests
+  assert on the rendered HTML string, a pure function. react-markdown was rejected
+  for its render cost (a 32,000-character body of nested quotes overflowed its stack,
+  and a 6 KB table took 1.5 s), and rendering tokens as React elements ourselves was
+  tried and dropped for its size.
+  - `allowedHref` allows only http(s) links with a host, and mailto. Images render as links, so a body never loads a remote URL; inside a link an image is its words, and an autolink in a link label renders as text, so anchors never nest.
+  - An inline rule turns `[[reference]]` and `[[reference|label]]` into `wikilink` tokens before links or emphasis can claim the brackets, never in code. They resolve only when the reference names one visible graph node (`wikilinkTarget` reads own properties only); a resolved one routes in the client unless the click carries a modifier (`keepsBrowserClick`), and an unresolved one names its reference on hover. The body parses once per content; a Graph refresh only renders it again.
+  - Reference definitions are disabled so they stay text, a fence's info string shows above its code, and bidirectional embedding/override/isolate controls and Unicode tag characters, raw or as entities, show as markers such as `⟨U+202E⟩` in the body, titles, labels, and snippets (`revealHidden`, `presentation.ts`). Memory detail's "Show source" button shows the text exactly as written, so nothing the renderer turns into markup is ever out of a reader's reach.
+  - A body whose blocks or inline markup nest past `MAXIMUM_MARKDOWN_NESTING` renders as text (`parseMemoryMarkdown`), because markdown-it drops the blocks past it and never bounds emphasis. The tables of one body share `MAXIMUM_TABLE_CELLS` while parsing (`boundedTable`), because markdown-it fills in the cells a short row leaves out; the table that goes past it and every later table stay paragraph text.
   - `MemoryView.tsx` loads the renderer apart from the shell, once the shell is idle, and renders a loaded renderer directly: `React.lazy` suspends on its first render even with the module loaded, and React holds a fallback for 300 ms. The body shows as text while the renderer loads or if it fails.
-  - `memoryTitle`/`memoryBody` (`presentation.ts`) show a first-line title without its Markdown and without repeating it under the title. `memoryBody` keeps the line whenever dropping it would lose something: the title cuts it short or loses markup (links, strikethrough, escapes, entities, an unpaired `**`), an odd backtick opens a code span the next line continues, or the next line would parse differently without it. Configured titles and Graph labels go through the same `plainInline`, and search snippets through `plain`; every pattern in them is linear, which `presentation.test.ts` measures on hostile input.
+  - `memoryTitle`/`memoryBody` (`presentation.ts`) show a first-line title without its Markdown. `memoryBody` drops that line only when it is a heading or a bold or 【…】 run with no other markup and the next line opens a block of its own; otherwise the title repeats rather than risk losing text. Configured titles and Graph labels go through the same `plainInline`, and search snippets through `plain`; every pattern in them is linear, which `presentation.test.ts` measures on hostile input.
 - `src/modules/graph/browser/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
   one Canvas, cold layout reveals progressively, and interaction frames transfer

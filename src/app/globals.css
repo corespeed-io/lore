@@ -740,6 +740,26 @@ body {
   overflow-wrap: anywhere;
 }
 
+.detail-source-toggle {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* A Memory's text exactly as written, beside its rendering. */
+.detail-source {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--hairline-soft);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
 .detail-body {
   font-size: 14px;
   line-height: 1.7;
@@ -859,14 +879,6 @@ body {
   background: var(--hairline-soft);
 }
 
-.detail-body .align-center {
-  text-align: center;
-}
-
-.detail-body .align-right {
-  text-align: right;
-}
-
 /* A fence's info string, shown so no text of the body is hidden. */
 .detail-body .fence-info {
   display: block;
@@ -886,11 +898,13 @@ body {
   margin: 1.2em 0;
 }
 
-.detail-body > :first-child {
+.detail-body > :first-child,
+.detail-markdown > :first-child {
   margin-top: 0;
 }
 
-.detail-body > :last-child {
+.detail-body > :last-child,
+.detail-markdown > :last-child {
   margin-bottom: 0;
 }
 

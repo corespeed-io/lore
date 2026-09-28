@@ -122,8 +122,8 @@ src/modules/memories/
   browser/
     data.ts         # SDK calls plus their SWR hooks and cache behavior
     presentation.ts # Memory title/type presentation and plain text for labels and snippets
-    markdown.ts     # markdown-it parser and the tree Memory detail renders from it
-    MemoryMarkdown.tsx # that tree as React elements
+    markdown.ts     # markdown-it parser and renderer rules for Memory bodies
+    MemoryMarkdown.tsx # the rendered body, with wikilink routing
     MemoryView.tsx  # Views, colocated with the data they read
     SearchResults.tsx
 ```

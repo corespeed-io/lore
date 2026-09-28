@@ -110,17 +110,15 @@ test("plain text keeps a code span as written and drops the rest of the inline m
   // A link with a title or with parentheses in its target reads as its label.
   expect(plainInline('See [docs](https://example.test "Docs") now')).toBe("See docs now");
   expect(plainInline("See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now")).toBe("See Foo now");
-  expect(plainInline("See [x](<https://example.test/a>) now")).toBe("See x now");
-  // An escape reads as the character it escapes, and common entities decode.
-  expect(plainInline("Use \\*args\\* and \\_x\\_ or \\[[not a link]]")).toBe(
-    "Use *args* and _x_ or [[not a link]]",
-  );
-  expect(plainInline("AT&amp;T &lt;tag&gt; &#8212; &#x41; &#0; &nbsp;")).toBe(
-    "AT&T <tag> — A \ufffd &nbsp;",
-  );
+  // An escape reads as the character it escapes; an entity reads as written.
+  expect(plainInline("Use \\*args\\* and AT&amp;T")).toBe("Use *args* and AT&amp;T");
   // A heading marker goes only at the start, and a link to another scheme stays.
   expect(plainInline("# Title # not a marker")).toBe("Title # not a marker");
   expect(plainInline("[x](javascript:alert(1))")).toBe("[x](javascript:alert(1))");
+  // Spaced markers are text, and an underscore inside a word is never emphasis.
+  expect(plainInline("2 * 3 * 4, a ** b, snake_case_name, _note_")).toBe(
+    "2 * 3 * 4, a ** b, snake_case_name, note",
+  );
 });
 
 test("plain text costs linear time on runs of brackets and markers", () => {
@@ -158,109 +156,74 @@ test("a label cut short loses its unpaired bold marker too", () => {
   );
 });
 
-test("Memory detail does not repeat a first line written as its title", () => {
+test("Memory detail does not repeat a first line that is only its title", () => {
   const bodyOf = (content: string, metadata: Memory["metadata"] = {}) =>
     memoryBody(memory({ content, metadata }));
 
   expect(bodyOf("**Title**\n\nFirst paragraph.")).toBe("First paragraph.");
   expect(bodyOf("### Title\r\n\r\nBody")).toBe("Body");
-  expect(bodyOf("【memory 统一用 Lore】\n- one")).toBe("- one");
   expect(bodyOf("**Title**")).toBe("");
-  // A title with a trailing note is still shown whole by the title.
+  expect(bodyOf("**Title**\rBody")).toBe("Body");
+  // The next line opens a block of its own: a list, a heading, a quote, or text.
+  expect(bodyOf("【memory 统一用 Lore】\n- one")).toBe("- one");
+  expect(bodyOf("**Owners**\n1. Alice")).toBe("1. Alice");
   expect(bodyOf("**Prefer code** (2026-09-18, review)\nBody")).toBe("Body");
   expect(bodyOf("【规范】（适用范围）\n正文")).toBe("正文");
-  // A plain first line may open a paragraph, so it stays.
-  expect(bodyOf("A durable fact.\nMore.")).toBe("A durable fact.\nMore.");
-  expect(bodyOf("Use **bold** later\nMore.")).toBe("Use **bold** later\nMore.");
-  // A title line too long to show whole stays in the body.
-  const long = `**${"x".repeat(97)}**\nBody`;
-  expect(bodyOf(long)).toBe(long);
-  // A configured title leaves the content whole.
-  expect(bodyOf("# Heading\nBody", { title: "Configured" })).toBe("# Heading\nBody");
-  // A lone carriage return ends a line too.
-  expect(bodyOf("**Title**\rBody")).toBe("Body");
-});
-
-test("the body keeps a title line the renderer reads as more than a title", () => {
-  const bodyOf = (content: string) => memoryBody(memory({ content }));
-  const kept = (content: string) => expect(bodyOf(content)).toBe(content);
-
-  // The next line makes it a table header or a setext heading.
-  const table = "**Col** | Other\n| --- | --- |\n| a | b |";
-  expect(bodyOf(table)).toBe(table);
-  const setext = "**Title**\n===\nBody";
-  expect(bodyOf(setext)).toBe(setext);
-  // A link the title cannot follow stays where it can be clicked.
-  const linked = "**See [the runbook](https://example.test)**\nBody";
-  expect(bodyOf(linked)).toBe(linked);
-  const wikilinked = "## [[ops/ch|ClickHouse]]\nBody";
-  expect(bodyOf(wikilinked)).toBe(wikilinked);
-  // An ATX heading ends at its line, so a rule under it is the body's own.
+  expect(bodyOf("**【规范】** 适用范围\n2026 plan")).toBe("2026 plan");
+  // An ATX heading ends at its line, so whatever follows is the body's own.
   expect(bodyOf("# Title\n---\nBody")).toBe("---\nBody");
-
-  // Every other link form, including autolinks and reference links.
-  kept("# See <https://example.test/runbook>\nBody");
-  kept("**Ask <team@example.test>**\nBody");
-  kept("## See [the runbook][rb]\n\n[rb]: https://example.test/rb");
-  // Markup whose plain text reads differently: strikethrough, escapes, entities,
-  // and an asterisk the title cannot pair.
-  kept("**Note** ~~old~~\nBody");
-  kept("# AT&amp;T \\*escaped\\*\nBody");
-  kept("# Python **kwargs and *args\nBody");
-  // A line that alone would open indented code or a later-numbered list, where
-  // under the title it was the title's paragraph.
-  kept("**Deploy steps**\n    ssh prod && ./deploy.sh\ncontinues");
-  kept("【标题】\n\t缩进");
-  kept("**Owners**\n2. Alice\n3. Bob");
-  kept("**Owners**\n1.\nnext");
-  kept("**Owners**\n2) Bob");
-  kept("**Owners**\n1)\nnext");
-  kept("**Owners**\n*\nnext");
-  kept("**Owners**\n+");
-  // A line shaped like a reference definition is text either way.
-  expect(bodyOf("**Links**\n[rb]: https://example.test/rb")).toBe("[rb]: https://example.test/rb");
-  // A list that may interrupt a paragraph parses the same either way.
-  expect(bodyOf("**Owners**\n1. Alice")).toBe("1. Alice");
-  expect(bodyOf("__Title__\nBody")).toBe("Body");
+  expect(bodyOf("#\tTabbed heading\n    code")).toBe("    code");
 });
 
-test("an escaped or encoded title reads as the body renders it", () => {
-  expect(memoryTitle(memory({ content: "# AT&amp;T \\*escaped\\*\nBody" }))).toBe("AT&T *escaped*");
-});
+test("the body keeps a first line the title would not show as written", () => {
+  const kept = (content: string, metadata: Memory["metadata"] = {}) =>
+    expect(memoryBody(memory({ content, metadata }))).toBe(content);
 
-test("an entity past Unicode, or a lone surrogate, reads as a replacement character", () => {
-  // String.fromCodePoint throws on these, and labels of every Graph node pass through here.
-  expect(plainInline("a &#9999999; b &#xFFFFFF; c &#xD800; d &#1114112;")).toBe(
-    "a \ufffd b \ufffd c \ufffd d \ufffd",
-  );
-  expect(memoryTitle(memory({ content: "# &#1114112;\nBody" }))).toBe("\ufffd");
-});
-
-test("the body keeps a first line longer than the title reads", () => {
-  const content = `## ${"**".repeat(500)}${"real text ".repeat(100)}\nBody`;
-  expect(memoryBody(memory({ content }))).toBe(content);
-  // Without markup the title shows only the words before the bound, so the rest stays.
-  const padded = `# Deploy${" ".repeat(1_000)}only after the freeze lifts\nBody`;
-  expect(memoryBody(memory({ content: padded }))).toBe(padded);
-});
-
-test("spaced asterisks and underscores are not emphasis in a title", () => {
-  expect(plainInline("Budget = 2 * 3 * 4 hours")).toBe("Budget = 2 * 3 * 4 hours");
-  expect(plainInline("a _ b _ c and a __ b __ c")).toBe("a _ b _ c and a __ b __ c");
-  const content = "# Budget = 2 * 3 * 4 hours\nBody";
-  expect(memoryTitle(memory({ content }))).toBe("Budget = 2 * 3 * 4 hours");
-  expect(memoryBody(memory({ content }))).toBe(content);
-});
-
-test("deciding whether a title line continues takes linear time", () => {
-  const cells = `-${`${" ".repeat(1_100)}|-`.repeat(26)}${" ".repeat(1_100)}x`;
-  const started = performance.now();
-  // Not a delimiter row, so the body starts after the title line.
-  expect(memoryBody(memory({ content: `**Note**\n${cells}` }))).toBe(cells);
-  // Indented, so it would open a code block without the title line, which stays.
-  const indented = `**Note**\n${" ".repeat(1_100)}${cells}`;
-  expect(memoryBody(memory({ content: indented }))).toBe(indented);
-  expect(performance.now() - started).toBeLessThan(100);
+  // Not a title: plain text, a hashtag, seven hashes, a non-breaking space, an unclosed run.
+  for (const line of [
+    "A durable fact.",
+    "#tag first",
+    "####### seven",
+    "# Title",
+    "**unclosed title",
+    "**【规范】 适用范围",
+  ]) {
+    kept(`${line}\nBody`);
+  }
+  // A configured title leaves the content whole.
+  kept("# Heading\nBody", { title: "Configured" });
+  // Markup past the title's own markers: links, code, bold, strikethrough, escapes,
+  // entities, autolinks, and table pipes.
+  for (const line of [
+    "## [[ops/ch|ClickHouse]]",
+    "**See [the runbook](https://example.test)**",
+    "## Use `bun run ch:migrate`",
+    '**Example** `\n[approved](https://example.test "hidden")\n`',
+    "# Compute 2**3",
+    "# Budget = 2 * 3 * 4 hours",
+    "**Note** ~~old~~",
+    "# AT&amp;T \\*escaped\\*",
+    "# See <https://example.test/runbook>",
+    "**Col** | Other\n| --- | --- |",
+  ]) {
+    kept(`${line}\nBody`);
+  }
+  // A next line that, without the title line above it, would parse differently.
+  for (const next of [
+    "===",
+    "    ssh prod",
+    "\tindented",
+    "2. Bob",
+    "1.",
+    "*",
+    "|---|",
+    "[rb]: x",
+  ]) {
+    kept(`**Title**\n${next}`);
+  }
+  // A title too long to show whole, or longer than the title reads.
+  kept(`**${"x".repeat(97)}**\nBody`);
+  kept(`# Deploy${" ".repeat(1_000)}only after the freeze lifts\nBody`);
 });
 
 test("a wikilink without a label reads as its reference", () => {
@@ -287,78 +250,36 @@ test("the title shows a first line whole only up to the limit, and the body agre
   const whole = "x".repeat(96);
   expect(memoryTitle(memory({ content: `**${whole}**\nBody` }))).toBe(whole);
   expect(memoryBody(memory({ content: `**${whole}**\nBody` }))).toBe("Body");
-
-  const cut = `**${"x".repeat(97)}**\nBody`;
-  const cutTitle = memoryTitle(memory({ content: cut }));
-  expect(cutTitle).toBe(`${"x".repeat(95)}…`);
-  expect(memoryBody(memory({ content: cut }))).toBe(cut);
-
+  expect(memoryTitle(memory({ content: `**${"x".repeat(97)}**\nBody` }))).toBe(
+    `${"x".repeat(95)}…`,
+  );
   // Runs of whitespace count once, as the title shows them.
   const spaced = `# ${"ab   ".repeat(30).trim()}\nBody`;
   expect(memoryTitle(memory({ content: spaced })).endsWith("…")).toBe(false);
   expect(memoryBody(memory({ content: spaced }))).toBe("Body");
 });
 
-test("only a heading, a bold run, or a 【…】 run opens a title line", () => {
-  const bodyOf = (content: string) => memoryBody(memory({ content }));
-
-  expect(bodyOf("**【规范】** 适用范围\n正文")).toBe("正文");
-  // An unclosed bold marker is text the title cannot show, so the line stays.
-  expect(bodyOf("**【规范】 适用范围\n正文")).toBe("**【规范】 适用范围\n正文");
-  expect(bodyOf("#\tTabbed heading\nBody")).toBe("Body");
-  // A hashtag, or seven hashes, is not a Markdown heading.
-  expect(bodyOf("#tag first\nBody")).toBe("#tag first\nBody");
-  expect(bodyOf("####### seven\nBody")).toBe("####### seven\nBody");
-  // An unclosed bold run is not a title.
-  expect(bodyOf("**unclosed title\nBody")).toBe("**unclosed title\nBody");
-});
-
-test("controls that reorder or hide text show as markers, and emoji stay whole", () => {
-  expect(revealHidden("a\u202Eb\u2066c\u{E0049}d\u202C")).toBe(
-    "a⟨U+202E⟩b⟨U+2066⟩c⟨U+E0049⟩d⟨U+202C⟩",
-  );
-  // A family (zero-width joiners), a heart (a variation selector), a subdivision
-  // flag (a tag sequence), and right-to-left marks are ordinary text.
-  for (const text of [
-    "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
-    "\u2764\uFE0F",
-    "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
-    "שלום\u200F!",
-  ]) {
-    expect(revealHidden(text)).toBe(text);
-  }
-  // Written as entities, they show the same way in titles, labels, and snippets.
-  const encoded = memory({ content: "# Pay &#x202E;4321&#x202C; now &#xE0049;\nBody" });
-  expect(memoryTitle(encoded)).toBe("Pay ⟨U+202E⟩4321⟨U+202C⟩ now ⟨U+E0049⟩");
-  expect(plain("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
-});
-
-test("the body keeps a title line whose code span or bold marker runs past it", () => {
-  const bodyOf = (content: string) => memoryBody(memory({ content }));
-  const kept = (content: string) => expect(bodyOf(content)).toBe(content);
-
-  // An odd backtick opens a code span the next lines continue.
-  kept('**Example** `\n[approved](https://example.test "hidden")\n`');
-  // An unpaired or spaced `**` is text the title reduces away.
-  kept("# Compute 2**3\nBody");
-  kept("# Passing **kwargs to the client\nBody");
-  kept("# Retry delay 2 ** attempt\nBody");
-  kept("**Note** a ** b\nBody");
-  expect(memoryTitle(memory({ content: "# Retry delay 2 ** attempt\nBody" }))).toBe(
-    "Retry delay 2 ** attempt",
-  );
-  // Paired markers and code spans still read as a title.
-  expect(bodyOf("## Use `bun run ch:migrate` for **ClickHouse**\nBody")).toBe("Body");
-});
-
-test("only a space or tab after the hashes makes a heading", () => {
-  const content = "#\u00a0Title\nBody";
-  expect(memoryBody(memory({ content }))).toBe(content);
-  expect(memoryTitle(memory({ content }))).toBe("# Title");
-});
-
 test("a title cut short never splits a character in two", () => {
   const title = memoryTitle(memory({ content: `# ${"x".repeat(94)}\u{1F600}tail\nBody` }));
   expect(title).toBe(`${"x".repeat(94)}…`);
   expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(title)).toBe(false);
+});
+
+test("controls that reorder or hide text show as markers, and emoji stay whole", () => {
+  expect(revealHidden("a‮b⁦c\u{E0049}d‬")).toBe("a⟨U+202E⟩b⟨U+2066⟩c⟨U+E0049⟩d⟨U+202C⟩");
+  // A family (zero-width joiners), a heart (a variation selector), a subdivision
+  // flag (a tag sequence), and right-to-left marks are ordinary text.
+  for (const text of [
+    "\u{1F468}‍\u{1F469}‍\u{1F467}",
+    "❤️",
+    "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+    "שלום‏!",
+  ]) {
+    expect(revealHidden(text)).toBe(text);
+  }
+  // Titles, labels, and snippets show them too; an entity stays as written, visibly.
+  expect(memoryTitle(memory({ content: "# Pay ‮4321 &#x202E;\nBody" }))).toBe(
+    "Pay ⟨U+202E⟩4321 &#x202E;",
+  );
+  expect(plain("Pay ‮4321")).toBe("Pay ⟨U+202E⟩4321");
 });

@@ -262,6 +262,10 @@ export function MemoryView({
   const bodyText = useMemo(() => memoryBody(memory), [memory]);
   // Chosen once per mount, so the element type never changes under a rendered body.
   const [MemoryMarkdown] = useState<MarkdownRenderer>(() => loadedMarkdown ?? LazyMarkdown);
+  // The Memory whose source is showing: a reader can always check the rendering
+  // against the text an agent wrote, so nothing the renderer drops stays hidden.
+  const [sourceOf, setSourceOf] = useState<string | null>(null);
+  const showSource = sourceOf === id;
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),
@@ -280,13 +284,25 @@ export function MemoryView({
           <div className="detail-meta">
             <span className="type-badge">{type}</span>
             <span className="detail-id">{id}</span>
+            {body.trim() && (
+              <button
+                type="button"
+                className="property-action detail-source-toggle"
+                aria-pressed={showSource}
+                onClick={() => setSourceOf(showSource ? null : id)}
+              >
+                {showSource ? "Show rendered" : "Show source"}
+              </button>
+            )}
           </div>
           {codeEvidenceSummary.attentionMessage && (
             <p className="code-evidence-notice" role="status">
               {codeEvidenceSummary.attentionMessage}
             </p>
           )}
-          {bodyText.trim() ? (
+          {showSource ? (
+            <pre className="detail-source">{revealHidden(body)}</pre>
+          ) : bodyText.trim() ? (
             <div className="detail-body">
               <PlainTextFallback key={`${id}:${version}`} text={bodyText}>
                 <Suspense fallback={<p className="detail-plain">{revealHidden(bodyText)}</p>}>
