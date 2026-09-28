@@ -148,16 +148,18 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
   owns that pure presentation model. The body renders through `MemoryMarkdown.tsx`,
   which renders markdown-it tokens as React elements:
   - It supports CommonMark plus tables and strikethrough. Task-list markers and bare URLs stay text.
+  - It never hides text of the body, because agents write Memories that humans review here while other agents read them word for word. Reference definitions are off, so `[x]: url "title"` and `[a][x]` show as written; a fence's info string shows above its code (`fence-info`); a link with no text shows its target. A link's target and title show on hover only, as for any link.
   - A single line break stays a line break, because a Memory's line breaks carry meaning.
   - Raw HTML shows as text.
   - Only http(s) links with a host open, in a new tab; mailto links open in place (`allowedHref`).
   - An image renders as a link to its source, so a Memory cannot make the browser load a remote URL. Inside a link it is its alt text.
-  - `#` and `##` render as `<h3>` under the page's own title.
+  - `#` and `##` render as `<h2>` under the page's own `<h1>` title, `###` as `<h3>`, and deeper headings as `<h4>`.
   - Table cell alignment is a class (`align-center`, `align-right`), never an inline style.
   - `[[reference]]` (`src/modules/memories/browser/markdown.ts`) becomes a link in prose, never in code, that routes in the client when the reference resolves. A modified or middle click keeps the browser's own behavior.
-  - The renderer loads with the first Memory detail. Until it loads, or if it fails, the body shows as its text (`detail-plain`), as does a body that nests too deeply to render whole.
-- A title taken from the first line (`memoryTitle`) shows that line's text without its Markdown. That title, Graph labels, and Graph previews all go through `plainInline`.
-- When the title shows the whole of a first line written as a title (a heading, or a line that opens with a bold or 【…】 run), `memoryBody` starts the body after that line instead of repeating it.
+  - The renderer loads apart from the shell, once the shell is idle. Until it loads, or if it fails, the body shows as its text (`detail-plain`), as does a body whose blocks or inline markup nest too deeply to render whole.
+  - The tables of one body render at most 5,000 cells together; a table past that shows as paragraph text.
+- A title taken from the first line (`memoryTitle`) shows that line's text without its Markdown, except strikethrough, which keeps its `~~` so struck words never read as current. That title, configured titles, and Graph labels all go through `plainInline`.
+- When the title shows the whole of a first line written as a title (a heading, or a line that opens with a bold or 【…】 run), `memoryBody` starts the body after that line instead of repeating it. The line stays whenever dropping it would lose something: a link only the body can follow, markup the title cannot show, or a next line that would parse differently without it.
 - `WorkspaceOperationsView.tsx` owns actor-visible archive download, checksum-backed
   dry-run/import, owner remap, read-only deployment readiness/capabilities, and
   read-only Code Index job state. `src/modules/code/browser/job-presentation.ts` owns that pure
@@ -375,6 +377,7 @@ a two-pixel `--link` ring. Color is scarce and never substitutes for labels.
 | Date | Decision | Reason | Supersedes |
 |---|---|---|---|
 | 2026-09-28 | Render Memory detail with markdown-it tokens turned into React elements, and show first-line titles without Markdown or repetition | The hand-written regex renderer had no paragraph model and relied on a `white-space: pre-wrap` rule the editorial redesign dropped, so every body collapsed into one paragraph. It also never supported ordered lists, tables, or blockquotes. Streamdown was rejected because it needs Tailwind and targets streamed AI output. react-markdown was tried and rejected: within the 32,000-character bound, nested quotes or lists overflowed its stack and a 6 KB table took 1.5 s, where markdown-it takes milliseconds. Rendering tokens as React elements keeps body HTML out of innerHTML | The hand-written regex renderer and its innerHTML click interception |
+| 2026-09-28 | Memory detail never hides text of a Memory body | Agents write Memories directly, and a human reviews them only here while other agents retrieve them word for word, so text that renders as nothing could carry instructions no reviewer sees. Reference definitions are off, fence info strings show, and a link with no text shows its target | CommonMark reference links, which now read as text |
 | 2026-08-15 | Surface Memory Code citations in the Memory detail context and Code Index jobs in Operations, both read-only | Make the six-state drift assessment and the indexing queue observable to the human who owns the Memory without building a code browser Lore does not need | Code-aware Memory reachable only through HTTP/SDK/CLI/MCP |
 | 2026-08-10 | Promote the measured Worker + Canvas renderer to the native Graph and keep labels interaction-driven | Keep ~1,000-node layout and drag responsive while making centrality visible without persistent annotation clutter | Main-thread SVG production renderer and always-on labels |
 | 2026-08-09 | Add Operations as the human-only Workspace portability and deployment-health destination | Keep high-consequence export/import behind checksum validation, owner remap, and dry-run while making lexical-safe degradation visible | CLI/API-only Workspace portability |

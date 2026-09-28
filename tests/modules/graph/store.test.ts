@@ -63,7 +63,7 @@ test("an ambiguous reference stays ambiguous however many nodes share it", () =>
   expect(store.byReference.d).toBe("d");
 });
 
-test("a Graph read shows label and preview text without markup, and references still resolve", async () => {
+test("a Graph read shows label text without markup, and references still resolve", async () => {
   vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
   const wire = {
     ...node("a", "ops/**clickhouse**", "## **ClickHouse** runbook"),
@@ -82,7 +82,6 @@ test("a Graph read shows label and preview text without markup, and references s
       {
         ...wire,
         label: "ClickHouse runbook",
-        preview: "Use bun run ch:migrate with ClickHouse and docs",
       },
     ],
     links,

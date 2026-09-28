@@ -568,15 +568,19 @@ been removed. Lore now has a native implementation, split into two concepts
   `innerHTML`. react-markdown was rejected for its render cost: a 32,000-character
   body of nested quotes or lists overflowed its stack, and a 6 KB table took 1.5 s.
   - Raw HTML and bare URLs show as text.
+  - No text of the body renders as nothing: reference definitions are disabled so they stay text, a fence's info string shows above it, and a link with no text shows its target. A human reviews agent-written Memories here while other agents read them verbatim.
   - `allowedHref` allows only http(s) links with a host, and mailto.
   - Images render as links, so a body never loads a remote URL.
   - A single line break is kept.
-  - A body that nests past `MAXIMUM_MARKDOWN_NESTING` renders as text
-    (`parseMemoryMarkdown`), because markdown-it drops what lies past it. The tables
-    of one body share `MAXIMUM_TABLE_CELLS`, and a table past it shows its source.
+  - A body whose blocks or inline markup nest past `MAXIMUM_MARKDOWN_NESTING`
+    renders as text (`parseMemoryMarkdown`), because markdown-it drops the blocks
+    past it and never bounds emphasis. The tables of one body share
+    `MAXIMUM_TABLE_CELLS` while parsing (`boundedTable`), because markdown-it fills
+    in the cells a short row leaves out; a table past it stays paragraph text.
+  - An autolink inside a link label, or an image or wikilink inside a link, renders as text, so anchors never nest.
   - An inline rule turns `[[reference]]` and `[[reference|label]]` into `wikilink` tokens before links or emphasis can claim the brackets, never in code. They resolve only when the reference names one visible graph node (`wikilinkTarget` reads own properties only), and a resolved one routes in the client unless the click carries a modifier. Unresolved or ambiguous references stay inert.
-  - `MemoryView.tsx` loads the renderer lazily and shows the body as text while it loads or if it fails.
-  - `memoryTitle`/`memoryBody` (`presentation.ts`) show a first-line title without its Markdown and without repeating it under the title. Configured titles, Graph labels, and Graph previews go through the same `plainInline`, and search snippets through `plain`; every pattern in them is linear.
+  - `MemoryView.tsx` loads the renderer apart from the shell, once the shell is idle, and shows the body as text while it loads or if it fails.
+  - `memoryTitle`/`memoryBody` (`presentation.ts`) show a first-line title without its Markdown and without repeating it under the title. `memoryBody` keeps the line whenever dropping it would lose something: the title cuts it short or loses markup (links, strikethrough, escapes, entities), or the next line would parse differently without it. Configured titles and Graph labels go through the same `plainInline`, and search snippets through `plain`; every pattern in them is linear, which `presentation.test.ts` measures on hostile input.
 - `src/modules/graph/browser/WorkerCanvasGraph.tsx` and its colocated Worker own the production
   Graph renderer: D3 simulation runs off the main thread, links and nodes paint on
   one Canvas, cold layout reveals progressively, and interaction frames transfer

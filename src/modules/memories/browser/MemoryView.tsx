@@ -19,27 +19,24 @@ import {
   memoryType,
 } from "@/modules/memories/browser/presentation";
 
-/** The Markdown renderer and its parser load with the first Memory detail, not the shell. */
-const MemoryMarkdown = lazy(() => import("@/modules/memories/browser/MemoryMarkdown"));
-
-interface PlainTextFallbackProps {
-  text: string;
-  children: ReactNode;
+/** The Markdown renderer and its parser load apart from the shell, once it is idle. */
+const loadMemoryMarkdown = () => import("@/modules/memories/browser/MemoryMarkdown");
+const MemoryMarkdown = lazy(loadMemoryMarkdown);
+if (typeof window !== "undefined") {
+  // A failed load surfaces when a body renders, through the fallback below.
+  const preload = () => void loadMemoryMarkdown().catch(() => {});
+  if ("requestIdleCallback" in window) window.requestIdleCallback(preload);
+  else setTimeout(preload, 1);
 }
 
 /**
  * A Memory body that cannot render as Markdown, or whose renderer failed to load,
- * still shows its text. A different body gets a fresh attempt.
+ * still shows its text. Keyed by Memory version, so a different body gets a fresh
+ * attempt at rendering; a renderer that failed to load stays failed until the page
+ * reloads, because `React.lazy` keeps the rejected import.
  */
-class PlainTextFallback extends Component<
-  PlainTextFallbackProps,
-  { failed: boolean; text: string }
-> {
-  state = { failed: false, text: this.props.text };
-
-  static getDerivedStateFromProps(props: PlainTextFallbackProps, state: { text: string }) {
-    return props.text === state.text ? null : { failed: false, text: props.text };
-  }
+class PlainTextFallback extends Component<{ text: string; children: ReactNode }> {
+  state = { failed: false };
 
   static getDerivedStateFromError() {
     return { failed: true };
@@ -238,7 +235,7 @@ export function MemoryView({
   const type = memoryType(memory);
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
-  const bodyText = memoryBody(memory);
+  const bodyText = useMemo(() => memoryBody(memory), [memory]);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),
@@ -265,7 +262,7 @@ export function MemoryView({
           )}
           {bodyText.trim() ? (
             <div className="detail-body">
-              <PlainTextFallback text={bodyText}>
+              <PlainTextFallback key={`${id}:${version}`} text={bodyText}>
                 <Suspense fallback={<p className="detail-plain">{bodyText}</p>}>
                   <MemoryMarkdown
                     content={bodyText}

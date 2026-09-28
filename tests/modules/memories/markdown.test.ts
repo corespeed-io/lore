@@ -3,9 +3,9 @@ import { expect, test } from "vitest";
 import {
   allowedHref,
   MAXIMUM_MARKDOWN_NESTING,
+  MAXIMUM_TABLE_CELLS,
   memoryMarkdown,
   parseMemoryMarkdown,
-  tableExtent,
   wikilinkTarget,
 } from "@/modules/memories/browser/markdown";
 
@@ -79,6 +79,13 @@ test("a wikilink claims its brackets before links and emphasis can", () => {
   expect(inline("[x] done")).toEqual([["text", "[x] done"]]);
 });
 
+test("a wikilink copied from a table into prose keeps its escaped pipe as the separator", () => {
+  expect(inline("See [[ops/ch\\|ClickHouse]]")).toEqual([
+    ["text", "See "],
+    { wikilink: "ops/ch", label: "ClickHouse" },
+  ]);
+});
+
 test("every wikilink reference reaches the renderer as written", () => {
   for (const reference of ["a b", "100%", "a#b?c=d", "AT&T", "路径/笔记", "a+b", "%E0%A4"]) {
     expect(inline(`[[${reference}]]`)).toEqual([{ wikilink: reference, label: reference }]);
@@ -116,7 +123,6 @@ test("a Memory body links only to http(s) with a host, and to mailto", () => {
     "vbscript:x",
     "https:/api",
     "https:///path",
-    "http://\\evil.test",
     "mailto:",
     "/memories",
     "relative/path",
@@ -135,9 +141,34 @@ test("a link to any other target stays text", () => {
     ["text", "z"],
     "link_close",
   ]);
+  // markdown-it percent-encodes a target before the check, so a backslash never
+  // reaches the browser as a path separator in the host.
+  expect(inline("[x](http://\\evil.test)")).toEqual([
+    ["link_open", "http://%5Cevil.test"],
+    ["text", "x"],
+    "link_close",
+  ]);
   // An image source passes the same check.
   expect(types("![x](data:image/png;base64,AAAA)")).not.toContain("image");
   expect(types("![x](https://example.test/x.png)")).toContain("image");
+});
+
+test("a reference definition and a reference link stay text a reader can see", () => {
+  const tokens = memoryMarkdown.parse(
+    'Visible fact.\n\n[x]: https://example.test "hidden title"\n\nSee [a][x] and [x].',
+    {},
+  );
+  const text = tokens
+    .flatMap((token) => token.children ?? [])
+    .filter((token) => token.type === "text")
+    .map((token) => token.content)
+    .join(" ");
+
+  expect(text).toContain('[x]: https://example.test "hidden title"');
+  expect(text).toContain("See [a][x] and [x].");
+  expect(tokens.flatMap((token) => token.children ?? []).map((token) => token.type)).not.toContain(
+    "link_open",
+  );
 });
 
 test("raw HTML and bare URLs stay text", () => {
@@ -187,17 +218,49 @@ test("a body that nests past the bound renders as text rather than losing its en
   expect(parseMemoryMarkdown(outline(60))).toBeNull();
 });
 
-test("a table's extent counts every cell, including the ones markdown-it fills in", () => {
-  const tokens = memoryMarkdown.parse(
-    "| a | b | c |\n| - | - | - |\n| 1 |\n| 2 | 3 |\n\nafter",
-    {},
-  );
-  const start = tokens.findIndex((token) => token.type === "table_open");
-  const { end, cells } = tableExtent(tokens, start);
+/** A table of `columns` columns and `rows` rows, the header row included. */
+function table(columns: number, rows: number): string {
+  return [`|${" a |".repeat(columns)}`, `|${" - |".repeat(columns)}`]
+    .concat(Array.from({ length: rows - 1 }, () => `|${" 1 |".repeat(columns)}`))
+    .join("\n");
+}
 
-  expect(tokens[end]?.type).toBe("table_close");
-  expect(cells).toBe(9);
-  expect(tokens[end + 1]?.type).toBe("paragraph_open");
+function tableCells(tokens: readonly Token[] | null): number {
+  return (tokens ?? []).filter((token) => token.type === "td_open" || token.type === "th_open")
+    .length;
+}
+
+test("the tables of one body share the cell budget, the cells markdown-it fills in too", () => {
+  const filled = parseMemoryMarkdown("| a | b | c |\n| - | - | - |\n| 1 |\n| 2 | 3 |");
+  expect(tableCells(filled)).toBe(9);
+
+  // 50 columns by 100 rows spends the budget exactly, and still renders.
+  const exact = parseMemoryMarkdown(table(50, 100));
+  expect(tableCells(exact)).toBe(MAXIMUM_TABLE_CELLS);
+
+  // One more row goes past it: that table and every later one stay paragraph text.
+  const past = parseMemoryMarkdown(`${table(2, 2)}\n\n${table(50, 101)}\n\n${table(2, 2)}`);
+  expect(tableCells(past)).toBe(4);
+  expect(past?.filter((token) => token.type === "table_open")).toHaveLength(1);
+  expect(past?.filter((token) => token.type === "paragraph_open")).toHaveLength(2);
+});
+
+test("a body cannot parse to more table cells than the budget, however few its characters", () => {
+  // Each table fills in about 66,000 cells from 1,260 characters.
+  const filling = `|${"|".repeat(209)}\n|${"-|".repeat(209)}\n${"a\n".repeat(315)}\n`;
+  const started = performance.now();
+  const tokens = parseMemoryMarkdown(filling.repeat(25));
+
+  expect(tableCells(tokens)).toBeLessThanOrEqual(MAXIMUM_TABLE_CELLS);
+  expect(tokens?.length ?? 0).toBeLessThan(1_000);
+  expect(performance.now() - started).toBeLessThan(500);
+});
+
+test("inline markup nested past the bound renders as text too", () => {
+  const nested = (depth: number) => `${"*a _a ".repeat(depth)}x${" a_ a*".repeat(depth)}`;
+
+  expect(parseMemoryMarkdown(nested(20))).not.toBeNull();
+  expect(parseMemoryMarkdown(nested(2_500))).toBeNull();
 });
 
 test("parsing costs linear time on hostile bodies", () => {

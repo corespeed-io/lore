@@ -747,7 +747,7 @@ body {
   word-wrap: break-word;
 }
 
-.detail-body h3 {
+.detail-body h2 {
   font-family: var(--font-sans);
   font-size: 1.2em;
   font-weight: 600;
@@ -788,27 +788,28 @@ body {
   font-size: inherit;
 }
 
-.detail-body h4,
-.detail-body h5 {
+.detail-body h3,
+.detail-body h4 {
   font-family: var(--font-sans);
   font-weight: 600;
   color: var(--ink);
   margin: 1.2em 0 0.3em;
 }
 
-.detail-body h4 {
+.detail-body h3 {
   font-size: 1.05em;
 }
 
-.detail-body h5 {
+.detail-body h4 {
   font-size: 1em;
 }
 
+/* `pre`, not `pre.fence`, so `> :last-child` below still outranks it. */
 .detail-body p,
 .detail-body ul,
 .detail-body ol,
 .detail-body blockquote,
-.detail-body pre.fence {
+.detail-body pre {
   margin: 0 0 0.8em;
 }
 
@@ -864,6 +865,14 @@ body {
 
 .detail-body .align-right {
   text-align: right;
+}
+
+/* A fence's info string, shown so no text of the body is hidden. */
+.detail-body .fence-info {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--mute);
+  font-size: 12px;
 }
 
 /* A body shown as its text: while the renderer loads, or when it cannot render. */

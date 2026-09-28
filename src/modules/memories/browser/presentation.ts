@@ -10,12 +10,22 @@ const TITLE_LIMIT = 96;
 const TITLE_SOURCE_LIMIT = 1_000;
 
 /**
+ * A link target that Memory detail renders: http(s) or mailto, optionally in angle
+ * brackets, with one level of parentheses inside it and an optional quoted title.
+ * Its alternatives start with different characters, so it never backtracks far.
+ */
+const LINK_TARGET = String.raw`\(<?(?:https?:\/\/|mailto:)(?:[^()\s<>]|\([^()\s]*\))*>?(?:\s+"[^"\n]*")?\)`;
+const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]${LINK_TARGET}`, "g");
+const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "g");
+
+/**
  * Text with the inline Markdown that Memory detail renders reduced to its words,
  * for places that show plain text: a leading heading marker, wikilinks, links and
- * images, bold, strikethrough, and `*emphasis*`. Code spans keep their text as
- * written. Every `**` goes, paired or not, because a label cut short may keep only
- * the opening one. No pattern can match `[` inside brackets, so a run of brackets
- * costs linear time.
+ * images, bold, and emphasis. Code spans keep their text as written, and so does
+ * strikethrough, whose markers are the only sign the words are struck. Every `**`
+ * goes, paired or not, because a label cut short may keep only the opening one. An
+ * underscore inside a word is never emphasis. No pattern can match `[` inside
+ * brackets, so a run of brackets costs linear time.
  */
 export function plainInline(text: string): string {
   const code: string[] = [];
@@ -25,10 +35,12 @@ export function plainInline(text: string): string {
       .replace(/^#{1,6}\s+/, "")
       .replace(/\[\[([^[\]|\n]+)\|([^[\]\n]+)\]\]/g, "$2")
       .replace(/\[\[([^[\]\n]+)\]\]/g, "$1")
-      .replace(/!\[([^[\]\n]*)\]\([^()\s]*\)/g, "$1")
-      .replace(/\[([^[\]\n]+)\]\((?:https?:\/\/|mailto:)[^()\s]*\)/g, "$1")
-      .replace(/\*\*|~~/g, "")
+      .replace(IMAGE, "$1")
+      .replace(LINK, "$1")
+      .replace(/\*\*/g, "")
       .replace(/(^|[^\w*])\*(?=\S)([^*\n]+)\*(?!\w)/g, "$1$2")
+      .replace(/(^|[^\p{L}\p{N}_])__(?=\S)([^_\n]+)__(?![\p{L}\p{N}_])/gu, "$1$2")
+      .replace(/(^|[^\p{L}\p{N}_])_(?=\S)([^_\n]+)_(?![\p{L}\p{N}_])/gu, "$1$2")
       // biome-ignore lint/suspicious/noControlCharactersInRegex: Memory text never holds NUL, so NUL marks a code span.
       .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => code[Number(index)] ?? "")
   );
@@ -51,12 +63,9 @@ function configuredTitle(memory: Memory): string | null {
   return typeof configured === "string" && configured.trim() ? configured.trim() : null;
 }
 
-function lines(content: string): string[] {
-  return content.split(/\r\n?|\n/);
-}
-
-function firstLine(memory: Memory): string {
-  return lines(memory.content)[0] ?? "";
+/** A text's first line. The split stops there, however long the body. */
+function firstLine(text: string): string {
+  return text.split(/\r\n?|\n/, 1)[0] ?? "";
 }
 
 function titleText(line: string): string {
@@ -65,32 +74,58 @@ function titleText(line: string): string {
 
 export function memoryTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
-  if (configured !== null) return compact(plainInline(configured), TITLE_LIMIT) || configured;
-  return compact(titleText(firstLine(memory)), TITLE_LIMIT) || "Untitled memory";
+  if (configured !== null) {
+    // Metadata may hold a title of 100,000 characters; only the first ones can show.
+    const source = configured.slice(0, TITLE_SOURCE_LIMIT);
+    return compact(plainInline(source), TITLE_LIMIT) || compact(source, TITLE_LIMIT);
+  }
+  return compact(titleText(firstLine(memory.content)), TITLE_LIMIT) || "Untitled memory";
 }
 
 /** A first line written as a title: it opens with a heading, a bold run, or a 【…】 run. */
-const TITLE_START = /^(?:#{1,6}\s|\*\*[^*\n]+\*\*|(?:\*\*)?【[^】\n]+】)/;
-/** A line that makes the one above it part of a table or a setext heading. */
-const CONTINUES_FIRST_LINE = /^\s*(?:\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?|=+)\s*$/;
+const TITLE_START = /^(?:#{1,6}\s|\*\*[^*\n]+\*\*|__[^_\n]+__|(?:\*\*)?【[^】\n]+】)/;
+/**
+ * Markup a title cannot carry: a link or autolink, which only the body can follow,
+ * and strikethrough, escapes, or entities, whose plain text reads differently.
+ */
+const BODY_ONLY_MARKUP = /\[[^[\]]*\]|<[^<>]*>|~~|\\|&/;
+
+/**
+ * Whether the line after a title line would parse differently once the title line
+ * is gone. The title line is a paragraph, so the next line may be its continuation:
+ * a table delimiter or setext underline that makes it a header or heading, or text
+ * that alone would open an indented code block or a list that cannot interrupt a
+ * paragraph (an empty item, or a number other than 1). Each
+ * test is a trim, a split, or an anchored pattern with no ambiguous repetition.
+ */
+function continuesTitle(next: string): boolean {
+  const text = next.trim();
+  if (!text) return false;
+  if (/^(?: {0,3}\t| {4})/.test(next)) return true;
+  if (/^=+$/.test(text) || /^[*+]$/.test(text)) return true;
+  const ordered = /^(\d{1,9})[.)](?:\s|$)/.exec(text);
+  if (ordered && (Number(ordered[1]) !== 1 || /^\d+[.)]$/.test(text))) return true;
+  const cells = text.replace(/^\|/, "").replace(/\|$/, "").split("|");
+  return cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
+}
 
 /**
  * The content Memory detail renders under its title. When the title shows the
  * whole of a first line written as a title, the body starts after that line
- * rather than repeating it. The line stays when the title cuts it short, when it
- * holds a link the title cannot follow, when the next line makes it a table row
- * or a setext heading, and when it is a plain line that may open a paragraph.
+ * rather than repeating it. The line stays whenever the page would otherwise lose
+ * something: when the title cuts it short, when it holds markup only the body can
+ * show, when the next line would parse differently without it, and when it is a
+ * plain line that may open a paragraph.
  */
 export function memoryBody(memory: Memory): string {
-  const line = firstLine(memory);
+  const line = firstLine(memory.content);
   if (configuredTitle(memory) !== null || !TITLE_START.test(line)) return memory.content;
-  if (/\[\[|\]\(/.test(line)) return memory.content;
-  if (titleText(line).replace(/\s+/g, " ").trim().length > TITLE_LIMIT) return memory.content;
+  if (line.length > TITLE_SOURCE_LIMIT || BODY_ONLY_MARKUP.test(line)) return memory.content;
+  const title = titleText(line).replace(/\s+/g, " ").trim();
+  if (title.length > TITLE_LIMIT || title.includes("*")) return memory.content;
   const rest = memory.content.slice(line.length).replace(/^(?:\r\n?|\n)/, "");
   // An ATX heading always ends at its line; any other title line can be continued.
-  if (!/^#{1,6}\s/.test(line) && CONTINUES_FIRST_LINE.test(lines(rest)[0] ?? "")) {
-    return memory.content;
-  }
+  if (!/^#{1,6}\s/.test(line) && continuesTitle(firstLine(rest))) return memory.content;
   return rest.replace(/^(?:\r\n?|\n)+/, "");
 }
 

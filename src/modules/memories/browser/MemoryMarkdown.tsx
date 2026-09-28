@@ -4,9 +4,7 @@ import type { Token } from "markdown-it";
 import { createContext, Fragment, type MouseEvent, type ReactNode, use, useMemo } from "react";
 import {
   allowedHref,
-  MAXIMUM_TABLE_CELLS,
   parseMemoryMarkdown,
-  tableExtent,
   wikilinkTarget,
 } from "@/modules/memories/browser/markdown";
 
@@ -49,7 +47,7 @@ function Wikilink({ reference, label }: { reference: string; label: string }) {
   const target = wikilinkTarget(targets, reference);
   if (!target) {
     return (
-      <span className="wl-unresolved" data-reference={reference} title={unresolvedTitle}>
+      <span className="wl-unresolved" title={unresolvedTitle}>
         {label}
       </span>
     );
@@ -58,8 +56,6 @@ function Wikilink({ reference, label }: { reference: string; label: string }) {
     <a
       className="wl"
       href={`/memory/${encodeURIComponent(target)}`}
-      data-memory-id={target}
-      data-reference={reference}
       onClick={(event) => {
         if (keepsBrowserClick(event)) return;
         event.preventDefault();
@@ -71,23 +67,31 @@ function Wikilink({ reference, label }: { reference: string; label: string }) {
   );
 }
 
-/** Headings sit under the page's own title, so `#` and `##` render as `<h3>`. */
-const HEADINGS: Readonly<Record<string, "h3" | "h4" | "h5">> = {
-  h1: "h3",
-  h2: "h3",
-  h3: "h4",
+/** Headings sit under the page's own `<h1>` title, so `#` and `##` render as `<h2>`. */
+const HEADINGS: Readonly<Record<string, "h2" | "h3" | "h4">> = {
+  h1: "h2",
+  h2: "h2",
+  h3: "h3",
 };
 
-function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
+function ExternalLink({
+  href,
+  title,
+  children,
+}: {
+  href: string;
+  title?: string | undefined;
+  children: ReactNode;
+}) {
   if (/^mailto:/i.test(href)) {
     return (
-      <a className="ext" href={href}>
+      <a className="ext" href={href} title={title}>
         {children}
       </a>
     );
   }
   return (
-    <a className="ext" href={href} target="_blank" rel="noopener noreferrer">
+    <a className="ext" href={href} title={title} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
   );
@@ -104,26 +108,38 @@ function alignment(token: Token): string | undefined {
   return align ? `align-${align}` : undefined;
 }
 
-/** The words an image's alt text or a link label carries, without its markup. */
+/** The words an image's alt text carries, without its markup. */
 function textOf(tokens: readonly Token[] | null): string {
   return (tokens ?? [])
-    .map((token) => (token.type === "image" ? textOf(token.children) : token.content))
+    .map((token) => {
+      if (token.type === "image") return textOf(token.children);
+      if (token.type === "wikilink") return String(token.meta?.label ?? "");
+      return token.content;
+    })
     .join("");
+}
+
+/** Whether a rendered child shows anything: an element, or text that is not blank. */
+function visible(child: ReactNode): boolean {
+  if (typeof child === "string") return child.trim() !== "";
+  return child !== null && child !== undefined && typeof child !== "boolean";
 }
 
 interface Frame {
   token: Token | null;
   key: number;
   children: ReactNode[];
+  /** Opened inside a link, where another link would nest one anchor in another. */
+  inLink: boolean;
 }
 
-function container({ token, key, children }: Frame): ReactNode {
+function container({ token, key, children, inLink }: Frame): ReactNode {
   switch (token?.type) {
     case "paragraph_open":
       // A tight list keeps its paragraphs but does not show them as paragraphs.
       return token.hidden ? <Fragment key={key}>{children}</Fragment> : <p key={key}>{children}</p>;
     case "heading_open": {
-      const Heading = HEADINGS[token.tag] ?? "h5";
+      const Heading = HEADINGS[token.tag] ?? "h4";
       return <Heading key={key}>{children}</Heading>;
     }
     case "bullet_list_open":
@@ -168,13 +184,15 @@ function container({ token, key, children }: Frame): ReactNode {
     case "s_open":
       return <s key={key}>{children}</s>;
     case "link_open": {
-      const target = href(token, "href");
-      return target ? (
-        <ExternalLink key={key} href={target}>
-          {children}
+      // markdown-it keeps links out of link labels, but not an autolink.
+      const target = inLink ? null : href(token, "href");
+      if (!target) return <Fragment key={key}>{children}</Fragment>;
+      const title = token.attrGet("title");
+      return (
+        <ExternalLink key={key} href={target} title={typeof title === "string" ? title : undefined}>
+          {/* A link with no text of its own would be invisible; it shows its target. */}
+          {children.some(visible) ? children : target}
         </ExternalLink>
-      ) : (
-        <Fragment key={key}>{children}</Fragment>
       );
     }
     default:
@@ -182,16 +200,10 @@ function container({ token, key, children }: Frame): ReactNode {
   }
 }
 
-/** What renders a table over the cell budget: its own lines, as written. */
-interface Source {
-  lines: readonly string[];
-  cells: number;
-}
-
-function leaf(token: Token, key: number, inLink: boolean, source: Source): ReactNode {
+function leaf(token: Token, key: number, inLink: boolean): ReactNode {
   switch (token.type) {
     case "inline":
-      return <Fragment key={key}>{render(token.children ?? [], source)}</Fragment>;
+      return <Fragment key={key}>{render(token.children ?? [])}</Fragment>;
     case "text":
       return token.content;
     case "code_inline":
@@ -201,8 +213,10 @@ function leaf(token: Token, key: number, inLink: boolean, source: Source): React
       return <br key={key} />;
     case "fence":
     case "code_block":
+      // A fence's info string is text of the body too, so it shows above the code.
       return (
         <pre key={key} className="fence">
+          {token.info.trim() && <span className="fence-info">{token.info.trim()}</span>}
           <code>{token.content}</code>
         </pre>
       );
@@ -235,36 +249,22 @@ function leaf(token: Token, key: number, inLink: boolean, source: Source): React
  * token starts an element, its closing token finishes it. Only the element types
  * named in `container` and `leaf` render; anything else keeps just its text.
  */
-function render(tokens: readonly Token[], source: Source): ReactNode[] {
-  const stack: Frame[] = [{ token: null, key: -1, children: [] }];
+function render(tokens: readonly Token[]): ReactNode[] {
+  const stack: Frame[] = [{ token: null, key: -1, children: [], inLink: false }];
   let links = 0;
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] as Token;
     const parent = stack[stack.length - 1] as Frame;
     if (token.nesting === 1) {
-      if (token.type === "table_open") {
-        const { end, cells } = tableExtent(tokens, index);
-        if (cells > source.cells) {
-          const [from, to] = token.map ?? [0, 0];
-          parent.children.push(
-            <pre key={index} className="fence">
-              {source.lines.slice(from, to).join("\n")}
-            </pre>,
-          );
-          index = end;
-          continue;
-        }
-        source.cells -= cells;
-      }
+      stack.push({ token, key: index, children: [], inLink: links > 0 });
       if (token.type === "link_open") links += 1;
-      stack.push({ token, key: index, children: [] });
     } else if (token.nesting === -1) {
       if (stack.length === 1) continue;
       const frame = stack.pop() as Frame;
       if (frame.token?.type === "link_open") links -= 1;
       (stack[stack.length - 1] as Frame).children.push(container(frame));
     } else {
-      parent.children.push(leaf(token, index, links > 0, source));
+      parent.children.push(leaf(token, index, links > 0));
     }
   }
   while (stack.length > 1) {
@@ -277,9 +277,8 @@ function render(tokens: readonly Token[], source: Source): ReactNode[] {
 /**
  * A Memory body as CommonMark plus tables and strikethrough, parsed by markdown-it
  * and rendered as React elements, so no body HTML reaches the page. Raw HTML shows
- * as text, only http(s) and mailto links render, an image is a link to its source,
- * and the tables of one body share `MAXIMUM_TABLE_CELLS`. A body that nests past
- * the parser's bound shows as its text.
+ * as text, only http(s) and mailto links render, and an image is a link to its
+ * source. A body that nests past the parser's bound shows as its text.
  */
 export default function MemoryMarkdown({
   content,
@@ -289,11 +288,7 @@ export default function MemoryMarkdown({
 }: MemoryMarkdownProps) {
   const body = useMemo(() => {
     const tokens = parseMemoryMarkdown(content);
-    if (!tokens) return <p className="detail-plain">{content}</p>;
-    return render(tokens, {
-      lines: content.replace(/\r\n?/g, "\n").split("\n"),
-      cells: MAXIMUM_TABLE_CELLS,
-    });
+    return tokens ? render(tokens) : <p className="detail-plain">{content}</p>;
   }, [content]);
   const wikilinks = useMemo(
     () => ({ targets: wikilinkTargets, unresolvedTitle, onOpen }),

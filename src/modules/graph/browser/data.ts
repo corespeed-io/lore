@@ -11,12 +11,9 @@ import { GRAPH_NODE_LIMIT, type GraphData } from "./types";
 export async function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
   const graph = await getBrowserClient().workspace(workspaceId).graph(GRAPH_NODE_LIMIT, signal);
   return {
-    // Labels and previews come from Memory content; show their text, not its markup.
-    nodes: graph.nodes.map((node) => ({
-      ...node,
-      label: plainInline(node.label),
-      preview: plainInline(node.preview),
-    })),
+    // Labels come from Memory content; show their text, not its markup. The browser
+    // shows no preview, so a surface that starts to must reduce it the same way.
+    nodes: graph.nodes.map((node) => ({ ...node, label: plainInline(node.label) })),
     links: [...graph.links],
     linksTruncated: graph.linksTruncated,
   };

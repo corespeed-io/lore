@@ -79,23 +79,37 @@ test("a title taken from the first line shows its text, not its Markdown", () =>
   expect(titleOf("See [the runbook](https://example.test/runbook) first")).toBe(
     "See the runbook first",
   );
-  // Markup the renderer does not treat as emphasis is text, and stays.
-  expect(titleOf("__init__.py loads a * b")).toBe("__init__.py loads a * b");
+  // Underscore emphasis reads as its words, as the body renders it, but an
+  // underscore inside a word and a lone asterisk are text.
+  expect(titleOf("__init__.py loads a * b")).toBe("init.py loads a * b");
+  expect(titleOf("## Rename snake_case_name, _then_ ship")).toBe(
+    "Rename snake_case_name, then ship",
+  );
+  expect(titleOf("# 中文_注意_中文")).toBe("中文_注意_中文");
   // A configured title shows its text, as a first line does.
   expect(memoryTitle(memory({ content: "**x**", metadata: { title: "## **Set** title" } }))).toBe(
     "Set title",
   );
   // A configured title that is only markup still shows what was set.
   expect(memoryTitle(memory({ content: "x", metadata: { title: "****" } }))).toBe("****");
+  // However long a configured title is, the title shows at most the limit.
+  expect(memoryTitle(memory({ metadata: { title: "**".repeat(4_000) } }))).toBe(
+    `${"*".repeat(95)}…`,
+  );
 });
 
 test("plain text keeps a code span as written and drops the rest of the inline markup", () => {
   expect(plainInline("Run `**not bold**` and `[[not|link]]`")).toBe(
     "Run **not bold** and [[not|link]]",
   );
+  // Strikethrough keeps its markers, the only sign that its words are struck.
   expect(plainInline("See ![the chart](https://example.test/c.png) and ~~old~~ *new*")).toBe(
-    "See the chart and old new",
+    "See the chart and ~~old~~ new",
   );
+  // A link with a title or with parentheses in its target reads as its label.
+  expect(plainInline('See [docs](https://example.test "Docs") now')).toBe("See docs now");
+  expect(plainInline("See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now")).toBe("See Foo now");
+  expect(plainInline("See [x](<https://example.test/a>) now")).toBe("See x now");
   // A heading marker goes only at the start, and a link to another scheme stays.
   expect(plainInline("# Title # not a marker")).toBe("Title # not a marker");
   expect(plainInline("[x](javascript:alert(1))")).toBe("[x](javascript:alert(1))");
@@ -108,7 +122,10 @@ test("plain text costs linear time on runs of brackets and markers", () => {
     "![".repeat(16_000),
     "[a](".repeat(8_000),
     "*a".repeat(16_000),
+    "_a".repeat(16_000),
     "`".repeat(32_000),
+    "[a](http://(".repeat(2_600),
+    '[a](https://x "'.repeat(2_000),
   ]) {
     const started = performance.now();
     plainInline(input);
@@ -158,6 +175,7 @@ test("Memory detail does not repeat a first line written as its title", () => {
 
 test("the body keeps a title line the renderer reads as more than a title", () => {
   const bodyOf = (content: string) => memoryBody(memory({ content }));
+  const kept = (content: string) => expect(bodyOf(content)).toBe(content);
 
   // The next line makes it a table header or a setext heading.
   const table = "**Col** | Other\n| --- | --- |\n| a | b |";
@@ -171,6 +189,43 @@ test("the body keeps a title line the renderer reads as more than a title", () =
   expect(bodyOf(wikilinked)).toBe(wikilinked);
   // An ATX heading ends at its line, so a rule under it is the body's own.
   expect(bodyOf("# Title\n---\nBody")).toBe("---\nBody");
+
+  // Every other link form, including autolinks and reference links.
+  kept("# See <https://example.test/runbook>\nBody");
+  kept("**Ask <team@example.test>**\nBody");
+  kept("## See [the runbook][rb]\n\n[rb]: https://example.test/rb");
+  // Markup whose plain text reads differently: strikethrough, escapes, entities,
+  // and an asterisk the title cannot pair.
+  kept("**Note** ~~old~~\nBody");
+  kept("# AT&amp;T \\*escaped\\*\nBody");
+  kept("# Python **kwargs and *args\nBody");
+  // A line that alone would open indented code or a later-numbered list, where
+  // under the title it was the title's paragraph.
+  kept("**Deploy steps**\n    ssh prod && ./deploy.sh\ncontinues");
+  kept("【标题】\n\t缩进");
+  kept("**Owners**\n2. Alice\n3. Bob");
+  kept("**Owners**\n1.\nnext");
+  // A line shaped like a reference definition is text either way.
+  expect(bodyOf("**Links**\n[rb]: https://example.test/rb")).toBe("[rb]: https://example.test/rb");
+  // A list that may interrupt a paragraph parses the same either way.
+  expect(bodyOf("**Owners**\n1. Alice")).toBe("1. Alice");
+  expect(bodyOf("__Title__\nBody")).toBe("Body");
+});
+
+test("the body keeps a first line longer than the title reads", () => {
+  const content = `## ${"**".repeat(500)}${"real text ".repeat(100)}\nBody`;
+  expect(memoryBody(memory({ content }))).toBe(content);
+});
+
+test("deciding whether a title line continues takes linear time", () => {
+  const cells = `-${`${" ".repeat(1_100)}|-`.repeat(26)}${" ".repeat(1_100)}x`;
+  const started = performance.now();
+  // Not a delimiter row, so the body starts after the title line.
+  expect(memoryBody(memory({ content: `**Note**\n${cells}` }))).toBe(cells);
+  // Indented, so it would open a code block without the title line, which stays.
+  const indented = `**Note**\n${" ".repeat(1_100)}${cells}`;
+  expect(memoryBody(memory({ content: indented }))).toBe(indented);
+  expect(performance.now() - started).toBeLessThan(100);
 });
 
 test("a wikilink without a label reads as its reference", () => {
