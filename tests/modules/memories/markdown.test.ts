@@ -120,6 +120,34 @@ test("an image is a link to its source, never a remote load", () => {
   expect(html("![x](https://x.test/p.png)")).not.toContain("<img");
 });
 
+test("an image's alt text and a link's title and target are escaped wherever they reach the page", () => {
+  // As a link to its source, as words where its source is not allowed, and inside a link.
+  expect(html("![<img src=x onerror=alert(1)>](https://x.test/a.png)")).toBe(
+    `<p><a class="ext" href="https://x.test/a.png" ${EXTERNAL}>&lt;img src=x onerror=alert(1)&gt;</a></p>\n`,
+  );
+  expect(html("![<b>x</b>]()")).toBe("<p>&lt;b&gt;x&lt;/b&gt;</p>\n");
+  expect(html("[![<b>x</b>](https://x.test/a.png)](https://d.test)")).toBe(
+    `<p><a class="ext" href="https://d.test" ${EXTERNAL}>&lt;b&gt;x&lt;/b&gt;</a></p>\n`,
+  );
+  // A quote in a title cannot close the attribute, and a target's ampersand is escaped.
+  expect(html(`[a](https://y.test 'x" onmouseover="alert(1)')`)).toContain(
+    'title="x&quot; onmouseover=&quot;alert(1)"',
+  );
+  expect(html(`![a](https://y.test/p.png 'q" x="1')`)).toContain('title="q&quot; x=&quot;1"');
+  expect(html("[a](https://y.test/?a=1&b=2)")).toContain('href="https://y.test/?a=1&amp;b=2"');
+  // Alt text shows hidden controls as markers, as the rest of the body does.
+  expect(html("![a‮b](https://x.test/p.png)")).toContain(">a⟨U+202E⟩b</a>");
+});
+
+test("a wikilink in a link's text keeps the link from forming, so anchors never nest", () => {
+  const rendered = html("[see [[ops/ch|CH]] now](https://y.test)", { "ops/ch": TARGET_MEMORY_ID });
+
+  expect(rendered).toBe(
+    `<p>[see <a class="wl" href="/memory/${TARGET_MEMORY_ID}" data-memory-id="${TARGET_MEMORY_ID}" title="ops/ch">CH</a> now](https://y.test)</p>\n`,
+  );
+  expect(rendered?.match(/<a /g)).toHaveLength(1);
+});
+
 test("raw HTML, bare URLs, and reference definitions stay text a reader can see", () => {
   expect(html("<b>bold</b> <script>x</script> www.example.test https://example.test")).toBe(
     "<p>&lt;b&gt;bold&lt;/b&gt; &lt;script&gt;x&lt;/script&gt; www.example.test https://example.test</p>\n",
@@ -174,6 +202,20 @@ test("the tables of one body share the cell budget, and a table past it stays te
   expect(past.match(/<table>/g)).toHaveLength(1);
 });
 
+test("tables that each fit the budget still share it, and the one past it keeps its words", () => {
+  const table = (columns: number, rows: number) =>
+    [`|${" a |".repeat(columns)}`, `|${" - |".repeat(columns)}`]
+      .concat(Array.from({ length: rows - 1 }, () => `|${" 1 |".repeat(columns)}`))
+      .join("\n");
+
+  // Four cells, then exactly the budget: each fits alone, but not together.
+  const shared = html(`${table(2, 2)}\n\n${table(50, 100)}`) ?? "";
+  expect(shared.match(/<table>/g)).toHaveLength(1);
+  // The table past the budget reads as its own lines of text, none of them lost.
+  expect(shared).toContain(`<p>|${" a |".repeat(50)}<br>\n|${" - |".repeat(50)}<br>`);
+  expect(shared.match(/\| 1 \|/g)?.length).toBeGreaterThanOrEqual(99);
+});
+
 test("a body cannot parse to more table cells than the budget, however few its characters", () => {
   // Each table fills in about 66,000 cells from 1,260 characters.
   const filling = `|${"|".repeat(209)}\n|${"-|".repeat(209)}\n${"a\n".repeat(315)}\n`;
@@ -196,6 +238,16 @@ test("a body that nests past the bound renders as text rather than losing its en
   expect(html(outline(60))).toBeNull();
   // Emphasis pairs after markdown-it's bound applies, so inline depth is checked too.
   expect(html(`${"*a _a ".repeat(2_500)}x${" a_ a*".repeat(2_500)}`)).toBeNull();
+});
+
+test("images nested inside image labels count toward the nesting bound", () => {
+  const nested = (depth: number) => `${"![".repeat(depth)}a${"](https://x.test)".repeat(depth)}`;
+
+  // Each image label parses on its own, so only the renderer's count sees the depth.
+  expect(html(nested(MAXIMUM_MARKDOWN_NESTING - 1))).toBe(
+    `<p><a class="ext" href="https://x.test" ${EXTERNAL}>a</a></p>\n`,
+  );
+  expect(html(nested(MAXIMUM_MARKDOWN_NESTING))).toBeNull();
 });
 
 test("parsing and rendering cost linear time on hostile bodies", () => {

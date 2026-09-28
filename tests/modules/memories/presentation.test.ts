@@ -175,6 +175,22 @@ test("Memory detail does not repeat a first line that is only its title", () => 
   expect(bodyOf("#\tTabbed heading\n    code")).toBe("    code");
 });
 
+test("a title line goes before a heading, a quote, or a list item of its own", () => {
+  const bodyOf = (content: string) => memoryBody(memory({ content }));
+
+  expect(bodyOf("**Title**\n## Section")).toBe("## Section");
+  expect(bodyOf("**Title**\n#")).toBe("#");
+  expect(bodyOf("**Title**\n> quoted")).toBe("> quoted");
+  expect(bodyOf("**Title**\n1) one")).toBe("1) one");
+  expect(bodyOf("【规范】\n+ plus")).toBe("+ plus");
+  // An empty heading shows no words, so nothing is lost when it goes.
+  expect(bodyOf("# \nBody")).toBe("Body");
+  // A number that could be a list marker stays, as does a bullet with nothing after it.
+  for (const next of ["12. x", "2026. x", "- "]) {
+    expect(bodyOf(`**Title**\n${next}`)).toBe(`**Title**\n${next}`);
+  }
+});
+
 test("the body keeps a first line the title would not show as written", () => {
   const kept = (content: string, metadata: Memory["metadata"] = {}) =>
     expect(memoryBody(memory({ content, metadata }))).toBe(content);
@@ -282,4 +298,22 @@ test("controls that reorder or hide text show as markers, and emoji stay whole",
     "Pay ⟨U+202E⟩4321 &#x202E;",
   );
   expect(plain("Pay ‮4321")).toBe("Pay ⟨U+202E⟩4321");
+});
+
+test("tag characters after a flag that do not spell a flag still show as markers", () => {
+  // Uppercase tags, a sequence with no cancel tag, and one too long for a subdivision.
+  expect(revealHidden("\u{1F3F4}\u{E0041}\u{E0042}\u{E007F}")).toBe(
+    "\u{1F3F4}⟨U+E0041⟩⟨U+E0042⟩⟨U+E007F⟩",
+  );
+  expect(revealHidden("\u{1F3F4}\u{E0067}\u{E0062}x")).toBe("\u{1F3F4}⟨U+E0067⟩⟨U+E0062⟩x");
+  expect(revealHidden(`\u{1F3F4}${"\u{E0061}".repeat(7)}\u{E007F}`)).toBe(
+    `\u{1F3F4}${"⟨U+E0061⟩".repeat(7)}⟨U+E007F⟩`,
+  );
+});
+
+test("a link target in angle brackets reads as its label", () => {
+  expect(plainInline("See [the runbook](<https://example.test/runbook>) first")).toBe(
+    "See the runbook first",
+  );
+  expect(plainInline("Mail [us](<mailto:team@example.test>)")).toBe("Mail us");
 });
