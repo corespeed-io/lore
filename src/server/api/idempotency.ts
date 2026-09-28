@@ -19,7 +19,7 @@ interface IdempotencyRow {
 export interface MutationClaim<Result> {
   requestId: string;
   /** The stored result of the first attempt; the route derives its response from it. */
-  replay?: { body: Result };
+  replay?: Result;
 }
 
 /** What a completed mutation did, in domain terms. Routes choose the HTTP status. */
@@ -135,13 +135,13 @@ export async function beginMutation<Result>(
     throw new Error("Idempotent mutation did not reach a terminal state");
   }
   await installRequestId(transaction, row.id);
-  return { requestId: row.id, replay: { body: row.response_body as Result } };
+  return { requestId: row.id, replay: row.response_body as Result };
 }
 
 /**
  * Every replay body a mutation may store. A body that carries canonical content is
  * deleted when its subject is forgotten. `completeMutation` records each subject in
- * its own column, and 0007's triggers scrub by those columns. Until the release that
+ * its own column, and 0009's triggers scrub by those columns. Until the release that
  * retires them, the baseline triggers also scrub by these JSON paths
  * (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
  * `{proposal,acceptedMemoryId}`, `{episode,id}`), which is what finds rows older app

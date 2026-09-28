@@ -1,8 +1,9 @@
 -- migrate:up transaction:false
--- Schema revision 8: the indexes behind 0007's replay-subject scrub, built without
--- blocking writes. Every hard delete of a Memory, Proposal, or Episode runs one of
--- the 0007 triggers, so without these each delete would scan the Workspace's
--- 24-hour replay ledger. A plain CREATE INDEX holds SHARE until commit and blocks
+-- Schema revision 8: indexes on 0007's replay subject columns, built without
+-- blocking writes and before 0009 adds the triggers that scrub by them. Every hard
+-- delete of a Memory, Proposal, or Episode runs one of those triggers, so without
+-- these each delete would scan the Workspace's 24-hour replay ledger, which is why
+-- the triggers wait for them. A plain CREATE INDEX holds SHARE until commit and blocks
 -- every idempotent write, so these build CONCURRENTLY, which refuses a transaction
 -- block: `bun run db:migrate` applies this file one statement at a time, as it does
 -- 0005, and commits the final schema_revision UPDATE with the ledger row.

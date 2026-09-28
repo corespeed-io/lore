@@ -160,7 +160,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             options.idempotency,
           );
           if (claim.replay) {
-            return { memory: claim.replay.body.memory, jobId: null, replayed: true };
+            return { memory: claim.replay.memory, jobId: null, replayed: true };
           }
           const access = await transaction.query<{ allowed: boolean }>(
             "SELECT lore.can_write_memory($1, $2) AS allowed",
@@ -217,7 +217,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           options.idempotency,
         );
         if (claim.replay) {
-          return { memory: claim.replay.body.memory, jobId: null };
+          return { memory: claim.replay.memory, jobId: null };
         }
         const updated = await updateMemoryInTransaction(
           transaction,
@@ -263,7 +263,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           actor,
           options.idempotency,
         );
-        if (claim.replay) return claim.replay.body.deleted;
+        if (claim.replay) return claim.replay.deleted;
         // Write authority is checked before the version, so a Memory this Actor may
         // not write reads as absent rather than as a version conflict.
         const deleted = await forgetMemoryInTransaction(

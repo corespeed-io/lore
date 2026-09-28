@@ -70,7 +70,11 @@ connection resets) is 400 `invalid_request`, not a server error.
 Export writes the `lore-workspace-v2` format. Import accepts it and the earlier
 `lore-workspace-v1`; the two differ only in how the checksum orders object keys
 (v2 by code unit, identically in every runtime; v1 by the runtime's default-locale
-collation), so an archive exported by an earlier release still imports.
+collation), so an archive exported by an earlier release still imports. The reverse
+does not hold: a release older than schema revision 9 accepts only
+`lore-workspace-v1` and refuses a v2 archive with `invalid_archive`, writing nothing.
+Upgrade the target deployment before moving a Workspace to it; the manifest `format`
+enum in its `/openapi.json` lists every format it imports.
 
 An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
 48,000,000 serialized bytes, so every archive export produces fits the
@@ -542,9 +546,10 @@ runs a multi-statement query as one transaction block, which `CREATE INDEX
 CONCURRENTLY` refuses. `0005` and `0008` are such migrations: they build the
 replay-scrub and import-provenance indexes concurrently so writes keep flowing
 during the build. `0007`, just before `0008`, adds the replay ledger's subject
-columns and their scrub triggers under a 5-second `lock_timeout`; on a busy
-database it may fail to take its locks, and a rerun of `bun run db:migrate` repeats
-it safely, because a stopped transactional migration records nothing.
+columns, and `0009`, just after it, adds the triggers that scrub by them; both run
+under a 5-second `lock_timeout` and rewrite no rows, so on a busy database either
+may fail to take its locks, and a rerun of `bun run db:migrate` repeats it safely,
+because a stopped transactional migration records nothing.
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous

@@ -135,12 +135,17 @@ been removed. Lore now has a native implementation, split into two concepts
   by those JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
   `{proposal,acceptedMemoryId}`, `{episode,id}`). Moving that scrub to explicit
   subject columns is a two-release migration, and this release is the first:
-  `0007_record_replay_subjects.sql` adds `subject_memory_id`, `subject_proposal_id`,
-  `proposal_target_memory_id`, `proposal_accepted_memory_id`, and
-  `subject_episode_id`, backfills the ledger's rows from the JSON paths, and adds one
-  BEFORE/AFTER DELETE trigger per subject table that scrubs by column;
-  `0008_index_replay_subjects_concurrently.sql` indexes those columns concurrently.
-  `completeMutation` writes the columns from its `ReplayBody`, the only type it
+  `0007_add_replay_subject_columns.sql` adds `subject_memory_id`,
+  `subject_proposal_id`, `proposal_target_memory_id`, `proposal_accepted_memory_id`,
+  and `subject_episode_id` (catalog-only; existing rows are not rewritten, because a
+  backfill under ADD COLUMN's ACCESS EXCLUSIVE lock would block every idempotent write
+  and the JSON-path triggers already scrub those rows);
+  `0008_index_replay_subjects_concurrently.sql` indexes them concurrently; and
+  `0009_scrub_replays_by_subject.sql` then adds one BEFORE/AFTER DELETE trigger per
+  subject table that scrubs by column, plus a trigger that clears the columns whenever
+  a row returns to `in_progress`, so an older instance reclaiming an expired key cannot
+  leave a stale subject behind. The triggers come after their indexes, so no forget
+  scans the ledger. `completeMutation` writes the columns from its `ReplayBody`, the only type it
   accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
@@ -149,7 +154,12 @@ been removed. Lore now has a native implementation, split into two concepts
   the 24-hour ledger has turned over, drops the JSON-path scrub from
   `lore.append_memory_event`, `lore.remove_proposals_for_deleted_memory`,
   `lore.scrub_deleted_episode_replay`, and `lore.scrub_deleted_memory_proposal`, with
-  the five 0005 expression indexes. Services report a `MutationOutcome`
+  the five 0005 expression indexes. Rows written before revision 7, or by an older
+  instance since, have NULL columns, and expired rows stay until the maintenance sweep
+  deletes them, so that migration must first derive the columns of every completed row
+  that lacks them (or delete expired rows) rather than trust that the sweep ran, and do
+  it outside any ACCESS EXCLUSIVE lock.
+  Services report a `MutationOutcome`
   (`created`/`ok`/`deleted`/`not_found`), never an HTTP status, and replay derives
   its response from the stored body alone. The ledger's `response_status` is still
   written, from the outcome, only because older instances require it on replay; the
@@ -168,13 +178,13 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 8) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 9) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (8), and
+  `tests/integration/api.test.ts` pin the current revision (9), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -331,7 +341,9 @@ been removed. Lore now has a native implementation, split into two concepts
   activated mid-packet cannot split them. The snapshot asks for those modes through
   `PostgresDatabase.transaction(use, { isolation, readOnly })`, which starts the
   transaction in them (`BEGIN ISOLATION LEVEL …`, or `SET TRANSACTION` as PGlite's
-  first statement) before host setup runs; every wrapper must pass `options` on;
+  first statement) before host setup runs; every wrapper must pass `options` on,
+  and the packet asks for them again inside, which is a no-op when they took effect
+  and fails, rather than reading at READ COMMITTED, when a wrapper dropped them;
   identity matching goes through the path-free Symbol Set payload index, not a
   suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
   cut list marks contextual impact `anchors:truncated`, so it is never
@@ -453,7 +465,10 @@ been removed. Lore now has a native implementation, split into two concepts
   specifier is not a string literal (`import("node:" + name)`) is a finding too:
   no scan can resolve it, so the guard refuses it instead of missing the edge. It is
   found by es-module-lexer over the JavaScript Bun emits for the file, which has no
-  types or comments, so a string, comment, or regex that mentions `import(` is not. Every browser-side file of a domain lives
+  types or comments, so a string, comment, or regex that mentions `import(` is not.
+  Bun folds a specifier built only from literals (`"node:" + "fs"`) into one literal
+  that no scan of the source reports, so a lexed specifier the source never writes
+  quoted is a finding too. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
@@ -486,7 +501,9 @@ been removed. Lore now has a native implementation, split into two concepts
   `applyMemoryChange` (`src/shell/memory-cache.ts`); a domain view reports a write
   to the shell instead of touching another domain's cache keys. The paused browse
   list applies a save or forget as an exact patch; a write of unknown extent (an
-  import, a failed review) makes its next resume re-read every page. The Graph
+  import, a failed review) makes its next resume re-read every page. A patch
+  re-slices the cached pages, so whether the window is capped or complete is
+  judged by the last page as the server returned it (`browseWindowState`). The Graph
   read model behind wikilinks and Related (`buildGraphStore`) lives in
   `src/modules/graph/browser/store.ts`, and browser bounds (Graph nodes, browse page
   size and window) come from the SDK's `LORE_CONTRACT`. Returning to browse re-reads only
@@ -1169,6 +1186,8 @@ database invariant, not a UI convention.
   orders them with the default-locale `localeCompare`, and verifies each archive in
   the format its manifest names (`WORKSPACE_ARCHIVE_FORMATS`, published as the
   manifest's `format` enum and `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`).
+  A release before schema revision 9 imports only v1 and refuses a v2 archive, so the
+  target of a Workspace move must be upgraded first (docs/operations.md).
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.

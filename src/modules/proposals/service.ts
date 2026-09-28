@@ -380,7 +380,7 @@ export function createMemoryProposalsModule(
             actor,
             options.idempotency,
           );
-          if (claim.replay) return claim.replay.body.proposal;
+          if (claim.replay) return claim.replay.proposal;
           const access = await transaction.query<{ allowed: boolean }>(
             "SELECT lore.can_write_memory($1, $2) AS allowed",
             [actor.workspaceId, actor.userId],

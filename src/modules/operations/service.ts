@@ -3,7 +3,7 @@ import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/te
 import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 8;
+export const LORE_SCHEMA_REVISION = 9;
 
 /**
  * The only public tables that hold no tenant data and so carry no RLS: the
