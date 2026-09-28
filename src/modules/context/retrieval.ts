@@ -454,8 +454,9 @@ export function createContextRetrievalModule(
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
           ? await database.transaction(async (transaction) => {
-              // Asking again is a no-op when the transaction began in these modes, and
-              // fails, rather than reading at READ COMMITTED, when a wrapper dropped them.
+              // Asking again is a no-op when the transaction began in these modes. When a
+              // wrapper dropped them it applies them, or fails if host setup already
+              // read, so the packet never reads at READ COMMITTED.
               await transaction.query(`SET TRANSACTION ${transactionModes(SNAPSHOT)}`);
               const snapshot: PostgresDatabase = { transaction: (use) => use(transaction) };
               return readAnchoredCode({

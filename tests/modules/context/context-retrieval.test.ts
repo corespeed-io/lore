@@ -752,6 +752,31 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
   ]);
   expect(isolation.filter((level) => level === "repeatable read/on")).toHaveLength(1);
 
+  // A host that passes the modes on and then reads during setup (as OSS Memory storage
+  // installs its Actor with a SELECT) still gets the snapshot: asking again is a no-op.
+  const readingLevels: string[] = [];
+  const reading: PostgresDatabase = {
+    transaction: (use, options) =>
+      context.database.transaction(async (transaction) => {
+        await transaction.query("SELECT 1");
+        const result = await use(transaction);
+        const level = await transaction.query<{ isolation: string; read_only: string }>(
+          "SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only",
+        );
+        readingLevels.push(`${level.rows[0]?.isolation}/${level.rows[0]?.read_only}`);
+        return result;
+      }, options),
+  };
+  await expect(
+    createContextRetrievalModule(reading).retrieve(context.alice, {
+      query: "What changed about the snapshot policy rationale?",
+      memoryQuery: "snapshot policy rationale",
+      repositoryKey,
+      commitOid: CURRENT_COMMIT,
+    }),
+  ).resolves.toMatchObject({ anchors: [expect.anything()] });
+  expect(readingLevels.filter((level) => level === "repeatable read/on")).toHaveLength(1);
+
   // A host that drops the modes but reads during setup would once have read the Code
   // at READ COMMITTED; the snapshot now refuses instead.
   const dropping: PostgresDatabase = {
