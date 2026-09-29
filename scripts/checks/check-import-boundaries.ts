@@ -183,15 +183,33 @@ export interface ImportRecord {
   typeOnly: boolean;
 }
 
+/** What the check's transpile turns each module-loading global into. */
+const REQUIRE = "__lore_require__";
+const META_REQUIRE = "__lore_import_meta_require__";
+const BUILTIN = "__lore_get_builtin_module__";
+
+/**
+ * Bun's `define` replaces every reference its parser sees to these globals, so an
+ * alias, `(0, require)`, `require.call`, an optional call, or `typeof require` is
+ * found and a string cannot fake one. It never replaces a locally bound name, and
+ * Bun keeps `module` itself for CommonJS interop, so `define` cannot name it.
+ */
+const LOADER_DEFINE = {
+  require: REQUIRE,
+  "import.meta.require": META_REQUIRE,
+  "process.getBuiltinModule": BUILTIN,
+  "globalThis.process.getBuiltinModule": BUILTIN,
+};
+
 /**
  * Without dead-code elimination: by default Bun inlines `process.env.NODE_ENV` and
  * drops the branch it proves dead, so the JavaScript `computedImports` lexes would
- * hide an import there depending on the environment the check runs in. The import
- * scan never removed dead code, so it reports the same either way.
+ * hide a load there depending on the environment the check runs in. The import scan
+ * never removed dead code, and `define` does not change what it reports.
  */
 const TRANSPILERS = {
-  ts: new Bun.Transpiler({ loader: "ts", deadCodeElimination: false }),
-  tsx: new Bun.Transpiler({ loader: "tsx", deadCodeElimination: false }),
+  ts: new Bun.Transpiler({ loader: "ts", deadCodeElimination: false, define: LOADER_DEFINE }),
+  tsx: new Bun.Transpiler({ loader: "tsx", deadCodeElimination: false, define: LOADER_DEFINE }),
 };
 
 /** The JSX runtime Bun reports for a TSX file that never names it. */
@@ -243,90 +261,101 @@ function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: 
 
 initModuleLexer();
 
-/** What the load check's transpile turns `require` and `import.meta.require` into. */
-const REQUIRE = "__lore_require__";
-const META_REQUIRE = "__lore_import_meta_require__";
+/** `createRequire` loads a module by any name, so no source file may import it. */
+const NODE_MODULE_SPECIFIERS = new Set(["module", "node:module"]);
 
 /**
- * A transpile where every reference Bun's parser sees to the global `require`, or to
- * `import.meta.require`, becomes a sentinel: a call, an alias, `(0, require)`,
- * `require.call`, an optional call, or `typeof require`, but never text in a string.
+ * A direct `require` call of one string literal, as Bun prints it: double-quoted, or
+ * a template with no substitution.
  */
-const LOAD_TRANSPILERS = {
-  ts: new Bun.Transpiler({
-    loader: "ts",
-    deadCodeElimination: false,
-    define: { require: REQUIRE, "import.meta.require": META_REQUIRE },
-  }),
-  tsx: new Bun.Transpiler({
-    loader: "tsx",
-    deadCodeElimination: false,
-    define: { require: REQUIRE, "import.meta.require": META_REQUIRE },
-  }),
-};
-
-/** A direct `require` call of one string literal, as Bun prints it. */
-const LITERAL_REQUIRE = new RegExp(`^${REQUIRE}\\(("(?:[^"\\\\]|\\\\.)*")\\)`);
+const LITERAL_REQUIRE = new RegExp(
+  `^${REQUIRE}\\((?:("(?:[^"\\\\]|\\\\.)*")|\`([^\`\\\\$]*)\`)\\)`,
+);
 
 /**
- * Loads the define leaves as written: Bun rewrites `module.require(` to a bare
- * `require(` after it, and leaves optional chains on `import.meta` and `module`.
- * Each match is rewritten, at the same length, to `import`, so es-module-lexer can
- * confirm the real calls and pass over a match inside a string or regex.
+ * `require` calls `define` leaves as written: a locally bound `require`, the bare
+ * `require(` Bun prints for `module.require(` and `module["require"](`, and
+ * `module?.require(`. Each match is rewritten, at the same length, to `import`, so
+ * es-module-lexer confirms the real calls and passes over a match inside a string.
  */
-const UNDEFINED_LOADS =
-  /(?<![\w$.#])(?:(?:import\.meta|module)\s*\?\.\s*)?require(?:\s*\?\.)?(?=\s*\()/g;
+const UNDEFINED_LOADS = /(?<![\w$.#])(?:module\s*\?\.\s*)?require(?:\s*\?\.)?(?=\s*\()/g;
 
-/** The printed statement around `index`, with the sentinels read back. */
-function loadExcerpt(javascript: string, index: number): string {
+/** `import.meta` properties that read a value and load nothing. */
+const IMPORT_META_READS =
+  /^\s*\??\.\s*(?:url|dirname|filename|dir|path|file|main|env|resolve|hot)\b/;
+
+function readBack(javascript: string): string {
+  return javascript
+    .replaceAll(META_REQUIRE, "import.meta.require")
+    .replaceAll(BUILTIN, "process.getBuiltinModule")
+    .replaceAll(REQUIRE, "require");
+}
+
+/** The printed line around `index`, with the sentinels read back. */
+function printedLine(javascript: string, index: number): string {
   const start = javascript.lastIndexOf("\n", index) + 1;
   const end = javascript.indexOf("\n", index);
-  return javascript
-    .slice(start, end < 0 ? undefined : end)
-    .trim()
-    .replaceAll(META_REQUIRE, "import.meta.require")
-    .replaceAll(REQUIRE, "require");
+  return readBack(javascript.slice(start, end < 0 ? undefined : end).trim());
+}
+
+/** The literal a direct `require` call at the start of `javascript` loads, if any. */
+function requiredLiteral(javascript: string): string | undefined {
+  const match = LITERAL_REQUIRE.exec(javascript);
+  if (!match) return undefined;
+  return match[1] === undefined ? match[2] : (JSON.parse(match[1]) as string);
 }
 
 /**
  * Every module load no scan can check, so each is a finding rather than an edge the
- * guard silently misses:
+ * guard silently misses. A file may load a module only through a static import,
+ * `import()` of a string literal, or `require()` of a string literal the parser's
+ * scan reports. Everything else that reaches a loader is refused:
  * - an `import()` whose specifier is not a string literal, such as
- *   `import("node:" + name)`, or whose literal the parser's scan did not report (Bun
- *   folds `"node:" + "fs"` into one literal the scan never reports). es-module-lexer
- *   reads the JavaScript Bun emits, which has no types or comments, so a string,
- *   comment, or regex that merely mentions `import(` is not counted;
- * - every reference to `require` other than a direct call of a string literal the
- *   scan reports, and every `import.meta.require`, which the scan never reports.
- *   Bun's transpiler `define` finds each reference its parser sees, so an alias or a
- *   comma callee is found and a string cannot fake one. A local function named
- *   `require` is reported too; rename it.
+ *   `import("node:" + name)`, or whose literal the scan did not report (Bun folds
+ *   `"node:" + "fs"` into one literal it never reports);
+ * - every other reference to the global `require`, and every `import.meta.require` or
+ *   `process.getBuiltinModule` (found by `define`), and every call of a `require`
+ *   that `define` leaves as written (found by the lexer, as above);
+ * - `import.meta` used as anything but a read of a known property, so it cannot be
+ *   aliased, destructured, or indexed to reach its loader.
+ * es-module-lexer reads the JavaScript Bun emits, which has no types or comments, so
+ * a string, comment, or regex that mentions a loader is not counted. `node:module`
+ * imports, whose `createRequire` loads by any name, are refused where records are
+ * checked. Destructuring `require` from `module` is the one form nothing here sees;
+ * neither bundler follows it.
  */
 export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
   const scanned = new Set(TRANSPILERS[loader].scanImports(parsable).map((item) => item.path));
   const javascript = TRANSPILERS[loader].transformSync(parsable);
-  const [imports] = lexModule(javascript);
-  const findings = imports
-    .filter((item) => item.d >= 0 && (item.n === undefined || !scanned.has(item.n)))
-    .map((item) => javascript.slice(item.ss, item.se).replace(/\s+/g, " "));
-
-  const loading = LOAD_TRANSPILERS[loader].transformSync(parsable);
-  for (const sentinel of [REQUIRE, META_REQUIRE]) {
-    for (let at = loading.indexOf(sentinel); at >= 0; at = loading.indexOf(sentinel, at + 1)) {
-      const literal =
-        sentinel === REQUIRE ? LITERAL_REQUIRE.exec(loading.slice(at))?.[1] : undefined;
-      if (literal !== undefined && scanned.has(JSON.parse(literal) as string)) continue;
-      findings.push(loadExcerpt(loading, at));
-    }
-  }
   const undefinedLoads = new Set<number>();
-  const lexable = loading.replace(UNDEFINED_LOADS, (call: string, index: number) => {
+  const lexable = javascript.replace(UNDEFINED_LOADS, (call: string, index: number) => {
     undefinedLoads.add(index);
     return "import".padEnd(call.length);
   });
+
+  const findings: string[] = [];
   for (const item of lexModule(lexable)[0]) {
-    if (item.d >= 0 && undefinedLoads.has(item.ss)) findings.push(loadExcerpt(loading, item.ss));
+    if (undefinedLoads.has(item.ss)) {
+      findings.push(printedLine(javascript, item.ss));
+    } else if (item.d === -2) {
+      if (!IMPORT_META_READS.test(javascript.slice(item.se))) {
+        findings.push(printedLine(javascript, item.ss));
+      }
+    } else if (item.d >= 0 && (item.n === undefined || !scanned.has(item.n))) {
+      findings.push(readBack(javascript.slice(item.ss, item.se).replace(/\s+/g, " ")));
+    }
+  }
+  for (const sentinel of [REQUIRE, META_REQUIRE, BUILTIN]) {
+    for (
+      let at = javascript.indexOf(sentinel);
+      at >= 0;
+      at = javascript.indexOf(sentinel, at + 1)
+    ) {
+      const literal = sentinel === REQUIRE ? requiredLiteral(javascript.slice(at)) : undefined;
+      if (literal !== undefined && scanned.has(literal)) continue;
+      findings.push(printedLine(javascript, at));
+    }
   }
   return findings;
 }
@@ -550,9 +579,9 @@ export function checkImportBoundaries(
       const text = readFileSync(join(root, file), "utf8");
       const loader = file.endsWith(".tsx") ? "tsx" : "ts";
       records = scanImports(text, loader);
-      for (const expression of computedImports(text, loader)) {
+      for (const load of computedImports(text, loader)) {
         findings.push(
-          `${file}: ${expression} loads a module no scan can check; use a static import or import() of a string literal`,
+          `${file}: ${load} loads a module no scan can check; use a static import or import() of a string literal`,
         );
       }
     } catch (error) {
@@ -564,6 +593,12 @@ export function checkImportBoundaries(
       const resolution = resolveImport(file, record.specifier);
       if (!record.typeOnly) edges.push(resolution);
       const where = `${file}:${record.line}`;
+      if (!record.typeOnly && NODE_MODULE_SPECIFIERS.has(record.specifier)) {
+        findings.push(
+          `${where}: imports ${record.specifier}, whose createRequire loads modules no scan can check`,
+        );
+        continue;
+      }
       if (resolution.file === null) continue;
       if (resolution.file.startsWith("unresolved:")) {
         findings.push(`${where}: cannot resolve ${record.specifier}`);
