@@ -7,9 +7,9 @@ import {
 } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { MAX_WORKSPACE_ARCHIVE_LINKS } from "@/modules/portability/limits";
-import { createAccessModule } from "@/server/auth/access";
 import { createMemoryGraphModule } from "../../src/modules/graph/service";
 import { createMemoryModule } from "../../src/modules/memories/service";
+import { createAccessModule } from "../support/access";
 import type { MemoryTestContext } from "../support/memory-context";
 import { createMemoryTestContext } from "../support/memory-context";
 

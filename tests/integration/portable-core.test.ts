@@ -522,11 +522,10 @@ test("Workspace import cannot reveal an RLS-hidden Memory id collision", async (
   const sourceOwner = archive.memories[0].ownerUserId;
   archive.memories[0].id = hidden.id;
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await workspaceArchiveChecksum({
-    manifest,
-    memories: archive.memories,
-    links: archive.links,
-  });
+  archive.manifest.checksum = await workspaceArchiveChecksum(
+    { manifest, memories: archive.memories, links: archive.links },
+    manifest.format,
+  );
 
   const imported = await portability.importWorkspace(testContext.alice, {
     archive,
@@ -566,11 +565,10 @@ test("Workspace import normalizes UUID case before owner and Link mapping", asyn
     link.targetMemoryId = link.targetMemoryId.toUpperCase();
   }
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await workspaceArchiveChecksum({
-    manifest,
-    memories: archive.memories,
-    links: archive.links,
-  });
+  archive.manifest.checksum = await workspaceArchiveChecksum(
+    { manifest, memories: archive.memories, links: archive.links },
+    manifest.format,
+  );
   const ownerMap = {
     [testContext.carol.userId.toUpperCase()]: testContext.alice.userId.toUpperCase(),
   };
@@ -589,11 +587,10 @@ test("Workspace import rejects metadata over the wire serialized-size bound", as
   const archive = await portability.exportWorkspace(testContext.carol);
   archive.memories[0].metadata = { items: "x".repeat(100_000) };
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await workspaceArchiveChecksum({
-    manifest,
-    memories: archive.memories,
-    links: archive.links,
-  });
+  archive.manifest.checksum = await workspaceArchiveChecksum(
+    { manifest, memories: archive.memories, links: archive.links },
+    manifest.format,
+  );
 
   await expect(
     portability.importWorkspace(testContext.alice, {
@@ -611,11 +608,10 @@ test("Workspace import dry-run rejects document-sized Memory content", async () 
   const archive = await portability.exportWorkspace(testContext.carol);
   archive.memories[0].content = "x".repeat(32_001);
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await workspaceArchiveChecksum({
-    manifest,
-    memories: archive.memories,
-    links: archive.links,
-  });
+  archive.manifest.checksum = await workspaceArchiveChecksum(
+    { manifest, memories: archive.memories, links: archive.links },
+    manifest.format,
+  );
 
   await expect(
     portability.importWorkspace(testContext.alice, {
@@ -632,7 +628,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 6,
+    schemaRevision: 9,
     memoryChunking: {
       revision: "lore-memory-chunking-v2",
       maximumCharacters: 1_200,
@@ -710,14 +706,14 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 7 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 10 WHERE singleton"),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 6 WHERE singleton"),
+    transaction.query("UPDATE lore_system_state SET schema_revision = 9 WHERE singleton"),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>

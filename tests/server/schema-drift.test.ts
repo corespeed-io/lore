@@ -11,6 +11,7 @@ import {
   type ObservationKind,
 } from "@corespeed/lore-core/episodes";
 import { expect, test } from "vitest";
+import type { AgentGrantPermission, AgentGrantStatus, AgentStatus } from "@/modules/agents/service";
 import type {
   CodeEvidenceRelationship,
   CodeEvidenceValidationState,
@@ -37,13 +38,7 @@ import {
   MEMORY_PROPOSAL_RETENTION_DAYS,
 } from "@/modules/proposals/limits";
 import type { MemoryProposalKind, MemoryProposalStatus } from "@/modules/proposals/service";
-import type {
-  AgentGrantPermission,
-  AgentGrantStatus,
-  AgentStatus,
-  MembershipRole,
-  MembershipStatus,
-} from "@/server/auth/access";
+import type { MembershipRole, MembershipStatus } from "@/modules/workspaces/service";
 import { createMemoryTestContext, type MemoryTestContext } from "../support/memory-context";
 
 /**

@@ -9,7 +9,12 @@ import {
   timestampProperties,
   workspaceHeader,
 } from "@/server/openapi/shared";
-import { MAX_WORKSPACE_ARCHIVE_LINKS, MAX_WORKSPACE_ARCHIVE_MEMORIES } from "./limits";
+import {
+  MAX_WORKSPACE_ARCHIVE_LINKS,
+  MAX_WORKSPACE_ARCHIVE_MEMORIES,
+  WORKSPACE_ARCHIVE_FORMAT,
+  WORKSPACE_ARCHIVE_FORMATS,
+} from "./limits";
 
 export const portabilityPaths = {
   "/api/v1/workspaces/export": {
@@ -112,7 +117,11 @@ export const portabilitySchemas = {
     properties: {
       checksum: { type: "string", pattern: "^[0-9a-f]{64}$" },
       exportedAt: { type: "string", format: "date-time" },
-      format: { const: "lore-workspace-v1" },
+      format: {
+        type: "string",
+        enum: [...WORKSPACE_ARCHIVE_FORMATS],
+        description: `Import accepts every listed format; export writes ${WORKSPACE_ARCHIVE_FORMAT}.`,
+      },
       memoryCount: {
         type: "integer",
         minimum: 0,

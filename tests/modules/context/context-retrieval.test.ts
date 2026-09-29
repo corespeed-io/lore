@@ -1,3 +1,4 @@
+import type { PostgresDatabase, PostgresTransactionOptions } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import type { AssessedMemoryCitation } from "@/modules/code/evidence";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
@@ -714,18 +715,23 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
   });
 
   const isolation: string[] = [];
-  let transactions = 0;
-  const counted = {
-    transaction: <Result>(use: Parameters<typeof context.database.transaction<Result>>[0]) => {
-      transactions += 1;
+  const requested: Array<PostgresTransactionOptions | undefined> = [];
+  const counted: PostgresDatabase = {
+    transaction: (use, options) => {
+      requested.push(options);
       return context.database.transaction(async (transaction) => {
         const result = await use(transaction);
-        const level = await transaction.query<{ transaction_isolation: string }>(
-          "SHOW transaction_isolation",
+        const level = await transaction.query<{
+          transaction_isolation: string;
+          transaction_read_only: string;
+        }>(
+          "SELECT current_setting('transaction_isolation') AS transaction_isolation, current_setting('transaction_read_only') AS transaction_read_only",
         );
-        isolation.push(level.rows[0]?.transaction_isolation ?? "");
+        isolation.push(
+          `${level.rows[0]?.transaction_isolation}/${level.rows[0]?.transaction_read_only}`,
+        );
         return result;
-      });
+      }, options);
     },
   };
   const packet = await createContextRetrievalModule(counted).retrieve(context.alice, {
@@ -739,8 +745,55 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
   expect(packet.receipt.contextualImpact).not.toBeNull();
   // Memory search, Code search, then one snapshot for assessment, anchored Artifacts,
   // and contextual impact (which alone reads two revisions' dependencies).
-  expect(transactions).toBe(3);
-  expect(isolation.filter((level) => level === "repeatable read")).toHaveLength(1);
+  expect(requested).toEqual([
+    undefined,
+    undefined,
+    { isolation: "repeatable read", readOnly: true },
+  ]);
+  expect(isolation.filter((level) => level === "repeatable read/on")).toHaveLength(1);
+
+  // A host that passes the modes on and then reads during setup (as OSS Memory storage
+  // installs its Actor with a SELECT) still gets the snapshot: asking again is a no-op.
+  const readingLevels: string[] = [];
+  const reading: PostgresDatabase = {
+    transaction: (use, options) =>
+      context.database.transaction(async (transaction) => {
+        await transaction.query("SELECT 1");
+        const result = await use(transaction);
+        const level = await transaction.query<{ isolation: string; read_only: string }>(
+          "SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only",
+        );
+        readingLevels.push(`${level.rows[0]?.isolation}/${level.rows[0]?.read_only}`);
+        return result;
+      }, options),
+  };
+  await expect(
+    createContextRetrievalModule(reading).retrieve(context.alice, {
+      query: "What changed about the snapshot policy rationale?",
+      memoryQuery: "snapshot policy rationale",
+      repositoryKey,
+      commitOid: CURRENT_COMMIT,
+    }),
+  ).resolves.toMatchObject({ anchors: [expect.anything()] });
+  expect(readingLevels.filter((level) => level === "repeatable read/on")).toHaveLength(1);
+
+  // A host that drops the modes but reads during setup would once have read the Code
+  // at READ COMMITTED; the snapshot now refuses instead.
+  const dropping: PostgresDatabase = {
+    transaction: (use) =>
+      context.database.transaction(async (transaction) => {
+        await transaction.query("SELECT 1");
+        return use(transaction);
+      }),
+  };
+  await expect(
+    createContextRetrievalModule(dropping).retrieve(context.alice, {
+      query: "What changed about the snapshot policy rationale?",
+      memoryQuery: "snapshot policy rationale",
+      repositoryKey,
+      commitOid: CURRENT_COMMIT,
+    }),
+  ).rejects.toThrow(/before any query/);
   await context.close();
 }, 90_000);
 

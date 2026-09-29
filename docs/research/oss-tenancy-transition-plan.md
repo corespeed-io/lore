@@ -161,7 +161,7 @@ layer for both product models.
 ## Source evidence
 
 - [Domain vocabulary](../CONTEXT.md), [request context](../../src/server/auth/request-context.ts),
-  [access implementation](../../src/server/auth/access.ts).
+  [Workspace](../../src/modules/workspaces/service.ts) and [Agent](../../src/modules/agents/service.ts) services.
 - [Archive and import behavior](../../src/modules/portability/service.ts),
   [portability behavior tests](../../tests/integration/portable-core.test.ts).
 - [Backup and restore guide](../operations.md#logical-backup-and-restore-drill),

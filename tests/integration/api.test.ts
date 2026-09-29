@@ -4,8 +4,8 @@ import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi } from "@/server/api/app";
-import { createAccessModule } from "@/server/auth/access";
 import { loreOpenApiDocument } from "@/server/openapi/document";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 afterEach(() => {
@@ -400,7 +400,7 @@ test("Capabilities verifies Agent credentials and Workspace grants in the handle
 
   expect(accepted.status).toBe(200);
   expect(accepted.headers.get("cache-control")).toBe("private, no-store");
-  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 6 });
+  await expect(accepted.json()).resolves.toMatchObject({ schemaRevision: 9 });
   expect(shapeOnly.status).toBe(403);
   await expect(shapeOnly.json()).resolves.toMatchObject({ code: "access_denied" });
   expect(revoked.status).toBe(403);

@@ -1,5 +1,11 @@
 import { Client, type ClientConfig, Pool, type PoolClient, type PoolConfig } from "pg";
-import type { PostgresDatabase, PostgresQueryResult, PostgresTransaction } from "./db";
+import {
+  type PostgresDatabase,
+  type PostgresQueryResult,
+  type PostgresTransaction,
+  type PostgresTransactionOptions,
+  transactionModes,
+} from "./db";
 
 export interface RuntimePostgresDatabase extends PostgresDatabase {
   close(): Promise<void>;
@@ -23,9 +29,11 @@ async function runTransaction<Result>(
   client: Pick<PoolClient, "query">,
   use: (transaction: PostgresTransaction) => Promise<Result>,
   initializeTransaction: PostgresDatabaseOptions["initializeTransaction"],
+  transactionOptions: PostgresTransactionOptions | undefined,
 ): Promise<Result> {
   try {
-    await client.query("BEGIN");
+    const modes = transactionModes(transactionOptions);
+    await client.query(modes ? `BEGIN ${modes}` : "BEGIN");
     const transaction = asTransaction(client);
     await initializeTransaction?.(transaction);
     const result = await use(transaction);
@@ -44,10 +52,13 @@ export function createPostgresDatabase(
   const pool = new Pool(config);
 
   return {
-    async transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>) {
+    async transaction<Result>(
+      use: (transaction: PostgresTransaction) => Promise<Result>,
+      transactionOptions?: PostgresTransactionOptions,
+    ) {
       const client = await pool.connect();
       try {
-        return await runTransaction(client, use, options.initializeTransaction);
+        return await runTransaction(client, use, options.initializeTransaction, transactionOptions);
       } finally {
         client.release();
       }
@@ -65,11 +76,14 @@ export function createRequestPostgresDatabase(
   options: PostgresDatabaseOptions = {},
 ): RuntimePostgresDatabase {
   return {
-    async transaction<Result>(use: (transaction: PostgresTransaction) => Promise<Result>) {
+    async transaction<Result>(
+      use: (transaction: PostgresTransaction) => Promise<Result>,
+      transactionOptions?: PostgresTransactionOptions,
+    ) {
       const client = new Client(config);
       await client.connect();
       try {
-        return await runTransaction(client, use, options.initializeTransaction);
+        return await runTransaction(client, use, options.initializeTransaction, transactionOptions);
       } finally {
         await client.end();
       }

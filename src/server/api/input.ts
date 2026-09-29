@@ -2,10 +2,9 @@ import { hasLoneSurrogate } from "@corespeed/lore-core";
 import type { z } from "zod/v4";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { mutationRequestHash } from "@/server/api/idempotency";
-import { AccessDeniedError } from "@/server/auth/access";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { normalizeUuid } from "@/server/auth/request-context";
-import { DomainError } from "@/server/errors";
+import { AccessDeniedError, DomainError } from "@/server/errors";
 import { IDEMPOTENCY_KEY_MAXIMUM_LENGTH, IDEMPOTENCY_KEY_PATTERN } from "@/server/openapi/shared";
 
 // One source for the check and the published OpenAPI header pattern.

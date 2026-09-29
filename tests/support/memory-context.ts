@@ -1,4 +1,5 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
+import { testDatabase } from "@corespeed/lore-core/testing";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -79,15 +80,9 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
   }
 
   function databaseForRole(role: "lore_app" | "lore_maintenance" | "NONE"): PostgresDatabase {
-    return {
-      transaction: (use) =>
-        postgres.transaction(async (transaction) => {
-          await transaction.query(`SET LOCAL ROLE ${role}`);
-          return use({
-            query: (sql, params) => transaction.query(sql, params),
-          });
-        }),
-    };
+    return testDatabase(postgres, async (transaction) => {
+      await transaction.query(`SET LOCAL ROLE ${role}`);
+    });
   }
 
   let closePromise: Promise<void> | undefined;

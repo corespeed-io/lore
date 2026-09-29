@@ -28,7 +28,7 @@ export function createEpisodeEvidenceModule(
         {
           ...storage,
           database: {
-            transaction: (use) =>
+            transaction: (use, transactionOptions) =>
               storage.database.transaction(async (transaction) => {
                 // Indexing spans transactions and model calls. Recheck admission
                 // each time, so a revoked grant cannot resume an authorized run.
@@ -42,7 +42,7 @@ export function createEpisodeEvidenceModule(
                   throw new EpisodeEvidenceAccessDeniedError("Actor cannot index this Episode");
                 }
                 return use(transaction);
-              }),
+              }, transactionOptions),
           },
         },
         options,

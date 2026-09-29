@@ -4,6 +4,8 @@ import {
   isLoreAgentsCacheKey,
 } from "@/modules/agents/browser/data";
 import {
+  browseWindowState,
+  createFetchedPageLengths,
   fullReadAfterResume,
   MAX_MEMORY_PAGES,
   MEMORY_PAGE_SIZE,
@@ -126,6 +128,69 @@ test("removing a Memory compacts cached pages", () => {
   expect(updated?.[1]).toEqual([]);
 });
 
+test("a forget at the browse cap keeps the window capped and incomplete", () => {
+  // The cap: every page full, so more Memories may exist on the server.
+  const pages = Array.from({ length: MAX_MEMORY_PAGES }, (_, pageIndex) =>
+    Array.from({ length: MEMORY_PAGE_SIZE }, (_, index) =>
+      memory(pageIndex * MEMORY_PAGE_SIZE + index),
+    ),
+  );
+  const patched = removeMemoryFromPages(pages, memory(0).id) ?? [];
+  // The re-slice leaves the last page one short, which alone would read as the end.
+  expect(patched.at(-1)).toHaveLength(MEMORY_PAGE_SIZE - 1);
+  const window = (fetchedLastPageLength: number | undefined) =>
+    browseWindowState({
+      hasData: true,
+      pageCount: patched.length,
+      lastPageLength: patched.at(-1)?.length ?? 0,
+      fetchedLastPageLength,
+    });
+  expect(window(MEMORY_PAGE_SIZE)).toEqual({ isCapped: true, isComplete: false });
+  // Without a fetched length (pages from an earlier mount's cache), the cached page decides.
+  expect(window(undefined)).toEqual({ isCapped: false, isComplete: true });
+});
+
+test("fetched page lengths are kept per Workspace and page", () => {
+  const lengths = createFetchedPageLengths();
+  lengths.record("workspace-a", MAX_MEMORY_PAGES - 1, MEMORY_PAGE_SIZE);
+  lengths.record("workspace-a", 0, 40);
+  expect(lengths.page("workspace-a", MAX_MEMORY_PAGES - 1)).toBe(MEMORY_PAGE_SIZE);
+  expect(lengths.page("workspace-b", MAX_MEMORY_PAGES - 1)).toBeUndefined();
+  // The last page of an empty list (pageCount 0) was never fetched.
+  expect(lengths.page("workspace-a", -1)).toBeUndefined();
+  expect(lengths.page("workspace-a", 1)).toBeUndefined();
+  // A re-read replaces the earlier length.
+  lengths.record("workspace-a", 0, 41);
+  expect(lengths.page("workspace-a", 0)).toBe(41);
+});
+
+test("the browse window is complete once the server returns a short last page", () => {
+  expect(
+    browseWindowState({
+      hasData: true,
+      pageCount: 2,
+      lastPageLength: 29,
+      fetchedLastPageLength: 30,
+    }),
+  ).toEqual({ isCapped: false, isComplete: true });
+  expect(
+    browseWindowState({
+      hasData: true,
+      pageCount: 3,
+      lastPageLength: MEMORY_PAGE_SIZE - 1,
+      fetchedLastPageLength: MEMORY_PAGE_SIZE,
+    }),
+  ).toEqual({ isCapped: false, isComplete: false });
+  expect(
+    browseWindowState({
+      hasData: false,
+      pageCount: 0,
+      lastPageLength: 0,
+      fetchedLastPageLength: undefined,
+    }),
+  ).toEqual({ isCapped: false, isComplete: false });
+});
+
 test("Memory pagination advances only from a settled full page inside the browse budget", () => {
   const ready = {
     enabled: true,
@@ -204,6 +269,28 @@ test("resuming browse re-reads a page whose list copy diverged from its page cac
   expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: compacted })).toBe(true);
   expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: edited })).toBe(true);
   expect(shouldRevalidateMemoryPageOnResume({ ...resume, listedPage: undefined })).toBe(true);
+});
+
+test("after a paused forget, resume re-reads every page the patch re-sliced", () => {
+  const pages = Array.from({ length: 3 }, (_, pageIndex) =>
+    Array.from({ length: MEMORY_PAGE_SIZE }, (_, index) =>
+      memory(pageIndex * MEMORY_PAGE_SIZE + index),
+    ),
+  );
+  // The paused patch writes only the list; each page's own cache keeps the page as
+  // it was fetched, so every page behind the forgotten Memory diverges from it.
+  const patched = removeMemoryFromPages(pages, memory(150).id) ?? [];
+  const resume = (pageIndex: number) =>
+    shouldRevalidateMemoryPageOnResume({
+      pageIndex,
+      cachedPage: pages[pageIndex],
+      listedPage: patched[pageIndex],
+      firstPageBefore: patched[0],
+      firstPageAfter: pages[0],
+    });
+  expect(resume(1)).toBe(true);
+  // The short last page is re-read too, so the Memory that moved onto it arrives.
+  expect(resume(2)).toBe(true);
 });
 
 test("a write elsewhere that shifts page 0 re-reads every later page on resume", () => {

@@ -7,9 +7,9 @@ import {
   requireHumanActor,
   uuidString,
 } from "@/server/api/input";
-import type { AgentGrantPermission, AgentStatus } from "@/server/auth/access";
-import { AgentNotDisabledError, createAccessModule } from "@/server/auth/access";
 import { NotFoundError } from "@/server/errors";
+import type { AgentGrantPermission, AgentStatus } from "./service";
+import { createAgentsModule } from "./service";
 
 function agentPermission(
   value: unknown,
@@ -27,23 +27,23 @@ function agentStatus(value: unknown): AgentStatus {
 
 export const agents = new Hono<ApiEnv>()
   .get("/", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const actor = requireHumanActor(await c.var.resolveActor());
-    return c.json(await access.listAgents(actor));
+    return c.json(await agentsModule.listAgents(actor));
   })
   .post("/", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const request = c.req.raw;
     const actor = requireHumanActor(await c.var.resolveActor());
     const body = await jsonObject(request);
-    const agent = await access.createAgentForWorkspace(actor, {
+    const agent = await agentsModule.createAgentForWorkspace(actor, {
       name: requiredString(body.name, "name", 120),
       permission: agentPermission(body.permission, "read"),
     });
     return c.json(agent, 201);
   })
   .patch("/:id", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const request = c.req.raw;
     const agentId = c.req.param("id");
     const normalizedAgentId = uuidString(agentId, "agentId");
@@ -58,7 +58,7 @@ export const agents = new Hono<ApiEnv>()
     if (body.name === undefined && body.status === undefined) {
       throw new BadRequestError("name or status is required");
     }
-    const agent = await access.updateAgent(actor, normalizedAgentId, {
+    const agent = await agentsModule.updateAgent(actor, normalizedAgentId, {
       name: body.name === undefined ? undefined : requiredString(body.name, "name", 120),
       status: body.status === undefined ? undefined : agentStatus(body.status),
     });
@@ -66,60 +66,58 @@ export const agents = new Hono<ApiEnv>()
     return c.json(agent);
   })
   .delete("/:id", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const agentId = c.req.param("id");
     const normalizedAgentId = uuidString(agentId, "agentId");
     const actor = requireHumanActor(await c.var.resolveActor());
-    const result = await access.deleteAgent(actor, normalizedAgentId);
-    if (result === "deleted") {
-      return c.body(null, 204);
+    if (!(await agentsModule.deleteAgent(actor, normalizedAgentId))) {
+      throw new NotFoundError("Agent not found");
     }
-    if (result === "must_disable") throw new AgentNotDisabledError();
-    throw new NotFoundError("Agent not found");
+    return c.body(null, 204);
   })
   .get("/:id/credentials", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const agentId = c.req.param("id");
     const normalizedAgentId = uuidString(agentId, "agentId");
     const actor = requireHumanActor(await c.var.resolveActor());
-    return c.json(await access.listAgentCredentials(actor, normalizedAgentId));
+    return c.json(await agentsModule.listAgentCredentials(actor, normalizedAgentId));
   })
   .post("/:id/credentials", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const agentId = c.req.param("id");
     const normalizedAgentId = uuidString(agentId, "agentId");
     const actor = requireHumanActor(await c.var.resolveActor());
-    return c.json(await access.issueAgentCredential(actor, normalizedAgentId), 201);
+    return c.json(await agentsModule.issueAgentCredential(actor, normalizedAgentId), 201);
   })
   .put("/:id/grant", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const request = c.req.raw;
     const agentId = c.req.param("id");
     const normalizedAgentId = uuidString(agentId, "agentId");
     const actor = requireHumanActor(await c.var.resolveActor());
     const body = await jsonObject(request);
     return c.json(
-      await access.grantAgent(actor, normalizedAgentId, {
+      await agentsModule.grantAgent(actor, normalizedAgentId, {
         permission: agentPermission(body.permission),
       }),
     );
   })
   .delete("/:id/grant", async (c) => {
-    const access = createAccessModule(await c.var.database());
+    const agentsModule = createAgentsModule(await c.var.database());
     const agentId = c.req.param("id");
     const normalizedAgentId = uuidString(agentId, "agentId");
     const actor = requireHumanActor(await c.var.resolveActor());
-    const revoked = await access.revokeAgentGrant(actor, normalizedAgentId);
+    const revoked = await agentsModule.revokeAgentGrant(actor, normalizedAgentId);
     if (!revoked) throw new NotFoundError("Active Agent grant not found");
     return c.body(null, 204);
   });
 
 export const agentCredentials = new Hono<ApiEnv>().delete("/:id", async (c) => {
-  const access = createAccessModule(await c.var.database());
+  const agentsModule = createAgentsModule(await c.var.database());
   const credentialId = c.req.param("id");
   const normalizedCredentialId = uuidString(credentialId, "credentialId");
   const actor = requireHumanActor(await c.var.resolveActor());
-  const revoked = await access.revokeAgentCredential(actor, normalizedCredentialId);
+  const revoked = await agentsModule.revokeAgentCredential(actor, normalizedCredentialId);
   if (!revoked) throw new NotFoundError("Agent credential not found");
   return c.body(null, 204);
 });

@@ -1,20 +1,13 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
-import { isPostgresAccessDenied } from "@corespeed/lore-core";
-import type { ActorContext, UserContext } from "@/server/auth/actor-context";
-import { installActorContext, installUserContext } from "@/server/auth/actor-context";
-import { DomainError } from "@/server/errors";
+import type { ActorContext } from "@/server/auth/actor-context";
+import { installActorContext } from "@/server/auth/actor-context";
+import { newAgentCredentialSecret } from "@/server/auth/agent-credentials";
+import { refusingDeniedAccess } from "@/server/database/access-denied";
+import { AccessDeniedError, DomainError } from "@/server/errors";
 
 export type AgentStatus = "active" | "disabled";
 export type AgentGrantPermission = "read" | "write";
 export type AgentGrantStatus = "active" | "revoked";
-export type AgentDeletionResult = "deleted" | "must_disable" | "not_found";
-export type MembershipRole = "owner" | "admin" | "member";
-export type MembershipStatus = "active" | "suspended";
-
-export class AccessDeniedError extends DomainError {
-  override name = "AccessDeniedError";
-  readonly code = "access_denied";
-}
 
 /** An Agent is deleted only once it is disabled. */
 export class AgentNotDisabledError extends DomainError {
@@ -63,26 +56,6 @@ export interface AgentCredential {
   revokedAt: string | null;
 }
 
-export interface Workspace {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WorkspaceMembership {
-  workspaceId: string;
-  userId: string;
-  role: MembershipRole;
-  status: MembershipStatus;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WorkspaceSummary extends Workspace {
-  role: MembershipRole;
-}
-
 interface AgentRow {
   id: string;
   owner_user_id: string;
@@ -106,11 +79,6 @@ interface WorkspaceAgentRow extends AgentRow {
   grant_status: AgentGrantStatus;
 }
 
-interface AuthenticatedAgentRow {
-  user_id: string;
-  agent_id: string;
-}
-
 interface AgentCredentialRow {
   id: string;
   agent_id: string;
@@ -118,45 +86,6 @@ interface AgentCredentialRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
-}
-
-interface WorkspaceRow {
-  id: string;
-  name: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface MembershipRow {
-  workspace_id: string;
-  user_id: string;
-  role: MembershipRole;
-  status: MembershipStatus;
-  created_at: string;
-  updated_at: string;
-}
-
-interface WorkspaceSummaryRow extends WorkspaceRow {
-  role: MembershipRole;
-}
-
-function randomSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function translateAccessError<Result>(operation: () => Promise<Result>): Promise<Result> {
-  try {
-    return await operation();
-  } catch (error) {
-    if (isPostgresAccessDenied(error)) throw new AccessDeniedError("Actor is not authorized");
-    throw error;
-  }
 }
 
 function toAgent(row: AgentRow): Agent {
@@ -200,88 +129,14 @@ function toAgentCredential(row: AgentCredentialRow): AgentCredential {
   };
 }
 
-function toWorkspace(row: WorkspaceRow): Workspace {
+/**
+ * A User's own Agents, their Workspace grants, and their bearer credentials.
+ * Agent records are user-private: every read and write is scoped to the caller.
+ */
+export function createAgentsModule(database: PostgresDatabase) {
   return {
-    id: row.id,
-    name: row.name,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function toMembership(row: MembershipRow): WorkspaceMembership {
-  return {
-    workspaceId: row.workspace_id,
-    userId: row.user_id,
-    role: row.role,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function toWorkspaceSummary(row: WorkspaceSummaryRow): WorkspaceSummary {
-  return { ...toWorkspace(row), role: row.role };
-}
-
-export function createAccessModule(database: PostgresDatabase) {
-  async function listWorkspaces(user: UserContext): Promise<WorkspaceSummary[]> {
-    return database.transaction(async (transaction) => {
-      await installUserContext(transaction, user);
-      const result = await transaction.query<WorkspaceSummaryRow>(
-        "SELECT * FROM lore.list_workspaces()",
-      );
-      return result.rows.map(toWorkspaceSummary);
-    });
-  }
-
-  return {
-    async createWorkspace(user: UserContext, input: { name: string }): Promise<Workspace> {
-      return translateAccessError(() =>
-        database.transaction(async (transaction) => {
-          await installUserContext(transaction, user);
-          const result = await transaction.query<WorkspaceRow>(
-            "SELECT * FROM lore.create_workspace($1, $2)",
-            [crypto.randomUUID(), input.name],
-          );
-          return toWorkspace(result.rows[0]);
-        }),
-      );
-    },
-
-    listWorkspaces,
-
-    async selectWorkspace(user: UserContext, workspaceId: string): Promise<ActorContext | null> {
-      const normalizedWorkspaceId = workspaceId.toLowerCase();
-      const workspaces = await listWorkspaces(user);
-      return workspaces.some((workspace) => workspace.id === normalizedWorkspaceId)
-        ? { userId: user.userId, workspaceId: normalizedWorkspaceId }
-        : null;
-    },
-
-    async addMember(
-      actor: ActorContext,
-      userId: string,
-      input: { role: MembershipRole },
-    ): Promise<WorkspaceMembership> {
-      return translateAccessError(() =>
-        database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          const result = await transaction.query<MembershipRow>(
-            `INSERT INTO memberships (workspace_id, user_id, role)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (workspace_id, user_id) DO UPDATE
-             SET role = EXCLUDED.role, status = 'active', updated_at = now()
-             RETURNING *`,
-            [actor.workspaceId, userId, input.role],
-          );
-          return toMembership(result.rows[0]);
-        }),
-      );
-    },
-
     async createAgent(actor: ActorContext, input: { name: string }): Promise<Agent> {
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const result = await transaction.query<AgentRow>(
@@ -299,7 +154,7 @@ export function createAccessModule(database: PostgresDatabase) {
       actor: ActorContext,
       input: { name: string; permission: AgentGrantPermission },
     ): Promise<WorkspaceAgent> {
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const agentId = crypto.randomUUID();
@@ -327,7 +182,7 @@ export function createAccessModule(database: PostgresDatabase) {
     },
 
     async listAgents(actor: ActorContext): Promise<WorkspaceAgent[]> {
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const result = await transaction.query<WorkspaceAgentRow>(
@@ -353,7 +208,7 @@ export function createAccessModule(database: PostgresDatabase) {
       agentId: string,
       input: { name?: string; status?: AgentStatus },
     ): Promise<WorkspaceAgent | null> {
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const result = await transaction.query<WorkspaceAgentRow>(
@@ -378,8 +233,12 @@ export function createAccessModule(database: PostgresDatabase) {
       );
     },
 
-    async deleteAgent(actor: ActorContext, agentId: string): Promise<AgentDeletionResult> {
-      return translateAccessError(() =>
+    /**
+     * Delete a disabled Agent with its grants and credentials; its Memories stay and
+     * lose their creating-Agent reference. False when this caller has no such Agent.
+     */
+    async deleteAgent(actor: ActorContext, agentId: string): Promise<boolean> {
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const target = await transaction.query<{ status: AgentStatus }>(
@@ -396,8 +255,8 @@ export function createAccessModule(database: PostgresDatabase) {
              FOR UPDATE`,
             [agentId, actor.userId, actor.workspaceId],
           );
-          if (!target.rows[0]) return "not_found";
-          if (target.rows[0].status !== "disabled") return "must_disable";
+          if (!target.rows[0]) return false;
+          if (target.rows[0].status !== "disabled") throw new AgentNotDisabledError();
           const deleted = await transaction.query<{ id: string }>(
             `DELETE FROM agents agent
              WHERE agent.id = $1
@@ -412,7 +271,7 @@ export function createAccessModule(database: PostgresDatabase) {
              RETURNING agent.id`,
             [agentId, actor.userId, actor.workspaceId],
           );
-          return deleted.rows[0] ? "deleted" : "not_found";
+          return deleted.rows.length === 1;
         }),
       );
     },
@@ -422,7 +281,7 @@ export function createAccessModule(database: PostgresDatabase) {
       agentId: string,
       input: { permission: AgentGrantPermission },
     ): Promise<AgentWorkspaceGrant> {
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const result = await transaction.query<AgentGrantRow>(
@@ -442,12 +301,9 @@ export function createAccessModule(database: PostgresDatabase) {
       actor: ActorContext,
       agentId: string,
     ): Promise<IssuedAgentCredential> {
-      const secret = randomSecret();
-      const token = `lore_agent_${secret}`;
-      const prefix = secret.slice(0, 12);
-      const secretHash = await sha256Hex(token);
+      const { token, prefix, secretHash } = await newAgentCredentialSecret();
 
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const id = crypto.randomUUID();
@@ -472,7 +328,7 @@ export function createAccessModule(database: PostgresDatabase) {
     },
 
     async listAgentCredentials(actor: ActorContext, agentId: string): Promise<AgentCredential[]> {
-      return translateAccessError(() =>
+      return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           const result = await transaction.query<AgentCredentialRow>(
@@ -497,24 +353,6 @@ export function createAccessModule(database: PostgresDatabase) {
           return result.rows.map(toAgentCredential);
         }),
       );
-    },
-
-    async authenticateAgent(token: string, workspaceId: string): Promise<ActorContext | null> {
-      const secretHash = await sha256Hex(token);
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<AuthenticatedAgentRow>(
-          "SELECT * FROM lore.authenticate_agent_credential($1, $2)",
-          [secretHash, workspaceId],
-        );
-        const authenticated = result.rows[0];
-        return authenticated
-          ? {
-              workspaceId,
-              userId: authenticated.user_id,
-              agentId: authenticated.agent_id,
-            }
-          : null;
-      });
     },
 
     async revokeAgentCredential(actor: ActorContext, credentialId: string): Promise<boolean> {

@@ -10,11 +10,11 @@ import {
   MemoryProposalCapacityError,
   MemoryProposalReviewConflictError,
 } from "@/modules/proposals/service";
-import { createAccessModule } from "@/server/auth/access";
 import { createObservationModule } from "../../../src/modules/episodes/service";
 import { createMemoryGraphModule } from "../../../src/modules/graph/service";
 import { createMemoryModule } from "../../../src/modules/memories/service";
 import { installActorContext } from "../../../src/server/auth/actor-context";
+import { createAccessModule } from "../../support/access";
 import { createMemoryTestContext } from "../../support/memory-context";
 
 /** The Memory kernel plus the oss Proposals module, as one test harness. */

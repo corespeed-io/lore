@@ -67,6 +67,15 @@ connection resets) is 400 `invalid_request`, not a server error.
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
 
+Export writes the `lore-workspace-v2` format. Import accepts it and the earlier
+`lore-workspace-v1`; the two differ only in how the checksum orders object keys
+(v2 by code unit, identically in every runtime; v1 by the runtime's default-locale
+collation), so an archive exported by an earlier release still imports. The reverse
+does not hold: a release older than schema revision 9 accepts only
+`lore-workspace-v1` and refuses a v2 archive with `invalid_archive`, writing nothing.
+Upgrade the target deployment before moving a Workspace to it; the manifest `format`
+enum in its `/openapi.json` lists every format it imports.
+
 An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
 48,000,000 serialized bytes, so every archive export produces fits the
 50,000,000-byte import request limit. Export keeps a running size sum and reads only
@@ -534,8 +543,9 @@ migrations or replace a production database to bypass preflight.
 A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
 statement at a time. dbmate would send the whole file as one query, and PostgreSQL
 runs a multi-statement query as one transaction block, which `CREATE INDEX
-CONCURRENTLY` refuses. `0005` is such a migration: it builds the replay-scrub and
-import-provenance indexes concurrently so writes keep flowing during the build.
+CONCURRENTLY` refuses. `0005` and `0008` are such migrations: they build the
+replay-scrub and import-provenance indexes concurrently so writes keep flowing
+during the build.
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous
@@ -544,6 +554,27 @@ each index is dropped and rebuilt, which replaces any `INVALID` index a cancelle
 build left behind. A concurrent build also waits for transactions that were already
 open when it started, so a long-running transaction delays the migration, not
 application writes.
+
+`0007` and `0009`, on either side of `0008`, are ordinary transactional migrations:
+`0007` adds the replay ledger's subject columns and locks the ledger but no subject
+table, and `0009` then adds the triggers that scrub by them and locks Episodes,
+Memories, and Proposals, in the order Agent deletion and forget reach them, but
+never the ledger that every keyed write locks first (each also locks
+`lore_system_state` for its closing revision update). A rare three-way collision
+between `0009`, a Proposal submission's evidence check, and a forget or update of
+that evidence can still abort one of them with a retryable deadlock error. Both run
+under a
+5-second `lock_timeout` and rewrite no rows, so
+on a busy database either may fail to take its locks, and a rerun of `bun run
+db:migrate` repeats it safely, because a stopped transactional migration records
+nothing. Readiness requires the exact schema revision, so from the moment `0007`
+commits (revision 7) old instances report the schema incompatible, and new instances
+report it until `0009` commits (revision 9). No instance is ready in between, which
+spans `0008`'s concurrent index build, and that build waits for every transaction
+already open. A rollout that routes only to ready instances serves nothing for that
+window: run `0007`-`0009` in a maintenance window, or relax readiness gating until the
+chain completes and the new instances are up. Replay bodies stay scrubbed meanwhile,
+by the baseline JSON-path triggers.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

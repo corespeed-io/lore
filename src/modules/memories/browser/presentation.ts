@@ -1,4 +1,4 @@
-import type { Memory } from "@corespeed/lore-sdk";
+import { LORE_CONTRACT, type Memory } from "@corespeed/lore-sdk";
 import {
   hasVisibleText,
   memoryInlineText,
@@ -6,6 +6,7 @@ import {
   prefix,
   revealHidden,
 } from "@/modules/memories/browser/markdown";
+import { displayCount } from "@/shared/browser/read-state";
 
 /**
  * `plainInline` reduces text's inline Markdown to the words Memory detail shows for
@@ -186,4 +187,67 @@ export interface MemoryGraphContext {
   relatedNotice: string | null;
   /** Title of a wikilink that did not resolve to one visible Graph node. */
   unresolvedWikilinkTitle: string;
+}
+
+/**
+ * The browse header's counts. Until the browse window is read in full (pages are
+ * still loading, or it stopped at the browse cap) each is a lower bound, "N+".
+ */
+export function browseCounts(input: {
+  /** Loaded Memories that match the type filter, however many rows are rendered. */
+  matching: number;
+  total: number;
+  filtered: boolean;
+  complete: boolean;
+}): { heading: string; count: (value: number) => string } {
+  const count = (value: number) => displayCount(value, "ready", !input.complete);
+  // The noun agrees with the count beside it; a lower bound such as "1+" is plural.
+  const noun = (value: number) => (input.complete && value === 1 ? "memory" : "memories");
+  const heading = input.filtered
+    ? `Showing ${count(input.matching)} of ${count(input.total)} ${noun(input.total)}`
+    : `Showing ${count(input.matching)} ${noun(input.matching)}`;
+  return { heading, count };
+}
+
+/**
+ * The browse type chips: "All", then every loaded type in the preferred order. The
+ * active filter keeps its chip even when no loaded Memory has that type (a deep link,
+ * or its last Memory was forgotten), so the applied filter stays visible.
+ */
+export function browseTypeChips(
+  loadedTypes: readonly string[],
+  typeFilter: string,
+): [key: string, label: string][] {
+  const types = [...new Set(loadedTypes)];
+  if (typeFilter !== "all" && !types.includes(typeFilter)) types.push(typeFilter);
+  return [
+    ["all", "All"],
+    ...types.sort(typeSort).map((type): [string, string] => [type, typeLabel(type)]),
+  ];
+}
+
+/**
+ * What browse says when a type filter matches no loaded Memory, or null. It names
+ * the type, so it reads on its own; a scope bucket (an untyped Memory's type is its
+ * scope) is named as untyped. It says "yet" only while pages still load: at the
+ * browse cap, or after a page failed, no more will arrive.
+ */
+export function browseFilterEmptyNote(input: {
+  type: string;
+  matching: number;
+  complete: boolean;
+  capped: boolean;
+  /** A browse page failed, so loading stopped short of the window. */
+  stopped: boolean;
+  /** How many Memories browse reads at most. */
+  window: number;
+}): string | null {
+  if (input.type === "all" || input.matching > 0) return null;
+  const scopes: readonly string[] = LORE_CONTRACT.vocabularies.memoryScopes;
+  const label = `“${typeLabel(input.type)}”`;
+  const memories = `No ${scopes.includes(input.type) ? `untyped ${label}` : label} Memories`;
+  if (input.complete) return `${memories}.`;
+  if (input.capped) return `${memories} in the first ${input.window.toLocaleString("en-US")}.`;
+  if (input.stopped) return `${memories} among those loaded.`;
+  return `${memories} have loaded yet.`;
 }

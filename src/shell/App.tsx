@@ -521,6 +521,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
                     results={searchResults}
                     memories={memories}
                     capped={memoriesCapped}
+                    complete={memoriesComplete}
                     loading={searchQuery ? searchLoading : memoriesLoading}
                     browseError={memoriesErrorMessage}
                     error={searchRequestError ? errorMessage(searchRequestError) : null}
