@@ -105,12 +105,24 @@ test("a Memory body links only to http(s) with a host, and to mailto", () => {
     "data:text/html,<script>alert(1)</script>",
     "https:/api",
     "https:///path",
+    "https://user@example.test/",
+    "https://example.test%5C@evil.test/",
     "mailto:",
     "/memories",
     "",
   ]) {
     expect(allowedHref(url)).toBe(false);
   }
+  for (const url of [
+    "https://example.test/a@b",
+    "https://example.test?to=a@b",
+    "https://[::1]:8080/",
+  ]) {
+    expect(allowedHref(url)).toBe(true);
+  }
+  // Userinfo can make an autolink's text name a host its target is not.
+  expect(html("<https://example.com\\@evil.com>")).not.toContain("<a ");
+  expect(html("[x](https://user@example.test)")).not.toContain("<a ");
   expect(html("[x](javascript:alert(1)) [y](https:/api) ![z](data:image/png;base64,AA)")).toBe(
     "<p>[x](javascript:alert(1)) [y](https:/api) ![z](data:image/png;base64,AA)</p>\n",
   );
@@ -215,17 +227,12 @@ test("controls that reorder or hide text show as markers, raw or as entities", (
   expect(html("[[ref‮|label]]")).toContain('title="ref⟨U+202E⟩ — not found"');
 });
 
-test("the tables of one body share the cell budget, and a table past it stays text", () => {
+test("the tables of one body share the cell budget, and the one past it keeps its words", () => {
   // markdown-it fills in the cells a short row leaves out, and they count.
   expect(cells("| a | b | c |\n| - | - | - |\n| 1 |")).toBe(6);
-  expect(cells(table(50, 100))).toBe(MAXIMUM_TABLE_CELLS);
-  const past = html(`${table(2, 2)}\n\n${table(50, 101)}\n\n${table(2, 2)}`) ?? "";
-  expect(past.match(/<table>/g)).toHaveLength(1);
-});
-
-test("tables that each fit the budget still share it, and the one past it keeps its words", () => {
-  // Four cells, then exactly the budget: each fits alone, but not together.
-  const shared = html(`${table(2, 2)}\n\n${table(50, 100)}`) ?? "";
+  // Four cells, then exactly the budget: each fits alone, but not together, and every
+  // later table stays text too.
+  const shared = html(`${table(2, 2)}\n\n${table(50, 100)}\n\n${table(2, 2)}`) ?? "";
   expect(shared.match(/<table>/g)).toHaveLength(1);
   // The table past the budget reads as its own lines of text, none of them lost.
   expect(shared).toContain(`<p>|${" a |".repeat(50)}<br>\n|${" - |".repeat(50)}<br>`);
@@ -356,9 +363,12 @@ test("an autolink shows its URL as written, never decoded", () => {
   expect(plainInline("<a@xn--pple-43d.com>")).toBe("a@xn--pple-43d.com");
 });
 
-test("an escaped closing bracket keeps a wikilink from forming", () => {
+test("an escaped closing bracket keeps a wikilink from forming, after a label too", () => {
   expect(html("[[a\\]]", { a: TARGET_MEMORY_ID })).toBe("<p>[[a]]</p>\n");
   expect(plainInline("[[a\\]]")).toBe("[[a]]");
+  expect(plainInline("[[a|b\\]]")).toBe("[[a|b]]");
+  // An escaped backslash leaves the brackets to close the wikilink.
+  expect(html("[[a\\\\]]")).toContain('class="wl-unresolved"');
 });
 
 test("a label or reference of only hidden controls shows as its markers", () => {
@@ -488,7 +498,7 @@ test("a table without outer pipes, in a quote, or in a list item counts its colu
       .split("\n")
       .map((line, index) => `${index === 0 ? "-" : " "} ${line}`)
       .join("\n");
-  for (const shape of [bare, quoted, listed]) {
+  for (const shape of [(rows: number) => table(50, rows), bare, quoted, listed]) {
     // A table of exactly the budget renders whole, never cut short a row early.
     expect(cells(shape(100))).toBe(MAXIMUM_TABLE_CELLS);
     expect(cells(shape(101))).toBe(0);

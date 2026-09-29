@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreAgents } from "@/modules/agents/browser/data";
 import { useLoreObservations } from "@/modules/episodes/browser/data";
 import { useLoreMemory } from "@/modules/memories/browser/data";
-import { memoryTitle, revealHidden } from "@/modules/memories/browser/presentation";
+import { memoryTitle, prefix, revealHidden } from "@/modules/memories/browser/presentation";
 import {
   useLoreMemoryProposalMutations,
   useLoreMemoryProposals,
@@ -257,7 +257,7 @@ export function MemoryProposalsView({
                       <span>{proposal.kind === "create" ? "New Memory" : "Update"}</span>
                       <time dateTime={proposal.createdAt}>{utcDate(proposal.createdAt)} UTC</time>
                     </span>
-                    <strong>{compact(revealHidden(proposal.proposedContent))}</strong>
+                    <strong>{compact(revealHidden(prefix(proposal.proposedContent, 400)))}</strong>
                     <span className="proposal-row-foot">
                       {submitter(proposal)} · {proposal.proposedScope}
                     </span>

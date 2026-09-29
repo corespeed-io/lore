@@ -5,6 +5,7 @@ import {
   memoryConfiguredType,
   memorySource,
   memoryTitle,
+  metadataLabel,
   shortMemoryDate,
 } from "@/modules/memories/browser/presentation";
 
@@ -36,9 +37,9 @@ export function RecentActivity({ items, notice, onOpen }: RecentActivityProps) {
               onClick={() => onOpen(memory.id)}
             >
               <span className="activity-title">{memoryTitle(memory)}</span>
-              {type && <span className="badge">{type}</span>}
+              {type && <span className="badge">{metadataLabel(type)}</span>}
               <span className="memory-scope">{memory.scope}</span>
-              {source && <span className="activity-src">{source}</span>}
+              {source && <span className="activity-src">{metadataLabel(source)}</span>}
               <span className="activity-date">{shortMemoryDate(memory.updatedAt)}</span>
             </button>
           );

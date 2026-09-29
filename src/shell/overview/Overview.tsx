@@ -4,7 +4,7 @@ import type { Memory } from "@corespeed/lore-sdk";
 import { GraphHealth } from "@/modules/graph/browser/GraphHealth";
 import { TopHubs } from "@/modules/graph/browser/TopHubs";
 import { areGraphLinksPartial, type GraphData } from "@/modules/graph/browser/types";
-import { memorySource, memoryType } from "@/modules/memories/browser/presentation";
+import { memorySource, memoryType, metadataLabel } from "@/modules/memories/browser/presentation";
 import type { ReadState } from "@/shared/browser/read-state";
 import { ActivityChart } from "@/shell/overview/ActivityChart";
 import { Breakdown } from "@/shell/overview/Breakdown";
@@ -47,7 +47,7 @@ function memorySources(memories: Memory[]): MemorySourceSummary[] {
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   return [...counts]
-    .map(([name, memoryCount]) => ({ id: name, name, memoryCount }))
+    .map(([source, memoryCount]) => ({ id: source, name: metadataLabel(source), memoryCount }))
     .sort(
       (left, right) => right.memoryCount - left.memoryCount || left.name.localeCompare(right.name),
     );

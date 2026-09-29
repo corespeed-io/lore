@@ -746,19 +746,24 @@ body {
   font-size: 12px;
 }
 
-/* A Memory's text as written, hidden controls as markers, beside its rendering. */
-.detail-source {
-  margin: 0;
+/* Show source and a body's code blocks share one box. */
+.detail-source,
+.detail-body pre.fence {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.6;
-  color: var(--body);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   background: var(--hairline-soft);
   border: 1px solid var(--hairline);
   border-radius: 12px;
   padding: 12px 14px;
+}
+
+/* A Memory's text as written, hidden controls as markers, beside its rendering. */
+.detail-source {
+  margin: 0;
+  color: var(--body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .detail-body {
@@ -792,14 +797,7 @@ body {
 }
 
 .detail-body pre.fence {
-  font-family: var(--font-mono);
-  background: var(--hairline-soft);
-  border: 1px solid var(--hairline);
-  padding: 12px 14px;
-  border-radius: 12px;
   overflow: auto;
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .detail-body :where(pre) code {

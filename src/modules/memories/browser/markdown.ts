@@ -53,6 +53,13 @@ export function hasVisibleText(text: string): boolean {
   return /[^\s\p{Cf}]/u.test(revealHidden(text));
 }
 
+/** Whether text ends in an odd run of backslashes, whose last one escapes what follows. */
+function escapesNext(text: string): boolean {
+  let run = 0;
+  while (text[text.length - 1 - run] === "\\") run += 1;
+  return run % 2 === 1;
+}
+
 function wikilink(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x5b || state.src.charCodeAt(state.pos + 1) !== 0x5b) {
     return false;
@@ -60,14 +67,17 @@ function wikilink(state: StateInline, silent: boolean): boolean {
   WIKILINK.lastIndex = state.pos;
   const match = WIKILINK.exec(state.src);
   if (!match || match.index + match[0].length > state.posMax) return false;
+  const [, target = "", written] = match;
+  // A backslash before `]]` escapes the bracket, so there is no wikilink.
+  if (escapesNext(written ?? target)) return false;
   // A table cell needs the label's pipe escaped (`\|`). markdown-it unescapes it in
   // the cell, but a wikilink copied from a table into prose still carries the backslash.
-  // With no label, that backslash escapes the closing bracket, so there is no wikilink.
-  if (match[2] === undefined && match[1]?.endsWith("\\")) return false;
-  const reference = match[1]?.replace(/\\$/, "").trim();
+  const reference = (
+    written !== undefined && escapesNext(target) ? target.slice(0, -1) : target
+  ).trim();
   if (!reference || !hasVisibleText(reference)) return false;
   if (!silent) {
-    const label = match[2]?.trim() ?? "";
+    const label = written?.trim() ?? "";
     const token = state.push("wikilink", "", 0);
     token.meta = { reference, label: hasVisibleText(label) ? label : reference };
   }
@@ -76,12 +86,13 @@ function wikilink(state: StateInline, silent: boolean): boolean {
 }
 
 /**
- * The only link targets a Memory body renders: http(s) with a host, or mailto.
- * Anything else, including `javascript:`, `data:`, a relative path, or an
- * `https:/path` without a host, stays plain text.
+ * The only link targets a Memory body renders: http(s) with a host and no userinfo,
+ * or mailto. Anything else, including `javascript:`, `data:`, a relative path, an
+ * `https:/path` without a host, or a `user@` before the host (which can make the
+ * shown URL name a host the link does not go to), stays plain text.
  */
 export function allowedHref(url: string): boolean {
-  return /^(?:https?:\/\/[^\s/\\?#]|mailto:\S)/i.test(url);
+  return /^(?:https?:\/\/[^\s/\\?#@]+(?:[/?#]|$)|mailto:\S)/i.test(url);
 }
 
 /**
@@ -339,34 +350,30 @@ function renderedWords(html: string): string {
     .replace(/&(amp|lt|gt|quot);/g, (_match, name: string) => ESCAPED[name] ?? "");
 }
 
-/** What makes markdown-it read a line as anything other than its own characters. */
-const INLINE_MARKUP = /^ {0,3}#|[`*_[\]<>&\\~\r\n]/;
-
 /**
  * A line's inline tokens. A heading's markers are block syntax, so a line that may be
  * one parses as a block, and a one-line heading reads as its text.
  */
-function inlineTokens(markdown: string, env: MemoryEnv): Token[] {
+function inlineTokens(markdown: string): Token[] {
   if (/^ {0,3}#/.test(markdown)) {
-    const tokens = memoryMarkdown.parse(markdown, env);
+    const tokens = memoryMarkdown.parse(markdown, {});
     if (tokens.length === 3 && tokens[0]?.type === "heading_open") return [tokens[1] as Token];
   }
-  return memoryMarkdown.parseInline(markdown, env);
+  return memoryMarkdown.parseInline(markdown, {});
 }
 
 /**
- * Inline Markdown as the words Memory detail would show for it, for places that
- * show plain text: the same parser and rules, so a title never drops a character
- * the body shows, nor keeps markup the body renders.
+ * Inline Markdown as the words Memory detail would show for it, for titles and Graph
+ * labels: the same parser and rules, so a title never drops a character the body
+ * shows, nor keeps markup the body renders.
  */
-export function memoryInlineText(markdown: string): string {
-  if (!INLINE_MARKUP.test(markdown)) return revealHidden(markdown);
-  const env: MemoryEnv = { targets: {}, unresolvedTitle: "", anchors: [] };
-  const tokens = inlineTokens(markdown, env);
-  return renderedWords(memoryMarkdown.renderer.render(tokens, memoryMarkdown.options, env));
+export function plainInline(markdown: string): string {
+  return renderedWords(renderMemoryMarkdown(inlineTokens(markdown), {}, ""));
 }
 
-/** A search snippet shows 200 characters; this much of its source is enough to find them. */
+/** A search snippet shows this many characters. */
+const SNIPPET_LIMIT = 200;
+/** A snippet parses this much of its source, enough to find the characters it shows. */
 const SNIPPET_SOURCE_LIMIT = 2_000;
 
 /** At most `limit` code units of text, never cutting a character outside the BMP in two. */
@@ -380,7 +387,7 @@ export function prefix(text: string, limit: number): string {
  * code included, since search evidence is one chunk that may start inside a fence,
  * whose closing line then opens one.
  */
-export function memoryPlainText(markdown: string): string {
+export function plain(markdown: string): string {
   const source = prefix(markdown, SNIPPET_SOURCE_LIMIT);
   const tokens = parseMemoryMarkdown(source);
   if (tokens) {
@@ -388,7 +395,7 @@ export function memoryPlainText(markdown: string): string {
     for (const token of tokens) if (token.type === "fence") token.info = "";
   }
   const words = tokens ? renderedWords(renderMemoryMarkdown(tokens, {}, "")) : revealHidden(source);
-  return words.replace(/\s+/g, " ").trim();
+  return prefix(words.replace(/\s+/g, " ").trim(), SNIPPET_LIMIT);
 }
 
 /** The Memory id a reference resolves to, read only from the map's own properties. */

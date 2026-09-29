@@ -106,10 +106,11 @@ test("a Graph label shows what the body shows, and as written when that is nothi
   ]);
 });
 
-test("a Graph node's type shows its hidden controls as markers", async () => {
+test("a Graph node's type stays as written, the legend and filter key", async () => {
   const nodes = [{ ...node("a", "a"), type: "\u202Eeganam" }, node("b", "b")];
 
   const graph = await readWith({ nodes, links: [], linksTruncated: false });
 
-  expect(graph.nodes.map((entry) => entry.type)).toEqual(["⟨U+202E⟩eganam", "concept"]);
+  // Views show it through metadataLabel, which marks its hidden controls.
+  expect(graph.nodes.map((entry) => entry.type)).toEqual(["\u202Eeganam", "concept"]);
 });

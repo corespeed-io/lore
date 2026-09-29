@@ -1,25 +1,19 @@
 import { LORE_CONTRACT, type Memory } from "@corespeed/lore-sdk";
 import {
   hasVisibleText,
-  memoryInlineText,
-  memoryPlainText,
+  plain,
+  plainInline,
   prefix,
   revealHidden,
 } from "@/modules/memories/browser/markdown";
 import { displayCount } from "@/shared/browser/read-state";
 
-/**
- * `plainInline` reduces text's inline Markdown to the words Memory detail shows for
- * it, for titles and Graph labels; `plain` does the same for search snippets.
- */
-export { hasVisibleText, memoryInlineText as plainInline, memoryPlainText as plain, revealHidden };
+// Other modules read Memory text through this file alone.
+export { hasVisibleText, plain, plainInline, prefix, revealHidden };
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
-  if (text.length <= limit) return text;
-  // Never cut between the two halves of a character outside the Basic Multilingual Plane.
-  const end = /[\uD800-\uDBFF]/.test(text[limit - 2] ?? "") ? limit - 2 : limit - 1;
-  return `${text.slice(0, end).trimEnd()}…`;
+  return text.length <= limit ? text : `${prefix(text, limit - 1).trimEnd()}…`;
 }
 
 const TITLE_LIMIT = 96;
@@ -40,15 +34,13 @@ function firstLine(text: string): string {
 }
 
 /**
- * A title's words, read from at most TITLE_SOURCE_LIMIT characters of its source.
- * Whitespace collapses first, so padding cannot push words out unseen, and a source
- * cut short ends in "…".
+ * A title's words, read from at most TITLE_SOURCE_LIMIT characters of its source. A
+ * source cut short ends in "…", so a title never looks whole when it is not.
  */
 function titleWords(text: string, limit: number): string {
-  const source = text.replace(/\s+/g, " ").trim();
-  const read = prefix(source, TITLE_SOURCE_LIMIT);
-  const words = memoryInlineText(read);
-  return compact(read.length < source.length ? `${words}…` : words, limit);
+  const read = prefix(text, TITLE_SOURCE_LIMIT);
+  const words = plainInline(read);
+  return compact(read.length < text.length ? `${words}…` : words, limit);
 }
 
 /** A configured title as its words, or as written when its words show nothing. */
@@ -86,7 +78,7 @@ export function memoryTitle(memory: Memory): string {
 export function memoryDetailTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
   if (configured === null) return memoryTitle(memory);
-  const words = compact(memoryInlineText(configured), Number.POSITIVE_INFINITY);
+  const words = compact(plainInline(configured), Number.POSITIVE_INFINITY);
   return shownTitle(configured, words, Number.POSITIVE_INFINITY);
 }
 
@@ -128,21 +120,29 @@ export function memoryBody(memory: Memory): string {
   return rest.replace(/^(?:\r\n?|\n)+/, "");
 }
 
+/** A type or source label shows at most this many characters of it. */
+const LABEL_LIMIT = 96;
+
 /**
- * The `metadata.type` a Memory actually carries, hidden controls as markers, or
- * null when it has none. Every type chip, badge, and breakdown reads it here.
+ * A metadata string as a label shows it: cut to the label limit, with hidden
+ * controls as markers. Types and sources stay as written wherever they are keys,
+ * so two values never merge into one chip, filter, or source.
  */
-export function memoryConfiguredType(memory: Memory): string | null {
-  const configured = memory.metadata.type;
-  return typeof configured === "string" && configured.trim()
-    ? revealHidden(configured.trim())
-    : null;
+export function metadataLabel(value: string): string {
+  const shown = prefix(value, LABEL_LIMIT);
+  return shown.length < value.length ? `${revealHidden(shown)}…` : revealHidden(shown);
 }
 
-/** The `metadata.source` a Memory names, hidden controls as markers, or null. */
+/** The `metadata.type` a Memory actually carries, or null when it has none. */
+export function memoryConfiguredType(memory: Memory): string | null {
+  const configured = memory.metadata.type;
+  return typeof configured === "string" && configured.trim() ? configured.trim() : null;
+}
+
+/** The `metadata.source` a Memory names, or null. */
 export function memorySource(memory: Memory): string | null {
   const source = memory.metadata.source;
-  return typeof source === "string" && source.trim() ? revealHidden(source.trim()) : null;
+  return typeof source === "string" && source.trim() ? source.trim() : null;
 }
 
 /**
@@ -169,7 +169,7 @@ export function shortMemoryDate(value: string): string {
 const PREFERRED_TYPE_ORDER = ["concept", "product", "person", "company"];
 
 export function typeLabel(type: string): string {
-  return (type.trim() || "other").replace(/[_-]/g, " ");
+  return metadataLabel(type.trim() || "other").replace(/[_-]/g, " ");
 }
 
 export function typeSort(a: string, b: string): number {

@@ -19,6 +19,7 @@ import {
   memoryConfiguredTitle,
   memoryDetailTitle,
   memoryType,
+  metadataLabel,
   revealHidden,
 } from "@/modules/memories/browser/presentation";
 
@@ -225,8 +226,8 @@ export function MemoryView({
   // A configured title may run to 100,000 characters, and parses whole here.
   const title = useMemo(() => memoryDetailTitle(memory), [memory]);
   // Shown as written, since the title above reads only its words.
-  const configuredTitle = memoryConfiguredTitle(memory);
-  const type = memoryType(memory);
+  const configuredTitle = useMemo(() => memoryConfiguredTitle(memory), [memory]);
+  const type = metadataLabel(memoryType(memory));
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
   const bodyText = useMemo(() => memoryBody(memory), [memory]);

@@ -10,6 +10,7 @@ import {
   memoryConfiguredType,
   memoryTitle,
   memoryType,
+  metadataLabel,
   plain,
   shortMemoryDate,
 } from "@/modules/memories/browser/presentation";
@@ -41,7 +42,7 @@ const snippets = new WeakMap<MemorySearchResult, string>();
 function snippetOf(result: MemorySearchResult): string {
   let snippet = snippets.get(result);
   if (snippet === undefined) {
-    snippet = plain(result.evidence || result.memory.content).slice(0, 200);
+    snippet = plain(result.evidence || result.memory.content);
     snippets.set(result, snippet);
   }
   return snippet;
@@ -74,7 +75,7 @@ function MemoryRowLabels({ memory }: { memory: Memory }) {
   const type = memoryConfiguredType(memory);
   return (
     <>
-      {type && <span className="badge">{type}</span>}
+      {type && <span className="badge">{metadataLabel(type)}</span>}
       <span className="memory-scope">{memory.scope}</span>
     </>
   );
