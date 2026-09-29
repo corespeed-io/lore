@@ -44,8 +44,11 @@ COMMENT ON COLUMN public.request_idempotency_records.subject_proposal_id IS
   'The Proposal a replayed Proposal response carries; deleting it deletes this row.';
 COMMENT ON COLUMN public.request_idempotency_records.proposal_target_memory_id IS
   'The target Memory of a replayed update Proposal; forgetting it deletes this row.';
+-- Only Proposal submission is replayed today, and a submitted Proposal is never yet
+-- accepted, so this column stays NULL. It mirrors the baseline `{proposal,acceptedMemoryId}`
+-- JSON path so a replayed Proposal body that names an accepted Memory needs no migration.
 COMMENT ON COLUMN public.request_idempotency_records.proposal_accepted_memory_id IS
-  'The Memory an accepted Proposal created or updated; forgetting it deletes this row.';
+  'The Memory an accepted Proposal created or updated; forgetting it deletes this row. NULL while only submissions are replayed.';
 COMMENT ON COLUMN public.request_idempotency_records.subject_episode_id IS
   'The Episode a replayed Episode response carries; forgetting it deletes this row.';
 

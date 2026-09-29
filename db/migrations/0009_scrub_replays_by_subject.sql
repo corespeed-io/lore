@@ -33,6 +33,8 @@ BEGIN
   WHERE replay.workspace_id = OLD.workspace_id AND replay.subject_memory_id = OLD.id;
   DELETE FROM public.request_idempotency_records replay
   WHERE replay.workspace_id = OLD.workspace_id AND replay.proposal_target_memory_id = OLD.id;
+  -- NULL while only submissions are replayed (see 0007), so its empty partial index
+  -- answers this at once; it keeps the column scrub whole beside the JSON paths.
   DELETE FROM public.request_idempotency_records replay
   WHERE replay.workspace_id = OLD.workspace_id AND replay.proposal_accepted_memory_id = OLD.id;
   RETURN OLD;

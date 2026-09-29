@@ -161,7 +161,11 @@ export type ReplayBody =
   | { episode: { id: string } }
   | { deleted: boolean };
 
-/** The subjects whose deletion must scrub a stored body, one column each. */
+/**
+ * The subjects whose deletion must scrub a stored body, one column each. Only
+ * submission replays a Proposal, so its `acceptedMemoryId` is null today; the column
+ * mirrors the JSON path so a replayed body that names one needs no migration.
+ */
 function replaySubjects(body: ReplayBody): (string | null)[] {
   const memory = "memory" in body ? (body.memory?.id ?? null) : null;
   const proposal = "proposal" in body ? body.proposal : null;
