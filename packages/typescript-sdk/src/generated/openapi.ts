@@ -1424,8 +1424,11 @@ export interface components {
             readonly checksum: string;
             /** Format: date-time */
             readonly exportedAt: string;
-            /** @constant */
-            readonly format: "lore-workspace-v1";
+            /**
+             * @description Import accepts every listed format; export writes lore-workspace-v2.
+             * @enum {string}
+             */
+            readonly format: "lore-workspace-v1" | "lore-workspace-v2";
             readonly linkCount: number;
             readonly memoryCount: number;
             /** Format: uuid */

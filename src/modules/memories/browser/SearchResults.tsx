@@ -5,12 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import { MAX_MEMORY_PAGES, MEMORY_PAGE_SIZE } from "@/modules/memories/browser/data";
 import { plain } from "@/modules/memories/browser/markdown";
 import {
+  browseCounts,
+  browseFilterEmptyNote,
+  browseTypeChips,
   memoryConfiguredType,
   memoryTitle,
   memoryType,
   shortMemoryDate,
-  typeLabel,
-  typeSort,
 } from "@/modules/memories/browser/presentation";
 
 const BROWSE_WINDOW = MEMORY_PAGE_SIZE * MAX_MEMORY_PAGES;
@@ -20,8 +21,10 @@ interface SearchResultsProps {
   results: readonly MemorySearchResult[];
   memories: Memory[];
   capped: boolean;
+  /** Every browse page was read, so the counts are exact. */
+  complete: boolean;
   loading: boolean;
-  /** The browse read failed before any Memory arrived. */
+  /** The browse read failed: before any Memory arrived, or on a later page. */
   browseError: string | null;
   error: string | null;
   query: string;
@@ -70,6 +73,7 @@ export function SearchResults({
   results,
   memories,
   capped,
+  complete,
   loading,
   browseError,
   error,
@@ -120,29 +124,36 @@ export function SearchResults({
       );
     }
 
-    const counts = Object.create(null) as Record<string, number>;
+    const typeCounts = Object.create(null) as Record<string, number>;
     for (const memory of memories) {
       const type = memoryType(memory);
-      counts[type] = (counts[type] ?? 0) + 1;
+      typeCounts[type] = (typeCounts[type] ?? 0) + 1;
     }
-    const types = Object.keys(counts).sort(typeSort);
-    const chips: [string, string][] = [
-      ["all", "All"],
-      ...types.map((type): [string, string] => [type, typeLabel(type)]),
-    ];
+    const chips = browseTypeChips(Object.keys(typeCounts), typeFilter);
     const filtered =
       typeFilter === "all"
         ? memories
         : memories.filter((memory) => memoryType(memory) === typeFilter);
     const shown = filtered.slice(0, rowLimit);
+    const counts = browseCounts({
+      matching: filtered.length,
+      total: memories.length,
+      filtered: typeFilter !== "all",
+      complete,
+    });
+    const emptyNote = browseFilterEmptyNote({
+      type: typeFilter,
+      matching: filtered.length,
+      complete,
+      capped,
+      stopped: Boolean(browseError),
+      window: BROWSE_WINDOW,
+    });
 
     return (
       <div className="page-wrap">
         <div className="memories-head">
-          <p>
-            Showing {filtered.length}
-            {typeFilter !== "all" ? ` of ${memories.length}` : ""} memories
-          </p>
+          <p>{counts.heading}</p>
           {capped && (
             <span>
               Browse is limited to {BROWSE_WINDOW.toLocaleString("en-US")} Memories. Search covers
@@ -156,13 +167,17 @@ export function SearchResults({
               key={key}
               type="button"
               className={`chip${typeFilter === key ? " chip-active" : ""}`}
+              aria-pressed={typeFilter === key}
               onClick={() => onTypeFilter(key)}
             >
               {label}{" "}
-              <span className="chip-count">{key === "all" ? memories.length : counts[key]}</span>
+              <span className="chip-count">
+                {counts.count(key === "all" ? memories.length : (typeCounts[key] ?? 0))}
+              </span>
             </button>
           ))}
         </div>
+        {emptyNote && <p className="muted-note">{emptyNote}</p>}
         <div className="search-list">
           {shown.map((memory) => (
             <button

@@ -1,11 +1,11 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
-import { createAccessModule } from "@/server/auth/access";
 import {
   createRequestContextResolver,
   RequestAuthenticationError,
   WorkspaceAccessError,
 } from "@/server/auth/request-context";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 afterEach(() => {

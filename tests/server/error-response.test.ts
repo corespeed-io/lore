@@ -8,6 +8,7 @@ import {
   MemoryVersionConflictError,
 } from "@corespeed/lore-core";
 import { expect, test, vi } from "vitest";
+import { AgentNotDisabledError } from "@/modules/agents/service";
 import {
   CodeEvidenceAccessDeniedError,
   CodeEvidenceValidationError,
@@ -38,13 +39,12 @@ import {
   PayloadTooLargeError,
   PreconditionRequiredError,
 } from "@/server/api/input";
-import { AccessDeniedError, AgentNotDisabledError } from "@/server/auth/access";
 import {
   RequestAuthenticationError,
   RequestInputError,
   WorkspaceAccessError,
 } from "@/server/auth/request-context";
-import { MethodNotAllowedError, NotFoundError } from "@/server/errors";
+import { AccessDeniedError, MethodNotAllowedError, NotFoundError } from "@/server/errors";
 
 /**
  * Each public failure keeps the status and code it had when every error class

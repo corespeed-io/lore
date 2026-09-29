@@ -76,7 +76,7 @@ export function createObservationModule(database: PostgresDatabase) {
             actor,
             options.idempotency,
           );
-          if (claim.replay) return claim.replay.body.episode;
+          if (claim.replay) return claim.replay.episode;
           // This OSS schema function authorizes User/Agent provenance and owns
           // the immutable Episode insert privileges unavailable to lore_app.
           const result = await transaction.query<{ id: string }>(
@@ -105,7 +105,7 @@ export function createObservationModule(database: PostgresDatabase) {
           await completeMutation(
             transaction,
             claim.requestId,
-            201,
+            "created",
             { episode },
             Boolean(options.idempotency),
           );
@@ -158,7 +158,7 @@ export function createObservationModule(database: PostgresDatabase) {
             actor,
             options.idempotency,
           );
-          if (claim.replay) return claim.replay.body.deleted;
+          if (claim.replay) return claim.replay.deleted;
           const writable = await transaction.query<{ id: string }>(
             `SELECT id FROM episodes
              WHERE workspace_id = $1 AND id = $2
@@ -174,7 +174,7 @@ export function createObservationModule(database: PostgresDatabase) {
           await completeMutation(
             transaction,
             claim.requestId,
-            deleted ? 204 : 404,
+            deleted ? "deleted" : "not_found",
             { deleted },
             Boolean(options.idempotency),
           );

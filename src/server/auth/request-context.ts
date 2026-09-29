@@ -1,7 +1,7 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
-import { createAccessModule } from "./access";
+import { createAgentAuthenticator } from "./agent-credentials";
 import {
   type AuthPrincipal,
   checkAuth,
@@ -39,7 +39,7 @@ function requestedWorkspace(request: Request): string {
 }
 
 export function createRequestContextResolver(database: PostgresDatabase) {
-  const access = createAccessModule(database);
+  const agentCredentials = createAgentAuthenticator(database);
   const identities = createIdentityModule(database);
 
   // Hono passes the principal its admission already verified; other callers verify here.
@@ -68,7 +68,7 @@ export function createRequestContextResolver(database: PostgresDatabase) {
       const workspaceId = requestedWorkspace(request);
       const token = bearerToken(request);
       if (token) {
-        const actor = await access.authenticateAgent(token, workspaceId);
+        const actor = await agentCredentials.authenticate(token, workspaceId);
         if (!actor) throw new WorkspaceAccessError("Agent is not granted to this Workspace");
         return actor;
       }

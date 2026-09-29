@@ -44,6 +44,11 @@ and bounded response reading; CLI/MCP operators may set the same value with
 Ordinary success responses are capped at 128 MiB and error responses at 64 KiB.
 Workspace exports read complete archives under the server's record-count limits,
 without the ordinary success-response byte cap; the configured timeout still applies.
+Export writes the `lore-workspace-v2` archive format, and import accepts every
+format in `LORE_CONTRACT.vocabularies.workspaceArchiveFormats` (`lore-workspace-v1`
+and `lore-workspace-v2`). A deployment older than schema revision 9 refuses a v2
+archive, so upgrade the target before moving a Workspace to it
+([operations guide](operations.md#workspace-export-and-import)).
 
 The frontend follows `SWR hook → domain client → TypeScript SDK → HTTP API`.
 SWR owns cached remote state and mutations. Domain clients retain UI defaults;

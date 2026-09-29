@@ -8,7 +8,7 @@ import {
   statementSql,
 } from "./migration-statements.ts";
 export const MINIMUM_POSTGRES_VERSION = 150000;
-export const LATEST_SCHEMA_REVISION = 6;
+export const LATEST_SCHEMA_REVISION = 9;
 export const MIGRATION_LOCK_ID = 1_280_263_749;
 export const DBMATE_MIGRATIONS_TABLE = "lore_schema_migrations";
 

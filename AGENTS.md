@@ -131,15 +131,46 @@ been removed. Lore now has a native implementation, split into two concepts
   `memory_import_provenance_import_idx` with `CREATE INDEX CONCURRENTLY`, so
   idempotent writes never wait on the build. Each index is dropped (`DROP INDEX
   CONCURRENTLY IF EXISTS`) and then built, so a rerun after a stopped build
-  replaces any `INVALID` leftover. The forget triggers find replay bodies by those
-  JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
-  `{proposal,acceptedMemoryId}`, `{episode,id}`), so renaming one in a replayed
-  response needs a forward migration. `ReplayBody` (`src/server/api/idempotency.ts`)
-  is the only type `completeMutation` accepts and names exactly those keys, so a
-  rename fails typecheck, and `tests/server/replay-scrub.test.ts` proves by content,
-  not by those paths, that forgetting removes every such body. Moving the scrub to
-  an explicit subject column is a two-release migration (the JSON-path triggers must
-  outlive every older app instance) and has not been scheduled.
+  replaces any `INVALID` leftover. The baseline forget triggers find replay bodies
+  by those JSON keys (`{memory,id}`, `{proposal,id}`, `{proposal,targetMemoryId}`,
+  `{proposal,acceptedMemoryId}`, `{episode,id}`). Moving that scrub to explicit
+  subject columns is a two-release migration, and this release is the first:
+  `0007_add_replay_subject_columns.sql` adds `subject_memory_id`,
+  `subject_proposal_id`, `proposal_target_memory_id`, `proposal_accepted_memory_id`,
+  and `subject_episode_id` (catalog-only; existing rows are not rewritten, because a
+  backfill under ADD COLUMN's ACCESS EXCLUSIVE lock would block every idempotent write
+  and the JSON-path triggers already scrub those rows), plus a ledger trigger that
+  clears them whenever a row returns to `in_progress`, so an older instance reclaiming
+  an expired key cannot leave a stale subject behind;
+  `0008_index_replay_subjects_concurrently.sql` indexes them concurrently; and
+  `0009_scrub_replays_by_subject.sql` then adds one BEFORE/AFTER DELETE trigger per
+  subject table that scrubs by column. The triggers come after their indexes, so no
+  forget scans the ledger, and 0009 locks episodes, memories, and memory_proposals, in
+  the order Agent deletion's foreign keys and forget reach them, but never the ledger,
+  which every keyed write locks first: a migration holding a subject table while it
+  waits for the ledger deadlocks with them. A rare three-way collision with a Proposal's
+  evidence check and a concurrent forget or update of that evidence can still abort one
+  side with a retryable deadlock error. `tests/server/replay-subject-upgrade.test.ts`
+  checks the tables each migration locks and the order 0009 creates its triggers in. `completeMutation` writes the columns from its `ReplayBody`, the only type it
+  accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
+  content. The JSON-path triggers and their 0005 indexes stay until the second
+  release, because app instances older than revision 7 still write rows without the
+  columns during a rolling deploy; until then renaming a replayed key still needs a
+  forward migration. The second release, once every instance writes the columns and
+  the 24-hour ledger has turned over, drops the JSON-path scrub from
+  `lore.append_memory_event`, `lore.remove_proposals_for_deleted_memory`,
+  `lore.scrub_deleted_episode_replay`, and `lore.scrub_deleted_memory_proposal`, with
+  the five 0005 expression indexes. Rows written before revision 7, or by an older
+  instance since, have NULL columns, and expired rows stay until the maintenance sweep
+  deletes them, so that migration must first derive the columns of every completed row
+  that lacks them (or delete expired rows) rather than trust that the sweep ran, and do
+  it outside any ACCESS EXCLUSIVE lock.
+  Services report a `MutationOutcome`
+  (`created`/`ok`/`deleted`/`not_found`), never an HTTP status, and replay derives
+  its response from the stored body alone. The ledger's `response_status` is still
+  written, from the outcome, only because older instances require it on replay; the
+  second release stops writing it and drops it, relaxing
+  `request_idempotency_records_check` first.
   `0006_publish_memory_link_capabilities.sql` replaces
   `lore.portable_core_capabilities()` with the baseline body plus the `memoryLinks`
   feature and the Link bounds (`memoryLinkMetadataCharacters`,
@@ -153,13 +184,13 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 6) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 9) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
   wrapper tolerates an older application constant, but readiness requires exact
   equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (6), and
+  `tests/integration/api.test.ts` pin the current revision (9), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -309,11 +340,17 @@ been removed. Lore now has a native implementation, split into two concepts
   changed chunk may follow its ordinal only when that surrounding sequence still
   matches; equal-count reorder/replacement must abstain as `ambiguous`. Artifact
   pruning must not delete citation anchors. Joint retrieval assesses all result
-  Memories' citations in one read (`assessMemoryCitations`); after the Memory and
-  Code searches, which call providers outside any transaction, every later Code read
-  of one packet (assessment, anchored Artifacts, contextual impact) shares one
-  REPEATABLE READ, READ ONLY snapshot, so a generation activated mid-packet cannot
-  split them;
+  Memories' citations in one read (`assessMemoryCitations`); after the Memory
+  search, which calls providers outside any transaction, and the Code search beside
+  it, every later Code read of one packet (assessment, anchored Artifacts,
+  contextual impact) shares one REPEATABLE READ, READ ONLY snapshot, so a generation
+  activated mid-packet cannot split them. The snapshot asks for those modes through
+  `PostgresDatabase.transaction(use, { isolation, readOnly })`, which starts the
+  transaction in them (`BEGIN ISOLATION LEVEL …`, or `SET TRANSACTION` as PGlite's
+  first statement) before host setup runs; every wrapper must pass `options` on,
+  and the packet asks for them again inside: a no-op when they took effect, applying
+  them when a wrapper dropped them but host setup took no snapshot, and failing
+  (500) when setup already read, so the packet never reads at READ COMMITTED;
   identity matching goes through the path-free Symbol Set payload index, not a
   suffix scan. Retrieval fetches one citation past `MAXIMUM_CONTEXT_ANCHORS`, and a
   cut list marks contextual impact `anchors:truncated`, so it is never
@@ -383,10 +420,15 @@ been removed. Lore now has a native implementation, split into two concepts
   changes must bump `CODE_INDEX_REVISION` so old and new Artifacts never masquerade
   as the same generation;
 - the `workspaces` module owns the active-session surface: Workspace list/create
-  plus `GET /api/v1/actor`, which resolves the verified human Actor *inside* the
-  active Workspace. There is no separate `identity` module — the Identity
-  aggregate's storage and policy live in `src/server/auth/`, and a four-file domain
-  folder for one workspace-scoped endpoint was scaffolding, not a seam;
+  and Memberships (`src/modules/workspaces/service.ts`) plus `GET /api/v1/actor`,
+  which resolves the verified human Actor *inside* the active Workspace. The
+  `agents` module (`src/modules/agents/service.ts`) owns a User's Agents, their
+  Workspace grants, and issuing and revoking their credentials. `src/server/auth/`
+  keeps only authentication: Identity storage, request admission, Actor context,
+  and proving an Agent bearer token (`agent-credentials.ts`, which also defines the
+  token format and stored hash the `agents` module issues). There is no separate
+  `identity` module, and a four-file domain folder for one workspace-scoped endpoint
+  was scaffolding, not a seam;
 - `/api/workspaces`, `/api/memories`, `/api/agents`, and `/api/evaluations` are
   Hono subrouters exported directly by `src/modules/*/routes.ts` and composed by
   `src/server/api/app.ts` through `app.route()`. Route handlers call domain services
@@ -426,9 +468,27 @@ been removed. Lore now has a native implementation, split into two concepts
   parse (reported at the parser's line:column), an unresolvable in-repo import, an
   import of an in-repo module that is not `.ts`/`.tsx` (stylesheets and other assets
   aside), and a declared `MODULES` dependency or export that nothing uses are all
-  findings. A computed specifier
-  (`import("node:" + name)`) is invisible to any scan; the Cloudflare dry run, which
-  sees the real bundle, is the backstop for those. Every browser-side file of a domain lives
+  findings. The intended ways to load a module are a static import, `import()` of a
+  string literal, and `require()` of a string literal the scan reports, and the guard
+  refuses the loads no scan can resolve instead of missing their edges:
+  `import("node:" + name)` and a literal Bun folds from parts (`"node:" + "fs"`) that
+  its scan then never reports; every other reference to the global `require` (a
+  computed argument, an alias, `(0, require)`, `require.call`, an optional call,
+  `typeof`); calls of a locally bound `require` and of `module.require`;
+  `import.meta.require` and `process.getBuiltinModule` written as those member
+  chains; `import.meta` used as anything but a read of a known property (`url`,
+  `dirname`, `filename`, `env`, `main`, `resolve`, ...), so it cannot be aliased,
+  destructured, or indexed to reach its loader; and any value import of
+  `node:module`, whose `createRequire` loads by any name (refused from the import
+  records). Bun's transpiler `define` finds the global references, so a string cannot
+  fake one; the rest are found by es-module-lexer over the JavaScript Bun emits,
+  which has no types or comments, emitted without dead-code elimination so no
+  `NODE_ENV` branch can hide a load. It is not a complete sandbox: it does not see
+  `process.getBuiltinModule` reached through an alias, destructuring, an index,
+  `process?.`, or `node:process`; other uses of `module`; `new Function` or `eval`
+  source; the `Bun` global (`Bun.spawn`); or the target of
+  `new Worker(new URL(...))`, which Turbopack does follow. A test pins each of these
+  limits, so a change that closes one updates this list. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
@@ -461,7 +521,9 @@ been removed. Lore now has a native implementation, split into two concepts
   `applyMemoryChange` (`src/shell/memory-cache.ts`); a domain view reports a write
   to the shell instead of touching another domain's cache keys. The paused browse
   list applies a save or forget as an exact patch; a write of unknown extent (an
-  import, a failed review) makes its next resume re-read every page. The Graph
+  import, a failed review) makes its next resume re-read every page. A patch
+  re-slices the cached pages, so whether the window is capped or complete is
+  judged by the last page as the server returned it (`browseWindowState`). The Graph
   read model behind wikilinks and Related (`buildGraphStore`) lives in
   `src/modules/graph/browser/store.ts`, and browser bounds (Graph nodes, browse page
   size and window) come from the SDK's `LORE_CONTRACT`. Returning to browse re-reads only
@@ -619,7 +681,16 @@ been removed. Lore now has a native implementation, split into two concepts
   Proposal content expires after 30 days, and hard-deleting a target or accepted
   Memory removes its associated proposals and replay bodies immediately.
   Accepting an update locks the target Memory before the Proposal, the same order
-  as forget's BEFORE DELETE trigger; keep it;
+  as forget's BEFORE DELETE trigger; keep it. Submitting an update holds its target
+  `FOR KEY SHARE` until commit, because the target has no foreign key to take that
+  lock: a forget under way makes the submission wait and then find no target, and a
+  later forget waits for it and then scrubs the Proposal and its replay body. Evidence
+  forgotten after its visibility check is refused by its foreign key and answers the
+  same 403 as invisible evidence (`scripts/checks/smoke-memory-core.ts` races a forget
+  under way against both on PostgreSQL). The lock makes an update or acceptance of the
+  target, which locks it `FOR UPDATE`, wait for the submission, and a submission that
+  reclaimed an expired key naming the same target can deadlock with a forget of it
+  (a retryable 409); moving updates to `FOR NO KEY UPDATE` is a follow-up;
 - Episodes are bounded, ordered evidence envelopes; their immutable Observations
   preserve message, tool, document-fragment, or event content until the owner User
   or an authorized Agent explicitly forgets the Episode. They default private, never enter ordinary
@@ -1136,9 +1207,16 @@ database invariant, not a UI convention.
   precision and validates it with import's rules, so export never emits a timestamp
   its own import refuses. Import stores the archive's timestamp text as provenance
   unchanged. The archive checksum (`src/modules/portability/checksum.ts`) is a
-  permanent format that a golden-value test pins; it deliberately does not share
-  request-replay hashing, which may change at any deploy. Change it only with a new
-  archive format.
+  permanent format that golden-value tests pin, one per archive format; it
+  deliberately does not share request-replay hashing, which may change at any
+  deploy. Change it only with a new archive format. Export writes
+  `lore-workspace-v2`, whose checksum orders object keys by UTF-16 code unit, the
+  same in every runtime; import also accepts `lore-workspace-v1`, whose checksum
+  orders them with the default-locale `localeCompare`, and verifies each archive in
+  the format its manifest names (`WORKSPACE_ARCHIVE_FORMATS`, published as the
+  manifest's `format` enum and `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`).
+  A release before schema revision 9 imports only v1 and refuses a v2 archive, so the
+  target of a Workspace move must be upgraded first (docs/operations.md).
 - Mutation events and deletion tombstones never retain Memory content, query text,
   credentials, or provider payloads and must expire. A future change feed/webhook/
   AutoDream consumer reads this outbox; it must not weaken source-table RLS.

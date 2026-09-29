@@ -108,18 +108,31 @@ test("transaction:false statements split only at line-ending semicolons outside 
   );
 });
 
-test("the chain sends 0005 one statement at a time and every other migration whole", async () => {
+test("the chain sends each transaction:false migration one statement at a time and every other whole", async () => {
+  // DROP/CREATE CONCURRENTLY pairs in each index-only migration, then its revision.
+  const concurrent: Record<string, { pairs: number; revision: number }> = {
+    "0005": { pairs: 6, revision: 5 },
+    "0008": { pairs: 5, revision: 8 },
+  };
+  const versions: string[] = [];
   for (const migration of await migrationFiles()) {
+    versions.push(migration.version);
     const queries = migrationQueries(migration.sql, migration.id);
-    if (migration.version !== "0005") {
+    const expected = concurrent[migration.version];
+    if (!expected) {
       expect(queries, migration.id).toHaveLength(1);
       continue;
     }
-    // Six DROP/CREATE CONCURRENTLY pairs, then the schema revision last.
-    expect(queries).toHaveLength(13);
-    expect(queries.slice(0, 12).every((query) => /CONCURRENTLY/.test(query))).toBe(true);
-    expect(queries.at(-1)).toMatch(/^UPDATE public\.lore_system_state\s+SET schema_revision = 5,/m);
+    expect(queries, migration.id).toHaveLength(expected.pairs * 2 + 1);
+    expect(queries.slice(0, -1).every((query) => /CONCURRENTLY/.test(query))).toBe(true);
+    expect(queries.at(-1)).toMatch(
+      new RegExp(
+        `^UPDATE public\\.lore_system_state\\s+SET schema_revision = ${expected.revision},`,
+        "m",
+      ),
+    );
   }
+  expect(versions).toEqual(expect.arrayContaining(Object.keys(concurrent)));
 });
 
 test("db:migrate hands dbmate each transactional run and applies transaction:false files itself", () => {

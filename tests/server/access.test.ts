@@ -1,10 +1,15 @@
-import { expect, test } from "vitest";
+import { createHash } from "node:crypto";
+import { expect, onTestFinished, test } from "vitest";
+import { AgentNotDisabledError } from "@/modules/agents/service";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
 import { createApi } from "@/server/api/app";
-import { AccessDeniedError, createAccessModule } from "@/server/auth/access";
+import { newAgentCredentialSecret } from "@/server/auth/agent-credentials";
+import { refusingDeniedAccess } from "@/server/database/access-denied";
+import { AccessDeniedError } from "@/server/errors";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import { installActorContext } from "../../src/server/auth/actor-context";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("User can create an Agent and grant it write access to their Workspace", async () => {
@@ -281,7 +286,7 @@ test("Agent lifecycle updates require ownership and a grant in the active Worksp
   await expect(
     access.updateAgent(testContext.bob, agent.id, { status: "disabled" }),
   ).resolves.toBeNull();
-  await expect(access.deleteAgent(testContext.bob, agent.id)).resolves.toBe("not_found");
+  await expect(access.deleteAgent(testContext.bob, agent.id)).resolves.toBe(false);
 
   await access.addMember(testContext.carol, testContext.alice.userId, { role: "member" });
   const researchAlice = {
@@ -291,7 +296,7 @@ test("Agent lifecycle updates require ownership and a grant in the active Worksp
   await expect(
     access.updateAgent(researchAlice, agent.id, { status: "disabled" }),
   ).resolves.toBeNull();
-  await expect(access.deleteAgent(researchAlice, agent.id)).resolves.toBe("not_found");
+  await expect(access.deleteAgent(researchAlice, agent.id)).resolves.toBe(false);
 
   const disabled = await access.updateAgent(testContext.alice, agent.id, {
     status: "disabled",
@@ -365,9 +370,11 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
     scope: "private",
   });
 
-  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("must_disable");
+  await expect(access.deleteAgent(testContext.alice, agent.id)).rejects.toBeInstanceOf(
+    AgentNotDisabledError,
+  );
   await access.updateAgent(testContext.alice, agent.id, { status: "disabled" });
-  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("deleted");
+  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe(true);
 
   await expect(access.listAgents(testContext.alice)).resolves.toEqual([]);
   await expect(access.listAgents(researchAlice)).resolves.toEqual([]);
@@ -473,7 +480,7 @@ test("Deleting a disabled Agent that cited Code Evidence keeps the citation with
   }
 
   await access.updateAgent(testContext.alice, agent.id, { status: "disabled" });
-  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe("deleted");
+  await expect(access.deleteAgent(testContext.alice, agent.id)).resolves.toBe(true);
 
   const surviving = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{
@@ -564,4 +571,87 @@ test("A suspended owner Membership denies the owner's Agents until it is reactiv
     access.authenticateAgent(credential.token, testContext.bob.workspaceId),
   ).resolves.toMatchObject({ agentId: agent.id });
   expect((await capabilities()).status).toBe(200);
+});
+
+test("a new Agent credential shows its first 12 secret digits and is stored by SHA-256", async () => {
+  const issued = await newAgentCredentialSecret();
+  expect(issued.token).toMatch(/^lore_agent_[0-9a-f]{64}$/);
+  const secret = issued.token.slice("lore_agent_".length);
+  expect(issued.prefix).toBe(secret.slice(0, 12));
+  expect(issued.secretHash).toBe(createHash("sha256").update(issued.token).digest("hex"));
+  expect((await newAgentCredentialSecret()).token).not.toBe(issued.token);
+});
+
+test("only a statement PostgreSQL refused is reported as access_denied", async () => {
+  await expect(refusingDeniedAccess(async () => "allowed")).resolves.toBe("allowed");
+  const refused = Object.assign(new Error("new row violates row-level security policy"), {
+    code: "42501",
+  });
+  await expect(refusingDeniedAccess(() => Promise.reject(refused))).rejects.toBeInstanceOf(
+    AccessDeniedError,
+  );
+  const conflict = Object.assign(new Error("duplicate key value"), { code: "23505" });
+  await expect(refusingDeniedAccess(() => Promise.reject(conflict))).rejects.toBe(conflict);
+});
+
+test("HTTP delete of an Agent the caller does not own, or one already deleted, is 404", async () => {
+  process.env.AUTH_MODE = "none";
+  process.env.ALLOW_INSECURE = "1";
+  process.env.LORE_LOCAL_SUBJECT = "agent-delete-missing";
+  onTestFinished(() => {
+    for (const key of ["AUTH_MODE", "ALLOW_INSECURE", "LORE_LOCAL_SUBJECT"]) {
+      delete process.env[key];
+    }
+  });
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const bobAgent = await access.createAgentForWorkspace(testContext.bob, {
+    name: "Bob's assistant",
+    permission: "read",
+  });
+  await access.updateAgent(testContext.bob, bobAgent.id, { status: "disabled" });
+  const app = createApi({
+    database: () => testContext.database,
+    memoryOptions: () => ({}),
+    codeRepositories: () => ({}),
+  });
+  const workspace = (await (
+    await app.request(
+      new Request("http://lore.local/api/v1/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ name: "Agent Lab" }),
+      }),
+    )
+  ).json()) as { id: string };
+  const headers = { "x-lore-workspace-id": workspace.id };
+  const remove = (agentId: string) =>
+    app.request(
+      new Request(`http://lore.local/api/v1/agents/${agentId}`, { method: "DELETE", headers }),
+    );
+
+  const foreign = await remove(bobAgent.id);
+  expect(foreign.status).toBe(404);
+  await expect(foreign.json()).resolves.toEqual({ code: "not_found", error: "Agent not found" });
+  await expect(access.listAgents(testContext.bob)).resolves.toMatchObject([{ id: bobAgent.id }]);
+
+  const own = (await (
+    await app.request(
+      new Request("http://lore.local/api/v1/agents", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ name: "Own assistant" }),
+      }),
+    )
+  ).json()) as { id: string };
+  await app.request(
+    new Request(`http://lore.local/api/v1/agents/${own.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status: "disabled" }),
+    }),
+  );
+  expect((await remove(own.id)).status).toBe(204);
+  const again = await remove(own.id);
+  expect(again.status).toBe(404);
+  await expect(again.json()).resolves.toMatchObject({ code: "not_found" });
 });

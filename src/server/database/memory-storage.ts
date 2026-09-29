@@ -15,11 +15,11 @@ export function createMemoryStorage(
     ownerId: actor.userId,
     ...(actor.agentId ? { sourceId: actor.agentId } : {}),
     database: {
-      transaction: (use) =>
+      transaction: (use, options) =>
         database.transaction(async (transaction) => {
           await installActorContext(transaction, actor);
           return use(transaction);
-        }),
+        }, options),
     },
   };
 }

@@ -69,3 +69,9 @@ export class MethodNotAllowedError extends DomainError {
   override name = "MethodNotAllowedError";
   readonly code = "method_not_allowed";
 }
+
+/** The Actor may not perform this operation. */
+export class AccessDeniedError extends DomainError {
+  override name = "AccessDeniedError";
+  readonly code = "access_denied";
+}

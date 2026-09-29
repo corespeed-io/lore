@@ -28,7 +28,11 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
   Metadata filters and context-group expansion only narrow or group eligible
   evidence; they never authorize access.
 - **PostgreSQL remains part of the engine.** Core owns SQL persistence and the
-  narrow `PostgresDatabase` transaction interface. Its storage schema still uses
+  narrow `PostgresDatabase` transaction interface. `transaction(use, options)`
+  may ask for an isolation level and read-only mode; an implementation starts the
+  transaction in them before its host setup (the `pg` adapters put them in `BEGIN`),
+  and a wrapper must pass `options` on, because PostgreSQL refuses to change the
+  isolation level once a statement has taken a snapshot. Its storage schema still uses
   physical names such as `workspace_id`, `owner_user_id`, and
   `created_by_agent_id`; the module maps opaque keys to those existing columns.
   Memory tables, lexical helper
@@ -47,7 +51,7 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 | Entry | Contents |
 | --- | --- |
 | `.` | Memory storage, retrieval, graph, maintenance, content/chunking, the domain contract (`LoreValidationError`, vocabularies, limits, and input validators), `MemoryStorageContext`, db seam, and model capability interfaces |
-| `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback |
+| `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback; each transaction begins in its requested modes before that callback |
 | `./episodes` | Episode/Observation vocabularies (`EPISODE_KINDS`, `OBSERVATION_KINDS`), bounded admission validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
 | `./testing` | Host-pluggable schema-contract test kit, `CORE_SCHEMA_CONTRACT`, and `missingSchemaContract` |
 
@@ -109,7 +113,8 @@ Lore remains upstream; HaaS ports selected changes manually and records their
 provenance. The packages are not assumed to be semantically identical, and Lore
 tasks do not require automatic changes to the HaaS fork. Hosts adopting this
 package can run `./testing` against their own schema. Its `testDatabase` helper
-applies host transaction initialization; it chooses no database role.
+applies host transaction initialization, after the requested transaction modes;
+it chooses no database role.
 Package tests also exercise real CRUD/retrieval against a minimal independent
 PGlite schema without OSS identity tables or authorization functions, alongside
 the OSS schema's isolation and embedding-maintenance contract.
@@ -176,6 +181,14 @@ its own:
   owner keeps an equal share, and suppresses affinity. Every `MemoryGraphLink` carries
   `derived`, true only for affinity edges. A port that read every Link, or told
   affinity apart by `kind`, must adopt both.
+- **`PostgresDatabase.transaction` takes transaction modes.** Its optional second
+  argument, `PostgresTransactionOptions` (`{ isolation?: "repeatable read" |
+  "serializable", readOnly?: boolean }`), must start the transaction in those modes
+  before any host setup runs; `transactionModes(options)` renders them for `BEGIN`
+  or a first `SET TRANSACTION`, and throws `LoreConfigurationError` for an unknown
+  isolation level. TypeScript accepts an implementation or wrapper that ignores the
+  argument, so a port must check each one by hand: a dropped option silently runs
+  the caller at READ COMMITTED, read-write.
 - **Batch primitives validate every record before any statement**, and a refusal
   names the record: `records[i].content`, `links[i].weight`. `insertMemoriesInTransaction`
   takes the ids it inserts; give it fresh UUIDs, never ids from an archive, or a

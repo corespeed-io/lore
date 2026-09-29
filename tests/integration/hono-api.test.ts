@@ -17,8 +17,8 @@ import {
   MAX_JSON_BODY_BYTES,
   PayloadTooLargeError,
 } from "@/server/api/input";
-import { createAccessModule } from "@/server/auth/access";
 import { loreOpenApiDocument } from "@/server/openapi/document";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 afterEach(() => vi.unstubAllEnvs());

@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createAccessModule } from "@/server/auth/access";
 import {
   createObservationModule,
   ObservationAccessDeniedError,
 } from "../../src/modules/episodes/service";
 import { installActorContext } from "../../src/server/auth/actor-context";
+import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
 
 test("An Episode records immutable ordered Observation evidence with private defaults", async () => {

@@ -336,11 +336,10 @@ test("import enqueues embedding jobs in its transaction and notifies them after 
 
 async function resigned(archive: WorkspaceArchive): Promise<WorkspaceArchive> {
   const { checksum: _checksum, ...manifest } = archive.manifest;
-  archive.manifest.checksum = await workspaceArchiveChecksum({
-    manifest,
-    memories: archive.memories,
-    links: archive.links,
-  });
+  archive.manifest.checksum = await workspaceArchiveChecksum(
+    { manifest, memories: archive.memories, links: archive.links },
+    manifest.format,
+  );
   return archive;
 }
 
@@ -548,6 +547,60 @@ test.each<[string, (archive: WorkspaceArchive) => void]>([
     await resigned(archive),
     /must be an RFC 3339 timestamp|is out of range/,
   );
+});
+
+// The format picks the checksum's key order, so it is checked before the checksum is
+// computed: an unknown one is an archive failure, never a failure to hash it.
+test.each<[string, unknown]>([
+  ["a later format", "lore-workspace-v3"],
+  ["a format in the wrong case", "LORE-WORKSPACE-V2"],
+  ["no format", undefined],
+])("import dry-run refuses %s, as the real import does", async (_name, format) => {
+  const testContext = await createMemoryTestContext();
+  const archive = await linkedArchive(testContext);
+  (archive.manifest as { format: unknown }).format = format;
+
+  await expectRefusedBeforeWrites(
+    testContext,
+    archive,
+    /^archive format must be lore-workspace-v1 or lore-workspace-v2$/,
+  );
+});
+
+test("export writes lore-workspace-v2, and a lore-workspace-v1 archive still imports", async () => {
+  const testContext = await createMemoryTestContext();
+  const portability = createPortabilityModule(testContext.database);
+  const archive = await linkedArchive(testContext);
+  expect(archive.manifest.format).toBe("lore-workspace-v2");
+
+  // An archive exported before v2: the same records, checksummed with v1's key order.
+  archive.manifest.format = "lore-workspace-v1";
+  await resigned(archive);
+  await expect(
+    portability.importWorkspace(testContext.alice, {
+      archive,
+      ownerMap: ownerMapTo(archive, testContext.alice),
+      dryRun: true,
+    }),
+  ).resolves.toMatchObject({ dryRun: true, importedMemories: 2, importedLinks: 1 });
+
+  // A checksum is verified in the format the manifest names: mixed-case keys sort
+  // differently in v1, so a v2 manifest with a v1-ordered checksum is refused.
+  archive.manifest.format = "lore-workspace-v2";
+  archive.memories[0].metadata = { Zeta: 1, alpha: 2 };
+  const { checksum: _checksum, ...manifest } = archive.manifest;
+  archive.manifest.checksum = await workspaceArchiveChecksum(
+    { manifest, memories: archive.memories, links: archive.links },
+    "lore-workspace-v1",
+  );
+  await expect(
+    portability.importWorkspace(testContext.alice, {
+      archive,
+      ownerMap: ownerMapTo(archive, testContext.alice),
+      dryRun: true,
+    }),
+  ).rejects.toThrow("archive checksum does not match its records");
+  await testContext.close();
 });
 
 test("every timestamp an import accepts is one PostgreSQL stores exactly", async () => {

@@ -79,7 +79,7 @@ SDK retain portable module contracts for other hosts.
 | `src/middleware.ts` | Next.js middleware, which Next expects inside `src/` when `src/app` is used |
 | `src/shell/` | App routing, Sidebar, and workflows that compose multiple domains |
 | `src/modules/` | Product domains, each owning its implementation and interfaces |
-| `src/server/auth/` | Authentication, identity storage, access policy, and Actor request context |
+| `src/server/auth/` | Authentication, identity storage, Agent credential verification, and Actor request context |
 | `src/server/database/` | OSS role selection, database construction, and identity-bound engine stores |
 | `src/server/providers/` | Concrete model adapters, SDK/protocol handling, model configuration, factories, and runtime provider instances |
 | `src/server/api/` | Hono composition and request context, Next.js/workerd hosts, input handling, idempotency headers, and error responses |
@@ -108,6 +108,10 @@ stay in `evaluation/`; the Docker runtime copies only `scripts/database/`.
 
 `src/modules` contains `memories`, `proposals`, `episodes`, `agents`, `workspaces`,
 `graph`, `code`, `context`, `evaluations`, `operations`, and `portability`.
+`workspaces/service.ts` owns Workspaces and Memberships; `agents/service.ts` owns a
+User's Agents, their Workspace grants, and issuing and revoking their credentials.
+`src/server/auth/` keeps only authentication, including proving an Agent bearer
+token (`agent-credentials.ts`).
 
 A module contains the files its implementation needs, and everything a browser may
 import lives in one `browser/` directory:
@@ -239,6 +243,12 @@ OSS `src/server/auth/actor-context.ts` owns User/Workspace/Agent context;
 including later retrieval-feedback rounds. `src/server/database/postgres.ts`
 chooses `lore_app` or `lore_maintenance`. Core's `./postgres` adapter only handles
 connections, transactions, and a host-supplied `initializeTransaction` callback.
+`PostgresDatabase.transaction(use, { isolation, readOnly })` starts the transaction
+in the requested modes (`BEGIN ISOLATION LEVEL …`) before that callback runs, and
+every wrapper must pass the options on: joint context retrieval reads one packet's
+Code evidence from a REPEATABLE READ, READ ONLY snapshot, and PostgreSQL cannot
+change the isolation level after any statement, host setup included, has taken a
+snapshot.
 An existing host transaction can be bound through `memoryStorageInTransaction`;
 its caller remains responsible for context, authorization, commit, and notification.
 
@@ -247,7 +257,9 @@ OSS modules `memories/service.ts`, `graph/service.ts`, and
 Core keys to the existing `workspaceId`, `ownerUserId`, and Agent provenance
 fields. Memory writes keep permission checks before version checks and mutate
 replay records inside the same transaction through
-`src/server/api/idempotency.ts`. Workspace lifecycle, memberships, grants,
+`src/server/api/idempotency.ts`. Services report a `MutationOutcome` (`created`,
+`ok`, `deleted`, `not_found`), never an HTTP status, and a replay derives its
+response from the stored body. Workspace lifecycle, memberships, grants,
 private/shared visibility, HTTP/SDK contracts, and existing tenant data remain
 OSS responsibilities. Metadata filters, scope selectors, and context-group
 expansion are retrieval inputs, never proof of authorization.
@@ -268,7 +280,8 @@ generation activation/pruning. Expired request replay and event cleanup,
 `purgeExpiredPortableCoreRecords`, lives in `src/modules/operations/maintenance.ts`.
 
 The `./testing` contract kit accepts host-bound contexts and a `testDatabase`
-helper that applies host transaction initialization. Tests exercise both the OSS RLS
+helper that applies the requested transaction modes and then host transaction
+initialization. Tests exercise both the OSS RLS
 schema and real CRUD/retrieval on a minimal independent PGlite schema without
 identity tables or authorization functions. The latter verifies the engine can
 operate without importing OSS policy; it does not supply a replacement security
@@ -381,6 +394,12 @@ does not change the code-index revision or stored artifact format.
    the generated SDK contract; presentation-only types stay with their consumers.
 5. Do not add compatibility re-export files at the retired `src/lib` paths. Update
    callers when moving an interface.
+6. Load a module with a static import, `import()` of a string literal, or
+   `require()` of a string literal. `architecture:check` refuses loads no scan can
+   resolve, such as a computed `import()` or `require()` specifier, an aliased
+   `require`, `import.meta.require`, `process.getBuiltinModule`, and value imports of
+   `node:module`. [`AGENTS.md`](../AGENTS.md) lists the exact rules and the limits
+   the guard does not cover.
 
 ## Scripts and tests
 

@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import type { EmbeddingProvider } from "./capabilities";
-import type { MemoryStorageContext, PostgresDatabase, PostgresTransaction } from "./db";
+import {
+  type MemoryStorageContext,
+  type PostgresDatabase,
+  type PostgresTransaction,
+  transactionModes,
+} from "./db";
 import { createMemoryMaintenanceModule } from "./maintenance";
 import { createMemoryModule, type MemoryScope } from "./memory";
 import {
@@ -187,8 +192,11 @@ export function testDatabase(
   initializeTransaction: (transaction: PostgresTransaction) => Promise<void>,
 ): PostgresDatabase {
   return {
-    transaction: (use) =>
+    // PGlite begins its own transaction, so the modes are its first statement.
+    transaction: (use, options) =>
       postgres.transaction(async (transaction) => {
+        const modes = transactionModes(options);
+        if (modes) await transaction.query(`SET TRANSACTION ${modes}`);
         await initializeTransaction(transaction);
         return use(transaction);
       }),
