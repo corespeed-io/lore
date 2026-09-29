@@ -222,7 +222,8 @@ export function MemoryView({
     updatedAt,
     version,
   } = memory;
-  const title = memoryDetailTitle(memory);
+  // A configured title may run to 100,000 characters, and parses whole here.
+  const title = useMemo(() => memoryDetailTitle(memory), [memory]);
   // Shown as written, since the title above reads only its words.
   const configuredTitle = memoryConfiguredTitle(memory);
   const type = memoryType(memory);

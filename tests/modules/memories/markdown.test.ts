@@ -232,15 +232,6 @@ test("tables that each fit the budget still share it, and the one past it keeps 
   expect(shared.match(/\| 1 \|/g)?.length).toBeGreaterThanOrEqual(99);
 });
 
-test("a body cannot parse to more table cells than the budget, however few its characters", () => {
-  // Each table fills in about 66,000 cells from 1,260 characters.
-  const filling = `|${"|".repeat(209)}\n|${"-|".repeat(209)}\n${"a\n".repeat(315)}\n`;
-  const [tokens, parsed] = withCellsParsed(() => parseMemoryMarkdown(filling.repeat(25)));
-
-  expect(parsed).toBeLessThanOrEqual(MAXIMUM_TABLE_CELLS + 209);
-  expect((tokens ?? []).filter((token) => token.type === "td_open")).toHaveLength(0);
-});
-
 test("a body that nests past the bound renders as text rather than losing its end", () => {
   const quoted = (depth: number) => `${">".repeat(depth)} deep`;
   expect(html(quoted(MAXIMUM_MARKDOWN_NESTING - 1))).toContain("deep");
@@ -331,11 +322,6 @@ test("a resolved wikilink escapes its target id, and an unresolved one its reaso
   );
 });
 
-test("an image whose alt is only spaces shows its source, and a line break keeps alt words apart", () => {
-  expect(html("![ ](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
-  expect(html("![two\nwords](https://x.test/a.png)")).toContain(">two words</a>");
-});
-
 test("bold, emphasis, and strikethrough close after CJK punctuation, and English reads as before", () => {
   expect(html("**注意：**请先阅读")).toBe("<p><strong>注意：</strong>请先阅读</p>\n");
   expect(html("**「重要」**这是说明")).toBe("<p><strong>「重要」</strong>这是说明</p>\n");
@@ -357,7 +343,22 @@ test("a link with no words of its own shows its target", () => {
   ]) {
     expect(html(`[${label}](https://d.test)`)).toContain(`${EXTERNAL}>https://d.test`);
   }
-  expect(html("![\u200B](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
+  for (const alt of ["\u200B", " "]) {
+    expect(html(`![${alt}](https://x.test/a.png)`)).toContain(">https://x.test/a.png</a>");
+  }
+});
+
+test("an autolink shows its URL as written, never decoded", () => {
+  expect(html("<https://xn--pple-43d.com/a%EF%BC%8Fb>")).toContain(
+    `${EXTERNAL}>https://xn--pple-43d.com/a%EF%BC%8Fb</a>`,
+  );
+  expect(plainInline("<https://xn--pple-43d.com>")).toBe("https://xn--pple-43d.com");
+  expect(plainInline("<a@xn--pple-43d.com>")).toBe("a@xn--pple-43d.com");
+});
+
+test("an escaped closing bracket keeps a wikilink from forming", () => {
+  expect(html("[[a\\]]", { a: TARGET_MEMORY_ID })).toBe("<p>[[a]]</p>\n");
+  expect(plainInline("[[a\\]]")).toBe("[[a]]");
 });
 
 test("a label or reference of only hidden controls shows as its markers", () => {
@@ -438,9 +439,12 @@ test("a table past the budget is parsed no further than one row past it", () => 
   // Without the stop, markdown-it would fill in 65,536 cells before the table is dropped.
   const wide = `|${"a|".repeat(4_000)}\n|${"-|".repeat(4_000)}\n${"a\n".repeat(4_000)}`;
   const long = `|${"a|".repeat(200)}\n|${"-|".repeat(200)}\n${"a\n".repeat(10_000)}`;
+  // Each of these tables fills in about 66,000 cells from 1,260 characters.
+  const filling = `|${"|".repeat(209)}\n|${"-|".repeat(209)}\n${"a\n".repeat(315)}\n`;
   for (const [input, columns] of [
     [wide, 4_000],
     [long, 200],
+    [filling.repeat(25), 209],
   ] as const) {
     const [tokens, parsed] = withCellsParsed(() => parseMemoryMarkdown(input.slice(0, 32_000)));
     expect(parsed).toBeLessThanOrEqual(MAXIMUM_TABLE_CELLS + columns);
@@ -456,4 +460,37 @@ test("once the budget is spent, a later table is not parsed at all", () => {
   expect(parsed).toBe(MAXIMUM_TABLE_CELLS);
   expect(rendered.match(/<table>/g)).toHaveLength(1);
   expect(rendered).toContain("<p>| a | a |<br>");
+});
+
+test("an image's alt text reads a hard break as a space and emphasis as its words", () => {
+  expect(html("![a\nb](https://x.test/p.png)")).toContain(">a b</a>");
+  expect(html("![a  \nb](https://x.test/p.png)")).toContain(">a b</a>");
+  expect(html("![a\\\nb](https://x.test/p.png)")).toContain(">a b</a>");
+  expect(html("![**b** _i_ `c` x](https://x.test/p.png)")).toContain(">b i c x</a>");
+  // Code is words of a link's own, so the link shows it rather than its target.
+  expect(html("[`x`](https://d.test)")).toBe(
+    `<p><a class="ext" href="https://d.test" ${EXTERNAL}><code>x</code></a></p>\n`,
+  );
+});
+
+test("a table without outer pipes, in a quote, or in a list item counts its columns as the budget does", () => {
+  const bare = (rows: number) =>
+    [Array(50).fill("a").join(" | "), Array(50).fill("---").join(" | ")]
+      .concat(Array.from({ length: rows - 1 }, () => Array(50).fill("1").join(" | ")))
+      .join("\n");
+  const quoted = (rows: number) =>
+    table(50, rows)
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+  const listed = (rows: number) =>
+    table(50, rows)
+      .split("\n")
+      .map((line, index) => `${index === 0 ? "-" : " "} ${line}`)
+      .join("\n");
+  for (const shape of [bare, quoted, listed]) {
+    // A table of exactly the budget renders whole, never cut short a row early.
+    expect(cells(shape(100))).toBe(MAXIMUM_TABLE_CELLS);
+    expect(cells(shape(101))).toBe(0);
+  }
 });

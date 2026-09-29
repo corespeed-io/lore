@@ -3,10 +3,15 @@ import {
   hasVisibleText,
   memoryInlineText,
   memoryPlainText,
+  prefix,
   revealHidden,
 } from "@/modules/memories/browser/markdown";
 
-export { hasVisibleText, revealHidden };
+/**
+ * `plainInline` reduces text's inline Markdown to the words Memory detail shows for
+ * it, for titles and Graph labels; `plain` does the same for search snippets.
+ */
+export { hasVisibleText, memoryInlineText as plainInline, memoryPlainText as plain, revealHidden };
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -17,27 +22,11 @@ function compact(value: string, limit: number): string {
 }
 
 const TITLE_LIMIT = 96;
-/** A title reads at most this much of a first line, which may be the whole 32k body. */
-const TITLE_SOURCE_LIMIT = 1_000;
-/** A search snippet shows 200 characters; this much of its source is enough to find them. */
-const SNIPPET_SOURCE_LIMIT = 2_000;
-
 /**
- * Text with its inline Markdown reduced to the words Memory detail shows for it, for
- * places that show plain text: link and image text, wikilink labels, and code without
- * its backticks. The body's own parser and rules do this (`memoryInlineText`), after a
- * leading heading marker goes. Hidden controls show as markers.
+ * A title reads at most this much of its source, a first line that may be the whole
+ * 32k body: enough for 96 characters of words, and it bounds the parse of each row.
  */
-export function plainInline(text: string): string {
-  return memoryInlineText(text.replace(/^#{1,6}[ \t]+/, ""));
-}
-
-/** Search snippets: a Memory's text as Memory detail shows it, without code blocks. */
-export function plain(s: string): string {
-  return memoryPlainText((s ?? "").slice(0, SNIPPET_SOURCE_LIMIT))
-    .replace(/\s+/g, " ")
-    .trim();
-}
+const TITLE_SOURCE_LIMIT = 300;
 
 function configuredTitle(memory: Memory): string | null {
   const configured = memory.metadata.title;
@@ -49,23 +38,43 @@ function firstLine(text: string): string {
   return text.split(/\r\n?|\n/, 1)[0] ?? "";
 }
 
-function titleText(line: string): string {
-  return plainInline(line.slice(0, TITLE_SOURCE_LIMIT));
+/**
+ * A title's words, read from at most TITLE_SOURCE_LIMIT characters of its source.
+ * Whitespace collapses first, so padding cannot push words out unseen, and a source
+ * cut short ends in "…".
+ */
+function titleWords(text: string, limit: number): string {
+  const source = text.replace(/\s+/g, " ").trim();
+  const read = prefix(source, TITLE_SOURCE_LIMIT);
+  const words = memoryInlineText(read);
+  return compact(read.length < source.length ? `${words}…` : words, limit);
 }
 
 /** A configured title as its words, or as written when its words show nothing. */
-function shownTitle(source: string, limit: number): string {
-  const words = compact(plainInline(source), limit);
-  return hasVisibleText(words) ? words : compact(revealHidden(source), limit);
+function shownTitle(configured: string, words: string, limit: number): string {
+  return hasVisibleText(words) ? words : compact(revealHidden(configured), limit);
 }
+
+function reducedTitle(memory: Memory): string {
+  const configured = configuredTitle(memory);
+  if (configured !== null) {
+    return shownTitle(configured, titleWords(configured, TITLE_LIMIT), TITLE_LIMIT);
+  }
+  const title = titleWords(firstLine(memory.content), TITLE_LIMIT);
+  return hasVisibleText(title) ? title : "Untitled memory";
+}
+
+/** Titles by Memory: rows render often, and a title costs a parse. */
+const titles = new WeakMap<Memory, string>();
 
 /** The title a row, label, or link shows, cut at the title limit. */
 export function memoryTitle(memory: Memory): string {
-  const configured = configuredTitle(memory);
-  // Metadata may hold a title of 100,000 characters; only the first ones can show.
-  if (configured !== null) return shownTitle(configured.slice(0, TITLE_SOURCE_LIMIT), TITLE_LIMIT);
-  const title = compact(titleText(firstLine(memory.content)), TITLE_LIMIT);
-  return hasVisibleText(title) ? title : "Untitled memory";
+  let title = titles.get(memory);
+  if (title === undefined) {
+    title = reducedTitle(memory);
+    titles.set(memory, title);
+  }
+  return title;
 }
 
 /**
@@ -75,9 +84,9 @@ export function memoryTitle(memory: Memory): string {
  */
 export function memoryDetailTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
-  return configured === null
-    ? memoryTitle(memory)
-    : shownTitle(configured, Number.POSITIVE_INFINITY);
+  if (configured === null) return memoryTitle(memory);
+  const words = compact(memoryInlineText(configured), Number.POSITIVE_INFINITY);
+  return shownTitle(configured, words, Number.POSITIVE_INFINITY);
 }
 
 /** A configured `metadata.title` as written, hidden controls as markers, or null. */
@@ -96,7 +105,7 @@ const MARKUP = /[`*_[\]<>&\\~|]/;
  * the title line above it can go without changing how it parses.
  */
 const OPENS_BLOCK =
-  /^(?:[ \t]*$|[ \t]{0,3}(?:[-*+][ \t]+\S|1[.)][ \t]|#{1,6}(?:[ \t]|$)|>)|\p{L}|\p{N}(?!\p{N}*[.)]))/u;
+  /^(?:[ \t]*$|[ \t]{0,3}(?:[-*+][ \t]+\S|1[.)][ \t]+\S|#{1,6}(?:[ \t]|$)|>)|\p{L}|\p{N}(?!\p{N}*[.)]))/u;
 
 /**
  * The content Memory detail renders under its title. When a first line written as
@@ -111,7 +120,7 @@ export function memoryBody(memory: Memory): string {
   const words = line.replace(/^#{1,6}[ \t]+/, "").replace(/^\*\*([^*\n]+)\*\*/, "$1");
   if (line.length > TITLE_SOURCE_LIMIT || MARKUP.test(words)) return memory.content;
   // Measured as the title shows it, with any hidden control grown into its marker.
-  if (titleText(line).replace(/\s+/g, " ").trim().length > TITLE_LIMIT) return memory.content;
+  if (titleWords(line, Number.POSITIVE_INFINITY).length > TITLE_LIMIT) return memory.content;
   const rest = memory.content.slice(line.length).replace(/^(?:\r\n?|\n)/, "");
   // An ATX heading always ends at its line; any other title line could continue.
   if (!line.startsWith("#") && !OPENS_BLOCK.test(firstLine(rest))) return memory.content;

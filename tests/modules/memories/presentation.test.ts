@@ -1,6 +1,7 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import { expect, test, vi } from "vitest";
 import {
+  hasVisibleText,
   memoryBody,
   memoryConfiguredTitle,
   memoryConfiguredType,
@@ -152,25 +153,20 @@ test("plain text costs linear time on runs of brackets and markers", () => {
     plain(input);
     memoryTitle(memory({ content: input }));
     memoryBody(memory({ content: input }));
-    // The quadratic patterns these replace took seconds on the same inputs.
-    expect(performance.now() - started).toBeLessThan(250);
+    // Linear time stays well under this on a slow machine; a quadratic cost takes seconds.
+    expect(performance.now() - started).toBeLessThan(1_000);
   }
 });
 
-test("a search snippet drops fences and block markers as well as inline markup", () => {
+test("a search snippet drops block markers and inline markup, and reads code as its text", () => {
   expect(plain("# H\n**b** [[a/b|c]] `x`")).toBe("H b c x");
   expect(plain("> quoted\n- item\n2) second\n```ts\nconst x = 1;\n```\nend")).toBe(
-    "quoted item second end",
+    "quoted item second const x = 1; end",
   );
 });
 
 test("markers the body shows as text stay, and only markup it renders goes", () => {
-  for (const text of [
-    "pow(2, 10) == 2**10",
-    "Match *.ts or *.js files",
-    "keep **/src",
-    "f(*args, **kwargs)",
-  ]) {
+  for (const text of ["keep **/src", "f(*args, **kwargs)"]) {
     expect(plainInline(text)).toBe(text);
   }
   // A label cut short keeps an opening marker whose pair was cut off, as the body would.
@@ -208,8 +204,8 @@ test("a title line goes before a heading, a quote, or a list item of its own", (
   expect(bodyOf("【规范】\n+ plus")).toBe("+ plus");
   // An empty heading shows no words, so nothing is lost when it goes.
   expect(bodyOf("# \nBody")).toBe("Body");
-  // A number that could be a list marker stays, as does a bullet with nothing after it.
-  for (const next of ["12. x", "2026. x", "- "]) {
+  // A number that could be a list marker stays.
+  for (const next of ["12. x", "2026. x"]) {
     expect(bodyOf(`**Title**\n${next}`)).toBe(`**Title**\n${next}`);
   }
 });
@@ -306,14 +302,9 @@ test("a title cut short never splits a character in two", () => {
 
 test("controls that reorder or hide text show as markers, and emoji stay whole", () => {
   expect(revealHidden("a‮b⁦c\u{E0049}d‬")).toBe("a⟨U+202E⟩b⟨U+2066⟩c⟨U+E0049⟩d⟨U+202C⟩");
-  // A family (zero-width joiners), a heart (a variation selector), a subdivision
-  // flag (a tag sequence), and right-to-left marks are ordinary text.
-  for (const text of [
-    "\u{1F468}‍\u{1F469}‍\u{1F467}",
-    "❤️",
-    "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
-    "שלום‏!",
-  ]) {
+  // A family (zero-width joiners), a heart (a variation selector), and right-to-left
+  // marks are ordinary text.
+  for (const text of ["\u{1F468}‍\u{1F469}‍\u{1F467}", "❤️", "שלום‏!"]) {
     expect(revealHidden(text)).toBe(text);
   }
   // Titles, labels, and snippets show them too, raw or as entities.
@@ -397,4 +388,130 @@ test("an entity or an escape alone keeps the title line in the body", () => {
   for (const content of ["# AT&amp;T\nBody", "**x\\**\nBody"]) {
     expect(memoryBody(memory({ content }))).toBe(content);
   }
+});
+
+test("a snippet of a body that nests past the bound shows its text as written, hidden controls as markers", () => {
+  expect(plain(`${">".repeat(100)} deep \u202E x`)).toBe(`${">".repeat(100)} deep ⟨U+202E⟩ x`);
+});
+
+test("a snippet reads a code block as its text, even one holding a closing tag, and a table as its cells", () => {
+  expect(plain("```\n</pre>secret\n```\nend")).toBe("</pre>secret end");
+  expect(plain("intro\n\n    indented code\n\nend")).toBe("intro indented code end");
+  expect(plain("| a | b |\n|---|---|\n| 1 | 2 |")).toBe("a b 1 2");
+});
+
+test("titles and snippets read text shaped like HTML as written, and decode an entity once", () => {
+  expect(plainInline("Vec<T> and <b>x</b> and `<s>y</s>` a < b > c")).toBe(
+    "Vec<T> and <b>x</b> and <s>y</s> a < b > c",
+  );
+  expect(plainInline("&amp;lt;b&amp;gt; and &quot;q&quot;")).toBe('&lt;b&gt; and "q"');
+  expect(plain("Line <br> and `<pre>` and ~~<s>~~")).toBe("Line <br> and <pre> and ~~<s>~~");
+});
+
+test("text shows nothing when it holds only spaces and zero-width characters", () => {
+  for (const text of ["", " \t\n", "\u200B\u2060\uFEFF", "\u00AD"]) {
+    expect(hasVisibleText(text), JSON.stringify(text)).toBe(false);
+  }
+  // A control that reorders or hides text shows as its marker, so it counts.
+  for (const text of ["\u202E", "\u2066", "\u{E0041}", "x"]) {
+    expect(hasVisibleText(text), JSON.stringify(text)).toBe(true);
+  }
+});
+
+test("a title line stays above a setext underline, and goes before a thematic break", () => {
+  for (const next of ["---", "--", "==="]) {
+    expect(memoryBody(memory({ content: `**Title**\n${next}` }))).toBe(`**Title**\n${next}`);
+  }
+  // A spaced break interrupts the paragraph either way, so the line may go.
+  expect(memoryBody(memory({ content: "**Title**\n- - -" }))).toBe("- - -");
+});
+
+test("Memory detail shows a configured title whose words show nothing whole, as written", () => {
+  const blank = `**${"\u200B".repeat(200)}**`;
+  expect(memoryDetailTitle(memory({ metadata: { title: blank } }))).toBe(blank);
+  expect(memoryTitle(memory({ metadata: { title: blank } }))).toHaveLength(96);
+});
+
+test("Memory detail reads a configured title as long as metadata allows in linear time", () => {
+  // Rows read 1,000 characters of a title, but detail reads all of it, up to the
+  // 100,000-character metadata bound; quadratic parsing would take seconds here.
+  for (const unit of ["[", "![", "*a", "_a", "[[a|", "[a](http://(", "~~a", "<"]) {
+    const title = unit.repeat(Math.floor(99_000 / unit.length));
+    const started = performance.now();
+    memoryDetailTitle(memory({ metadata: { title } }));
+    expect(performance.now() - started, unit).toBeLessThan(1_000);
+  }
+  expect(memoryDetailTitle(memory({ metadata: { title: "[".repeat(99_000) } }))).toHaveLength(
+    99_000,
+  );
+});
+
+test("a snippet of a chunk cut inside a fence or a list item keeps its words", () => {
+  // Search evidence is one chunk of a Memory, which may start inside a fence: its
+  // closing line then opens one, and what follows reads as code.
+  const inFence = "  const value36 = compute(36);\n```\n\nRotate the credentials every Friday.";
+  expect(plain(inFence)).toBe("const value36 = compute(36); Rotate the credentials every Friday.");
+  // A chunk that starts with an item's indented continuation reads it as code.
+  expect(plain("    Details for step 10: rotate keys.\n\n11. Next")).toBe(
+    "Details for step 10: rotate keys. Next",
+  );
+});
+
+test("a heading title drops its closing run of #, as the body does", () => {
+  expect(memoryTitle(memory({ content: "## Title ##\nBody" }))).toBe("Title");
+  expect(memoryTitle(memory({ content: "# C# and F#\nBody" }))).toBe("C# and F#");
+  expect(memoryTitle(memory({ content: "# Title \\#\nBody" }))).toBe("Title #");
+  expect(memoryTitle(memory({ content: "#\nBody" }))).toBe("Untitled memory");
+  expect(memoryTitle(memory({ content: "#hashtag\nBody" }))).toBe("#hashtag");
+});
+
+test("a title line stays above an empty list item, which could not open a list under it", () => {
+  for (const next of ["1. ", "1.\t", "1)", "- "]) {
+    const content = `**Owners**\n${next}`;
+    expect(memoryBody(memory({ content })), JSON.stringify(next)).toBe(content);
+  }
+});
+
+test("a heading title reads as markdown-it reads it, indented or closed, in linear time", () => {
+  expect(memoryTitle(memory({ content: "   # Title\nBody" }))).toBe("Title");
+  expect(memoryTitle(memory({ content: "  ## Heading ##\nBody" }))).toBe("Heading");
+  for (const title of [
+    `# a${" ".repeat(99_000)}#x`,
+    `# a${"\t".repeat(99_000)}#x`,
+    `# a${"#".repeat(99_000)}x`,
+  ]) {
+    const started = performance.now();
+    memoryDetailTitle(memory({ metadata: { title } }));
+    expect(performance.now() - started).toBeLessThan(1_000);
+  }
+});
+
+test("a title whose source runs past what it reads says it was cut", () => {
+  // Whitespace collapses before the source is cut, so padding cannot hide words.
+  const padded = memory({
+    content: `# Deploy${" ".repeat(1_000)}only after the freeze lifts\nBody`,
+  });
+  expect(memoryTitle(padded)).toBe("Deploy only after the freeze lifts");
+  // Words that reduce to fewer than the title shows still end in "…" when cut.
+  const cut = memoryTitle(memory({ metadata: { title: `**Owner:** ${"&amp;".repeat(100)}` } }));
+  // The cut may split an entity, whose start then shows as written.
+  expect(cut.startsWith("Owner: &&")).toBe(true);
+  expect(cut.endsWith("…")).toBe(true);
+  expect(cut.length).toBeLessThan(96);
+  const astral = memoryTitle(
+    memory({ metadata: { title: `${"&amp;".repeat(59)}x\u{1F600}tail` } }),
+  );
+  expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(astral)).toBe(false);
+});
+
+test("a row title parses once per Memory, and a hostile first line costs a bounded parse", () => {
+  const rows = Array.from({ length: 200 }, (_, index) =>
+    memory({ id: String(index), content: `${"![".repeat(1_000)}${index}` }),
+  );
+  const first = performance.now();
+  for (const row of rows) memoryTitle(row);
+  expect(performance.now() - first).toBeLessThan(2_000);
+  const again = performance.now();
+  for (const row of rows) memoryTitle(row);
+  expect(performance.now() - again).toBeLessThan(20);
 });

@@ -32,6 +32,18 @@ interface SearchResultsProps {
 
 const BROWSE_BATCH = 200;
 
+/** Snippets by search result: results render often, and a snippet costs a parse. */
+const snippets = new WeakMap<MemorySearchResult, string>();
+
+function snippetOf(result: MemorySearchResult): string {
+  let snippet = snippets.get(result);
+  if (snippet === undefined) {
+    snippet = plain(result.evidence || result.memory.content).slice(0, 200);
+    snippets.set(result, snippet);
+  }
+  return snippet;
+}
+
 function escapeRe(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -223,8 +235,9 @@ export function SearchResults({
   return (
     <div className="page-wrap">
       <div className="search-list">
-        {results.map(({ memory, score, evidence }) => {
-          const snippet = plain(evidence || memory.content).slice(0, 200);
+        {results.map((result) => {
+          const { memory, score } = result;
+          const snippet = snippetOf(result);
           return (
             <button
               key={memory.id}

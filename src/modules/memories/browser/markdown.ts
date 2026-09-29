@@ -62,6 +62,8 @@ function wikilink(state: StateInline, silent: boolean): boolean {
   if (!match || match.index + match[0].length > state.posMax) return false;
   // A table cell needs the label's pipe escaped (`\|`). markdown-it unescapes it in
   // the cell, but a wikilink copied from a table into prose still carries the backslash.
+  // With no label, that backslash escapes the closing bracket, so there is no wikilink.
+  if (match[2] === undefined && match[1]?.endsWith("\\")) return false;
   const reference = match[1]?.replace(/\\$/, "").trim();
   if (!reference || !hasVisibleText(reference)) return false;
   if (!silent) {
@@ -98,6 +100,9 @@ const memoryMarkdown = new MarkdownIt({
   maxNesting: MAXIMUM_MARKDOWN_NESTING,
 }).use(cjkFriendly);
 memoryMarkdown.validateLink = allowedHref;
+// An autolink shows its URL as written. markdown-it would show punycode hosts and
+// percent escapes decoded, so a reader could see a host the link does not go to.
+memoryMarkdown.normalizeLinkText = (url) => url;
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
 memoryMarkdown.block.ruler.disable("reference");
@@ -330,9 +335,23 @@ const ESCAPED: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", 
 function renderedWords(html: string): string {
   return html
     .replace(/<\/?s>/g, "~~")
-    .replace(/<br>/g, " ")
     .replace(/<[^>]*>/g, "")
     .replace(/&(amp|lt|gt|quot);/g, (_match, name: string) => ESCAPED[name] ?? "");
+}
+
+/** What makes markdown-it read a line as anything other than its own characters. */
+const INLINE_MARKUP = /^ {0,3}#|[`*_[\]<>&\\~\r\n]/;
+
+/**
+ * A line's inline tokens. A heading's markers are block syntax, so a line that may be
+ * one parses as a block, and a one-line heading reads as its text.
+ */
+function inlineTokens(markdown: string, env: MemoryEnv): Token[] {
+  if (/^ {0,3}#/.test(markdown)) {
+    const tokens = memoryMarkdown.parse(markdown, env);
+    if (tokens.length === 3 && tokens[0]?.type === "heading_open") return [tokens[1] as Token];
+  }
+  return memoryMarkdown.parseInline(markdown, env);
 }
 
 /**
@@ -341,16 +360,35 @@ function renderedWords(html: string): string {
  * the body shows, nor keeps markup the body renders.
  */
 export function memoryInlineText(markdown: string): string {
+  if (!INLINE_MARKUP.test(markdown)) return revealHidden(markdown);
   const env: MemoryEnv = { targets: {}, unresolvedTitle: "", anchors: [] };
-  return renderedWords(memoryMarkdown.renderInline(markdown, env));
+  const tokens = inlineTokens(markdown, env);
+  return renderedWords(memoryMarkdown.renderer.render(tokens, memoryMarkdown.options, env));
 }
 
-/** A Memory body as the words Memory detail shows, without its code blocks. */
+/** A search snippet shows 200 characters; this much of its source is enough to find them. */
+const SNIPPET_SOURCE_LIMIT = 2_000;
+
+/** At most `limit` code units of text, never cutting a character outside the BMP in two. */
+export function prefix(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  return text.slice(0, /[\uD800-\uDBFF]/.test(text[limit - 1] ?? "") ? limit - 1 : limit);
+}
+
+/**
+ * A search snippet: a Memory's text as Memory detail shows it, whitespace collapsed,
+ * code included, since search evidence is one chunk that may start inside a fence,
+ * whose closing line then opens one.
+ */
 export function memoryPlainText(markdown: string): string {
-  const tokens = parseMemoryMarkdown(markdown);
-  if (!tokens) return revealHidden(markdown);
-  const html = renderMemoryMarkdown(tokens, {}, "");
-  return renderedWords(html.replace(/<pre class="fence">[\s\S]*?<\/pre>/g, " "));
+  const source = prefix(markdown, SNIPPET_SOURCE_LIMIT);
+  const tokens = parseMemoryMarkdown(source);
+  if (tokens) {
+    // A fence's code reads on its own, without the info string shown above it.
+    for (const token of tokens) if (token.type === "fence") token.info = "";
+  }
+  const words = tokens ? renderedWords(renderMemoryMarkdown(tokens, {}, "")) : revealHidden(source);
+  return words.replace(/\s+/g, " ").trim();
 }
 
 /** The Memory id a reference resolves to, read only from the map's own properties. */
