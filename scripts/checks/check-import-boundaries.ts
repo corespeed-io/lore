@@ -243,33 +243,92 @@ function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: 
 
 initModuleLexer();
 
-/** A CommonJS-style load call: `require(`, `module.require(`, `import.meta.require(`. */
-const LOAD_CALLS = /(?<![\w$.])(?:import\.meta\.require|module\.require|require)(\s*)\(/g;
+/** What the load check's transpile turns `require` and `import.meta.require` into. */
+const REQUIRE = "__lore_require__";
+const META_REQUIRE = "__lore_import_meta_require__";
 
 /**
- * Every module load no scan can check: an `import()` or `require()` (also
- * `module.require()` and `import.meta.require()`) whose specifier is not a string
- * literal, such as `import("node:" + name)`, and any such load whose literal the
- * parser's scan did not report. No scan can resolve one, so each is a finding rather
- * than an edge the guard silently misses. The JavaScript Bun emits for the source
- * has no types or comments, and es-module-lexer reads it as a real lexer, so a
- * string, comment, or regex that merely mentions `import(` is not counted. The lexer
- * does not read CommonJS calls, so each is rewritten, at the same length, to
- * `import(` first. Bun folds a specifier built only from literals (`"node:" + "fs"`)
- * into one the scan never reports, and never reports `import.meta.require` at all.
+ * A transpile where every reference Bun's parser sees to the global `require`, or to
+ * `import.meta.require`, becomes a sentinel: a call, an alias, `(0, require)`,
+ * `require.call`, an optional call, or `typeof require`, but never text in a string.
+ */
+const LOAD_TRANSPILERS = {
+  ts: new Bun.Transpiler({
+    loader: "ts",
+    deadCodeElimination: false,
+    define: { require: REQUIRE, "import.meta.require": META_REQUIRE },
+  }),
+  tsx: new Bun.Transpiler({
+    loader: "tsx",
+    deadCodeElimination: false,
+    define: { require: REQUIRE, "import.meta.require": META_REQUIRE },
+  }),
+};
+
+/** A direct `require` call of one string literal, as Bun prints it. */
+const LITERAL_REQUIRE = new RegExp(`^${REQUIRE}\\(("(?:[^"\\\\]|\\\\.)*")\\)`);
+
+/**
+ * Loads the define leaves as written: Bun rewrites `module.require(` to a bare
+ * `require(` after it, and leaves optional chains on `import.meta` and `module`.
+ * Each match is rewritten, at the same length, to `import`, so es-module-lexer can
+ * confirm the real calls and pass over a match inside a string or regex.
+ */
+const UNDEFINED_LOADS =
+  /(?<![\w$.#])(?:(?:import\.meta|module)\s*\?\.\s*)?require(?:\s*\?\.)?(?=\s*\()/g;
+
+/** The printed statement around `index`, with the sentinels read back. */
+function loadExcerpt(javascript: string, index: number): string {
+  const start = javascript.lastIndexOf("\n", index) + 1;
+  const end = javascript.indexOf("\n", index);
+  return javascript
+    .slice(start, end < 0 ? undefined : end)
+    .trim()
+    .replaceAll(META_REQUIRE, "import.meta.require")
+    .replaceAll(REQUIRE, "require");
+}
+
+/**
+ * Every module load no scan can check, so each is a finding rather than an edge the
+ * guard silently misses:
+ * - an `import()` whose specifier is not a string literal, such as
+ *   `import("node:" + name)`, or whose literal the parser's scan did not report (Bun
+ *   folds `"node:" + "fs"` into one literal the scan never reports). es-module-lexer
+ *   reads the JavaScript Bun emits, which has no types or comments, so a string,
+ *   comment, or regex that merely mentions `import(` is not counted;
+ * - every reference to `require` other than a direct call of a string literal the
+ *   scan reports, and every `import.meta.require`, which the scan never reports.
+ *   Bun's transpiler `define` finds each reference its parser sees, so an alias or a
+ *   comma callee is found and a string cannot fake one. A local function named
+ *   `require` is reported too; rename it.
  */
 export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
   const scanned = new Set(TRANSPILERS[loader].scanImports(parsable).map((item) => item.path));
   const javascript = TRANSPILERS[loader].transformSync(parsable);
-  const lexable = javascript.replace(
-    LOAD_CALLS,
-    (call, space: string) => `import${" ".repeat(call.length - 7 - space.length)}${space}(`,
-  );
-  const [imports] = lexModule(lexable);
-  return imports
+  const [imports] = lexModule(javascript);
+  const findings = imports
     .filter((item) => item.d >= 0 && (item.n === undefined || !scanned.has(item.n)))
     .map((item) => javascript.slice(item.ss, item.se).replace(/\s+/g, " "));
+
+  const loading = LOAD_TRANSPILERS[loader].transformSync(parsable);
+  for (const sentinel of [REQUIRE, META_REQUIRE]) {
+    for (let at = loading.indexOf(sentinel); at >= 0; at = loading.indexOf(sentinel, at + 1)) {
+      const literal =
+        sentinel === REQUIRE ? LITERAL_REQUIRE.exec(loading.slice(at))?.[1] : undefined;
+      if (literal !== undefined && scanned.has(JSON.parse(literal) as string)) continue;
+      findings.push(loadExcerpt(loading, at));
+    }
+  }
+  const undefinedLoads = new Set<number>();
+  const lexable = loading.replace(UNDEFINED_LOADS, (call: string, index: number) => {
+    undefinedLoads.add(index);
+    return "import".padEnd(call.length);
+  });
+  for (const item of lexModule(lexable)[0]) {
+    if (item.d >= 0 && undefinedLoads.has(item.ss)) findings.push(loadExcerpt(loading, item.ss));
+  }
+  return findings;
 }
 
 /**
@@ -493,7 +552,7 @@ export function checkImportBoundaries(
       records = scanImports(text, loader);
       for (const expression of computedImports(text, loader)) {
         findings.push(
-          `${file}: ${expression} has a computed specifier that no scan can check; import a string literal`,
+          `${file}: ${expression} loads a module no scan can check; use a static import or import() of a string literal`,
         );
       }
     } catch (error) {

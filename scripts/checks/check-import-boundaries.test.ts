@@ -535,7 +535,7 @@ test("an import() with a computed specifier is a finding, and one merely mention
   );
   assert.ok(
     findings.includes(
-      'src/modules/beta/service.ts: import("./" + name) has a computed specifier that no scan can check; import a string literal',
+      'src/modules/beta/service.ts: import("./" + name) loads a module no scan can check; use a static import or import() of a string literal',
     ),
   );
 });
@@ -578,7 +578,7 @@ test("an import() whose literal parts Bun folds into one specifier is still a fi
       (finding) =>
         finding.startsWith("src/modules/alpha/service.ts: import(") &&
         finding.endsWith(
-          "has a computed specifier that no scan can check; import a string literal",
+          "loads a module no scan can check; use a static import or import() of a string literal",
         ),
     ),
     findings.join("\n"),
@@ -601,25 +601,39 @@ test("a computed import() in a branch Bun would prove dead is found in every env
   assert.deepEqual(computedImports(source, "ts"), ["import(name)", "import(`${name}.dev`)"]);
 });
 
-test("a require() with a computed specifier, or any import.meta.require(), is a finding", () => {
-  assert.deepEqual(
-    computedImports(
-      [
-        'const name = "fs";',
-        'export const computed = require("node:" + name);',
-        'export const literal = require("./literal");',
-        'export const meta = import.meta.require("node:fs");',
-        "declare const loader: { require(name: string): unknown };",
-        "export const method = loader.require(name);",
-        'export const mention = "require(name) is only text";',
-        "export const pattern = /require(name)/;",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
-        "export const templated = `${require(name)}`;",
-      ].join("\n"),
-      "ts",
-    ),
-    ['require("node:" + name)', 'import.meta.require("node:fs")', "require(name)"],
-  );
+test("every require reference but a scanned literal call, and any import.meta.require, is a finding", () => {
+  const found = (line: string) =>
+    computedImports(["declare const name: string;", line].join("\n"), "ts").length;
+  // What the scan reports, or what loads nothing, is not a finding.
+  for (const line of [
+    'export const literal = require("./literal");',
+    'declare const loader: { require(name: string): unknown }; export const method = loader.require("./x");',
+    'export const mention = "require(name) is only text";',
+    "export const pattern = /require(name)/;",
+  ]) {
+    assert.equal(found(line), 0, line);
+  }
+  // Every other way to reach require loads a module neither scan checks.
+  for (const line of [
+    'export const computed = require("node:" + name);',
+    "export const optional = require?.(name);",
+    'const load = require; export const aliased = load("./x");',
+    'export const comma = (0, require)("./x");',
+    'export const called = require.call(null, "./x");',
+    'export const meta = import.meta.require("node:fs");',
+    'export const metaOptional = import.meta.require?.("node:fs");',
+    'export const metaChained = import.meta?.require("node:fs");',
+    "export const moduleCall = module.require(name);",
+    'export const moduleLiteral = module.require("./x");',
+    "export const moduleChained = module?.require(name);",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+    "export const templated = `${require(name)}`;",
+  ]) {
+    assert.ok(found(line) > 0, line);
+  }
+  assert.deepEqual(computedImports('const load = require;\nexport const x = load("./x");', "ts"), [
+    "const load = require;",
+  ]);
 });
 
 test("import.meta, a type-position import(), and a shebang are not computed imports", () => {

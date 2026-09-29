@@ -468,16 +468,19 @@ been removed. Lore now has a native implementation, split into two concepts
   parse (reported at the parser's line:column), an unresolvable in-repo import, an
   import of an in-repo module that is not `.ts`/`.tsx` (stylesheets and other assets
   aside), and a declared `MODULES` dependency or export that nothing uses are all
-  findings. An `import()` or `require()` (also `module.require()`) whose
-  specifier is not a string literal (`import("node:" + name)`), and any
-  `import.meta.require()`, which the scan never reports, is a finding too:
-  no scan can resolve it, so the guard refuses it instead of missing the edge. It is
-  found by es-module-lexer over the JavaScript Bun emits for the file, which has no
-  types or comments, so a string, comment, or regex that mentions `import(` is not.
-  Bun folds a specifier built only from literals (`"node:" + "fs"`) into one literal
-  that its import scan does not report, so a lexed specifier the scan did not report
-  is a finding too; the lexed JavaScript is emitted without dead-code elimination, so
-  no `NODE_ENV` branch can hide one. Every browser-side file of a domain lives
+  findings. An `import()` whose specifier is not a string literal
+  (`import("node:" + name)`) is a finding too, and so is every reference to `require`
+  other than a direct call of a string literal the scan reports (a computed argument,
+  an alias, `(0, require)`, `require.call`, an optional call, `module.require`) and any
+  `import.meta.require`: no scan can resolve one, so the guard refuses it instead of
+  missing the edge. `import()` is found by es-module-lexer over the JavaScript Bun
+  emits for the file, which has no types or comments, so a string, comment, or regex
+  that mentions `import(` is not; Bun folds a specifier built only from literals
+  (`"node:" + "fs"`) into one literal its scan does not report, so a lexed specifier
+  the scan did not report is a finding too. `require` references are found by Bun's
+  transpiler `define`, which replaces each one its parser sees, so a string cannot
+  hide or fake one. The lexed JavaScript is emitted without dead-code elimination, so
+  no `NODE_ENV` branch can hide a load. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
