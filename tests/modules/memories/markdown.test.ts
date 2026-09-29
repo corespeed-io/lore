@@ -1,4 +1,5 @@
-import { expect, test } from "vitest";
+import MarkdownIt from "markdown-it";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   allowedHref,
   keepsBrowserClick,
@@ -8,6 +9,11 @@ import {
   renderMemoryMarkdown,
   wikilinkTarget,
 } from "@/modules/memories/browser/markdown";
+import { plainInline } from "@/modules/memories/browser/presentation";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const TARGET_MEMORY_ID = "e6f22a12-8b29-57ef-bbdf-ce11121303c7";
 const EXTERNAL = 'target="_blank" rel="noopener noreferrer"';
@@ -20,6 +26,23 @@ function html(markdown: string, targets: Record<string, string> = {}): string | 
 
 function cells(markdown: string): number {
   return (html(markdown)?.match(/<t[hd][ >]/g) ?? []).length;
+}
+
+/** A table of `columns` columns and `rows` rows, its header row included. */
+function table(columns: number, rows: number): string {
+  return [`|${" a |".repeat(columns)}`, `|${" - |".repeat(columns)}`]
+    .concat(Array.from({ length: rows - 1 }, () => `|${" 1 |".repeat(columns)}`))
+    .join("\n");
+}
+
+/** What `run` returns, and the table cells markdown-it built, kept or dropped, meanwhile. */
+function withCellsParsed<T>(run: () => T): [T, number] {
+  // Every markdown-it instance shares one block state class, so this sees the body's.
+  const push = vi.spyOn(new MarkdownIt().block.State.prototype, "push");
+  const result = run();
+  const parsed = push.mock.calls.filter(([type]) => type === "td_open" || type === "th_open");
+  push.mockRestore();
+  return [result, parsed.length];
 }
 
 test("a Memory body keeps its paragraphs and each line break, whatever the line ending", () => {
@@ -193,11 +216,6 @@ test("controls that reorder or hide text show as markers, raw or as entities", (
 });
 
 test("the tables of one body share the cell budget, and a table past it stays text", () => {
-  const table = (columns: number, rows: number) =>
-    [`|${" a |".repeat(columns)}`, `|${" - |".repeat(columns)}`]
-      .concat(Array.from({ length: rows - 1 }, () => `|${" 1 |".repeat(columns)}`))
-      .join("\n");
-
   // markdown-it fills in the cells a short row leaves out, and they count.
   expect(cells("| a | b | c |\n| - | - | - |\n| 1 |")).toBe(6);
   expect(cells(table(50, 100))).toBe(MAXIMUM_TABLE_CELLS);
@@ -206,11 +224,6 @@ test("the tables of one body share the cell budget, and a table past it stays te
 });
 
 test("tables that each fit the budget still share it, and the one past it keeps its words", () => {
-  const table = (columns: number, rows: number) =>
-    [`|${" a |".repeat(columns)}`, `|${" - |".repeat(columns)}`]
-      .concat(Array.from({ length: rows - 1 }, () => `|${" 1 |".repeat(columns)}`))
-      .join("\n");
-
   // Four cells, then exactly the budget: each fits alone, but not together.
   const shared = html(`${table(2, 2)}\n\n${table(50, 100)}`) ?? "";
   expect(shared.match(/<table>/g)).toHaveLength(1);
@@ -326,23 +339,96 @@ test("an image whose alt is only spaces shows its source, and a line break keeps
   expect(html("![two\nwords](https://x.test/a.png)")).toContain(">two words</a>");
 });
 
+test("bold, emphasis, and strikethrough close after CJK punctuation, and English reads as before", () => {
+  expect(html("**注意：**请先阅读")).toBe("<p><strong>注意：</strong>请先阅读</p>\n");
+  expect(html("**「重要」**这是说明")).toBe("<p><strong>「重要」</strong>这是说明</p>\n");
+  expect(html("*斜体。*后文 ~~删除。~~后文")).toBe(
+    "<p><em>斜体。</em>后文 <s>删除。</s>后文</p>\n",
+  );
+  expect(html("**English:**text and 2 * 3 * 4")).toBe("<p>**English:**text and 2 * 3 * 4</p>\n");
+});
+
 test("a link with no words of its own shows its target", () => {
   expect(html("[](https://y.test) and [ ](https://z.test)")).toBe(
     `<p><a class="ext" href="https://y.test" ${EXTERNAL}>https://y.test</a> and <a class="ext" href="https://z.test" ${EXTERNAL}>https://z.test </a></p>\n`,
   );
-  // A link whose words are an image or a wikilink keeps them.
+  // A link whose words are an image's alt text keeps them.
   expect(html("[![logo](https://x.test/l.png)](https://d.test)")).toContain(">logo</a>");
+  // An image with no alt text, or zero-width words, are no words either.
+  for (const label of [
+    "![](https://x.test/l.png)",
+    "![\u200B](https://x.test/l.png)",
+    "\u200B\u2060",
+  ]) {
+    expect(html(`[${label}](https://d.test)`)).toContain(`${EXTERNAL}>https://d.test`);
+  }
+  expect(html("![\u200B](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
+});
+
+test("a wikilink whose label shows nothing reads as its reference, and one with no reference stays text", () => {
+  const targets = { foo: TARGET_MEMORY_ID };
+  expect(html("[[foo|\u200B]]", targets)).toContain(`data-memory-id="${TARGET_MEMORY_ID}">foo</a>`);
+  expect(html("[[missing|\u2060]]")).toContain('title="missing — not found">missing</span>');
+  expect(html("[[\u200B]]")).toBe("<p>[[\u200B]]</p>\n");
+});
+
+test("a title reads a link as its label only where the body renders one", () => {
+  const read = (target: string) => {
+    const markdown = `[label](${target})`;
+    return {
+      linked: html(markdown)?.includes("<a ") ?? false,
+      reduced: plainInline(markdown) === "label",
+    };
+  };
+  const both = { linked: true, reduced: true };
+  for (const target of [
+    "https://example.test",
+    "HTTPS://example.test",
+    "MAILTO:team@example.test",
+    "<https://example.test/a b>",
+    "<mailto:team@example.test>",
+    'https://example.test "Title"',
+    "https://example.test 'Title'",
+    "https://example.test/(a)",
+  ]) {
+    expect(read(target), target).toEqual(both);
+  }
+  const neither = { linked: false, reduced: false };
+  for (const target of [
+    "https:/path",
+    "javascript:alert(1)",
+    "https://?q",
+    "mailto:",
+    "<https://>",
+  ]) {
+    expect(read(target), target).toEqual(neither);
+  }
+  // Rarer targets the title leaves as written, which never hides words the body shows.
+  for (const target of ["https://example.test/((a))", "https://example.test (Title)"]) {
+    expect(read(target), target).toEqual({ linked: true, reduced: false });
+  }
 });
 
 test("a table past the budget is parsed no further than one row past it", () => {
   // Without the stop, markdown-it would fill in 65,536 cells before the table is dropped.
   const wide = `|${"a|".repeat(4_000)}\n|${"-|".repeat(4_000)}\n${"a\n".repeat(4_000)}`;
   const long = `|${"a|".repeat(200)}\n|${"-|".repeat(200)}\n${"a\n".repeat(10_000)}`;
-  for (const input of [wide, long]) {
-    const started = performance.now();
-    const tokens = parseMemoryMarkdown(input.slice(0, 32_000)) ?? [];
-    expect(tokens.filter((token) => token.type === "td_open")).toHaveLength(0);
-    expect(tokens.length).toBeLessThan(1_000);
-    expect(performance.now() - started).toBeLessThan(100);
+  for (const [input, columns] of [
+    [wide, 4_000],
+    [long, 200],
+  ] as const) {
+    const [tokens, parsed] = withCellsParsed(() => parseMemoryMarkdown(input.slice(0, 32_000)));
+    expect(parsed).toBeLessThanOrEqual(MAXIMUM_TABLE_CELLS + columns);
+    expect((tokens ?? []).filter((token) => token.type === "td_open")).toHaveLength(0);
   }
+});
+
+test("once the budget is spent, a later table is not parsed at all", () => {
+  const [rendered, parsed] = withCellsParsed(
+    () => html(`${table(50, 100)}\n\n${table(2, 2)}`) ?? "",
+  );
+  // The first table spends the whole budget, and the second builds no cell.
+  expect(parsed).toBe(MAXIMUM_TABLE_CELLS);
+  expect(rendered.match(/<table>/g)).toHaveLength(1);
+  expect(rendered).toContain("<p>| a | a |<br>");
 });

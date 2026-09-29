@@ -33,13 +33,14 @@ const TITLE_SOURCE_LIMIT = 1_000;
 
 /**
  * A link target that Memory detail renders (see `allowedHref`): http(s) with a host,
- * or mailto with an address, optionally in angle brackets, with one level of
- * parentheses inside it and an optional quoted title. Its alternatives start with
- * different characters, so it never backtracks far.
+ * or mailto with an address, in any case, and an optional quoted title. In angle
+ * brackets it may hold spaces; bare, one level of parentheses. A target this misses
+ * only leaves its link as written in a title, never hides words the body shows.
+ * Its alternatives start with different characters, so it never backtracks far.
  */
-const LINK_TARGET = String.raw`\(<?(?:https?:\/\/[^\s/\\?#()<>]|mailto:[^\s()<>])(?:[^()\s<>]|\([^()\s]*\))*>?(?:\s+"[^"\n]*")?\)`;
-const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]${LINK_TARGET}`, "g");
-const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "g");
+const LINK_TARGET = String.raw`\((?:<(?:https?:\/\/[^\s/\\?#<>]|mailto:[^\s<>])[^<>\n]*>|(?:https?:\/\/[^\s/\\?#()<>]|mailto:[^\s()<>])(?:[^()\s<>]|\([^()\s]*\))*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)`;
+const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]${LINK_TARGET}`, "gi");
+const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "gi");
 
 /**
  * Text with the inline Markdown that Memory detail renders reduced to its words,
@@ -142,10 +143,21 @@ export function memoryBody(memory: Memory): string {
   return rest.replace(/^(?:\r\n?|\n)+/, "");
 }
 
-/** The `metadata.type` a Memory actually carries, or null when it has none. */
+/**
+ * The `metadata.type` a Memory actually carries, hidden controls as markers, or
+ * null when it has none. Every type chip, badge, and breakdown reads it here.
+ */
 export function memoryConfiguredType(memory: Memory): string | null {
   const configured = memory.metadata.type;
-  return typeof configured === "string" && configured.trim() ? configured.trim() : null;
+  return typeof configured === "string" && configured.trim()
+    ? revealHidden(configured.trim())
+    : null;
+}
+
+/** The `metadata.source` a Memory names, hidden controls as markers, or null. */
+export function memorySource(memory: Memory): string | null {
+  const source = memory.metadata.source;
+  return typeof source === "string" && source.trim() ? revealHidden(source.trim()) : null;
 }
 
 /**

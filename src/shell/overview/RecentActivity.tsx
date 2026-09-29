@@ -3,6 +3,7 @@
 import type { Memory } from "@corespeed/lore-sdk";
 import {
   memoryConfiguredType,
+  memorySource,
   memoryTitle,
   shortMemoryDate,
 } from "@/modules/memories/browser/presentation";
@@ -25,7 +26,7 @@ export function RecentActivity({ items, notice, onOpen }: RecentActivityProps) {
         <p className="panel-empty">Nothing recent.</p>
       ) : (
         items.map((memory) => {
-          const source = memory.metadata.source;
+          const source = memorySource(memory);
           const type = memoryConfiguredType(memory);
           return (
             <button
@@ -37,9 +38,7 @@ export function RecentActivity({ items, notice, onOpen }: RecentActivityProps) {
               <span className="activity-title">{memoryTitle(memory)}</span>
               {type && <span className="badge">{type}</span>}
               <span className="memory-scope">{memory.scope}</span>
-              {typeof source === "string" && source.trim() && (
-                <span className="activity-src">{source}</span>
-              )}
+              {source && <span className="activity-src">{source}</span>}
               <span className="activity-date">{shortMemoryDate(memory.updatedAt)}</span>
             </button>
           );

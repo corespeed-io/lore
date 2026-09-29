@@ -3,6 +3,7 @@ import { expect, test, vi } from "vitest";
 import {
   memoryBody,
   memoryConfiguredType,
+  memorySource,
   memoryTitle,
   memoryType,
   plain,
@@ -37,6 +38,15 @@ test("a typed Memory keeps its scope separate from its type badge", () => {
   expect(memoryConfiguredType(untyped)).toBeNull();
   // Grouping still buckets untyped Memories by scope.
   expect(memoryType(untyped)).toBe("private");
+});
+
+test("a type or source from metadata shows its hidden controls as markers", () => {
+  const marked = memory({ metadata: { type: "\u202Eeganam", source: " cli\u2066 " } });
+  expect(memoryConfiguredType(marked)).toBe("⟨U+202E⟩eganam");
+  expect(memoryType(marked)).toBe("⟨U+202E⟩eganam");
+  expect(memorySource(marked)).toBe("cli⟨U+2066⟩");
+  expect(memorySource(memory({ metadata: { source: 7 } }))).toBeNull();
+  expect(memorySource(memory({ metadata: { source: " " } }))).toBeNull();
 });
 
 // CI and most dev boxes run in UTC, where a local-time formatter also passes, so the
@@ -132,6 +142,8 @@ test("plain text costs linear time on runs of brackets and markers", () => {
     "`".repeat(32_000),
     "[a](http://(".repeat(2_600),
     '[a](https://x "'.repeat(2_000),
+    "[a](<https://x ".repeat(2_000),
+    "[a](https://x '".repeat(2_000),
   ]) {
     const started = performance.now();
     plainInline(input);

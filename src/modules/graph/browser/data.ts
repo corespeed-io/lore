@@ -14,9 +14,11 @@ export async function readGraph(workspaceId: string, signal?: AbortSignal): Prom
     // Labels come from Memory content; show their text, not its markup. The browser
     // shows no preview, so a surface that starts to must reduce it the same way.
     // A label that is only markup keeps its text as written rather than going blank.
+    // Types, from metadata, show hidden controls as markers, as Memory rows do.
     nodes: graph.nodes.map((node) => ({
       ...node,
       label: plainInline(node.label).trim() || revealHidden(node.label),
+      type: revealHidden(node.type),
     })),
     links: [...graph.links],
     linksTruncated: graph.linksTruncated,

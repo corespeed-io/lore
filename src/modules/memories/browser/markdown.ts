@@ -1,4 +1,5 @@
-import MarkdownIt, { type Env, type StateBlock, type StateInline, type Token } from "markdown-it";
+import MarkdownIt, { type Env, type StateInline, type Token } from "markdown-it";
+import cjkFriendly from "markdown-it-cjk-friendly";
 import { revealHidden } from "@/modules/memories/browser/presentation";
 
 /**
@@ -26,6 +27,14 @@ interface MemoryEnv extends Env {
  */
 const WIKILINK = /\[\[([^[\]|\n]+)(?:\|([^[\]\n]+))?\]\]/y;
 
+/**
+ * Whether text shows anything: a character other than a space or a zero-width
+ * format character, once hidden controls have grown into their markers.
+ */
+function hasVisibleText(text: string): boolean {
+  return /[^\s\p{Cf}]/u.test(revealHidden(text));
+}
+
 function wikilink(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x5b || state.src.charCodeAt(state.pos + 1) !== 0x5b) {
     return false;
@@ -36,10 +45,11 @@ function wikilink(state: StateInline, silent: boolean): boolean {
   // A table cell needs the label's pipe escaped (`\|`). markdown-it unescapes it in
   // the cell, but a wikilink copied from a table into prose still carries the backslash.
   const reference = match[1]?.replace(/\\$/, "").trim();
-  if (!reference) return false;
+  if (!reference || !hasVisibleText(reference)) return false;
   if (!silent) {
+    const label = match[2]?.trim() ?? "";
     const token = state.push("wikilink", "", 0);
-    token.meta = { reference, label: match[2]?.trim() || reference };
+    token.meta = { reference, label: hasVisibleText(label) ? label : reference };
   }
   state.pos += match[0].length;
   return true;
@@ -58,8 +68,9 @@ export function allowedHref(url: string): boolean {
  * The Memory Markdown parser: CommonMark plus tables and strikethrough. Raw HTML,
  * bare URLs, and reference definitions stay text, a single line break stays a line
  * break, and `[[reference]]` becomes a `wikilink` token before links or emphasis can
- * claim its brackets. With `html: false`, every character of the body reaches the
- * page escaped, so its HTML is safe to set as `innerHTML`.
+ * claim its brackets. Emphasis follows the CJK-friendly amendment, so `**注意：**请`
+ * is bold as it is in English. With `html: false`, every character of the body
+ * reaches the page escaped, so its HTML is safe to set as `innerHTML`.
  */
 const memoryMarkdown = new MarkdownIt({
   html: false,
@@ -67,7 +78,7 @@ const memoryMarkdown = new MarkdownIt({
   linkify: false,
   typographer: false,
   maxNesting: MAXIMUM_MARKDOWN_NESTING,
-});
+}).use(cjkFriendly);
 memoryMarkdown.validateLink = allowedHref;
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
@@ -83,13 +94,9 @@ memoryMarkdown.core.ruler.push("memory_headings", (state) => {
   }
 });
 
-type BlockRule = (
-  state: StateBlock,
-  startLine: number,
-  endLine: number,
-  silent: boolean,
-) => boolean;
-
+const tableRule = memoryMarkdown.block.ruler.__rules__.find((rule) => rule.name === "table");
+if (!tableRule) throw new Error("markdown-it has no table rule to bound");
+const table = tableRule.fn;
 /**
  * markdown-it's table rule, held to `MAXIMUM_TABLE_CELLS` across one body. The rule
  * fills in every cell a short row leaves out, so a 32,000-character body could
@@ -97,8 +104,9 @@ type BlockRule = (
  * parsed no further than one row past what is left of the budget; the table that
  * goes past it, and every later table, stays paragraph text.
  */
-function boundedTable(table: BlockRule): BlockRule {
-  return (state, startLine, endLine, silent) => {
+memoryMarkdown.block.ruler.at(
+  "table",
+  (state, startLine, endLine, silent) => {
     const env = state.env as MemoryEnv;
     if (env.tablesOff) return false;
     // Silently, markdown-it checks only the header and delimiter lines.
@@ -131,12 +139,9 @@ function boundedTable(table: BlockRule): BlockRule {
     }
     env.tableCells = cells;
     return true;
-  };
-}
-
-const tableRule = memoryMarkdown.block.ruler.__rules__.find((rule) => rule.name === "table");
-if (!tableRule) throw new Error("markdown-it has no table rule to bound");
-memoryMarkdown.block.ruler.at("table", boundedTable(tableRule.fn), { alt: [...tableRule.alt] });
+  },
+  { alt: [...tableRule.alt] },
+);
 
 const { escapeHtml } = memoryMarkdown.utils;
 const rules = memoryMarkdown.renderer.rules;
@@ -152,12 +157,16 @@ function insideAnchor(env: MemoryEnv): boolean {
   return env.anchors?.includes(true) ?? false;
 }
 
-/** Whether the link opened at `index` shows any words before it closes. */
+/**
+ * Whether the link opened at `index` shows any words before it closes. A wikilink
+ * never sits in a link label: markdown-it refuses a label that holds one.
+ */
 function linkShowsText(tokens: readonly Token[], index: number): boolean {
   for (let next = index + 1; next < tokens.length; next += 1) {
     const token = tokens[next] as Token;
     if (token.type === "link_close") return false;
-    if (token.type === "image" || token.type === "wikilink" || token.content.trim()) return true;
+    const words = token.type === "image" ? altText(token.children ?? []) : token.content;
+    if (hasVisibleText(words)) return true;
   }
   return false;
 }
@@ -210,7 +219,7 @@ rules.image = (tokens, index, _options, env) => {
   const alt = altText(token.children ?? []);
   const src = String(token.attrGet("src") ?? "");
   if (insideAnchor(env as MemoryEnv) || !allowedHref(src)) return escapeHtml(revealHidden(alt));
-  const text = alt.trim() ? revealHidden(alt) : src;
+  const text = hasVisibleText(alt) ? revealHidden(alt) : src;
   return `<a${linkAttributes(src, token.attrGet("title"))}>${escapeHtml(text)}</a>`;
 };
 
@@ -221,6 +230,8 @@ rules.wikilink = (tokens, index, _options, env) => {
     label: string;
   };
   const shown = escapeHtml(revealHidden(label));
+  // Unreachable while markdown-it refuses a link label holding a wikilink; kept so
+  // anchors could never nest if it stopped.
   if (insideAnchor(memory)) return shown;
   const memoryId = wikilinkTarget(memory.targets ?? {}, reference);
   const referenceText = escapeHtml(revealHidden(reference));

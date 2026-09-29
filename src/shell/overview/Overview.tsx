@@ -4,7 +4,7 @@ import type { Memory } from "@corespeed/lore-sdk";
 import { GraphHealth } from "@/modules/graph/browser/GraphHealth";
 import { TopHubs } from "@/modules/graph/browser/TopHubs";
 import { areGraphLinksPartial, type GraphData } from "@/modules/graph/browser/types";
-import { memoryType } from "@/modules/memories/browser/presentation";
+import { memorySource, memoryType } from "@/modules/memories/browser/presentation";
 import type { ReadState } from "@/shared/browser/read-state";
 import { ActivityChart } from "@/shell/overview/ActivityChart";
 import { Breakdown } from "@/shell/overview/Breakdown";
@@ -42,9 +42,8 @@ function countByType(memories: Memory[]) {
 function memorySources(memories: Memory[]): MemorySourceSummary[] {
   const counts = new Map<string, number>();
   for (const memory of memories) {
-    const source = memory.metadata.source;
-    if (typeof source !== "string" || !source.trim()) continue;
-    const name = source.trim();
+    const name = memorySource(memory);
+    if (name === null) continue;
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   return [...counts]
