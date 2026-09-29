@@ -189,10 +189,13 @@ const META_REQUIRE = "__lore_import_meta_require__";
 const BUILTIN = "__lore_get_builtin_module__";
 
 /**
- * Bun's `define` replaces every reference its parser sees to these globals, so an
- * alias, `(0, require)`, `require.call`, an optional call, or `typeof require` is
- * found and a string cannot fake one. It never replaces a locally bound name, and
- * Bun keeps `module` itself for CommonJS interop, so `define` cannot name it.
+ * Bun's `define` replaces every reference its parser sees to the global `require`, so
+ * an alias, `(0, require)`, `require.call`, an optional call, or `typeof require` is
+ * found and a string cannot fake one. For the dotted keys it matches only that exact
+ * member chain: `process["getBuiltinModule"]`, an alias of `process`, or
+ * `import { getBuiltinModule } from "node:process"` is not replaced. It never replaces
+ * a locally bound name, and Bun keeps `module` for CommonJS interop, so `define`
+ * cannot name `module` at all.
  */
 const LOADER_DEFINE = {
   require: REQUIRE,
@@ -265,8 +268,10 @@ initModuleLexer();
 const NODE_MODULE_SPECIFIERS = new Set(["module", "node:module"]);
 
 /**
- * A direct `require` call of one string literal, as Bun prints it: double-quoted, or
- * a template with no substitution.
+ * A direct `require` call of one double-quoted string literal or template with no
+ * substitution, as Bun prints most literals. Bun prints a literal that contains `"`
+ * single-quoted, which this does not accept, so such a `require` is a finding even
+ * though the scan reports it.
  */
 const LITERAL_REQUIRE = new RegExp(
   `^${REQUIRE}\\((?:("(?:[^"\\\\]|\\\\.)*")|\`([^\`\\\\$]*)\`)\\)`,
@@ -306,23 +311,30 @@ function requiredLiteral(javascript: string): string | undefined {
 }
 
 /**
- * Every module load no scan can check, so each is a finding rather than an edge the
- * guard silently misses. A file may load a module only through a static import,
- * `import()` of a string literal, or `require()` of a string literal the parser's
- * scan reports. Everything else that reaches a loader is refused:
+ * The module loads no scan can check, each a finding rather than an edge the guard
+ * silently misses. The intended ways to load a module are a static import, `import()`
+ * of a string literal, and `require()` of a string literal the parser's scan
+ * reports. This finds:
  * - an `import()` whose specifier is not a string literal, such as
  *   `import("node:" + name)`, or whose literal the scan did not report (Bun folds
  *   `"node:" + "fs"` into one literal it never reports);
- * - every other reference to the global `require`, and every `import.meta.require` or
- *   `process.getBuiltinModule` (found by `define`), and every call of a `require`
- *   that `define` leaves as written (found by the lexer, as above);
+ * - every other reference to the global `require`, and `import.meta.require` or
+ *   `process.getBuiltinModule` written as that member chain (found by `define`);
+ * - every call of a `require` that `define` leaves as written: a locally bound one,
+ *   `module.require(`, `module["require"](`, and `module?.require(` (found by the
+ *   lexer, below);
  * - `import.meta` used as anything but a read of a known property, so it cannot be
  *   aliased, destructured, or indexed to reach its loader.
  * es-module-lexer reads the JavaScript Bun emits, which has no types or comments, so
  * a string, comment, or regex that mentions a loader is not counted. `node:module`
  * imports, whose `createRequire` loads by any name, are refused where records are
- * checked. Destructuring `require` from `module` is the one form nothing here sees;
- * neither bundler follows it.
+ * checked.
+ *
+ * It is not a complete sandbox. It does not see `process.getBuiltinModule` reached
+ * through an alias, destructuring, an index, `process?.`, or `node:process`; any use
+ * of `module` other than those calls; `new Function` or `eval` source; the `Bun`
+ * global (`Bun.spawn`); or the target of `new Worker(new URL(...))`, which Turbopack
+ * does follow. Code review and the Cloudflare dry run cover those.
  */
 export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
@@ -581,7 +593,7 @@ export function checkImportBoundaries(
       records = scanImports(text, loader);
       for (const load of computedImports(text, loader)) {
         findings.push(
-          `${file}: ${load} loads a module no scan can check; use a static import or import() of a string literal`,
+          `${file}: ${load} reaches a module loader no scan can check; use a static import, or import() or require() of a string literal`,
         );
       }
     } catch (error) {

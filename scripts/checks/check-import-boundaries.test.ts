@@ -535,7 +535,7 @@ test("an import() with a computed specifier is a finding, and one merely mention
   );
   assert.ok(
     findings.includes(
-      'src/modules/beta/service.ts: import("./" + name) loads a module no scan can check; use a static import or import() of a string literal',
+      'src/modules/beta/service.ts: import("./" + name) reaches a module loader no scan can check; use a static import, or import() or require() of a string literal',
     ),
   );
 });
@@ -578,7 +578,7 @@ test("an import() whose literal parts Bun folds into one specifier is still a fi
       (finding) =>
         finding.startsWith("src/modules/alpha/service.ts: import(") &&
         finding.endsWith(
-          "loads a module no scan can check; use a static import or import() of a string literal",
+          "reaches a module loader no scan can check; use a static import, or import() or require() of a string literal",
         ),
     ),
     findings.join("\n"),
@@ -597,8 +597,10 @@ test("a computed import() in a branch Bun would prove dead is found in every env
     '  return import("./fallback");',
     "}",
   ].join("\n");
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
-  assert.deepEqual(computedImports(source, "ts"), ["import(name)", "import(`${name}.dev`)"]);
+  for (const loader of ["ts", "tsx"] as const) {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+    assert.deepEqual(computedImports(source, loader), ["import(name)", "import(`${name}.dev`)"]);
+  }
 });
 
 test("a file may load only through a literal import(), a scanned literal require, or a static import", () => {
@@ -655,7 +657,7 @@ test("a file may load only through a literal import(), a scanned literal require
   ]) {
     assert.ok(computedImports(`declare const name: string;\n${source}`, "ts").length > 0, source);
   }
-  // Findings read as the source was written, not as the check transpiled it.
+  // Findings read back each sentinel as the global it replaced.
   assert.deepEqual(computedImports('export const meta = import.meta.require("node:fs");', "ts"), [
     'export const meta = import.meta.require("node:fs");',
   ]);
@@ -682,35 +684,88 @@ test("a require in a branch Bun would prove dead is found in every environment",
     '  return require("./fallback");',
     "}",
   ].join("\n");
-  assert.deepEqual(computedImports(source, "ts"), [
-    "return require(name);",
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
-    "return require(`${name}.dev`);",
-  ]);
+  for (const loader of ["ts", "tsx"] as const) {
+    assert.deepEqual(computedImports(source, loader), [
+      "return require(name);",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+      "return require(`${name}.dev`);",
+    ]);
+  }
 });
 
 test("importing node:module is a finding, because createRequire loads by any name", () => {
-  const findings = checkImportBoundaries(
+  for (const specifier of ["module", "node:module"]) {
+    const findings = checkImportBoundaries(
+      fixture({
+        ...CLEAN,
+        "src/modules/beta/service.ts": [
+          `import { createRequire } from "${specifier}";`,
+          "export const beta = 1;",
+          "export const load = createRequire(import.meta.url);",
+          "",
+        ].join("\n"),
+      }),
+      TWO_MODULES,
+    );
+    assert.ok(
+      findings.includes(
+        `src/modules/beta/service.ts:1: imports ${specifier}, whose createRequire loads modules no scan can check`,
+      ),
+      findings.join("\n"),
+    );
+  }
+  // A type loads nothing.
+  const typeOnly = checkImportBoundaries(
     fixture({
       ...CLEAN,
-      "src/modules/beta/service.ts": [
-        'import { createRequire } from "node:module";',
-        "export const beta = 1;",
-        "export const load = createRequire(import.meta.url);",
-        "",
-      ].join("\n"),
+      "src/modules/beta/service.ts":
+        'import type { Module } from "node:module";\nexport const beta = 1;\nexport type M = Module;\n',
     }),
     TWO_MODULES,
   );
+  assert.ok(!typeOnly.some((finding) => finding.includes("createRequire")), typeOnly.join("\n"));
+});
+
+test("import.meta reads, an escaped literal, and a folded resolve read as intended", () => {
+  const found = (line: string) =>
+    computedImports(["declare const name: string;", line].join("\n"), "ts");
+  for (const line of [
+    "export const a = import.meta.filename + import.meta.dir + import.meta.path + import.meta.file;",
+    "export const b = import.meta.main;",
+    'export const c = import.meta.resolve("./x");',
+    "export const d = import.meta.hot;",
+    "export const e = import.meta?.url;",
+    'export const f = require("./a\\\\b");',
+  ]) {
+    assert.deepEqual(found(line), [], line);
+  }
+  // A property that only starts like an allowed one is not a read of it.
+  assert.ok(found("export const g = (import.meta as any).urlLoader(name);").length > 0);
+  // A literal the scan does not report is not let through, even when it looks literal.
+  assert.ok(found('export const h = new require("./x");').length > 0);
+  // An import() finding reads its sentinels back too.
   assert.ok(
-    findings.includes(
-      "src/modules/beta/service.ts:1: imports node:module, whose createRequire loads modules no scan can check",
+    computedImports('export const t = import(require.resolve("./x"));', "ts").includes(
+      'import(require.resolve("./x"))',
     ),
-    findings.join("\n"),
   );
 });
 
-test("import.meta, a type-position import(), and a shebang are not computed imports", () => {
+test("the guard's documented limits stay as documented", () => {
+  // AGENTS.md and computedImports name these as unchecked; a change that starts
+  // catching one should update both.
+  for (const line of [
+    'const { getBuiltinModule } = process; export const a = getBuiltinModule("node:fs");',
+    'export const b = process["getBuiltinModule"]("node:fs");',
+    'export const c = new Function("s", "return import(s)");',
+    'export const d = () => Bun.spawn(["git", "status"]);',
+    'export const e = () => new Worker(new URL("./worker.ts", import.meta.url));',
+  ]) {
+    assert.deepEqual(computedImports(line, "ts"), [], line);
+  }
+});
+
+test("import.meta.url, a type-position import(), and a shebang are not unscannable loads", () => {
   assert.deepEqual(
     computedImports(
       [

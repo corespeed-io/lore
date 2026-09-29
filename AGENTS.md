@@ -468,23 +468,27 @@ been removed. Lore now has a native implementation, split into two concepts
   parse (reported at the parser's line:column), an unresolvable in-repo import, an
   import of an in-repo module that is not `.ts`/`.tsx` (stylesheets and other assets
   aside), and a declared `MODULES` dependency or export that nothing uses are all
-  findings. A file may load a module only through a static import, `import()` of a
-  string literal, or `require()` of a string literal the scan reports; anything else
-  that reaches a loader is a finding, because no scan can resolve it, so the guard
-  refuses it instead of missing the edge. That covers `import("node:" + name)` and a
-  literal Bun folds from parts (`"node:" + "fs"`) that its scan then never reports;
-  every other reference to the global `require` (a computed argument, an alias,
-  `(0, require)`, `require.call`, an optional call, `typeof`); a locally bound
-  `require` and `module.require` calls; `import.meta.require`,
-  `process.getBuiltinModule`, and `import.meta` used as anything but a read of a known
-  property (`url`, `dirname`, `filename`, `env`, `main`, `resolve`, ...), so it cannot
-  be aliased, destructured, or indexed to reach its loader; and any value import of
-  `node:module`, whose `createRequire` loads by any name. Bun's transpiler `define`
-  finds each reference its parser sees to those globals, so a string cannot fake
-  one; the rest are found by es-module-lexer over the JavaScript Bun emits, which has
-  no types or comments, emitted without dead-code elimination so no `NODE_ENV` branch
-  can hide a load. Destructuring `require` from `module` is the one form neither
-  sees; neither bundler follows it. Every browser-side file of a domain lives
+  findings. The intended ways to load a module are a static import, `import()` of a
+  string literal, and `require()` of a string literal the scan reports, and the guard
+  refuses the loads no scan can resolve instead of missing their edges:
+  `import("node:" + name)` and a literal Bun folds from parts (`"node:" + "fs"`) that
+  its scan then never reports; every other reference to the global `require` (a
+  computed argument, an alias, `(0, require)`, `require.call`, an optional call,
+  `typeof`); calls of a locally bound `require` and of `module.require`;
+  `import.meta.require` and `process.getBuiltinModule` written as those member
+  chains; `import.meta` used as anything but a read of a known property (`url`,
+  `dirname`, `filename`, `env`, `main`, `resolve`, ...), so it cannot be aliased,
+  destructured, or indexed to reach its loader; and any value import of
+  `node:module`, whose `createRequire` loads by any name (refused from the import
+  records). Bun's transpiler `define` finds the global references, so a string cannot
+  fake one; the rest are found by es-module-lexer over the JavaScript Bun emits,
+  which has no types or comments, emitted without dead-code elimination so no
+  `NODE_ENV` branch can hide a load. It is not a complete sandbox: it does not see
+  `process.getBuiltinModule` reached through an alias, destructuring, an index,
+  `process?.`, or `node:process`; other uses of `module`; `new Function` or `eval`
+  source; the `Bun` global (`Bun.spawn`); or the target of
+  `new Worker(new URL(...))`, which Turbopack does follow. A test pins each of these
+  limits, so a change that closes one updates this list. Every browser-side file of a domain lives
   under `src/modules/*/browser/`, and that directory — not a list of blessed file
   names — is how both guards recognize browser code. Adding a browser file must
   never require editing `biome.json`; exposing a file to another module is a
