@@ -51,7 +51,7 @@ engine. CoreSpeed HaaS maintains a separate vendored fork as described below.
 | Entry | Contents |
 | --- | --- |
 | `.` | Memory storage, retrieval, graph, maintenance, content/chunking, the domain contract (`LoreValidationError`, vocabularies, limits, and input validators), `MemoryStorageContext`, db seam, and model capability interfaces |
-| `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback |
+| `./postgres` | Pooled and per-transaction `pg` database factories with an optional host-supplied `initializeTransaction` callback; each transaction begins in its requested modes before that callback |
 | `./episodes` | Episode/Observation vocabularies (`EPISODE_KINDS`, `OBSERVATION_KINDS`), bounded admission validation, store-bound reads/deletion, and the separate rebuildable hybrid evidence index; the host schema must keep `episodes.id` as its primary key |
 | `./testing` | Host-pluggable schema-contract test kit, `CORE_SCHEMA_CONTRACT`, and `missingSchemaContract` |
 
@@ -181,6 +181,14 @@ its own:
   owner keeps an equal share, and suppresses affinity. Every `MemoryGraphLink` carries
   `derived`, true only for affinity edges. A port that read every Link, or told
   affinity apart by `kind`, must adopt both.
+- **`PostgresDatabase.transaction` takes transaction modes.** Its optional second
+  argument, `PostgresTransactionOptions` (`{ isolation?: "repeatable read" |
+  "serializable", readOnly?: boolean }`), must start the transaction in those modes
+  before any host setup runs; `transactionModes(options)` renders them for `BEGIN`
+  or a first `SET TRANSACTION`, and throws `LoreConfigurationError` for an unknown
+  isolation level. TypeScript accepts an implementation or wrapper that ignores the
+  argument, so a port must check each one by hand: a dropped option silently runs
+  the caller at READ COMMITTED, read-write.
 - **Batch primitives validate every record before any statement**, and a refusal
   names the record: `records[i].content`, `links[i].weight`. `insertMemoriesInTransaction`
   takes the ids it inserts; give it fresh UUIDs, never ids from an archive, or a
