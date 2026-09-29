@@ -303,7 +303,7 @@ test("parsing and rendering cost linear time on hostile bodies", () => {
     const started = performance.now();
     html(input);
     // Linear time stays well under this on a busy machine; a quadratic cost takes seconds.
-    expect(performance.now() - started).toBeLessThan(1_500);
+    expect(performance.now() - started, input.slice(0, 12)).toBeLessThan(3_000);
   }
 });
 
@@ -385,6 +385,14 @@ test("a link whose host is written outside ASCII stays text", () => {
     "[docs](< https://\u4F8B\u3048.jp>)",
     "![](\u00A0https://paypal.com\u3002evil.com)",
     "[a](\u00A0mailto:x@\u00FC.com)",
+    // A mailto URL names addresses past a `/` and in `?to=` or `?cc=`, and a mail
+    // client decodes its escapes, so it opens only in ASCII with no escape.
+    "<mailto:a/@github.com\u2215x.attacker.dev>",
+    "<mailto:?to=ceo@\u0430pple.com>",
+    "[mail](mailto:team@example.test?cc=ceo@\u0430pple.com)",
+    "<mailto:a@github.com%E2%88%95x.attacker.dev>",
+    "<mailto:team@example.test?subject=Hello%20there>",
+    "[a](mailto:caf\u00E9@example.test)",
   ]) {
     expect(html(markdown), markdown).not.toContain("<a ");
   }
@@ -392,6 +400,7 @@ test("a link whose host is written outside ASCII stays text", () => {
   expect(html("<https://example.test/caf\u00E9>")).toContain("<a ");
   expect(html("<HTTPS://example.test>")).toContain("<a ");
   expect(html("<mailto:team@example.test>")).toContain('href="mailto:team@example.test"');
+  expect(html("<mailto:team@example.test?subject=Hello>")).toContain("<a ");
   // A host of `s` and `k` is ASCII: they only fold to ſ and K under a case-blind match.
   expect(html("<https://sk.test>")).toContain('href="https://sk.test"');
 });

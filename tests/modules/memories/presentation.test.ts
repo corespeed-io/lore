@@ -690,19 +690,24 @@ test("Show source reads every metadata key as written, hidden controls as marker
   expect(memoryMetadataText(memory({ metadata: {} }))).toBeNull();
   expect(metadataSource({})).toBe("{}");
   expect(
-    memoryMetadataText(memory({ metadata: { note: "a\u202Eb", tags: ["x", { y: 1 }] } })),
-  ).toBe('{\n  "note": "a⟨U+202E⟩b",\n  "tags": ["x",{"y":1}]\n}');
+    memoryMetadataText(
+      memory({ metadata: { note: "a\u202Eb", "ty\u202Epe": "x", tags: ["x", { y: 1 }] } }),
+    ),
+  ).toBe('{\n  "note": "a⟨U+202E⟩b",\n  "ty⟨U+202E⟩pe": "x",\n  "tags": ["x",{"y":1}]\n}');
 });
 
 test("metadata source grows with the metadata, however deeply it nests", () => {
-  const nested = (depth: number) => {
-    let value: unknown = 1;
-    for (let index = 0; index < depth; index += 1) value = [value];
-    return { deep: value };
+  // The server accepts values some thousands deep; indenting each level would square it.
+  let deep: unknown = 1;
+  for (let index = 0; index < 4_000; index += 1) deep = [deep];
+  expect(metadataSource({ deep })).toBe(`{\n  "deep": ${JSON.stringify(deep)}\n}`);
+  // A value too deep for this engine's stack says so, and every other key still shows.
+  const overflowing = {
+    toJSON() {
+      throw new RangeError("Maximum call stack size exceeded");
+    },
   };
-  // 100,000 serialized characters allow 50,000 levels; indenting each would square it.
-  const deep = nested(4_000);
-  expect(metadataSource(deep).length).toBeLessThan(2 * JSON.stringify(deep).length);
-  // Deeper than a browser's stack can serialize, it says so rather than throw.
-  expect(metadataSource(nested(50_000))).toBe("This metadata nests too deeply to show.");
+  expect(metadataSource({ deep: overflowing, type: "decision" })).toBe(
+    '{\n  "deep": ⟨nests too deeply to show⟩,\n  "type": "decision"\n}',
+  );
 });

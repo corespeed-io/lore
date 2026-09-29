@@ -90,8 +90,9 @@ function wikilink(state: StateInline, silent: boolean): boolean {
  * or mailto. Anything else, including `javascript:`, `data:`, a relative path, an
  * `https:/path` without a host, a `user@` before the host, or a percent escape in it
  * (either can make the shown URL name a host the link does not go to), stays text.
- * A host written outside ASCII never reaches this check: `normalizeLink` below
- * refuses it first.
+ * A host written outside ASCII, and a mailto link written with anything outside
+ * ASCII or a percent escape, never reach this check: `normalizeLink` below refuses
+ * them first.
  */
 export function allowedHref(url: string): boolean {
   return /^(?:https?:\/\/[^\s/\\?#@%]+(?:[/?#]|$)|mailto:\S)/i.test(url);
@@ -116,14 +117,18 @@ memoryMarkdown.validateLink = allowedHref;
 // An autolink shows its URL as written. markdown-it would show punycode hosts and
 // percent escapes decoded, so a reader could see a host the link does not go to.
 memoryMarkdown.normalizeLinkText = (url) => url;
-// A host written outside ASCII, a mailto one included, goes where its punycode
-// points, which can read as another host (`github.com∕x.attacker.dev`), so such a
-// link stays text. The check reads the URL trimmed, as markdown-it's own parse does,
-// so leading Unicode whitespace cannot move the host out of its reach.
+// A host written outside ASCII goes where its punycode points, which can read as
+// another host (`github.com∕x.attacker.dev`), so such a link stays text. A mailto URL
+// names addresses past a `/` and in `?to=` or `?cc=` too, and a mail client decodes
+// its percent escapes, so a mailto link opens only when written wholly in ASCII with
+// no percent escape. The check reads the URL trimmed, as markdown-it's own parse
+// does, so leading Unicode whitespace cannot move the host out of its reach.
 const normalizeLink = memoryMarkdown.normalizeLink.bind(memoryMarkdown);
 // No `i` flag: under `iu`, \P{ASCII} matches `s` and `k` too, since ſ and K fold to them.
-const NON_ASCII_HOST = /^(?:[A-Za-z][\w+.-]*:\/\/|[Mm][Aa][Ii][Ll][Tt][Oo]:)[^/?#]*\P{ASCII}/u;
-memoryMarkdown.normalizeLink = (url) => (NON_ASCII_HOST.test(url.trim()) ? "" : normalizeLink(url));
+const SPOOFABLE_TARGET =
+  /^(?:[A-Za-z][\w+.-]*:\/\/[^/?#]*\P{ASCII}|[Mm][Aa][Ii][Ll][Tt][Oo]:[\s\S]*[%\P{ASCII}])/u;
+memoryMarkdown.normalizeLink = (url) =>
+  SPOOFABLE_TARGET.test(url.trim()) ? "" : normalizeLink(url);
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
 memoryMarkdown.block.ruler.disable("reference");

@@ -127,12 +127,20 @@ export function memoryDetailTitle(memory: Memory): string {
 export function metadataSource(metadata: Readonly<Record<string, unknown>>): string {
   const keys = Object.keys(metadata);
   if (keys.length === 0) return "{}";
+  const lines = keys.map((key) => `  ${JSON.stringify(key)}: ${compactValue(metadata[key])}`);
+  return revealHidden(`{\n${lines.join(",\n")}\n}`);
+}
+
+/**
+ * A metadata value as compact JSON. An engine whose stack is shallower than the
+ * server's cannot serialize the deepest values the server accepts, and then only
+ * that value says so, so every other key still shows.
+ */
+function compactValue(value: unknown): string {
   try {
-    const lines = keys.map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(metadata[key])}`);
-    return revealHidden(`{\n${lines.join(",\n")}\n}`);
+    return JSON.stringify(value);
   } catch {
-    // A browser's stack may be shallower than the server's that accepted the value.
-    return "This metadata nests too deeply to show.";
+    return "⟨nests too deeply to show⟩";
   }
 }
 
