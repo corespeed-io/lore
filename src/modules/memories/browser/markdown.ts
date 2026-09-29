@@ -88,11 +88,11 @@ function wikilink(state: StateInline, silent: boolean): boolean {
 /**
  * The only link targets a Memory body renders: http(s) with a host and no userinfo,
  * or mailto. Anything else, including `javascript:`, `data:`, a relative path, an
- * `https:/path` without a host, or a `user@` before the host (which can make the
- * shown URL name a host the link does not go to), stays plain text.
+ * `https:/path` without a host, a `user@` before the host, or a percent escape in it
+ * (either can make the shown URL name a host the link does not go to), stays text.
  */
 export function allowedHref(url: string): boolean {
-  return /^(?:https?:\/\/[^\s/\\?#@]+(?:[/?#]|$)|mailto:\S)/i.test(url);
+  return /^(?:https?:\/\/[^\s/\\?#@%]+(?:[/?#]|$)|mailto:\S)/i.test(url);
 }
 
 /**
@@ -184,7 +184,7 @@ const rules = memoryMarkdown.renderer.rules;
 
 /** A new tab for the web, the mail client in place for mailto; titles show on hover. */
 function linkAttributes(href: string, title: string | number | null): string {
-  const hover = title ? ` title="${escapeHtml(revealHidden(String(title)))}"` : "";
+  const hover = title ? ` title="${escapeHtml(String(title))}"` : "";
   const tab = /^mailto:/i.test(href) ? "" : ' target="_blank" rel="noopener noreferrer"';
   return ` class="ext" href="${escapeHtml(href)}"${hover}${tab}`;
 }
@@ -254,8 +254,8 @@ rules.image = (tokens, index, _options, env) => {
   const token = tokens[index] as Token;
   const alt = altText(token.children ?? []);
   const src = String(token.attrGet("src") ?? "");
-  if (insideAnchor(env as MemoryEnv) || !allowedHref(src)) return escapeHtml(revealHidden(alt));
-  const text = hasVisibleText(alt) ? revealHidden(alt) : src;
+  if (insideAnchor(env as MemoryEnv) || !allowedHref(src)) return escapeHtml(alt);
+  const text = hasVisibleText(alt) ? alt : src;
   return `<a${linkAttributes(src, token.attrGet("title"))}>${escapeHtml(text)}</a>`;
 };
 
@@ -265,12 +265,12 @@ rules.wikilink = (tokens, index, _options, env) => {
     reference: string;
     label: string;
   };
-  const shown = escapeHtml(revealHidden(label));
+  const shown = escapeHtml(label);
   // Unreachable while markdown-it refuses a link label holding a wikilink; kept so
   // anchors could never nest if it stopped.
   if (insideAnchor(memory)) return shown;
   const memoryId = wikilinkTarget(memory.targets ?? {}, reference);
-  const referenceText = escapeHtml(revealHidden(reference));
+  const referenceText = escapeHtml(reference);
   if (!memoryId) {
     // The reference shows on hover, as a link's target does.
     const title = `${referenceText} — ${escapeHtml(memory.unresolvedTitle ?? "")}`;
@@ -281,13 +281,10 @@ rules.wikilink = (tokens, index, _options, env) => {
   return `<a class="wl" href="${escapeHtml(href)}" data-memory-id="${escapeHtml(memoryId)}"${hover}>${shown}</a>`;
 };
 
-// Text, code, and a fence's info string (shown above its code) as they read.
-rules.text = (tokens, index) => escapeHtml(revealHidden((tokens[index] as Token).content));
-rules.code_inline = (tokens, index) =>
-  `<code>${escapeHtml(revealHidden((tokens[index] as Token).content))}</code>`;
+// A fence's info string shows above its code.
 function fence(content: string, info: string): string {
-  const caption = info ? `<span class="fence-info">${escapeHtml(revealHidden(info))}</span>` : "";
-  return `<pre class="fence">${caption}<code>${escapeHtml(revealHidden(content))}</code></pre>\n`;
+  const caption = info ? `<span class="fence-info">${escapeHtml(info)}</span>` : "";
+  return `<pre class="fence">${caption}<code>${escapeHtml(content)}</code></pre>\n`;
 }
 rules.fence = (tokens, index) => {
   const token = tokens[index] as Token;
@@ -326,14 +323,18 @@ export function parseMemoryMarkdown(content: string): Token[] | null {
   return tokens;
 }
 
-/** A parsed body as HTML, with its wikilinks resolved against the visible Graph. */
+/**
+ * A parsed body as HTML, with its wikilinks resolved against the visible Graph and
+ * every hidden control, in text or an attribute, shown as its marker. A marker holds
+ * no character HTML escapes, so revealing the HTML reveals every text in it.
+ */
 export function renderMemoryMarkdown(
   tokens: Token[],
   targets: Readonly<Record<string, string>>,
   unresolvedTitle: string,
 ): string {
   const env: MemoryEnv = { targets, unresolvedTitle, anchors: [] };
-  return memoryMarkdown.renderer.render(tokens, memoryMarkdown.options, env);
+  return revealHidden(memoryMarkdown.renderer.render(tokens, memoryMarkdown.options, env));
 }
 
 const ESCAPED: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"' };

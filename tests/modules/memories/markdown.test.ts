@@ -107,6 +107,8 @@ test("a Memory body links only to http(s) with a host, and to mailto", () => {
     "https:///path",
     "https://user@example.test/",
     "https://example.test%5C@evil.test/",
+    "https://example.com%2Eevil.com/",
+    "https://good.com%E3%80%82evil.com/",
     "mailto:",
     "/memories",
     "",
@@ -117,6 +119,7 @@ test("a Memory body links only to http(s) with a host, and to mailto", () => {
     "https://example.test/a@b",
     "https://example.test?to=a@b",
     "https://[::1]:8080/",
+    "https://good.com/%2e",
   ]) {
     expect(allowedHref(url)).toBe(true);
   }
@@ -216,6 +219,11 @@ test("a fence shows its info string above its code, and code is escaped", () => 
     '<pre class="fence"><span class="fence-info">ts ignore previous</span><code>&lt;b&gt;x&lt;/b&gt;\n</code></pre>\n',
   );
   expect(html("    indented")).toBe('<pre class="fence"><code>indented\n</code></pre>\n');
+  const payload = "<img src=x onerror=alert(1)>";
+  expect(html(`\`${payload}\``)).toBe("<p><code>&lt;img src=x onerror=alert(1)&gt;</code></p>\n");
+  expect(html(`\`\`\`${payload}\ncode\n\`\`\``)).toBe(
+    '<pre class="fence"><span class="fence-info">&lt;img src=x onerror=alert(1)&gt;</span><code>code\n</code></pre>\n',
+  );
 });
 
 test("controls that reorder or hide text show as markers, raw or as entities", () => {
@@ -225,6 +233,12 @@ test("controls that reorder or hide text show as markers, raw or as entities", (
   expect(html("`a‮b`")).toBe("<p><code>a⟨U+202E⟩b</code></p>\n");
   expect(html('[a](https://y.test "x‮y")')).toContain('title="x⟨U+202E⟩y"');
   expect(html("[[ref‮|label]]")).toContain('title="ref⟨U+202E⟩ — not found"');
+  expect(html("```ts‮\nif (admin) {‮ } else {⁦\n```")).toBe(
+    '<pre class="fence"><span class="fence-info">ts⟨U+202E⟩</span><code>if (admin) {⟨U+202E⟩ } else {⟨U+2066⟩\n</code></pre>\n',
+  );
+  expect(html("[[ref|a‮b]]")).toContain(">a⟨U+202E⟩b</span>");
+  expect(html("![a‮b]()")).toBe("<p>a⟨U+202E⟩b</p>\n");
+  expect(html("[![c‮d](https://x.test/i.png)](https://d.test)")).toContain(">c⟨U+202E⟩d</a>");
 });
 
 test("the tables of one body share the cell budget, and the one past it keeps its words", () => {
@@ -300,23 +314,6 @@ test("a modified, secondary, or handled click stays the browser's", () => {
   }
 });
 
-test("code spans and fence info strings are escaped before they reach the page", () => {
-  const payload = "<img src=x onerror=alert(1)>";
-  expect(html(`\`${payload}\``)).toBe("<p><code>&lt;img src=x onerror=alert(1)&gt;</code></p>\n");
-  expect(html(`\`\`\`${payload}\ncode\n\`\`\``)).toBe(
-    '<pre class="fence"><span class="fence-info">&lt;img src=x onerror=alert(1)&gt;</span><code>code\n</code></pre>\n',
-  );
-});
-
-test("hidden controls show as markers in code blocks, fence info, wikilink labels, and alt text", () => {
-  expect(html("```ts‮\nif (admin) {‮ } else {⁦\n```")).toBe(
-    '<pre class="fence"><span class="fence-info">ts⟨U+202E⟩</span><code>if (admin) {⟨U+202E⟩ } else {⟨U+2066⟩\n</code></pre>\n',
-  );
-  expect(html("[[ref|a‮b]]")).toContain(">a⟨U+202E⟩b</span>");
-  expect(html("![a‮b]()")).toBe("<p>a⟨U+202E⟩b</p>\n");
-  expect(html("[![c‮d](https://x.test/i.png)](https://d.test)")).toContain(">c⟨U+202E⟩d</a>");
-});
-
 test("a resolved wikilink escapes its target id, and an unresolved one its reason", () => {
   const id = '"><img src=x onerror=alert(1)>';
   const rendered = html("[[r]]", { r: id }) ?? "";
@@ -369,6 +366,11 @@ test("an escaped closing bracket keeps a wikilink from forming, after a label to
   expect(plainInline("[[a|b\\]]")).toBe("[[a|b]]");
   // An escaped backslash leaves the brackets to close the wikilink.
   expect(html("[[a\\\\]]")).toContain('class="wl-unresolved"');
+  // Before a label's pipe, an odd run escapes the pipe and loses one backslash; an even
+  // run is the reference's own.
+  expect(html("[[a\\|b]]")).toContain('title="a — not found">b</span>');
+  expect(html("[[a\\\\|b]]")).toContain('title="a\\\\ — not found">b</span>');
+  expect(html("[[a\\\\\\|b]]")).toContain('title="a\\\\ — not found">b</span>');
 });
 
 test("a label or reference of only hidden controls shows as its markers", () => {

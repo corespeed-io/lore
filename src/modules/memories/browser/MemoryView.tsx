@@ -227,14 +227,15 @@ export function MemoryView({
   const title = useMemo(() => memoryDetailTitle(memory), [memory]);
   // Shown as written, since the title above reads only its words.
   const configuredTitle = useMemo(() => memoryConfiguredTitle(memory), [memory]);
-  const type = metadataLabel(memoryType(memory));
+  const type = memoryType(memory);
+  // The Type property reads whole, as the configured title does; the badge is a label.
+  const typeText = useMemo(() => revealHidden(memoryType(memory)), [memory]);
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
   const bodyText = useMemo(() => memoryBody(memory), [memory]);
-  // The Memory whose source is showing: a reader can always check the rendering
-  // against the text an agent wrote, so nothing the renderer drops stays hidden.
-  const [sourceOf, setSourceOf] = useState<string | null>(null);
-  const showSource = sourceOf === id;
+  // A reader can always check the rendering against the text an agent wrote, so
+  // nothing the renderer drops stays hidden. App remounts this view per Memory.
+  const [showSource, setShowSource] = useState(false);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),
@@ -251,13 +252,13 @@ export function MemoryView({
         <article className="detail-panel">
           <h1 className="detail-title">{title || "Untitled memory"}</h1>
           <div className="detail-meta">
-            <span className="type-badge">{type}</span>
+            <span className="type-badge">{metadataLabel(type)}</span>
             <span className="detail-id">{id}</span>
             {body.trim() && (
               <button
                 type="button"
                 className="property-action detail-source-toggle"
-                onClick={() => setSourceOf(showSource ? null : id)}
+                onClick={() => setShowSource(!showSource)}
               >
                 {showSource ? "Show rendered" : "Show source"}
               </button>
@@ -272,7 +273,7 @@ export function MemoryView({
             <pre className="detail-source">{revealHidden(body)}</pre>
           ) : bodyText.trim() ? (
             <div className="detail-body">
-              <PlainTextFallback key={`${id}:${version}`} text={bodyText}>
+              <PlainTextFallback key={version} text={bodyText}>
                 <MemoryMarkdown
                   content={bodyText}
                   wikilinkTargets={wikilinkTargets}
@@ -300,7 +301,7 @@ export function MemoryView({
               )}
               <div className="property-row">
                 <dt>Type</dt>
-                <dd>{type}</dd>
+                <dd>{typeText}</dd>
               </div>
               <div className="property-row">
                 <dt>Scope</dt>

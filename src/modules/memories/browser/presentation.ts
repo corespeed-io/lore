@@ -23,9 +23,14 @@ const TITLE_LIMIT = 96;
  */
 const TITLE_SOURCE_LIMIT = 300;
 
+/** A metadata string a Memory carries, trimmed, or null when it has none. */
+function metadataText(memory: Memory, key: "title" | "type" | "source"): string | null {
+  const value = memory.metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function configuredTitle(memory: Memory): string | null {
-  const configured = memory.metadata.title;
-  return typeof configured === "string" && configured.trim() ? configured.trim() : null;
+  return metadataText(memory, "title");
 }
 
 /** A text's first line. The split stops there, however long the body. */
@@ -34,38 +39,36 @@ function firstLine(text: string): string {
 }
 
 /**
- * A title's words, read from at most TITLE_SOURCE_LIMIT characters of its source. A
- * source cut short ends in "…", so a title never looks whole when it is not.
+ * A title from at most TITLE_SOURCE_LIMIT characters of its source; a source cut short
+ * ends in "…", so a title never looks whole when it is not. Words that show nothing
+ * leave a configured title as written, and a first line as "Untitled memory".
  */
-function titleWords(text: string, limit: number): string {
-  const read = prefix(text, TITLE_SOURCE_LIMIT);
+function readTitle(read: string, cut: boolean, configured: boolean): string {
   const words = plainInline(read);
-  return compact(read.length < text.length ? `${words}…` : words, limit);
+  const ellipsis = cut ? "…" : "";
+  if (hasVisibleText(words)) return compact(`${words.trimEnd()}${ellipsis}`, TITLE_LIMIT);
+  if (!configured) return "Untitled memory";
+  return compact(`${revealHidden(read).trimEnd()}${ellipsis}`, TITLE_LIMIT);
 }
 
-/** A configured title as its words, or as written when its words show nothing. */
-function shownTitle(configured: string, words: string, limit: number): string {
-  return hasVisibleText(words) ? words : compact(revealHidden(configured), limit);
-}
-
-function reducedTitle(memory: Memory): string {
-  const configured = configuredTitle(memory);
-  if (configured !== null) {
-    return shownTitle(configured, titleWords(configured, TITLE_LIMIT), TITLE_LIMIT);
-  }
-  const title = titleWords(firstLine(memory.content), TITLE_LIMIT);
-  return hasVisibleText(title) ? title : "Untitled memory";
-}
-
-/** Titles by Memory: rows render often, and a title costs a parse. */
-const titles = new WeakMap<Memory, string>();
+/** Enough titles or labels for a browse window twice over. */
+const CACHE_LIMIT = 10_000;
+/** Titles by what they read: rows render often, fresh reads bring new objects, and a title costs a parse. */
+const titles = new Map<string, string>();
 
 /** The title a row, label, or link shows, cut at the title limit. */
 export function memoryTitle(memory: Memory): string {
-  let title = titles.get(memory);
+  const configured = configuredTitle(memory);
+  const source = configured ?? firstLine(memory.content);
+  const read = prefix(source, TITLE_SOURCE_LIMIT);
+  const cut = read.length < source.length;
+  // Everything a title depends on: which source it reads, what, and whether it was cut.
+  const key = `${configured === null ? "line" : "title"}${cut ? "…" : ""}\n${read}`;
+  let title = titles.get(key);
   if (title === undefined) {
-    title = reducedTitle(memory);
-    titles.set(memory, title);
+    title = readTitle(read, cut, configured !== null);
+    if (titles.size >= CACHE_LIMIT) titles.clear();
+    titles.set(key, title);
   }
   return title;
 }
@@ -79,7 +82,9 @@ export function memoryDetailTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
   if (configured === null) return memoryTitle(memory);
   const words = compact(plainInline(configured), Number.POSITIVE_INFINITY);
-  return shownTitle(configured, words, Number.POSITIVE_INFINITY);
+  return hasVisibleText(words)
+    ? words
+    : compact(revealHidden(configured), Number.POSITIVE_INFINITY);
 }
 
 /** A configured `metadata.title` as written, hidden controls as markers, or null. */
@@ -113,7 +118,9 @@ export function memoryBody(memory: Memory): string {
   const words = line.replace(/^#{1,6}[ \t]+/, "").replace(/^\*\*([^*\n]+)\*\*/, "$1");
   if (line.length > TITLE_SOURCE_LIMIT || MARKUP.test(words)) return memory.content;
   // Measured as the title shows it, with any hidden control grown into its marker.
-  if (titleWords(line, Number.POSITIVE_INFINITY).length > TITLE_LIMIT) return memory.content;
+  if (compact(plainInline(line), Number.POSITIVE_INFINITY).length > TITLE_LIMIT) {
+    return memory.content;
+  }
   const rest = memory.content.slice(line.length).replace(/^(?:\r\n?|\n)/, "");
   // An ATX heading always ends at its line; any other title line could continue.
   if (!line.startsWith("#") && !OPENS_BLOCK.test(firstLine(rest))) return memory.content;
@@ -129,20 +136,38 @@ const LABEL_LIMIT = 96;
  * so two values never merge into one chip, filter, or source.
  */
 export function metadataLabel(value: string): string {
-  const shown = prefix(value, LABEL_LIMIT);
-  return shown.length < value.length ? `${revealHidden(shown)}…` : revealHidden(shown);
+  const read = prefix(value, LABEL_LIMIT);
+  const key = read.length < value.length ? `${read}…` : read;
+  let label = labels.get(key);
+  if (label === undefined) {
+    // Measured as it shows, with each hidden control grown into its marker.
+    label = compact(revealHidden(key), LABEL_LIMIT);
+    if (labels.size >= CACHE_LIMIT) labels.clear();
+    labels.set(key, label);
+  }
+  return label;
+}
+
+/** Labels by what they show: views list every type and source on each render. */
+const labels = new Map<string, string>();
+
+/** A row's excerpt of text as it reads: whitespace collapsed, hidden controls as markers. */
+export function excerpt(text: string, limit: number): string {
+  const source = text.trimStart();
+  // Four times what it shows fills it once whitespace collapses; "…" says it was cut.
+  const read = prefix(source, 4 * limit);
+  const ellipsis = read.length < source.length ? "…" : "";
+  return compact(`${revealHidden(read).trimEnd()}${ellipsis}`, limit);
 }
 
 /** The `metadata.type` a Memory actually carries, or null when it has none. */
 export function memoryConfiguredType(memory: Memory): string | null {
-  const configured = memory.metadata.type;
-  return typeof configured === "string" && configured.trim() ? configured.trim() : null;
+  return metadataText(memory, "type");
 }
 
 /** The `metadata.source` a Memory names, or null. */
 export function memorySource(memory: Memory): string | null {
-  const source = memory.metadata.source;
-  return typeof source === "string" && source.trim() ? source.trim() : null;
+  return metadataText(memory, "source");
 }
 
 /**

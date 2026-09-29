@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreAgents } from "@/modules/agents/browser/data";
 import { useLoreObservations } from "@/modules/episodes/browser/data";
 import { useLoreMemory } from "@/modules/memories/browser/data";
-import { memoryTitle, prefix, revealHidden } from "@/modules/memories/browser/presentation";
+import { excerpt, memoryTitle, revealHidden } from "@/modules/memories/browser/presentation";
 import {
   useLoreMemoryProposalMutations,
   useLoreMemoryProposals,
@@ -35,11 +35,6 @@ const EMPTY_OBSERVATION_IDS: readonly string[] = [];
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
-}
-
-function compact(value: string, limit = 112): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1).trimEnd()}…` : normalized;
 }
 
 function utcDate(value: string): string {
@@ -257,7 +252,7 @@ export function MemoryProposalsView({
                       <span>{proposal.kind === "create" ? "New Memory" : "Update"}</span>
                       <time dateTime={proposal.createdAt}>{utcDate(proposal.createdAt)} UTC</time>
                     </span>
-                    <strong>{compact(revealHidden(prefix(proposal.proposedContent, 400)))}</strong>
+                    <strong>{excerpt(proposal.proposedContent, 112)}</strong>
                     <span className="proposal-row-foot">
                       {submitter(proposal)} · {proposal.proposedScope}
                     </span>

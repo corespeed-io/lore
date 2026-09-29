@@ -4,6 +4,7 @@ import {
   browseCounts,
   browseFilterEmptyNote,
   browseTypeChips,
+  excerpt,
   hasVisibleText,
   memoryBody,
   memoryConfiguredTitle,
@@ -67,7 +68,10 @@ test("a type or source label shows at most 96 characters, whatever the metadata 
   const started = performance.now();
   const label = metadataLabel(long);
   expect(performance.now() - started).toBeLessThan(50);
-  expect(label).toBe(`${"⟨U+202E⟩".repeat(96)}…`);
+  // Measured as it shows: the markers count, so the label stays within 96.
+  expect(label).toHaveLength(96);
+  expect(label.startsWith("⟨U+202E⟩⟨U+202E⟩")).toBe(true);
+  expect(label.endsWith("…")).toBe(true);
   expect(metadataLabel("x".repeat(96))).toBe("x".repeat(96));
 });
 
@@ -284,9 +288,8 @@ test("the body keeps a first line the title would not show as written", () => {
   ]) {
     kept(`**Title**\n${next}`);
   }
-  // A title too long to show whole, or longer than the title reads.
+  // A title too long to show whole.
   kept(`**${"x".repeat(97)}**\nBody`);
-  kept(`# Deploy${" ".repeat(1_000)}only after the freeze lifts\nBody`);
 });
 
 test("a wikilink without a label reads as its reference", () => {
@@ -340,6 +343,9 @@ test("controls that reorder or hide text show as markers, and emoji stay whole",
     "Pay ⟨U+202E⟩4321 ⟨U+202E⟩",
   );
   expect(plain("Pay ‮4321")).toBe("Pay ⟨U+202E⟩4321");
+  expect(plainInline("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
+  expect(memoryTitle(memory({ content: "Pay \u202E4321\nBody" }))).toBe("Pay ⟨U+202E⟩4321");
+  expect(memoryTitle(memory({ metadata: { title: "a\u2066b" } }))).toBe("a⟨U+2066⟩b");
 });
 
 test("tag characters after a flag that do not spell a flag still show as markers", () => {
@@ -520,12 +526,6 @@ test("a title never reads an indented code line or a non-ASCII space after # as 
   expect(memoryTitle(titled)).toBe(memoryDetailTitle(titled));
 });
 
-test("a title or label with no markup still shows hidden controls as markers", () => {
-  expect(plainInline("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
-  expect(memoryTitle(memory({ content: "Pay \u202E4321\nBody" }))).toBe("Pay ⟨U+202E⟩4321");
-  expect(memoryTitle(memory({ metadata: { title: "a\u2066b" } }))).toBe("a⟨U+2066⟩b");
-});
-
 test("a snippet shows at most 200 characters of at most 2,000 read, never splitting a character", () => {
   const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
   expect(plain("x".repeat(500))).toHaveLength(200);
@@ -624,4 +624,36 @@ test("a type filter with no loaded match names the type, and says 'yet' only whi
     browseFilterEmptyNote({ type: "field_note", matching: 3, window: 5000, ...loading }),
   ).toBeNull();
   expect(browseFilterEmptyNote({ type: "all", matching: 0, window: 5000, ...loading })).toBeNull();
+});
+
+test("a title cut short ends in an ellipsis with no space before it, whatever its source", () => {
+  const padded = `Deploy${" ".repeat(1_000)}only after the freeze lifts`;
+  expect(memoryTitle(memory({ content: `${padded}\nBody` }))).toBe("Deploy…");
+  expect(memoryTitle(memory({ content: `**Deploy**${" ".repeat(1_000)}rest\nBody` }))).toBe(
+    "Deploy…",
+  );
+  expect(memoryTitle(memory({ metadata: { title: padded } }))).toBe("Deploy…");
+});
+
+test("row titles are read once per source, whatever object carries it", () => {
+  const content = `${"![".repeat(1_000)}x\nBody`;
+  memoryTitle(memory({ content }));
+  const started = performance.now();
+  for (let index = 0; index < 5_000; index += 1) memoryTitle(memory({ content }));
+  expect(performance.now() - started).toBeLessThan(100);
+  // A configured title and a first line with the same text are separate titles.
+  const same = "\u200B";
+  expect(memoryTitle(memory({ content: same }))).toBe("Untitled memory");
+  expect(memoryTitle(memory({ metadata: { title: same } }))).toBe("\u200B");
+});
+
+test("a row excerpt collapses whitespace, marks hidden controls, and says when it was cut", () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+  expect(excerpt(`Approve${" ".repeat(500)}and delete prod`, 112)).toBe("Approve…");
+  expect(excerpt(`${" ".repeat(400)}Drop the audit log`, 112)).toBe("Drop the audit log");
+  expect(excerpt("a\u202Eb", 112)).toBe("a⟨U+202E⟩b");
+  // The cut would fall inside the emoji, which it drops whole rather than split.
+  const astral = excerpt(`${"x".repeat(110)}\u{1F600}tail`, 112);
+  expect(lone.test(astral)).toBe(false);
+  expect(astral).toBe(`${"x".repeat(110)}…`);
 });
