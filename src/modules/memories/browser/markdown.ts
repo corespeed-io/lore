@@ -36,6 +36,10 @@ const WIKILINK = /\[\[([^[\]|\n]+)(?:\|([^[\]\n]+))?\]\]/y;
  * tags a reader sees are the three subdivision flags (England, Scotland, and Wales),
  * which are matched first and kept; any other tag run, flag-shaped or not, shows.
  */
+// gstack-shortcut(dec-315131f9-26c7-4496-b492-eb60b60705fd): a visible right-to-left
+// character (U+05F3, U+061B, U+06D4) reorders the digits after it as a mark does, and a
+// run of variation selectors shows as nothing; neither is marked, upgrade when digit
+// runs render as left-to-right isolates on every surface.
 const HIDDEN_CHARACTERS =
   /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
 
@@ -49,11 +53,13 @@ export function revealHidden(text: string): string {
 }
 
 /**
- * Whether text shows anything: a character other than a space or a zero-width
- * format character, once hidden controls have grown into their markers.
+ * Whether text shows anything: a character other than a space, a zero-width format
+ * character, a character Unicode says to draw as nothing (variation selectors, the
+ * combining grapheme joiner, Hangul fillers), or the blank braille pattern, once hidden
+ * controls have grown into their markers.
  */
 export function hasVisibleText(text: string): boolean {
-  return /[^\s\p{Cf}]/u.test(revealHidden(text));
+  return /[^\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/u.test(revealHidden(text));
 }
 
 /** Whether text ends in an odd run of backslashes, whose last one escapes what follows. */
@@ -125,13 +131,20 @@ memoryMarkdown.normalizeLinkText = (url) => url;
 // names addresses past a `/` and in `?to=` or `?cc=` too, and a mail client decodes
 // its percent escapes, so a mailto link opens only when written wholly in ASCII with
 // no percent escape. The check reads the URL trimmed, as markdown-it's own parse
-// does, so leading Unicode whitespace cannot move the host out of its reach.
+// does, so leading Unicode whitespace cannot move the host out of its reach. markdown-it
+// also cuts a host label past 63 characters and a host past 255, so a link whose
+// scheme and authority do not come through unchanged stays text too.
 const normalizeLink = memoryMarkdown.normalizeLink.bind(memoryMarkdown);
 // No `i` flag: under `iu`, \P{ASCII} matches `s` and `k` too, since ſ and K fold to them.
 const SPOOFABLE_TARGET =
   /^(?:[A-Za-z][\w+.-]*:\/\/[^/?#]*\P{ASCII}|[Mm][Aa][Ii][Ll][Tt][Oo]:[\s\S]*[%\P{ASCII}])/u;
-memoryMarkdown.normalizeLink = (url) =>
-  SPOOFABLE_TARGET.test(url.trim()) ? "" : normalizeLink(url);
+const AUTHORITY = /^[A-Za-z][\w+.-]*:(?:\/\/)?[^/?#]*/;
+memoryMarkdown.normalizeLink = (url) => {
+  const written = url.trim();
+  if (SPOOFABLE_TARGET.test(written)) return "";
+  const normalized = normalizeLink(url);
+  return AUTHORITY.exec(normalized)?.[0] === AUTHORITY.exec(written)?.[0] ? normalized : "";
+};
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
 memoryMarkdown.block.ruler.disable("reference");
@@ -145,12 +158,22 @@ memoryMarkdown.core.ruler.push("memory_headings", (state) => {
     }
   }
 });
+// An ordered item shows the number written for it: the browser would count on from
+// the first, so `1000.` then `9000.` would read 1000 then 1001.
+memoryMarkdown.core.ruler.push("memory_list_numbers", (state) => {
+  for (const token of state.tokens) {
+    if (token.type === "list_item_open" && token.info) token.attrSet("value", token.info);
+  }
+});
 
 // `__rules__` is markdown-it's internal rule list; nothing public returns a rule by
 // name. A release that renames it fails here, and so every test, rather than quietly.
 const tableRule = memoryMarkdown.block.ruler.__rules__.find((rule) => rule.name === "table");
 if (!tableRule) throw new Error("markdown-it has no table rule to bound");
 const table = tableRule.fn;
+// gstack-shortcut(dec-18586735-9b84-4629-b2b4-77770a79cee2): a body row's cells past
+// the header's count are dropped and only Show source shows them, upgrade when an
+// over-wide row makes its table paragraph text.
 /**
  * markdown-it's table rule, held to `MAXIMUM_TABLE_CELLS` across one body. The rule
  * fills in every cell a short row leaves out, so a 32,000-character body could

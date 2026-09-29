@@ -369,17 +369,20 @@ test("tag characters after a flag that do not spell a flag still show as markers
   );
 });
 
-test("every bidi embedding, override, and isolate control shows as a marker, and its neighbours stay text", () => {
+test("every bidi control and direction mark shows as a marker, and its neighbours stay text", () => {
   for (const code of [
-    0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069, 0xe0001,
+    0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069,
+    0xe0001,
   ]) {
     const hex = code.toString(16).toUpperCase().padStart(4, "0");
     expect(revealHidden(`a${String.fromCodePoint(code)}b`)).toBe(`a⟨U+${hex}⟩b`);
   }
-  for (const code of [0x2029, 0x202f, 0x2065, 0x206a, 0xe0080]) {
+  for (const code of [0x061b, 0x061d, 0x200d, 0x2010, 0x2029, 0x202f, 0x2065, 0x206a, 0xe0080]) {
     const text = `a${String.fromCodePoint(code)}b`;
     expect(revealHidden(text)).toBe(text);
   }
+  // A first line of only a mark shows it, rather than reading as untitled.
+  expect(memoryTitle(memory({ content: "\u200F\nBody" }))).toBe("⟨U+200F⟩");
 });
 
 test("only the three subdivision flags keep their tags; any other flag-shaped run shows", () => {
@@ -444,7 +447,7 @@ test("text shows nothing when it holds only spaces and zero-width characters", (
     expect(hasVisibleText(text), JSON.stringify(text)).toBe(false);
   }
   // A control that reorders or hides text shows as its marker, so it counts.
-  for (const text of ["\u202E", "\u2066", "\u{E0041}", "x"]) {
+  for (const text of ["\u202E", "\u2066", "\u{E0041}", "\u200E", "\u200F", "\u061C", "x"]) {
     expect(hasVisibleText(text), JSON.stringify(text)).toBe(true);
   }
 });

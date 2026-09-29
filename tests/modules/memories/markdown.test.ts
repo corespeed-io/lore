@@ -217,7 +217,13 @@ test("headings sit under the page title, and every block keeps its element", () 
     "<h2>A</h2>\n<h2>B</h2>\n<h3>C</h3>\n<h4>D</h4>\n<h4>E</h4>\n",
   );
   expect(html("- a\n- b")).toBe("<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n");
-  expect(html("3. c\n4. d")).toBe('<ol start="3">\n<li>c</li>\n<li>d</li>\n</ol>\n');
+  expect(html("3. c\n4. d")).toBe(
+    '<ol start="3">\n<li value="3">c</li>\n<li value="4">d</li>\n</ol>\n',
+  );
+  // An ordered item shows the number written for it, never one counted from the first.
+  expect(html("1000. to vendor A\n9000. to vendor B")).toContain(
+    '<li value="9000">to vendor B</li>',
+  );
   expect(html("~~old~~ **b** *e* `c`\n\n> q\n\n---")).toBe(
     "<p><s>old</s> <strong>b</strong> <em>e</em> <code>c</code></p>\n<blockquote>\n<p>q</p>\n</blockquote>\n<hr>\n",
   );
@@ -244,7 +250,7 @@ test("controls that reorder or hide text show as markers, raw or as entities", (
   expect(html("Pay &#x202E;4321&#x202C; now &#xE0049; end")).toBe(
     "<p>Pay ⟨U+202E⟩4321⟨U+202C⟩ now ⟨U+E0049⟩ end</p>\n",
   );
-  // A direction mark before numbers draws "100 250" as "250 100".
+  // A right-to-left or Arabic letter mark before numbers draws "100 250" as "250 100".
   expect(html("Approve \u200F100 250, \u200E1 2, and &#x61C;3 4")).toBe(
     "<p>Approve ⟨U+200F⟩100 250, ⟨U+200E⟩1 2, and ⟨U+061C⟩3 4</p>\n",
   );
@@ -355,6 +361,16 @@ test("bold, emphasis, and strikethrough close after CJK punctuation, and English
   expect(html("**English:**text and 2 * 3 * 4")).toBe("<p>**English:**text and 2 * 3 * 4</p>\n");
 });
 
+test("a link whose words Unicode draws as nothing shows its target", () => {
+  // Variation selectors, the combining grapheme joiner, Hangul fillers, blank braille.
+  for (const label of ["\uFE0F", "\u{E0100}", "\u034F", "\u17B4", "\u3164", "\u115F", "\u2800"]) {
+    expect(html(`[${label}](https://d.test)`), label).toContain(`${EXTERNAL}>https://d.test`);
+  }
+  expect(html("![\uFE0F](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
+  // An emoji with its variation selector is a word.
+  expect(html("[\u2764\uFE0F](https://d.test)")).toContain(`${EXTERNAL}>\u2764\uFE0F</a>`);
+});
+
 test("a link with no words of its own shows its target", () => {
   expect(html("[](https://y.test) and [ ](https://z.test)")).toBe(
     `<p><a class="ext" href="https://y.test" ${EXTERNAL}>https://y.test</a> and <a class="ext" href="https://z.test" ${EXTERNAL}>https://z.test </a></p>\n`,
@@ -374,7 +390,7 @@ test("a link with no words of its own shows its target", () => {
   }
 });
 
-test("a link whose host is written outside ASCII stays text", () => {
+test("a link whose host is written outside ASCII, or a mailto link with anything outside ASCII or an escape, stays text", () => {
   // Such a host goes where its punycode points, which can read as another host.
   for (const markdown of [
     "<https://github.com\u2215corespeed-io\u2215lore.attacker.dev>",
@@ -400,13 +416,55 @@ test("a link whose host is written outside ASCII stays text", () => {
   ]) {
     expect(html(markdown), markdown).not.toContain("<a ");
   }
-  // A path outside ASCII is fine, and a scheme in capitals still links.
+  // An http(s) path outside ASCII is fine, and a scheme in capitals still links.
   expect(html("<https://example.test/caf\u00E9>")).toContain("<a ");
   expect(html("<HTTPS://example.test>")).toContain("<a ");
   expect(html("<mailto:team@example.test>")).toContain('href="mailto:team@example.test"');
   expect(html("<mailto:team@example.test?subject=Hello>")).toContain("<a ");
   // A host of `s` and `k` is ASCII: they only fold to ſ and K under a case-blind match.
   expect(html("<https://sk.test>")).toContain('href="https://sk.test"');
+});
+
+test("an email autolink, a mailto fragment, and an image's mailto source follow the same rule", () => {
+  // An email autolink is a mailto link, so an escape in its address keeps it text.
+  expect(html("<a%40evil.test@example.test>")).toBe("<p>&lt;a%40evil.test@example.test&gt;</p>\n");
+  expect(html("<team@example.test>")).toContain('href="mailto:team@example.test"');
+  // The check reads past a `#`, and an image's source is a link target like any other.
+  expect(html("[a](mailto:a@example.test#caf\u00E9)")).not.toContain("<a ");
+  expect(html("[a](mailto:a@example.test#top)")).toContain('href="mailto:a@example.test#top"');
+  expect(html("![x](mailto:a%40b@example.test)")).not.toContain("<a ");
+  expect(html("![x](mailto:a@example.test)")).toContain('href="mailto:a@example.test"');
+  // The check reads a destination as markdown-it decodes it, entities and escapes included.
+  for (const markdown of [
+    "[a](mailto:a&#x25;40b@example.test)",
+    "[a](mailto:x@&#x430;pple.com)",
+    "[a](mailto:x@example.test\\%40y)",
+    "![x](mailto:team@example.test?cc=&#x430;@b.test)",
+  ]) {
+    expect(html(markdown), markdown).not.toContain("<a ");
+  }
+  expect(html("[a](mailto:a&#x40;example.test)")).toContain('href="mailto:a@example.test"');
+  // A title keeps a refused link as written, as the body does.
+  expect(plainInline("<a%40evil.test@example.test>")).toBe("<a%40evil.test@example.test>");
+  expect(plainInline("[label](mailto:a@example.test?subject=%20)")).toBe(
+    "[label](mailto:a@example.test?subject=%20)",
+  );
+});
+
+test("a link whose host markdown-it would cut stays text", () => {
+  // markdown-it cuts a host label past 63 characters and a host past 255 characters.
+  const long = `github.com.${"a".repeat(58)}.${`${"a".repeat(63)}.`.repeat(3)}${"b".repeat(63)}evil.test`;
+  for (const markdown of [
+    `<https://${long}/>`,
+    `<mailto:ceo@${long}>`,
+    `<ceo@${long}>`,
+    `<https://x.${"a".repeat(63)}12:80/path>`,
+  ]) {
+    expect(html(markdown), markdown.slice(0, 24)).not.toContain("<a ");
+  }
+  // A long label within the limits still links.
+  const fits = `<https://${"a".repeat(63)}.example.test/>`;
+  expect(html(fits)).toContain(`href="https://${"a".repeat(63)}.example.test/"`);
 });
 
 test("an autolink shows its URL as written, never decoded", () => {
@@ -434,6 +492,11 @@ test("a label or reference of only hidden controls shows as its markers", () => 
   expect(html("[\u202E](https://d.test)")).toContain(`${EXTERNAL}>⟨U+202E⟩</a>`);
   expect(html("[[a|\u202E]]")).toContain('title="a — not found">⟨U+202E⟩</span>');
   expect(html("[[\u202E]]")).toContain('<span class="wl-unresolved"');
+  // Direction marks reorder what follows them too, so they are words, not nothing.
+  expect(html("[\u200F](https://d.test)")).toContain(`${EXTERNAL}>⟨U+200F⟩</a>`);
+  expect(html("![\u200E\u061C](https://x.test/a.png)")).toContain(">⟨U+200E⟩⟨U+061C⟩</a>");
+  expect(html("[[a|\u200F]]")).toContain('title="a — not found">⟨U+200F⟩</span>');
+  expect(html("[[\u200F]]")).toContain('title="⟨U+200F⟩ — not found">⟨U+200F⟩</span>');
 });
 
 test("a wikilink whose label shows nothing reads as its reference, and one with no reference stays text", () => {
