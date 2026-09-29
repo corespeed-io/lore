@@ -341,16 +341,18 @@ test("controls that reorder or hide text show as markers, and emoji stay whole",
   expect(revealHidden("a\u202Eb\u2066c\u{E0049}d\u202C")).toBe(
     "a⟨U+202E⟩b⟨U+2066⟩c⟨U+E0049⟩d⟨U+202C⟩",
   );
-  // A family (zero-width joiners), a heart (a variation selector), and right-to-left
-  // marks are ordinary text.
-  for (const text of ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467}", "❤️", "שלום\u200F!"]) {
+  // A family (zero-width joiners) and a heart (a variation selector) are ordinary text.
+  for (const text of ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467}", "❤️"]) {
     expect(revealHidden(text)).toBe(text);
   }
+  // A right-to-left mark reorders numbers, so it shows even in right-to-left text.
+  expect(revealHidden("שלום\u200F!")).toBe("שלום⟨U+200F⟩!");
   // Titles, labels, and snippets show them too, raw or as entities.
   expect(memoryTitle(memory({ content: "# Pay \u202E4321 &#x202E;\nBody" }))).toBe(
     "Pay ⟨U+202E⟩4321 ⟨U+202E⟩",
   );
   expect(plain("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
+  expect(metadataSource({ limit: "\u200F100 250" })).toBe('{\n  "limit": "⟨U+200F⟩100 250"\n}');
   expect(plainInline("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
   expect(memoryTitle(memory({ content: "Pay \u202E4321\nBody" }))).toBe("Pay ⟨U+202E⟩4321");
   expect(memoryTitle(memory({ metadata: { title: "a\u2066b" } }))).toBe("a⟨U+2066⟩b");

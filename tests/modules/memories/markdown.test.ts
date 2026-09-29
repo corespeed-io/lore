@@ -244,6 +244,10 @@ test("controls that reorder or hide text show as markers, raw or as entities", (
   expect(html("Pay &#x202E;4321&#x202C; now &#xE0049; end")).toBe(
     "<p>Pay ⟨U+202E⟩4321⟨U+202C⟩ now ⟨U+E0049⟩ end</p>\n",
   );
+  // A direction mark before numbers draws "100 250" as "250 100".
+  expect(html("Approve \u200F100 250, \u200E1 2, and &#x61C;3 4")).toBe(
+    "<p>Approve ⟨U+200F⟩100 250, ⟨U+200E⟩1 2, and ⟨U+061C⟩3 4</p>\n",
+  );
   expect(html("`a\u202Eb`")).toBe("<p><code>a⟨U+202E⟩b</code></p>\n");
   expect(html('[a](https://y.test "x\u202Ey")')).toContain('title="x⟨U+202E⟩y"');
   expect(html("[[ref\u202E|label]]")).toContain('title="ref⟨U+202E⟩ — not found"');

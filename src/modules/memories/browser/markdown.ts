@@ -28,13 +28,16 @@ const WIKILINK = /\[\[([^[\]|\n]+)(?:\|([^[\]\n]+))?\]\]/y;
 
 /**
  * Characters that would make the text a reader sees differ from the text an agent
- * reads: the bidirectional embedding, override, and isolate controls, which reorder
- * what follows them, and the Unicode tag characters, which show as nothing. The only
+ * reads: the bidirectional embedding, override, and isolate controls and the
+ * left-to-right, right-to-left, and Arabic letter marks, which reorder what follows
+ * them (a right-to-left mark draws "100 250" as "250 100"), and the Unicode tag
+ * characters, which show as nothing. Right-to-left text that uses the marks shows
+ * them too, the cost of a reader seeing numbers in the order an agent wrote. The only
  * tags a reader sees are the three subdivision flags (England, Scotland, and Wales),
  * which are matched first and kept; any other tag run, flag-shaped or not, shows.
  */
 const HIDDEN_CHARACTERS =
-  /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
+  /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
 
 /** Text with each hidden control shown as a marker that names it, such as `⟨U+202E⟩`. */
 export function revealHidden(text: string): string {
