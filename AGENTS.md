@@ -468,8 +468,9 @@ been removed. Lore now has a native implementation, split into two concepts
   parse (reported at the parser's line:column), an unresolvable in-repo import, an
   import of an in-repo module that is not `.ts`/`.tsx` (stylesheets and other assets
   aside), and a declared `MODULES` dependency or export that nothing uses are all
-  findings. An `import()` whose
-  specifier is not a string literal (`import("node:" + name)`) is a finding too:
+  findings. An `import()` or `require()` (also `module.require()`) whose
+  specifier is not a string literal (`import("node:" + name)`), and any
+  `import.meta.require()`, which the scan never reports, is a finding too:
   no scan can resolve it, so the guard refuses it instead of missing the edge. It is
   found by es-module-lexer over the JavaScript Bun emits for the file, which has no
   types or comments, so a string, comment, or regex that mentions `import(` is not.

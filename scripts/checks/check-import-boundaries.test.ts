@@ -601,6 +601,27 @@ test("a computed import() in a branch Bun would prove dead is found in every env
   assert.deepEqual(computedImports(source, "ts"), ["import(name)", "import(`${name}.dev`)"]);
 });
 
+test("a require() with a computed specifier, or any import.meta.require(), is a finding", () => {
+  assert.deepEqual(
+    computedImports(
+      [
+        'const name = "fs";',
+        'export const computed = require("node:" + name);',
+        'export const literal = require("./literal");',
+        'export const meta = import.meta.require("node:fs");',
+        "declare const loader: { require(name: string): unknown };",
+        "export const method = loader.require(name);",
+        'export const mention = "require(name) is only text";',
+        "export const pattern = /require(name)/;",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the fixture is source text.
+        "export const templated = `${require(name)}`;",
+      ].join("\n"),
+      "ts",
+    ),
+    ['require("node:" + name)', 'import.meta.require("node:fs")', "require(name)"],
+  );
+});
+
 test("import.meta, a type-position import(), and a shebang are not computed imports", () => {
   assert.deepEqual(
     computedImports(

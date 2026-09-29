@@ -243,20 +243,30 @@ function parsedSpecifiers(transpiler: Bun.Transpiler, source: string, original: 
 
 initModuleLexer();
 
+/** A CommonJS-style load call: `require(`, `module.require(`, `import.meta.require(`. */
+const LOAD_CALLS = /(?<![\w$.])(?:import\.meta\.require|module\.require|require)(\s*)\(/g;
+
 /**
- * Every `import()` whose specifier is not a string literal, such as
- * `import("node:" + name)`. No scan can resolve one, so each is a finding rather than
- * an edge the guard silently misses. The JavaScript Bun emits for the source has no
- * types or comments, and es-module-lexer reads it as a real lexer, so a string or
- * comment that merely mentions `import(` is not counted. Bun folds a specifier built
- * only from literals (`"node:" + "fs"`) into one that the parser's scan never
- * reports, so a lexed specifier the scan did not report counts as computed too.
+ * Every module load no scan can check: an `import()` or `require()` (also
+ * `module.require()` and `import.meta.require()`) whose specifier is not a string
+ * literal, such as `import("node:" + name)`, and any such load whose literal the
+ * parser's scan did not report. No scan can resolve one, so each is a finding rather
+ * than an edge the guard silently misses. The JavaScript Bun emits for the source
+ * has no types or comments, and es-module-lexer reads it as a real lexer, so a
+ * string, comment, or regex that merely mentions `import(` is not counted. The lexer
+ * does not read CommonJS calls, so each is rewritten, at the same length, to
+ * `import(` first. Bun folds a specifier built only from literals (`"node:" + "fs"`)
+ * into one the scan never reports, and never reports `import.meta.require` at all.
  */
 export function computedImports(source: string, loader: "ts" | "tsx" = "tsx"): string[] {
   const parsable = source.replace(/^#![^\n]*/, (line) => " ".repeat(line.length));
   const scanned = new Set(TRANSPILERS[loader].scanImports(parsable).map((item) => item.path));
   const javascript = TRANSPILERS[loader].transformSync(parsable);
-  const [imports] = lexModule(javascript);
+  const lexable = javascript.replace(
+    LOAD_CALLS,
+    (call, space: string) => `import${" ".repeat(call.length - 7 - space.length)}${space}(`,
+  );
+  const [imports] = lexModule(lexable);
   return imports
     .filter((item) => item.d >= 0 && (item.n === undefined || !scanned.has(item.n)))
     .map((item) => javascript.slice(item.ss, item.se).replace(/\s+/g, " "));
