@@ -114,6 +114,12 @@ memoryMarkdown.validateLink = allowedHref;
 // An autolink shows its URL as written. markdown-it would show punycode hosts and
 // percent escapes decoded, so a reader could see a host the link does not go to.
 memoryMarkdown.normalizeLinkText = (url) => url;
+// A host written outside ASCII goes where its punycode points, which can read as
+// another host (`github.com∕x.attacker.dev`), so such a link stays text.
+const normalizeLink = memoryMarkdown.normalizeLink.bind(memoryMarkdown);
+memoryMarkdown.normalizeLink = (url) =>
+  // No `i` flag: under `iu`, \P{ASCII} also matches `s` and `k`, which fold to ſ and K.
+  /^[A-Za-z][\w+.-]*:\/\/[^/?#]*\P{ASCII}/u.test(url) ? "" : normalizeLink(url);
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
 memoryMarkdown.block.ruler.disable("reference");
@@ -269,7 +275,10 @@ rules.wikilink = (tokens, index, _options, env) => {
   // Unreachable while markdown-it refuses a link label holding a wikilink; kept so
   // anchors could never nest if it stopped.
   if (insideAnchor(memory)) return shown;
-  const memoryId = wikilinkTarget(memory.targets ?? {}, reference);
+  // Only the map's own properties are targets, so a name like `constructor` is none.
+  const targets = memory.targets ?? {};
+  const target: unknown = Object.hasOwn(targets, reference) ? targets[reference] : undefined;
+  const memoryId = typeof target === "string" && target ? target : undefined;
   const referenceText = escapeHtml(reference);
   if (!memoryId) {
     // The reference shows on hover, as a link's target does.
@@ -397,16 +406,6 @@ export function plain(markdown: string): string {
   }
   const words = tokens ? renderedWords(renderMemoryMarkdown(tokens, {}, "")) : revealHidden(source);
   return prefix(words.replace(/\s+/g, " ").trim(), SNIPPET_LIMIT);
-}
-
-/** The Memory id a reference resolves to, read only from the map's own properties. */
-export function wikilinkTarget(
-  targets: Readonly<Record<string, string>>,
-  reference: string,
-): string | undefined {
-  if (!Object.hasOwn(targets, reference)) return undefined;
-  const target: unknown = targets[reference];
-  return typeof target === "string" && target ? target : undefined;
 }
 
 /** The parts of a click that decide whether the page or the browser handles it. */

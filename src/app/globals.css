@@ -758,12 +758,16 @@ body {
   padding: 12px 14px;
 }
 
-/* A Memory's text as written, hidden controls as markers, beside its rendering. */
+/* A Memory's text and metadata as written, hidden controls as markers. */
 .detail-source {
   margin: 0;
   color: var(--body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.detail-source + .detail-source {
+  margin-top: 12px;
 }
 
 .detail-body {

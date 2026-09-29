@@ -84,12 +84,35 @@ export function MemoryProposalsView({
     () => new Map(evidenceObservations.map((observation) => [observation.id, observation])),
     [evidenceObservations],
   );
+  // Revealed once per read: an Observation may hold 100,000 characters.
+  const observationText = useMemo(
+    () =>
+      new Map(
+        evidenceObservations.map((observation) => [
+          observation.id,
+          revealHidden(observation.content),
+        ]),
+      ),
+    [evidenceObservations],
+  );
+  const proposedText = useMemo(
+    () =>
+      selected && {
+        content: revealHidden(selected.proposedContent),
+        metadata: revealHidden(JSON.stringify(selected.proposedMetadata, null, 2)),
+      },
+    [selected],
+  );
   const targetId = selected?.kind === "update" ? selected.targetMemoryId : null;
   const {
     data: targetMemory,
     error: targetError,
     isLoading: targetLoading,
   } = useLoreMemory(workspaceId, targetId);
+  const targetText = useMemo(
+    () => (targetMemory ? revealHidden(targetMemory.content) : null),
+    [targetMemory],
+  );
   const agentNames = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent.name])),
     [agents],
@@ -353,18 +376,18 @@ export function MemoryProposalsView({
               {selected.kind === "update" && targetMemory && (
                 <section className="proposal-content-block proposal-current-content">
                   <h3>Current content</h3>
-                  <div>{revealHidden(targetMemory.content)}</div>
+                  <div>{targetText}</div>
                 </section>
               )}
 
               <section className="proposal-content-block">
                 <h3>Proposed content</h3>
-                <div>{revealHidden(selected.proposedContent)}</div>
+                <div>{proposedText?.content}</div>
               </section>
 
               <details className="proposal-metadata">
                 <summary>Proposed metadata</summary>
-                <pre>{revealHidden(JSON.stringify(selected.proposedMetadata, null, 2))}</pre>
+                <pre>{proposedText?.metadata}</pre>
               </details>
 
               <section className="proposal-evidence" aria-labelledby="proposal-evidence-title">
@@ -426,7 +449,7 @@ export function MemoryProposalsView({
                               </header>
                               {observation ? (
                                 <>
-                                  <div>{revealHidden(observation.content)}</div>
+                                  <div>{observationText.get(observationId)}</div>
                                   <small>
                                     SHA-256 {observation.payloadSha256} · {observationId}
                                   </small>

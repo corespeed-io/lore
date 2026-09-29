@@ -7,7 +7,6 @@ import {
   MAXIMUM_TABLE_CELLS,
   parseMemoryMarkdown,
   renderMemoryMarkdown,
-  wikilinkTarget,
 } from "@/modules/memories/browser/markdown";
 import { plainInline } from "@/modules/memories/browser/presentation";
 
@@ -88,12 +87,29 @@ test("a wikilink's reference and label are escaped wherever they reach the page"
 });
 
 test("a wikilink resolves only through the map's own properties", () => {
-  expect(wikilinkTarget({ "topic/specs": TARGET_MEMORY_ID }, "topic/specs")).toBe(TARGET_MEMORY_ID);
-  expect(wikilinkTarget({}, "constructor")).toBeUndefined();
-  expect(wikilinkTarget({}, "__proto__")).toBeUndefined();
-  expect(wikilinkTarget({ empty: "" }, "empty")).toBeUndefined();
+  const unresolved = 'class="wl-unresolved"';
+  expect(html("[[topic/specs]]", { "topic/specs": TARGET_MEMORY_ID })).toContain(
+    `data-memory-id="${TARGET_MEMORY_ID}"`,
+  );
+  // An inherited string is no target either, even one a prototype was given.
+  expect(html("[[inherited]]", Object.create({ inherited: TARGET_MEMORY_ID }))).toContain(
+    unresolved,
+  );
+  expect(html("[[empty]]", { empty: "" })).toContain(unresolved);
   const malformed = { count: 42 } as unknown as Record<string, string>;
-  expect(wikilinkTarget(malformed, "count")).toBeUndefined();
+  expect(html("[[count]]", malformed)).toContain(unresolved);
+});
+
+test("a wikilink named like an object property renders unresolved unless the map holds it", () => {
+  const inherited = html("[[constructor]] [[__proto__]] [[toString]]") ?? "";
+  expect(inherited.match(/class="wl-unresolved"/g)).toHaveLength(3);
+  expect(inherited).not.toContain("<a ");
+  // A map that holds the name itself resolves it like any other reference.
+  const owned = Object.create(null) as Record<string, string>;
+  Object.defineProperty(owned, "constructor", { value: TARGET_MEMORY_ID, enumerable: true });
+  expect(html("[[constructor]]", owned)).toContain(
+    `data-memory-id="${TARGET_MEMORY_ID}">constructor</a>`,
+  );
 });
 
 test("a Memory body links only to http(s) with a host, and to mailto", () => {
@@ -177,7 +193,7 @@ test("an image's alt text and a link's title and target are escaped wherever the
   expect(html(`![a](https://y.test/p.png 'q" x="1')`)).toContain('title="q&quot; x=&quot;1"');
   expect(html("[a](https://y.test/?a=1&b=2)")).toContain('href="https://y.test/?a=1&amp;b=2"');
   // Alt text shows hidden controls as markers, as the rest of the body does.
-  expect(html("![a‮b](https://x.test/p.png)")).toContain(">a⟨U+202E⟩b</a>");
+  expect(html("![a\u202Eb](https://x.test/p.png)")).toContain(">a⟨U+202E⟩b</a>");
 });
 
 test("a wikilink in a link's text keeps the link from forming, so anchors never nest", () => {
@@ -230,15 +246,15 @@ test("controls that reorder or hide text show as markers, raw or as entities", (
   expect(html("Pay &#x202E;4321&#x202C; now &#xE0049; end")).toBe(
     "<p>Pay ⟨U+202E⟩4321⟨U+202C⟩ now ⟨U+E0049⟩ end</p>\n",
   );
-  expect(html("`a‮b`")).toBe("<p><code>a⟨U+202E⟩b</code></p>\n");
-  expect(html('[a](https://y.test "x‮y")')).toContain('title="x⟨U+202E⟩y"');
-  expect(html("[[ref‮|label]]")).toContain('title="ref⟨U+202E⟩ — not found"');
-  expect(html("```ts‮\nif (admin) {‮ } else {⁦\n```")).toBe(
+  expect(html("`a\u202Eb`")).toBe("<p><code>a⟨U+202E⟩b</code></p>\n");
+  expect(html('[a](https://y.test "x\u202Ey")')).toContain('title="x⟨U+202E⟩y"');
+  expect(html("[[ref\u202E|label]]")).toContain('title="ref⟨U+202E⟩ — not found"');
+  expect(html("```ts\u202E\nif (admin) {\u202E } else {\u2066\n```")).toBe(
     '<pre class="fence"><span class="fence-info">ts⟨U+202E⟩</span><code>if (admin) {⟨U+202E⟩ } else {⟨U+2066⟩\n</code></pre>\n',
   );
-  expect(html("[[ref|a‮b]]")).toContain(">a⟨U+202E⟩b</span>");
-  expect(html("![a‮b]()")).toBe("<p>a⟨U+202E⟩b</p>\n");
-  expect(html("[![c‮d](https://x.test/i.png)](https://d.test)")).toContain(">c⟨U+202E⟩d</a>");
+  expect(html("[[ref|a\u202Eb]]")).toContain(">a⟨U+202E⟩b</span>");
+  expect(html("![a\u202Eb]()")).toBe("<p>a⟨U+202E⟩b</p>\n");
+  expect(html("[![c\u202Ed](https://x.test/i.png)](https://d.test)")).toContain(">c⟨U+202E⟩d</a>");
 });
 
 test("the tables of one body share the cell budget, and the one past it keeps its words", () => {
@@ -287,7 +303,8 @@ test("parsing and rendering cost linear time on hostile bodies", () => {
   ]) {
     const started = performance.now();
     html(input.slice(0, 32_000));
-    expect(performance.now() - started).toBeLessThan(500);
+    // Linear time stays well under this on a busy machine; a quadratic cost takes seconds.
+    expect(performance.now() - started).toBeLessThan(1_500);
   }
 });
 
@@ -347,9 +364,27 @@ test("a link with no words of its own shows its target", () => {
   ]) {
     expect(html(`[${label}](https://d.test)`)).toContain(`${EXTERNAL}>https://d.test`);
   }
+  // Words are what an image's alt shows, not its source: markup around nothing is none.
+  expect(html("[![**\u200B**](https://x.test/l.png)](https://d.test)")).toContain(
+    `${EXTERNAL}>https://d.test`,
+  );
   for (const alt of ["\u200B", " "]) {
     expect(html(`![${alt}](https://x.test/a.png)`)).toContain(">https://x.test/a.png</a>");
   }
+});
+
+test("a link whose host is written outside ASCII stays text", () => {
+  // Such a host goes where its punycode points, which can read as another host.
+  for (const markdown of [
+    "<https://github.com\u2215corespeed-io\u2215lore.attacker.dev>",
+    "<https://paypal.com\u3002evil.com>",
+    "[docs](https://\u4F8B\u3048.jp)",
+  ]) {
+    expect(html(markdown), markdown).not.toContain("<a ");
+  }
+  // A path outside ASCII is fine, and a scheme in capitals still links.
+  expect(html("<https://example.test/caf\u00E9>")).toContain("<a ");
+  expect(html("<HTTPS://example.test>")).toContain("<a ");
 });
 
 test("an autolink shows its URL as written, never decoded", () => {

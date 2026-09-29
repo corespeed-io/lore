@@ -12,12 +12,14 @@ import {
   shortCommitOid,
   summarizeCodeEvidence,
 } from "@/modules/code/browser/evidence-presentation";
-import MemoryMarkdown from "@/modules/memories/browser/MemoryMarkdown";
+import { MemoryMarkdown } from "@/modules/memories/browser/MemoryMarkdown";
 import {
   type MemoryGraphContext,
   memoryBody,
   memoryConfiguredTitle,
   memoryDetailTitle,
+  memoryMetadataText,
+  memorySource,
   memoryType,
   metadataLabel,
   revealHidden,
@@ -230,6 +232,12 @@ export function MemoryView({
   const type = memoryType(memory);
   // The Type property reads whole, as the configured title does; the badge is a label.
   const typeText = useMemo(() => revealHidden(memoryType(memory)), [memory]);
+  // Show source shows every metadata key, since agents read them all.
+  const metadataText = useMemo(() => memoryMetadataText(memory), [memory]);
+  const source = useMemo(() => {
+    const written = memorySource(memory);
+    return written === null ? null : revealHidden(written);
+  }, [memory]);
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
   const bodyText = useMemo(() => memoryBody(memory), [memory]);
@@ -270,7 +278,10 @@ export function MemoryView({
             </p>
           )}
           {showSource ? (
-            <pre className="detail-source">{revealHidden(body)}</pre>
+            <>
+              <pre className="detail-source">{revealHidden(body)}</pre>
+              {metadataText !== null && <pre className="detail-source">{metadataText}</pre>}
+            </>
           ) : bodyText.trim() ? (
             <div className="detail-body">
               <PlainTextFallback key={version} text={bodyText}>
@@ -303,6 +314,12 @@ export function MemoryView({
                 <dt>Type</dt>
                 <dd>{typeText}</dd>
               </div>
+              {source !== null && (
+                <div className="property-row">
+                  <dt>Source</dt>
+                  <dd>{source}</dd>
+                </div>
+              )}
               <div className="property-row">
                 <dt>Scope</dt>
                 <dd>{scope}</dd>

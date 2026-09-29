@@ -2,7 +2,12 @@
 
 import { useCallback, useLayoutEffect, useRef } from "react";
 import useSWR from "swr";
-import { hasVisibleText, plainInline, revealHidden } from "@/modules/memories/browser/presentation";
+import {
+  cached,
+  hasVisibleText,
+  plainInline,
+  revealHidden,
+} from "@/modules/memories/browser/presentation";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { getBrowserClient } from "@/shared/browser/sdk";
 import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume";
@@ -12,14 +17,10 @@ import { GRAPH_NODE_LIMIT, type GraphData } from "./types";
 const labels = new Map<string, string>();
 
 function nodeLabel(source: string): string {
-  let label = labels.get(source);
-  if (label === undefined) {
+  return cached(labels, source, () => {
     const words = plainInline(source).trim();
-    label = hasVisibleText(words) ? words : revealHidden(source);
-    if (labels.size >= 2 * GRAPH_NODE_LIMIT) labels.clear();
-    labels.set(source, label);
-  }
-  return label;
+    return hasVisibleText(words) ? words : revealHidden(source);
+  });
 }
 
 export async function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {

@@ -9,10 +9,15 @@ import {
 import { displayCount } from "@/shared/browser/read-state";
 
 // Other modules read Memory text through this file alone.
-export { hasVisibleText, plain, plainInline, prefix, revealHidden };
+export { hasVisibleText, plain, plainInline, revealHidden };
+
+/** Text with each whitespace run as one space, trimmed. */
+function collapse(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
 
 function compact(value: string, limit: number): string {
-  const text = value.replace(/\s+/g, " ").trim();
+  const text = collapse(value);
   return text.length <= limit ? text : `${prefix(text, limit - 1).trimEnd()}…`;
 }
 
@@ -43,48 +48,75 @@ function firstLine(text: string): string {
  * ends in "…", so a title never looks whole when it is not. Words that show nothing
  * leave a configured title as written, and a first line as "Untitled memory".
  */
-function readTitle(read: string, cut: boolean, configured: boolean): string {
+function readTitle(read: string, cut: boolean, configured: boolean, limit = TITLE_LIMIT): string {
   const words = plainInline(read);
   const ellipsis = cut ? "…" : "";
-  if (hasVisibleText(words)) return compact(`${words.trimEnd()}${ellipsis}`, TITLE_LIMIT);
+  if (hasVisibleText(words)) return compact(`${words.trimEnd()}${ellipsis}`, limit);
   if (!configured) return "Untitled memory";
-  return compact(`${revealHidden(read).trimEnd()}${ellipsis}`, TITLE_LIMIT);
+  return compact(`${revealHidden(read).trimEnd()}${ellipsis}`, limit);
 }
 
-/** Enough titles or labels for a browse window twice over. */
-const CACHE_LIMIT = 10_000;
+/** Enough cached titles or labels for two full browse windows. */
+const CACHE_LIMIT = 2 * LORE_CONTRACT.limits.graphNodes;
+
+/** A copy of text that shares no memory with the string it came from. */
+function own(text: string): string {
+  return ` ${text}`.slice(1);
+}
+
+/**
+ * `read()` for `key`, kept in `cache` up to `limit` entries, the oldest going first.
+ * Keys and values are copied: a slice of a Memory's text would keep the whole text
+ * alive in V8 long after the Memory is gone.
+ */
+export function cached(
+  cache: Map<string, string>,
+  key: string,
+  read: () => string,
+  limit = CACHE_LIMIT,
+): string {
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+  const value = own(read());
+  const oldest = cache.size >= limit ? cache.keys().next().value : undefined;
+  if (oldest !== undefined) cache.delete(oldest);
+  cache.set(own(key), value);
+  return value;
+}
+
 /** Titles by what they read: rows render often, fresh reads bring new objects, and a title costs a parse. */
 const titles = new Map<string, string>();
 
-/** The title a row, label, or link shows, cut at the title limit. */
+/** The title a row shows, cut at the title limit. */
 export function memoryTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
-  const source = configured ?? firstLine(memory.content);
+  // Past what a title reads, the first line's length only decides whether it was cut.
+  const source = configured ?? firstLine(memory.content.slice(0, TITLE_SOURCE_LIMIT + 2));
   const read = prefix(source, TITLE_SOURCE_LIMIT);
   const cut = read.length < source.length;
   // Everything a title depends on: which source it reads, what, and whether it was cut.
   const key = `${configured === null ? "line" : "title"}${cut ? "…" : ""}\n${read}`;
-  let title = titles.get(key);
-  if (title === undefined) {
-    title = readTitle(read, cut, configured !== null);
-    if (titles.size >= CACHE_LIMIT) titles.clear();
-    titles.set(key, title);
-  }
-  return title;
+  return cached(titles, key, () => readTitle(read, cut, configured !== null));
 }
 
 /**
- * The title Memory detail shows: a configured one whole, since no other part of the
- * page shows it, and a first-line one as rows do, since its line stays in the body
- * whenever the title cuts it short.
+ * The title Memory detail shows: a configured one whole, since the body never holds
+ * it, and a first-line one as rows do, since its line stays in the body whenever the
+ * title cuts it short.
  */
 export function memoryDetailTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
   if (configured === null) return memoryTitle(memory);
-  const words = compact(plainInline(configured), Number.POSITIVE_INFINITY);
-  return hasVisibleText(words)
-    ? words
-    : compact(revealHidden(configured), Number.POSITIVE_INFINITY);
+  return readTitle(configured, false, true, Number.POSITIVE_INFINITY);
+}
+
+/**
+ * A Memory's metadata as written, hidden controls as markers, or null when it has
+ * none: agents read every key, so Show source shows every key.
+ */
+export function memoryMetadataText(memory: Memory): string | null {
+  if (Object.keys(memory.metadata).length === 0) return null;
+  return revealHidden(JSON.stringify(memory.metadata, null, 2));
 }
 
 /** A configured `metadata.title` as written, hidden controls as markers, or null. */
@@ -107,10 +139,10 @@ const OPENS_BLOCK =
 
 /**
  * The content Memory detail renders under its title. When a first line written as
- * a title is nothing but the words the title shows, and the next line opens a block
- * of its own, the body starts after that line rather than repeating it. Anything
- * else keeps the line, since the source view is one click away but a dropped line
- * is gone from the page.
+ * a title is nothing but the words the title shows, the body starts after that line
+ * rather than repeating it: a heading always ends at its line, and a bold or 【…】
+ * line needs the next line to open a block of its own. Anything else keeps the line,
+ * since the source view is one click away but a dropped line is gone from the page.
  */
 export function memoryBody(memory: Memory): string {
   const line = firstLine(memory.content);
@@ -118,7 +150,7 @@ export function memoryBody(memory: Memory): string {
   const words = line.replace(/^#{1,6}[ \t]+/, "").replace(/^\*\*([^*\n]+)\*\*/, "$1");
   if (line.length > TITLE_SOURCE_LIMIT || MARKUP.test(words)) return memory.content;
   // Measured as the title shows it, with any hidden control grown into its marker.
-  if (compact(plainInline(line), Number.POSITIVE_INFINITY).length > TITLE_LIMIT) {
+  if (collapse(plainInline(line)).length > TITLE_LIMIT) {
     return memory.content;
   }
   const rest = memory.content.slice(line.length).replace(/^(?:\r\n?|\n)/, "");
@@ -129,6 +161,8 @@ export function memoryBody(memory: Memory): string {
 
 /** A type or source label shows at most this many characters of it. */
 const LABEL_LIMIT = 96;
+/** Labels by what they show: views list every type and source on each render. */
+const labels = new Map<string, string>();
 
 /**
  * A metadata string as a label shows it: cut to the label limit, with hidden
@@ -138,23 +172,14 @@ const LABEL_LIMIT = 96;
 export function metadataLabel(value: string): string {
   const read = prefix(value, LABEL_LIMIT);
   const key = read.length < value.length ? `${read}…` : read;
-  let label = labels.get(key);
-  if (label === undefined) {
-    // Measured as it shows, with each hidden control grown into its marker.
-    label = compact(revealHidden(key), LABEL_LIMIT);
-    if (labels.size >= CACHE_LIMIT) labels.clear();
-    labels.set(key, label);
-  }
-  return label;
+  // Measured as it shows, with each hidden control grown into its marker.
+  return cached(labels, key, () => compact(revealHidden(key), LABEL_LIMIT));
 }
-
-/** Labels by what they show: views list every type and source on each render. */
-const labels = new Map<string, string>();
 
 /** A row's excerpt of text as it reads: whitespace collapsed, hidden controls as markers. */
 export function excerpt(text: string, limit: number): string {
   const source = text.trimStart();
-  // Four times what it shows fills it once whitespace collapses; "…" says it was cut.
+  // Four times what it shows usually fills it once whitespace collapses; "…" says it was cut.
   const read = prefix(source, 4 * limit);
   const ellipsis = read.length < source.length ? "…" : "";
   return compact(`${revealHidden(read).trimEnd()}${ellipsis}`, limit);

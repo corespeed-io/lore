@@ -106,6 +106,25 @@ test("a Graph label shows what the body shows, and as written when that is nothi
   ]);
 });
 
+test("Graph labels stay right across reads, once the label cache fills and starts again", async () => {
+  // Each read brings up to 5,000 labels, and the cache starts again past 10,000.
+  const batch = (read: number) =>
+    Array.from({ length: 4_000 }, (_, index) =>
+      node(`${read}-${index}`, `${read}-${index}`, `## **Label** ${read}-${index}`),
+    );
+  const first = await readWith({ nodes: batch(0), links: [], linksTruncated: false });
+  expect(first.nodes[0]?.label).toBe("Label 0-0");
+  // The same labels read again come from the cache, unchanged.
+  const repeated = await readWith({ nodes: batch(0), links: [], linksTruncated: false });
+  expect(repeated.nodes).toEqual(first.nodes);
+  for (const read of [1, 2]) {
+    await readWith({ nodes: batch(read), links: [], linksTruncated: false });
+  }
+  const again = await readWith({ nodes: batch(0), links: [], linksTruncated: false });
+  expect(again.nodes.map((entry) => entry.label)).toEqual(first.nodes.map((entry) => entry.label));
+  expect(again.nodes.at(-1)?.label).toBe("Label 0-3999");
+});
+
 test("a Graph node's type stays as written, the legend and filter key", async () => {
   const nodes = [{ ...node("a", "a"), type: "\u202Eeganam" }, node("b", "b")];
 

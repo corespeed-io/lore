@@ -23,7 +23,7 @@ interface MemoryMarkdownProps {
  * once per content; a Graph refresh only renders it again. A resolved wikilink
  * routes in the client unless the click belongs to the browser.
  */
-export default function MemoryMarkdown({
+export function MemoryMarkdown({
   content,
   wikilinkTargets,
   unresolvedTitle,
