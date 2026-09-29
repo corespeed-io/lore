@@ -94,6 +94,10 @@ test("a Graph label shows what the body shows, and as written when that is nothi
     node("b", "b", "**"),
     node("c", "c", "**\u200B**"),
     node("d", "d", "[\u200B](https://x.test)"),
+    // Words Unicode draws as nothing are no words either.
+    node("e", "e", "**\u3164**"),
+    node("f", "f", "_\uFE0F\u2800_"),
+    node("g", "g", "[\u2800](https://x.test)"),
   ];
 
   const graph = await readWith({ nodes, links: [], linksTruncated: false });
@@ -103,6 +107,9 @@ test("a Graph label shows what the body shows, and as written when that is nothi
     "**",
     "**\u200B**",
     "https://x.test\u200B",
+    "**\u3164**",
+    "_\uFE0F\u2800_",
+    "https://x.test\u2800",
   ]);
 });
 

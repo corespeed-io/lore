@@ -17,6 +17,13 @@ afterEach(() => {
 const TARGET_MEMORY_ID = "e6f22a12-8b29-57ef-bbdf-ce11121303c7";
 const EXTERNAL = 'target="_blank" rel="noopener noreferrer"';
 
+/** Text's code points, to name an invisible case in a failure message. */
+function codePoints(text: string): string {
+  return [...text]
+    .map((c) => `U+${(c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`)
+    .join(" ");
+}
+
 /** A body's HTML, or null when it renders as its text. */
 function html(markdown: string, targets: Record<string, string> = {}): string | null {
   const tokens = parseMemoryMarkdown(markdown);
@@ -125,6 +132,9 @@ test("a Memory body links only to http(s) with a host, and to mailto", () => {
     "https://good.com%E3%80%82evil.com/",
     "mailto:",
     "/memories",
+    "//example.test/x",
+    "#top",
+    "example.test/a.png",
     "",
   ]) {
     expect(allowedHref(url)).toBe(false);
@@ -220,10 +230,6 @@ test("headings sit under the page title, and every block keeps its element", () 
   expect(html("3. c\n4. d")).toBe(
     '<ol start="3">\n<li value="3">c</li>\n<li value="4">d</li>\n</ol>\n',
   );
-  // An ordered item shows the number written for it, never one counted from the first.
-  expect(html("1000. to vendor A\n9000. to vendor B")).toContain(
-    '<li value="9000">to vendor B</li>',
-  );
   expect(html("~~old~~ **b** *e* `c`\n\n> q\n\n---")).toBe(
     "<p><s>old</s> <strong>b</strong> <em>e</em> <code>c</code></p>\n<blockquote>\n<p>q</p>\n</blockquote>\n<hr>\n",
   );
@@ -232,6 +238,26 @@ test("headings sit under the page title, and every block keeps its element", () 
   );
   // A table may follow a paragraph line directly.
   expect(html("Owners:\n| a |\n|---|\n| b |")).toMatch(/^<p>Owners:<\/p>\n<table>/);
+});
+
+test("an ordered item shows its own number in a nested list, a quote, or after a `)`, and a bullet item none", () => {
+  // An ordered item shows the number written for it, never one counted from the first.
+  expect(html("1000. to vendor A\n9000. to vendor B")).toContain(
+    '<li value="9000">to vendor B</li>',
+  );
+  expect(html("- a\n  1. x\n  9. y\n- b")).toBe(
+    '<ul>\n<li>a\n<ol>\n<li value="1">x</li>\n<li value="9">y</li>\n</ol>\n</li>\n<li>b</li>\n</ul>\n',
+  );
+  expect(html("7. a\n   - x\n8. b")).toBe(
+    '<ol start="7">\n<li value="7">a\n<ul>\n<li>x</li>\n</ul>\n</li>\n<li value="8">b</li>\n</ol>\n',
+  );
+  expect(html("> 5) q\n> 2) r")).toBe(
+    '<blockquote>\n<ol start="5">\n<li value="5">q</li>\n<li value="2">r</li>\n</ol>\n</blockquote>\n',
+  );
+  // A zero is a number written like any other.
+  expect(html("0. a\n0. b")).toBe(
+    '<ol start="0">\n<li value="0">a</li>\n<li value="0">b</li>\n</ol>\n',
+  );
 });
 
 test("a fence shows its info string above its code, and code is escaped", () => {
@@ -361,17 +387,7 @@ test("bold, emphasis, and strikethrough close after CJK punctuation, and English
   expect(html("**English:**text and 2 * 3 * 4")).toBe("<p>**English:**text and 2 * 3 * 4</p>\n");
 });
 
-test("a link whose words Unicode draws as nothing shows its target", () => {
-  // Variation selectors, the combining grapheme joiner, Hangul fillers, blank braille.
-  for (const label of ["\uFE0F", "\u{E0100}", "\u034F", "\u17B4", "\u3164", "\u115F", "\u2800"]) {
-    expect(html(`[${label}](https://d.test)`), label).toContain(`${EXTERNAL}>https://d.test`);
-  }
-  expect(html("![\uFE0F](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
-  // An emoji with its variation selector is a word.
-  expect(html("[\u2764\uFE0F](https://d.test)")).toContain(`${EXTERNAL}>\u2764\uFE0F</a>`);
-});
-
-test("a link with no words of its own shows its target", () => {
+test("a link with no words of its own, or only words Unicode draws as nothing, shows its target", () => {
   expect(html("[](https://y.test) and [ ](https://z.test)")).toBe(
     `<p><a class="ext" href="https://y.test" ${EXTERNAL}>https://y.test</a> and <a class="ext" href="https://z.test" ${EXTERNAL}>https://z.test </a></p>\n`,
   );
@@ -385,9 +401,31 @@ test("a link with no words of its own shows its target", () => {
   ]) {
     expect(html(`[${label}](https://d.test)`)).toContain(`${EXTERNAL}>https://d.test`);
   }
-  for (const alt of ["\u200B", " "]) {
+  for (const alt of ["\u200B", " ", "\uFE0F"]) {
     expect(html(`![${alt}](https://x.test/a.png)`)).toContain(">https://x.test/a.png</a>");
   }
+  // Variation selectors, the combining grapheme joiner, a Khmer inherent vowel, Hangul
+  // fillers, blank braille, and the object replacement character draw as nothing too.
+  for (const label of [
+    "\uFE0F",
+    "\u{E0100}",
+    "\u034F",
+    "\u17B4",
+    "\u3164",
+    "\u115F",
+    "\u2800",
+    "\uFFFC",
+    "&#xFFFC;",
+  ]) {
+    expect(html(`[${label}](https://d.test)`), codePoints(label)).toContain(
+      `${EXTERNAL}>https://d.test`,
+    );
+  }
+  expect(html("[![\uFE0F](https://x.test/a.png)](https://d.test)")).toContain(
+    `${EXTERNAL}>https://d.test\uFE0F</a>`,
+  );
+  // An emoji with its variation selector is a word.
+  expect(html("[\u2764\uFE0F](https://d.test)")).toContain(`${EXTERNAL}>\u2764\uFE0F</a>`);
 });
 
 test("a link whose host is written outside ASCII, or a mailto link with anything outside ASCII or an escape, stays text", () => {
@@ -451,20 +489,52 @@ test("an email autolink, a mailto fragment, and an image's mailto source follow 
   );
 });
 
-test("a link whose host markdown-it would cut stays text", () => {
-  // markdown-it cuts a host label past 63 characters and a host past 255 characters.
-  const long = `github.com.${"a".repeat(58)}.${`${"a".repeat(63)}.`.repeat(3)}${"b".repeat(63)}evil.test`;
+test("a link whose scheme or host markdown-it would rewrite stays text, and one it keeps links", () => {
+  // markdown-it splits a host label past 63 characters into the path, which can move a
+  // port there, and drops a host past 255 characters.
+  const label = "a".repeat(63);
+  // 255 characters, every label at most 63: the longest host markdown-it keeps.
+  const longest = `${`${label}.`.repeat(3)}${label}`;
+  const over = `${`${label}.`.repeat(3)}${"a".repeat(62)}.b`;
+  const shifted = `https://x.${label}12:80/path`;
   for (const markdown of [
-    `<https://${long}/>`,
-    `<mailto:ceo@${long}>`,
-    `<ceo@${long}>`,
-    `<https://x.${"a".repeat(63)}12:80/path>`,
+    `<${shifted}>`,
+    `[docs](${shifted})`,
+    `![x](${shifted})`,
+    `<https://${over}/>`,
+    `[mail](mailto:ceo@${over})`,
+    `<mailto:ceo@${over}>`,
+    // An email autolink allows no label past 63 characters, so only the host's length can cut it.
+    `<ceo@${over}>`,
   ]) {
     expect(html(markdown), markdown.slice(0, 24)).not.toContain("<a ");
   }
-  // A long label within the limits still links.
-  const fits = `<https://${"a".repeat(63)}.example.test/>`;
-  expect(html(fits)).toContain(`href="https://${"a".repeat(63)}.example.test/"`);
+  expect(html(`<ceo@${longest}>`)).toContain(`href="mailto:ceo@${longest}"`);
+  expect(html(`[mail](mailto:ceo@${longest})`)).toContain(`href="mailto:ceo@${longest}"`);
+  expect(html(`[docs](https://${longest}/)`)).toContain(`href="https://${longest}/"`);
+  // A label past 63 characters that markdown-it moves into the path comes back unchanged.
+  const split = `https://${"a".repeat(64)}.example.test/p`;
+  expect(html(`[docs](${split})`)).toContain(`href="${split}"`);
+  // A title keeps a refused link as written, as the body does.
+  expect(plainInline(`[docs](${shifted})`)).toBe(`[docs](${shifted})`);
+});
+
+test("a link keeps its written host whatever its port, brackets, case, escapes, or leading space", () => {
+  for (const [markdown, href] of [
+    ["<https://example.test:8080/p>", "https://example.test:8080/p"],
+    ["[a](https://[::1]:8080/)", "https://[::1]:8080/"],
+    ["[a](https://Example.TEST/X)", "https://Example.TEST/X"],
+    ["[a](mailto:Team@Example.TEST)", "mailto:Team@Example.TEST"],
+    // markdown-it trims Unicode whitespace before it reads the host, and so does the check.
+    ["[a](\u00A0https://example.test/p)", "https://example.test/p"],
+    ["[a](\uFEFFhttps://example.test/p)", "https://example.test/p"],
+    // markdown-it escapes such characters of a mail address, which still name it.
+    ["<a|b@example.test>", "mailto:a%7Cb@example.test"],
+    ["<o{x}@example.test>", "mailto:o%7Bx%7D@example.test"],
+    ['[m](mailto:"john.doe"@example.test)', "mailto:%22john.doe%22@example.test"],
+  ] as const) {
+    expect(html(markdown), codePoints(markdown)).toContain(`href="${href}"`);
+  }
 });
 
 test("an autolink shows its URL as written, never decoded", () => {
@@ -497,6 +567,17 @@ test("a label or reference of only hidden controls shows as its markers", () => 
   expect(html("![\u200E\u061C](https://x.test/a.png)")).toContain(">⟨U+200E⟩⟨U+061C⟩</a>");
   expect(html("[[a|\u200F]]")).toContain('title="a — not found">⟨U+200F⟩</span>');
   expect(html("[[\u200F]]")).toContain('title="⟨U+200F⟩ — not found">⟨U+200F⟩</span>');
+});
+
+test("a wikilink whose label Unicode draws as nothing reads as its reference, and one whose reference it draws as nothing stays text", () => {
+  const targets = { foo: TARGET_MEMORY_ID };
+  expect(html("[[foo|\u2800]]", targets)).toContain(`data-memory-id="${TARGET_MEMORY_ID}">foo</a>`);
+  expect(html("[[missing|\uFE0F\u3164]]")).toContain('title="missing — not found">missing</span>');
+  for (const reference of ["\u3164", "\u034F", "\u2800", "\u{E0100}"]) {
+    expect(html(`[[${reference}]]`), codePoints(reference)).toBe(`<p>[[${reference}]]</p>\n`);
+    expect(plainInline(`[[${reference}]]`), codePoints(reference)).toBe(`[[${reference}]]`);
+  }
+  expect(plainInline("[[foo|\u2800]]")).toBe("foo");
 });
 
 test("a wikilink whose label shows nothing reads as its reference, and one with no reference stays text", () => {

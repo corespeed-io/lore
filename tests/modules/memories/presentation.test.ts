@@ -194,10 +194,10 @@ test("plain text costs linear time on runs of brackets and markers", () => {
   }
 });
 
-test("a search snippet drops block markers and inline markup, and reads code as its text", () => {
+test("a search snippet drops quote and bullet markers and inline markup, and reads code as its text", () => {
   expect(plain("# H\n**b** [[a/b|c]] `x`")).toBe("H b c x");
   expect(plain("> quoted\n- item\n2) second\n```ts\nconst x = 1;\n```\nend")).toBe(
-    "quoted item second const x = 1; end",
+    "quoted item 2) second const x = 1; end",
   );
 });
 
@@ -442,14 +442,45 @@ test("titles and snippets read text shaped like HTML as written, and decode an e
   expect(plain("Line <br> and `<pre>` and ~~<s>~~")).toBe("Line <br> and <pre> and ~~<s>~~");
 });
 
-test("text shows nothing when it holds only spaces and zero-width characters", () => {
-  for (const text of ["", " \t\n", "\u200B\u2060\uFEFF", "\u00AD"]) {
+test("text shows nothing when it holds only spaces, zero-width characters, or characters Unicode draws as nothing, and a title of it reads as untitled or as written", () => {
+  // Variation selectors, the combining grapheme joiner, Hangul fillers, a Mongolian
+  // variation selector, the blank braille pattern, and the object replacement character
+  // draw as nothing, as spaces and zero-width characters do.
+  for (const text of [
+    "",
+    " \t\n",
+    "\u200B\u2060\uFEFF",
+    "\u00AD",
+    "\uFE0F\u{E0100}",
+    "\uFE00",
+    "\u034F",
+    "\u115F\u1160\u3164\uFFA0",
+    "\u180B",
+    "\u2800 \u2800",
+    "\uFFFC",
+  ]) {
     expect(hasVisibleText(text), JSON.stringify(text)).toBe(false);
   }
   // A control that reorders or hides text shows as its marker, so it counts.
-  for (const text of ["\u202E", "\u2066", "\u{E0041}", "\u200E", "\u200F", "\u061C", "x"]) {
+  for (const text of [
+    "\u202E",
+    "\u2066",
+    "\u{E0041}",
+    "\u200E",
+    "\u200F",
+    "\u061C",
+    "x",
+    "\u2764\uFE0F",
+    "a\u3164",
+    "\u2801",
+  ]) {
     expect(hasVisibleText(text), JSON.stringify(text)).toBe(true);
   }
+  expect(memoryTitle(memory({ content: "\u3164\nBody" }))).toBe("Untitled memory");
+  expect(memoryTitle(memory({ content: "**\u2800**\nBody" }))).toBe("Untitled memory");
+  const configured = memory({ metadata: { title: "**\u3164**" } });
+  expect(memoryTitle(configured)).toBe("**\u3164**");
+  expect(memoryDetailTitle(configured)).toBe("**\u3164**");
 });
 
 test("Memory detail shows a configured title whose words show nothing whole, as written", () => {
@@ -513,6 +544,13 @@ test("Memory detail reads a configured title as long as metadata allows in linea
   );
 });
 
+test("a snippet shows an ordered item's number as the body does", () => {
+  expect(plain("1000. to vendor A\n9000. to vendor B")).toBe("1000. to vendor A 9000. to vendor B");
+  // A number reads as the body shows it, and a `)` stays the delimiter written.
+  expect(plain("007) x\n8) y")).toBe("7) x 8) y");
+  expect(plain("- a\n- b")).toBe("a b");
+});
+
 test("a snippet of a chunk cut inside a fence or a list item keeps its words", () => {
   // Search evidence is one chunk of a Memory, which may start inside a fence: its
   // closing line then opens one, and what follows reads as code.
@@ -520,7 +558,7 @@ test("a snippet of a chunk cut inside a fence or a list item keeps its words", (
   expect(plain(inFence)).toBe("const value36 = compute(36); Rotate the credentials every Friday.");
   // A chunk that starts with an item's indented continuation reads it as code.
   expect(plain("    Details for step 10: rotate keys.\n\n11. Next")).toBe(
-    "Details for step 10: rotate keys. Next",
+    "Details for step 10: rotate keys. 11. Next",
   );
 });
 

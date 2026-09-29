@@ -55,11 +55,12 @@ export function revealHidden(text: string): string {
 /**
  * Whether text shows anything: a character other than a space, a zero-width format
  * character, a character Unicode says to draw as nothing (variation selectors, the
- * combining grapheme joiner, Hangul fillers), or the blank braille pattern, once hidden
- * controls have grown into their markers.
+ * combining grapheme joiner, Hangul fillers), the blank braille pattern, or the object
+ * replacement character, which browsers draw as nothing, once hidden controls have
+ * grown into their markers.
  */
 export function hasVisibleText(text: string): boolean {
-  return /[^\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/u.test(revealHidden(text));
+  return /[^\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800\uFFFC]/u.test(revealHidden(text));
 }
 
 /** Whether text ends in an odd run of backslashes, whose last one escapes what follows. */
@@ -99,9 +100,9 @@ function wikilink(state: StateInline, silent: boolean): boolean {
  * or mailto. Anything else, including `javascript:`, `data:`, a relative path, an
  * `https:/path` without a host, a `user@` before the host, or a percent escape in it
  * (either can make the shown URL name a host the link does not go to), stays text.
- * A host written outside ASCII, and a mailto link written with anything outside
- * ASCII or a percent escape, never reach this check: `normalizeLink` below refuses
- * them first.
+ * A host written outside ASCII, a mailto link written with anything outside ASCII or
+ * a percent escape, and a target whose scheme or host markdown-it would rewrite never
+ * reach this check: `normalizeLink` below refuses them first.
  */
 export function allowedHref(url: string): boolean {
   return /^(?:https?:\/\/[^\s/\\?#@%]+(?:[/?#]|$)|mailto:\S)/i.test(url);
@@ -132,8 +133,9 @@ memoryMarkdown.normalizeLinkText = (url) => url;
 // its percent escapes, so a mailto link opens only when written wholly in ASCII with
 // no percent escape. The check reads the URL trimmed, as markdown-it's own parse
 // does, so leading Unicode whitespace cannot move the host out of its reach. markdown-it
-// also cuts a host label past 63 characters and a host past 255, so a link whose
-// scheme and authority do not come through unchanged stays text too.
+// also rewrites some hosts (splitting a label past 63 characters can move a port into
+// the path, and a host past 255 characters is dropped), so a link whose scheme and
+// authority do not come through unchanged stays text too.
 const normalizeLink = memoryMarkdown.normalizeLink.bind(memoryMarkdown);
 // No `i` flag: under `iu`, \P{ASCII} matches `s` and `k` too, since ſ and K fold to them.
 const SPOOFABLE_TARGET =
@@ -143,8 +145,23 @@ memoryMarkdown.normalizeLink = (url) => {
   const written = url.trim();
   if (SPOOFABLE_TARGET.test(written)) return "";
   const normalized = normalizeLink(url);
-  return AUTHORITY.exec(normalized)?.[0] === AUTHORITY.exec(written)?.[0] ? normalized : "";
+  return decodedAuthority(normalized) === AUTHORITY.exec(written)?.[0] ? normalized : "";
 };
+
+/**
+ * A URL's scheme and authority with markdown-it's percent escapes decoded: it escapes
+ * characters such as `|` and `"` in a mail address, which still name the same address.
+ * The written URL holds no escape of its own there, which the checks above refuse.
+ */
+function decodedAuthority(url: string): string | undefined {
+  const authority = AUTHORITY.exec(url)?.[0];
+  if (authority === undefined) return undefined;
+  try {
+    return decodeURIComponent(authority);
+  } catch {
+    return undefined;
+  }
+}
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
 memoryMarkdown.block.ruler.disable("reference");
@@ -160,6 +177,9 @@ memoryMarkdown.core.ruler.push("memory_headings", (state) => {
 });
 // An ordered item shows the number written for it: the browser would count on from
 // the first, so `1000.` then `9000.` would read 1000 then 1001.
+// gstack-shortcut(dec-2ba0e97f-66a6-4a33-9dba-91a5cb3f2dc5): a number of five or more
+// digits can outgrow the 1.3em list indent on a phone, upgrade when a list sizes its
+// indent to its widest number.
 memoryMarkdown.core.ruler.push("memory_list_numbers", (state) => {
   for (const token of state.tokens) {
     if (token.type === "list_item_open" && token.info) token.attrSet("value", token.info);
@@ -436,10 +456,19 @@ export function plain(markdown: string): string {
   const source = prefix(markdown, SNIPPET_SOURCE_LIMIT);
   const tokens = parseMemoryMarkdown(source);
   if (tokens) {
-    // A fence's code reads on its own, without the info string shown above it.
-    for (const token of tokens) if (token.type === "fence") token.info = "";
+    for (const token of tokens) {
+      // A fence's code reads on its own, without the info string shown above it.
+      if (token.type === "fence") token.info = "";
+      // An ordered item reads with the number the body shows for it.
+      if (token.type === "list_item_open" && token.info) {
+        token.attrSet("data-number", `${Number(token.info)}${token.markup}`);
+      }
+    }
   }
-  const words = tokens ? renderedWords(renderMemoryMarkdown(tokens, {}, "")) : revealHidden(source);
+  const rendered = tokens && renderMemoryMarkdown(tokens, {}, "");
+  const words = rendered
+    ? renderedWords(rendered.replace(/<li [^>]*data-number="([^"]*)"[^>]*>/g, "$1 "))
+    : revealHidden(source);
   return prefix(words.replace(/\s+/g, " ").trim(), SNIPPET_LIMIT);
 }
 
