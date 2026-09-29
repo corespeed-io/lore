@@ -44,9 +44,10 @@ function firstLine(text: string): string {
 }
 
 /**
- * A title from at most TITLE_SOURCE_LIMIT characters of its source; a source cut short
+ * A title from `read`, the part of its source a title reads; a source cut short
  * ends in "…", so a title never looks whole when it is not. Words that show nothing
- * leave a configured title as written, and a first line as "Untitled memory".
+ * leave a configured title as written, and a first line as "Untitled memory". The
+ * result shows at most `limit` characters, cut as rows cut it.
  */
 function readTitle(read: string, cut: boolean, configured: boolean, limit = TITLE_LIMIT): string {
   const words = plainInline(read);
@@ -65,38 +66,46 @@ function own(text: string): string {
 }
 
 /**
- * `read()` for `key`, kept in `cache` up to `limit` entries, the oldest going first.
- * Keys and values are copied: a slice of a Memory's text would keep the whole text
- * alive in V8 long after the Memory is gone.
+ * A cache of text read once per key, keeping at most `limit` entries, the oldest
+ * going first. Keys and values are copied: a slice of a Memory's text would keep the
+ * whole text alive in V8 long after the Memory is gone.
  */
-export function cached(
-  cache: Map<string, string>,
-  key: string,
-  read: () => string,
-  limit = CACHE_LIMIT,
-): string {
-  const hit = cache.get(key);
-  if (hit !== undefined) return hit;
-  const value = own(read());
-  const oldest = cache.size >= limit ? cache.keys().next().value : undefined;
-  if (oldest !== undefined) cache.delete(oldest);
-  cache.set(own(key), value);
-  return value;
+export function textCache(limit = CACHE_LIMIT): (key: string, read: () => string) => string {
+  const values = new Map<string, string>();
+  // Keys in the order they came, so the oldest is found without walking the Map.
+  const order: string[] = [];
+  let oldest = 0;
+  return (key, read) => {
+    const hit = values.get(key);
+    if (hit !== undefined) return hit;
+    const value = own(read());
+    const owned = own(key);
+    if (order.length < limit) {
+      order.push(owned);
+    } else {
+      values.delete(order[oldest]);
+      order[oldest] = owned;
+      oldest = (oldest + 1) % limit;
+    }
+    values.set(owned, value);
+    return value;
+  };
 }
 
 /** Titles by what they read: rows render often, fresh reads bring new objects, and a title costs a parse. */
-const titles = new Map<string, string>();
+const titles = textCache();
 
 /** The title a row shows, cut at the title limit. */
 export function memoryTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
-  // Past what a title reads, the first line's length only decides whether it was cut.
-  const source = configured ?? firstLine(memory.content.slice(0, TITLE_SOURCE_LIMIT + 2));
+  // Past what a title reads, the first line's length only decides whether it was cut,
+  // which one character more shows.
+  const source = configured ?? firstLine(memory.content.slice(0, TITLE_SOURCE_LIMIT + 1));
   const read = prefix(source, TITLE_SOURCE_LIMIT);
   const cut = read.length < source.length;
   // Everything a title depends on: which source it reads, what, and whether it was cut.
   const key = `${configured === null ? "line" : "title"}${cut ? "…" : ""}\n${read}`;
-  return cached(titles, key, () => readTitle(read, cut, configured !== null));
+  return titles(key, () => readTitle(read, cut, configured !== null));
 }
 
 /**
@@ -111,12 +120,28 @@ export function memoryDetailTitle(memory: Memory): string {
 }
 
 /**
- * A Memory's metadata as written, hidden controls as markers, or null when it has
- * none: agents read every key, so Show source shows every key.
+ * Metadata as written, hidden controls as markers: one top-level key to a line, its
+ * value compact JSON. Indenting nested values would repeat the indent on every line
+ * of them, which squares the length of a value nested thousands deep.
+ */
+export function metadataSource(metadata: Readonly<Record<string, unknown>>): string {
+  const keys = Object.keys(metadata);
+  if (keys.length === 0) return "{}";
+  try {
+    const lines = keys.map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(metadata[key])}`);
+    return revealHidden(`{\n${lines.join(",\n")}\n}`);
+  } catch {
+    // A browser's stack may be shallower than the server's that accepted the value.
+    return "This metadata nests too deeply to show.";
+  }
+}
+
+/**
+ * A Memory's metadata for Show source, or null when it has none: agents read every
+ * key, so Show source shows every key.
  */
 export function memoryMetadataText(memory: Memory): string | null {
-  if (Object.keys(memory.metadata).length === 0) return null;
-  return revealHidden(JSON.stringify(memory.metadata, null, 2));
+  return Object.keys(memory.metadata).length === 0 ? null : metadataSource(memory.metadata);
 }
 
 /** A configured `metadata.title` as written, hidden controls as markers, or null. */
@@ -162,7 +187,7 @@ export function memoryBody(memory: Memory): string {
 /** A type or source label shows at most this many characters of it. */
 const LABEL_LIMIT = 96;
 /** Labels by what they show: views list every type and source on each render. */
-const labels = new Map<string, string>();
+const labels = textCache();
 
 /**
  * A metadata string as a label shows it: cut to the label limit, with hidden
@@ -173,7 +198,7 @@ export function metadataLabel(value: string): string {
   const read = prefix(value, LABEL_LIMIT);
   const key = read.length < value.length ? `${read}…` : read;
   // Measured as it shows, with each hidden control grown into its marker.
-  return cached(labels, key, () => compact(revealHidden(key), LABEL_LIMIT));
+  return labels(key, () => compact(revealHidden(key), LABEL_LIMIT));
 }
 
 /** A row's excerpt of text as it reads: whitespace collapsed, hidden controls as markers. */

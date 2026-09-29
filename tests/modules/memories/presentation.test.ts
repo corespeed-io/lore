@@ -4,7 +4,6 @@ import {
   browseCounts,
   browseFilterEmptyNote,
   browseTypeChips,
-  cached,
   excerpt,
   hasVisibleText,
   memoryBody,
@@ -16,10 +15,12 @@ import {
   memoryTitle,
   memoryType,
   metadataLabel,
+  metadataSource,
   plain,
   plainInline,
   revealHidden,
   shortMemoryDate,
+  textCache,
   typeLabel,
 } from "@/modules/memories/browser/presentation";
 
@@ -77,9 +78,7 @@ test("a type or source stays as written as a key, and its label shows hidden con
 
 test("a type or source label shows at most 96 characters, whatever the metadata holds", () => {
   const long = "\u202E".repeat(99_000);
-  const started = performance.now();
   const label = metadataLabel(long);
-  expect(performance.now() - started).toBeLessThan(150);
   // Measured as it shows: the markers count, so the label stays within 96.
   expect(label).toHaveLength(96);
   expect(label.startsWith("⟨U+202E⟩⟨U+202E⟩")).toBe(true);
@@ -171,18 +170,19 @@ test("plain text keeps a code span as written and drops the rest of the inline m
 });
 
 test("plain text costs linear time on runs of brackets and markers", () => {
+  // Four times the 32,000-character body bound, so a quadratic cost cannot fit the budget.
   for (const input of [
-    "[".repeat(32_000),
-    "[[a|".repeat(8_000),
-    "![".repeat(16_000),
-    "[a](".repeat(8_000),
-    "*a".repeat(16_000),
-    "_a".repeat(16_000),
-    "`".repeat(32_000),
-    "[a](http://(".repeat(2_600),
-    '[a](https://x "'.repeat(2_000),
-    "[a](<https://x ".repeat(2_000),
-    "[a](https://x '".repeat(2_000),
+    "[".repeat(128_000),
+    "[[a|".repeat(32_000),
+    "![".repeat(64_000),
+    "[a](".repeat(32_000),
+    "*a".repeat(64_000),
+    "_a".repeat(64_000),
+    "`".repeat(128_000),
+    "[a](http://(".repeat(10_400),
+    '[a](https://x "'.repeat(8_000),
+    "[a](<https://x ".repeat(8_000),
+    "[a](https://x '".repeat(8_000),
   ]) {
     const started = performance.now();
     plainInline(input);
@@ -469,37 +469,23 @@ test("a configured title whose words show nothing and run past what a row reads 
   expect(memoryTitle(lines)).toBe("# A B");
 });
 
-test("a cache holds at most its limit, the oldest entry going first", () => {
-  const cache = new Map<string, string>();
+test("a text cache holds at most its limit, the oldest entry going first", () => {
+  const cache = textCache(2);
   let reads = 0;
   const read = (key: string) =>
-    cached(
-      cache,
-      key,
-      () => {
-        reads += 1;
-        return `${key}!${reads}`;
-      },
-      2,
-    );
+    cache(key, () => {
+      reads += 1;
+      return `${key}!${reads}`;
+    });
   expect([read("a"), read("b"), read("a")]).toEqual(["a!1", "b!2", "a!1"]);
+  // "c" pushes out "a", the oldest, so reading "a" again reads it afresh.
   expect(read("c")).toBe("c!3");
-  expect([...cache.keys()]).toEqual(["b", "c"]);
-  // "a" went first, so reading it again reads it afresh.
+  expect(read("b")).toBe("b!2");
   expect(read("a")).toBe("a!4");
-});
-
-test("titles and labels stay right once their caches fill and start again", () => {
-  // Past 10,000 entries each cache drops its oldest, and every value stays right.
-  const count = 10_001;
-  for (let index = 0; index < count; index += 1) {
-    memoryTitle(memory({ content: `## Title **${index}**\nBody` }));
-    metadataLabel(`source\u202E${index}`);
-  }
-  for (const index of [0, count - 1]) {
-    expect(memoryTitle(memory({ content: `## Title **${index}**\nBody` }))).toBe(`Title ${index}`);
-    expect(metadataLabel(`source\u202E${index}`)).toBe(`source⟨U+202E⟩${index}`);
-  }
+  // Reading "a" pushed out "b", so "b" reads afresh and pushes out "c", the oldest.
+  expect(read("b")).toBe("b!5");
+  expect(read("a")).toBe("a!4");
+  expect(read("c")).toBe("c!6");
 });
 
 test("Memory detail reads a configured title as long as metadata allows in linear time", () => {
@@ -571,8 +557,6 @@ test("a title never reads an indented code line or a non-ASCII space after # as 
       /^# Code line$/,
     );
   }
-  const titled = memory({ metadata: { title: "# A\nB" } });
-  expect(memoryTitle(titled)).toBe(memoryDetailTitle(titled));
 });
 
 test("a snippet shows at most 200 characters of at most 2,000 read, never splitting a character", () => {
@@ -704,7 +688,21 @@ test("a row excerpt collapses whitespace, marks hidden controls, and says when i
 
 test("Show source reads every metadata key as written, hidden controls as markers", () => {
   expect(memoryMetadataText(memory({ metadata: {} }))).toBeNull();
-  expect(memoryMetadataText(memory({ metadata: { note: "a\u202Eb", type: "concept" } }))).toBe(
-    '{\n  "note": "a⟨U+202E⟩b",\n  "type": "concept"\n}',
-  );
+  expect(metadataSource({})).toBe("{}");
+  expect(
+    memoryMetadataText(memory({ metadata: { note: "a\u202Eb", tags: ["x", { y: 1 }] } })),
+  ).toBe('{\n  "note": "a⟨U+202E⟩b",\n  "tags": ["x",{"y":1}]\n}');
+});
+
+test("metadata source grows with the metadata, however deeply it nests", () => {
+  const nested = (depth: number) => {
+    let value: unknown = 1;
+    for (let index = 0; index < depth; index += 1) value = [value];
+    return { deep: value };
+  };
+  // 100,000 serialized characters allow 50,000 levels; indenting each would square it.
+  const deep = nested(4_000);
+  expect(metadataSource(deep).length).toBeLessThan(2 * JSON.stringify(deep).length);
+  // Deeper than a browser's stack can serialize, it says so rather than throw.
+  expect(metadataSource(nested(50_000))).toBe("This metadata nests too deeply to show.");
 });

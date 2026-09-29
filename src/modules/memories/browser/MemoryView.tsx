@@ -232,8 +232,6 @@ export function MemoryView({
   const type = memoryType(memory);
   // The Type property reads whole, as the configured title does; the badge is a label.
   const typeText = useMemo(() => revealHidden(memoryType(memory)), [memory]);
-  // Show source shows every metadata key, since agents read them all.
-  const metadataText = useMemo(() => memoryMetadataText(memory), [memory]);
   const source = useMemo(() => {
     const written = memorySource(memory);
     return written === null ? null : revealHidden(written);
@@ -244,6 +242,11 @@ export function MemoryView({
   // A reader can always check the rendering against the text an agent wrote, so
   // nothing the renderer drops stays hidden. App remounts this view per Memory.
   const [showSource, setShowSource] = useState(false);
+  // Show source shows every metadata key, since agents read them all.
+  const metadataText = useMemo(
+    () => (showSource ? memoryMetadataText(memory) : null),
+    [memory, showSource],
+  );
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),

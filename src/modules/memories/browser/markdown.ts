@@ -90,6 +90,8 @@ function wikilink(state: StateInline, silent: boolean): boolean {
  * or mailto. Anything else, including `javascript:`, `data:`, a relative path, an
  * `https:/path` without a host, a `user@` before the host, or a percent escape in it
  * (either can make the shown URL name a host the link does not go to), stays text.
+ * A host written outside ASCII never reaches this check: `normalizeLink` below
+ * refuses it first.
  */
 export function allowedHref(url: string): boolean {
   return /^(?:https?:\/\/[^\s/\\?#@%]+(?:[/?#]|$)|mailto:\S)/i.test(url);
@@ -114,12 +116,14 @@ memoryMarkdown.validateLink = allowedHref;
 // An autolink shows its URL as written. markdown-it would show punycode hosts and
 // percent escapes decoded, so a reader could see a host the link does not go to.
 memoryMarkdown.normalizeLinkText = (url) => url;
-// A host written outside ASCII goes where its punycode points, which can read as
-// another host (`github.com∕x.attacker.dev`), so such a link stays text.
+// A host written outside ASCII, a mailto one included, goes where its punycode
+// points, which can read as another host (`github.com∕x.attacker.dev`), so such a
+// link stays text. The check reads the URL trimmed, as markdown-it's own parse does,
+// so leading Unicode whitespace cannot move the host out of its reach.
 const normalizeLink = memoryMarkdown.normalizeLink.bind(memoryMarkdown);
-memoryMarkdown.normalizeLink = (url) =>
-  // No `i` flag: under `iu`, \P{ASCII} also matches `s` and `k`, which fold to ſ and K.
-  /^[A-Za-z][\w+.-]*:\/\/[^/?#]*\P{ASCII}/u.test(url) ? "" : normalizeLink(url);
+// No `i` flag: under `iu`, \P{ASCII} matches `s` and `k` too, since ſ and K fold to them.
+const NON_ASCII_HOST = /^(?:[A-Za-z][\w+.-]*:\/\/|[Mm][Aa][Ii][Ll][Tt][Oo]:)[^/?#]*\P{ASCII}/u;
+memoryMarkdown.normalizeLink = (url) => (NON_ASCII_HOST.test(url.trim()) ? "" : normalizeLink(url));
 memoryMarkdown.inline.ruler.before("link", "wikilink", wikilink);
 // A reference definition renders as nothing, which would hide what an agent wrote there.
 memoryMarkdown.block.ruler.disable("reference");

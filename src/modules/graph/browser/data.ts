@@ -3,10 +3,10 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 import useSWR from "swr";
 import {
-  cached,
   hasVisibleText,
   plainInline,
   revealHidden,
+  textCache,
 } from "@/modules/memories/browser/presentation";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { getBrowserClient } from "@/shared/browser/sdk";
@@ -14,10 +14,10 @@ import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume
 import { GRAPH_NODE_LIMIT, type GraphData } from "./types";
 
 /** Labels by source: every Graph read brings up to 5,000, mostly the same as the last. */
-const labels = new Map<string, string>();
+const labels = textCache();
 
 function nodeLabel(source: string): string {
-  return cached(labels, source, () => {
+  return labels(source, () => {
     const words = plainInline(source).trim();
     return hasVisibleText(words) ? words : revealHidden(source);
   });

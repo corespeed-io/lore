@@ -9,7 +9,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreAgents } from "@/modules/agents/browser/data";
 import { useLoreObservations } from "@/modules/episodes/browser/data";
 import { useLoreMemory } from "@/modules/memories/browser/data";
-import { excerpt, memoryTitle, revealHidden } from "@/modules/memories/browser/presentation";
+import {
+  excerpt,
+  memoryTitle,
+  metadataSource,
+  revealHidden,
+} from "@/modules/memories/browser/presentation";
 import {
   useLoreMemoryProposalMutations,
   useLoreMemoryProposals,
@@ -80,17 +85,13 @@ export function MemoryProposalsView({
     isLoading: observationsLoading,
     mutate: mutateObservations,
   } = useLoreObservations(workspaceId, observationIds);
-  const observationsById = useMemo(
-    () => new Map(evidenceObservations.map((observation) => [observation.id, observation])),
-    [evidenceObservations],
-  );
   // Revealed once per read: an Observation may hold 100,000 characters.
-  const observationText = useMemo(
+  const observationsById = useMemo(
     () =>
       new Map(
         evidenceObservations.map((observation) => [
           observation.id,
-          revealHidden(observation.content),
+          { observation, text: revealHidden(observation.content) },
         ]),
       ),
     [evidenceObservations],
@@ -99,7 +100,7 @@ export function MemoryProposalsView({
     () =>
       selected && {
         content: revealHidden(selected.proposedContent),
-        metadata: revealHidden(JSON.stringify(selected.proposedMetadata, null, 2)),
+        metadata: metadataSource(selected.proposedMetadata),
       },
     [selected],
   );
@@ -432,7 +433,8 @@ export function MemoryProposalsView({
                     )}
                     <ul>
                       {selected.evidenceObservationIds.map((observationId, index) => {
-                        const observation = observationsById.get(observationId);
+                        const evidence = observationsById.get(observationId);
+                        const observation = evidence?.observation;
                         const observationState = observation
                           ? observation.kind
                           : observationsLoading
@@ -449,7 +451,7 @@ export function MemoryProposalsView({
                               </header>
                               {observation ? (
                                 <>
-                                  <div>{observationText.get(observationId)}</div>
+                                  <div>{evidence?.text}</div>
                                   <small>
                                     SHA-256 {observation.payloadSha256} · {observationId}
                                   </small>

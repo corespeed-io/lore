@@ -98,9 +98,7 @@ test("a wikilink resolves only through the map's own properties", () => {
   expect(html("[[empty]]", { empty: "" })).toContain(unresolved);
   const malformed = { count: 42 } as unknown as Record<string, string>;
   expect(html("[[count]]", malformed)).toContain(unresolved);
-});
-
-test("a wikilink named like an object property renders unresolved unless the map holds it", () => {
+  // A reference named like an object property is no target unless the map holds it.
   const inherited = html("[[constructor]] [[__proto__]] [[toString]]") ?? "";
   expect(inherited.match(/class="wl-unresolved"/g)).toHaveLength(3);
   expect(inherited).not.toContain("<a ");
@@ -293,16 +291,17 @@ test("images nested inside image labels count toward the nesting bound", () => {
 });
 
 test("parsing and rendering cost linear time on hostile bodies", () => {
+  // Four times the 32,000-character body bound, so a quadratic cost cannot fit the budget.
   for (const input of [
-    "> ".repeat(16_000),
-    "*a".repeat(16_000),
-    "[[".repeat(16_000),
-    "[[a".repeat(10_000),
-    `${"![".repeat(2_000)}a${"](https://x)".repeat(2_000)}`,
-    `${"[".repeat(8_000)}a${"](https://x)".repeat(2_000)}`,
+    "> ".repeat(64_000),
+    "*a".repeat(64_000),
+    "[[".repeat(64_000),
+    "[[a".repeat(40_000),
+    `${"![".repeat(8_000)}a${"](https://x)".repeat(8_000)}`,
+    `${"[".repeat(32_000)}a${"](https://x)".repeat(8_000)}`,
   ]) {
     const started = performance.now();
-    html(input.slice(0, 32_000));
+    html(input);
     // Linear time stays well under this on a busy machine; a quadratic cost takes seconds.
     expect(performance.now() - started).toBeLessThan(1_500);
   }
@@ -356,18 +355,16 @@ test("a link with no words of its own shows its target", () => {
   expect(html("[](https://y.test) and [ ](https://z.test)")).toBe(
     `<p><a class="ext" href="https://y.test" ${EXTERNAL}>https://y.test</a> and <a class="ext" href="https://z.test" ${EXTERNAL}>https://z.test </a></p>\n`,
   );
-  // An image with no alt text, or zero-width words, are no words either.
+  // An image with no alt text, or zero-width words, are no words either. Words are
+  // what an image's alt shows, not its source: markup around nothing is none.
   for (const label of [
     "![](https://x.test/l.png)",
     "![\u200B](https://x.test/l.png)",
+    "![**\u200B**](https://x.test/l.png)",
     "\u200B\u2060",
   ]) {
     expect(html(`[${label}](https://d.test)`)).toContain(`${EXTERNAL}>https://d.test`);
   }
-  // Words are what an image's alt shows, not its source: markup around nothing is none.
-  expect(html("[![**\u200B**](https://x.test/l.png)](https://d.test)")).toContain(
-    `${EXTERNAL}>https://d.test`,
-  );
   for (const alt of ["\u200B", " "]) {
     expect(html(`![${alt}](https://x.test/a.png)`)).toContain(">https://x.test/a.png</a>");
   }
@@ -379,12 +376,24 @@ test("a link whose host is written outside ASCII stays text", () => {
     "<https://github.com\u2215corespeed-io\u2215lore.attacker.dev>",
     "<https://paypal.com\u3002evil.com>",
     "[docs](https://\u4F8B\u3048.jp)",
+    // A mailto host is punycoded too, whatever case its scheme is written in.
+    "<mailto:security@github.com\u2215x.evil.dev>",
+    "<MAILTO:security@github.com\u2215x.evil.dev>",
+    "<mailto:security@g\u0131thub.com>",
+    // markdown-it trims Unicode whitespace before it reads the host, and so does the check.
+    "[docs](\uFEFFhttps://\u4F8B\u3048.jp)",
+    "[docs](< https://\u4F8B\u3048.jp>)",
+    "![](\u00A0https://paypal.com\u3002evil.com)",
+    "[a](\u00A0mailto:x@\u00FC.com)",
   ]) {
     expect(html(markdown), markdown).not.toContain("<a ");
   }
   // A path outside ASCII is fine, and a scheme in capitals still links.
   expect(html("<https://example.test/caf\u00E9>")).toContain("<a ");
   expect(html("<HTTPS://example.test>")).toContain("<a ");
+  expect(html("<mailto:team@example.test>")).toContain('href="mailto:team@example.test"');
+  // A host of `s` and `k` is ASCII: they only fold to ſ and K under a case-blind match.
+  expect(html("<https://sk.test>")).toContain('href="https://sk.test"');
 });
 
 test("an autolink shows its URL as written, never decoded", () => {
