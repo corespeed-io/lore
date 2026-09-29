@@ -2,7 +2,9 @@ import type { Memory } from "@corespeed/lore-sdk";
 import { expect, test, vi } from "vitest";
 import {
   memoryBody,
+  memoryConfiguredTitle,
   memoryConfiguredType,
+  memoryDetailTitle,
   memorySource,
   memoryTitle,
   memoryType,
@@ -120,8 +122,8 @@ test("plain text keeps a code span as written and drops the rest of the inline m
   // A link with a title or with parentheses in its target reads as its label.
   expect(plainInline('See [docs](https://example.test "Docs") now')).toBe("See docs now");
   expect(plainInline("See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now")).toBe("See Foo now");
-  // An escape reads as the character it escapes; an entity reads as written.
-  expect(plainInline("Use \\*args\\* and AT&amp;T")).toBe("Use *args* and AT&amp;T");
+  // An escape reads as the character it escapes, and an entity as the character it names.
+  expect(plainInline("Use \\*args\\* and AT&amp;T")).toBe("Use *args* and AT&T");
   // A heading marker goes only at the start, and a link to another scheme stays.
   expect(plainInline("# Title # not a marker")).toBe("Title # not a marker");
   expect(plainInline("[x](javascript:alert(1))")).toBe("[x](javascript:alert(1))");
@@ -162,9 +164,18 @@ test("a search snippet drops fences and block markers as well as inline markup",
   );
 });
 
-test("a label cut short loses its unpaired bold marker too", () => {
+test("markers the body shows as text stay, and only markup it renders goes", () => {
+  for (const text of [
+    "pow(2, 10) == 2**10",
+    "Match *.ts or *.js files",
+    "keep **/src",
+    "f(*args, **kwargs)",
+  ]) {
+    expect(plainInline(text)).toBe(text);
+  }
+  // A label cut short keeps an opening marker whose pair was cut off, as the body would.
   expect(plainInline("**ci-runner controller service-account key: org-policy exception…")).toBe(
-    "ci-runner controller service-account key: org-policy exception…",
+    "**ci-runner controller service-account key: org-policy exception…",
   );
 });
 
@@ -269,9 +280,9 @@ test("a blank or non-text configured title falls back to the first line, then to
     "First line",
   );
   expect(memoryTitle(memory({ content: "" }))).toBe("Untitled memory");
-  // A first line that is only markup has no words to show.
+  // A first line whose words show nothing has no title to show.
   expect(memoryTitle(memory({ content: "# \nBody" }))).toBe("Untitled memory");
-  expect(memoryTitle(memory({ content: "****\nBody" }))).toBe("Untitled memory");
+  expect(memoryTitle(memory({ content: "**\u200B**\nBody" }))).toBe("Untitled memory");
 });
 
 test("the title shows a first line whole only up to the limit, and the body agrees", () => {
@@ -305,9 +316,9 @@ test("controls that reorder or hide text show as markers, and emoji stay whole",
   ]) {
     expect(revealHidden(text)).toBe(text);
   }
-  // Titles, labels, and snippets show them too; an entity stays as written, visibly.
+  // Titles, labels, and snippets show them too, raw or as entities.
   expect(memoryTitle(memory({ content: "# Pay ‮4321 &#x202E;\nBody" }))).toBe(
-    "Pay ⟨U+202E⟩4321 &#x202E;",
+    "Pay ⟨U+202E⟩4321 ⟨U+202E⟩",
   );
   expect(plain("Pay ‮4321")).toBe("Pay ⟨U+202E⟩4321");
 });
@@ -321,13 +332,6 @@ test("tag characters after a flag that do not spell a flag still show as markers
   expect(revealHidden(`\u{1F3F4}${"\u{E0061}".repeat(7)}\u{E007F}`)).toBe(
     `\u{1F3F4}${"⟨U+E0061⟩".repeat(7)}⟨U+E007F⟩`,
   );
-});
-
-test("a link target in angle brackets reads as its label", () => {
-  expect(plainInline("See [the runbook](<https://example.test/runbook>) first")).toBe(
-    "See the runbook first",
-  );
-  expect(plainInline("Mail [us](<mailto:team@example.test>)")).toBe("Mail us");
 });
 
 test("every bidi embedding, override, and isolate control shows as a marker, and its neighbours stay text", () => {
@@ -357,12 +361,27 @@ test("only the three subdivision flags keep their tags; any other flag-shaped ru
   expect(revealHidden(`\u{1F3F4}${tags("gbxyz")}\u{E007F}`)).toContain("⟨U+E0078⟩");
 });
 
-test("a configured title that reduces to nothing still shows its hidden controls", () => {
-  const title = memoryTitle(
-    memory({ metadata: { title: `![](https://example.test/${String.fromCodePoint(0xe0069)}‮)` } }),
+test("a configured title whose words show nothing shows as written, hidden controls as markers", () => {
+  const title = (value: string) => memoryTitle(memory({ metadata: { title: value } }));
+  expect(title("**\u200B\u2060**")).toBe("**\u200B\u2060**");
+  expect(title("[‮](https://example.test)")).toBe("⟨U+202E⟩");
+  // An image with no words shows its source, as the body does, its controls encoded.
+  expect(title(`![](https://example.test/${String.fromCodePoint(0xe0069)}‮)`)).toBe(
+    "https://example.test/%F3%A0%81%A9%E2%80%AE",
   );
-  expect(title).not.toMatch(/[‪-‮⁦-⁩\u{E0000}-\u{E007F}]/u);
-  expect(title).toContain("⟨U+202E⟩");
+});
+
+test("Memory detail shows a configured title whole, and as written beside it", () => {
+  const long = `Decision record: ${"we moved the embedding worker to independent leases ".repeat(3).trim()}`;
+  const titled = memory({ metadata: { title: ` [Approved](https://x.example) ${long} ` } });
+  expect(memoryTitle(titled)).toHaveLength(96);
+  expect(memoryDetailTitle(titled)).toBe(`Approved ${long}`);
+  expect(memoryConfiguredTitle(titled)).toBe(`[Approved](https://x.example) ${long}`);
+  // A first-line title stays as rows show it, since its line stays in the body.
+  const untitled = memory({ content: `# ${long}\nBody` });
+  expect(memoryDetailTitle(untitled)).toBe(memoryTitle(untitled));
+  expect(memoryConfiguredTitle(untitled)).toBeNull();
+  expect(memoryConfiguredTitle(memory({ metadata: { title: "a‮b" } }))).toBe("a⟨U+202E⟩b");
 });
 
 test("a title line whose markers overflow the title stays in the body", () => {
@@ -377,12 +396,5 @@ test("a title line whose markers overflow the title stays in the body", () => {
 test("an entity or an escape alone keeps the title line in the body", () => {
   for (const content of ["# AT&amp;T\nBody", "**x\\**\nBody"]) {
     expect(memoryBody(memory({ content }))).toBe(content);
-  }
-});
-
-test("a title reads a link as its label only when the body would render it as a link", () => {
-  expect(plainInline("See [x](https://example.test) now")).toBe("See x now");
-  for (const text of ["[x](https:///path)", "[x](mailto:)", "[x](http://?q)"]) {
-    expect(plainInline(text)).toBe(text);
   }
 });

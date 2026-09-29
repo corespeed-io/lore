@@ -1,4 +1,12 @@
 import type { Memory } from "@corespeed/lore-sdk";
+import {
+  hasVisibleText,
+  memoryInlineText,
+  memoryPlainText,
+  revealHidden,
+} from "@/modules/memories/browser/markdown";
+
+export { hasVisibleText, revealHidden };
 
 function compact(value: string, limit: number): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -8,81 +16,25 @@ function compact(value: string, limit: number): string {
   return `${text.slice(0, end).trimEnd()}…`;
 }
 
-/**
- * Characters that would make the text a reader sees differ from the text an agent
- * reads: the bidirectional embedding, override, and isolate controls, which reorder
- * what follows them, and the Unicode tag characters, which show as nothing. The only
- * tags a reader sees are the three subdivision flags (England, Scotland, and Wales),
- * which are matched first and kept; any other tag run, flag-shaped or not, shows.
- */
-const HIDDEN_CHARACTERS =
-  /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
-
-/** Text with each hidden control shown as a marker that names it, such as `⟨U+202E⟩`. */
-export function revealHidden(text: string): string {
-  return text.replace(HIDDEN_CHARACTERS, (match) => {
-    if (match.codePointAt(0) === 0x1f3f4) return match;
-    const code = match.codePointAt(0) ?? 0;
-    return `⟨U+${code.toString(16).toUpperCase().padStart(4, "0")}⟩`;
-  });
-}
-
 const TITLE_LIMIT = 96;
 /** A title reads at most this much of a first line, which may be the whole 32k body. */
 const TITLE_SOURCE_LIMIT = 1_000;
+/** A search snippet shows 200 characters; this much of its source is enough to find them. */
+const SNIPPET_SOURCE_LIMIT = 2_000;
 
 /**
- * A link target that Memory detail renders (see `allowedHref`): http(s) with a host,
- * or mailto with an address, in any case, and an optional quoted title. In angle
- * brackets it may hold spaces; bare, one level of parentheses. A target this misses
- * only leaves its link as written in a title, never hides words the body shows.
- * Its alternatives start with different characters, so it never backtracks far.
- */
-const LINK_TARGET = String.raw`\((?:<(?:https?:\/\/[^\s/\\?#<>]|mailto:[^\s<>])[^<>\n]*>|(?:https?:\/\/[^\s/\\?#()<>]|mailto:[^\s()<>])(?:[^()\s<>]|\([^()\s]*\))*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)`;
-const IMAGE = new RegExp(String.raw`!\[([^[\]\n]*)\]${LINK_TARGET}`, "gi");
-const LINK = new RegExp(String.raw`\[([^[\]\n]+)\]${LINK_TARGET}`, "gi");
-
-/**
- * Text with the inline Markdown that Memory detail renders reduced to its words,
- * for places that show plain text: a leading heading marker, wikilinks, links and
- * images, bold, and emphasis. Code spans keep their text as written, and so does
- * strikethrough, whose markers are the only sign the words are struck. A backslash
- * escape reads as the character it escapes; entities stay as written. Every `**`
- * goes, paired or not, because a label cut short may keep only the opening one, but
- * one with space on both sides is text. An underscore inside a word is never
- * emphasis. Hidden controls show as markers (`revealHidden`). No pattern can match
- * `[` inside brackets, so a run of brackets costs linear time.
+ * Text with its inline Markdown reduced to the words Memory detail shows for it, for
+ * places that show plain text: link and image text, wikilink labels, and code without
+ * its backticks. The body's own parser and rules do this (`memoryInlineText`), after a
+ * leading heading marker goes. Hidden controls show as markers.
  */
 export function plainInline(text: string): string {
-  const code: string[] = [];
-  const stash = (kept: string) => `\u0000${code.push(kept) - 1}\u0000`;
-  return revealHidden(
-    text
-      .replace(/`([^`\n]+)`/g, (_match, span: string) => stash(span))
-      .replace(/\\([!-/:-@[-`{-~])/g, (_match, character: string) => stash(character))
-      .replace(/^#{1,6}[ \t]+/, "")
-      .replace(/\[\[([^[\]|\n]+)\|([^[\]\n]+)\]\]/g, "$2")
-      .replace(/\[\[([^[\]\n]+)\]\]/g, "$1")
-      .replace(IMAGE, "$1")
-      .replace(LINK, "$1")
-      // A `**` with space on both sides is text, not a marker.
-      .replace(/(?<!\s)\*\*|\*\*(?!\s)/g, "")
-      .replace(/(^|[^\w*])\*(?=\S)([^*\n]+)\*(?!\w)/g, "$1$2")
-      .replace(/(^|[^\p{L}\p{N}_])__(?=\S)([^_\n]+)__(?![\p{L}\p{N}_])/gu, "$1$2")
-      .replace(/(^|[^\p{L}\p{N}_])_(?=\S)([^_\n]+)_(?![\p{L}\p{N}_])/gu, "$1$2")
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: Memory text never holds NUL, so NUL marks what was stashed.
-      .replace(/\u0000(\d+)\u0000/g, (_match, index: string) => code[Number(index)] ?? ""),
-  );
+  return memoryInlineText(text.replace(/^#{1,6}[ \t]+/, ""));
 }
 
-/** Search snippets: a Memory's text without its fences, block markers, or inline markup. */
+/** Search snippets: a Memory's text as Memory detail shows it, without code blocks. */
 export function plain(s: string): string {
-  return plainInline(
-    (s ?? "")
-      .replace(/```[\s\S]*?```/g, " ")
-      .replace(/^[ \t]{0,3}(?:>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)+/gm, ""),
-  )
-    .replace(/[#*`>]/g, "")
+  return memoryPlainText((s ?? "").slice(0, SNIPPET_SOURCE_LIMIT))
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -101,14 +53,37 @@ function titleText(line: string): string {
   return plainInline(line.slice(0, TITLE_SOURCE_LIMIT));
 }
 
+/** A configured title as its words, or as written when its words show nothing. */
+function shownTitle(source: string, limit: number): string {
+  const words = compact(plainInline(source), limit);
+  return hasVisibleText(words) ? words : compact(revealHidden(source), limit);
+}
+
+/** The title a row, label, or link shows, cut at the title limit. */
 export function memoryTitle(memory: Memory): string {
   const configured = configuredTitle(memory);
-  if (configured !== null) {
-    // Metadata may hold a title of 100,000 characters; only the first ones can show.
-    const source = configured.slice(0, TITLE_SOURCE_LIMIT);
-    return compact(plainInline(source), TITLE_LIMIT) || compact(revealHidden(source), TITLE_LIMIT);
-  }
-  return compact(titleText(firstLine(memory.content)), TITLE_LIMIT) || "Untitled memory";
+  // Metadata may hold a title of 100,000 characters; only the first ones can show.
+  if (configured !== null) return shownTitle(configured.slice(0, TITLE_SOURCE_LIMIT), TITLE_LIMIT);
+  const title = compact(titleText(firstLine(memory.content)), TITLE_LIMIT);
+  return hasVisibleText(title) ? title : "Untitled memory";
+}
+
+/**
+ * The title Memory detail shows: a configured one whole, since no other part of the
+ * page shows it, and a first-line one as rows do, since its line stays in the body
+ * whenever the title cuts it short.
+ */
+export function memoryDetailTitle(memory: Memory): string {
+  const configured = configuredTitle(memory);
+  return configured === null
+    ? memoryTitle(memory)
+    : shownTitle(configured, Number.POSITIVE_INFINITY);
+}
+
+/** A configured `metadata.title` as written, hidden controls as markers, or null. */
+export function memoryConfiguredTitle(memory: Memory): string | null {
+  const configured = configuredTitle(memory);
+  return configured === null ? null : revealHidden(configured);
 }
 
 /** A first line written as a title: a heading, or a line that opens with a bold or 【…】 run. */

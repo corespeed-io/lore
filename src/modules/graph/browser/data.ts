@@ -2,7 +2,7 @@
 
 import { useCallback, useLayoutEffect, useRef } from "react";
 import useSWR from "swr";
-import { plainInline, revealHidden } from "@/modules/memories/browser/presentation";
+import { hasVisibleText, plainInline, revealHidden } from "@/modules/memories/browser/presentation";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { getBrowserClient } from "@/shared/browser/sdk";
 import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume";
@@ -13,13 +13,16 @@ export async function readGraph(workspaceId: string, signal?: AbortSignal): Prom
   return {
     // Labels come from Memory content; show their text, not its markup. The browser
     // shows no preview, so a surface that starts to must reduce it the same way.
-    // A label that is only markup keeps its text as written rather than going blank.
+    // A label whose words show nothing keeps its text as written rather than going blank.
     // Types, from metadata, show hidden controls as markers, as Memory rows do.
-    nodes: graph.nodes.map((node) => ({
-      ...node,
-      label: plainInline(node.label).trim() || revealHidden(node.label),
-      type: revealHidden(node.type),
-    })),
+    nodes: graph.nodes.map((node) => {
+      const label = plainInline(node.label).trim();
+      return {
+        ...node,
+        label: hasVisibleText(label) ? label : revealHidden(node.label),
+        type: revealHidden(node.type),
+      };
+    }),
     links: [...graph.links],
     linksTruncated: graph.linksTruncated,
   };

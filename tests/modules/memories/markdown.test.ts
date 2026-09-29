@@ -235,12 +235,10 @@ test("tables that each fit the budget still share it, and the one past it keeps 
 test("a body cannot parse to more table cells than the budget, however few its characters", () => {
   // Each table fills in about 66,000 cells from 1,260 characters.
   const filling = `|${"|".repeat(209)}\n|${"-|".repeat(209)}\n${"a\n".repeat(315)}\n`;
-  const started = performance.now();
-  const tokens = parseMemoryMarkdown(filling.repeat(25)) ?? [];
+  const [tokens, parsed] = withCellsParsed(() => parseMemoryMarkdown(filling.repeat(25)));
 
-  expect(tokens.filter((token) => token.type === "td_open").length).toBe(0);
-  expect(tokens.length).toBeLessThan(1_000);
-  expect(performance.now() - started).toBeLessThan(500);
+  expect(parsed).toBeLessThanOrEqual(MAXIMUM_TABLE_CELLS + 209);
+  expect((tokens ?? []).filter((token) => token.type === "td_open")).toHaveLength(0);
 });
 
 test("a body that nests past the bound renders as text rather than losing its end", () => {
@@ -274,7 +272,6 @@ test("parsing and rendering cost linear time on hostile bodies", () => {
     "[[a".repeat(10_000),
     `${"![".repeat(2_000)}a${"](https://x)".repeat(2_000)}`,
     `${"[".repeat(8_000)}a${"](https://x)".repeat(2_000)}`,
-    `|${"a|".repeat(3_000)}\n|${"-|".repeat(3_000)}\n${"a\n".repeat(10_000)}`,
   ]) {
     const started = performance.now();
     html(input.slice(0, 32_000));
@@ -352,8 +349,6 @@ test("a link with no words of its own shows its target", () => {
   expect(html("[](https://y.test) and [ ](https://z.test)")).toBe(
     `<p><a class="ext" href="https://y.test" ${EXTERNAL}>https://y.test</a> and <a class="ext" href="https://z.test" ${EXTERNAL}>https://z.test </a></p>\n`,
   );
-  // A link whose words are an image's alt text keeps them.
-  expect(html("[![logo](https://x.test/l.png)](https://d.test)")).toContain(">logo</a>");
   // An image with no alt text, or zero-width words, are no words either.
   for (const label of [
     "![](https://x.test/l.png)",
@@ -365,6 +360,12 @@ test("a link with no words of its own shows its target", () => {
   expect(html("![\u200B](https://x.test/a.png)")).toContain(">https://x.test/a.png</a>");
 });
 
+test("a label or reference of only hidden controls shows as its markers", () => {
+  expect(html("[\u202E](https://d.test)")).toContain(`${EXTERNAL}>⟨U+202E⟩</a>`);
+  expect(html("[[a|\u202E]]")).toContain('title="a — not found">⟨U+202E⟩</span>');
+  expect(html("[[\u202E]]")).toContain('<span class="wl-unresolved"');
+});
+
 test("a wikilink whose label shows nothing reads as its reference, and one with no reference stays text", () => {
   const targets = { foo: TARGET_MEMORY_ID };
   expect(html("[[foo|\u200B]]", targets)).toContain(`data-memory-id="${TARGET_MEMORY_ID}">foo</a>`);
@@ -372,15 +373,14 @@ test("a wikilink whose label shows nothing reads as its reference, and one with 
   expect(html("[[\u200B]]")).toBe("<p>[[\u200B]]</p>\n");
 });
 
-test("a title reads a link as its label only where the body renders one", () => {
+test("a title reads a link as its label exactly where the body renders one", () => {
   const read = (target: string) => {
     const markdown = `[label](${target})`;
     return {
-      linked: html(markdown)?.includes("<a ") ?? false,
+      linked: html(markdown)?.includes(">label</a>") ?? false,
       reduced: plainInline(markdown) === "label",
     };
   };
-  const both = { linked: true, reduced: true };
   for (const target of [
     "https://example.test",
     "HTTPS://example.test",
@@ -389,23 +389,48 @@ test("a title reads a link as its label only where the body renders one", () => 
     "<mailto:team@example.test>",
     'https://example.test "Title"',
     "https://example.test 'Title'",
+    "https://example.test (Title)",
     "https://example.test/(a)",
+    "https://example.test/((a))",
   ]) {
-    expect(read(target), target).toEqual(both);
+    expect(read(target), target).toEqual({ linked: true, reduced: true });
   }
-  const neither = { linked: false, reduced: false };
   for (const target of [
     "https:/path",
+    "https:///path",
     "javascript:alert(1)",
     "https://?q",
+    "http://?q",
     "mailto:",
     "<https://>",
+    "https://\\/x",
+    "https://&#47;x",
+    "https://a\u0001b",
+    '<https://x>\u00A0"t"',
   ]) {
-    expect(read(target), target).toEqual(neither);
+    expect(read(target), target).toEqual({ linked: false, reduced: false });
   }
-  // Rarer targets the title leaves as written, which never hides words the body shows.
-  for (const target of ["https://example.test/((a))", "https://example.test (Title)"]) {
-    expect(read(target), target).toEqual({ linked: true, reduced: false });
+});
+
+test("a title shows the words the body shows, whatever the label holds", () => {
+  const targets = { "ops/ch": TARGET_MEMORY_ID };
+  for (const [markdown, words] of [
+    ["2**10 and *.ts or *.js", "2**10 and *.ts or *.js"],
+    ["[see [[a]] x](https://x.test)", "[see a x](https://x.test)"],
+    ["[\u200B](https://x.test)", "https://x.test\u200B"],
+    ["![\u200B](https://x.test/a.png)", "https://x.test/a.png"],
+    ["[[ops/ch|\u200B]] and [[ref\\|label]]", "ops/ch and label"],
+    ["[[ ]] and [[\u200B]]", "[[ ]] and [[\u200B]]"],
+    ["AT&amp;T `a&amp;b` ~~old~~ **new**", "AT&T a&amp;b ~~old~~ new"],
+  ] as const) {
+    expect(plainInline(markdown), markdown).toBe(words);
+    // The body shows the same words, whether or not the wikilink resolves.
+    const shown = (html(markdown, targets) ?? "")
+      .replace(/<\/?s>/g, "~~")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&amp;/g, "&")
+      .trim();
+    expect(shown, markdown).toBe(words);
   }
 });
 

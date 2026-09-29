@@ -5,8 +5,8 @@ import {
   keepsBrowserClick,
   parseMemoryMarkdown,
   renderMemoryMarkdown,
+  revealHidden,
 } from "@/modules/memories/browser/markdown";
-import { revealHidden } from "@/modules/memories/browser/presentation";
 
 interface MemoryMarkdownProps {
   content: string;

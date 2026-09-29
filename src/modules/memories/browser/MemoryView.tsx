@@ -1,16 +1,7 @@
 "use client";
 
 import type { Memory } from "@corespeed/lore-sdk";
-import {
-  Component,
-  type ComponentProps,
-  type ComponentType,
-  lazy,
-  type ReactNode,
-  Suspense,
-  useMemo,
-  useState,
-} from "react";
+import { Component, type ReactNode, useMemo, useState } from "react";
 import { useLoreMemoryCodeEvidence } from "@/modules/code/browser/data";
 import type {
   CodeEvidenceRow,
@@ -21,43 +12,19 @@ import {
   shortCommitOid,
   summarizeCodeEvidence,
 } from "@/modules/code/browser/evidence-presentation";
+import MemoryMarkdown from "@/modules/memories/browser/MemoryMarkdown";
 import {
   type MemoryGraphContext,
   memoryBody,
-  memoryTitle,
+  memoryConfiguredTitle,
+  memoryDetailTitle,
   memoryType,
   revealHidden,
 } from "@/modules/memories/browser/presentation";
 
-type MarkdownRenderer = ComponentType<
-  ComponentProps<typeof import("@/modules/memories/browser/MemoryMarkdown").default>
->;
-
-/** The Markdown renderer and its parser load apart from the shell, once it is idle. */
-let loadedMarkdown: MarkdownRenderer | null = null;
-const loadMemoryMarkdown = () =>
-  import("@/modules/memories/browser/MemoryMarkdown").then((module) => {
-    loadedMarkdown = module.default;
-    return module;
-  });
 /**
- * Only for a body that renders before the preload finishes. `React.lazy` suspends on
- * its first render even when the module is loaded, and React then holds its fallback
- * for 300 ms, so a loaded renderer is used directly instead.
- */
-const LazyMarkdown = lazy(loadMemoryMarkdown);
-if (typeof window !== "undefined") {
-  // A failed load surfaces when a body renders, through the fallback below.
-  const preload = () => void loadMemoryMarkdown().catch(() => {});
-  if ("requestIdleCallback" in window) window.requestIdleCallback(preload);
-  else setTimeout(preload, 1);
-}
-
-/**
- * A Memory body that cannot render as Markdown, or whose renderer failed to load,
- * still shows its text. Keyed by Memory version, so a different body gets a fresh
- * attempt at rendering; a renderer that failed to load stays failed until the page
- * reloads, because `React.lazy` keeps the rejected import.
+ * A Memory body whose rendering throws still shows its text. Keyed by Memory
+ * version, so a different body gets a fresh attempt at rendering.
  */
 class PlainTextFallback extends Component<{ text: string; children: ReactNode }> {
   state = { failed: false };
@@ -255,13 +222,13 @@ export function MemoryView({
     updatedAt,
     version,
   } = memory;
-  const title = memoryTitle(memory);
+  const title = memoryDetailTitle(memory);
+  // Shown as written, since the title above reads only its words.
+  const configuredTitle = memoryConfiguredTitle(memory);
   const type = memoryType(memory);
   const { unresolvedWikilinkTitle } = graphContext;
   // A Memory whose only line is its title has nothing more to show under it.
   const bodyText = useMemo(() => memoryBody(memory), [memory]);
-  // Chosen once per mount, so the element type never changes under a rendered body.
-  const [MemoryMarkdown] = useState<MarkdownRenderer>(() => loadedMarkdown ?? LazyMarkdown);
   // The Memory whose source is showing: a reader can always check the rendering
   // against the text an agent wrote, so nothing the renderer drops stays hidden.
   const [sourceOf, setSourceOf] = useState<string | null>(null);
@@ -304,14 +271,12 @@ export function MemoryView({
           ) : bodyText.trim() ? (
             <div className="detail-body">
               <PlainTextFallback key={`${id}:${version}`} text={bodyText}>
-                <Suspense fallback={<p className="detail-plain">{revealHidden(bodyText)}</p>}>
-                  <MemoryMarkdown
-                    content={bodyText}
-                    wikilinkTargets={wikilinkTargets}
-                    unresolvedTitle={unresolvedWikilinkTitle}
-                    onOpen={onOpen}
-                  />
-                </Suspense>
+                <MemoryMarkdown
+                  content={bodyText}
+                  wikilinkTargets={wikilinkTargets}
+                  unresolvedTitle={unresolvedWikilinkTitle}
+                  onOpen={onOpen}
+                />
               </PlainTextFallback>
             </div>
           ) : (
@@ -325,6 +290,12 @@ export function MemoryView({
               <h3>Properties</h3>
             </div>
             <dl className="property-list">
+              {configuredTitle !== null && (
+                <div className="property-row">
+                  <dt>Title</dt>
+                  <dd>{configuredTitle}</dd>
+                </div>
+              )}
               <div className="property-row">
                 <dt>Type</dt>
                 <dd>{type}</dd>

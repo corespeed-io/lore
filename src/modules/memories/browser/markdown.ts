@@ -1,6 +1,5 @@
 import MarkdownIt, { type Env, type StateInline, type Token } from "markdown-it";
 import cjkFriendly from "markdown-it-cjk-friendly";
-import { revealHidden } from "@/modules/memories/browser/presentation";
 
 /**
  * How deep blocks and inline markup may nest before markdown-it stops nesting:
@@ -28,10 +27,29 @@ interface MemoryEnv extends Env {
 const WIKILINK = /\[\[([^[\]|\n]+)(?:\|([^[\]\n]+))?\]\]/y;
 
 /**
+ * Characters that would make the text a reader sees differ from the text an agent
+ * reads: the bidirectional embedding, override, and isolate controls, which reorder
+ * what follows them, and the Unicode tag characters, which show as nothing. The only
+ * tags a reader sees are the three subdivision flags (England, Scotland, and Wales),
+ * which are matched first and kept; any other tag run, flag-shaped or not, shows.
+ */
+const HIDDEN_CHARACTERS =
+  /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/gu;
+
+/** Text with each hidden control shown as a marker that names it, such as `⟨U+202E⟩`. */
+export function revealHidden(text: string): string {
+  return text.replace(HIDDEN_CHARACTERS, (match) => {
+    if (match.codePointAt(0) === 0x1f3f4) return match;
+    const code = match.codePointAt(0) ?? 0;
+    return `⟨U+${code.toString(16).toUpperCase().padStart(4, "0")}⟩`;
+  });
+}
+
+/**
  * Whether text shows anything: a character other than a space or a zero-width
  * format character, once hidden controls have grown into their markers.
  */
-function hasVisibleText(text: string): boolean {
+export function hasVisibleText(text: string): boolean {
   return /[^\s\p{Cf}]/u.test(revealHidden(text));
 }
 
@@ -69,7 +87,7 @@ export function allowedHref(url: string): boolean {
  * bare URLs, and reference definitions stay text, a single line break stays a line
  * break, and `[[reference]]` becomes a `wikilink` token before links or emphasis can
  * claim its brackets. Emphasis follows the CJK-friendly amendment, so `**注意：**请`
- * is bold as it is in English. With `html: false`, every character of the body
+ * is bold as `**Note:** read` is in English. With `html: false`, every character of the body
  * reaches the page escaped, so its HTML is safe to set as `innerHTML`.
  */
 const memoryMarkdown = new MarkdownIt({
@@ -94,6 +112,8 @@ memoryMarkdown.core.ruler.push("memory_headings", (state) => {
   }
 });
 
+// `__rules__` is markdown-it's internal rule list; nothing public returns a rule by
+// name. A release that renames it fails here, and so every test, rather than quietly.
 const tableRule = memoryMarkdown.block.ruler.__rules__.find((rule) => rule.name === "table");
 if (!tableRule) throw new Error("markdown-it has no table rule to bound");
 const table = tableRule.fn;
@@ -298,6 +318,39 @@ export function renderMemoryMarkdown(
 ): string {
   const env: MemoryEnv = { targets, unresolvedTitle, anchors: [] };
   return memoryMarkdown.renderer.render(tokens, memoryMarkdown.options, env);
+}
+
+const ESCAPED: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"' };
+
+/**
+ * The words a rendering shows. Every character of the text reaches the HTML
+ * escaped, so each tag is a rule's own and goes whole, attributes and all; a
+ * strike keeps its `~~`, so struck words never read as current.
+ */
+function renderedWords(html: string): string {
+  return html
+    .replace(/<\/?s>/g, "~~")
+    .replace(/<br>/g, " ")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&(amp|lt|gt|quot);/g, (_match, name: string) => ESCAPED[name] ?? "");
+}
+
+/**
+ * Inline Markdown as the words Memory detail would show for it, for places that
+ * show plain text: the same parser and rules, so a title never drops a character
+ * the body shows, nor keeps markup the body renders.
+ */
+export function memoryInlineText(markdown: string): string {
+  const env: MemoryEnv = { targets: {}, unresolvedTitle: "", anchors: [] };
+  return renderedWords(memoryMarkdown.renderInline(markdown, env));
+}
+
+/** A Memory body as the words Memory detail shows, without its code blocks. */
+export function memoryPlainText(markdown: string): string {
+  const tokens = parseMemoryMarkdown(markdown);
+  if (!tokens) return revealHidden(markdown);
+  const html = renderMemoryMarkdown(tokens, {}, "");
+  return renderedWords(html.replace(/<pre class="fence">[\s\S]*?<\/pre>/g, " "));
 }
 
 /** The Memory id a reference resolves to, read only from the map's own properties. */

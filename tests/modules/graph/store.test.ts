@@ -7,6 +7,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** A Graph read of `body`, as the browser makes it. */
+async function readWith(body: object) {
+  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+  return readGraph("10000000-0000-4000-8000-000000000001");
+}
+
 function node(id: string, reference: string, label = id): GraphNode {
   return {
     id,
@@ -64,26 +71,16 @@ test("an ambiguous reference stays ambiguous however many nodes share it", () =>
 });
 
 test("a Graph read shows label text without markup, and references still resolve", async () => {
-  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
   const wire = {
     ...node("a", "ops/**clickhouse**", "## **ClickHouse** runbook"),
     preview: "Use `bun run ch:migrate` with [[ops/ch|ClickHouse]] and [docs](https://example.test)",
   };
   const links = [{ source: "a", target: "a", kind: "related", weight: 1, derived: false }];
-  const fetcher = vi
-    .fn()
-    .mockResolvedValue(Response.json({ nodes: [wire], links, linksTruncated: true }));
-  vi.stubGlobal("fetch", fetcher);
 
-  const graph = await readGraph("10000000-0000-4000-8000-000000000001");
+  const graph = await readWith({ nodes: [wire], links, linksTruncated: true });
 
   expect(graph).toEqual({
-    nodes: [
-      {
-        ...wire,
-        label: "ClickHouse runbook",
-      },
-    ],
+    nodes: [{ ...wire, label: "ClickHouse runbook" }],
     links,
     linksTruncated: true,
   });
@@ -91,37 +88,28 @@ test("a Graph read shows label text without markup, and references still resolve
   expect(buildGraphStore(graph).byReference["ops/**clickhouse**"]).toBe("a");
 });
 
-test("a Graph label that is only markup keeps its text rather than going blank", async () => {
-  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
+test("a Graph label shows what the body shows, and as written when that is nothing", async () => {
   const nodes = [
     node("a", "a", "![](https://example.test/a.png)"),
     node("b", "b", "**"),
-    node("c", "c", "![](https://example.test/\u202E)"),
+    node("c", "c", "**\u200B**"),
+    node("d", "d", "[\u200B](https://x.test)"),
   ];
-  const fetcher = vi
-    .fn()
-    .mockResolvedValue(Response.json({ nodes, links: [], linksTruncated: false }));
-  vi.stubGlobal("fetch", fetcher);
 
-  const graph = await readGraph("10000000-0000-4000-8000-000000000001");
+  const graph = await readWith({ nodes, links: [], linksTruncated: false });
 
   expect(graph.nodes.map((entry) => entry.label)).toEqual([
-    "![](https://example.test/a.png)",
+    "https://example.test/a.png",
     "**",
-    // Kept as written, its hidden controls still show.
-    "![](https://example.test/⟨U+202E⟩)",
+    "**\u200B**",
+    "https://x.test\u200B",
   ]);
 });
 
 test("a Graph node's type shows its hidden controls as markers", async () => {
-  vi.stubGlobal("window", { location: { origin: "https://lore.test" } });
   const nodes = [{ ...node("a", "a"), type: "\u202Eeganam" }, node("b", "b")];
-  const fetcher = vi
-    .fn()
-    .mockResolvedValue(Response.json({ nodes, links: [], linksTruncated: false }));
-  vi.stubGlobal("fetch", fetcher);
 
-  const graph = await readGraph("10000000-0000-4000-8000-000000000001");
+  const graph = await readWith({ nodes, links: [], linksTruncated: false });
 
   expect(graph.nodes.map((entry) => entry.type)).toEqual(["⟨U+202E⟩eganam", "concept"]);
 });
