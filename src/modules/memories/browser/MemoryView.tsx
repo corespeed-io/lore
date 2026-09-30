@@ -1,7 +1,7 @@
 "use client";
 
 import type { Memory } from "@corespeed/lore-sdk";
-import { useEffect, useMemo, useRef } from "react";
+import { Component, type ReactNode, useMemo, useState } from "react";
 import { useLoreMemoryCodeEvidence } from "@/modules/code/browser/data";
 import type {
   CodeEvidenceRow,
@@ -12,12 +12,38 @@ import {
   shortCommitOid,
   summarizeCodeEvidence,
 } from "@/modules/code/browser/evidence-presentation";
-import { renderMarkdown } from "@/modules/memories/browser/markdown";
+import { MemoryMarkdown } from "@/modules/memories/browser/MemoryMarkdown";
 import {
   type MemoryGraphContext,
-  memoryTitle,
+  memoryBody,
+  memoryConfiguredTitle,
+  memoryDetailTitle,
+  memoryMetadataText,
+  memorySource,
   memoryType,
+  metadataLabel,
+  revealHidden,
 } from "@/modules/memories/browser/presentation";
+
+/**
+ * A Memory body whose rendering throws still shows its text. Keyed by Memory
+ * version, so a different body gets a fresh attempt at rendering.
+ */
+class PlainTextFallback extends Component<{ text: string; children: ReactNode }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? (
+      <p className="detail-plain">{revealHidden(this.props.text)}</p>
+    ) : (
+      this.props.children
+    );
+  }
+}
 
 interface MemoryLink {
   id: string;
@@ -199,36 +225,33 @@ export function MemoryView({
     updatedAt,
     version,
   } = memory;
-  const title = memoryTitle(memory);
+  // A configured title may run to 100,000 characters, and parses whole here.
+  const title = useMemo(() => memoryDetailTitle(memory), [memory]);
+  // Shown as written, since the title above reads only its words.
+  const configuredTitle = useMemo(() => memoryConfiguredTitle(memory), [memory]);
   const type = memoryType(memory);
+  // The Type property reads whole, as the configured title does; the badge is a label.
+  const typeText = useMemo(() => revealHidden(memoryType(memory)), [memory]);
+  const source = useMemo(() => {
+    const written = memorySource(memory);
+    return written === null ? null : revealHidden(written);
+  }, [memory]);
   const { unresolvedWikilinkTitle } = graphContext;
-  const bodyHtml = useMemo(
-    () =>
-      renderMarkdown(body.replace(/^#\s+.*\r?\n+/, ""), wikilinkTargets, unresolvedWikilinkTitle),
-    [body, wikilinkTargets, unresolvedWikilinkTitle],
+  // A Memory whose only line is its title has nothing more to show under it.
+  const bodyText = useMemo(() => memoryBody(memory), [memory]);
+  // A reader can always check the rendering against the text an agent wrote, so
+  // nothing the renderer drops stays hidden. App remounts this view per Memory.
+  const [showSource, setShowSource] = useState(false);
+  // Show source shows every metadata key, since agents read them all.
+  const metadataText = useMemo(
+    () => (showSource ? memoryMetadataText(memory) : null),
+    [memory, showSource],
   );
-  const bodyRef = useRef<HTMLDivElement>(null);
   const codeEvidence = useLoreMemoryCodeEvidence(workspaceId, id);
   const codeEvidenceSummary = useMemo(
     () => summarizeCodeEvidence(codeEvidence.data ?? []),
     [codeEvidence.data],
   );
-
-  useEffect(() => {
-    const bodyElement = bodyRef.current;
-    if (!bodyElement) return;
-    bodyElement.innerHTML = bodyHtml;
-    const handleClick = (event: globalThis.MouseEvent) => {
-      if (!(event.target instanceof Element)) return;
-      const anchor = event.target.closest<HTMLAnchorElement>("a.wl[data-memory-id]");
-      const memoryId = anchor?.dataset.memoryId;
-      if (!memoryId) return;
-      event.preventDefault();
-      onOpen(memoryId);
-    };
-    bodyElement.addEventListener("click", handleClick);
-    return () => bodyElement.removeEventListener("click", handleClick);
-  }, [bodyHtml, onOpen]);
 
   return (
     <div className="page-wrap page-wrap-wide">
@@ -240,18 +263,41 @@ export function MemoryView({
         <article className="detail-panel">
           <h1 className="detail-title">{title || "Untitled memory"}</h1>
           <div className="detail-meta">
-            <span className="type-badge">{type}</span>
+            <span className="type-badge">{metadataLabel(type)}</span>
             <span className="detail-id">{id}</span>
+            {body.trim() && (
+              <button
+                type="button"
+                className="property-action detail-source-toggle"
+                onClick={() => setShowSource(!showSource)}
+              >
+                {showSource ? "Show rendered" : "Show source"}
+              </button>
+            )}
           </div>
           {codeEvidenceSummary.attentionMessage && (
             <p className="code-evidence-notice" role="status">
               {codeEvidenceSummary.attentionMessage}
             </p>
           )}
-          {body.trim() ? (
-            <div ref={bodyRef} className="detail-body" />
+          {showSource ? (
+            <>
+              <pre className="detail-source">{revealHidden(body)}</pre>
+              {metadataText !== null && <pre className="detail-source">{metadataText}</pre>}
+            </>
+          ) : bodyText.trim() ? (
+            <div className="detail-body">
+              <PlainTextFallback key={version} text={bodyText}>
+                <MemoryMarkdown
+                  content={bodyText}
+                  wikilinkTargets={wikilinkTargets}
+                  unresolvedTitle={unresolvedWikilinkTitle}
+                  onOpen={onOpen}
+                />
+              </PlainTextFallback>
+            </div>
           ) : (
-            <p className="detail-placeholder">No content available</p>
+            !body.trim() && <p className="detail-placeholder">No content available</p>
           )}
         </article>
 
@@ -261,10 +307,22 @@ export function MemoryView({
               <h3>Properties</h3>
             </div>
             <dl className="property-list">
+              {configuredTitle !== null && (
+                <div className="property-row">
+                  <dt>Title</dt>
+                  <dd>{configuredTitle}</dd>
+                </div>
+              )}
               <div className="property-row">
                 <dt>Type</dt>
-                <dd>{type}</dd>
+                <dd>{typeText}</dd>
               </div>
+              {source !== null && (
+                <div className="property-row">
+                  <dt>Source</dt>
+                  <dd>{source}</dd>
+                </div>
+              )}
               <div className="property-row">
                 <dt>Scope</dt>
                 <dd>{scope}</dd>

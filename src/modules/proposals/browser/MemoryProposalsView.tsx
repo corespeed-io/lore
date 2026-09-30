@@ -9,7 +9,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoreAgents } from "@/modules/agents/browser/data";
 import { useLoreObservations } from "@/modules/episodes/browser/data";
 import { useLoreMemory } from "@/modules/memories/browser/data";
-import { memoryTitle } from "@/modules/memories/browser/presentation";
+import {
+  excerpt,
+  memoryTitle,
+  metadataSource,
+  revealHidden,
+} from "@/modules/memories/browser/presentation";
 import {
   useLoreMemoryProposalMutations,
   useLoreMemoryProposals,
@@ -35,11 +40,6 @@ const EMPTY_OBSERVATION_IDS: readonly string[] = [];
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
-}
-
-function compact(value: string, limit = 112): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1).trimEnd()}…` : normalized;
 }
 
 function utcDate(value: string): string {
@@ -85,9 +85,24 @@ export function MemoryProposalsView({
     isLoading: observationsLoading,
     mutate: mutateObservations,
   } = useLoreObservations(workspaceId, observationIds);
+  // Revealed once per read: an Observation may hold 100,000 characters.
   const observationsById = useMemo(
-    () => new Map(evidenceObservations.map((observation) => [observation.id, observation])),
+    () =>
+      new Map(
+        evidenceObservations.map((observation) => [
+          observation.id,
+          { observation, text: revealHidden(observation.content) },
+        ]),
+      ),
     [evidenceObservations],
+  );
+  const proposedText = useMemo(
+    () =>
+      selected && {
+        content: revealHidden(selected.proposedContent),
+        metadata: metadataSource(selected.proposedMetadata),
+      },
+    [selected],
   );
   const targetId = selected?.kind === "update" ? selected.targetMemoryId : null;
   const {
@@ -95,6 +110,10 @@ export function MemoryProposalsView({
     error: targetError,
     isLoading: targetLoading,
   } = useLoreMemory(workspaceId, targetId);
+  const targetText = useMemo(
+    () => (targetMemory ? revealHidden(targetMemory.content) : null),
+    [targetMemory],
+  );
   const agentNames = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent.name])),
     [agents],
@@ -257,7 +276,7 @@ export function MemoryProposalsView({
                       <span>{proposal.kind === "create" ? "New Memory" : "Update"}</span>
                       <time dateTime={proposal.createdAt}>{utcDate(proposal.createdAt)} UTC</time>
                     </span>
-                    <strong>{compact(proposal.proposedContent)}</strong>
+                    <strong>{excerpt(proposal.proposedContent, 112)}</strong>
                     <span className="proposal-row-foot">
                       {submitter(proposal)} · {proposal.proposedScope}
                     </span>
@@ -358,18 +377,18 @@ export function MemoryProposalsView({
               {selected.kind === "update" && targetMemory && (
                 <section className="proposal-content-block proposal-current-content">
                   <h3>Current content</h3>
-                  <div>{targetMemory.content}</div>
+                  <div>{targetText}</div>
                 </section>
               )}
 
               <section className="proposal-content-block">
                 <h3>Proposed content</h3>
-                <div>{selected.proposedContent}</div>
+                <div>{proposedText?.content}</div>
               </section>
 
               <details className="proposal-metadata">
                 <summary>Proposed metadata</summary>
-                <pre>{JSON.stringify(selected.proposedMetadata, null, 2)}</pre>
+                <pre>{proposedText?.metadata}</pre>
               </details>
 
               <section className="proposal-evidence" aria-labelledby="proposal-evidence-title">
@@ -414,7 +433,8 @@ export function MemoryProposalsView({
                     )}
                     <ul>
                       {selected.evidenceObservationIds.map((observationId, index) => {
-                        const observation = observationsById.get(observationId);
+                        const evidence = observationsById.get(observationId);
+                        const observation = evidence?.observation;
                         const observationState = observation
                           ? observation.kind
                           : observationsLoading
@@ -431,7 +451,7 @@ export function MemoryProposalsView({
                               </header>
                               {observation ? (
                                 <>
-                                  <div>{observation.content}</div>
+                                  <div>{evidence?.text}</div>
                                   <small>
                                     SHA-256 {observation.payloadSha256} · {observationId}
                                   </small>

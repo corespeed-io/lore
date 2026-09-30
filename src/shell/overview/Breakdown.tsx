@@ -33,7 +33,7 @@ export function Breakdown({ byCounts, notice, lowerBound = false, onType }: Brea
           type="button"
           className="type-bar-row bar-btn"
           onClick={() => onType(key)}
-          title={`Browse ${key} memories`}
+          title={`Browse ${typeLabel(key)} memories`}
         >
           <span className="dot" style={{ background: typeColor(key) }} />
           <span className="type-bar-label">{typeLabel(key)}</span>

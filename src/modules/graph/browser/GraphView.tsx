@@ -14,6 +14,7 @@ import type { GraphData, GraphNode } from "@/modules/graph/browser/types";
 import { areGraphLinksPartial, isGraphCapped } from "@/modules/graph/browser/types";
 import { WorkerCanvasGraph } from "@/modules/graph/browser/WorkerCanvasGraph";
 import { useLoreSearch } from "@/modules/memories/browser/data";
+import { metadataLabel } from "@/modules/memories/browser/presentation";
 import { displayCount } from "@/shared/browser/read-state";
 
 interface GraphViewProps {
@@ -248,11 +249,15 @@ export function GraphView({
               type="button"
               className="glegend-item"
               aria-pressed={pressed}
-              title={pressed ? `Show all (clear ${type} filter)` : `Filter to ${type}`}
+              title={
+                pressed
+                  ? `Show all (clear ${metadataLabel(type)} filter)`
+                  : `Filter to ${metadataLabel(type)}`
+              }
               onClick={() => setLegendFilter(pressed ? null : { kind: "type", value: type })}
             >
               <span className="dot" style={{ background: color }} />
-              {type}
+              {metadataLabel(type)}
             </button>
           );
         })}
@@ -310,7 +315,7 @@ export function GraphView({
       {selectedNode && selectedSummary && (
         <aside key={selectedNode.id} className="graph-node-preview" aria-live="polite">
           <div className="graph-node-preview-head">
-            {selectedType && <span className="type-badge">{selectedType}</span>}
+            {selectedType && <span className="type-badge">{metadataLabel(selectedType)}</span>}
             <span className="graph-node-preview-count">
               {selectedNode.scope} ·{" "}
               {displayCount(selectedSummary.links.length, "ready", areGraphLinksPartial(data))}{" "}

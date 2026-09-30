@@ -2,15 +2,37 @@
 
 import { useCallback, useLayoutEffect, useRef } from "react";
 import useSWR from "swr";
+import {
+  hasVisibleText,
+  plainInline,
+  revealHidden,
+  textCache,
+} from "@/modules/memories/browser/presentation";
 import { loreKeys } from "@/shared/browser/cache-keys";
 import { getBrowserClient } from "@/shared/browser/sdk";
 import { useRevalidateOnResume } from "@/shared/browser/use-revalidate-on-resume";
 import { GRAPH_NODE_LIMIT, type GraphData } from "./types";
 
+/** Labels by source: every Graph read brings up to 5,000, mostly the same as the last. */
+const labels = textCache();
+
+function nodeLabel(source: string): string {
+  return labels(source, () => {
+    const words = plainInline(source).trim();
+    return hasVisibleText(words) ? words : revealHidden(source);
+  });
+}
+
 export async function readGraph(workspaceId: string, signal?: AbortSignal): Promise<GraphData> {
   const graph = await getBrowserClient().workspace(workspaceId).graph(GRAPH_NODE_LIMIT, signal);
   return {
-    nodes: [...graph.nodes],
+    // Labels come from Memory content; show their text, not its markup. The browser
+    // shows no preview, so a surface that starts to must reduce it the same way.
+    // A label whose words show nothing keeps its text as written rather than going blank.
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      label: nodeLabel(node.label),
+    })),
     links: [...graph.links],
     linksTruncated: graph.linksTruncated,
   };
