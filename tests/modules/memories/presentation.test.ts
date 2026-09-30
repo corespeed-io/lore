@@ -197,7 +197,7 @@ test("plain text costs linear time on runs of brackets and markers", () => {
 test("a search snippet drops quote and bullet markers and inline markup, and reads code as its text", () => {
   expect(plain("# H\n**b** [[a/b|c]] `x`")).toBe("H b c x");
   expect(plain("> quoted\n- item\n2) second\n```ts\nconst x = 1;\n```\nend")).toBe(
-    "quoted item 2) second const x = 1; end",
+    "quoted item 2. second const x = 1; end",
   );
 });
 
@@ -442,7 +442,7 @@ test("titles and snippets read text shaped like HTML as written, and decode an e
   expect(plain("Line <br> and `<pre>` and ~~<s>~~")).toBe("Line <br> and <pre> and ~~<s>~~");
 });
 
-test("text shows nothing when it holds only spaces, zero-width characters, or characters Unicode draws as nothing, and a title of it reads as untitled or as written", () => {
+test("text shows nothing when it holds only spaces, zero-width characters, or characters that draw as nothing, and a title of it reads as untitled or as written", () => {
   // Variation selectors, the combining grapheme joiner, Hangul fillers, a Mongolian
   // variation selector, the blank braille pattern, and the object replacement character
   // draw as nothing, as spaces and zero-width characters do.
@@ -473,11 +473,15 @@ test("text shows nothing when it holds only spaces, zero-width characters, or ch
     "\u2764\uFE0F",
     "a\u3164",
     "\u2801",
+    "a\uFFFC",
+    "\uFFFD",
   ]) {
     expect(hasVisibleText(text), JSON.stringify(text)).toBe(true);
   }
   expect(memoryTitle(memory({ content: "\u3164\nBody" }))).toBe("Untitled memory");
   expect(memoryTitle(memory({ content: "**\u2800**\nBody" }))).toBe("Untitled memory");
+  expect(memoryTitle(memory({ content: "\uFFFC\nBody" }))).toBe("Untitled memory");
+  expect(memoryTitle(memory({ content: "&#xFFFC;\nBody" }))).toBe("Untitled memory");
   const configured = memory({ metadata: { title: "**\u3164**" } });
   expect(memoryTitle(configured)).toBe("**\u3164**");
   expect(memoryDetailTitle(configured)).toBe("**\u3164**");
@@ -546,8 +550,12 @@ test("Memory detail reads a configured title as long as metadata allows in linea
 
 test("a snippet shows an ordered item's number as the body does", () => {
   expect(plain("1000. to vendor A\n9000. to vendor B")).toBe("1000. to vendor A 9000. to vendor B");
-  // A number reads as the body shows it, and a `)` stays the delimiter written.
-  expect(plain("007) x\n8) y")).toBe("7) x 8) y");
+  // A number reads as the body draws it: without leading zeros, and with a `.`.
+  expect(plain("007) x\n8) y")).toBe("7. x 8. y");
+  expect(plain("0. a\n0. b")).toBe("0. a 0. b");
+  // Nested and quoted items read with their numbers too.
+  expect(plain("- a\n  1. x\n  9. y\n- b")).toBe("a 1. x 9. y b");
+  expect(plain("> 5) q\n> 2) r")).toBe("5. q 2. r");
   expect(plain("- a\n- b")).toBe("a b");
 });
 

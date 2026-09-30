@@ -53,11 +53,11 @@ export function revealHidden(text: string): string {
 }
 
 /**
- * Whether text shows anything: a character other than a space, a zero-width format
- * character, a character Unicode says to draw as nothing (variation selectors, the
- * combining grapheme joiner, Hangul fillers), the blank braille pattern, or the object
- * replacement character, which browsers draw as nothing, once hidden controls have
- * grown into their markers.
+ * Whether text shows anything once hidden controls have grown into their markers: a
+ * character other than a space, a zero-width format character, a character Unicode says
+ * to draw as nothing (variation selectors, the combining grapheme joiner, Hangul
+ * fillers), the blank braille pattern, or the object replacement character, which
+ * browsers draw as nothing.
  */
 export function hasVisibleText(text: string): boolean {
   return /[^\s\p{Cf}\p{Default_Ignorable_Code_Point}\u2800\uFFFC]/u.test(revealHidden(text));
@@ -133,9 +133,9 @@ memoryMarkdown.normalizeLinkText = (url) => url;
 // its percent escapes, so a mailto link opens only when written wholly in ASCII with
 // no percent escape. The check reads the URL trimmed, as markdown-it's own parse
 // does, so leading Unicode whitespace cannot move the host out of its reach. markdown-it
-// also rewrites some hosts (splitting a label past 63 characters can move a port into
-// the path, and a host past 255 characters is dropped), so a link whose scheme and
-// authority do not come through unchanged stays text too.
+// also rewrites some hosts (it keeps 63 characters of a longer label and moves the rest
+// after the port, which changes the port, and drops a host past 255 characters), so a
+// link whose scheme and authority do not come through unchanged stays text too.
 const normalizeLink = memoryMarkdown.normalizeLink.bind(memoryMarkdown);
 // No `i` flag: under `iu`, \P{ASCII} matches `s` and `k` too, since ſ and K fold to them.
 const SPOOFABLE_TARGET =
@@ -149,9 +149,10 @@ memoryMarkdown.normalizeLink = (url) => {
 };
 
 /**
- * A URL's scheme and authority with markdown-it's percent escapes decoded: it escapes
- * characters such as `|` and `"` in a mail address, which still name the same address.
- * The written URL holds no escape of its own there, which the checks above refuse.
+ * A URL's scheme and authority with every percent escape decoded, since markdown-it
+ * escapes characters such as `|` and `"` in a mail address, which still name the same
+ * address. A mailto link cannot hold an escape of its own (`SPOOFABLE_TARGET` refuses
+ * it), and an http(s) authority that does fails this comparison or `allowedHref`.
  */
 function decodedAuthority(url: string): string | undefined {
   const authority = AUTHORITY.exec(url)?.[0];
@@ -254,6 +255,10 @@ function insideAnchor(env: MemoryEnv): boolean {
   return env.anchors?.includes(true) ?? false;
 }
 
+// gstack-shortcut(dec-65f9052a-13d0-4ce7-9d2e-43de81a68ff8): a label of only characters
+// that join the grapheme before it (a combining mark, a skin-tone modifier, a ZWJ
+// continuation) still counts as words and draws a link no one can see or click,
+// upgrade when every labeled external link shows its real host after the label.
 /**
  * Whether the link opened at `index` shows any words before it closes. A wikilink
  * never sits in a link label: markdown-it refuses a label that holds one.
@@ -459,9 +464,9 @@ export function plain(markdown: string): string {
     for (const token of tokens) {
       // A fence's code reads on its own, without the info string shown above it.
       if (token.type === "fence") token.info = "";
-      // An ordered item reads with the number the body shows for it.
+      // An ordered item reads with the number the body shows for it, drawn with a `.`.
       if (token.type === "list_item_open" && token.info) {
-        token.attrSet("data-number", `${Number(token.info)}${token.markup}`);
+        token.attrSet("data-number", `${Number(token.info)}.`);
       }
     }
   }
