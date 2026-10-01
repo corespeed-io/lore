@@ -4011,14 +4011,14 @@ a.ext {
    and while dimmed, every hover move retriggers it on the ~100 elements whose
    .lit flips, which is the per-frame full-layer cost this file's whole design
    exists to avoid. An instant dim costs ONE repaint; the fade cost eight per
-   engage and then kept paying on every move. ("一dim就变得很卡" — measured by
-   the person using it.) */
+   engage and then kept paying on every move. (Translated: "it gets really
+   laggy as soon as it dims" — measured by the person using it.) */
 /* Dimmed elements are OPAQUE pale colours, not opacity — with 2,400 elements
    at alpha 0.12, every frame of a drag paid per-element blending on top of the
-   full-layer raster ("dim拖拽的时候这么卡"). An opaque #e9edf0 over the #fafafa
-   canvas reads the same as 0.12-alpha colour, and opaque paint is the cheap
-   path. The type colour disappears from dimmed nodes — at 0.12 alpha it was
-   indistinguishable anyway. */
+   full-layer raster (translated: "dragging while dimmed is this laggy"). An
+   opaque #e9edf0 over the #fafafa canvas reads the same as 0.12-alpha colour,
+   and opaque paint is the cheap path. The type colour disappears from dimmed
+   nodes — at 0.12 alpha it was indistinguishable anyway. */
 /* The dim rules deliberately DON'T MATCH lit/hovered elements — those keep
    their attribute fill and the rules further up, with no override juggling. */
 .lore-graph.graph-dimmed .gnodes circle:not(.lit):not(.hovered) {
