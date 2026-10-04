@@ -341,10 +341,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         // delete waits for the claim, so a replay deletes nothing and a reclaimed
         // key's events carry the ledger row's request id.
         const claimed = beginMutation<{ deleted: boolean }>(transaction, idempotency);
+        // Locked for no update: the read compares and fetches nothing else.
         const locking = primitives.lockMemoryInTransaction(
           transaction,
           memoryStorageScope(actor),
           id,
+          {},
         );
         locking.catch(() => undefined);
         const claim = await claimed;
