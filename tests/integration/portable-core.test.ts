@@ -791,10 +791,21 @@ test("readiness accepts a newer schema only inside the range its migrations decl
   }
 
   // Capabilities served by an older instance keep to that instance's contract, even
-  // when a newer schema publishes fields and features it does not know.
+  // when a newer schema publishes fields and features it does not know, nested ones
+  // included.
+  const generation = {
+    provider: "fixture",
+    model: "contract-v1",
+    dimensions: 1024,
+    revision: "fixture-v1",
+  };
   await publish(
     next,
-    `jsonb_set(base, '{features,futureFeature}', 'true') || '{"compatibleFrom": ${LORE_SCHEMA_REVISION}, "futureField": 1}'`,
+    `jsonb_set(base, '{features,futureFeature}', 'true') || jsonb_build_object(
+       'compatibleFrom', ${LORE_SCHEMA_REVISION},
+       'futureField', 1,
+       'activeEmbeddingGeneration', '${JSON.stringify({ ...generation, futureNested: true })}'::jsonb
+     )`,
   );
   expect(await schemaStatus()).toBe("ok");
   const capabilities = await operations.capabilities();
@@ -811,6 +822,7 @@ test("readiness accepts a newer schema only inside the range its migrations decl
   );
   expect(capabilities).toMatchObject({ schemaRevision: next, features: DEPLOYMENT_FEATURES });
   expect(capabilities.features).toEqual(DEPLOYMENT_FEATURES);
+  expect(capabilities.activeEmbeddingGeneration).toEqual(generation);
   await testContext.close();
 });
 

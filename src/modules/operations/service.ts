@@ -157,7 +157,8 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           // The database reports deployment state; features and limits come from
           // the constants that enforce them (tests/server/schema-drift.test.ts keeps
           // the frozen SQL copy equal). Only the fields this application publishes
-          // are copied, because a newer compatible schema may add its own.
+          // are copied, at every depth, because a newer compatible schema may add its own.
+          const generation = capabilities.activeEmbeddingGeneration;
           return {
             apiVersion: capabilities.apiVersion,
             schemaRevision: capabilities.schemaRevision,
@@ -165,7 +166,14 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
             memoryChunking: MEMORY_CHUNKING_CAPABILITY,
             features: DEPLOYMENT_FEATURES,
             limits: DEPLOYMENT_LIMITS,
-            activeEmbeddingGeneration: capabilities.activeEmbeddingGeneration,
+            activeEmbeddingGeneration: generation
+              ? {
+                  provider: generation.provider,
+                  model: generation.model,
+                  dimensions: generation.dimensions,
+                  revision: generation.revision,
+                }
+              : null,
           };
         }),
       );
