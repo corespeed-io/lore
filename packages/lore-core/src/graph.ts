@@ -801,26 +801,27 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
       };
       // The lock and the existing-Link read share one round trip; the read still
       // starts after the lock is granted (see lockLinkEndpointsStatement).
-      const attempt = await database.transaction(async (transaction) => {
-        const [locked, existing] = await transaction.batch([
-          lockLinkEndpointsStatement(storage.partitionId, input),
-          readExisting,
-        ]);
-        if (locked.rows.length !== 1) return null;
-        const current = existing.rows[0];
-        if (current) return replace(transaction, current);
-        // Bound only new Links, counting only Links from this owner's own Memories
-        // so no writer spends another's quota. Each count stops at its bound,
-        // however many Links an import left behind; the owner's total reads up to
-        // its whole bound, so its cost falls only on a writer who owns that many
-        // Links. The source lock makes the source and pair counts exact among
-        // connects; the target and owner counts may overshoot by concurrent writes
-        // from the same owner's other Memories. The counts and the insert they gate
-        // are one statement, sent together with COMMIT.
-        const [inserted] = await transaction.batch(
-          [
-            statement<Record<MemoryLinkBound, number> & Partial<MemoryLinkRow>>(
-              `WITH counts AS (
+      const attempt = () =>
+        database.transaction(async (transaction) => {
+          const [locked, existing] = await transaction.batch([
+            lockLinkEndpointsStatement(storage.partitionId, input),
+            readExisting,
+          ]);
+          if (locked.rows.length !== 1) return null;
+          const current = existing.rows[0];
+          if (current) return replace(transaction, current);
+          // Bound only new Links, counting only Links from this owner's own Memories
+          // so no writer spends another's quota. Each count stops at its bound,
+          // however many Links an import left behind; the owner's total reads up to
+          // its whole bound, so its cost falls only on a writer who owns that many
+          // Links. The source lock makes the source and pair counts exact among
+          // connects; the target and owner counts may overshoot by concurrent writes
+          // from the same owner's other Memories. The counts and the insert they gate
+          // are one statement, sent together with COMMIT.
+          const [inserted] = await transaction.batch(
+            [
+              statement<Record<MemoryLinkBound, number> & Partial<MemoryLinkRow>>(
+                `WITH counts AS (
                  SELECT
                    (SELECT count(*) FROM (
                       SELECT 1 FROM memory_links
@@ -866,45 +867,42 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
                SELECT counts.*, inserted.*
                FROM counts
                LEFT JOIN inserted ON true`,
-              [
-                storage.partitionId,
-                input.sourceMemoryId,
-                input.targetMemoryId,
-                MEMORY_LINK_LIMITS.maximumKindsPerPair,
-                MEMORY_LINK_LIMITS.maximumLinksPerSource,
-                MEMORY_LINK_LIMITS.maximumLinksPerTarget,
-                MEMORY_LINK_LIMITS.maximumLinksPerOwner,
-                storage.ownerId,
-                crypto.randomUUID(),
-                kind,
-                weight,
-                JSON.stringify(metadata),
-              ],
-            ),
-          ],
-          { commit: true },
-        );
-        const row = inserted.rows[0];
-        if (row?.id) return { link: toMemoryLink(row as MemoryLinkRow), created: true };
-        for (const bound of Object.keys(MEMORY_LINK_BOUND_MESSAGES) as MemoryLinkBound[]) {
-          if ((row?.[bound] ?? 0) >= MEMORY_LINK_LIMITS[bound]) {
-            throw new MemoryLinkCapacityError(bound, MEMORY_LINK_BOUND_MESSAGES[bound]);
+                [
+                  storage.partitionId,
+                  input.sourceMemoryId,
+                  input.targetMemoryId,
+                  MEMORY_LINK_LIMITS.maximumKindsPerPair,
+                  MEMORY_LINK_LIMITS.maximumLinksPerSource,
+                  MEMORY_LINK_LIMITS.maximumLinksPerTarget,
+                  MEMORY_LINK_LIMITS.maximumLinksPerOwner,
+                  storage.ownerId,
+                  crypto.randomUUID(),
+                  kind,
+                  weight,
+                  JSON.stringify(metadata),
+                ],
+              ),
+            ],
+            { commit: true },
+          );
+          const row = inserted.rows[0];
+          if (row?.id) return { link: toMemoryLink(row as MemoryLinkRow), created: true };
+          for (const bound of Object.keys(MEMORY_LINK_BOUND_MESSAGES) as MemoryLinkBound[]) {
+            if ((row?.[bound] ?? 0) >= MEMORY_LINK_LIMITS[bound]) {
+              throw new MemoryLinkCapacityError(bound, MEMORY_LINK_BOUND_MESSAGES[bound]);
+            }
           }
-        }
-        return "taken" as const;
-      });
-      if (attempt !== "taken") return attempt;
+          return "taken" as const;
+        });
+      const first = await attempt();
+      if (first !== "taken") return first;
       // The key is taken by a Link the first read could not see: its target was
       // invisible for that statement, or a writer that skips the source lock (a
-      // batch insert) added it since. Replace it if it is visible now.
-      return database.transaction(async (transaction) => {
-        const [locked, existing] = await transaction.batch([
-          lockLinkEndpointsStatement(storage.partitionId, input),
-          readExisting,
-        ]);
-        const taken = existing.rows[0];
-        return locked.rows.length === 1 && taken ? replace(transaction, taken) : null;
-      });
+      // batch insert) added it since. The first attempt has committed, so the next
+      // one reads under a fresh lock: it replaces that Link if it is visible now,
+      // and inserts again if a disconnect removed it in between.
+      const second = await attempt();
+      return second === "taken" ? null : second;
     },
 
     /**
