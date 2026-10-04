@@ -64,8 +64,10 @@ been removed. Lore now has a native implementation, split into two concepts
   their ids and vectors; a prepend still re-embeds everything after it. Scope and
   metadata changes never touch chunks. A job for the new version is queued only
   when some chunk lacks a vector in the serving generation; older-version jobs are
-  cancelled at claim. Memory Proposal acceptance passes `versionUnchanged`, because
-  its review trigger accepts an update receipt only at `base_memory_version + 1`.
+  cancelled at claim (`scripts/checks/smoke-memory-core.ts` commits an update while
+  an older version's provider call is in flight on PostgreSQL). Memory Proposal
+  acceptance passes `versionUnchanged`, because its review trigger accepts an
+  update receipt only at `base_memory_version + 1`.
   `packages/lore-core/tests/transaction-handle.test.ts` pins the seam and each
   engine operation's statements and network waits.
   **It is a package to enforce a boundary, not to ship an artifact.** It is
