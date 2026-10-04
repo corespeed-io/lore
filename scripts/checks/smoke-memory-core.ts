@@ -17,7 +17,10 @@ import type { GraphData } from "../../src/modules/graph/browser/types";
 import type { Memory } from "../../src/modules/memories/schemas";
 import { LORE_SCHEMA_REVISION } from "../../src/modules/operations/service";
 import { createApi } from "../../src/server/api/app";
-import { createPostgresDatabase } from "../../src/server/database/postgres";
+import {
+  createPostgresDatabase,
+  createRequestPostgresDatabase,
+} from "../../src/server/database/postgres";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const smokeDatabaseUrl = process.env.LORE_SMOKE_DATABASE_URL;
@@ -983,9 +986,45 @@ try {
       [chunked.id],
     );
     assert.equal(eventsAfter.rows[0]?.count, eventsBefore.rows[0]?.count);
+
+    // A provider-backed search on PostgreSQL: the query embeds before the first pass,
+    // and the admission prefix travels with the dense and lexical candidates.
+    const searchQuery = scoped.content.split(/\s+/).slice(0, 3).join(" ");
+    const providerSearch = await expectJson<Array<{ memory: { id: string } }>>(
+      await embeddingApp.request(
+        jsonRequest(`/api/v1/memories?q=${encodeURIComponent(searchQuery)}`, {
+          headers: aliceHeaders,
+        }),
+      ),
+      200,
+      "search with an embedding provider",
+    );
+    assert.ok(
+      providerSearch.some((result) => result.memory.id === chunked.id),
+      "a provider-backed search finds the embedded Memory",
+    );
   } finally {
     await inspector.end();
     await maintenanceDatabase.close();
+  }
+
+  // A Workers request pool never evicts its idle client, so a provider call longer
+  // than pg's default 10-second idle timeout reuses the request's one connection.
+  const requestPool = createRequestPostgresDatabase(
+    { connectionString: runtimeConnection(adminUrl, runtimeRole, runtimePassword) },
+    { pipeline: true },
+  );
+  try {
+    const backend = () =>
+      requestPool.transaction(
+        async (transaction) =>
+          (await transaction.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]?.pid,
+      );
+    const first = await backend();
+    await new Promise((resolve) => setTimeout(resolve, 10_500));
+    assert.equal(await backend(), first, "the request pool kept its one connection while idle");
+  } finally {
+    await requestPool.close();
   }
 
   assert.equal(alice.userId !== bob.userId, true, "smoke Actors must resolve to distinct Users");

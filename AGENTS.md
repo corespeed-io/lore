@@ -1727,7 +1727,12 @@ Memory-only context packets bind a pending Actor (`c.var.requestActor()`); other
 routes call `c.var.resolveActor()`, one round trip of its own. `GET /workspaces`
 registers a pending User (`PendingUser`, `lore.register_identity`) as the prefix of
 its list. `tests/server/round-trip-budget.test.ts` pins every hot route's statements
-and network waits, for humans and Agents, through the real `pg` adapter. For unsafe methods it
+and network waits, and each search configuration's (dense, planner, feedback,
+context-group expansion, Memory-only context packets), for humans and Agents,
+through the real `pg` adapter. `tests/server/function-grants.test.ts` holds the
+grant matrix: no `lore` function is executable by `PUBLIC`, a NOINHERIT request login
+holds nothing before its role switch, and request and maintenance functions stay
+with `lore_app` and `lore_maintenance` respectively. For unsafe methods it
 returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of the
 URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
 passes even behind a Host-rewriting proxy, and clients that send neither header

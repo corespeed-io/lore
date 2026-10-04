@@ -1,6 +1,6 @@
 # Spec: lore-core database wave (v3)
 
-Status: **draft for tech review**. No code has changed; branch `perf/lore-core-db-wave` holds this document only.
+Status: **implemented as PRs 0, 1, and 2** in the stack #135 → #138 → #139 → #141 → #140 → #137 → #136 → #142 (2026-10-04). Each PR was reviewed and approved on its own, and all of them merge into `main` through #135. The design text below is kept as reviewed; where the build differs, an *As built* note says how (§4.3a, §5, §6, §10). **Not done:** the Hyperdrive prototype and verification (§4.4, §9.2), so Workers keep pipelining off; and PR 3, which waits on those measurements.
 Author: Claude (Agent Ensemble session), for Yunpeng. Dates: 2026-10-03 to 2026-10-04. Base: `main` at `ed9c5c8`.
 v3 replaces v2 after an independent Codex review, summarized in §14.
 
@@ -36,7 +36,7 @@ v3 therefore measures before it moves engine SQL:
    - No hook, no login grants, and no new schema are needed.
    - The PR includes the grant guard and the canonical definitions for the core SQL it installs.
 
-Out of the wave, as separate PRs: the embedding-maintenance API consolidation (§11) and dependency upgrades other than `pg` and `pg-cloudflare`.
+Out of the wave, as separate PRs: the embedding-maintenance API consolidation (§11) and dependency upgrades other than `pg` and `pg-cloudflare`. *As built:* both stayed separate PRs (#137, #136), stacked on the wave so that they merge with it in one step.
 
 ### Decision log
 
@@ -50,6 +50,7 @@ Out of the wave, as separate PRs: the embedding-maintenance API consolidation (�
 | 2026-10-04 | Admission runs as the first pipelined statements of the business transaction (role switch, then admission that sets the RLS settings from its own result, then a membership check read after the batch), with the existing `register_identity` and `authenticate_agent_credential`. Reads are 1 wait in PR 1. This supersedes the 2026-10-03 direct grants to request logins and the `lore.enter` hook: neither is needed. | Yunpeng |
 | 2026-10-04 | Search: human callers, whose credential the app has already verified, run admission concurrently with the provider calls. Agent callers are admitted before any provider call. Lexical-only search batches like a read. | Yunpeng |
 | 2026-10-04 | `pg` → 8.23.1 and `pg-cloudflare` → 1.4.1 go into PR 1. Other dependency upgrades are a separate PR. | Yunpeng |
+| 2026-10-04 | *As built* (amends the two admission and search rows above; details in §4.3a): <br>• Humans are admitted with `lore.resolve_identity`, never `register_identity`. Membership needs a registered User, and a read-only prefix fits the read-only snapshots. <br>• A human's search sends its prefix with the first pass after the provider calls. That is still 1 wait after the embedding call. <br>• Agents are also admitted first before a read-only or repeatable-read snapshot. <br>• Workers keep pipelining off (`LORE_POSTGRES_PIPELINE=0`) until §9.2 is measured. | Claude, in review |
 
 ## 1. Background and measurements
 
@@ -187,6 +188,19 @@ export interface PostgresTransaction {
 - **`afterCommit` replaces job-id threading.** Core's write primitives stop returning `jobId`. Core records the jobs a transaction queued and, after COMMIT, sends at most 1,000 queue messages; the sweep picks up the rest. Hosts no longer see embedding job ids.
 - **Core drops `pg`.** Core's own tests implement the seam over PGlite (`./testing`), and `pg` leaves `packages/lore-core/package.json`. The boundary check gains `pg` as a forbidden import for `packages/lore-core`.
 
+*As built* (`packages/lore-core/src/db.ts`):
+
+- **No `PostgresDatabase.batch`.** `PostgresDatabase` keeps only `transaction(use, options)`. A one-batch operation is `transaction(tx => tx.batch(statements, { commit: true }))`, and `commit` puts COMMIT behind the statements.
+- **What `transactionHandle(send, { opening })` returns.** Its handle also carries:
+  - `started()`;
+  - `commit()`;
+  - `rollback()`, which returns false when ROLLBACK itself failed, so the adapter destroys the client;
+  - `isCommitted()`, which lets an adapter run the effects of a transaction that committed inside a batch even when the callback threw (#142);
+  - `committed()`.
+- **Two more helpers.** `managedTransactionDatabase` wraps PGlite-style drivers, and `transactionThrough` is for wrappers that observe statements.
+- **Write primitives** take `{ commit, finish }`.
+- **Update** is split into `lockMemoryInTransaction` and `updateLockedMemoryInTransaction`, and keyed forget uses `forgetLockedMemoryInTransaction` (§4.3a).
+
 ### 4.2 oss adapters (`src/server/database/postgres.ts`)
 
 | Runtime | Factory | Behavior |
@@ -195,6 +209,8 @@ export interface PostgresTransaction {
 | Workers request, queue batch, cron | `createRequestPool(config, { role })` | A `pg.Pool` with `max: 2`, `pipeline: true`, and `idleTimeoutMillis: 0`, created inside the request. |
 
 The request pool's default 10-second idle eviction would open a second connection after a long planner or embedding call, so the request pool disables it. It also installs an `error` listener and closes in `finally`. Using it after `close()` throws.
+
+*As built:* the factories keep their names, `createPostgresDatabase` and `createRequestPostgresDatabase`. `LORE_POSTGRES_PIPELINE` (`1`/`0`) chooses pipelining. It defaults on for Bun and self-host. It defaults off for the Workers request, queue, and cron pools, which then send one statement at a time, until §9.2 verifies Hyperdrive. The real-PostgreSQL smoke proves that an idle pause past 10 seconds keeps the request pool's one connection.
 
 - **Closing.** `fetchCloudflareApi` closes the request pool in `waitUntil` after the response resolves. The queue and cron handlers close theirs in `finally`.
 - **Hyperdrive.** Closing a Worker's client doesn't close Hyperdrive's pooled origin connection. Hyperdrive pools by transaction, so consecutive transactions may run on different backends. Tests therefore count client connections, never backend PIDs.
@@ -235,6 +251,8 @@ The request pool's default 10-second idle eviction would open a second connectio
   - the insert, which depends on the counts.
 
   Pipelining keeps per-statement snapshots, so the existing-Link read still starts after the lock is granted. Merging them into one statement would break that (review finding 7).
+
+  *As built:* the lock and the existing-Link read stay separate statements in one batch. The four counts and the insert became one data-modifying CTE, sent with COMMIT. The insert depends on the counts, and inside one statement it needs no TypeScript decision; the source lock is already held. A connect that finds the key taken, by a Link its first read could not see, now runs whole once more under a fresh lock (#142). So a disconnect that slips in between no longer turns a valid PUT into a 404.
 - **Graph keeps its version-checked full-content reread.** It runs only when a node needs it.
 
 ### 4.3a As built (PR 1b)
@@ -246,6 +264,9 @@ Measured by `tests/server/round-trip-budget.test.ts` through the real `pg` adapt
 - **A human's search sends its prefix with the first pass, after the provider calls, not concurrently with them.** That is still 1 wait after the embedding call, and one round trip fewer overall. An Agent's search that pays an embedding or planning provider is admitted first, as specified.
 - **A refused write costs a second wait for its ROLLBACK.** Its claim travelled with the admission. A refused read stays 1 wait.
 - **Writes split into two phases.** The core update primitive is a locking phase (`lockMemoryInTransaction`) and an apply phase (`updateLockedMemoryInTransaction`), so OSS can check the claim between them. The write primitives take a `finish` hook that appends the ledger completion to their final batch. The completion's body is built in SQL from the row just written (`writtenMemoryReplayBody`).
+- **A keyed forget locks first.** It locks with its claim and deletes in the second batch (`forgetLockedMemoryInTransaction`). A replay therefore deletes nothing, and a reclaimed key's events carry the ledger row's request id. An unkeyed forget sends its delete, version read, and COMMIT in one batch.
+- **One admission per request.** Of a request's concurrent transactions, the first to run sends the admission. The others wait for its outcome and bind it before sending anything (found in review).
+- **Memory-only context packets** take a pending Actor, as search does. A packet with a repository admits first, because Code reads need the Actor's ids.
 
 ### 4.4 Write-path prototype
 
@@ -257,6 +278,8 @@ PR 1 ships a prototype harness, not production code. It applies a scratch migrat
 PR 3 adopts the functions only if the measured difference justifies moving write control flow into plpgsql.
 
 The harness also checks that Hyperdrive handles pipelined extended-protocol queries correctly, including errors and aborts. If it doesn't, the spec is amended: the prefix then costs its own wait, and SQL functions become the way to reach 1 wait.
+
+*As built:* **not done.** It needs a Cloudflare account with a Hyperdrive binding and a staging database. Until then Workers run with `LORE_POSTGRES_PIPELINE=0`, and PR 3 stays undecided.
 
 ## 5. Statement and wait budgets
 
@@ -290,6 +313,29 @@ Waits are network round trips. Statements are shown where they differ. W = Worke
   - Replay is the same two batches, and the second is only `COMMIT`.
 - **What the tests check.** Budget tests assert waits and statements per route and per configuration (planner, expansion, feedback) for human and Agent callers, and both baseline and worst case. Latency is measured separately (§4.4).
 
+*As built,* measured through the real `pg` adapter with pipelining on (`tests/server/round-trip-budget.test.ts`):
+
+| Request | Human: statements / waits | Agent: statements / waits |
+| --- | --- | --- |
+| GET actor, GET workspaces | 5 / 1 | — |
+| GET memory, list | 6 / 1 | 5 / 1 |
+| GET links | 7 / 1 | — |
+| GET graph | 7 / 1 | 9 / 2 (admitted before the snapshot) |
+| Search, lexical | 6 / 1 | 5 / 1 |
+| Search, dense | 6 / 1 after the embedding call | 8 / 2 |
+| Search, planner + dense | 8 / 1 | 10 / 2 |
+| Search, one feedback round | 11 / 2 | 10 / 2 |
+| Search, context-group expansion | 7 / 2 | 6 / 2 |
+| Context retrieve, Memory-only | as search | — |
+| POST memory, keyed / unkeyed | 11 / 2, 8 / 2 | 10 / 2 |
+| PATCH, keyed | 14 / 2 | — |
+| DELETE memory, keyed / unkeyed | 11 / 2, 8 / 1 | 10 / 2 |
+| PUT link | 8 / 2 | — |
+| DELETE link | 7 / 1 | — |
+| A refused read / write | 1 / 2 waits (the write's ROLLBACK) | same |
+
+On Workers, with pipelining off until §9.2, every statement is a wait. For example, a Memory read costs 6 statements, where it cost 11–12 before.
+
 ## 6. PR 2 — write-path semantics and safe schema changes
 
 ### 6.1 Remember
@@ -302,6 +348,8 @@ Waits are network round trips. Statements are shown where they differ. W = Worke
 1. A `SELECT … FOR UPDATE` (RLS) locks the row. A row the caller can't write reads as absent before the version check, so the answer is 404 with no version leak. A stale `If-Match` still gets 409.
 2. The `UPDATE` runs only when `content`, `scope`, or `metadata` actually differ (`IS DISTINCT FROM`). When none differs, the locked row comes back with the same version, `updated_at`, and ETag, with no event and no job. Idempotent replay keeps today's semantics.
 3. **Empty PATCH.** A PATCH with no fields keeps today's bypass (`src/modules/memories/service.ts:205`) and returns the current row. It is covered by a test.
+
+   *As built:* Memory Proposal acceptance passes `versionUnchanged`, so an accepted Proposal that changes nothing still records the next version. The reason is that `lore.protect_memory_proposal_review` accepts an update receipt only at base version + 1. Chunks and jobs still follow the rules below.
 4. **Content changes.** The new chunks (chunking v2, computed in TypeScript) are compared with the stored ones by ordinal. Only differing ordinals and the removed tail are deleted and inserted. Unchanged ordinals keep their ids and vectors.
 5. **Scope-only and metadata-only changes** don't touch chunks.
 6. **Jobs.** A job is queued only when some chunk lacks a vector in the serving generation. Jobs stay fenced by version and scope, so a stale job is still cancelled at claim time.
@@ -315,7 +363,7 @@ Chunks are matched by ordinal, not content: moving an ordinal would need `UPDATE
 
 ### 6.4 Forget, Links, Agent credentials
 
-- **Forget** runs `DELETE … [AND version = $expected] RETURNING`. When it deletes nothing, one locking read decides between 404 and 409.
+- **Forget** runs `DELETE … [AND version = $expected] RETURNING`. When it deletes nothing, one locking read decides between 404 and 409. *As built:* the unkeyed path sends the locking version read in the same batch as the delete, so it costs no extra wait. The keyed path locks with its claim and deletes in the second batch (§4.3a).
 - **Forget's events.** The `memories` BEFORE DELETE trigger also writes `memory_link.deleted` for each outbound Link, using the owner and scope from `OLD`. 0009's JSON-path replay scrub is kept verbatim.
 - **Agent `last_used_at`** is updated only when it is NULL or more than 60 s old, with the age condition in the `UPDATE` predicate. A `CASE` would still lock and write the row. Authentication still returns the Actor when no update happens, and revocation is checked on every request.
 
@@ -438,12 +486,21 @@ The maintenance runner, lease rule, and generation admin API are consolidated in
 
 Old and new instances are exercised against each migration in the chain, including a chain that stopped part-way. The test plan covers this (§10).
 
+*As built:* the whole wave merges in one step, through #135. For a rolling multi-instance deployment:
+
+1. Deploy commit `e7fb471` (PR 0, readiness only) everywhere.
+2. Run `bun run db:migrate` from the merged release, and deploy it.
+
+Otherwise, migrate in a maintenance window. Workers keep `LORE_POSTGRES_PIPELINE=0` until §9.2 passes.
+
 ### 9.2 Hyperdrive verification (in PR 1, before PR 3 is decided)
 
 - Pipelined extended-protocol queries are correct through Hyperdrive, including error and abort behavior.
 - One Worker client connection per request.
 - The admission prefix (`set_config('role', …, true)` and settings computed from the admission function) behaves correctly under Hyperdrive's transaction pooling.
 - Write latency for pipelined writes and for SQL write functions, measured on the same routes.
+
+*As built:* **not done**; see §4.4.
 
 ### 9.3 HaaS
 
@@ -515,6 +572,40 @@ Also on real PostgreSQL: both vector widths, a provider-backed search configurat
 
 **Retrieval benchmark** (only if PR 3 moves search SQL; not planned). Metrics must be identical and latency within noise.
 
+*As built — status of this plan:*
+
+- **Done.** Each item is listed with the test that covers it:
+  - core seam, boundary, and budgets: `packages/lore-core/tests/transaction-handle.test.ts`;
+  - update semantics: `update-semantics.test.ts`;
+  - forget 404 versus 409;
+  - partial and empty claims, and the claim fenced by version (also in the real-PostgreSQL smoke race);
+  - notifications: at most 1,000, none on rollback, none for a no-op update, and effects after a committed throw.
+- **Done in OSS:**
+  - API budgets per route and per search configuration, for humans and Agents;
+  - the admission prefix: members, non-members, unknown and ungranted tokens, refused writes, and concurrent transactions of one request;
+  - provider ordering: an Agent pays nothing before its admission;
+  - RLS suites and scope-change visibility at every level;
+  - forget events in both directions;
+  - the Agent throttle;
+  - migrations from empty and from revision 9 with data, 0010's lock set, and a stopped 0011 rerun;
+  - readiness across compatible revisions;
+  - adapters: role per transaction, close and use-after-close, the error listener, and ROLLBACK failure;
+  - the grant guard (`tests/server/function-grants.test.ts`): no `PUBLIC`, a NOINHERIT login holds nothing before its role switch, and the request and maintenance roles stay on their own side.
+- **Done on real PostgreSQL** (smoke):
+  - concurrent same-key Link PUTs;
+  - Proposals versus forget;
+  - an embedding completion racing chunk-reusing updates;
+  - a provider-backed search;
+  - a request pool kept across an idle pause past 10 seconds.
+- **Differs.** A human's search starts its prefix after the provider call, not concurrently with it (§4.3a). The test asserts that order.
+- **Not done:**
+  - old and new application processes on one real database;
+  - migration locks under live traffic;
+  - both vector widths on real PostgreSQL;
+  - everything that needs Hyperdrive (§9.2).
+
+  The upgrade from revision 9 and the compatible-readiness tests on PGlite cover the first two in part.
+
 ## 11. Separate PRs, outside this wave
 
 - **Embedding maintenance consolidation.**
@@ -522,11 +613,13 @@ Also on real PostgreSQL: both vector widths, a provider-backed search configurat
   - `EmbeddingProvider.requestTimeoutMs?`, which replaces the `provider === "ollama"` lease branches.
   - `createEmbeddingGenerationAdmin` (`findReport`, `activate`, `requeueDeadJobs`) for the `db:embedding:*` scripts.
 
-  The review advised keeping this out of the adapter move.
+  The review advised keeping this out of the adapter move. *As built:* #137, stacked on the wave so that it merges with it.
 - **Dependency upgrades other than `pg`/`pg-cloudflare`:**
   - patch and minor bumps: next, hono, wrangler 4.147 (regenerate `cloudflare-env.d.ts`, run the Cloudflare dry run), openai, @google/genai, MCP SDK, opennext;
   - major bumps, each evaluated alone: vitest 5, @types/node 26, es-module-lexer 3;
   - voyageai stays 0.1.0, per AGENTS.md.
+
+  *As built:* #136, stacked on the wave, with patch and minor bumps only.
 - **Composite FK** for vector→chunk integrity, if wanted.
 
 ## 12. Alternatives
@@ -557,13 +650,13 @@ Also on real PostgreSQL: both vector widths, a provider-backed search configurat
 
 | # | Finding | v3 |
 | --- | --- | --- |
-| 1 | One-call search runs provider work before Agent authentication | Agents are admitted before any provider call. Humans, verified by the app, overlap admission with the provider call (§4.3, §5) |
+| 1 | One-call search runs provider work before Agent authentication | Agents are admitted before any provider call. Humans, verified by the app, overlap admission with the provider call (§4.3, §5). *As built:* a human's prefix travels with the first pass after the provider call (§4.3a) |
 | 2 | Grant recipe incomplete; schema default privileges can't revoke `PUBLIC` | No login grants needed at all. Explicit `PUBLIC` revokes and a guard test (§7.2) |
 | 3 | Migrate-first makes old instances unready | PR 0 readiness range (§3) |
 | 4 | `pg` 8.23 already pipelines | Pipelining is PR 1; reads reach 1 wait; writes are measured against SQL functions (§4.3, §4.4) |
 | 5 | Search fusion and expansion are TypeScript; feedback needs visible ids | Stay in TypeScript; budgets reflect them (§5) |
 | 6 | Graph fallback needs version checks | Kept (§4.3) |
-| 7 | Combined lock + read breaks Link concurrency | Separate statements, pipelined (§4.3) |
+| 7 | Combined lock + read breaks Link concurrency | Separate statements, pipelined (§4.3). *As built:* the lock and the read stay separate; the counts and the insert are one CTE |
 | 8 | Hook order, single row, settings overwrite, search_path | Hook dropped. The prefix sets every setting from the admission function's single result. The search_path contract applies to canonical functions (§4.3, §7.3) |
 | 9 | Lock analysis must be in the spec; compare with a plain `chunk_id` index | Written out; plain index chosen, FK deferred (§6.5) |
 | 10 | Dimensions beyond vector casts | Rendered definitions (§7.3) |
@@ -586,6 +679,8 @@ Verified by the review and not re-litigated:
 - canonical SQL with migration copies being workable.
 
 ## 15. Questions for the reviewer
+
+*Resolved 2026-10-04:* PR 0 first; a plain `chunk_id` index, with the composite FK deferred; a no-op PATCH keeps its version and ETag; a fixed 60-second throttle on `last_used_at`. The questions are kept below as they were asked.
 
 1. **PR 0 first?**
    - It changes readiness so a migration can declare which older app revisions it stays compatible with. Old instances then stay ready through compatible migrations.
