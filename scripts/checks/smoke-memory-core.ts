@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createEmbeddingMaintenance, type EmbeddingProvider } from "@corespeed/lore-core";
 import type {
   Episode,
   HumanActor,
@@ -823,8 +824,174 @@ try {
   const conflictBody = (await conflictedReview.json()) as { code?: string };
   assert.equal(conflictBody.code, "proposal_review_conflict");
 
+  // An update replaces only the chunks it changed, so the rest keep their ids and
+  // vectors, and an embedding completion for a version an update replaced while the
+  // provider call was in flight writes nothing. The provider identity is the one
+  // the CI maintenance cycle serves, so that cycle still finds this generation.
+  const embeddedTexts: string[][] = [];
+  let providerGate: Promise<void> | undefined;
+  const smokeEmbeddings: EmbeddingProvider = {
+    provider: "ollama",
+    model: "qwen3-embedding:0.6b",
+    dimensions: 1024,
+    revision: "lore-embedding-v2",
+    async embed(texts) {
+      embeddedTexts.push(texts);
+      await providerGate;
+      return texts.map((_text, index) =>
+        Array.from({ length: 1024 }, (_value, slot) => (slot === index ? 1 : 0)),
+      );
+    },
+  };
+  const embeddingApp = createApi({
+    database: () => database,
+    memoryOptions: () => ({ embeddingProvider: smokeEmbeddings }),
+    codeRepositories: () => ({}),
+  });
+  const maintenanceDatabase = createPostgresDatabase(
+    {
+      connectionString: runtimeConnection(adminUrl, maintenanceRole, maintenancePassword),
+      max: 2,
+    },
+    { role: "lore_maintenance" },
+  );
+  const inspector = new Client({ connectionString: smokeDatabaseUrl });
+  await inspector.connect();
+  try {
+    const maintenance = createEmbeddingMaintenance(maintenanceDatabase, {
+      embeddingProviders: [smokeEmbeddings],
+    });
+    const paragraph = (text: string) => `${text} `.repeat(Math.ceil(900 / (text.length + 1)));
+    const body = (...texts: string[]) => texts.map(paragraph).join("\n\n");
+    const chunked = await expectJson<Memory>(
+      await embeddingApp.request(
+        jsonRequest("/api/v1/memories", {
+          method: "POST",
+          headers: aliceHeaders,
+          body: { content: body("Pier one log.", "Pier two log.", "Pier three log.") },
+        }),
+      ),
+      201,
+      "create the chunk-reuse Memory",
+    );
+    const patch = async (version: number, input: Record<string, unknown>) =>
+      expectJson<Memory>(
+        await embeddingApp.request(
+          jsonRequest(`/api/v1/memories/${chunked.id}`, {
+            method: "PATCH",
+            headers: { ...aliceHeaders, "if-match": `"memory-v${version}"` },
+            body: input,
+          }),
+        ),
+        200,
+        `update the chunk-reuse Memory from version ${version}`,
+      );
+    const jobFor = async (version: number) => {
+      const job = await inspector.query<{ id: string }>(
+        "SELECT id FROM memory_embedding_jobs WHERE memory_id = $1 AND memory_version = $2",
+        [chunked.id, version],
+      );
+      const id = job.rows[0]?.id;
+      assert.ok(id, `version ${version} must have queued an embedding job`);
+      return id;
+    };
+    const chunkState = async () =>
+      (
+        await inspector.query<{ id: string; ordinal: number; embedded: boolean }>(
+          `SELECT chunk.id, chunk.ordinal,
+                  EXISTS (SELECT 1 FROM memory_chunk_embeddings vector
+                          WHERE vector.chunk_id = chunk.id) AS embedded
+           FROM memory_chunks chunk WHERE chunk.memory_id = $1 ORDER BY chunk.ordinal`,
+          [chunked.id],
+        )
+      ).rows;
+
+    assert.equal((await maintenance.run({ jobId: await jobFor(1) })).status, "complete");
+    const original = await chunkState();
+    assert.deepEqual(
+      original.map((chunk) => chunk.embedded),
+      [true, true, true],
+    );
+
+    // Version 2 replaces only the middle chunk; its job claims that chunk alone and
+    // waits in the provider while version 3 replaces the last chunk.
+    await patch(1, { content: body("Pier one log.", "Pier two tide.", "Pier three log.") });
+    let releaseProvider: () => void = () => undefined;
+    providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    const staleRun = maintenance.run({ jobId: await jobFor(2) });
+    const providerDeadline = Date.now() + 10_000;
+    while (embeddedTexts.length < 2) {
+      if (Date.now() > providerDeadline)
+        throw new Error("The version 2 job never called the provider");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await patch(2, { content: body("Pier one log.", "Pier two tide.", "Pier three crane.") });
+    releaseProvider();
+    providerGate = undefined;
+    assert.notEqual(
+      (await staleRun).status,
+      "complete",
+      "a completion for a replaced version must be fenced",
+    );
+    const replaced = await chunkState();
+    assert.equal(replaced[0]?.id, original[0]?.id, "an unchanged chunk keeps its id");
+    assert.deepEqual(
+      replaced.map((chunk) => chunk.embedded),
+      [true, false, false],
+      "an unchanged chunk keeps its vector and a fenced completion writes none",
+    );
+
+    assert.equal((await maintenance.run({ jobId: await jobFor(3) })).status, "complete");
+    assert.deepEqual(
+      embeddedTexts.map((texts) => texts.length),
+      [3, 1, 2],
+      "each job embeds only the chunks that lack a vector",
+    );
+    assert.deepEqual(
+      (await chunkState()).map((chunk) => chunk.embedded),
+      [true, true, true],
+    );
+
+    // A scope change with every chunk embedded rewrites no chunk and queues no job.
+    const jobsBefore = await inspector.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM memory_embedding_jobs WHERE memory_id = $1",
+      [chunked.id],
+    );
+    const scoped = await patch(3, { scope: "private" });
+    assert.equal(scoped.version, 4);
+    assert.deepEqual(
+      (await chunkState()).map((chunk) => chunk.id),
+      replaced.map((chunk) => chunk.id),
+    );
+    const jobsAfter = await inspector.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM memory_embedding_jobs WHERE memory_id = $1",
+      [chunked.id],
+    );
+    assert.equal(jobsAfter.rows[0]?.count, jobsBefore.rows[0]?.count);
+
+    // Equal fields write nothing: same version and ETag, no event.
+    const eventsBefore = await inspector.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM memory_events WHERE resource_id = $1",
+      [chunked.id],
+    );
+    const unchanged = await patch(4, { scope: "private", content: scoped.content });
+    assert.deepEqual(unchanged, scoped);
+    const eventsAfter = await inspector.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM memory_events WHERE resource_id = $1",
+      [chunked.id],
+    );
+    assert.equal(eventsAfter.rows[0]?.count, eventsBefore.rows[0]?.count);
+  } finally {
+    await inspector.end();
+    await maintenanceDatabase.close();
+  }
+
   assert.equal(alice.userId !== bob.userId, true, "smoke Actors must resolve to distinct Users");
-  console.log("Memory Core smoke passed: schema, RLS, governance, retrieval, and degraded mode");
+  console.log(
+    "Memory Core smoke passed: schema, RLS, governance, retrieval, chunk reuse, and degraded mode",
+  );
 } finally {
   await database.close();
   for (const key of [

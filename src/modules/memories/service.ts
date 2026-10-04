@@ -9,6 +9,7 @@ import {
   type MemoryModuleOptions,
   type MemoryMutationPrimitivesOptions,
   type MemoryRow,
+  type MemoryUpdateBatchOptions,
   type MemoryWriteBatchOptions,
   memorySelectColumns,
   type PostgresBatchOptions,
@@ -20,7 +21,6 @@ import {
   type MemorySearchResult as StoredMemorySearchResult,
   type UpdateMemory,
   type MemoryMutationOptions as VersionOptions,
-  validatedEmbeddingDimensions,
   validateMemoryMetadata,
   validateMemoryScope,
 } from "@corespeed/lore-core";
@@ -108,7 +108,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       id: string,
       input: UpdateMemory,
       expectedVersion?: number,
-      batchOptions: MemoryWriteBatchOptions = {},
+      options: MemoryUpdateBatchOptions = {},
     ) {
       const result = await primitives.updateMemoryInTransaction(
         transaction,
@@ -116,7 +116,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         id,
         input,
         expectedVersion,
-        batchOptions,
+        options,
       );
       return result ? { ...result, memory: memoryFromStorage(result.memory) } : null;
     },
@@ -177,15 +177,6 @@ export function writtenMemoryReplayBody(workspaceId: string, memoryId: string): 
  * reads take one round trip, writes two (`docs/research/lore-core-db-wave-spec.md`).
  */
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
-  const dimensions = validatedEmbeddingDimensions(
-    options.embeddingDimensions ?? options.embeddingProvider?.dimensions ?? 1024,
-  );
-  if (options.embeddingProvider && options.embeddingProvider.dimensions !== dimensions) {
-    throw new Error(
-      "embeddingDimensions must match embeddingProvider.dimensions: " +
-        `the module is configured for ${dimensions} but the provider embeds at ${options.embeddingProvider.dimensions}`,
-    );
-  }
   const primitives = createCoreMutationPrimitives(options);
   const coreFor = (actor: RequestActor) =>
     createCoreMemoryModule(createMemoryStorage(database, actor), options);
@@ -272,6 +263,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           transaction,
           memoryStorageScope(actor),
           id,
+          input,
         );
         locking.catch(() => undefined);
         const claim = await claimed;
@@ -291,7 +283,6 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           transaction,
           memoryStorageInTransaction(transaction, bound),
           locked,
-          input,
           options.expectedVersion,
           {
             commit: true,
@@ -340,10 +331,12 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         // delete waits for the claim, so a replay deletes nothing and a reclaimed
         // key's events carry the ledger row's request id.
         const claimed = beginMutation<{ deleted: boolean }>(transaction, idempotency);
+        // Locked for no update: the read compares and fetches nothing else.
         const locking = primitives.lockMemoryInTransaction(
           transaction,
           memoryStorageScope(actor),
           id,
+          {},
         );
         locking.catch(() => undefined);
         const claim = await claimed;

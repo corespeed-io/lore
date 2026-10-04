@@ -209,6 +209,31 @@ describe("managedTransactionDatabase over PGlite", () => {
     }
   });
 
+  test("effects still run when the callback throws after a batch committed", async () => {
+    const postgres = new PGlite();
+    try {
+      await postgres.exec("CREATE TABLE notes (id integer PRIMARY KEY)");
+      const database = managedTransactionDatabase(postgres);
+      const effects: string[] = [];
+      const failure = new Error("failed after its commit");
+
+      await expect(
+        database.transaction(async (transaction) => {
+          transaction.afterCommit(() => effects.push("committed"));
+          await transaction.batch([statement("INSERT INTO notes VALUES (1)")], { commit: true });
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+
+      expect(effects).toEqual(["committed"]);
+      await expect(
+        postgres.query("SELECT count(*)::int AS count FROM notes"),
+      ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await postgres.close();
+    }
+  });
+
   test("a view through transactionThrough sees batched statements one by one", async () => {
     const postgres = new PGlite();
     try {
@@ -307,7 +332,7 @@ test("engine operations stay within their statement and network-wait budgets", a
     };
     const memories = createMemoryModule(storage, { embeddingDimensions: 8 });
     const graph = createMemoryGraphModule(storage);
-    let first = { id: "", version: 0 };
+    let first = { id: "", version: 0, content: "" };
     let second = { id: "", version: 0 };
 
     const budgets = {
@@ -321,6 +346,22 @@ test("engine operations stay within their statement and network-wait budgets", a
         const updated = await memories.update(
           first.id,
           { content: "Harbor observatory opens at midnight." },
+          { expectedVersion: first.version },
+        );
+        if (updated) first = updated;
+      }),
+      unchangedUpdate: await measured.measure(async () => {
+        const unchanged = await memories.update(
+          first.id,
+          { content: first.content, scope: "shared" },
+          { expectedVersion: first.version },
+        );
+        expect(unchanged?.version).toBe(first.version);
+      }),
+      scopeUpdate: await measured.measure(async () => {
+        const updated = await memories.update(
+          first.id,
+          { scope: "private" },
           { expectedVersion: first.version },
         );
         if (updated) first = updated;
@@ -348,7 +389,13 @@ test("engine operations stay within their statement and network-wait budgets", a
       retrieve: { statements: 3, waits: 1 },
       list: { statements: 3, waits: 1 },
       search: { statements: 3, waits: 1 },
-      update: { statements: 6, waits: 2 },
+      // The lock with the stored-chunk read, then the update, the one replaced
+      // chunk's delete and insert, and COMMIT.
+      update: { statements: 7, waits: 2 },
+      // Nothing differs: the lock with the stored-chunk read, then COMMIT alone.
+      unchangedUpdate: { statements: 4, waits: 2 },
+      // Scope alone never touches chunks: the lock, then the update with COMMIT.
+      scopeUpdate: { statements: 4, waits: 2 },
       // A second remember (1 wait) and the Link: the lock with the existing-Link read,
       // then the counts and insert with COMMIT.
       connect: { statements: 9, waits: 3 },

@@ -1,5 +1,5 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingMaintenance } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
@@ -48,8 +48,8 @@ async function fixture() {
     targetMemoryId: alicePrivate.id,
   });
   await graph.connect(context.bob, { sourceMemoryId: bobShared.id, targetMemoryId: bobPrivate.id });
-  const maintenance = createMemoryMaintenanceModule(context.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(context.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Embed every Memory so the embedding policy is exercised.

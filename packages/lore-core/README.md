@@ -78,10 +78,27 @@ column list, or ON CONFLICT target in the engine's SQL differs from the contract
 counts a unique key only as a whole, non-partial unique index on plain columns:
 an expression or partial index cannot match an ON CONFLICT target.
 
-Maintenance leases fence ownership and allow reclamation; they do not cancel
-provider calls. `embeddingMaintenanceLeaseSeconds` estimates a reservation from
-nominal attempts, not worst-case provider wall time. Hosts are responsible for
-provider deadlines and recovery from stalled requests.
+## Embedding maintenance
+
+`createEmbeddingMaintenance(database, { embeddingProviders, generationRetentionSeconds,
+logger })` is the whole maintenance surface a host drives: `run(message?)` claims
+and finishes one job (the one a `{ jobId }` queue message names, or any due job;
+a malformed message returns `{ status: "invalid" }`), `sweep()` prunes expired
+retiring generations, seeds stale jobs, and reports each generation's coverage, and
+`pending(limit)` returns `{ jobId }` messages for queue fan-out. Each provider is
+one lane, the serving provider first; unnamed claims rotate between lanes. Hosts
+own the transport, concurrency, and log format; log entries name the generation.
+
+A lane's lease is three nominal attempts of `EmbeddingProvider.requestTimeoutMs`
+plus a minute, between 30 seconds and an hour, and 420 seconds when the adapter
+publishes no deadline. Leases fence ownership and allow reclamation; they do not
+cancel provider calls and are not worst-case provider wall time. Hosts are
+responsible for provider deadlines and recovery from stalled requests.
+
+`createEmbeddingGenerationAdmin(database)` reports (read-only), activates, and
+re-arms dead jobs of a generation without calling a provider, and
+`embeddingGenerationServing(transaction, identity)` tells readiness whether an
+active or retiring generation matches a provider identity.
 
 ## Host extension seams
 

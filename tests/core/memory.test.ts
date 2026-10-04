@@ -1,10 +1,11 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
 import {
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   MemoryAccessDeniedError,
   RETRIEVAL_ENTITY_ALIAS_POLICY,
 } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
+import { createMemoryGraphModule } from "../../src/modules/graph/service";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import type { ActorContext } from "../../src/server/auth/actor-context";
 import { installActorContext } from "../../src/server/auth/actor-context";
@@ -59,8 +60,8 @@ async function drainEmbeddings(
   testContext: MemoryTestContext,
   embeddingProvider: ReturnType<typeof felineEmbeddingProvider>,
 ): Promise<void> {
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain every deterministic document job before dense retrieval.
@@ -425,29 +426,141 @@ test("Updating Memory content replaces stale search chunks", async () => {
   await testContext.close();
 });
 
-test("Changing Memory scope invalidates and rebuilds derived chunks", async () => {
+test("An update equal to the stored Memory writes no row, event, chunk, or job", async () => {
   const testContext = await createMemoryTestContext();
-  const memories = createMemoryModule(testContext.database);
-  const created = await memories.remember(testContext.alice, {
-    content: "A shared launch checklist becomes private.",
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: felineEmbeddingProvider(),
   });
-  const chunkIds = async () =>
-    testContext.database.transaction(async (transaction) => {
-      installActorContext(transaction, testContext.alice);
-      const result = await transaction.query<{ id: string }>(
-        "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+  const created = await memories.remember(testContext.alice, {
+    content: "The harbor ferry leaves at seven.",
+    metadata: { route: "north", stops: [1, 2] },
+  });
+  const written = async () =>
+    testContext.adminDatabase.transaction(async (transaction) => {
+      const result = await transaction.query<{ events: number; jobs: number; chunks: string[] }>(
+        `SELECT
+           (SELECT count(*)::integer FROM memory_events WHERE resource_id = $1) AS events,
+           (SELECT count(*)::integer FROM memory_embedding_jobs WHERE memory_id = $1) AS jobs,
+           ARRAY(SELECT id::text FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal) AS chunks`,
         [created.id],
       );
-      return result.rows.map((row) => row.id);
+      return result.rows[0];
     });
-  const before = await chunkIds();
+  const before = await written();
 
-  await memories.update(testContext.alice, created.id, { scope: "private" });
+  const unchanged = await memories.update(
+    testContext.alice,
+    created.id,
+    {
+      content: created.content,
+      scope: "shared",
+      metadata: { stops: [1, 2], route: "north" },
+    },
+    { expectedVersion: 1 },
+  );
 
-  const after = await chunkIds();
-  expect(after).toHaveLength(before.length);
-  expect(after).not.toEqual(before);
-  await expect(memories.retrieve(testContext.bob, created.id)).resolves.toBeNull();
+  expect(unchanged).toEqual(created);
+  expect(await written()).toEqual(before);
+  // The version check still precedes the no-op decision.
+  await expect(
+    memories.update(testContext.alice, created.id, { scope: "shared" }, { expectedVersion: 2 }),
+  ).rejects.toMatchObject({ name: "MemoryVersionConflictError" });
+  // An update naming no field returns the current row without locking it.
+  await expect(memories.update(testContext.alice, created.id, {})).resolves.toEqual(created);
+  // A Memory Bob may read but not write is absent to his update, equal or not.
+  await expect(
+    memories.update(testContext.bob, created.id, { content: created.content }),
+  ).resolves.toBeNull();
+
+  const changed = await memories.update(testContext.alice, created.id, {
+    metadata: { route: "south" },
+  });
+  expect(changed).toMatchObject({ version: 2, metadata: { route: "south" } });
+  const after = await written();
+  expect(after).toMatchObject({ events: before.events + 1, chunks: before.chunks });
+  await testContext.close();
+});
+
+test("A scope change rewrites no chunk or vector yet takes effect at every read", async () => {
+  const testContext = await createMemoryTestContext();
+  const embeddingProvider = felineEmbeddingProvider();
+  const memories = createMemoryModule(testContext.database, { embeddingProvider });
+  const graph = createMemoryGraphModule(testContext.database);
+  const feline = await memories.remember(testContext.alice, {
+    content: "The launch checklist names the feline mascot.",
+  });
+  const neighbor = await memories.remember(testContext.alice, {
+    content: "The launch window opens at noon.",
+  });
+  await graph.connect(testContext.alice, {
+    sourceMemoryId: neighbor.id,
+    targetMemoryId: feline.id,
+  });
+  await drainEmbeddings(testContext, embeddingProvider);
+
+  /** What `actor` can see of the feline Memory through each read path. */
+  const visible = async (actor: ActorContext) => {
+    const derived = await testContext.database.transaction(async (transaction) => {
+      installActorContext(transaction, actor);
+      const chunks = await transaction.query<{ id: string }>(
+        "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY id",
+        [feline.id],
+      );
+      const vectors = await transaction.query<{ chunk_id: string }>(
+        "SELECT chunk_id FROM memory_chunk_embeddings WHERE memory_id = $1 ORDER BY chunk_id",
+        [feline.id],
+      );
+      return {
+        chunks: chunks.rows.map((row) => row.id),
+        vectors: vectors.rows.map((row) => row.chunk_id),
+      };
+    });
+    const read = await graph.read(actor);
+    return {
+      memory: (await memories.retrieve(actor, feline.id))?.id ?? null,
+      ...derived,
+      // Lexical channels cannot match "cat", so a hit proves the dense channel.
+      search: (await memories.search(actor, { query: "cat" })).map((result) => result.memory.id),
+      graphNode: read.nodes.some((node) => node.id === feline.id),
+      graphLink: read.links.some(
+        (link) => !link.derived && link.source === neighbor.id && link.target === feline.id,
+      ),
+    };
+  };
+  const jobCount = async () =>
+    testContext.adminDatabase.transaction(async (transaction) => {
+      const result = await transaction.query<{ count: number }>(
+        "SELECT count(*)::integer AS count FROM memory_embedding_jobs WHERE memory_id = $1",
+        [feline.id],
+      );
+      return result.rows[0]?.count;
+    });
+
+  const shared = await visible(testContext.alice);
+  expect(shared).toMatchObject({ memory: feline.id, search: [feline.id], graphNode: true });
+  expect(shared.graphLink).toBe(true);
+  expect(shared.chunks.length).toBeGreaterThan(0);
+  expect(shared.vectors).toEqual(shared.chunks);
+  await expect(visible(testContext.bob)).resolves.toEqual(shared);
+  const jobsBefore = await jobCount();
+
+  await memories.update(testContext.alice, feline.id, { scope: "private" });
+
+  // The owner keeps every chunk id and vector, so no job is queued and dense
+  // search still finds the Memory without another embedding pass.
+  await expect(visible(testContext.alice)).resolves.toEqual(shared);
+  expect(await jobCount()).toBe(jobsBefore);
+  await expect(visible(testContext.bob)).resolves.toEqual({
+    memory: null,
+    chunks: [],
+    vectors: [],
+    search: [],
+    graphNode: false,
+    graphLink: false,
+  });
+
+  await memories.update(testContext.alice, feline.id, { scope: "shared" });
+  await expect(visible(testContext.bob)).resolves.toEqual(shared);
   await testContext.close();
 });
 
@@ -1871,8 +1984,8 @@ test("Hybrid search finds semantically related visible Memory without lexical ov
     content: "The orbital vehicle completed its burn.",
   });
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain the four deterministic document jobs before semantic search.
@@ -1919,8 +2032,8 @@ test("Bounded retrieval feedback follows a visible semantic hop without leaking 
     content: "Bob's classified birthplace record says Paris.",
     scope: "private",
   });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain deterministic document embedding jobs.
@@ -2200,12 +2313,12 @@ test("A metadata-only update notifies maintenance for the job it enqueues while 
   const [creationJob, updateJob] = notifications;
   expect(updateJob).not.toBe(creationJob);
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   // The superseded version's job is cancelled; the notified job embeds the Memory.
-  await expect(maintenance.run(creationJob)).resolves.toMatchObject({ status: "idle" });
-  await expect(maintenance.run(updateJob)).resolves.toMatchObject({
+  await expect(maintenance.run({ jobId: creationJob })).resolves.toMatchObject({ status: "idle" });
+  await expect(maintenance.run({ jobId: updateJob })).resolves.toMatchObject({
     status: "complete",
     jobId: updateJob,
   });
