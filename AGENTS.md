@@ -188,8 +188,20 @@ been removed. Lore now has a native implementation, split into two concepts
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
-  wrapper tolerates an older application constant, but readiness requires exact
-  equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
+  wrapper tolerates an older application constant, but readiness reports a schema
+  older than the application incompatible. Readiness (`schemaCompatibility`) accepts a
+  newer schema only when its `compatibleFrom`, published by
+  `lore.portable_core_capabilities()`, is at most the application's revision; a schema
+  that publishes none (every revision through 9) serves only its own revision, and a
+  malformed value fails closed. From the next migration on, `lore_system_state` carries
+  `compatible_from` and every migration sets it to the oldest application revision it
+  still serves: keep it when old instances lose nothing, raise it when they would, and
+  prove the choice with the old application against the migrated schema
+  (docs/operations.md, "Schema compatibility and rolling deploys"). Capabilities copy
+  only the fields this application publishes, so an older instance on a newer schema
+  never serves fields outside its OpenAPI contract; features, like limits, come from
+  `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
+  application. `tests/integration/portable-core.test.ts`,
   `tests/integration/api.test.ts` pin the current revision (9), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,

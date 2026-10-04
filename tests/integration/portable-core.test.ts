@@ -1,8 +1,13 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { MemoryVersionConflictError } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
+import { DEPLOYMENT_FEATURES } from "@/modules/operations/limits";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createOperationsModule, NON_TENANT_PUBLIC_TABLES } from "@/modules/operations/service";
+import {
+  createOperationsModule,
+  LORE_SCHEMA_REVISION,
+  NON_TENANT_PUBLIC_TABLES,
+} from "@/modules/operations/service";
 import { workspaceArchiveChecksum } from "@/modules/portability/checksum";
 import {
   MAX_WORKSPACE_ARCHIVE_LINKS,
@@ -723,6 +728,90 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
     status: "unready",
     components: { rlsRole: "unavailable" },
   });
+});
+
+test("readiness accepts a newer schema only inside the range its migrations declare", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  const admin = (sql: string) =>
+    testContext.adminDatabase.transaction((transaction) => transaction.query(sql));
+  // A later migration publishes compatible_from through the same SECURITY DEFINER
+  // function readiness already calls (lore_app cannot read lore_system_state). Stand
+  // in for it by wrapping this chain's function and editing what it returns.
+  await admin(
+    "ALTER FUNCTION lore.portable_core_capabilities() RENAME TO published_core_capabilities",
+  );
+  const publish = async (revision: number, published: string) => {
+    await admin(`UPDATE lore_system_state SET schema_revision = ${revision} WHERE singleton`);
+    await admin(
+      `CREATE OR REPLACE FUNCTION lore.portable_core_capabilities() RETURNS jsonb
+         LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'pg_catalog', 'public'
+         AS $body$ SELECT ${published} FROM lore.published_core_capabilities() AS base $body$`,
+    );
+    await admin("GRANT EXECUTE ON FUNCTION lore.portable_core_capabilities() TO lore_app");
+  };
+  const schemaStatus = async () => (await operations.readiness()).components.schema;
+  const next = LORE_SCHEMA_REVISION + 1;
+
+  // Without compatibleFrom a schema serves only its own revision, as before.
+  await publish(LORE_SCHEMA_REVISION, "base");
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+  await publish(next, "base");
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { schema: "incompatible" },
+  });
+
+  // A newer schema that still serves this application keeps it ready.
+  await publish(next, `base || '{"compatibleFrom": ${LORE_SCHEMA_REVISION}}'`);
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "ready",
+    components: { schema: "ok" },
+  });
+  await publish(next, `base || '{"compatibleFrom": 1}'`);
+  expect(await schemaStatus()).toBe("ok");
+
+  // One that removed something this application uses does not.
+  await publish(next, `base || '{"compatibleFrom": ${next}}'`);
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { schema: "incompatible" },
+  });
+
+  // A schema older than the application is never compatible, whatever it declares.
+  await publish(LORE_SCHEMA_REVISION - 1, `base || '{"compatibleFrom": 1}'`);
+  expect(await schemaStatus()).toBe("incompatible");
+
+  // A malformed declaration fails closed rather than falling back to exact equality.
+  for (const malformed of ["null", `"${LORE_SCHEMA_REVISION}"`, "8.5", "0", `${next + 1}`]) {
+    await publish(next, `base || '{"compatibleFrom": ${malformed}}'`);
+    expect(await schemaStatus(), malformed).toBe("incompatible");
+    await publish(LORE_SCHEMA_REVISION, `base || '{"compatibleFrom": ${malformed}}'`);
+    expect(await schemaStatus(), malformed).toBe("incompatible");
+  }
+
+  // Capabilities served by an older instance keep to that instance's contract, even
+  // when a newer schema publishes fields and features it does not know.
+  await publish(
+    next,
+    `jsonb_set(base, '{features,futureFeature}', 'true') || '{"compatibleFrom": ${LORE_SCHEMA_REVISION}, "futureField": 1}'`,
+  );
+  expect(await schemaStatus()).toBe("ok");
+  const capabilities = await operations.capabilities();
+  expect(Object.keys(capabilities).sort()).toEqual(
+    [
+      "activeEmbeddingGeneration",
+      "apiVersion",
+      "deploymentId",
+      "features",
+      "limits",
+      "memoryChunking",
+      "schemaRevision",
+    ].sort(),
+  );
+  expect(capabilities).toMatchObject({ schemaRevision: next, features: DEPLOYMENT_FEATURES });
+  expect(capabilities.features).toEqual(DEPLOYMENT_FEATURES);
+  await testContext.close();
 });
 
 test("readiness requires RLS on every tenant table, including tables added later", async () => {

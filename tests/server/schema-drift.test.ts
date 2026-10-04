@@ -30,7 +30,11 @@ import {
   REPOSITORY_PATH_MAXIMUM_LENGTH,
 } from "@/modules/code/indexing/validation";
 import type { EvaluationRunStatus } from "@/modules/evaluations/service";
-import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "@/modules/operations/limits";
+import {
+  DEPLOYMENT_FEATURES,
+  DEPLOYMENT_LIMITS,
+  MEMORY_CHUNKING_CAPABILITY,
+} from "@/modules/operations/limits";
 import { operationsSchemas } from "@/modules/operations/openapi";
 import { createOperationsModule } from "@/modules/operations/service";
 import {
@@ -239,14 +243,16 @@ test("the frozen capabilities function and the published contract equal the enfo
   // The application serves limits from its constants; the baseline's function
   // still restates them for any reader of the SQL, so it must not drift.
   const [frozen] = await asAdmin<{
-    capabilities: { limits: unknown; memoryChunking: unknown };
+    capabilities: { features: unknown; limits: unknown; memoryChunking: unknown };
   }>(testContext, "SELECT lore.portable_core_capabilities() AS capabilities");
+  expect(frozen?.capabilities.features).toEqual(DEPLOYMENT_FEATURES);
   expect(frozen?.capabilities.limits).toEqual(DEPLOYMENT_LIMITS);
   expect(frozen?.capabilities.memoryChunking).toEqual(MEMORY_CHUNKING_CAPABILITY);
 
   const capabilities = await createOperationsModule(testContext.database, {
     embeddingConfigured: true,
   }).capabilities();
+  expect(capabilities.features).toEqual(DEPLOYMENT_FEATURES);
   expect(capabilities.limits).toEqual(DEPLOYMENT_LIMITS);
   expect(capabilities.memoryChunking).toEqual(MEMORY_CHUNKING_CAPABILITY);
 

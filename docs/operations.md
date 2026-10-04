@@ -25,8 +25,9 @@ Lore uses a forward-only migration chain beginning with `0001_v1_baseline.sql`.
 `bun run db:migrate` initializes an empty database or upgrades an existing database
 whose migration ledger and checksums pass preflight. Applied migration files,
 including the production baseline, are immutable; schema changes require a new
-numbered migration. Readiness requires the database schema revision to match the
-running application.
+numbered migration. Readiness requires a database schema at the running
+application's revision, or a newer one whose migrations declare that they still
+serve it (see [Schema compatibility and rolling deploys](#schema-compatibility-and-rolling-deploys)).
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
@@ -481,7 +482,9 @@ counts show how many anchors you would affect.
 
 - `GET /livez` is process-only and never checks external dependencies.
 - `GET /readyz` verifies database access, the `lore_app` runtime role, schema/app
-  compatibility, pgvector, and a fail-closed RLS probe. The RLS check reads
+  compatibility (see
+  [Schema compatibility and rolling deploys](#schema-compatibility-and-rolling-deploys)),
+  pgvector, and a fail-closed RLS probe. The RLS check reads
   `pg_catalog`: every public table except the non-tenant `lore_system_state` and
   `lore_schema_migrations` must enable RLS, so a table added by a later migration
   is covered without editing a list. A table an extension owns (a `pg_depend` row
@@ -567,7 +570,9 @@ under a
 5-second `lock_timeout` and rewrite no rows, so
 on a busy database either may fail to take its locks, and a rerun of `bun run
 db:migrate` repeats it safely, because a stopped transactional migration records
-nothing. Readiness requires the exact schema revision, so from the moment `0007`
+nothing. Those revisions publish no `compatibleFrom` (see
+[Schema compatibility and rolling deploys](#schema-compatibility-and-rolling-deploys)),
+so readiness requires the exact schema revision for them: from the moment `0007`
 commits (revision 7) old instances report the schema incompatible, and new instances
 report it until `0009` commits (revision 9). No instance is ready in between, which
 spans `0008`'s concurrent index build, and that build waits for every transaction
@@ -585,3 +590,31 @@ flag is recorded as an advisory, never as proof that the backup exists.
 Always invoke migrations through `bun run db:migrate`. Production recovery is
 forward-only: the `down` sections are intentionally empty, so running `dbmate down`
 directly would remove a ledger version without reverting its schema changes.
+
+## Schema compatibility and rolling deploys
+
+Readiness reads the schema's state through `lore.portable_core_capabilities()`, the
+`SECURITY DEFINER` function `lore_app` may execute (it has no SELECT on
+`lore_system_state`). It reports the schema `ok` when the database's
+`schemaRevision` is at least the application's revision and the database's
+`compatibleFrom`, the oldest application revision the schema still serves, is at
+most the application's revision. A schema older than the application is always
+`incompatible`. A schema that publishes no `compatibleFrom`, which is every revision
+through 9, serves only its own revision. A `compatibleFrom` that is present but
+null, not a positive integer, or above `schemaRevision` fails closed as
+`incompatible`, even at the application's own revision.
+
+From the next schema migration on, `lore_system_state` carries a `compatible_from`
+column that the capabilities function publishes, and every migration sets it. A
+migration that only adds what older instances never read keeps it; one that removes
+or changes something an older instance uses raises it to the oldest application
+revision that no longer depends on it. Review a migration's `compatible_from` together
+with a test that runs the older application against the migrated schema: too low a
+value lets an instance that cannot work report ready.
+
+With such migrations, migrate first and then deploy: old instances stay ready
+against the newer schema, and new instances become ready once it is in place. A
+new instance against the old schema is `incompatible` until the migration commits.
+Only readiness tolerates a newer schema. The migration preflight still refuses a
+database newer than the application, so run `bun run db:migrate` from the new
+release.

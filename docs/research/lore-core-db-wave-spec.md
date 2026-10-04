@@ -150,6 +150,8 @@ PR 0 is app-only:
   - PR 0 reads `capabilities.compatibleFrom` when it is present, and treats a missing field as equal to `schemaRevision`, which is today's exact rule.
   - 0010 adds the column and republishes the function with the field, the way 0006 did with `CREATE OR REPLACE`. `tests/server/schema-drift.test.ts` covers the new field.
 - **Migrations declare compatibility.** From PR 2 on, each migration sets `compatible_from` to the oldest app revision it stays compatible with. A migration that is additive for old instances keeps it; one that removes something old instances use raises it.
+- **Malformed values fail closed.** A `compatibleFrom` that is present but null, not a positive integer, or above `schemaRevision` makes readiness report `incompatible`, even at the application's own revision. It is not treated as absent.
+- **Capabilities stay inside each instance's contract.** Once an older instance stays ready on a newer schema, spreading the database's capabilities would serve fields that instance's OpenAPI schema forbids (`additionalProperties: false`), starting with `compatibleFrom` itself. The capabilities response therefore copies only the fields the application publishes. Features come from an application constant, `DEPLOYMENT_FEATURES`, the way limits already do, and `schema-drift.test.ts` keeps the SQL restatement equal to it. *(Added during PR 0 implementation.)*
 - **Preflight is unchanged.** It still refuses a database newer than the application for migration purposes. The tolerance applies only to readiness.
 - **Deploy order:** ship PR 0, and only then migrate PR 2. PR 0 has no migration, so it needs no window.
 

@@ -1,9 +1,42 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/telemetry";
-import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
+import { DEPLOYMENT_FEATURES, DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 export const LORE_API_VERSION = "v1";
 export const LORE_SCHEMA_REVISION = 9;
+
+function isSchemaRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+/**
+ * Whether an application built for `applicationRevision` may serve the schema that
+ * `lore.portable_core_capabilities()` describes. A schema older than the application
+ * never is. A newer one is when its migrations declared it: `compatibleFrom` names
+ * the oldest application revision the schema still serves, so a migration that only
+ * adds keeps it and one that removes something older instances use raises it. A
+ * schema that publishes no `compatibleFrom` (every revision through 9) serves only
+ * its own revision. Readiness fails closed on anything else: a missing or
+ * non-integer `schemaRevision`, or a `compatibleFrom` that is present but null, not
+ * an integer, below 1, or above `schemaRevision`.
+ *
+ * Only readiness tolerates a newer schema; migration preflight still refuses to run
+ * an application's migrations against a database newer than the application.
+ */
+export function schemaCompatibility(
+  capabilities: Readonly<Record<string, unknown>>,
+  applicationRevision = LORE_SCHEMA_REVISION,
+): "ok" | "incompatible" {
+  const { schemaRevision, compatibleFrom = schemaRevision } = capabilities;
+  if (!isSchemaRevision(schemaRevision) || !isSchemaRevision(compatibleFrom)) {
+    return "incompatible";
+  }
+  return compatibleFrom <= schemaRevision &&
+    compatibleFrom <= applicationRevision &&
+    applicationRevision <= schemaRevision
+    ? "ok"
+    : "incompatible";
+}
 
 /**
  * The only public tables that hold no tenant data and so carry no RLS: the
@@ -72,20 +105,7 @@ export interface DeploymentCapabilities {
   schemaRevision: number;
   deploymentId: string;
   memoryChunking: typeof MEMORY_CHUNKING_CAPABILITY;
-  features: {
-    idempotency: boolean;
-    optimisticConcurrency: boolean;
-    transactionalOutbox: boolean;
-    workspacePortability: boolean;
-    embeddingGenerations: boolean;
-    cursorPagination: boolean;
-    memoryProposals: boolean;
-    observationEvidence: boolean;
-    codeIndex: boolean;
-    codeDependencies: boolean;
-    codeEvidence: boolean;
-    memoryLinks: boolean;
-  };
+  features: typeof DEPLOYMENT_FEATURES;
   limits: typeof DEPLOYMENT_LIMITS;
   activeEmbeddingGeneration: {
     provider: string;
@@ -134,13 +154,18 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           );
           const capabilities = result.rows[0]?.capabilities;
           if (!capabilities) throw new Error("Portable Core capabilities are unavailable");
-          // The database reports deployment state; limits come from the constants
-          // that enforce them (tests/server/schema-drift.test.ts keeps the frozen
-          // SQL copy equal).
+          // The database reports deployment state; features and limits come from
+          // the constants that enforce them (tests/server/schema-drift.test.ts keeps
+          // the frozen SQL copy equal). Only the fields this application publishes
+          // are copied, because a newer compatible schema may add its own.
           return {
-            ...capabilities,
+            apiVersion: capabilities.apiVersion,
+            schemaRevision: capabilities.schemaRevision,
+            deploymentId: capabilities.deploymentId,
             memoryChunking: MEMORY_CHUNKING_CAPABILITY,
+            features: DEPLOYMENT_FEATURES,
             limits: DEPLOYMENT_LIMITS,
+            activeEmbeddingGeneration: capabilities.activeEmbeddingGeneration,
           };
         }),
       );
@@ -232,8 +257,7 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
         components.vector = row.has_vector ? "ok" : "unavailable";
         components.rlsRole =
           row.role_name === "lore_app" && row.rls_probe === true ? "ok" : "unavailable";
-        components.schema =
-          Number(row.capabilities.schemaRevision) === LORE_SCHEMA_REVISION ? "ok" : "incompatible";
+        components.schema = schemaCompatibility(row.capabilities);
         if (options.embeddingConfigured && !row.embedding_matches) {
           components.embedding = "degraded";
         }
