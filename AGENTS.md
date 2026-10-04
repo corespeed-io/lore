@@ -53,7 +53,19 @@ been removed. Lore now has a native implementation, split into two concepts
   `query` one at a time, and must not query after the callback returns: the engine
   may already have committed inside its last batch. The single-Memory write
   primitives take `{ commit }` to commit in their final batch, which OSS passes
-  when no idempotency ledger row is left to complete.
+  when no idempotency ledger row is left to complete. An update is one locking
+  read, which also reads the stored chunks when content is given, and one final
+  batch, and it writes only what differs: when content, scope, and metadata all
+  equal the locked row it writes nothing (same version, `updatedAt`, and ETag; no
+  event, no job; a keyed no-op still completes its ledger row with that body).
+  Content changes are re-chunked in TypeScript and compared with the stored chunks
+  by ordinal, so only differing ordinals and the removed tail are deleted and
+  inserted (`lore_app` has no UPDATE on `memory_chunks`), and unchanged chunks keep
+  their ids and vectors; a prepend still re-embeds everything after it. Scope and
+  metadata changes never touch chunks. A job for the new version is queued only
+  when some chunk lacks a vector in the serving generation; older-version jobs are
+  cancelled at claim. Memory Proposal acceptance passes `versionUnchanged`, because
+  its review trigger accepts an update receipt only at `base_memory_version + 1`.
   `packages/lore-core/tests/transaction-handle.test.ts` pins the seam and each
   engine operation's statements and network waits.
   **It is a package to enforce a boundary, not to ship an artifact.** It is
@@ -1159,7 +1171,7 @@ The v1 system must provide:
 - user-private and Workspace-shared Memory enforced with Postgres RLS;
 - owner-private Memory Proposals with human-only acceptance into canonical Memory;
 - deterministic background maintenance: chunking, embedding, indexing, retries,
-  re-indexing, and deletion/permission-change invalidation;
+  re-indexing, and cancelling jobs a later write made stale;
 - a Benchmark/Evaluation suite covering retrieval quality, isolation, latency, and
   cost.
 
@@ -1280,8 +1292,10 @@ database invariant, not a UI convention.
 - Code dependency reads must select the same Workspace, repository, full commit OID,
   and active generation before traversing callers or callees. Unresolved and
   ambiguous targets remain explicit and never become guessed cross-file edges.
-- Deleting a Memory or changing its scope must invalidate its chunks, embeddings,
-  cached search results, and derived graph data.
+- Deleting a Memory removes its chunks, embeddings, jobs, and Links in the same
+  transaction. A scope change takes effect immediately and rewrites nothing: chunk,
+  embedding, Link, and Graph reads authorize through the parent Memory row's RLS
+  policy, and none of them stores scope.
 - HTTP update/delete requires a strong Memory ETag through `If-Match`; retries may
   use actor/operation-scoped `Idempotency-Key`. Keep the lock, version check, source
   write, chunk/job changes, replay record, and mutation event in one transaction.
@@ -1388,7 +1402,7 @@ surfaces:
 - **Workspace access module:** select the active Workspace and validate Membership
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
-  chunking, indexing, provenance, and permission invalidation.
+  chunking, chunk reuse, indexing, and provenance.
 - **Observation module:** atomically record, list, retrieve, and explicitly forget
   bounded immutable Episodes while keeping their Observations outside canonical
   Memory retrieval and enforcing the same owner/scope/RLS rules.

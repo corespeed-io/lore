@@ -742,7 +742,8 @@ function searchResults(rows: readonly SearchRow[]): MemorySearchResult[] {
 }
 
 /**
- * Insert a Memory's chunks in one statement; ordinals follow the chunk order.
+ * Insert a Memory's chunks in one statement. Ordinals follow the chunk order unless
+ * `ordinals` names each chunk's own, as an update that replaces only some does.
  * Vectors live in generation-scoped memory_chunk_embeddings, so no per-chunk
  * embedding columns are written.
  */
@@ -750,21 +751,60 @@ function chunkInsertStatement(
   workspaceId: string,
   memoryId: string,
   chunks: readonly string[],
+  ordinals: readonly number[] = chunks.map((_chunk, ordinal) => ordinal),
 ): PostgresStatement {
   return statement(
     `INSERT INTO memory_chunks (
        id, workspace_id, memory_id, ordinal, content, chunking_revision
      )
-     SELECT chunk.id, $1::uuid, $2::uuid, (chunk.position - 1)::integer, chunk.content, $5
-     FROM unnest($3::uuid[], $4::text[]) WITH ORDINALITY AS chunk(id, content, position)`,
+     SELECT chunk.id, $1::uuid, $2::uuid, chunk.ordinal, chunk.content, $6
+     FROM unnest($3::uuid[], $4::integer[], $5::text[]) AS chunk(id, ordinal, content)`,
     [
       workspaceId,
       memoryId,
       chunks.map(() => crypto.randomUUID()),
+      ordinals,
       chunks,
       MEMORY_CHUNKING_REVISION,
     ],
   );
+}
+
+/** One stored chunk as an update compares it with the new content's chunks. */
+export interface StoredChunkRow {
+  ordinal: number;
+  content: string;
+  chunking_revision: string;
+}
+
+/**
+ * The ordinals an update must replace: every stored chunk whose text or chunking
+ * revision differs from the new chunk at its ordinal, and the stored tail past the
+ * new count are deleted; every new chunk with no identical stored chunk at its
+ * ordinal is inserted. Chunks match by ordinal, never by content, because moving a
+ * chunk would need `UPDATE … SET ordinal` against a non-deferrable unique key.
+ */
+function chunkReplacement(
+  stored: readonly StoredChunkRow[],
+  chunks: readonly string[],
+): { deleted: number[]; inserted: { ordinals: number[]; chunks: string[] } } {
+  const kept = new Set<number>();
+  const deleted: number[] = [];
+  for (const chunk of stored) {
+    const ordinal = Number(chunk.ordinal);
+    if (chunk.chunking_revision === MEMORY_CHUNKING_REVISION && chunks[ordinal] === chunk.content) {
+      kept.add(ordinal);
+    } else {
+      deleted.push(ordinal);
+    }
+  }
+  const inserted = { ordinals: [] as number[], chunks: [] as string[] };
+  chunks.forEach((chunk, ordinal) => {
+    if (kept.has(ordinal)) return;
+    inserted.ordinals.push(ordinal);
+    inserted.chunks.push(chunk);
+  });
+  return { deleted, inserted };
 }
 
 /**
@@ -877,6 +917,17 @@ export interface MemoryWriteBatchOptions extends PostgresBatchOptions {
  */
 export interface LockedMemory {
   readonly row: MemoryRow;
+  /** The update it was locked for, and what its locking read compared and fetched. */
+  readonly input: UpdateMemory;
+  readonly chunks: readonly string[] | null;
+  readonly metadata: string | null;
+  readonly metadataChanged: boolean;
+  readonly storedChunks: readonly StoredChunkRow[] | null;
+}
+
+/** An update's final batch; `versionUnchanged` is described at the update primitive. */
+export interface MemoryUpdateBatchOptions extends MemoryWriteBatchOptions {
+  versionUnchanged?: boolean;
 }
 
 export interface MemoryMutationPrimitivesOptions {
@@ -997,106 +1048,169 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
 
   /**
    * Lock a Memory for an update, sending the locking read at once so it can share
-   * a round trip with whatever the host sent before it. Null when the store shows
-   * no such Memory it may write: under RLS a locking read also applies the update
-   * policy's condition, so a Memory this store may read but not write reads as
-   * absent before any version check.
+   * a round trip with whatever the host sent before it. Under RLS a locking read
+   * also applies the update policy's condition, so a Memory this store may read but
+   * not write reads as absent (null) before any version check. When content is
+   * given, the stored chunks are read behind the lock in the same round trip: each
+   * statement of a batch takes its own snapshot, so this one sees the locked state.
    */
   async function lockMemoryInTransaction(
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     id: string,
+    input: UpdateMemory,
   ): Promise<LockedMemory | null> {
-    const current = await transaction.query<MemoryRow>(
-      `SELECT *
-       FROM memories
-       WHERE id = $1
-         AND workspace_id = $2
-       FOR UPDATE`,
-      [id, storageScope.partitionId],
-    );
-    const row = current.rows[0];
-    return row ? { row } : null;
+    if (input.scope !== undefined) validateMemoryScope(input.scope);
+    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
+    const chunks = input.content === undefined ? null : prepareMemoryContent(input.content).chunks;
+    const metadata = input.metadata === undefined ? null : JSON.stringify(input.metadata);
+    const [current, stored] = await transaction.batch([
+      statement<MemoryRow & { metadata_changed: boolean }>(
+        `SELECT ${memorySelectColumns()},
+                ($3::jsonb IS NOT NULL AND metadata IS DISTINCT FROM $3::jsonb) AS metadata_changed
+         FROM memories
+         WHERE id = $1
+           AND workspace_id = $2
+         FOR UPDATE`,
+        [id, storageScope.partitionId, metadata],
+      ),
+      ...(chunks === null
+        ? []
+        : [
+            statement<StoredChunkRow>(
+              `SELECT ordinal, content, chunking_revision
+               FROM memory_chunks
+               WHERE workspace_id = $2
+                 AND memory_id = $1
+               ORDER BY ordinal`,
+              [id, storageScope.partitionId],
+            ),
+          ]),
+    ]);
+    const currentRow = current.rows[0];
+    if (!currentRow) return null;
+    const { metadata_changed: metadataChanged, ...row } = currentRow;
+    return {
+      row,
+      input,
+      chunks,
+      metadata,
+      metadataChanged,
+      storedChunks: stored?.rows ?? null,
+    };
   }
 
+  /**
+   * Update one Memory under a row lock: one locking read, which also fetches the
+   * stored chunks when content is given, then one final batch. Returns null when
+   * the store shows no such Memory, or one it may read but not write, before any
+   * version check; throws MemoryVersionConflictError on a stale expected version.
+   */
   async function updateMemoryInTransaction(
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     id: string,
     input: UpdateMemory,
     expectedVersion?: number,
-    batchOptions: MemoryWriteBatchOptions = {},
-  ): Promise<{ chunksChanged: boolean; memory: Memory } | null> {
-    if (input.scope !== undefined) validateMemoryScope(input.scope);
-    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
-    const locked = await lockMemoryInTransaction(transaction, storageScope, id);
+    options: MemoryUpdateBatchOptions = {},
+  ): Promise<{ changed: boolean; chunksChanged: boolean; memory: Memory } | null> {
+    const locked = await lockMemoryInTransaction(transaction, storageScope, id, input);
     if (!locked) return null;
     return updateLockedMemoryInTransaction(
       transaction,
       storageScope,
       locked,
-      input,
       expectedVersion,
-      batchOptions,
+      options,
     );
   }
 
   /**
-   * Apply an update to a Memory this transaction locked. Throws
-   * MemoryVersionConflictError on a stale expected version. Everything after the
-   * lock is known, so the update, the chunk rewrite, the job for the new version,
-   * and the host's `finish` statements share one round trip.
+   * Apply the update a Memory was locked for. Throws MemoryVersionConflictError on
+   * a stale expected version.
+   *
+   * Only what actually differs is written. When content, scope, and metadata all
+   * equal the locked row, nothing is written: the row comes back with its version
+   * and `updatedAt`, no event is recorded, and no job is queued (the final batch
+   * carries only the host's `finish` statements and, with `commit`, COMMIT).
+   * Content changes replace only the chunks whose ordinals differ, so unchanged
+   * chunks keep their ids and vectors; scope and metadata changes leave chunks
+   * alone. A job for the new version is queued only when some chunk lacks a vector
+   * in the serving generation; jobs for older versions are cancelled when claimed.
+   *
+   * `versionUnchanged` records a new version even when nothing differs, for a
+   * host whose own receipt names the next version (lore's Memory Proposal
+   * acceptance); chunks and jobs still follow the rules above.
    */
   async function updateLockedMemoryInTransaction(
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     locked: LockedMemory,
-    input: UpdateMemory,
     expectedVersion?: number,
-    batchOptions: MemoryWriteBatchOptions = {},
-  ): Promise<{ chunksChanged: boolean; memory: Memory } | null> {
-    if (input.scope !== undefined) validateMemoryScope(input.scope);
-    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
-    const currentMemory = locked.row;
+    options: MemoryUpdateBatchOptions = {},
+  ): Promise<{ changed: boolean; chunksChanged: boolean; memory: Memory } | null> {
+    const { row: currentMemory, input, chunks, metadata, metadataChanged } = locked;
+    const stored = locked.storedChunks;
     const id = currentMemory.id;
+    const commit = { commit: options.commit === true };
     if (expectedVersion !== undefined && currentMemory.version !== expectedVersion) {
       throw new MemoryVersionConflictError(expectedVersion, currentMemory.version);
     }
-    const contentToEmbed =
-      input.content ?? (input.scope === undefined ? null : currentMemory.content);
-    const chunks = contentToEmbed === null ? null : prepareMemoryContent(contentToEmbed).chunks;
+    const contentChanged = chunks !== null && input.content !== currentMemory.content;
+    const scopeChanged = input.scope !== undefined && input.scope !== currentMemory.scope;
+    const changed = contentChanged || scopeChanged || metadataChanged;
+    if (!changed && options.versionUnchanged !== true) {
+      await transaction.batch(options.finish?.(id) ?? [], commit);
+      return { memory: memoryFromRow(currentMemory), changed: false, chunksChanged: false };
+    }
+    // The row is locked, so everything after the read is known and shares one
+    // round trip: the update, the replaced chunks, the job for the new version,
+    // and the host's `finish` statements.
     const update = statement<MemoryRow>(
       `UPDATE memories
-       SET content = COALESCE($3::text, content),
-           scope = COALESCE($4::memory_scope, scope),
-           metadata = COALESCE($5::jsonb, metadata),
-           version = version + 1,
-           updated_at = now()
-       WHERE id = $1
-         AND workspace_id = $2
-         AND version = $6
-       RETURNING ${memorySelectColumns()}`,
+         SET content = COALESCE($3::text, content),
+             scope = COALESCE($4::memory_scope, scope),
+             metadata = COALESCE($5::jsonb, metadata),
+             version = version + 1,
+             updated_at = now()
+         WHERE id = $1
+           AND workspace_id = $2
+           AND version = $6
+         RETURNING ${memorySelectColumns()}`,
       [
         id,
         storageScope.partitionId,
-        input.content ?? null,
-        input.scope ?? null,
-        input.metadata === undefined ? null : JSON.stringify(input.metadata),
+        contentChanged ? input.content : null,
+        scopeChanged ? input.scope : null,
+        metadataChanged ? metadata : null,
         currentMemory.version,
       ],
     );
     const tail: PostgresStatement<unknown>[] = [];
-    if (chunks) {
-      tail.push(
-        statement("DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2", [
-          storageScope.partitionId,
-          id,
-        ]),
-        chunkInsertStatement(storageScope.partitionId, id, chunks),
-      );
+    let chunksChanged = false;
+    if (contentChanged && stored && chunks) {
+      const { deleted, inserted } = chunkReplacement(stored, chunks);
+      if (deleted.length > 0) {
+        tail.push(
+          statement(
+            `DELETE FROM memory_chunks
+             WHERE workspace_id = $1
+               AND memory_id = $2
+               AND ordinal = ANY($3::integer[])`,
+            [storageScope.partitionId, id, deleted],
+          ),
+        );
+      }
+      if (inserted.chunks.length > 0) {
+        tail.push(
+          chunkInsertStatement(storageScope.partitionId, id, inserted.chunks, inserted.ordinals),
+        );
+      }
+      chunksChanged = deleted.length > 0 || inserted.chunks.length > 0;
     }
     const jobId = crypto.randomUUID();
     if (embeddingProvider) {
+      // Runs after the chunk writes, so it sees which chunks still lack a vector.
       tail.push(
         embeddingJobStatement(
           {
@@ -1108,13 +1222,13 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
           },
           jobId,
           embeddingProvider,
-          chunks === null,
+          true,
         ),
       );
     }
     const results = await transaction.batch(
-      [update, ...tail, ...(batchOptions.finish?.(id) ?? [])],
-      { commit: batchOptions.commit === true },
+      [update, ...tail, ...(options.finish?.(id) ?? [])],
+      commit,
     );
     const updatedMemory = results[0].rows[0];
     if (!updatedMemory) return null;
@@ -1122,7 +1236,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     if (embeddingProvider && (results[tail.length]?.rows.length ?? 0) > 0) {
       notifyAfterCommit(transaction, [jobId]);
     }
-    return { memory: memoryFromRow(updatedMemory), chunksChanged: chunks !== null };
+    return { memory: memoryFromRow(updatedMemory), changed, chunksChanged };
   }
 
   /**

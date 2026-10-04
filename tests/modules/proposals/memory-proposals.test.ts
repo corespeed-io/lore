@@ -712,6 +712,47 @@ test("Accepting a metadata-only proposal preserves canonical chunks", async () =
   await testContext.close();
 });
 
+test("Accepting a Proposal equal to its target records the next version without touching chunks", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const original = await memories.remember(testContext.alice, {
+    content: "The ferry schedule is posted at the pier.",
+    metadata: { state: "approved" },
+  });
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: original.id,
+    expectedVersion: original.version,
+    content: original.content,
+    metadata: { state: "approved" },
+  });
+
+  const chunkIds = () =>
+    testContext.database.transaction(async (transaction) => {
+      installActorContext(transaction, testContext.alice);
+      const result = await transaction.query<{ id: string }>(
+        "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
+        [original.id],
+      );
+      return result.rows.map((row) => row.id);
+    });
+  const before = await chunkIds();
+
+  const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
+
+  // The accepted receipt names the version after the reviewed one, so acceptance
+  // records it even though no field differs; the chunks stay as they were.
+  expect(accepted?.proposal).toMatchObject({ status: "accepted", acceptedMemoryId: original.id });
+  expect(accepted?.memory).toMatchObject({
+    content: original.content,
+    metadata: original.metadata,
+    version: original.version + 1,
+  });
+  expect(await chunkIds()).toEqual(before);
+
+  await testContext.close();
+});
+
 test("Proposal evidence cannot include a private Memory hidden from the Actor", async () => {
   const { agentActor, testContext } = await createWritingAgent();
   const memories = createProposalsHarness(testContext.database);

@@ -32,7 +32,9 @@ serve it (see [Schema compatibility and rolling deploys](#schema-compatibility-a
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
 `precondition_required` (428), while a stale version returns `version_conflict`
-(412). `POST`, `PATCH`, and `DELETE` accept an optional `Idempotency-Key`. Keys are
+(412). A `PATCH` whose fields all equal the stored Memory changes nothing: it
+answers 200 with the same version and ETag and records no event. `POST`, `PATCH`,
+and `DELETE` accept an optional `Idempotency-Key`. Keys are
 scoped by Workspace, Actor, and operation, expire after 24 hours, and store only a
 request hash plus the bounded response. Reusing a key with a different request
 returns `idempotency_conflict` (409).
