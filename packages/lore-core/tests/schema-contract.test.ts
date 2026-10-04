@@ -108,9 +108,15 @@ test("the engine calls only contract functions and writes only contract settings
   );
   expect([...contractFunctions].filter((name) => !functions.has(name)).sort()).toEqual([]);
 
-  const settings = new Set(
-    [...source.matchAll(/set_config\('([a-z_.]+)'/g)].map((match) => match[1] as string),
+  // The engine writes settings through `setLocal({ "name": value })`; a literal
+  // `set_config('name', …)` in SQL counts too.
+  const setLocalKeys = [...source.matchAll(/setLocal\(\{([^}]*)\}\)/g)].flatMap((call) =>
+    [...(call[1] ?? "").matchAll(/"([a-z_.]+)"\s*:/g)].map((match) => match[1] as string),
   );
+  const settings = new Set([
+    ...[...source.matchAll(/set_config\('([a-z_.]+)'/g)].map((match) => match[1] as string),
+    ...setLocalKeys,
+  ]);
   expect([...settings].sort()).toEqual([...contractSettings].sort());
   expect(source).not.toMatch(/current_setting\(/);
 });

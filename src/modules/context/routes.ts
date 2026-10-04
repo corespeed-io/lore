@@ -40,7 +40,7 @@ function optionalRoute(body: Record<string, unknown>): ContextRetrievalRoute | u
 export const context = new Hono<ApiEnv>().post("/retrieve", async (c) => {
   const context = createContextRetrievalModule(await c.var.database(), c.var.memoryOptions());
   const request = c.req.raw;
-  const actor = await c.var.resolveActor();
+  const actor = await c.var.requestActor();
   const body = await jsonObject(request);
   const result = await observeOperation("context.retrieve", () =>
     context.retrieve(actor, {

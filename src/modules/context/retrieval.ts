@@ -22,6 +22,7 @@ import {
   validateRepositoryKey,
 } from "@/modules/code/indexing/validation";
 import { createMemoryModule } from "@/modules/memories/service";
+import { admittedActor, type RequestActor } from "@/server/auth/actor-admission";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
 import type {
@@ -118,7 +119,7 @@ export interface RetrievedContext {
 }
 
 export interface ContextRetrievalModule {
-  retrieve(actor: ActorContext, input: RetrieveContextInput): Promise<RetrievedContext>;
+  retrieve(actor: RequestActor, input: RetrieveContextInput): Promise<RetrievedContext>;
 }
 
 export class ContextRetrievalValidationError extends DomainError {
@@ -424,17 +425,23 @@ export function createContextRetrievalModule(
         plan.route === "code-only" || plan.route === "both"
           ? queryText(input.codeQuery ?? query, "codeQuery", CODE_QUERY_MAXIMUM_LENGTH)
           : null;
+      // Code reads take an admitted Actor. A packet without a repository reads only
+      // Memory, whose search admits a pending Actor as its first statements.
+      const admitted = repositoryKey === undefined ? null : await admittedActor(database, actor);
       const [memoryResults, codeResults] = await Promise.all([
         memoryQuery !== null
-          ? memories.search(actor, {
+          ? memories.search(admitted ?? actor, {
               query: memoryQuery,
               limit: memoryLimit,
               scope: input.scope,
               metadataFilter: input.metadata,
             })
           : [],
-        codeQuery !== null && repositoryKey !== undefined && requestedCommitOid !== undefined
-          ? code.search(actor, {
+        codeQuery !== null &&
+        admitted !== null &&
+        repositoryKey !== undefined &&
+        requestedCommitOid !== undefined
+          ? code.search(admitted, {
               repositoryKey,
               commitOid: requestedCommitOid,
               query: codeQuery,
@@ -451,6 +458,7 @@ export function createContextRetrievalModule(
         plan.needsAnchorExpansion &&
         plan.needsLocalAssessment &&
         memoryResults.length > 0 &&
+        admitted !== null &&
         repositoryKey !== undefined &&
         requestedCommitOid !== undefined
           ? await database.transaction(async (transaction) => {
@@ -460,7 +468,7 @@ export function createContextRetrievalModule(
               await transaction.query(`SET TRANSACTION ${transactionModes(SNAPSHOT)}`);
               const snapshot: PostgresDatabase = { transaction: (use) => use(transaction) };
               return readAnchoredCode({
-                actor,
+                actor: admitted,
                 plan,
                 repositoryKey,
                 requestedCommitOid,

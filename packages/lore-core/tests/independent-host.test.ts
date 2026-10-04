@@ -11,7 +11,7 @@ import {
   type MemoryStorageContext,
   MemoryVersionConflictError,
 } from "../src/index";
-import { missingSchemaContract } from "../src/testing";
+import { missingSchemaContract, testDatabase } from "../src/testing";
 
 test("an independent storage host runs Memory CRUD and retrieval without OSS identity", async () => {
   const postgres = new PGlite({ extensions: { vector } });
@@ -19,8 +19,9 @@ test("an independent storage host runs Memory CRUD and retrieval without OSS ide
     await postgres.exec(
       await readFile(new URL("fixtures/independent-host-schema.sql", import.meta.url), "utf8"),
     );
+    const database = testDatabase(postgres, () => undefined);
     const storage: MemoryStorageContext = {
-      database: postgres,
+      database,
       partitionId: "20000000-0000-4000-8000-000000000001",
       ownerId: "10000000-0000-4000-8000-000000000001",
       sourceId: "30000000-0000-4000-8000-000000000001",
@@ -201,14 +202,15 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
     await postgres.exec(
       await readFile(new URL("fixtures/independent-host-schema.sql", import.meta.url), "utf8"),
     );
+    const database = testDatabase(postgres, () => undefined);
     const storage: MemoryStorageContext = {
-      database: postgres,
+      database,
       partitionId: "20000000-0000-4000-8000-000000000001",
       ownerId: "10000000-0000-4000-8000-000000000001",
     };
     const primitives = createMemoryMutationPrimitives();
     const ids = ["40000000-0000-4000-8000-00000000000a", "40000000-0000-4000-8000-00000000000b"];
-    const inserted = await postgres.transaction((transaction) =>
+    const inserted = await database.transaction((transaction) =>
       primitives.insertMemoriesInTransaction(
         transaction,
         storage,
@@ -221,10 +223,7 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
         })),
       ),
     );
-    expect(inserted).toEqual({
-      jobIds: [],
-      memories: ids.map((id) => ({ id, version: 1 })),
-    });
+    expect(inserted).toEqual({ memories: ids.map((id) => ({ id, version: 1 })) });
 
     const graph = createMemoryGraphModule(storage);
     const endpoints = { sourceMemoryId: ids[0] as string, targetMemoryId: ids[1] as string };
@@ -254,7 +253,7 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
     await expect(graph.disconnect(endpoints)).resolves.toBe(false);
     await expect(graph.connect(endpoints)).resolves.toMatchObject({ created: true });
     await expect(
-      postgres.transaction((transaction) =>
+      database.transaction((transaction) =>
         insertMemoryLinksInTransaction(transaction, storage.partitionId, [
           { sourceMemoryId: ids[0] as string, targetMemoryId: ids[1] as string },
           { sourceMemoryId: ids[1] as string, targetMemoryId: ids[0] as string, kind: "cites" },
@@ -262,7 +261,7 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
       ),
     ).resolves.toHaveLength(1);
     await expect(
-      postgres.transaction((transaction) =>
+      database.transaction((transaction) =>
         insertMemoryLinksInTransaction(transaction, storage.partitionId, [
           { sourceMemoryId: ids[0] as string, targetMemoryId: ids[0] as string },
         ]),
@@ -274,31 +273,18 @@ test("Links, batch inserts, and forget run on the independent host", async () =>
     });
 
     await expect(
-      postgres.transaction((transaction) =>
+      database.transaction((transaction) =>
         primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, {
           expectedVersion: 2,
         }),
       ),
     ).rejects.toBeInstanceOf(MemoryVersionConflictError);
-    // A host that already locked the row hands over its version, which the engine
-    // checks and deletes by without reading the row again.
+    // A host that already locked the row may still forget it in the same transaction.
     await expect(
-      postgres.transaction((transaction) =>
-        primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, {
-          expectedVersion: 2,
-          lockedVersion: 1,
-        }),
-      ),
-    ).rejects.toBeInstanceOf(MemoryVersionConflictError);
-    await expect(
-      postgres.transaction(async (transaction) => {
-        const locked = await transaction.query<{ version: number }>(
-          "SELECT version FROM memories WHERE id = $1 FOR UPDATE",
-          [ids[0]],
-        );
+      database.transaction(async (transaction) => {
+        await transaction.query("SELECT version FROM memories WHERE id = $1 FOR UPDATE", [ids[0]]);
         return primitives.forgetMemoryInTransaction(transaction, storage, ids[0] as string, {
           expectedVersion: 1,
-          lockedVersion: locked.rows[0]?.version,
         });
       }),
     ).resolves.toBe(true);

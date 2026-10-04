@@ -1,5 +1,10 @@
 import { queryInRecordBatches } from "./batch";
-import type { MemoryStorageContext, PostgresTransaction } from "./db";
+import {
+  type MemoryStorageContext,
+  type PostgresStatement,
+  type PostgresTransaction,
+  statement,
+} from "./db";
 import type { Memory, MemoryScope } from "./memory";
 import { validateMemoryMetadata } from "./memory-input";
 import { utcTimestampSql } from "./timestamp";
@@ -585,14 +590,15 @@ function buildGraph(
  * Each node row carries at most `prefixCharacters` code points of content, or its
  * complete content when `prefixCharacters` is null.
  */
-async function readGraphRows(
-  transaction: PostgresTransaction,
-  partitionId: string,
-  limit: number,
-  prefixCharacters: number | null,
-): Promise<{ memories: GraphMemory[]; stored: StoredGraphLinks }> {
+/**
+ * The node and Link reads of one Graph, as two statements over the same node set.
+ * Run them in one REPEATABLE READ transaction so both see one snapshot: the Link
+ * statement re-selects the node set rather than taking the first one's ids, which
+ * is what lets both travel in a single round trip.
+ */
+function graphStatements(partitionId: string, limit: number, prefixCharacters: number | null) {
   // Reading one code point past the bound tells complete content from a cut.
-  const memoryResult = await transaction.query<GraphMemoryRow>(
+  const nodes = statement<GraphMemoryRow>(
     `SELECT
        id,
        scope,
@@ -611,17 +617,20 @@ async function readGraphRows(
      LIMIT $2`,
     [partitionId, limit, prefixCharacters],
   );
-  if (memoryResult.rows.length === 0) {
-    return { memories: [], stored: { links: [], truncated: false } };
-  }
-  const memoryIds = memoryResult.rows.map((memory) => memory.id);
   // Reading one Link past the budget tells a complete set from a cut one. A cut
   // takes each source owner's newest Link, then each owner's next newest, and so
   // on, so every owner keeps at least an equal share and no owner's Links crowd
   // out another's; a Link just written is its owner's first choice. The bound
   // limits the response, not the ranking, which still reads every candidate.
-  const linkResult = await transaction.query<GraphLinkRow & { priority: number }>(
-    `WITH ranked AS (
+  const links = statement<GraphLinkRow & { priority: number }>(
+    `WITH graph_nodes AS MATERIALIZED (
+       SELECT id
+       FROM memories
+       WHERE workspace_id = $1
+       ORDER BY updated_at DESC, id
+       LIMIT $2
+     ),
+     ranked AS (
        SELECT link.source_memory_id, link.target_memory_id, link.kind, link.weight,
               link.created_at, link.id,
               row_number() OVER (
@@ -632,8 +641,8 @@ async function readGraphRows(
          ON owned.workspace_id = link.workspace_id
         AND owned.id = link.source_memory_id
        WHERE link.workspace_id = $1
-         AND link.source_memory_id = ANY($2::uuid[])
-         AND link.target_memory_id = ANY($2::uuid[])
+         AND link.source_memory_id IN (SELECT id FROM graph_nodes)
+         AND link.target_memory_id IN (SELECT id FROM graph_nodes)
      ),
      chosen AS (
        SELECT ranked.*,
@@ -646,17 +655,23 @@ async function readGraphRows(
      SELECT source_memory_id, target_memory_id, kind, weight, priority
      FROM chosen
      ORDER BY created_at, id`,
-    [partitionId, memoryIds, MEMORY_GRAPH_LIMITS.maximumLinks + 1],
+    [partitionId, limit, MEMORY_GRAPH_LIMITS.maximumLinks + 1],
   );
-  const truncated = linkResult.rows.length > MEMORY_GRAPH_LIMITS.maximumLinks;
-  const links = linkResult.rows
+  return [nodes, links] as const;
+}
+
+function graphRows(
+  memoryRows: readonly GraphMemoryRow[],
+  linkRows: readonly (GraphLinkRow & { priority: number })[],
+): { memories: GraphMemory[]; stored: StoredGraphLinks } {
+  const truncated = linkRows.length > MEMORY_GRAPH_LIMITS.maximumLinks;
+  const links = linkRows
     .filter((row) => row.priority <= MEMORY_GRAPH_LIMITS.maximumLinks)
     .map(({ priority: _priority, ...link }) => link);
-  return {
-    memories: memoryResult.rows.map(toMemory),
-    stored: { links, truncated },
-  };
+  return { memories: memoryRows.map(toMemory), stored: { links, truncated } };
 }
+
+const GRAPH_SNAPSHOT = { isolation: "repeatable read", readOnly: true } as const;
 
 /**
  * Insert many Memory Links in bounded set-based batches. Each obeys the Link rules;
@@ -697,18 +712,19 @@ export async function insertMemoryLinksInTransaction(
 }
 
 /**
- * Lock a Link's source Memory for writing, provided its target is visible too.
- * False when the store cannot lock the source or see the target. Every `connect`
+ * Lock a Link's source Memory for writing, provided its target is visible too; no
+ * row when the store cannot lock the source or see the target. Every `connect`
  * and `disconnect` from one source serializes on this lock, which makes
  * `connect`'s `created` exact among them; batch inserts do not take it. A NO KEY
- * lock still lets other Links target the source Memory.
+ * lock still lets other Links target the source Memory. Statements sent behind it
+ * in the same batch start only after it returns, each with its own READ COMMITTED
+ * snapshot, so they see what a competing writer committed before the lock.
  */
-async function lockLinkEndpoints(
-  transaction: PostgresTransaction,
+function lockLinkEndpointsStatement(
   partitionId: string,
   input: { sourceMemoryId: string; targetMemoryId: string },
-): Promise<boolean> {
-  const locked = await transaction.query<{ id: string }>(
+): PostgresStatement<{ id: string }> {
+  return statement<{ id: string }>(
     `SELECT source.id
      FROM memories source
      WHERE source.workspace_id = $1
@@ -720,7 +736,6 @@ async function lockLinkEndpoints(
      FOR NO KEY UPDATE`,
     [partitionId, input.sourceMemoryId, input.targetMemoryId],
   );
-  return locked.rows.length === 1;
 }
 
 /**
@@ -743,125 +758,151 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
      */
     async connect(input: ConnectMemories): Promise<ConnectedMemoryLink | null> {
       const { kind, weight, metadata } = validateMemoryLink(input);
-      return database.transaction(async (transaction) => {
-        if (!(await lockLinkEndpoints(transaction, storage.partitionId, input))) return null;
-        const readExisting = async () =>
-          (
-            await transaction.query<MemoryLinkRow & { unchanged: boolean }>(
-              `SELECT ${MEMORY_LINK_COLUMNS},
-                      (weight, metadata) IS NOT DISTINCT FROM ($5::real, $6::jsonb) AS unchanged
-               FROM memory_links
-               WHERE workspace_id = $1
-                 AND source_memory_id = $2
-                 AND target_memory_id = $3
-                 AND kind = $4
-               FOR UPDATE`,
-              [
-                storage.partitionId,
-                input.sourceMemoryId,
-                input.targetMemoryId,
-                kind,
-                weight,
-                JSON.stringify(metadata),
-              ],
-            )
-          ).rows[0];
-        const replace = async (
-          current: MemoryLinkRow & { unchanged: boolean },
-        ): Promise<ConnectedMemoryLink | null> => {
-          // An unchanged repeat writes nothing, so it emits no Link event either.
-          if (current.unchanged) return { link: toMemoryLink(current), created: false };
-          const updated = await transaction.query<MemoryLinkRow>(
-            `UPDATE memory_links
-             SET weight = $2::real, metadata = $3::jsonb, updated_at = now()
-             WHERE id = $1
-             RETURNING ${MEMORY_LINK_COLUMNS}`,
-            [current.id, weight, JSON.stringify(metadata)],
+      const readExisting = statement<MemoryLinkRow & { unchanged: boolean }>(
+        `SELECT ${MEMORY_LINK_COLUMNS},
+                (weight, metadata) IS NOT DISTINCT FROM ($5::real, $6::jsonb) AS unchanged
+         FROM memory_links
+         WHERE workspace_id = $1
+           AND source_memory_id = $2
+           AND target_memory_id = $3
+           AND kind = $4
+         FOR UPDATE`,
+        [
+          storage.partitionId,
+          input.sourceMemoryId,
+          input.targetMemoryId,
+          kind,
+          weight,
+          JSON.stringify(metadata),
+        ],
+      );
+      const replace = async (
+        transaction: PostgresTransaction,
+        current: MemoryLinkRow & { unchanged: boolean },
+      ): Promise<ConnectedMemoryLink | null> => {
+        // An unchanged repeat writes nothing, so it emits no Link event either.
+        if (current.unchanged) return { link: toMemoryLink(current), created: false };
+        const [updated] = await transaction.batch(
+          [
+            statement<MemoryLinkRow>(
+              `UPDATE memory_links
+               SET weight = $2::real, metadata = $3::jsonb, updated_at = now()
+               WHERE id = $1
+               RETURNING ${MEMORY_LINK_COLUMNS}`,
+              [current.id, weight, JSON.stringify(metadata)],
+            ),
+          ],
+          { commit: true },
+        );
+        // The row is locked, so no row back means the store stopped showing it
+        // (under RLS, its target turned invisible after the read): unreachable.
+        const row = updated.rows[0];
+        return row ? { link: toMemoryLink(row), created: false } : null;
+      };
+      // The lock and the existing-Link read share one round trip; the read still
+      // starts after the lock is granted (see lockLinkEndpointsStatement).
+      const attempt = () =>
+        database.transaction(async (transaction) => {
+          const [locked, existing] = await transaction.batch([
+            lockLinkEndpointsStatement(storage.partitionId, input),
+            readExisting,
+          ]);
+          if (locked.rows.length !== 1) return null;
+          const current = existing.rows[0];
+          if (current) return replace(transaction, current);
+          // Bound only new Links, counting only Links from this owner's own Memories
+          // so no writer spends another's quota. Each count stops at its bound,
+          // however many Links an import left behind; the owner's total reads up to
+          // its whole bound, so its cost falls only on a writer who owns that many
+          // Links. The source lock makes the source and pair counts exact among
+          // connects; the target and owner counts may overshoot by concurrent writes
+          // from the same owner's other Memories. The counts and the insert they gate
+          // are one statement, sent together with COMMIT.
+          const [inserted] = await transaction.batch(
+            [
+              statement<Record<MemoryLinkBound, number> & Partial<MemoryLinkRow>>(
+                `WITH counts AS (
+                 SELECT
+                   (SELECT count(*) FROM (
+                      SELECT 1 FROM memory_links
+                      WHERE workspace_id = $1 AND source_memory_id = $2
+                        AND target_memory_id = $3
+                      LIMIT $4) AS pair)::integer AS "maximumKindsPerPair",
+                   (SELECT count(*) FROM (
+                      SELECT 1 FROM memory_links
+                      WHERE workspace_id = $1 AND source_memory_id = $2
+                      LIMIT $5) AS outbound)::integer AS "maximumLinksPerSource",
+                   (SELECT count(*) FROM (
+                      SELECT 1
+                      FROM memory_links link
+                      JOIN memories owned
+                        ON owned.workspace_id = link.workspace_id
+                       AND owned.id = link.source_memory_id
+                      WHERE link.workspace_id = $1
+                        AND link.target_memory_id = $3
+                        AND owned.owner_user_id = $8
+                      LIMIT $6) AS inbound)::integer AS "maximumLinksPerTarget",
+                   (SELECT count(*) FROM (
+                      SELECT 1
+                      FROM memories owned
+                      JOIN memory_links link
+                        ON link.workspace_id = owned.workspace_id
+                       AND link.source_memory_id = owned.id
+                      WHERE owned.workspace_id = $1
+                        AND owned.owner_user_id = $8
+                      LIMIT $7) AS everything)::integer AS "maximumLinksPerOwner"
+               ), inserted AS (
+                 INSERT INTO memory_links (
+                   id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
+                 )
+                 SELECT $9, $1, $2, $3, $10, $11, $12::jsonb
+                 FROM counts
+                 WHERE counts."maximumKindsPerPair" < $4
+                   AND counts."maximumLinksPerSource" < $5
+                   AND counts."maximumLinksPerTarget" < $6
+                   AND counts."maximumLinksPerOwner" < $7
+                 ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
+                 RETURNING ${MEMORY_LINK_COLUMNS}
+               )
+               SELECT counts.*, inserted.*
+               FROM counts
+               LEFT JOIN inserted ON true`,
+                [
+                  storage.partitionId,
+                  input.sourceMemoryId,
+                  input.targetMemoryId,
+                  MEMORY_LINK_LIMITS.maximumKindsPerPair,
+                  MEMORY_LINK_LIMITS.maximumLinksPerSource,
+                  MEMORY_LINK_LIMITS.maximumLinksPerTarget,
+                  MEMORY_LINK_LIMITS.maximumLinksPerOwner,
+                  storage.ownerId,
+                  crypto.randomUUID(),
+                  kind,
+                  weight,
+                  JSON.stringify(metadata),
+                ],
+              ),
+            ],
+            { commit: true },
           );
-          // The row is locked, so no row back means the store stopped showing it
-          // (under RLS, its target turned invisible after the read): unreachable.
-          const row = updated.rows[0];
-          return row ? { link: toMemoryLink(row), created: false } : null;
-        };
-        const current = await readExisting();
-        if (current) return replace(current);
-        // Bound only new Links, counting only Links from this owner's own Memories so
-        // no writer spends another's quota. Each count stops at its bound, however
-        // many Links an import left behind; the owner's total reads up to its whole
-        // bound, so its cost falls only on a writer who owns that many Links. The
-        // source lock makes the source and pair counts exact among connects; the
-        // target and owner counts may overshoot by concurrent writes from the same
-        // owner's other Memories.
-        const counts = await transaction.query<Record<MemoryLinkBound, number>>(
-          `SELECT
-             (SELECT count(*) FROM (
-                SELECT 1 FROM memory_links
-                WHERE workspace_id = $1 AND source_memory_id = $2 AND target_memory_id = $3
-                LIMIT $4) AS pair)::integer AS "maximumKindsPerPair",
-             (SELECT count(*) FROM (
-                SELECT 1 FROM memory_links
-                WHERE workspace_id = $1 AND source_memory_id = $2
-                LIMIT $5) AS outbound)::integer AS "maximumLinksPerSource",
-             (SELECT count(*) FROM (
-                SELECT 1
-                FROM memory_links link
-                JOIN memories owned
-                  ON owned.workspace_id = link.workspace_id
-                 AND owned.id = link.source_memory_id
-                WHERE link.workspace_id = $1
-                  AND link.target_memory_id = $3
-                  AND owned.owner_user_id = $8
-                LIMIT $6) AS inbound)::integer AS "maximumLinksPerTarget",
-             (SELECT count(*) FROM (
-                SELECT 1
-                FROM memories owned
-                JOIN memory_links link
-                  ON link.workspace_id = owned.workspace_id
-                 AND link.source_memory_id = owned.id
-                WHERE owned.workspace_id = $1
-                  AND owned.owner_user_id = $8
-                LIMIT $7) AS everything)::integer AS "maximumLinksPerOwner"`,
-          [
-            storage.partitionId,
-            input.sourceMemoryId,
-            input.targetMemoryId,
-            MEMORY_LINK_LIMITS.maximumKindsPerPair,
-            MEMORY_LINK_LIMITS.maximumLinksPerSource,
-            MEMORY_LINK_LIMITS.maximumLinksPerTarget,
-            MEMORY_LINK_LIMITS.maximumLinksPerOwner,
-            storage.ownerId,
-          ],
-        );
-        const counted = counts.rows[0];
-        for (const bound of Object.keys(MEMORY_LINK_BOUND_MESSAGES) as MemoryLinkBound[]) {
-          if ((counted?.[bound] ?? 0) >= MEMORY_LINK_LIMITS[bound]) {
-            throw new MemoryLinkCapacityError(bound, MEMORY_LINK_BOUND_MESSAGES[bound]);
+          const row = inserted.rows[0];
+          if (row?.id) return { link: toMemoryLink(row as MemoryLinkRow), created: true };
+          for (const bound of Object.keys(MEMORY_LINK_BOUND_MESSAGES) as MemoryLinkBound[]) {
+            if ((row?.[bound] ?? 0) >= MEMORY_LINK_LIMITS[bound]) {
+              throw new MemoryLinkCapacityError(bound, MEMORY_LINK_BOUND_MESSAGES[bound]);
+            }
           }
-        }
-        const inserted = await transaction.query<MemoryLinkRow>(
-          `INSERT INTO memory_links (
-             id, workspace_id, source_memory_id, target_memory_id, kind, weight, metadata
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-           ON CONFLICT (workspace_id, source_memory_id, target_memory_id, kind) DO NOTHING
-           RETURNING ${MEMORY_LINK_COLUMNS}`,
-          [
-            crypto.randomUUID(),
-            storage.partitionId,
-            input.sourceMemoryId,
-            input.targetMemoryId,
-            kind,
-            weight,
-            JSON.stringify(metadata),
-          ],
-        );
-        const row = inserted.rows[0];
-        if (row) return { link: toMemoryLink(row), created: true };
-        // The key is taken by a Link the first read could not see: its target was
-        // invisible for that statement, or a writer that skips the source lock (a
-        // batch insert) added it since. Replace it if it is visible now.
-        const taken = await readExisting();
-        return taken ? replace(taken) : null;
-      });
+          return "taken" as const;
+        });
+      const first = await attempt();
+      if (first !== "taken") return first;
+      // The key is taken by a Link the first read could not see: its target was
+      // invisible for that statement, or a writer that skips the source lock (a
+      // batch insert) added it since. The first attempt has committed, so the next
+      // one reads under a fresh lock: it replaces that Link if it is visible now,
+      // and inserts again if a disconnect removed it in between.
+      const second = await attempt();
+      return second === "taken" ? null : second;
     },
 
     /**
@@ -870,19 +911,31 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
      */
     async disconnect(input: DisconnectMemories): Promise<boolean> {
       const { kind } = validateMemoryLinkKey(input);
-      return database.transaction(async (transaction) => {
-        if (!(await lockLinkEndpoints(transaction, storage.partitionId, input))) return false;
-        const deleted = await transaction.query<{ id: string }>(
-          `DELETE FROM memory_links
-           WHERE workspace_id = $1
-             AND source_memory_id = $2
-             AND target_memory_id = $3
-             AND kind = $4
-           RETURNING id`,
-          [storage.partitionId, input.sourceMemoryId, input.targetMemoryId, kind],
-        );
-        return deleted.rows.length === 1;
-      });
+      // The lock, the delete, and COMMIT share one round trip. The delete repeats
+      // the lock's target check, because a Link whose target the store cannot see
+      // stays undeletable even by its source's writer.
+      const [, deleted] = await database.transaction((transaction) =>
+        transaction.batch(
+          [
+            lockLinkEndpointsStatement(storage.partitionId, input),
+            statement<{ id: string }>(
+              `DELETE FROM memory_links link
+               WHERE link.workspace_id = $1
+                 AND link.source_memory_id = $2
+                 AND link.target_memory_id = $3
+                 AND link.kind = $4
+                 AND EXISTS (
+                   SELECT 1 FROM memories target
+                   WHERE target.workspace_id = $1 AND target.id = $3
+                 )
+               RETURNING link.id`,
+              [storage.partitionId, input.sourceMemoryId, input.targetMemoryId, kind],
+            ),
+          ],
+          { commit: true },
+        ),
+      );
+      return deleted.rows.length === 1;
     },
 
     /**
@@ -914,30 +967,35 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
         throw new LoreValidationError("cursor", "cursor must name a Link's createdAt and id");
       }
       const anchorColumn = direction === "outbound" ? "source_memory_id" : "target_memory_id";
-      return database.transaction(async (transaction) => {
-        const anchor = await transaction.query<{ id: string }>(
-          "SELECT id FROM memories WHERE workspace_id = $1 AND id = $2",
-          [storage.partitionId, input.memoryId],
-        );
-        if (!anchor.rows[0]) return null;
-        const links = await transaction.query<MemoryLinkRow>(
-          `SELECT ${MEMORY_LINK_COLUMNS}
-           FROM memory_links
-           WHERE workspace_id = $1
-             AND ${anchorColumn} = $2
-             AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
-           ORDER BY created_at DESC, id DESC
-           LIMIT $5`,
+      const [anchor, links] = await database.transaction((transaction) =>
+        transaction.batch(
           [
-            storage.partitionId,
-            input.memoryId,
-            cursor?.createdAt ?? null,
-            cursor?.id ?? null,
-            limit,
+            statement<{ id: string }>(
+              "SELECT id FROM memories WHERE workspace_id = $1 AND id = $2",
+              [storage.partitionId, input.memoryId],
+            ),
+            statement<MemoryLinkRow>(
+              `SELECT ${MEMORY_LINK_COLUMNS}
+               FROM memory_links
+               WHERE workspace_id = $1
+                 AND ${anchorColumn} = $2
+                 AND ($3::timestamptz IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+               ORDER BY created_at DESC, id DESC
+               LIMIT $5`,
+              [
+                storage.partitionId,
+                input.memoryId,
+                cursor?.createdAt ?? null,
+                cursor?.id ?? null,
+                limit,
+              ],
+            ),
           ],
-        );
-        return links.rows.map(toMemoryLink);
-      });
+          { commit: true },
+        ),
+      );
+      if (!anchor.rows[0]) return null;
+      return links.rows.map(toMemoryLink);
     },
 
     async read(input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
@@ -946,48 +1004,55 @@ export function createMemoryGraphModule(storage: MemoryStorageContext) {
         maximum: MEMORY_GRAPH_LIMITS.maximumNodes,
         fallback: MEMORY_GRAPH_LIMITS.maximumNodes,
       });
-      return database.transaction(async (transaction) => {
-        const bounded = await readGraphRows(
-          transaction,
-          storage.partitionId,
-          limit,
-          GRAPH_CONTENT_PREFIX_CHARACTERS,
-        );
-        const requiredIds = completeContentIds(bounded.memories, bounded.stored);
-        if (requiredIds.length === 0) return buildGraph(bounded.memories, bounded.stored, input);
-        const completeResult = await transaction.query<{
-          id: string;
-          version: number;
-          content: string;
-        }>(
-          `SELECT id, version, content
-           FROM memories
-           WHERE workspace_id = $1
-             AND id = ANY($2::uuid[])`,
-          [storage.partitionId, requiredIds],
-        );
-        const completeById = new Map(completeResult.rows.map((row) => [row.id, row] as const));
-        const versionById = new Map(
-          bounded.memories.map((memory) => [memory.id, memory.version] as const),
-        );
-        const unchanged = requiredIds.every(
-          (id) => completeById.get(id)?.version === versionById.get(id),
-        );
-        if (!unchanged) {
-          // A write between statements changed or hid a Memory whose complete
-          // content is needed. Reread every node in full so the whole graph
-          // again comes from one statement's snapshot.
-          const reread = await readGraphRows(transaction, storage.partitionId, limit, null);
-          return buildGraph(reread.memories, reread.stored, input);
-        }
-        const memories = bounded.memories.map((memory) => {
-          const complete = completeById.get(memory.id);
-          return complete
-            ? { ...memory, content: complete.content, contentComplete: true }
-            : memory;
-        });
-        return buildGraph(memories, bounded.stored, input);
+      // Nodes, Links, and COMMIT share one round trip and one snapshot.
+      const readGraph = (prefixCharacters: number | null) =>
+        database.transaction(async (transaction) => {
+          const [memoryRows, linkRows] = await transaction.batch(
+            graphStatements(storage.partitionId, limit, prefixCharacters),
+            { commit: true },
+          );
+          return graphRows(memoryRows.rows, linkRows.rows);
+        }, GRAPH_SNAPSHOT);
+      const bounded = await readGraph(GRAPH_CONTENT_PREFIX_CHARACTERS);
+      const requiredIds = completeContentIds(bounded.memories, bounded.stored);
+      if (requiredIds.length === 0) return buildGraph(bounded.memories, bounded.stored, input);
+      // Rare: some nodes need their complete content. That read takes a later
+      // snapshot, so it carries versions to compare against.
+      const [completeResult] = await database.transaction(
+        (transaction) =>
+          transaction.batch(
+            [
+              statement<{ id: string; version: number; content: string }>(
+                `SELECT id, version, content
+                 FROM memories
+                 WHERE workspace_id = $1
+                   AND id = ANY($2::uuid[])`,
+                [storage.partitionId, requiredIds],
+              ),
+            ],
+            { commit: true },
+          ),
+        GRAPH_SNAPSHOT,
+      );
+      const completeById = new Map(completeResult.rows.map((row) => [row.id, row] as const));
+      const versionById = new Map(
+        bounded.memories.map((memory) => [memory.id, memory.version] as const),
+      );
+      const unchanged = requiredIds.every(
+        (id) => completeById.get(id)?.version === versionById.get(id),
+      );
+      if (!unchanged) {
+        // A write between the two snapshots changed or hid a Memory whose complete
+        // content is needed. Reread every node in full so the whole graph again
+        // comes from one snapshot.
+        const reread = await readGraph(null);
+        return buildGraph(reread.memories, reread.stored, input);
+      }
+      const memories = bounded.memories.map((memory) => {
+        const complete = completeById.get(memory.id);
+        return complete ? { ...memory, content: complete.content, contentComplete: true } : memory;
       });
+      return buildGraph(memories, bounded.stored, input);
     },
   };
 }

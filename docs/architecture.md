@@ -36,7 +36,10 @@ Services remain independent of Hono. The same shared subrouters mount
 at `/api` and `/api/v1`; versioned-only resources mount only under `/api/v1`.
 `src/server/api/dependencies.ts` binds typed, lazy Hono context functions to each
 request. It reuses that request's database adapter and identity resolver; handlers
-choose when to resolve an Actor or User. Liveness probes, admission failures, and
+choose when to resolve an Actor or User. Hot routes take the request's pending Actor
+(`requestActor`), which the first transaction that binds it admits as its own
+prefix (`src/server/auth/actor-admission.ts`), so a read costs one round trip with
+its admission; other routes resolve it first (`resolveActor`, one round trip). Liveness probes, admission failures, and
 unmatched or unsupported routes do not initialize application dependencies. Shared
 `onError` handling maps known domain failures to the public error contract and
 hides unexpected error details: a domain failure extends `DomainError`
@@ -241,17 +244,29 @@ run inside the host's transaction.
 The supplied database must constrain every transaction before Core uses it.
 OSS `src/server/auth/actor-context.ts` owns User/Workspace/Agent context;
 `src/server/database/memory-storage.ts` installs it for every engine transaction,
-including later retrieval-feedback rounds. `src/server/database/postgres.ts`
-chooses `lore_app` or `lore_maintenance`. Core's `./postgres` adapter only handles
-connections, transactions, and a host-supplied `initializeTransaction` callback.
+including later retrieval-feedback rounds.
+
+Core owns its SQL and the host owns connections. Core imports no database driver;
+`src/server/database/postgres.ts` owns OSS's `pg` pools and sets `lore_app` or
+`lore_maintenance` as each transaction's first setting. Its process pool serves
+Bun, self-host, and tooling; its request pool (at most two connections) lives for
+one Workers request, queue batch, or cron run. Both build on Core's
+`transactionHandle(send)`, which sends `BEGIN` and pending `setLocal` settings with
+the first statement. `transaction.batch(statements, { commit })` sends statements
+whose inputs are already known without waiting between them; with pg pipelining on
+(`LORE_POSTGRES_PIPELINE`), BEGIN, settings, a whole read, and COMMIT share one
+network wait. PostgreSQL still runs them in order, each with its own READ COMMITTED
+snapshot, so a statement behind a lock sees what was committed before the lock was
+granted. Post-commit work, such as embedding queue notifications, is registered with
+`transaction.afterCommit` and runs only after COMMIT succeeds.
 `PostgresDatabase.transaction(use, { isolation, readOnly })` starts the transaction
-in the requested modes (`BEGIN ISOLATION LEVEL …`) before that callback runs, and
+in the requested modes (`BEGIN ISOLATION LEVEL …`) before host setup runs, and
 every wrapper must pass the options on: joint context retrieval reads one packet's
 Code evidence from a REPEATABLE READ, READ ONLY snapshot, and PostgreSQL cannot
 change the isolation level after any statement, host setup included, has taken a
 snapshot.
 An existing host transaction can be bound through `memoryStorageInTransaction`;
-its caller remains responsible for context, authorization, commit, and notification.
+its caller remains responsible for context, authorization, and commit.
 
 OSS modules `memories/service.ts`, `graph/service.ts`, and
 `episodes/{service,evidence}.ts` compose those stores with product policy and map
@@ -276,8 +291,14 @@ Episode admission is an OSS operation: `episodes/service.ts` validates with Core
 `normalizedEpisode`, then calls the authorization-bearing `lore.record_episode`
 function and records request replay. Core's Observation module provides validation,
 store-bound reads, and deletion; its Episode evidence index still owns partitioning,
-embedding, and retrieval algorithms. Core maintenance keeps embedding leases and
-generation activation/pruning. Expired request replay and event cleanup,
+embedding, and retrieval algorithms. Core maintenance owns embedding lanes,
+leases, retries, seeding, and generation activation/pruning behind one runner,
+`createEmbeddingMaintenance` (`run`, `sweep`, `pending`), which the Bun worker's
+loops and the Cloudflare queue/scheduled handlers drive; a lane's lease comes from
+its provider's optional `requestTimeoutMs`, never from a provider name. Operator
+generation commands use `createEmbeddingGenerationAdmin`, and readiness uses
+`embeddingGenerationServing`. Hosts keep environment parsing, concurrency, loops,
+queue transport, and log format. Expired request replay and event cleanup,
 `purgeExpiredPortableCoreRecords`, lives in `src/modules/operations/maintenance.ts`.
 
 The `./testing` contract kit accepts host-bound contexts and a `testDatabase`

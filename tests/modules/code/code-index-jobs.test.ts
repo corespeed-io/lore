@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type PostgresDatabase, transactionThrough } from "@corespeed/lore-core";
 import { afterEach, expect, onTestFinished, test } from "vitest";
 import {
   CodeIndexValidationError,
@@ -497,7 +497,7 @@ test("only a write-authorized Actor of the repository's Workspace can enqueue or
   ] as const) {
     await expect(
       context.database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         return transaction.query("SELECT lore.enqueue_code_index_job($1, $2, $3, NULL, $4)", [
           queued.repositoryId,
           "/srv/elsewhere",
@@ -518,7 +518,7 @@ test("only a write-authorized Actor of the repository's Workspace can enqueue or
   // request role cannot call it directly.
   await expect(
     context.database.transaction(async (transaction) => {
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       return transaction.query("SELECT lore.code_index_requester_can_run($1, $2, NULL)", [
         context.carol.workspaceId,
         context.carol.userId,
@@ -571,7 +571,7 @@ test("the sweep cancels jobs an older app instance enqueued for a superseded ind
   // The request role cannot run it.
   await expect(
     context.database.transaction(async (transaction) => {
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       return transaction.query("SELECT lore.cancel_superseded_code_index_jobs(ARRAY['x'])");
     }),
   ).rejects.toMatchObject({ code: "42501" });
@@ -789,17 +789,19 @@ test("a transient failure keeps the retry budget and a content-free error", asyn
   );
   let failed = false;
   const flaky: PostgresDatabase = {
-    transaction: (use) =>
-      context.maintenanceDatabase.transaction((transaction) =>
-        use({
-          query: (sql, params) => {
-            if (!failed && sql.includes("INSERT INTO code_revisions")) {
-              failed = true;
-              throw new Error(`connection reset while reading ${repositoryPath}`);
-            }
-            return transaction.query(sql, params);
-          },
-        }),
+    transaction: (use, options) =>
+      context.maintenanceDatabase.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, (sql, params) => {
+              if (!failed && sql.includes("INSERT INTO code_revisions")) {
+                failed = true;
+                throw new Error(`connection reset while reading ${repositoryPath}`);
+              }
+              return transaction.query(sql, params);
+            }),
+          ),
+        options,
       ),
   };
   const logs: CodeIndexMaintenanceLog[] = [];

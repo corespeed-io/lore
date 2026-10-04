@@ -28,7 +28,7 @@ test("Verified provider identity resolves to one stable internal User", async ()
     identities.resolve("oidc:https://identity.example", "external-user-42"),
   ).resolves.toEqual(registered);
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, {
+    installActorContext(transaction, {
       userId: registered.id,
       workspaceId: testContext.alice.workspaceId,
     });
@@ -39,7 +39,7 @@ test("Verified provider identity resolves to one stable internal User", async ()
     });
   });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(
       transaction.query("SELECT provider, subject FROM identities"),
     ).resolves.toMatchObject({ rows: [] });

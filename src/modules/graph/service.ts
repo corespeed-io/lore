@@ -9,7 +9,7 @@ import {
   type ReadMemoryGraph,
   type MemoryLink as StoredMemoryLink,
 } from "@corespeed/lore-core";
-import type { ActorContext } from "@/server/auth/actor-context";
+import type { RequestActor } from "@/server/auth/actor-admission";
 import { createMemoryStorage } from "@/server/database/memory-storage";
 
 export interface MemoryLink extends Omit<StoredMemoryLink, "partitionId"> {
@@ -41,12 +41,12 @@ function isVanishedEndpoint(error: unknown): boolean {
  * write and a target it cannot read are both absent.
  */
 export function createMemoryGraphModule(database: PostgresDatabase) {
-  const coreFor = (actor: ActorContext) =>
+  const coreFor = (actor: RequestActor) =>
     createCoreMemoryGraphModule(createMemoryStorage(database, actor));
   return {
     /** Null when the source is not writable or the target is not visible to this Actor. */
     async connect(
-      actor: ActorContext,
+      actor: RequestActor,
       input: ConnectMemories,
     ): Promise<ConnectedMemoryLink | null> {
       try {
@@ -61,19 +61,19 @@ export function createMemoryGraphModule(database: PostgresDatabase) {
     },
 
     /** False when no such Link is visible to this Actor through a source it may write. */
-    async disconnect(actor: ActorContext, input: DisconnectMemories): Promise<boolean> {
+    async disconnect(actor: RequestActor, input: DisconnectMemories): Promise<boolean> {
       return coreFor(actor).disconnect(input);
     },
 
     /** One page of a Memory's visible Links; null when the Memory is not visible. */
-    async list(actor: ActorContext, input: ListMemoryLinks): Promise<MemoryLink[] | null> {
+    async list(actor: RequestActor, input: ListMemoryLinks): Promise<MemoryLink[] | null> {
       const links = await coreFor(actor).list(input);
       return (
         links?.map(({ partitionId, ...link }) => ({ ...link, workspaceId: partitionId })) ?? null
       );
     },
 
-    read(actor: ActorContext, input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
+    read(actor: RequestActor, input: ReadMemoryGraph = {}): Promise<MemoryGraph> {
       return coreFor(actor).read(input);
     },
   };

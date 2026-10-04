@@ -1,4 +1,5 @@
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type PostgresDatabase, statement } from "@corespeed/lore-core";
+import { type RequestUser, userTransaction } from "@/server/auth/actor-admission";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { installActorContext, installUserContext } from "@/server/auth/actor-context";
 import { refusingDeniedAccess } from "@/server/database/access-denied";
@@ -72,11 +73,12 @@ function toWorkspaceSummary(row: WorkspaceSummaryRow): WorkspaceSummary {
 
 /** Workspaces and their Memberships, as the calling User may see and change them. */
 export function createWorkspacesModule(database: PostgresDatabase) {
-  async function listWorkspaces(user: UserContext): Promise<WorkspaceSummary[]> {
-    return database.transaction(async (transaction) => {
-      await installUserContext(transaction, user);
-      const result = await transaction.query<WorkspaceSummaryRow>(
-        "SELECT * FROM lore.list_workspaces()",
+  /** One round trip, registering a pending User as its prefix. */
+  async function listWorkspaces(user: RequestUser): Promise<WorkspaceSummary[]> {
+    return userTransaction(database, user, async (transaction) => {
+      const [result] = await transaction.batch(
+        [statement<WorkspaceSummaryRow>("SELECT * FROM lore.list_workspaces()")],
+        { commit: true },
       );
       return result.rows.map(toWorkspaceSummary);
     });
@@ -86,7 +88,7 @@ export function createWorkspacesModule(database: PostgresDatabase) {
     async createWorkspace(user: UserContext, input: { name: string }): Promise<Workspace> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installUserContext(transaction, user);
+          installUserContext(transaction, user);
           const result = await transaction.query<WorkspaceRow>(
             "SELECT * FROM lore.create_workspace($1, $2)",
             [crypto.randomUUID(), input.name],
@@ -113,7 +115,7 @@ export function createWorkspacesModule(database: PostgresDatabase) {
     ): Promise<WorkspaceMembership> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const result = await transaction.query<MembershipRow>(
             `INSERT INTO memberships (workspace_id, user_id, role)
              VALUES ($1, $2, $3)

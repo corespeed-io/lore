@@ -95,7 +95,7 @@ test("RLS keeps a User's Agents and Workspace Grants private from other members"
   });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(transaction.query("SELECT id FROM agents")).resolves.toMatchObject({ rows: [] });
     await expect(
       transaction.query("SELECT agent_id FROM agent_workspace_grants"),
@@ -137,7 +137,7 @@ test("Agent credential resolves to the owning User and granted Workspace", async
     access.authenticateAgent("lore_agent_invalid", testContext.alice.workspaceId),
   ).resolves.toBeNull();
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query("SELECT id, agent_id, secret_prefix FROM agent_credentials"),
     ).resolves.toMatchObject({ rows: [{ id: credential.id, agent_id: agent.id }] });
@@ -146,7 +146,7 @@ test("Agent credential resolves to the owning User and granted Workspace", async
     );
   });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(
       transaction.query("SELECT id, agent_id, secret_prefix FROM agent_credentials"),
     ).resolves.toMatchObject({ rows: [] });
@@ -413,7 +413,7 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
 
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, agentActor);
+      installActorContext(transaction, agentActor);
       await transaction.query("UPDATE memories SET created_by_agent_id = NULL WHERE id = $1", [
         memory.id,
       ]);
@@ -421,7 +421,7 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
   ).rejects.toThrow(/Memory identity and provenance are immutable/);
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       await transaction.query("UPDATE memories SET created_by_agent_id = NULL WHERE id = $1", [
         memory.id,
       ]);
@@ -547,7 +547,7 @@ test("Deleting a disabled Agent that cited Code Evidence keeps the citation with
   for (const database of [testContext.database, testContext.adminDatabase]) {
     await expect(
       database.transaction(async (transaction) => {
-        await installActorContext(transaction, testContext.alice);
+        installActorContext(transaction, testContext.alice);
         await transaction.query(
           "UPDATE memory_code_evidence SET created_by_agent_id = NULL WHERE id = $1",
           [citation.id],

@@ -1,17 +1,31 @@
 import { configuredCodeRepositoriesFromEnvironment } from "@/modules/code/indexing/queue";
-import { createRequestPostgresDatabase } from "@/server/database/postgres";
+import {
+  createRequestPostgresDatabase,
+  postgresPipeline,
+  type RuntimePostgresDatabase,
+} from "@/server/database/postgres";
 import { getRuntimeMemoryModuleOptions } from "@/server/providers/runtime";
 import { createApi } from "./app";
 
-/** Each request gets its own Hyperdrive adapter; sockets never cross request lifetimes. */
-export function fetchCloudflareApi(
+/**
+ * Each request gets its own Hyperdrive connections, reused by every transaction of
+ * the request and closed once its response is ready; sockets never cross request
+ * lifetimes.
+ */
+export async function fetchCloudflareApi(
   request: Request,
-  env: Pick<CloudflareEnv, "HYPERDRIVE" | "MEMORY_MAINTENANCE_QUEUE">,
+  env: Pick<CloudflareEnv, "HYPERDRIVE" | "MEMORY_MAINTENANCE_QUEUE" | "LORE_POSTGRES_PIPELINE">,
   context: Pick<ExecutionContext, "waitUntil">,
-) {
+): Promise<Response> {
+  let database: RuntimePostgresDatabase | undefined;
   const app = createApi({
-    database: () =>
-      createRequestPostgresDatabase({ connectionString: env.HYPERDRIVE.connectionString }),
+    database: () => {
+      database ??= createRequestPostgresDatabase(
+        { connectionString: env.HYPERDRIVE.connectionString },
+        { pipeline: postgresPipeline(env.LORE_POSTGRES_PIPELINE, false) },
+      );
+      return database;
+    },
     memoryOptions: () =>
       getRuntimeMemoryModuleOptions({
         maintenanceNotifier: {
@@ -39,5 +53,9 @@ export function fetchCloudflareApi(
     // Workers do not run local Git ingestion. Public enqueue is self-host only.
     codeRepositories: () => configuredCodeRepositoriesFromEnvironment({}),
   });
-  return app.fetch(request);
+  try {
+    return await app.fetch(request);
+  } finally {
+    if (database) context.waitUntil(database.close());
+  }
 }

@@ -99,12 +99,8 @@ test("a key reused after its record expires forgets the earlier subjects and com
   const inspected = new Error("roll back the inspected claim");
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
-      const claim = await beginMutation(
-        transaction,
-        testContext.alice,
-        (await request(secondContent)).idempotency,
-      );
+      installActorContext(transaction, testContext.alice);
+      const claim = await beginMutation(transaction, (await request(secondContent)).idempotency);
       expect(claim).toEqual({ requestId: firstRecord.id });
       const reset = await transaction.query<Omit<LedgerRow, "id" | "expires_at">>(
         `SELECT status, response_status, response_body, subject_memory_id,
@@ -217,7 +213,28 @@ test("each replayed outcome answers with its first status, whatever response_sta
     200, 200, 200,
   ]);
   expect(updated.replay.headers.get("etag")).toBe('"memory-v2"');
-  await expect(updated.replay.json()).resolves.toEqual(await updated.first.json());
+  const updatedBody = await updated.first.json();
+  await expect(updated.replay.json()).resolves.toEqual(updatedBody);
+
+  // An update equal to the stored Memory writes nothing yet completes its record
+  // with the unchanged body, so its replay answers the same version and ETag.
+  const unchanged = await twice(`/api/v1/memories/${memory.id}`, {
+    method: "PATCH",
+    key: "outcome-unchanged",
+    headers: { "if-match": '"memory-v2"' },
+    body: JSON.stringify({ content: "Replay outcome canary, revised." }),
+  });
+  expect([unchanged.first.status, unchanged.replay.status, unchanged.legacyStatus]).toEqual([
+    200, 200, 200,
+  ]);
+  expect(unchanged.first.headers.get("etag")).toBe('"memory-v2"');
+  expect(unchanged.replay.headers.get("etag")).toBe('"memory-v2"');
+  const unchangedBody = await unchanged.first.json();
+  expect(unchangedBody).toEqual(updatedBody);
+  await expect(unchanged.replay.json()).resolves.toEqual(unchangedBody);
+  expect(await ledger(testContext, "outcome-unchanged")).toMatchObject([
+    { status: "completed", subject_memory_id: memory.id },
+  ]);
 
   const missingUpdate = await twice(`/api/v1/memories/${missingId}`, {
     method: "PATCH",

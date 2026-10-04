@@ -556,7 +556,10 @@ computed locally, so no cleartext password reaches the server log. Runtime passw
 must therefore be printable ASCII (for example `openssl rand -base64 32`).
 
 Set `DATABASE_URL` to the new runtime login, copy the remaining local values from
-`.env.example`, and run:
+`.env.example`, and run the command below. Self-host processes pipeline each
+transaction's independent statements (pg's `pipeline` mode), so BEGIN, a whole read,
+and COMMIT share one network wait; `LORE_POSTGRES_PIPELINE=0` turns that off, for
+example behind a proxy that mishandles pipelined queries.
 
 ```bash
 bun run dev
@@ -734,6 +737,12 @@ leases, and RLS reads depend on transaction-local context and must always be fre
 The checked-in Hyperdrive ids and Access values are deliberate placeholders. Set
 provider API keys with `wrangler secret put`; `.dev.vars.example` is only a local
 Workerd template.
+
+Each request, queue batch, and cron run opens its own Hyperdrive connections (at
+most two) and closes them when it ends. `LORE_POSTGRES_PIPELINE` in `wrangler.jsonc`
+stays `"0"`: pg then waits for each statement's reply before sending the next.
+Set it to `"1"` only after pipelined queries through Hyperdrive, errors and aborts
+included, have been verified for the deployment.
 
 ## Verify changes
 

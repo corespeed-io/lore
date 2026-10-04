@@ -8,7 +8,6 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./postgres": "./src/postgres.ts",
     "./episodes": "./src/episodes/index.ts",
     "./testing": "./src/testing.ts"
   },
@@ -17,11 +16,7 @@
     "test": "bun --no-env-file --bun vitest run",
     "check": "bun run typecheck && bun run test"
   },
-  "dependencies": {
-    "pg": "^8.23.0"
-  },
   "devDependencies": {
-    "@types/pg": "^8.23.1",
     "typescript": "^7.0.2",
     "@electric-sql/pglite": "^0.5.8",
     "@electric-sql/pglite-pgvector": "^0.0.9",

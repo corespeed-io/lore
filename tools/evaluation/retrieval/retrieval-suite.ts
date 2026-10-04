@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ContextGroupExpansionOptions, EmbeddingProvider } from "@corespeed/lore-core";
 import {
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   MEMORY_SEARCH_LIMITS,
   RETRIEVAL_CJK_LEXICAL_POLICY,
   RETRIEVAL_CONTEXT_GROUP_POLICY,
@@ -639,8 +639,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     const maintenanceStartedAt = performance.now();
     let completedJobs = 0;
     if (!input.reuseIndexed) {
-      const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, {
-        embeddingProvider,
+      const maintenance = createEmbeddingMaintenance(maintenanceDatabase, {
+        embeddingProviders: [embeddingProvider],
       });
       completedJobs = await drainEmbeddingMaintenance({
         run: () => maintenance.run(),

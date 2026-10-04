@@ -8,9 +8,10 @@
  * policy before the engine reads or writes. Identity, tenant authorization,
  * request replay and database role selection belong to the host.
  *
- * Subpath entries: `./postgres` (pg-backed database factories), `./episodes`
- * (optional Episode/Observation evidence capability), and `./testing`
- * (host-pluggable schema-contract tests). Hosts supply model adapters through
+ * Subpath entries: `./episodes` (optional Episode/Observation evidence
+ * capability) and `./testing` (host-pluggable schema-contract tests). The engine
+ * has no database driver: hosts own connections and implement
+ * {@link PostgresDatabase}, usually through {@link transactionHandle}. Hosts supply model adapters through
  * the embedding, reranking, and query-planning capability interfaces.
  */
 
@@ -18,7 +19,21 @@ export * from "./batch";
 export * from "./capabilities";
 export * from "./db";
 export * from "./graph";
-export * from "./maintenance";
+// Maintenance lanes and the lease rule stay internal; hosts drive the runner.
+export {
+  createEmbeddingGenerationAdmin,
+  createEmbeddingMaintenance,
+  type EmbeddingGenerationIdentity,
+  type EmbeddingGenerationReport,
+  type EmbeddingMaintenance,
+  type EmbeddingMaintenanceLog,
+  type EmbeddingMaintenanceOptions,
+  type EmbeddingMaintenanceRunResult,
+  type EmbeddingMaintenanceSweep,
+  embeddingGenerationServing,
+  type MemoryMaintenanceResult,
+  type MemoryMaintenanceStatus,
+} from "./maintenance";
 export * from "./memory";
 export * from "./memory-chunking";
 export * from "./memory-content";

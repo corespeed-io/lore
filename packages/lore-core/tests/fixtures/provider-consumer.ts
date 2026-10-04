@@ -7,6 +7,7 @@ import {
   type PostgresDatabase,
   type QueryPlanningProvider,
   type RerankingProvider,
+  transactionHandle,
 } from "@corespeed/lore-core";
 import { createEpisodeEvidenceModule } from "@corespeed/lore-core/episodes";
 
@@ -33,7 +34,13 @@ const rerankingProvider: RerankingProvider = {
   },
 };
 const database: PostgresDatabase = {
-  transaction: (use) => use({ query: async () => ({ rows: [] }) }),
+  async transaction(use) {
+    const handle = transactionHandle(async () => ({ rows: [] }));
+    const result = await use(handle.transaction);
+    await handle.commit();
+    handle.committed();
+    return result;
+  },
 };
 const options = { embeddingProvider, queryPlanningProvider, rerankingProvider };
 const storage: MemoryStorageContext = {

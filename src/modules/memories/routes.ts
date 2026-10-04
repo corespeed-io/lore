@@ -37,7 +37,7 @@ export const memories = new Hono<ApiEnv>()
   .get("/", async (c) => {
     const memories = createMemoryModule(await c.var.database(), c.var.memoryOptions());
     const request = c.req.raw;
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const url = new URL(request.url);
     const requestedQuery = url.searchParams.get("q");
     const query = requestedQuery?.trim()
@@ -100,7 +100,7 @@ export const memories = new Hono<ApiEnv>()
   .post("/", async (c) => {
     const memories = createMemoryModule(await c.var.database(), c.var.memoryOptions());
     const request = c.req.raw;
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const body = await jsonObject(request);
     const input = parseMemoryInput(CreateMemoryInputSchema, body);
     const memory = await observeOperation("memory.create", async () =>
@@ -114,7 +114,7 @@ export const memories = new Hono<ApiEnv>()
     const memories = createMemoryModule(await c.var.database());
     const id = c.req.param("id");
     const memoryId = uuidString(id, "memoryId");
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const memory = await observeOperation("memory.retrieve", () =>
       memories.retrieve(actor, memoryId),
     );
@@ -126,7 +126,7 @@ export const memories = new Hono<ApiEnv>()
     const request = c.req.raw;
     const id = c.req.param("id");
     const memoryId = uuidString(id, "memoryId");
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const body = await jsonObject(request);
     const input = parseMemoryInput(UpdateMemoryInputSchema, body);
     const expectedVersion = expectedMemoryVersion(request);
@@ -148,7 +148,7 @@ export const memories = new Hono<ApiEnv>()
     const request = c.req.raw;
     const id = c.req.param("id");
     const memoryId = uuidString(id, "memoryId");
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const expectedVersion = expectedMemoryVersion(request);
     const forgotten = await observeOperation("memory.delete", async () =>
       memories.forget(actor, memoryId, {

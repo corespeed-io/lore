@@ -78,7 +78,7 @@ test("An Episode records immutable ordered Observation evidence with private def
   ).resolves.toEqual([]);
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query("UPDATE observations SET observed_at = now() WHERE id = $1", [
         episode.observations[0].id,

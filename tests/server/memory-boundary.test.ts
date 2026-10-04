@@ -1,11 +1,13 @@
-import type {
-  EmbeddingProvider,
-  PostgresDatabase,
-  PostgresTransaction,
+import {
+  type EmbeddingProvider,
+  type PostgresDatabase,
+  type PostgresTransaction,
+  transactionHandle,
 } from "@corespeed/lore-core";
 import { expect, test, vi } from "vitest";
-import { createMemoryModule } from "@/modules/memories/service";
+import { createMemoryModule, createMemoryMutationPrimitives } from "@/modules/memories/service";
 import { mutationRequestHash } from "@/server/api/idempotency";
+import { installActorContext } from "@/server/auth/actor-context";
 import { createMemoryStorage } from "@/server/database/memory-storage";
 import { createAccessModule } from "../support/access";
 import { createMemoryTestContext } from "../support/memory-context";
@@ -56,12 +58,19 @@ test("OSS denies read-only Agent mutations before disclosing the current Memory 
 test("OSS rolls back Memory, idempotency and embedding jobs without notifying maintenance", async () => {
   const context = await createMemoryTestContext();
   const failure = new Error("Host transaction cannot commit");
+  // COMMIT is the statement that fails, whether the engine sends it behind its
+  // last batch or the host sends it once the callback returns.
   const database: PostgresDatabase = {
-    transaction: (use) =>
+    transaction: (use, options) =>
       context.database.transaction(async (transaction) => {
-        await use(transaction);
-        throw failure;
-      }),
+        const handle = transactionHandle((sql, params) =>
+          sql === "COMMIT" ? Promise.reject(failure) : transaction.query(sql, [...params]),
+        );
+        const result = await use(handle.transaction);
+        await handle.commit();
+        handle.committed();
+        return result;
+      }, options),
   };
   const notify = vi.fn();
   const memories = createMemoryModule(database, {
@@ -93,16 +102,30 @@ test("OSS preserves wire identity and emits one post-commit notification across 
   const context = await createMemoryTestContext();
   let activeTransactions = 0;
   let committedTransactions = 0;
+  // The host decides when post-commit effects run, so an engine that notified
+  // any other way would do it while the transaction is still active.
   const database: PostgresDatabase = {
-    async transaction(use) {
+    async transaction(use, options) {
+      const effects: Array<() => void> = [];
       activeTransactions += 1;
+      let result: Awaited<ReturnType<typeof use>>;
       try {
-        const result = await context.database.transaction(use);
+        result = await context.database.transaction(
+          (transaction) =>
+            use({
+              query: (sql, params) => transaction.query(sql, params),
+              batch: (statements, batchOptions) => transaction.batch(statements, batchOptions),
+              setLocal: (settings) => transaction.setLocal(settings),
+              afterCommit: (effect) => effects.push(effect),
+            }),
+          options,
+        );
         committedTransactions += 1;
-        return result;
       } finally {
         activeTransactions -= 1;
       }
+      for (const effect of effects) effect();
+      return result;
     },
   };
   const notifications: Array<{
@@ -253,4 +276,49 @@ test("OSS Memory storage starts the engine's transaction in its modes, then inst
   await expect(storage.database.transaction(settings)).resolves.toMatchObject({
     rows: [{ isolation: "read committed", read_only: "off", user_id: context.alice.userId }],
   });
+});
+
+test("a committed transaction notifies at most 1,000 queued jobs, and a rolled-back one none", async () => {
+  const context = await createMemoryTestContext();
+  const batches: Array<Array<{ jobId: string }>> = [];
+  const notify = vi.fn();
+  const primitives = createMemoryMutationPrimitives({
+    embeddingProvider: embeddingProvider(),
+    maintenanceNotifier: { notify, notifyMany: (messages) => batches.push([...messages]) },
+  });
+  const records = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: crypto.randomUUID(),
+      scope: "shared" as const,
+      content: `Imported decision ${index}.`,
+      metadata: {},
+    }));
+
+  await context.database.transaction(async (transaction) => {
+    installActorContext(transaction, context.alice);
+    await primitives.insertMemoriesInTransaction(transaction, context.alice, records(1_001));
+    expect(batches).toEqual([]);
+  });
+  // One message per job up to the cap; the sweep finds the 1,001st.
+  expect(batches).toHaveLength(1);
+  expect(batches[0]).toHaveLength(1_000);
+  expect(new Set(batches[0]?.map((message) => message.jobId)).size).toBe(1_000);
+
+  const failure = new Error("import refused after its writes");
+  await expect(
+    context.database.transaction(async (transaction) => {
+      installActorContext(transaction, context.alice);
+      await primitives.insertMemoriesInTransaction(transaction, context.alice, records(2));
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(batches).toHaveLength(1);
+  expect(notify).not.toHaveBeenCalled();
+  await expect(
+    context.adminDatabase.transaction((transaction) =>
+      transaction.query<{ count: number }>(
+        "SELECT count(*)::integer AS count FROM memory_embedding_jobs",
+      ),
+    ),
+  ).resolves.toMatchObject({ rows: [{ count: 1_001 }] });
 });

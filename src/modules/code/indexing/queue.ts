@@ -82,7 +82,7 @@ export function createCodeIndexQueueModule(
         : null;
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const allowed = await transaction.query<{ allowed: boolean }>(
             "SELECT lore.can_write_code_index($1) AS allowed",
             [actor.workspaceId],

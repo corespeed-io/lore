@@ -1,5 +1,5 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
-import { MemoryVersionConflictError } from "@corespeed/lore-core";
+import { MemoryVersionConflictError, transactionHandle } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { DEPLOYMENT_FEATURES } from "@/modules/operations/limits";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
@@ -54,34 +54,32 @@ function exportLimitDatabase(options: {
   };
   return {
     transaction: (use) =>
-      use({
-        async query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }> {
+      use(
+        transactionHandle(async (sql, params) => {
           options.queries.push(sql);
-          if (sql.includes("set_config('lore.workspace_id'")) return { rows: [] };
+          if (sql.includes("set_config(") || sql === "COMMIT") return { rows: [] };
           if (sql.includes("portable_core_capabilities")) {
             return {
-              rows: [
-                { capabilities: { deploymentId: EXPORT_TEST_DEPLOYMENT_ID } },
-              ] as unknown as Row[],
+              rows: [{ capabilities: { deploymentId: EXPORT_TEST_DEPLOYMENT_ID } }],
             };
           }
           if (sql.includes("FROM memories")) {
             expect(sql).toContain("LIMIT $2");
             expect(params?.[1]).toBe(MAX_WORKSPACE_ARCHIVE_MEMORIES + 1);
             return {
-              rows: Array(options.memoryCount).fill(memory) as unknown as Row[],
+              rows: Array(options.memoryCount).fill(memory),
             };
           }
           if (sql.includes("FROM memory_links")) {
             expect(sql).toContain("LIMIT $3");
             expect(params?.[2]).toBe(MAX_WORKSPACE_ARCHIVE_LINKS + 1);
             return {
-              rows: Array(options.linkCount ?? 0).fill(link) as unknown as Row[],
+              rows: Array(options.linkCount ?? 0).fill(link),
             };
           }
           throw new Error(`Unexpected export test query: ${sql}`);
-        },
-      }),
+        }).transaction,
+      ),
   };
 }
 
@@ -230,7 +228,7 @@ test("Idempotency-Key scope is isolated by actor", async () => {
   await memories.remember(testContext.bob, input, { idempotency });
 
   const aliceRows = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     return transaction.query<{ actor_user_id: string }>(
       "SELECT actor_user_id FROM request_idempotency_records",
     );
@@ -275,7 +273,7 @@ test("transactional Memory events survive hard deletion without retaining conten
   await memories.forget(testContext.alice, privateMemory.id);
 
   const aliceEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     return transaction.query<{
       event_type: string;
       resource_id: string;
@@ -309,13 +307,13 @@ test("transactional Memory events survive hard deletion without retaining conten
   });
 
   const bobEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     return transaction.query<{ resource_id: string }>("SELECT resource_id FROM memory_events");
   });
   expect(bobEvents.rows).toEqual([{ resource_id: sharedMemory.id }]);
 
   const carolEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.carol);
+    installActorContext(transaction, testContext.carol);
     return transaction.query("SELECT resource_id FROM memory_events");
   });
   expect(carolEvents.rows).toEqual([]);
@@ -336,7 +334,7 @@ test("Memory Link mutations append content-free events in the same transaction",
   await graph.connect(testContext.alice, { ...endpoints, weight: 0.5 });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await transaction.query("DELETE FROM memory_links WHERE id = $1", [link.id]);
   });
   const result = await testContext.adminDatabase.transaction((transaction) =>
@@ -384,7 +382,7 @@ test("Memory Link mutations append content-free events in the same transaction",
 
   await memories.update(testContext.alice, target.id, { scope: "private" });
   const bobLinkEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     return transaction.query(
       "SELECT resource_id FROM memory_events WHERE resource_type = 'memory_link'",
     );
@@ -392,7 +390,7 @@ test("Memory Link mutations append content-free events in the same transaction",
   expect(bobLinkEvents.rows).toEqual([]);
 
   const bobTargetEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     return transaction.query(
       "SELECT resource_id FROM memory_events WHERE resource_type = 'memory' AND resource_id = $1",
       [target.id],
