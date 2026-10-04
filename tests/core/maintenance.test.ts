@@ -976,7 +976,18 @@ test("a malformed queue message is invalid and claims nothing", async () => {
     embeddingProviders: [provider],
   });
 
-  for (const message of [null, "job", 7, [], {}, { jobId: 7 }, { id: notifications[0] }]) {
+  // A queue message whose body is undefined is malformed too; only a call with no
+  // message at all claims any due job.
+  for (const message of [
+    undefined,
+    null,
+    "job",
+    7,
+    [],
+    {},
+    { jobId: 7 },
+    { id: notifications[0] },
+  ]) {
     await expect(maintenance.run(message)).resolves.toEqual({ status: "invalid" });
   }
   const job = await testContext.adminDatabase.transaction((transaction) =>

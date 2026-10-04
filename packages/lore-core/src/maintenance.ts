@@ -431,8 +431,11 @@ export function createEmbeddingMaintenance(
    */
   function run(): Promise<MemoryMaintenanceResult>;
   function run(message: unknown): Promise<EmbeddingMaintenanceRunResult>;
-  async function run(message?: unknown): Promise<EmbeddingMaintenanceRunResult> {
-    if (message === undefined) return runLanes();
+  async function run(...args: [] | [unknown]): Promise<EmbeddingMaintenanceRunResult> {
+    // Decided by whether a message was passed, not by its value: a queue message
+    // whose body is undefined is malformed, never "any due job".
+    if (args.length === 0) return runLanes();
+    const [message] = args;
     if (!isJobMessage(message)) return { status: "invalid" };
     return runLanes(message.jobId);
   }
