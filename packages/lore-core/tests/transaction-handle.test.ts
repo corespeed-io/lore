@@ -209,6 +209,31 @@ describe("managedTransactionDatabase over PGlite", () => {
     }
   });
 
+  test("effects still run when the callback throws after a batch committed", async () => {
+    const postgres = new PGlite();
+    try {
+      await postgres.exec("CREATE TABLE notes (id integer PRIMARY KEY)");
+      const database = managedTransactionDatabase(postgres);
+      const effects: string[] = [];
+      const failure = new Error("failed after its commit");
+
+      await expect(
+        database.transaction(async (transaction) => {
+          transaction.afterCommit(() => effects.push("committed"));
+          await transaction.batch([statement("INSERT INTO notes VALUES (1)")], { commit: true });
+          throw failure;
+        }),
+      ).rejects.toBe(failure);
+
+      expect(effects).toEqual(["committed"]);
+      await expect(
+        postgres.query("SELECT count(*)::int AS count FROM notes"),
+      ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+    } finally {
+      await postgres.close();
+    }
+  });
+
   test("a view through transactionThrough sees batched statements one by one", async () => {
     const postgres = new PGlite();
     try {

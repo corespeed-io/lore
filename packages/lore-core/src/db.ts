@@ -135,6 +135,12 @@ export interface PostgresTransactionHandle {
   /** Send COMMIT unless nothing was sent or a batch already committed. */
   commit(): Promise<void>;
   /**
+   * Whether COMMIT succeeded, in a batch or through `commit`. A callback that throws
+   * after its last batch committed leaves a committed transaction behind; its
+   * adapter must still run the post-commit effects.
+   */
+  isCommitted(): boolean;
+  /**
    * Send ROLLBACK when something was sent and not committed. Resolves false when
    * ROLLBACK itself failed, so the adapter must discard the connection.
    */
@@ -227,6 +233,7 @@ export function transactionHandle(
   return {
     transaction,
     started: () => sent,
+    isCommitted: () => committed,
     async commit() {
       if (!sent || committed) return;
       await send("COMMIT", []);
@@ -277,18 +284,25 @@ export function managedTransactionDatabase(
   return {
     async transaction(use, transactionOptions) {
       let handle: PostgresTransactionHandle | undefined;
-      const result = await driver.transaction(async (raw) => {
-        const modes = transactionModes(transactionOptions);
-        handle = transactionHandle(
-          (sql, params) => {
-            options.observe?.(sql);
-            return raw.query(sql, [...params]);
-          },
-          { opening: modes ? statement(`SET TRANSACTION ${modes}`) : null },
-        );
-        await options.initialize?.(handle.transaction);
-        return use(handle.transaction);
-      });
+      let result: Awaited<ReturnType<typeof use>>;
+      try {
+        result = await driver.transaction(async (raw) => {
+          const modes = transactionModes(transactionOptions);
+          handle = transactionHandle(
+            (sql, params) => {
+              options.observe?.(sql);
+              return raw.query(sql, [...params]);
+            },
+            { opening: modes ? statement(`SET TRANSACTION ${modes}`) : null },
+          );
+          await options.initialize?.(handle.transaction);
+          return use(handle.transaction);
+        });
+      } catch (error) {
+        // A batch may have committed before the callback threw.
+        if (handle?.isCommitted()) handle.committed();
+        throw error;
+      }
       handle?.committed();
       return result;
     },

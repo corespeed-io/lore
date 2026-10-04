@@ -214,6 +214,27 @@ test.each(adapters)(
 );
 
 test.each(adapters)(
+  "$name runs post-commit effects when the callback throws after a batch committed",
+  async ({ create }) => {
+    const database = create({});
+    const effects: string[] = [];
+    const failure = new Error("failed after its commit");
+
+    await expect(
+      database.transaction(async (transaction) => {
+        transaction.afterCommit(() => effects.push("committed"));
+        await transaction.batch([statement("SELECT 1")], { commit: true });
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+
+    expect(effects).toEqual(["committed"]);
+    expect(driver.release.mock.calls).toEqual([[undefined]]);
+    await database.close();
+  },
+);
+
+test.each(adapters)(
   "$name commits inside a batch and reports the first failure in statement order",
   async ({ create }) => {
     const database = create({});
