@@ -1,4 +1,5 @@
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type PostgresDatabase, statement } from "@corespeed/lore-core";
+import { type RequestUser, userTransaction } from "@/server/auth/actor-admission";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { installActorContext, installUserContext } from "@/server/auth/actor-context";
 import { refusingDeniedAccess } from "@/server/database/access-denied";
@@ -72,11 +73,12 @@ function toWorkspaceSummary(row: WorkspaceSummaryRow): WorkspaceSummary {
 
 /** Workspaces and their Memberships, as the calling User may see and change them. */
 export function createWorkspacesModule(database: PostgresDatabase) {
-  async function listWorkspaces(user: UserContext): Promise<WorkspaceSummary[]> {
-    return database.transaction(async (transaction) => {
-      installUserContext(transaction, user);
-      const result = await transaction.query<WorkspaceSummaryRow>(
-        "SELECT * FROM lore.list_workspaces()",
+  /** One round trip, registering a pending User as its prefix. */
+  async function listWorkspaces(user: RequestUser): Promise<WorkspaceSummary[]> {
+    return userTransaction(database, user, async (transaction) => {
+      const [result] = await transaction.batch(
+        [statement<WorkspaceSummaryRow>("SELECT * FROM lore.list_workspaces()")],
+        { commit: true },
       );
       return result.rows.map(toWorkspaceSummary);
     });

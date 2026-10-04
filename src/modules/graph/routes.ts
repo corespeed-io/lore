@@ -23,7 +23,7 @@ import { observeOperation } from "@/server/telemetry/telemetry";
 export const graph = new Hono<ApiEnv>().get("/", async (c) => {
   const graph = createMemoryGraphModule(await c.var.database());
   const request = c.req.raw;
-  const actor = await c.var.resolveActor();
+  const actor = await c.var.requestActor();
   const url = new URL(request.url);
   const limit = queryInteger(
     url,
@@ -89,7 +89,7 @@ export const memoryLinks = new Hono<ApiEnv>()
     );
     // Link pages carry the last Link's createdAt in the shared cursor's timestamp.
     const cursor = decodeCursor(url.searchParams.get("cursor"));
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const links = await observeOperation("memory-link.list", () =>
       graph.list(actor, {
         memoryId,
@@ -110,7 +110,7 @@ export const memoryLinks = new Hono<ApiEnv>()
     const graph = createMemoryGraphModule(await c.var.database());
     const request = c.req.raw;
     const key = linkKey(request, c.req.param("id"), c.req.param("targetId"));
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const input = parseMemoryInput(PutMemoryLinkInputSchema, await jsonObject(request));
     const connected = await observeOperation("memory-link.connect", () =>
       graph.connect(actor, { ...key, ...input }),
@@ -122,7 +122,7 @@ export const memoryLinks = new Hono<ApiEnv>()
   .delete("/:id/links/:targetId", async (c) => {
     const graph = createMemoryGraphModule(await c.var.database());
     const key = linkKey(c.req.raw, c.req.param("id"), c.req.param("targetId"));
-    const actor = await c.var.resolveActor();
+    const actor = await c.var.requestActor();
     const deleted = await observeOperation("memory-link.disconnect", () =>
       graph.disconnect(actor, key),
     );

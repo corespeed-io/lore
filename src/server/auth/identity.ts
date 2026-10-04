@@ -1,5 +1,4 @@
-import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
-import { installUserContext } from "@/server/auth/actor-context";
+import { type PostgresDatabase, statement } from "@corespeed/lore-core";
 
 export interface User {
   id: string;
@@ -31,48 +30,28 @@ function toUser(row: UserRow): User {
   };
 }
 
-async function registerInTransaction(
-  transaction: PostgresTransaction,
-  identity: RegisterIdentity,
-): Promise<User> {
-  const result = await transaction.query<UserRow>(
-    "SELECT * FROM lore.register_identity($1, $2, $3, $4, $5, $6)",
-    [
-      crypto.randomUUID(),
-      crypto.randomUUID(),
-      identity.provider,
-      identity.subject,
-      identity.displayName,
-      identity.email ?? "",
-    ],
-  );
-  return toUser(result.rows[0]);
-}
-
 export function createIdentityModule(database: PostgresDatabase) {
   return {
+    /** Register the verified identity, or find its User; one round trip. */
     async register(identity: RegisterIdentity): Promise<User> {
-      return database.transaction((transaction) => registerInTransaction(transaction, identity));
-    },
-
-    /**
-     * Register the verified identity and test its active Membership in exactly one
-     * Workspace, in one transaction. Suspended, revoked, and unknown Workspaces all
-     * report `activeMember: false`.
-     */
-    async registerInWorkspace(
-      identity: RegisterIdentity,
-      workspaceId: string,
-    ): Promise<{ activeMember: boolean; user: User }> {
-      return database.transaction(async (transaction) => {
-        const user = await registerInTransaction(transaction, identity);
-        installUserContext(transaction, { userId: user.id });
-        const membership = await transaction.query<{ active: boolean }>(
-          "SELECT lore.is_active_member($1) AS active",
-          [workspaceId],
-        );
-        return { activeMember: membership.rows[0]?.active === true, user };
-      });
+      const [registered] = await database.transaction((transaction) =>
+        transaction.batch(
+          [
+            statement<UserRow>("SELECT * FROM lore.register_identity($1, $2, $3, $4, $5, $6)", [
+              crypto.randomUUID(),
+              crypto.randomUUID(),
+              identity.provider,
+              identity.subject,
+              identity.displayName,
+              identity.email ?? "",
+            ]),
+          ],
+          { commit: true },
+        ),
+      );
+      const row = registered.rows[0];
+      if (!row) throw new Error("Identity registration returned no User");
+      return toUser(row);
     },
 
     async resolve(provider: string, subject: string): Promise<User | null> {

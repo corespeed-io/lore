@@ -36,7 +36,10 @@ Services remain independent of Hono. The same shared subrouters mount
 at `/api` and `/api/v1`; versioned-only resources mount only under `/api/v1`.
 `src/server/api/dependencies.ts` binds typed, lazy Hono context functions to each
 request. It reuses that request's database adapter and identity resolver; handlers
-choose when to resolve an Actor or User. Liveness probes, admission failures, and
+choose when to resolve an Actor or User. Hot routes take the request's pending Actor
+(`requestActor`), which the first transaction that binds it admits as its own
+prefix (`src/server/auth/actor-admission.ts`), so a read costs one round trip with
+its admission; other routes resolve it first (`resolveActor`, one round trip). Liveness probes, admission failures, and
 unmatched or unsupported routes do not initialize application dependencies. Shared
 `onError` handling maps known domain failures to the public error contract and
 hides unexpected error details: a domain failure extends `DomainError`

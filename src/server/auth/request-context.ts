@@ -1,14 +1,14 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext, UserContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
-import { createAgentAuthenticator } from "./agent-credentials";
+import { PendingActor, PendingUser } from "./actor-admission";
+import { agentCredentialHash } from "./agent-credentials";
 import {
   type AuthPrincipal,
   checkAuth,
   RequestAuthenticationError,
   WorkspaceAccessError,
 } from "./auth";
-import { createIdentityModule } from "./identity";
 
 // Admission refuses with the same two failures, so they live beside it.
 export { RequestAuthenticationError, WorkspaceAccessError };
@@ -39,9 +39,6 @@ function requestedWorkspace(request: Request): string {
 }
 
 export function createRequestContextResolver(database: PostgresDatabase) {
-  const agentCredentials = createAgentAuthenticator(database);
-  const identities = createIdentityModule(database);
-
   // Hono passes the principal its admission already verified; other callers verify here.
   async function verifiedPrincipal(
     request: Request,
@@ -56,29 +53,36 @@ export function createRequestContextResolver(database: PostgresDatabase) {
   }
 
   return {
-    async resolveUser(request: Request, principal?: AuthPrincipal): Promise<UserContext> {
+    /**
+     * The verified human, not yet registered: the request's first transaction
+     * registers the Identity as its prefix (`userTransaction`).
+     */
+    async requestUser(request: Request, principal?: AuthPrincipal): Promise<PendingUser> {
       if (bearerToken(request)) {
         throw new RequestAuthenticationError("Agent credential cannot act as a human User");
       }
-      const user = await identities.register(await verifiedPrincipal(request, principal));
-      return { userId: user.id };
+      return new PendingUser(await verifiedPrincipal(request, principal));
     },
 
-    async resolveActor(request: Request, principal?: AuthPrincipal): Promise<ActorContext> {
+    /** The registered User, in a transaction of its own (one round trip). */
+    async resolveUser(request: Request, principal?: AuthPrincipal): Promise<UserContext> {
+      return (await this.requestUser(request, principal)).resolve(database);
+    },
+
+    /**
+     * The Actor the request names, not yet admitted: its first transaction admits
+     * it as a prefix (`actorTransaction`). Input errors are still thrown here.
+     */
+    async requestActor(request: Request, principal?: AuthPrincipal): Promise<PendingActor> {
       const workspaceId = requestedWorkspace(request);
       const token = bearerToken(request);
-      if (token) {
-        const actor = await agentCredentials.authenticate(token, workspaceId);
-        if (!actor) throw new WorkspaceAccessError("Agent is not granted to this Workspace");
-        return actor;
-      }
+      if (token) return PendingActor.agent(await agentCredentialHash(token), workspaceId);
+      return PendingActor.human(await verifiedPrincipal(request, principal), workspaceId);
+    },
 
-      const { activeMember, user } = await identities.registerInWorkspace(
-        await verifiedPrincipal(request, principal),
-        workspaceId,
-      );
-      if (!activeMember) throw new WorkspaceAccessError("User is not an active Workspace member");
-      return { userId: user.id, workspaceId };
+    /** The admitted Actor, in a transaction of its own (one round trip). */
+    async resolveActor(request: Request, principal?: AuthPrincipal): Promise<ActorContext> {
+      return (await this.requestActor(request, principal)).resolve(database);
     },
   };
 }

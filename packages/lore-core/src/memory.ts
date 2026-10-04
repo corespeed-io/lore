@@ -861,6 +861,24 @@ export function memoryFromRow(row: MemoryRow): Memory {
   };
 }
 
+/**
+ * How a single-Memory write primitive ends its final batch. `finish` adds the
+ * host's own statements to it, after the write, so a host's completion (an
+ * idempotency ledger row, say) costs no round trip of its own; they may read the
+ * Memory row the batch just wrote. With `commit`, COMMIT follows them.
+ */
+export interface MemoryWriteBatchOptions extends PostgresBatchOptions {
+  finish?: (memoryId: string) => readonly PostgresStatement<unknown>[];
+}
+
+/**
+ * A Memory row an update has locked (`lockMemoryInTransaction`). It stays locked
+ * until the transaction ends, so the update applied to it cannot race.
+ */
+export interface LockedMemory {
+  readonly row: MemoryRow;
+}
+
 export interface MemoryMutationPrimitivesOptions {
   defaultMemoryScope?: MemoryScope;
   embeddingProvider?: EmbeddingProvider;
@@ -917,7 +935,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     storageScope: MemoryStorageScope,
     input: RememberMemory,
     createdByAgentId: string | null = storageScope.sourceId ?? null,
-    batchOptions: PostgresBatchOptions = {},
+    batchOptions: MemoryWriteBatchOptions = {},
   ): Promise<{ memory: Memory }> {
     const { chunks } = prepareMemoryContent(input.content);
     const scope = input.scope === undefined ? defaultMemoryScope : validateMemoryScope(input.scope);
@@ -942,7 +960,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     // The Memory, its chunks, and its first embedding job share one round trip.
     // A new Memory always starts at version 1, which the job is fenced by.
     if (!embeddingProvider) {
-      const [inserted] = await transaction.batch([memoryInsert, chunkInsert], batchOptions);
+      const [inserted] = await transaction.batch(
+        [memoryInsert, chunkInsert, ...(batchOptions.finish?.(id) ?? [])],
+        { commit: batchOptions.commit === true },
+      );
       const memory = inserted.rows[0];
       if (!memory) throw new Error("Memory insert returned no row");
       return { memory: memoryFromRow(memory) };
@@ -964,8 +985,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
           embeddingProvider,
           false,
         ),
+        ...(batchOptions.finish?.(id) ?? []),
       ],
-      batchOptions,
+      { commit: batchOptions.commit === true },
     );
     const memory = inserted.rows[0];
     if (!memory) throw new Error("Memory insert returned no row");
@@ -973,19 +995,18 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     return { memory: memoryFromRow(memory) };
   }
 
-  async function updateMemoryInTransaction(
+  /**
+   * Lock a Memory for an update, sending the locking read at once so it can share
+   * a round trip with whatever the host sent before it. Null when the store shows
+   * no such Memory it may write: under RLS a locking read also applies the update
+   * policy's condition, so a Memory this store may read but not write reads as
+   * absent before any version check.
+   */
+  async function lockMemoryInTransaction(
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     id: string,
-    input: UpdateMemory,
-    expectedVersion?: number,
-    batchOptions: PostgresBatchOptions = {},
-  ): Promise<{ chunksChanged: boolean; memory: Memory } | null> {
-    if (input.scope !== undefined) validateMemoryScope(input.scope);
-    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
-    // Under RLS a locking read also applies the update policy's condition, so a
-    // Memory this store may read but not write reads as absent before any version
-    // check.
+  ): Promise<LockedMemory | null> {
     const current = await transaction.query<MemoryRow>(
       `SELECT *
        FROM memories
@@ -994,8 +1015,50 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
        FOR UPDATE`,
       [id, storageScope.partitionId],
     );
-    const currentMemory = current.rows[0];
-    if (!currentMemory) return null;
+    const row = current.rows[0];
+    return row ? { row } : null;
+  }
+
+  async function updateMemoryInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    id: string,
+    input: UpdateMemory,
+    expectedVersion?: number,
+    batchOptions: MemoryWriteBatchOptions = {},
+  ): Promise<{ chunksChanged: boolean; memory: Memory } | null> {
+    if (input.scope !== undefined) validateMemoryScope(input.scope);
+    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
+    const locked = await lockMemoryInTransaction(transaction, storageScope, id);
+    if (!locked) return null;
+    return updateLockedMemoryInTransaction(
+      transaction,
+      storageScope,
+      locked,
+      input,
+      expectedVersion,
+      batchOptions,
+    );
+  }
+
+  /**
+   * Apply an update to a Memory this transaction locked. Throws
+   * MemoryVersionConflictError on a stale expected version. Everything after the
+   * lock is known, so the update, the chunk rewrite, the job for the new version,
+   * and the host's `finish` statements share one round trip.
+   */
+  async function updateLockedMemoryInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    locked: LockedMemory,
+    input: UpdateMemory,
+    expectedVersion?: number,
+    batchOptions: MemoryWriteBatchOptions = {},
+  ): Promise<{ chunksChanged: boolean; memory: Memory } | null> {
+    if (input.scope !== undefined) validateMemoryScope(input.scope);
+    if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
+    const currentMemory = locked.row;
+    const id = currentMemory.id;
     if (expectedVersion !== undefined && currentMemory.version !== expectedVersion) {
       throw new MemoryVersionConflictError(expectedVersion, currentMemory.version);
     }
@@ -1022,8 +1085,6 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         currentMemory.version,
       ],
     );
-    // The row is locked, so everything after the read is known and shares one
-    // round trip: the update, the chunk rewrite, and the job for the new version.
     const tail: PostgresStatement<unknown>[] = [];
     if (chunks) {
       tail.push(
@@ -1051,10 +1112,14 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         ),
       );
     }
-    const [updated, ...rest] = await transaction.batch([update, ...tail], batchOptions);
-    const updatedMemory = updated.rows[0];
+    const results = await transaction.batch(
+      [update, ...tail, ...(batchOptions.finish?.(id) ?? [])],
+      { commit: batchOptions.commit === true },
+    );
+    const updatedMemory = results[0].rows[0];
     if (!updatedMemory) return null;
-    if (embeddingProvider && (rest.at(-1)?.rows.length ?? 0) > 0) {
+    // The job, when there is one, is the tail's last statement.
+    if (embeddingProvider && (results[tail.length]?.rows.length ?? 0) > 0) {
       notifyAfterCommit(transaction, [jobId]);
     }
     return { memory: memoryFromRow(updatedMemory), chunksChanged: chunks !== null };
@@ -1227,6 +1292,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     forgetMemoryInTransaction,
     insertMemoriesInTransaction,
     insertMemoryInTransaction,
+    lockMemoryInTransaction,
+    updateLockedMemoryInTransaction,
     updateMemoryInTransaction,
   };
 }

@@ -100,11 +100,7 @@ test("a key reused after its record expires forgets the earlier subjects and com
   await expect(
     testContext.database.transaction(async (transaction) => {
       installActorContext(transaction, testContext.alice);
-      const claim = await beginMutation(
-        transaction,
-        testContext.alice,
-        (await request(secondContent)).idempotency,
-      );
+      const claim = await beginMutation(transaction, (await request(secondContent)).idempotency);
       expect(claim).toEqual({ requestId: firstRecord.id });
       const reset = await transaction.query<Omit<LedgerRow, "id" | "expires_at">>(
         `SELECT status, response_status, response_body, subject_memory_id,

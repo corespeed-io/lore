@@ -1,5 +1,7 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
+import { PendingActor } from "./actor-admission";
+import { WorkspaceAccessError } from "./auth";
 
 /**
  * Agent bearer credentials: the token format, its stored hash, and verification.
@@ -7,6 +9,11 @@ import type { ActorContext } from "@/server/auth/actor-context";
  * is authentication, so both share the hash defined here.
  */
 const AGENT_TOKEN_PREFIX = "lore_agent_";
+
+/** The stored hash of a bearer token. */
+export async function agentCredentialHash(token: string): Promise<string> {
+  return sha256Hex(token);
+}
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -25,26 +32,17 @@ export async function newAgentCredentialSecret(): Promise<{
   return { token, prefix: secret.slice(0, 12), secretHash: await sha256Hex(token) };
 }
 
-interface AuthenticatedAgentRow {
-  user_id: string;
-  agent_id: string;
-}
-
 export function createAgentAuthenticator(database: PostgresDatabase) {
   return {
     /** The Agent Actor a bearer token proves in this Workspace, or null. */
     async authenticate(token: string, workspaceId: string): Promise<ActorContext | null> {
-      const secretHash = await sha256Hex(token);
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<AuthenticatedAgentRow>(
-          "SELECT * FROM lore.authenticate_agent_credential($1, $2)",
-          [secretHash, workspaceId],
-        );
-        const authenticated = result.rows[0];
-        return authenticated
-          ? { workspaceId, userId: authenticated.user_id, agentId: authenticated.agent_id }
-          : null;
-      });
+      const pending = PendingActor.agent(await sha256Hex(token), workspaceId);
+      try {
+        return await pending.resolve(database);
+      } catch (error) {
+        if (error instanceof WorkspaceAccessError) return null;
+        throw error;
+      }
     },
   };
 }

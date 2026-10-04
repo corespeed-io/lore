@@ -9,6 +9,8 @@ import {
   type MemoryModuleOptions,
   type MemoryMutationPrimitivesOptions,
   type MemoryRow,
+  type MemoryWriteBatchOptions,
+  memorySelectColumns,
   type PostgresBatchOptions,
   type PostgresDatabase,
   type PostgresTransaction,
@@ -20,9 +22,24 @@ import {
   type MemoryMutationOptions as VersionOptions,
   validatedEmbeddingDimensions,
 } from "@corespeed/lore-core";
-import { beginMutation, completeMutation, type IdempotencyRequest } from "@/server/api/idempotency";
-import { type ActorContext, installActorContext } from "@/server/auth/actor-context";
-import { createMemoryStorage, memoryStorageInTransaction } from "@/server/database/memory-storage";
+import {
+  beginMutation,
+  completionStatement,
+  type IdempotencyRequest,
+  type SqlReplayBody,
+} from "@/server/api/idempotency";
+import {
+  actorTransaction,
+  admittedActor,
+  PendingActor,
+  type RequestActor,
+} from "@/server/auth/actor-admission";
+import type { ActorContext } from "@/server/auth/actor-context";
+import {
+  createMemoryStorage,
+  memoryStorageInTransaction,
+  memoryStorageScope,
+} from "@/server/database/memory-storage";
 
 export interface Memory extends Omit<StoredMemory, "partitionId" | "ownerId" | "sourceId"> {
   workspaceId: string;
@@ -68,7 +85,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       actor: ActorContext,
       input: RememberMemory,
       createdByAgentId: string | null = actor.agentId ?? null,
-      batchOptions: PostgresBatchOptions = {},
+      batchOptions: MemoryWriteBatchOptions = {},
     ) {
       const result = await primitives.insertMemoryInTransaction(
         transaction,
@@ -89,7 +106,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       id: string,
       input: UpdateMemory,
       expectedVersion?: number,
-      batchOptions: PostgresBatchOptions = {},
+      batchOptions: MemoryWriteBatchOptions = {},
     ) {
       const result = await primitives.updateMemoryInTransaction(
         transaction,
@@ -123,7 +140,47 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
   };
 }
 
-/** Product orchestration: actor identity, write policy, replay and post-commit delivery. */
+/**
+ * The wire Memory of the row a keyed write has just written, built by PostgreSQL
+ * as the ledger completion runs, so the completion travels in the write's own
+ * batch. It is `memoryFromRow` in SQL; tests hold the two equal.
+ */
+export function writtenMemoryReplayBody(workspaceId: string, memoryId: string): SqlReplayBody {
+  return {
+    sql: `(SELECT jsonb_build_object('memory', jsonb_build_object(
+             'id', memory.id,
+             'workspaceId', memory.workspace_id,
+             'ownerUserId', memory.owner_user_id,
+             'createdByAgentId', memory.created_by_agent_id,
+             'scope', memory.scope,
+             'content', memory.content,
+             'metadata', memory.metadata,
+             'version', memory.version,
+             'createdAt', memory.created_at,
+             'updatedAt', memory.updated_at))
+           FROM (
+             SELECT ${memorySelectColumns()}
+             FROM memories
+             WHERE workspace_id = $9 AND id = $10
+           ) AS memory)`,
+    params: [workspaceId, memoryId],
+    subjects: { memory: { id: memoryId } },
+  };
+}
+
+/** A replayed forget whose own delete must not stand: its transaction rolls back. */
+class ReplayedForget extends Error {
+  constructor(readonly deleted: boolean) {
+    super("Replayed forget");
+  }
+}
+
+/**
+ * Product orchestration: actor identity, write policy, replay and post-commit
+ * delivery. A pending Actor is admitted as the prefix of each operation's first
+ * transaction, and a keyed write claims its ledger row in that same round trip:
+ * reads take one round trip, writes two (`docs/research/lore-core-db-wave-spec.md`).
+ */
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
   const dimensions = validatedEmbeddingDimensions(
     options.embeddingDimensions ?? options.embeddingProvider?.dimensions ?? 1024,
@@ -134,42 +191,52 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         `the module is configured for ${dimensions} but the provider embeds at ${options.embeddingProvider.dimensions}`,
     );
   }
-  const { forgetMemoryInTransaction, insertMemoryInTransaction, updateMemoryInTransaction } =
-    createMemoryMutationPrimitives(options);
-  const coreFor = (actor: ActorContext) =>
+  const primitives = createCoreMutationPrimitives(options);
+  const coreFor = (actor: RequestActor) =>
     createCoreMemoryModule(createMemoryStorage(database, actor), options);
+  // An Agent's token is proved only in the database, so a search that pays a
+  // provider before its first transaction admits the Agent first. A human's
+  // credential was verified before the request reached here.
+  const searchCallsProviderFirst = Boolean(
+    options.embeddingProvider || options.queryPlanningProvider,
+  );
   return {
     async remember(
-      actor: ActorContext,
+      actor: RequestActor,
       input: RememberMemory,
       options: MemoryMutationOptions = {},
     ): Promise<Memory> {
+      const keyed = Boolean(options.idempotency);
       try {
-        const created = await database.transaction(async (transaction) => {
-          installActorContext(transaction, actor);
-          const claim = await beginMutation<{ memory: Memory }>(
-            transaction,
-            actor,
-            options.idempotency,
-          );
+        return await actorTransaction(database, actor, async (transaction, admitted) => {
+          const claim = await beginMutation<{ memory: Memory }>(transaction, options.idempotency);
+          const bound = await admitted;
           if (claim.replay) return claim.replay.memory;
           // The memories_insert policy enforces write authority; a refusal is
-          // SQLSTATE 42501, answered below as MemoryAccessDeniedError. Without a
-          // ledger row to complete, COMMIT travels with the insert.
-          const inserted = await insertMemoryInTransaction(transaction, actor, input, undefined, {
-            commit: !options.idempotency,
-          });
-          await completeMutation(
+          // SQLSTATE 42501, answered below as MemoryAccessDeniedError. The ledger
+          // completion and COMMIT travel with the insert.
+          const inserted = await primitives.insertMemoryInTransaction(
             transaction,
-            claim.requestId,
-            "created",
-            { memory: inserted.memory },
-            Boolean(options.idempotency),
-            { commit: true },
+            memoryStorageInTransaction(transaction, bound),
+            input,
+            bound.agentId ?? null,
+            {
+              commit: true,
+              ...(keyed
+                ? {
+                    finish: (memoryId: string) => [
+                      completionStatement(
+                        claim.requestId,
+                        "created",
+                        writtenMemoryReplayBody(bound.workspaceId, memoryId),
+                      ),
+                    ],
+                  }
+                : {}),
+            },
           );
-          return inserted.memory;
+          return memoryFromStorage(inserted.memory);
         });
-        return created;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
           throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace", {
@@ -180,13 +247,13 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       }
     },
 
-    async retrieve(actor: ActorContext, id: string): Promise<Memory | null> {
+    async retrieve(actor: RequestActor, id: string): Promise<Memory | null> {
       const memory = await coreFor(actor).retrieve(id);
       return memory ? memoryFromStorage(memory) : null;
     },
 
     async update(
-      actor: ActorContext,
+      actor: RequestActor,
       id: string,
       input: UpdateMemory,
       options: MemoryMutationOptions = {},
@@ -198,85 +265,106 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       ) {
         return this.retrieve(actor, id);
       }
-      const updatedResult = await database.transaction(async (transaction) => {
-        installActorContext(transaction, actor);
-        const claim = await beginMutation<{ memory: Memory | null }>(
+      const keyed = Boolean(options.idempotency);
+      return actorTransaction(database, actor, async (transaction, admitted) => {
+        // The claim and the locking read share the admission's round trip. Write
+        // authority is checked by the locking read, before the version.
+        const claimed = beginMutation<{ memory: Memory | null }>(transaction, options.idempotency);
+        const locking = primitives.lockMemoryInTransaction(
           transaction,
-          actor,
-          options.idempotency,
-        );
-        if (claim.replay) return claim.replay.memory;
-        const updated = await updateMemoryInTransaction(
-          transaction,
-          actor,
+          memoryStorageScope(actor),
           id,
-          input,
-          options.expectedVersion,
-          { commit: !options.idempotency },
         );
-        if (!updated) {
-          await completeMutation(
-            transaction,
-            claim.requestId,
-            "not_found",
-            { memory: null },
-            Boolean(options.idempotency),
-            { commit: true },
-          );
+        locking.catch(() => undefined);
+        const claim = await claimed;
+        const bound = await admitted;
+        if (claim.replay) return claim.replay.memory;
+        const locked = await locking;
+        if (!locked) {
+          if (keyed) {
+            await transaction.batch(
+              [completionStatement(claim.requestId, "not_found", { memory: null })],
+              { commit: true },
+            );
+          }
           return null;
         }
-        await completeMutation(
+        const updated = await primitives.updateLockedMemoryInTransaction(
           transaction,
-          claim.requestId,
-          "ok",
-          { memory: updated.memory },
-          Boolean(options.idempotency),
-          { commit: true },
+          memoryStorageInTransaction(transaction, bound),
+          locked,
+          input,
+          options.expectedVersion,
+          {
+            commit: true,
+            ...(keyed
+              ? {
+                  finish: (memoryId: string) => [
+                    completionStatement(
+                      claim.requestId,
+                      "ok",
+                      writtenMemoryReplayBody(bound.workspaceId, memoryId),
+                    ),
+                  ],
+                }
+              : {}),
+          },
         );
-        return updated.memory;
+        return updated ? memoryFromStorage(updated.memory) : null;
       });
-      return updatedResult;
     },
 
     async forget(
-      actor: ActorContext,
+      actor: RequestActor,
       id: string,
       options: MemoryMutationOptions = {},
     ): Promise<boolean> {
-      return database.transaction(async (transaction) => {
-        installActorContext(transaction, actor);
-        const claim = await beginMutation<{ deleted: boolean }>(
-          transaction,
-          actor,
-          options.idempotency,
-        );
-        if (claim.replay) return claim.replay.deleted;
-        // Write authority is checked before the version, so a Memory this Actor may
-        // not write reads as absent rather than as a version conflict.
-        const deleted = await forgetMemoryInTransaction(
-          transaction,
-          actor,
-          id,
-          options.expectedVersion,
-          { commit: !options.idempotency },
-        );
-        await completeMutation(
-          transaction,
-          claim.requestId,
-          deleted ? "deleted" : "not_found",
-          { deleted },
-          Boolean(options.idempotency),
-          { commit: true },
-        );
-        return deleted;
-      });
+      const keyed = Boolean(options.idempotency);
+      try {
+        return await actorTransaction(database, actor, async (transaction, admitted) => {
+          const claimed = beginMutation<{ deleted: boolean }>(transaction, options.idempotency);
+          // The delete travels with the claim. RLS skips a Memory this Actor may not
+          // write in the delete and its version read alike, so it reads as absent
+          // rather than as a version conflict. Without a ledger row to complete,
+          // COMMIT travels with them too.
+          const deleting = primitives.forgetMemoryInTransaction(
+            transaction,
+            memoryStorageScope(actor),
+            id,
+            { expectedVersion: options.expectedVersion, commit: !keyed },
+          );
+          deleting.catch(() => undefined);
+          const claim = await claimed;
+          await admitted;
+          if (claim.replay) throw new ReplayedForget(claim.replay.deleted);
+          const deleted = await deleting;
+          if (keyed) {
+            await transaction.batch(
+              [
+                completionStatement(claim.requestId, deleted ? "deleted" : "not_found", {
+                  deleted,
+                }),
+              ],
+              { commit: true },
+            );
+          }
+          return deleted;
+        });
+      } catch (error) {
+        if (error instanceof ReplayedForget) return error.deleted;
+        throw error;
+      }
     },
 
-    async list(actor: ActorContext, input: ListMemory = {}): Promise<Memory[]> {
+    async list(actor: RequestActor, input: ListMemory = {}): Promise<Memory[]> {
       return (await coreFor(actor).list(input)).map(memoryFromStorage);
     },
-    async search(actor: ActorContext, input: SearchMemory): Promise<MemorySearchResult[]> {
-      return (await coreFor(actor).search(input)).map((result) => ({
+    async search(actor: RequestActor, input: SearchMemory): Promise<MemorySearchResult[]> {
+      const searching =
+        actor instanceof PendingActor && actor.kind === "agent" && searchCallsProviderFirst
+          ? await admittedActor(database, actor)
+          : actor;
+      return (await coreFor(searching).search(input)).map((result) => ({
         ...result,
         memory: memoryFromStorage(result.memory),
       }));

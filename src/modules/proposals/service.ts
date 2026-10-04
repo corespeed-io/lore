@@ -391,7 +391,6 @@ export function createMemoryProposalsModule(
           installActorContext(transaction, actor);
           const claim = await beginMutation<{ proposal: MemoryProposal }>(
             transaction,
-            actor,
             options.idempotency,
           );
           if (claim.replay) return claim.replay.proposal;

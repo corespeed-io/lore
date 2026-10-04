@@ -173,7 +173,10 @@ been removed. Lore now has a native implementation, split into two concepts
   evidence check and a concurrent forget or update of that evidence can still abort one
   side with a retryable deadlock error. `tests/server/replay-subject-upgrade.test.ts`
   checks the tables each migration locks and the order 0009 creates its triggers in. `completeMutation` writes the columns from its `ReplayBody`, the only type it
-  accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
+  accepts (`completionStatement` also takes a `SqlReplayBody`, a body PostgreSQL
+  builds from the row the same batch just wrote, so a keyed Memory write completes
+  its ledger row in the write's own batch; `writtenMemoryReplayBody` is
+  `memoryFromRow` in SQL, and tests hold a replay equal to the first response), and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
   columns during a rolling deploy; until then renaming a replayed key still needs a
@@ -485,7 +488,8 @@ been removed. Lore now has a native implementation, split into two concepts
   which resolves the verified human Actor *inside* the active Workspace. The
   `agents` module (`src/modules/agents/service.ts`) owns a User's Agents, their
   Workspace grants, and issuing and revoking their credentials. `src/server/auth/`
-  keeps only authentication: Identity storage, request admission, Actor context,
+  keeps only authentication: Identity storage, request admission, Actor context and
+  its in-transaction admission (`actor-admission.ts`),
   and proving an Agent bearer token (`agent-credentials.ts`, which also defines the
   token format and stored hash the `agents` module issues). There is no separate
   `identity` module, and a four-file domain folder for one workspace-scoped endpoint
@@ -743,7 +747,13 @@ been removed. Lore now has a native implementation, split into two concepts
   model), and print the provider/model/revision they acted on;
 - `src/server/api/idempotency.ts`, `src/modules/operations/maintenance.ts`,
   `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
-  own OSS replay, expired replay/event cleanup, and operational integration.
+  own OSS replay, expired replay/event cleanup, and operational integration. A ledger
+  claim takes its Workspace and actor columns from the Actor bound to the transaction
+  (`lore.current_workspace_id()`, `lore.current_user_id()`, `lore.current_agent_id()`),
+  never from parameters, so it travels in the admission's round trip: a keyed Memory
+  write is two round trips (the admission, claim, and any locking read or delete;
+  then the write, its ledger completion, and COMMIT), an unkeyed forget one, and a
+  replayed forget rolls back the delete that travelled with its claim.
   Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
@@ -1247,8 +1257,9 @@ database invariant, not a UI convention.
 - Postgres is the primary store. RLS must cover every tenant-owned table, including
   chunks, embeddings, graph/relationship data, credentials, and evaluation data.
 - A request resolves an authenticated User and an active Workspace, then installs
-  that context for the database transaction. Never trust a caller-supplied user or
-  Workspace id by itself.
+  that context for the database transaction; on hot routes the resolution is the
+  first transaction's prefix and binds the context from the database's own answer.
+  Never trust a caller-supplied user or Workspace id by itself.
 - An Identity is an authentication-provider identity mapped to an internal User.
   Proxy headers, OIDC claims, or local credentials authenticate; Memberships and
   grants authorize.
@@ -1658,8 +1669,25 @@ framework-independent. Use `app.request()` for API tests, including middleware
 and routing. Preserve the unversioned aliases and v1 contract, HEAD/OPTIONS/405
 behavior, and shared admission policy in
 `src/server/auth/auth.ts`. `admitRequest` verifies the human credential once and
-passes the principal to the resolver, which registers the Identity and checks the
-requested Workspace's active Membership in one transaction. For unsafe methods it
+passes the principal on. Workspace admission is then the prefix of the request's
+first database transaction (`src/server/auth/actor-admission.ts`): a `PendingActor`
+sends its statements ahead of that transaction's own, without a round trip of its
+own, and they bind the RLS settings inside PostgreSQL from what they find. A human
+is resolved, never registered (`lore.resolve_identity` plus `lore.is_active_member`;
+Membership needs a registered User, so the prefix stays read-only and fits the
+engine's read-only snapshots); an Agent is `lore.authenticate_agent_credential`,
+which may record its use, so an Agent is admitted in a transaction of its own before
+a read-only or repeatable-read one (the Graph, context packets) and before a search
+that pays an embedding or planning provider, since its token is proved only in the
+database. A refused Actor binds nothing: RLS shows the statements behind it nothing
+and refuses their writes, and `actorTransaction` then answers
+`WorkspaceAccessError` (403) whatever they returned. Every transaction of one
+request shares its one admission. Memory reads, search, Links, Graph, and
+Memory-only context packets bind a pending Actor (`c.var.requestActor()`); other
+routes call `c.var.resolveActor()`, one round trip of its own. `GET /workspaces`
+registers a pending User (`PendingUser`, `lore.register_identity`) as the prefix of
+its list. `tests/server/round-trip-budget.test.ts` pins every hot route's statements
+and network waits, for humans and Agents, through the real `pg` adapter. For unsafe methods it
 returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of the
 URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
 passes even behind a Host-rewriting proxy, and clients that send neither header
