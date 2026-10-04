@@ -752,8 +752,9 @@ been removed. Lore now has a native implementation, split into two concepts
   (`lore.current_workspace_id()`, `lore.current_user_id()`, `lore.current_agent_id()`),
   never from parameters, so it travels in the admission's round trip: a keyed Memory
   write is two round trips (the admission, claim, and any locking read or delete;
-  then the write, its ledger completion, and COMMIT), an unkeyed forget one, and a
-  replayed forget rolls back the delete that travelled with its claim.
+  then the write, its ledger completion, and COMMIT), and an unkeyed forget one. A
+  keyed forget locks the Memory with its claim and deletes in the second batch, so a
+  replay deletes nothing and a reclaimed key's events carry the ledger row's id.
   Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
@@ -1682,7 +1683,8 @@ that pays an embedding or planning provider, since its token is proved only in t
 database. A refused Actor binds nothing: RLS shows the statements behind it nothing
 and refuses their writes, and `actorTransaction` then answers
 `WorkspaceAccessError` (403) whatever they returned. Every transaction of one
-request shares its one admission. Memory reads, search, Links, Graph, and
+request shares its one admission: the first to run sends it, and a concurrent one
+waits for its outcome and binds it before sending anything. Memory reads, search, Links, Graph, and
 Memory-only context packets bind a pending Actor (`c.var.requestActor()`); other
 routes call `c.var.resolveActor()`, one round trip of its own. `GET /workspaces`
 registers a pending User (`PendingUser`, `lore.register_identity`) as the prefix of

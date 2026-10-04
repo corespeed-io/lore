@@ -92,22 +92,24 @@ export class PendingActor {
 
   /**
    * Send the admission statements on `transaction` now, ahead of whatever it sends
-   * next. Only the first call sends; later calls share its outcome. With `commit`,
-   * COMMIT follows them, for a transaction that only admits.
+   * next, as the request's one admission. A transaction that finds an admission
+   * already sent binds its outcome instead (`actorTransaction`), so this refuses a
+   * second one rather than leave that transaction with no Actor bound.
    */
-  admitIn(transaction: PostgresTransaction, options: { commit?: boolean } = {}) {
-    this.#admission ??= transaction
-      .batch(this.#statements, options)
-      .then((results) => this.#verdict(results));
+  admitIn(transaction: PostgresTransaction): Promise<ActorContext> {
+    if (this.#admission) throw new Error("This Actor's admission was already sent");
+    this.#admission = transaction.batch(this.#statements).then((results) => this.#verdict(results));
     return this.#admission;
   }
 
   /** Admit in a transaction of its own (one round trip), unless already admitted. */
   resolve(database: PostgresDatabase): Promise<ActorContext> {
-    return (
-      this.#admission ??
-      database.transaction((transaction) => this.admitIn(transaction, { commit: true }))
+    this.#admission ??= database.transaction((transaction) =>
+      transaction
+        .batch(this.#statements, { commit: true })
+        .then((results) => this.#verdict(results)),
     );
+    return this.#admission;
   }
 
   #verdict(results: PostgresQueryResult<unknown>[]): ActorContext {
@@ -158,24 +160,24 @@ export async function actorTransaction<Result>(
   use: (transaction: PostgresTransaction, admitted: Promise<ActorContext>) => Promise<Result>,
   options?: PostgresTransactionOptions,
 ): Promise<Result> {
-  let bound: ActorContext | undefined;
-  if (!(actor instanceof PendingActor)) bound = actor;
-  else if (actor.actor) bound = actor.actor;
-  // Another transaction of this request is admitting it: wait rather than admit twice.
-  else if (actor.admission) bound = await actor.admission;
-  else if (actor.kind === "agent" && (options?.readOnly || options?.isolation)) {
-    bound = await actor.resolve(database);
+  if (
+    actor instanceof PendingActor &&
+    !actor.admission &&
+    actor.kind === "agent" &&
+    (options?.readOnly || options?.isolation)
+  ) {
+    await actor.resolve(database);
   }
-  if (bound) {
-    const admitted = bound;
-    return database.transaction((transaction) => {
-      installActorContext(transaction, admitted);
-      return use(transaction, Promise.resolve(admitted));
-    }, options);
-  }
-  const pending = actor as PendingActor;
   return database.transaction(async (transaction) => {
-    const admitted = pending.admitIn(transaction);
+    // Decided only once this transaction runs: of a request's concurrent
+    // transactions, the first to get here sends the admission, and the others wait
+    // for its outcome and bind it, before sending anything of their own.
+    if (!(actor instanceof PendingActor) || actor.admission) {
+      const bound = actor instanceof PendingActor ? await admittedActor(database, actor) : actor;
+      installActorContext(transaction, bound);
+      return use(transaction, Promise.resolve(bound));
+    }
+    const admitted = actor.admitIn(transaction);
     // Observed now, so a refusal that settles while `use` runs is never unhandled.
     admitted.catch(() => undefined);
     let result: Result;
@@ -221,22 +223,37 @@ export class PendingUser {
     );
   }
 
-  /** Send the registration on `transaction` now; only the first call sends. */
-  registerIn(transaction: PostgresTransaction, options: { commit?: boolean } = {}) {
-    this.#registration ??= transaction.batch([this.#statement], options).then(([registered]) => {
-      const row = registered.rows[0];
-      if (!row) throw new Error("Identity registration returned no User");
-      return { userId: row.user_id };
-    });
+  /** The registration sent so far, if any. */
+  get registration(): Promise<UserContext> | undefined {
+    return this.#registration;
+  }
+
+  /**
+   * Send the registration on `transaction` now, as the request's one registration;
+   * like `PendingActor.admitIn`, it refuses a second.
+   */
+  registerIn(transaction: PostgresTransaction): Promise<UserContext> {
+    if (this.#registration) throw new Error("This User's registration was already sent");
+    this.#registration = this.#send(transaction, {});
     return this.#registration;
   }
 
   /** Register in a transaction of its own (one round trip), unless already registered. */
   resolve(database: PostgresDatabase): Promise<UserContext> {
-    return (
-      this.#registration ??
-      database.transaction((transaction) => this.registerIn(transaction, { commit: true }))
+    this.#registration ??= database.transaction((transaction) =>
+      this.#send(transaction, { commit: true }),
     );
+    return this.#registration;
+  }
+
+  async #send(
+    transaction: PostgresTransaction,
+    options: { commit?: boolean },
+  ): Promise<UserContext> {
+    const [registered] = await transaction.batch([this.#statement], options);
+    const row = registered.rows[0];
+    if (!row) throw new Error("Identity registration returned no User");
+    return { userId: row.user_id };
   }
 }
 
@@ -250,9 +267,11 @@ export async function userTransaction<Result>(
   use: (transaction: PostgresTransaction, registered: Promise<UserContext>) => Promise<Result>,
 ): Promise<Result> {
   return database.transaction(async (transaction) => {
-    if (!(user instanceof PendingUser)) {
-      installUserContext(transaction, user);
-      return use(transaction, Promise.resolve(user));
+    // As in actorTransaction: only the first transaction to run sends it.
+    if (!(user instanceof PendingUser) || user.registration) {
+      const bound = user instanceof PendingUser ? await user.resolve(database) : user;
+      installUserContext(transaction, bound);
+      return use(transaction, Promise.resolve(bound));
     }
     const registered = user.registerIn(transaction);
     registered.catch(() => undefined);

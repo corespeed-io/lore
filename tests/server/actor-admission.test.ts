@@ -168,17 +168,48 @@ test("an Agent's search pays no provider before its admission returns; a human's
   expect(observed.map((entry) => entry.actor)).not.toContain("unknown");
 });
 
-test("one request admits once, however many transactions bind its Actor", async () => {
+test("one request admits once, and every concurrent transaction binds its Actor", async () => {
   const context = await createMemoryTestContext();
-  const { human } = await fixture(context);
+  const { owner, human } = await fixture(context);
+  await createMemoryModule(context.database).remember(owner, { content: "Harbor notes." });
   const { database, log } = recording(context.database);
   const actor = human();
   const memories = createMemoryModule(database);
 
-  await Promise.all([memories.list(actor), memories.list(actor), memories.list(actor)]);
-  await memories.list(actor);
+  // Started together: only the first to run sends the admission; the others wait
+  // for its outcome and bind it, so each still reads as the member.
+  const lists = await Promise.all([
+    memories.list(actor),
+    memories.list(actor),
+    memories.list(actor),
+  ]);
+  const written = await Promise.all([
+    memories.remember(actor, { content: "Written beside a read." }),
+    memories.list(actor),
+  ]);
 
+  expect(lists.map((listed) => listed.length)).toEqual([1, 1, 1]);
+  expect(written[0]).toMatchObject({ ownerUserId: owner.userId });
+  expect(written[1].length).toBeGreaterThanOrEqual(1);
   expect(log.filter((entry) => entry.includes("lore.resolve_identity"))).toHaveLength(1);
+  expect(log.filter((entry) => entry === "transaction")).toHaveLength(5);
+});
+
+test("concurrent transactions of a refused Actor all answer WorkspaceAccessError", async () => {
+  const context = await createMemoryTestContext();
+  const { owner } = await fixture(context);
+  const outsider = PendingActor.human(
+    { ...principal, subject: "never-registered" },
+    owner.workspaceId,
+  );
+  const memories = createMemoryModule(context.database);
+
+  const outcomes = await Promise.allSettled([memories.list(outsider), memories.list(outsider)]);
+
+  expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "rejected"]);
+  for (const outcome of outcomes) {
+    expect(outcome.status === "rejected" && outcome.reason).toBeInstanceOf(WorkspaceAccessError);
+  }
 });
 
 test("an Agent is admitted before a read-only snapshot, a human inside it", async () => {
@@ -236,7 +267,7 @@ test("a keyed write's stored body is the Memory the write returned", async () =>
   expect(replayedUpdate).toEqual(updated);
 });
 
-test("a replayed forget rolls back its own delete", async () => {
+test("a replayed forget deletes nothing and answers the first result", async () => {
   const context = await createMemoryTestContext();
   const { owner, human } = await fixture(context);
   const memories = createMemoryModule(context.database);

@@ -1220,6 +1220,40 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
   }
 
   /**
+   * Delete a Memory this transaction locked (`lockMemoryInTransaction`), for a host
+   * that must decide between the lock and the delete. Throws
+   * MemoryVersionConflictError on a stale expected version. The locking read applied
+   * the same write authority the delete policy does, so the delete removes the row;
+   * it and the host's `finish` statements share one round trip.
+   */
+  async function forgetLockedMemoryInTransaction(
+    transaction: PostgresTransaction,
+    storageScope: MemoryStorageScope,
+    locked: LockedMemory,
+    expectedVersion?: number,
+    batchOptions: MemoryWriteBatchOptions = {},
+  ): Promise<boolean> {
+    if (expectedVersion !== undefined && locked.row.version !== expectedVersion) {
+      throw new MemoryVersionConflictError(expectedVersion, locked.row.version);
+    }
+    const id = locked.row.id;
+    const [deleted] = await transaction.batch(
+      [
+        statement<{ id: string }>(
+          `DELETE FROM memories
+           WHERE id = $1
+             AND workspace_id = $2
+           RETURNING id`,
+          [id, storageScope.partitionId],
+        ),
+        ...(batchOptions.finish?.(id) ?? []),
+      ],
+      { commit: batchOptions.commit === true },
+    );
+    return deleted.rows.length === 1;
+  }
+
+  /**
    * Insert many Memories with caller-chosen ids in bounded set-based batches, with
    * their chunks and embedding jobs. Every record obeys the same content, scope, and
    * metadata rules as a single write. Returns each inserted id, in PostgreSQL's
@@ -1289,6 +1323,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
 
   return {
     enqueueEmbeddingJobsInTransaction,
+    forgetLockedMemoryInTransaction,
     forgetMemoryInTransaction,
     insertMemoriesInTransaction,
     insertMemoryInTransaction,

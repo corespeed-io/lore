@@ -21,6 +21,8 @@ import {
   type UpdateMemory,
   type MemoryMutationOptions as VersionOptions,
   validatedEmbeddingDimensions,
+  validateMemoryMetadata,
+  validateMemoryScope,
 } from "@corespeed/lore-core";
 import {
   beginMutation,
@@ -168,13 +170,6 @@ export function writtenMemoryReplayBody(workspaceId: string, memoryId: string): 
   };
 }
 
-/** A replayed forget whose own delete must not stand: its transaction rolls back. */
-class ReplayedForget extends Error {
-  constructor(readonly deleted: boolean) {
-    super("Replayed forget");
-  }
-}
-
 /**
  * Product orchestration: actor identity, write policy, replay and post-commit
  * delivery. A pending Actor is admitted as the prefix of each operation's first
@@ -265,6 +260,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       ) {
         return this.retrieve(actor, id);
       }
+      // Refused before any statement, as the engine's own update refuses it.
+      if (input.scope !== undefined) validateMemoryScope(input.scope);
+      if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
       const keyed = Boolean(options.idempotency);
       return actorTransaction(database, actor, async (transaction, admitted) => {
         // The claim and the locking read share the admission's round trip. Write
@@ -319,41 +317,57 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       id: string,
       options: MemoryMutationOptions = {},
     ): Promise<boolean> {
-      const keyed = Boolean(options.idempotency);
-      try {
-        return await actorTransaction(database, actor, async (transaction, admitted) => {
-          const claimed = beginMutation<{ deleted: boolean }>(transaction, options.idempotency);
-          // The delete travels with the claim. RLS skips a Memory this Actor may not
-          // write in the delete and its version read alike, so it reads as absent
-          // rather than as a version conflict. Without a ledger row to complete,
-          // COMMIT travels with them too.
+      if (!options.idempotency) {
+        // The delete, its version read, and COMMIT all travel with the admission.
+        // RLS skips a Memory this Actor may not write in the delete and its version
+        // read alike, so it reads as absent rather than as a version conflict.
+        return actorTransaction(database, actor, async (transaction, admitted) => {
+          await beginMutation(transaction);
           const deleting = primitives.forgetMemoryInTransaction(
             transaction,
             memoryStorageScope(actor),
             id,
-            { expectedVersion: options.expectedVersion, commit: !keyed },
+            { expectedVersion: options.expectedVersion, commit: true },
           );
           deleting.catch(() => undefined);
-          const claim = await claimed;
           await admitted;
-          if (claim.replay) throw new ReplayedForget(claim.replay.deleted);
-          const deleted = await deleting;
-          if (keyed) {
-            await transaction.batch(
-              [
-                completionStatement(claim.requestId, deleted ? "deleted" : "not_found", {
-                  deleted,
-                }),
-              ],
-              { commit: true },
-            );
-          }
-          return deleted;
+          return deleting;
         });
-      } catch (error) {
-        if (error instanceof ReplayedForget) return error.deleted;
-        throw error;
       }
+      const idempotency = options.idempotency;
+      return actorTransaction(database, actor, async (transaction, admitted) => {
+        // The claim and the locking read share the admission's round trip; the
+        // delete waits for the claim, so a replay deletes nothing and a reclaimed
+        // key's events carry the ledger row's request id.
+        const claimed = beginMutation<{ deleted: boolean }>(transaction, idempotency);
+        const locking = primitives.lockMemoryInTransaction(
+          transaction,
+          memoryStorageScope(actor),
+          id,
+        );
+        locking.catch(() => undefined);
+        const claim = await claimed;
+        await admitted;
+        if (claim.replay) return claim.replay.deleted;
+        const locked = await locking;
+        if (!locked) {
+          await transaction.batch(
+            [completionStatement(claim.requestId, "not_found", { deleted: false })],
+            { commit: true },
+          );
+          return false;
+        }
+        return primitives.forgetLockedMemoryInTransaction(
+          transaction,
+          memoryStorageScope(actor),
+          locked,
+          options.expectedVersion,
+          {
+            commit: true,
+            finish: () => [completionStatement(claim.requestId, "deleted", { deleted: true })],
+          },
+        );
+      });
     },
 
     async list(actor: RequestActor, input: ListMemory = {}): Promise<Memory[]> {
