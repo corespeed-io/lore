@@ -1,4 +1,4 @@
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingGenerationAdmin } from "@corespeed/lore-core";
 import { createPostgresDatabase } from "../../src/server/database/postgres";
 import {
   type EmbeddingConfiguration,
@@ -59,20 +59,6 @@ function generationSelector(options: readonly string[]): string {
   return value;
 }
 
-function administeredMaintenance(
-  database: ReturnType<typeof createPostgresDatabase>,
-  generation: AdministeredGeneration,
-) {
-  const { source: _source, ...configuration } = generation;
-  const provider = {
-    ...configuration,
-    async embed(): Promise<number[][]> {
-      throw new Error("Generation administration does not call the embedding provider");
-    },
-  };
-  return createMemoryMaintenanceModule(database, { embeddingProvider: provider });
-}
-
 async function runEmbeddingGenerationCommand(argv: readonly string[]): Promise<void> {
   const [command = "report", ...options] = argv;
   if (!["report", "activate", "requeue-dead"].includes(command)) throw new Error(usage);
@@ -82,6 +68,7 @@ async function runEmbeddingGenerationCommand(argv: readonly string[]): Promise<v
   // the database.
   const generation = command === "requeue-dead" ? null : administeredGeneration(process.env);
   const database = createPostgresDatabase({ connectionString }, { role: "lore_maintenance" });
+  const admin = createEmbeddingGenerationAdmin(database);
   try {
     if (generation) {
       const identity = {
@@ -91,10 +78,9 @@ async function runEmbeddingGenerationCommand(argv: readonly string[]): Promise<v
         revision: generation.revision,
         source: generation.source,
       };
-      const maintenance = administeredMaintenance(database, generation);
       if (command === "report") {
         // Read-only: reporting must never create a generation or seed jobs.
-        const report = await maintenance.findGenerationReport();
+        const report = await admin.findReport(generation);
         console.log(
           JSON.stringify(
             {
@@ -110,19 +96,13 @@ async function runEmbeddingGenerationCommand(argv: readonly string[]): Promise<v
           ),
         );
       } else {
-        const id = await maintenance.activateGeneration();
+        const id = await admin.activate(generation);
         console.log(JSON.stringify({ status: "active", generationId: id, generation: identity }));
       }
     } else {
       const generationId = generationSelector(options);
       const apply = options.includes("--apply");
-      const count = await database.transaction(async (transaction) => {
-        const result = await transaction.query<{ count: string | number }>(
-          "SELECT lore.requeue_dead_memory_embedding_jobs($1, $2) AS count",
-          [generationId, apply],
-        );
-        return Number(result.rows[0]?.count ?? 0);
-      });
+      const count = await admin.requeueDeadJobs(generationId, { apply });
       console.log(
         JSON.stringify(
           apply

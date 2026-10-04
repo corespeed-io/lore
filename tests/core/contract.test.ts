@@ -1,5 +1,5 @@
 import {
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   createMemoryModule,
   type EmbeddingProvider,
   type MemoryStorageContext,
@@ -173,10 +173,10 @@ test("a metadata-only update notifies maintenance exactly when it enqueues a job
     // The creation job has not run, so the new version still needs vectors.
     await memories.update(memory.id, { metadata: { reviewed: true } });
     expect(notifications).toHaveLength(2);
-    const maintenance = createMemoryMaintenanceModule(fixture.maintenanceDatabase, {
-      embeddingProvider,
+    const maintenance = createEmbeddingMaintenance(fixture.maintenanceDatabase, {
+      embeddingProviders: [embeddingProvider],
     });
-    await expect(maintenance.run(notifications[1])).resolves.toMatchObject({
+    await expect(maintenance.run({ jobId: notifications[1] })).resolves.toMatchObject({
       status: "complete",
     });
 

@@ -237,6 +237,16 @@ The request pool's default 10-second idle eviction would open a second connectio
   Pipelining keeps per-statement snapshots, so the existing-Link read still starts after the lock is granted. Merging them into one statement would break that (review finding 7).
 - **Graph keeps its version-checked full-content reread.** It runs only when a node needs it.
 
+### 4.3a As built (PR 1b)
+
+Measured by `tests/server/round-trip-budget.test.ts` through the real `pg` adapter. Every §5 budget holds. Five details differ from §4.3:
+
+- **The human prefix resolves the Identity and never registers it.** It uses `lore.resolve_identity` plus `lore.is_active_member`. Membership needs a registered User, so an unregistered Identity is refused either way. The prefix stays read-only, so it also fits the Graph's and context packets' read-only REPEATABLE READ snapshots. Registration happens in `GET /workspaces`, as that request's own prefix.
+- **An Agent is admitted in a transaction of its own before a read-only or repeatable-read snapshot.** `authenticate_agent_credential` may write `last_used_at`. That write would fail under READ ONLY and could fail to serialize under REPEATABLE READ. An Agent's Graph read therefore costs 2 waits.
+- **A human's search sends its prefix with the first pass, after the provider calls, not concurrently with them.** That is still 1 wait after the embedding call, and one round trip fewer overall. An Agent's search that pays an embedding or planning provider is admitted first, as specified.
+- **A refused write costs a second wait for its ROLLBACK.** Its claim travelled with the admission. A refused read stays 1 wait.
+- **Writes split into two phases.** The core update primitive is a locking phase (`lockMemoryInTransaction`) and an apply phase (`updateLockedMemoryInTransaction`), so OSS can check the claim between them. The write primitives take a `finish` hook that appends the ledger completion to their final batch. The completion's body is built in SQL from the row just written (`writtenMemoryReplayBody`).
+
 ### 4.4 Write-path prototype
 
 PR 1 ships a prototype harness, not production code. It applies a scratch migration to a staging database behind a real Hyperdrive binding. For each write route it measures p50 and p95 latency, plus statements, waits, and connections, for two variants:

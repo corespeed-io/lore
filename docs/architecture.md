@@ -36,7 +36,10 @@ Services remain independent of Hono. The same shared subrouters mount
 at `/api` and `/api/v1`; versioned-only resources mount only under `/api/v1`.
 `src/server/api/dependencies.ts` binds typed, lazy Hono context functions to each
 request. It reuses that request's database adapter and identity resolver; handlers
-choose when to resolve an Actor or User. Liveness probes, admission failures, and
+choose when to resolve an Actor or User. Hot routes take the request's pending Actor
+(`requestActor`), which the first transaction that binds it admits as its own
+prefix (`src/server/auth/actor-admission.ts`), so a read costs one round trip with
+its admission; other routes resolve it first (`resolveActor`, one round trip). Liveness probes, admission failures, and
 unmatched or unsupported routes do not initialize application dependencies. Shared
 `onError` handling maps known domain failures to the public error contract and
 hides unexpected error details: a domain failure extends `DomainError`
@@ -288,8 +291,14 @@ Episode admission is an OSS operation: `episodes/service.ts` validates with Core
 `normalizedEpisode`, then calls the authorization-bearing `lore.record_episode`
 function and records request replay. Core's Observation module provides validation,
 store-bound reads, and deletion; its Episode evidence index still owns partitioning,
-embedding, and retrieval algorithms. Core maintenance keeps embedding leases and
-generation activation/pruning. Expired request replay and event cleanup,
+embedding, and retrieval algorithms. Core maintenance owns embedding lanes,
+leases, retries, seeding, and generation activation/pruning behind one runner,
+`createEmbeddingMaintenance` (`run`, `sweep`, `pending`), which the Bun worker's
+loops and the Cloudflare queue/scheduled handlers drive; a lane's lease comes from
+its provider's optional `requestTimeoutMs`, never from a provider name. Operator
+generation commands use `createEmbeddingGenerationAdmin`, and readiness uses
+`embeddingGenerationServing`. Hosts keep environment parsing, concurrency, loops,
+queue transport, and log format. Expired request replay and event cleanup,
 `purgeExpiredPortableCoreRecords`, lives in `src/modules/operations/maintenance.ts`.
 
 The `./testing` contract kit accepts host-bound contexts and a `testDatabase`

@@ -391,7 +391,6 @@ export function createMemoryProposalsModule(
           installActorContext(transaction, actor);
           const claim = await beginMutation<{ proposal: MemoryProposal }>(
             transaction,
-            actor,
             options.idempotency,
           );
           if (claim.replay) return claim.replay.proposal;
@@ -781,6 +780,9 @@ export function createMemoryProposalsModule(
                 ...(current.changes_metadata ? { metadata: current.proposed_metadata } : {}),
               },
               current.base_memory_version,
+              // The review trigger accepts an update only at the next version, so an
+              // accepted Proposal equal to its target still records one.
+              { versionUnchanged: true },
             );
           }
           if (!applied) {

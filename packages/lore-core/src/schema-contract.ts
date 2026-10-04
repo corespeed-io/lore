@@ -217,6 +217,7 @@ export const CORE_SCHEMA_CONTRACT = {
       "lore.list_pending_memory_embedding_jobs(text,text,text,integer,integer)",
       "lore.lock_current_maintenance_memory()",
       "lore.prune_retiring_embedding_generations(integer)",
+      "lore.requeue_dead_memory_embedding_jobs(uuid,boolean)",
     ],
     types: ["vector"],
     enums: {},

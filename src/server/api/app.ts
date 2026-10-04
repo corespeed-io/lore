@@ -35,7 +35,9 @@ export function createApi(dependencies: ApiDependencies) {
     c.set("database", request.database);
     c.set("memoryOptions", request.memoryOptions);
     c.set("codeRepositories", request.codeRepositories);
+    c.set("requestActor", request.requestActor);
     c.set("resolveActor", request.resolveActor);
+    c.set("requestUser", request.requestUser);
     c.set("resolveUser", request.resolveUser);
     if (admission.denied) c.res = admission.denied;
     else await next();

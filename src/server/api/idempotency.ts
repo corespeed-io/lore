@@ -1,5 +1,4 @@
-import { type PostgresTransaction, statement } from "@corespeed/lore-core";
-import type { ActorContext } from "@/server/auth/actor-context";
+import { type PostgresStatement, type PostgresTransaction, statement } from "@corespeed/lore-core";
 import { DomainError } from "@/server/errors";
 
 export interface IdempotencyRequest {
@@ -42,18 +41,24 @@ export class IdempotencyConflictError extends DomainError {
   readonly code = "idempotency_conflict";
 }
 
-function actorIdentity(actor: ActorContext): { id: string; kind: "agent" | "user" } {
-  return actor.agentId ? { id: actor.agentId, kind: "agent" } : { id: actor.userId, kind: "user" };
-}
+/** The ledger's actor columns, read from the Actor bound to the transaction. */
+const ACTOR_KIND_SQL = "CASE WHEN lore.current_agent_id() IS NULL THEN 'user' ELSE 'agent' END";
+const ACTOR_ID_SQL = "COALESCE(lore.current_agent_id(), lore.current_user_id())";
 
 /** The request id travels with the transaction's next statement; no round trip of its own. */
 function installRequestId(transaction: PostgresTransaction, requestId: string): void {
   transaction.setLocal({ "lore.request_id": requestId });
 }
 
+/**
+ * Claim `request`'s key for this transaction, or find the stored result of the
+ * attempt that holds it. The ledger's Workspace and actor columns come from the
+ * Actor bound to the transaction (`lore.current_*`), not from parameters, so the
+ * claim can travel in the same round trip as a pending Actor's admission: it is
+ * sent when this is called, before its result is awaited.
+ */
 export async function beginMutation<Result>(
   transaction: PostgresTransaction,
-  actor: ActorContext,
   request?: IdempotencyRequest,
 ): Promise<MutationClaim<Result>> {
   // A fresh id is the request id unless an expired key is reclaimed or replayed.
@@ -61,7 +66,6 @@ export async function beginMutation<Result>(
   installRequestId(transaction, requestId);
   if (!request) return { requestId };
 
-  const identity = actorIdentity(actor);
   // The claim and the lookup share one round trip. The lookup runs after the
   // insert, so it finds this request's own row when the insert claimed the key,
   // and otherwise the row that holds it, locked until this transaction ends.
@@ -70,31 +74,25 @@ export async function beginMutation<Result>(
       `INSERT INTO request_idempotency_records (
          id, workspace_id, actor_user_id, actor_kind, actor_id,
          operation, idempotency_key, request_sha256
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ) VALUES (
+         $1, lore.current_workspace_id(), lore.current_user_id(), ${ACTOR_KIND_SQL},
+         ${ACTOR_ID_SQL}, $2, $3, $4
+       )
        ON CONFLICT (workspace_id, actor_kind, actor_id, operation, idempotency_key)
          DO NOTHING
        RETURNING id`,
-      [
-        requestId,
-        actor.workspaceId,
-        actor.userId,
-        identity.kind,
-        identity.id,
-        request.operation,
-        request.key,
-        request.requestHash,
-      ],
+      [requestId, request.operation, request.key, request.requestHash],
     ),
     statement<IdempotencyRow>(
       `SELECT id, request_sha256, status, response_body, expires_at
        FROM request_idempotency_records
-       WHERE workspace_id = $1
-         AND actor_kind = $2
-         AND actor_id = $3
-         AND operation = $4
-         AND idempotency_key = $5
+       WHERE workspace_id = lore.current_workspace_id()
+         AND actor_kind = ${ACTOR_KIND_SQL}
+         AND actor_id = ${ACTOR_ID_SQL}
+         AND operation = $1
+         AND idempotency_key = $2
        FOR UPDATE`,
-      [actor.workspaceId, identity.kind, identity.id, request.operation, request.key],
+      [request.operation, request.key],
     ),
   ]);
   if (inserted.rows[0]) return { requestId };
@@ -177,6 +175,59 @@ function replaySubjects(body: ReplayBody): (string | null)[] {
   ];
 }
 
+/**
+ * A response body PostgreSQL builds as the completion runs, so the completion can
+ * travel in the same batch as the write whose row it describes. `sql` is an
+ * expression whose parameters are numbered from $9; `subjects` names what the body
+ * describes, for the scrub columns.
+ */
+export interface SqlReplayBody {
+  sql: string;
+  params: readonly unknown[];
+  subjects: ReplayBody;
+}
+
+/**
+ * The statement that completes this request's ledger row. COMMIT may travel behind
+ * it, so its guard fails inside the statement: a row this request no longer holds
+ * raises (22012), and the transaction ends in ROLLBACK instead of committing a key
+ * stuck in progress.
+ */
+export function completionStatement(
+  requestId: string,
+  outcome: MutationOutcome,
+  body: ReplayBody | SqlReplayBody,
+): PostgresStatement<{ id: string | null }> {
+  const built = "sql" in body ? body : null;
+  const subjects = built ? built.subjects : (body as ReplayBody);
+  return statement<{ id: string | null }>(
+    `WITH completed AS (
+       UPDATE request_idempotency_records
+       SET status = 'completed',
+           response_status = $2,
+           response_body = ${built ? `COALESCE(${built.sql}, $3::jsonb)` : "$3::jsonb"},
+           subject_memory_id = $4,
+           subject_proposal_id = $5,
+           proposal_target_memory_id = $6,
+           proposal_accepted_memory_id = $7,
+           subject_episode_id = $8,
+           completed_at = now()
+       WHERE id = $1
+         AND status = 'in_progress'
+       RETURNING id
+     )
+     SELECT (SELECT id FROM completed) AS id,
+            1 / (SELECT count(*) FROM completed)::integer AS guard`,
+    [
+      requestId,
+      LEGACY_RESPONSE_STATUS[outcome],
+      built ? null : JSON.stringify(body),
+      ...replaySubjects(subjects),
+      ...(built ? built.params : []),
+    ],
+  );
+}
+
 export async function completeMutation(
   transaction: PostgresTransaction,
   requestId: string,
@@ -186,34 +237,9 @@ export async function completeMutation(
   options: { commit?: boolean } = {},
 ): Promise<void> {
   if (!idempotent) return;
-  // With `commit`, COMMIT travels with the completion, so the guard must fail inside
-  // the statement: a ledger row this request no longer holds raises (22012) and the
-  // transaction ends in ROLLBACK instead of committing a key stuck in progress.
-  const [completed] = await transaction.batch(
-    [
-      statement<{ id: string | null }>(
-        `WITH completed AS (
-           UPDATE request_idempotency_records
-           SET status = 'completed',
-               response_status = $2,
-               response_body = $3::jsonb,
-               subject_memory_id = $4,
-               subject_proposal_id = $5,
-               proposal_target_memory_id = $6,
-               proposal_accepted_memory_id = $7,
-               subject_episode_id = $8,
-               completed_at = now()
-           WHERE id = $1
-             AND status = 'in_progress'
-           RETURNING id
-         )
-         SELECT (SELECT id FROM completed) AS id,
-                1 / (SELECT count(*) FROM completed)::integer AS guard`,
-        [requestId, LEGACY_RESPONSE_STATUS[outcome], JSON.stringify(body), ...replaySubjects(body)],
-      ),
-    ],
-    { commit: options.commit === true },
-  );
+  const [completed] = await transaction.batch([completionStatement(requestId, outcome, body)], {
+    commit: options.commit === true,
+  });
   if (!completed.rows[0]?.id) throw new Error("Idempotency record completion failed");
 }
 
