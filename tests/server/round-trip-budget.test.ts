@@ -1,3 +1,4 @@
+import type { EmbeddingProvider, MemoryModuleOptions } from "@corespeed/lore-core";
 import type { PGlite } from "@electric-sql/pglite";
 import { afterEach, expect, test, vi } from "vitest";
 import { createApi } from "@/server/api/app";
@@ -55,7 +56,7 @@ interface Measured {
   body: unknown;
 }
 
-async function budgetFixture() {
+async function budgetFixture(memoryOptions: MemoryModuleOptions = {}) {
   process.env.AUTH_MODE = "none";
   process.env.ALLOW_INSECURE = "1";
   process.env.LORE_LOCAL_SUBJECT = "budget-human";
@@ -64,7 +65,7 @@ async function budgetFixture() {
   const database = createPostgresDatabase({});
   const app = createApi({
     database: () => database,
-    memoryOptions: () => ({}),
+    memoryOptions: () => memoryOptions,
     codeRepositories: () => ({}),
   });
 
@@ -264,4 +265,79 @@ test("a refused Actor answers 403 and writes nothing", async () => {
     ),
   );
   expect(written.rows[0]).toEqual({ memories: 0, claims: 0 });
+});
+
+const embeddings: EmbeddingProvider = {
+  provider: "fixture",
+  model: "budget-v1",
+  revision: "fixture-v1",
+  dimensions: 1024,
+  async embed(texts) {
+    return texts.map(() => Array.from({ length: 1024 }, (_, index) => (index === 0 ? 1 : 0)));
+  },
+};
+
+test("search configurations stay within their budgets for humans and Agents", async () => {
+  const configurations: Record<string, MemoryModuleOptions> = {
+    dense: { embeddingProvider: embeddings },
+    planned: {
+      embeddingProvider: embeddings,
+      queryPlanningProvider: { plan: async ({ query }) => [`${query} schedule`, `${query} log`] },
+    },
+    feedback: { retrievalFeedbackQueries: 1 },
+    expansion: { contextGroupExpansion: { groupMetadataKey: "session" } },
+  };
+  const measured: Record<string, unknown> = {};
+  for (const [name, options] of Object.entries(configurations)) {
+    const { context, measure, workspaceId, userId } = await budgetFixture(options);
+    const json = { "x-lore-workspace-id": workspaceId, "content-type": "application/json" };
+    for (const [content, session] of [
+      ["The harbor observatory opens at dawn. Its keeper logs the tides.", "s1"],
+      ["The keeper logs the tides in the harbor ledger every night.", "s1"],
+      ["The ledger moved to the lighthouse archive.", "s2"],
+    ]) {
+      await measure("/api/v1/memories", {
+        method: "POST",
+        headers: json,
+        body: JSON.stringify({ content, metadata: { session } }),
+      });
+    }
+    const access = createAccessModule(context.database);
+    const owner = { workspaceId, userId };
+    const agent = await access.createAgentForWorkspace(owner, {
+      name: "Budget Agent",
+      permission: "read",
+    });
+    const credential = await access.issueAgentCredential(owner, agent.id);
+    const search = "/api/v1/memories?q=harbor%20observatory";
+    measured[name] = {
+      human: cost(await measure(search, { headers: { "x-lore-workspace-id": workspaceId } })),
+      agent: cost(
+        await measure(search, {
+          headers: {
+            "x-lore-workspace-id": workspaceId,
+            authorization: `Bearer ${credential.token}`,
+          },
+        }),
+      ),
+      context: cost(
+        await measure("/api/v1/context/retrieve", {
+          method: "POST",
+          headers: json,
+          body: JSON.stringify({ query: "What do we remember about the harbor observatory?" }),
+        }),
+      ),
+    };
+  }
+  // Provider calls run before any statement. A human is admitted with the first pass;
+  // an Agent pays for a provider only after its own admission (one more wait), and a
+  // lexical search admits it with the first pass. Expansion and each feedback round
+  // add one wait; a Memory-only context packet costs what its search does.
+  const at = (statements: number, waits: number) => ({ status: 200, statements, waits });
+  expect(measured).toEqual({
+    dense: { human: at(6, 1), agent: at(8, 2), context: at(6, 1) },
+    planned: { human: at(8, 1), agent: at(10, 2), context: at(8, 1) },
+    feedback: { human: at(11, 2), agent: at(10, 2), context: at(11, 2) },
+    expansion: { human: at(7, 2), agent: at(6, 2), context: at(7, 2) },
+  });
 });

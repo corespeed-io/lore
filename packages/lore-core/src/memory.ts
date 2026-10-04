@@ -204,8 +204,11 @@ async function expandContextGroupResults(input: {
   // reranker sees only that anchor plus up to evidenceNeighborChunks following
   // chunks, matching an ordinary candidate's compact passage and never wider
   // than the returned evidence.
-  const expanded = await input.transaction.query<SearchRow>(
-    `SELECT
+  // The last statement of the search's transaction: COMMIT travels with it.
+  const [expanded] = await input.transaction.batch(
+    [
+      statement<SearchRow>(
+        `SELECT
        ${memorySelectColumns("memory")},
        0::double precision AS score,
        evidence.content AS evidence,
@@ -240,19 +243,22 @@ async function expandContextGroupResults(input: {
        memory.updated_at DESC,
        memory.id
      LIMIT $9`,
-    [
-      input.storageScope.partitionId,
-      input.scope,
-      input.updatedAfter,
-      input.updatedBefore,
-      input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
-      input.expansion.groupMetadataKey,
-      groupValues,
-      excludedMemoryIds,
-      fetchLimit,
-      input.evidenceTopChunks,
-      input.evidenceNeighborChunks,
+        [
+          input.storageScope.partitionId,
+          input.scope,
+          input.updatedAfter,
+          input.updatedBefore,
+          input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+          input.expansion.groupMetadataKey,
+          groupValues,
+          excludedMemoryIds,
+          fetchLimit,
+          input.evidenceTopChunks,
+          input.evidenceNeighborChunks,
+        ],
+      ),
     ],
+    { commit: true },
   );
   const rankedExpanded = expanded.rows
     .map((row) => {

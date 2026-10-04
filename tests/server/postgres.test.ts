@@ -14,6 +14,7 @@ const driver = vi.hoisted(() => ({
   release: vi.fn(),
   poolConfig: vi.fn(),
   poolEnd: vi.fn(),
+  poolListeners: vi.fn(),
 }));
 
 vi.mock("pg", () => ({
@@ -22,7 +23,8 @@ vi.mock("pg", () => ({
       driver.poolConfig(config);
     }
 
-    on() {
+    on(event: string) {
+      driver.poolListeners(event);
       return this;
     }
 
@@ -346,6 +348,14 @@ test("each adapter picks its pipelining default and accepts an explicit override
   expect(postgresPipeline("0", true)).toBe(false);
   expect(postgresPipeline(undefined, true)).toBe(true);
   expect(postgresPipeline("yes", false)).toBe(false);
+  await Promise.all([processPool.close(), requestPool.close()]);
+});
+
+test("both pools listen for idle-client errors, so a dropped socket cannot crash the process", async () => {
+  const processPool = createPostgresDatabase({});
+  const requestPool = createRequestPostgresDatabase({});
+
+  expect(driver.poolListeners.mock.calls).toEqual([["error"], ["error"]]);
   await Promise.all([processPool.close(), requestPool.close()]);
 });
 
