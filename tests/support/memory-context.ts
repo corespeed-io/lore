@@ -20,6 +20,8 @@ function migrate(postgres: PGlite): Promise<void> {
 }
 
 export interface MemoryTestContext {
+  /** The context's own PGlite session, for tests that drive a host adapter over it. */
+  postgres: PGlite;
   database: PostgresDatabase;
   maintenanceDatabase: PostgresDatabase;
   adminDatabase: PostgresDatabase;
@@ -87,6 +89,7 @@ export async function createMemoryTestContext(): Promise<MemoryTestContext> {
 
   let closePromise: Promise<void> | undefined;
   const context: MemoryTestContext = {
+    postgres,
     database: databaseForRole("lore_app"),
     maintenanceDatabase: databaseForRole("lore_maintenance"),
     adminDatabase: databaseForRole("NONE"),

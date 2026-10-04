@@ -138,7 +138,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     async createAgent(actor: ActorContext, input: { name: string }): Promise<Agent> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const result = await transaction.query<AgentRow>(
             `INSERT INTO agents (id, owner_user_id, name)
              VALUES ($1, $2, $3)
@@ -156,7 +156,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     ): Promise<WorkspaceAgent> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const agentId = crypto.randomUUID();
           const agentResult = await transaction.query<AgentRow>(
             `INSERT INTO agents (id, owner_user_id, name)
@@ -184,7 +184,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     async listAgents(actor: ActorContext): Promise<WorkspaceAgent[]> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const result = await transaction.query<WorkspaceAgentRow>(
             `SELECT
                agent.*,
@@ -210,7 +210,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     ): Promise<WorkspaceAgent | null> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const result = await transaction.query<WorkspaceAgentRow>(
             `UPDATE agents agent
              SET
@@ -240,7 +240,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     async deleteAgent(actor: ActorContext, agentId: string): Promise<boolean> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const target = await transaction.query<{ status: AgentStatus }>(
             `SELECT agent.status
              FROM agents agent
@@ -283,7 +283,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     ): Promise<AgentWorkspaceGrant> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const result = await transaction.query<AgentGrantRow>(
             `INSERT INTO agent_workspace_grants (workspace_id, agent_id, permission)
              VALUES ($1, $2, $3)
@@ -305,7 +305,7 @@ export function createAgentsModule(database: PostgresDatabase) {
 
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const id = crypto.randomUUID();
           const result = await transaction.query<{ id: string; secret_prefix: string }>(
             `INSERT INTO agent_credentials (id, agent_id, secret_prefix, secret_hash)
@@ -330,7 +330,7 @@ export function createAgentsModule(database: PostgresDatabase) {
     async listAgentCredentials(actor: ActorContext, agentId: string): Promise<AgentCredential[]> {
       return refusingDeniedAccess(() =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const result = await transaction.query<AgentCredentialRow>(
             `SELECT
                credential.id,
@@ -357,7 +357,7 @@ export function createAgentsModule(database: PostgresDatabase) {
 
     async revokeAgentCredential(actor: ActorContext, credentialId: string): Promise<boolean> {
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<{ id: string }>(
           `UPDATE agent_credentials credential
            SET revoked_at = now()
@@ -378,7 +378,7 @@ export function createAgentsModule(database: PostgresDatabase) {
 
     async revokeAgentGrant(actor: ActorContext, agentId: string): Promise<boolean> {
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<{ agent_id: string }>(
           `UPDATE agent_workspace_grants
            SET status = 'revoked', updated_at = now()

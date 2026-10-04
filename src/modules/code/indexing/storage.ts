@@ -117,7 +117,7 @@ export async function loadReusableGitFiles(
   database: PostgresDatabase,
   actor: ActorContext,
   lookup: ReusableGitFileLookup,
-  installContext: (transaction: PostgresTransaction) => Promise<void> = (transaction) =>
+  installContext: (transaction: PostgresTransaction) => void = (transaction) =>
     installActorContext(transaction, actor),
 ): Promise<Map<string, PreparedFileIndex>> {
   const { manifest, resumeRevision } = lookup;
@@ -134,7 +134,7 @@ export async function loadReusableGitFiles(
   if (requestedFiles.length === 0) return new Map();
 
   return database.transaction(async (transaction) => {
-    await installContext(transaction);
+    installContext(transaction);
     const result = await transaction.query<ReusableArtifactRow>(
       `WITH requested AS MATERIALIZED (
          SELECT requested_file.path, requested_file.object_oid,

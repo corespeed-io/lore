@@ -124,6 +124,7 @@ function createEmbeddingProvider(
     model: configuration.model,
     dimensions: configuration.dimensions,
     revision: configuration.revision,
+    requestTimeoutMs: timeoutMs,
     async embed(texts: string[], _task: EmbeddingTask): Promise<number[][]> {
       if (!texts.length) return [];
       const embeddings: number[][] = [];

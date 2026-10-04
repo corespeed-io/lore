@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { managedTransactionDatabase, type PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -50,13 +50,9 @@ function databaseForRole(
   postgres: PGlite,
   role: "lore_app" | "lore_maintenance",
 ): PostgresDatabase {
-  return {
-    transaction: (use) =>
-      postgres.transaction(async (transaction) => {
-        await transaction.query(`SET LOCAL ROLE ${role}`);
-        return use({ query: (sql, params) => transaction.query(sql, params) });
-      }),
-  };
+  return managedTransactionDatabase(postgres, {
+    initialize: (transaction) => transaction.setLocal({ role }),
+  });
 }
 
 /** A real repository whose one commit holds a BOM-only blob beside ordinary source. */

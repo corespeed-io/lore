@@ -1,5 +1,5 @@
 import type { EmbeddingTask, PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingMaintenance, transactionThrough } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
@@ -36,14 +36,16 @@ function archiveBytes(archive: WorkspaceArchive): number {
 
 function countingDatabase(database: PostgresDatabase, statements: string[]): PostgresDatabase {
   return {
-    transaction: (use) =>
-      database.transaction((transaction) =>
-        use({
-          query: (sql, params) => {
-            statements.push(sql);
-            return transaction.query(sql, params);
-          },
-        }),
+    transaction: (use, options) =>
+      database.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, (sql, params) => {
+              statements.push(sql);
+              return transaction.query(sql, params);
+            }),
+          ),
+        options,
       ),
   };
 }
@@ -320,10 +322,12 @@ test("import enqueues embedding jobs in its transaction and notifies them after 
     Object.values(imported.memoryIdMap).sort(),
   );
   expect(jobs.rows.every((job) => job.status === "pending")).toBe(true);
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.run(notifications[0])).resolves.toMatchObject({ status: "complete" });
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toMatchObject({
+    status: "complete",
+  });
   expect(tasks).toEqual(["document"]);
 
   // A replayed import creates no new work.

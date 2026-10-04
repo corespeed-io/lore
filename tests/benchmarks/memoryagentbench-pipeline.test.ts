@@ -1,5 +1,5 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingMaintenance } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryModule } from "../../src/modules/memories/service";
 import { memoryAgentBenchSubstringExactMatch } from "../../tools/evaluation/retrieval/memoryagentbench";
@@ -29,8 +29,8 @@ test("MemoryAgentBench conflict pipeline preserves sequence and rejects private 
     scope: "private",
     metadata: { benchmark: "MemoryAgentBench", corpusKey: "fixture", source: "conflict" },
   });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain deterministic fixture jobs.

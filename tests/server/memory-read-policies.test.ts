@@ -1,5 +1,5 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingMaintenance } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
@@ -48,8 +48,8 @@ async function fixture() {
     targetMemoryId: alicePrivate.id,
   });
   await graph.connect(context.bob, { sourceMemoryId: bobShared.id, targetMemoryId: bobPrivate.id });
-  const maintenance = createMemoryMaintenanceModule(context.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(context.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Embed every Memory so the embedding policy is exercised.
@@ -78,7 +78,7 @@ async function readerAgent(
 
 async function visible(context: MemoryTestContext, actor: ActorContext) {
   return context.database.transaction(async (transaction) => {
-    await installActorContext(transaction, actor);
+    installActorContext(transaction, actor);
     const ids = async (sql: string) =>
       (await transaction.query<{ id: string }>(sql)).rows.map((row) => row.id).sort();
     return {
@@ -175,7 +175,7 @@ test("a revoked grant or a disabled Agent denies that Agent", async () => {
 test("the Workspace read check is planned once per statement, not per row", async () => {
   const { context } = await fixture();
   await context.database.transaction(async (transaction) => {
-    await installActorContext(transaction, context.alice);
+    installActorContext(transaction, context.alice);
     for (const sql of [
       "SELECT id FROM memories",
       "SELECT id FROM memory_chunks",

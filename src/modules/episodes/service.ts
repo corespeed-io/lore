@@ -70,12 +70,8 @@ export function createObservationModule(database: PostgresDatabase) {
       const normalized = normalizedEpisode(input);
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          const claim = await beginMutation<{ episode: Episode }>(
-            transaction,
-            actor,
-            options.idempotency,
-          );
+          installActorContext(transaction, actor);
+          const claim = await beginMutation<{ episode: Episode }>(transaction, options.idempotency);
           if (claim.replay) return claim.replay.episode;
           // This OSS schema function authorizes User/Agent provenance and owns
           // the immutable Episode insert privileges unavailable to lore_app.
@@ -152,12 +148,8 @@ export function createObservationModule(database: PostgresDatabase) {
     ): Promise<boolean> {
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
-          const claim = await beginMutation<{ deleted: boolean }>(
-            transaction,
-            actor,
-            options.idempotency,
-          );
+          installActorContext(transaction, actor);
+          const claim = await beginMutation<{ deleted: boolean }>(transaction, options.idempotency);
           if (claim.replay) return claim.replay.deleted;
           const writable = await transaction.query<{ id: string }>(
             `SELECT id FROM episodes

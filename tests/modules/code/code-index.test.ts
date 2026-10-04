@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { type PostgresDatabase, transactionThrough } from "@corespeed/lore-core";
 import { expect, onTestFinished, test } from "vitest";
 import { createCodeDependencyGraphModule } from "@/modules/code/graph";
 import {
@@ -60,14 +60,16 @@ function interruptingDatabase(
   interrupts: (sql: string, params: unknown[] | undefined) => boolean,
 ): PostgresDatabase {
   return {
-    transaction: (use) =>
-      database.transaction((transaction) =>
-        use({
-          query: (sql, params) => {
-            if (interrupts(sql, params)) throw new Error("simulated worker interruption");
-            return transaction.query(sql, params);
-          },
-        }),
+    transaction: (use, options) =>
+      database.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, (sql, params) => {
+              if (interrupts(sql, params)) throw new Error("simulated worker interruption");
+              return transaction.query(sql, params);
+            }),
+          ),
+        options,
       ),
   };
 }
@@ -380,19 +382,19 @@ test("a leased job commits small complete files together in one bounded checkpoi
   });
   let checkpointTransactions = 0;
   const counted: PostgresDatabase = {
-    transaction: (use) =>
+    transaction: (use, options) =>
       context.maintenanceDatabase.transaction((transaction) => {
         let insertsArtifacts = false;
-        return use({
-          query: (sql, params) => {
+        return use(
+          transactionThrough(transaction, (sql, params) => {
             if (!insertsArtifacts && sql.includes("INSERT INTO code_artifacts")) {
               insertsArtifacts = true;
               checkpointTransactions += 1;
             }
             return transaction.query(sql, params);
-          },
-        });
-      }),
+          }),
+        );
+      }, options),
   };
 
   await expect(codeIndexMaintenance(counted).run(queued.id)).resolves.toMatchObject({
@@ -1160,7 +1162,7 @@ test("indexes TypeScript by AST symbol while keeping fallback text out of Memory
   });
   await expect(
     context.database.transaction(async (transaction) => {
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       await transaction.query("UPDATE code_artifact_payloads SET content = 'rewritten'");
     }),
   ).rejects.toMatchObject({ code: "42501" });
@@ -1171,7 +1173,7 @@ test("indexes TypeScript by AST symbol while keeping fallback text out of Memory
   ).rejects.toMatchObject({ code: "23514" });
   await expect(
     context.database.transaction(async (transaction) => {
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       await transaction.query("UPDATE code_symbol_payloads SET symbol = 'rewritten'");
     }),
   ).rejects.toMatchObject({ code: "42501" });

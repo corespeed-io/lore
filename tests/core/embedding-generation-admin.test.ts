@@ -1,4 +1,4 @@
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingGenerationAdmin, createEmbeddingMaintenance } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { administeredGeneration } from "../../scripts/database/embedding-generation.ts";
 import { createMemoryModule } from "../../src/modules/memories/service";
@@ -38,13 +38,10 @@ async function jobStates(testContext: MemoryTestContext) {
 }
 
 function requeueDead(testContext: MemoryTestContext, generationId: string, apply: boolean) {
-  return testContext.maintenanceDatabase.transaction(async (transaction) => {
-    const result = await transaction.query<{ count: string | number }>(
-      "SELECT lore.requeue_dead_memory_embedding_jobs($1, $2) AS count",
-      [generationId, apply],
-    );
-    return Number(result.rows[0]?.count);
-  });
+  return createEmbeddingGenerationAdmin(testContext.maintenanceDatabase).requeueDeadJobs(
+    generationId,
+    { apply },
+  );
 }
 
 /** Two Memories whose only embedding jobs are dead, then one edited to a new version. */
@@ -57,14 +54,17 @@ async function deadJobsWithOneStale() {
   await testContext.adminDatabase.transaction((transaction) =>
     transaction.query("UPDATE memory_embedding_jobs SET max_attempts = 1"),
   );
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
   await expect(maintenance.run()).resolves.toMatchObject({ status: "dead" });
   await expect(maintenance.run()).resolves.toMatchObject({ status: "dead" });
   // The edit enqueues a version-2 job; the version-1 job stays dead until a sweep.
   await memories.update(testContext.alice, edited.id, { content: "Changed after it died." });
-  const report = await maintenance.generationReport();
+  const report = await createEmbeddingGenerationAdmin(testContext.maintenanceDatabase).findReport(
+    provider,
+  );
+  if (!report) throw new Error("The failed jobs must have created their generation");
   return { current, edited, maintenance, report, testContext };
 }
 
@@ -110,9 +110,9 @@ test("requeueing dead embedding jobs refuses unknown generations and request act
   );
   // Only the maintenance login may re-arm jobs; the request role cannot even call it.
   await expect(
-    testContext.database.transaction((transaction) =>
-      transaction.query("SELECT lore.requeue_dead_memory_embedding_jobs($1, true)", [report.id]),
-    ),
+    createEmbeddingGenerationAdmin(testContext.database).requeueDeadJobs(report.id, {
+      apply: true,
+    }),
   ).rejects.toThrow(/permission denied/);
   await expect(jobStates(testContext)).resolves.toEqual(before);
 });
@@ -122,9 +122,7 @@ test("a coverage report for an unseeded generation creates nothing", async () =>
   const provider = unavailableProvider("never-seeded");
   const memories = createMemoryModule(testContext.database);
   await memories.remember(testContext.alice, { content: "Lexical-only Memory." });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
-  });
+  const admin = createEmbeddingGenerationAdmin(testContext.maintenanceDatabase);
   const generations = () =>
     testContext.adminDatabase.transaction(async (transaction) => {
       const result = await transaction.query<{ count: string | number }>(
@@ -134,10 +132,7 @@ test("a coverage report for an unseeded generation creates nothing", async () =>
     });
   const generationsBefore = await generations();
 
-  await expect(maintenance.findGenerationReport()).resolves.toBeNull();
-  await expect(maintenance.generationReport()).rejects.toThrow(
-    "Embedding generation is not initialized",
-  );
+  await expect(admin.findReport(provider)).resolves.toBeNull();
   await expect(generations()).resolves.toBe(generationsBefore);
   await expect(jobStates(testContext)).resolves.toEqual([]);
 });

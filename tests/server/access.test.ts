@@ -95,7 +95,7 @@ test("RLS keeps a User's Agents and Workspace Grants private from other members"
   });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(transaction.query("SELECT id FROM agents")).resolves.toMatchObject({ rows: [] });
     await expect(
       transaction.query("SELECT agent_id FROM agent_workspace_grants"),
@@ -137,7 +137,7 @@ test("Agent credential resolves to the owning User and granted Workspace", async
     access.authenticateAgent("lore_agent_invalid", testContext.alice.workspaceId),
   ).resolves.toBeNull();
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query("SELECT id, agent_id, secret_prefix FROM agent_credentials"),
     ).resolves.toMatchObject({ rows: [{ id: credential.id, agent_id: agent.id }] });
@@ -146,12 +146,89 @@ test("Agent credential resolves to the owning User and granted Workspace", async
     );
   });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(
       transaction.query("SELECT id, agent_id, secret_prefix FROM agent_credentials"),
     ).resolves.toMatchObject({ rows: [] });
   });
 
+  await testContext.close();
+});
+
+test("Agent authentication writes last_used_at at most once a minute and checks access every time", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Busy assistant" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const authenticate = () =>
+    access.authenticateAgent(credential.token, testContext.alice.workspaceId);
+  const actor = {
+    workspaceId: testContext.alice.workspaceId,
+    userId: testContext.alice.userId,
+    agentId: agent.id,
+  };
+  // xmin changes whenever the row is written, even to an equal value.
+  const row = async () =>
+    (
+      await testContext.adminDatabase.transaction((transaction) =>
+        transaction.query<{ last_used_at: string | null; version: string }>(
+          `SELECT last_used_at::text, xmin::text AS version
+           FROM agent_credentials WHERE id = $1`,
+          [credential.id],
+        ),
+      )
+    ).rows[0];
+
+  expect((await row())?.last_used_at).toBeNull();
+  await expect(authenticate()).resolves.toEqual(actor);
+  const first = await row();
+  expect(first?.last_used_at).not.toBeNull();
+
+  // Within a minute nothing is written, but the Actor is still returned.
+  await expect(authenticate()).resolves.toEqual(actor);
+  await expect(row()).resolves.toEqual(first);
+
+  // Every check still runs inside that minute.
+  await expect(access.revokeAgentGrant(testContext.alice, agent.id)).resolves.toBe(true);
+  await expect(authenticate()).resolves.toBeNull();
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  await expect(authenticate()).resolves.toEqual(actor);
+  await testContext.suspendMembership(testContext.alice);
+  await expect(authenticate()).resolves.toBeNull();
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE memberships SET status = 'active' WHERE workspace_id = $1 AND user_id = $2",
+      [testContext.alice.workspaceId, testContext.alice.userId],
+    ),
+  );
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE agents SET status = 'disabled' WHERE id = $1", [agent.id]),
+  );
+  await expect(authenticate()).resolves.toBeNull();
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE agents SET status = 'active' WHERE id = $1", [agent.id]),
+  );
+  await expect(authenticate()).resolves.toEqual(actor);
+  await expect(row()).resolves.toEqual(first);
+
+  // Older than a minute, it is written again.
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE agent_credentials SET last_used_at = now() - interval '61 seconds' WHERE id = $1",
+      [credential.id],
+    ),
+  );
+  const stale = await row();
+  await expect(authenticate()).resolves.toEqual(actor);
+  const refreshed = await row();
+  expect(refreshed?.version).not.toBe(stale?.version);
+  expect(Date.parse(refreshed?.last_used_at ?? "")).toBeGreaterThan(
+    Date.parse(stale?.last_used_at ?? ""),
+  );
+
+  await expect(access.revokeAgentCredential(testContext.alice, credential.id)).resolves.toBe(true);
+  await expect(authenticate()).resolves.toBeNull();
   await testContext.close();
 });
 
@@ -336,7 +413,7 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
 
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, agentActor);
+      installActorContext(transaction, agentActor);
       await transaction.query("UPDATE memories SET created_by_agent_id = NULL WHERE id = $1", [
         memory.id,
       ]);
@@ -344,7 +421,7 @@ test("Deleting a disabled Agent removes every grant and credential but preserves
   ).rejects.toThrow(/Memory identity and provenance are immutable/);
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       await transaction.query("UPDATE memories SET created_by_agent_id = NULL WHERE id = $1", [
         memory.id,
       ]);
@@ -470,7 +547,7 @@ test("Deleting a disabled Agent that cited Code Evidence keeps the citation with
   for (const database of [testContext.database, testContext.adminDatabase]) {
     await expect(
       database.transaction(async (transaction) => {
-        await installActorContext(transaction, testContext.alice);
+        installActorContext(transaction, testContext.alice);
         await transaction.query(
           "UPDATE memory_code_evidence SET created_by_agent_id = NULL WHERE id = $1",
           [citation.id],

@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   chunkMemoryContent,
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
 } from "@corespeed/lore-core";
@@ -30,6 +30,7 @@ import {
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
 import type { BenchmarkReaderRuntimeSnapshot } from "../shared/benchmark-reader";
 import { createBenchmarkReaderFromEnvironment } from "../shared/benchmark-reader";
+import { requireMigratedBenchmarkSchema } from "../shared/benchmark-schema";
 import {
   drainEmbeddingMaintenance,
   pendingEmbeddingJobCount,
@@ -395,16 +396,15 @@ try {
   if (!databaseName || !benchmarkNamePattern.test(databaseName)) {
     throw new Error(`Refusing to modify non-benchmark database ${JSON.stringify(databaseName)}`);
   }
+  await requireMigratedBenchmarkSchema(admin);
   const schema = await admin.query<{
     entity_alias_column: boolean;
     memories: string | null;
-    metadata_index: string | null;
   }>(
     // The alias channel's sentinel is the generated column it scans, not an
     // index: migration 0003 dropped the request-path-dead entity-aliases GIN.
     `SELECT
        to_regclass('public.memories')::text AS memories,
-       to_regclass('public.memories_metadata_gin_idx')::text AS metadata_index,
        EXISTS (
          SELECT 1 FROM information_schema.columns
          WHERE table_schema = 'public'
@@ -412,8 +412,8 @@ try {
            AND column_name = 'entity_aliases'
        ) AS entity_alias_column`,
   );
-  if (!schema.rows[0]?.memories || !schema.rows[0]?.metadata_index) {
-    throw new Error("Lore v1 baseline with the Memory metadata index is required");
+  if (!schema.rows[0]?.memories) {
+    throw new Error("Lore v1 baseline with the Memory table is required");
   }
   if (!schema.rows[0]?.entity_alias_column) {
     throw new Error("Lore v1 baseline with the entity-alias column is required");
@@ -492,7 +492,9 @@ try {
         tripwireMemoryIds.set(questionId, tripwire.id);
       }
     }
-    const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, { embeddingProvider });
+    const maintenance = createEmbeddingMaintenance(maintenanceDatabase, {
+      embeddingProviders: [embeddingProvider],
+    });
     const indexingStartedAt = performance.now();
     // Tolerates provider retries and backoff; only a dead job or sustained zero
     // progress aborts the run.

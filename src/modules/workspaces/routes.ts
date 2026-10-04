@@ -7,7 +7,7 @@ import { createWorkspacesModule } from "./service";
 export const workspaces = new Hono<ApiEnv>()
   .get("/", async (c) => {
     const workspacesModule = createWorkspacesModule(await c.var.database());
-    const user = await c.var.resolveUser();
+    const user = await c.var.requestUser();
     return c.json(await workspacesModule.listWorkspaces(user));
   })
   .post("/", async (c) => {

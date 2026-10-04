@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
   "files": {
     "includes": [
       "**",
@@ -161,9 +161,12 @@
                       "voyageai/**",
                       "@ast-grep/napi",
                       "@vercel/otel",
-                      "@opentelemetry/**"
+                      "@opentelemetry/**",
+                      "pg",
+                      "pg/**",
+                      "pg-cloudflare"
                     ],
-                    "message": "The engine must not know its host: keep OSS identity/tenancy, HTTP, UI, wire validation, and concrete model SDKs out of packages/lore-core. Hosts inject capabilities through the embedding, reranking, and query-planning interfaces."
+                    "message": "The engine must not know its host: keep OSS identity/tenancy, HTTP, UI, wire validation, database drivers, and concrete model SDKs out of packages/lore-core. Hosts inject capabilities through the embedding, reranking, and query-planning interfaces."
                   }
                 ]
               }

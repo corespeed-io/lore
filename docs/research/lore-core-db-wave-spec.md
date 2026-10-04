@@ -237,6 +237,16 @@ The request pool's default 10-second idle eviction would open a second connectio
   Pipelining keeps per-statement snapshots, so the existing-Link read still starts after the lock is granted. Merging them into one statement would break that (review finding 7).
 - **Graph keeps its version-checked full-content reread.** It runs only when a node needs it.
 
+### 4.3a As built (PR 1b)
+
+Measured by `tests/server/round-trip-budget.test.ts` through the real `pg` adapter. Every §5 budget holds. Five details differ from §4.3:
+
+- **The human prefix resolves the Identity and never registers it.** It uses `lore.resolve_identity` plus `lore.is_active_member`. Membership needs a registered User, so an unregistered Identity is refused either way. The prefix stays read-only, so it also fits the Graph's and context packets' read-only REPEATABLE READ snapshots. Registration happens in `GET /workspaces`, as that request's own prefix.
+- **An Agent is admitted in a transaction of its own before a read-only or repeatable-read snapshot.** `authenticate_agent_credential` may write `last_used_at`. That write would fail under READ ONLY and could fail to serialize under REPEATABLE READ. An Agent's Graph read therefore costs 2 waits.
+- **A human's search sends its prefix with the first pass, after the provider calls, not concurrently with them.** That is still 1 wait after the embedding call, and one round trip fewer overall. An Agent's search that pays an embedding or planning provider is admitted first, as specified.
+- **A refused write costs a second wait for its ROLLBACK.** Its claim travelled with the admission. A refused read stays 1 wait.
+- **Writes split into two phases.** The core update primitive is a locking phase (`lockMemoryInTransaction`) and an apply phase (`updateLockedMemoryInTransaction`), so OSS can check the claim between them. The write primitives take a `finish` hook that appends the ledger completion to their final batch. The completion's body is built in SQL from the row just written (`writtenMemoryReplayBody`).
+
 ### 4.4 Write-path prototype
 
 PR 1 ships a prototype harness, not production code. It applies a scratch migration to a staging database behind a real Hyperdrive binding. For each write route it measures p50 and p95 latency, plus statements, waits, and connections, for two variants:
@@ -313,33 +323,38 @@ Chunks are matched by ordinal, not content: moving an ordinal would need `UPDATE
 
 All are forward-only. Revisions continue from 9, and each migration sets `compatible_from` (PR 0).
 
-**Migration 0010 (`transaction:false`, one statement at a time via the existing runner `scripts/database/lib/migration-statements.ts:45`):**
+The transactional migration runs first, because it adds the `compatible_from` column that both migrations' final UPDATE writes. (v3 of this spec listed the concurrent index migration first; it could not set `compatible_from` before the column existed.)
 
-| # | Statement | Lock | Blocks |
-| --- | --- | --- | --- |
-| 1 | `DROP INDEX CONCURRENTLY IF EXISTS memories_metadata_gin_idx` | SHARE UPDATE EXCLUSIVE on `memories`; waits for open transactions | No reads or writes |
-| 2 | `DROP INDEX CONCURRENTLY IF EXISTS memory_links_workspace_source_idx` | Same, on `memory_links` | No reads or writes |
-| 3 | `DROP INDEX CONCURRENTLY IF EXISTS memory_chunks_embedding_cosine_idx` | Same, on `memory_chunks` | No reads or writes |
-| 4 | `DROP INDEX CONCURRENTLY IF EXISTS memory_chunk_embeddings_chunk_idx`, then `CREATE INDEX CONCURRENTLY memory_chunk_embeddings_chunk_idx ON memory_chunk_embeddings (chunk_id)` | SHARE UPDATE EXCLUSIVE on `memory_chunk_embeddings`; waits for open transactions | No reads or writes |
-| 5 | `UPDATE lore_system_state SET schema_revision = 10, compatible_from = 9` | Row lock | — |
-
-Rerun safety: every create is preceded by a drop of its leftover, so an interrupted run replaces any `INVALID` index (the 0005 pattern).
-
-**Migration 0011 (transactional, `SET LOCAL lock_timeout = '5s'`).** Statements run in this order:
+**Migration 0010 (transactional, `SET LOCAL lock_timeout = '5s'`).** Statements run in this order:
 
 | # | Statement | Lock |
 | --- | --- | --- |
-| 1 | `CREATE OR REPLACE FUNCTION` claim, `append_memory_event`, `authenticate_agent_credential` | Function objects only; no table lock |
-| 2 | `ALTER TABLE memory_chunks DROP COLUMN embedding, embedding_provider, embedding_model, embedding_revision, embedded_at` (also drops their CHECK) | ACCESS EXCLUSIVE on `memory_chunks`; catalog-only, so it's brief |
-| 3 | `DROP POLICY memory_chunks_update ON memory_chunks` | Same lock, already held |
-| 4 | `REVOKE UPDATE ON memory_chunks FROM lore_app` | Catalog only |
-| 5 | `UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9` | Row lock |
+| 1 | `ALTER TABLE memory_chunks DROP COLUMN embedding, embedding_provider, embedding_model, embedding_revision, embedded_at` (also drops their CHECK and `memory_chunks_embedding_cosine_idx`) | ACCESS EXCLUSIVE on `memory_chunks`; catalog-only, so it's brief |
+| 2 | `DROP POLICY memory_chunks_update ON memory_chunks` | Same lock, already held |
+| 3 | `REVOKE UPDATE ON memory_chunks FROM lore_app` | Catalog only |
+| 4 | `CREATE OR REPLACE FUNCTION` claim, `append_memory_event`, `authenticate_agent_credential` | Function objects only; no table lock |
+| 5 | `ALTER TABLE lore_system_state ADD COLUMN compatible_from integer` with a CHECK (`NULL` or 1 to `schema_revision`) | ACCESS EXCLUSIVE on `lore_system_state` |
+| 6 | `CREATE OR REPLACE FUNCTION lore.portable_core_capabilities()` publishing `compatibleFrom` (`COALESCE(compatible_from, schema_revision)`) | Validating the SQL body takes ACCESS SHARE on `embedding_generations` and `lore_system_state` |
+| 7 | `UPDATE lore_system_state SET schema_revision = 10, compatible_from = 9` | Row lock |
 
-- **Lock order.** 0011 takes only one table lock, on `memory_chunks`, so it can't form a lock cycle with request writes, which lock `memories` before `memory_chunks`.
-- **Blocking and retry.** A write that already holds a `memory_chunks` lock delays 0011 by up to 5 s, and requests that arrive meanwhile queue behind it. If the timeout expires, nothing is recorded and the rerun repeats it.
+`memory_chunks` is locked before `lore_system_state`: a request write may hold `memory_chunks` for up to the 5 s timeout, and readiness reads `lore_system_state` under a 2 s statement timeout, so it must not wait behind that.
+
+**Migration 0011 (`transaction:false`, one statement at a time via the existing runner `scripts/database/lib/migration-statements.ts:45`):**
+
+| # | Statement | Lock | Blocks |
+| --- | --- | --- | --- |
+| 1 | `DROP INDEX CONCURRENTLY IF EXISTS memory_chunk_embeddings_chunk_idx`, then `CREATE INDEX CONCURRENTLY memory_chunk_embeddings_chunk_idx ON memory_chunk_embeddings (chunk_id)` | SHARE UPDATE EXCLUSIVE on `memory_chunk_embeddings`; waits for open transactions | No reads or writes |
+| 2 | `DROP INDEX CONCURRENTLY IF EXISTS memories_metadata_gin_idx` | SHARE UPDATE EXCLUSIVE on `memories`; waits for open transactions | No reads or writes |
+| 3 | `DROP INDEX CONCURRENTLY IF EXISTS memory_links_workspace_source_idx` | Same, on `memory_links` | No reads or writes |
+| 4 | `UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9` | Row lock | — |
+
+Rerun safety: every create is preceded by a drop of its leftover, so an interrupted run replaces any `INVALID` index (the 0005 pattern). `memory_chunks_embedding_cosine_idx` needs no concurrent drop: it goes with its column in 0010.
+
+- **Lock order.** 0010 takes only one exclusive lock that request traffic contends for, on `memory_chunks`, and never locks `memories`, so it can't form a lock cycle with request writes, which lock `memories` before `memory_chunks`.
+- **Blocking and retry.** A write that already holds a `memory_chunks` lock delays 0010 by up to 5 s, and requests that arrive meanwhile queue behind it. If the timeout expires, nothing is recorded and the rerun repeats it.
 - **Old instances keep working.** They never read the dropped columns (verified by search), so `compatible_from` stays 9.
 
-**Composite FK: deferred.** It would add relational integrity: a vector's `memory_id` would have to match its chunk's Memory. That costs SHARE ROW EXCLUSIVE on both tables to add, a separate `VALIDATE`, and a pre-check for mismatched rows. The `chunk_id` index in 0010 fixes the cascade cost without blocking writes. Integrity becomes its own follow-up if wanted (question 2).
+**Composite FK: deferred.** It would add relational integrity: a vector's `memory_id` would have to match its chunk's Memory. That costs SHARE ROW EXCLUSIVE on both tables to add, a separate `VALIDATE`, and a pre-check for mismatched rows. The `chunk_id` index in 0011 fixes the cascade cost without blocking writes. Integrity becomes its own follow-up if wanted (question 2).
 
 **PR 3 migrations** create functions and grants only, with no table locks. Each one raises `compatible_from` only if it removes something old instances call. It doesn't: `register_identity`, `is_active_member`, and `SET LOCAL ROLE` all remain.
 
@@ -416,7 +431,7 @@ The maintenance runner, lease rule, and generation admin API are consolidated in
 
 ### 9.1 Order and compatibility
 
-1. **PR 0** (app only), deployed everywhere.
+1. **PR 0** (app only), deployed everywhere as a release of its own. A revision-9 build without it requires exact equality and goes unready when 0010 commits, so 0010 must wait until no such build serves traffic (or run in a maintenance window).
 2. **PR 1** (app only).
 3. **PR 2:** migrate 0010 → 0011, then deploy. With PR 0 in place, old instances stay ready, because both migrations keep `compatible_from = 9`.
 4. **PR 3:** migrate, then deploy.

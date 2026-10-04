@@ -233,7 +233,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
       const commitOid = validateCommitOid(input.commitOid);
       const selectedArtifactIds = artifactIds(input.artifactIds);
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<ArtifactRow>(
           `WITH selected_generation AS MATERIALIZED (
              SELECT repository.id AS repository_id, revision.id AS revision_id,
@@ -281,7 +281,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
       const commitOid = validateCommitOid(input.commitOid);
       const selectedArtifactIds = artifactIds(input.artifactIds);
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<ArtifactLogicalDigestRow>(
           `WITH selected_generation AS MATERIALIZED (
              SELECT repository.id AS repository_id, revision.id AS revision_id,
@@ -327,7 +327,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
     async getIndexJob(actor, input) {
       const jobId = validateUuid(input.jobId, "jobId");
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<CodeIndexJobRow>(
           `SELECT job.id, job.repository_id, repository.repository_key,
              job.commit_oid, job.source_ref, job.indexer_revision, job.status,
@@ -356,7 +356,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
         );
       }
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<CodeIndexJobRow>(
           `SELECT job.id, job.repository_id, repository.repository_key,
              job.commit_oid, job.source_ref, job.indexer_revision, job.status,
@@ -379,7 +379,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
       const repositoryKey = validateRepositoryKey(input.repositoryKey);
       const commitOid = validateCommitOid(input.commitOid);
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const revision = await transaction.query<{ id: string }>(
           `SELECT revision.id
            FROM code_revisions revision
@@ -432,7 +432,7 @@ export function createCodeIndexReadModule(database: PostgresDatabase): CodeIndex
       }
       const pathPrefix = input.pathPrefix ? validatePathPrefix(input.pathPrefix) : null;
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<ArtifactRow>(
           `WITH selected_generation AS MATERIALIZED (
              SELECT repository.id AS repository_id, revision.id AS revision_id,

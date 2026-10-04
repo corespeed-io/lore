@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ContextGroupExpansionOptions, EmbeddingProvider } from "@corespeed/lore-core";
 import {
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   MEMORY_SEARCH_LIMITS,
   RETRIEVAL_CJK_LEXICAL_POLICY,
   RETRIEVAL_CONTEXT_GROUP_POLICY,
@@ -24,6 +24,7 @@ import {
   type RetrievalKnobs,
 } from "../../../src/server/providers/retrieval-knobs";
 import { createBenchmarkMetering } from "../shared/benchmark-metering";
+import { requireMigratedBenchmarkSchema } from "../shared/benchmark-schema";
 import {
   drainEmbeddingMaintenance,
   pendingEmbeddingJobCount,
@@ -417,18 +418,17 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       );
     }
 
+    await requireMigratedBenchmarkSchema(admin);
     const schemaResult = await admin.query<{
       entity_alias_column: boolean;
       memories: string | null;
       jobs: string | null;
-      metadata_index: string | null;
     }>(
       // The alias channel's sentinel is the generated column it scans, not an
       // index: migration 0003 dropped the request-path-dead entity-aliases GIN.
       `SELECT
          to_regclass('public.memories')::text AS memories,
          to_regclass('public.memory_embedding_jobs')::text AS jobs,
-         to_regclass('public.memories_metadata_gin_idx')::text AS metadata_index,
          EXISTS (
            SELECT 1 FROM information_schema.columns
            WHERE table_schema = 'public'
@@ -436,11 +436,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
              AND column_name = 'entity_aliases'
          ) AS entity_alias_column`,
     );
-    if (
-      !schemaResult.rows[0]?.memories ||
-      !schemaResult.rows[0]?.jobs ||
-      !schemaResult.rows[0]?.metadata_index
-    ) {
+    if (!schemaResult.rows[0]?.memories || !schemaResult.rows[0]?.jobs) {
       throw new Error(
         "Lore migrations are missing; run DATABASE_URL=$BENCHMARK_DATABASE_URL bun run db:migrate first",
       );
@@ -643,8 +639,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
     const maintenanceStartedAt = performance.now();
     let completedJobs = 0;
     if (!input.reuseIndexed) {
-      const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, {
-        embeddingProvider,
+      const maintenance = createEmbeddingMaintenance(maintenanceDatabase, {
+        embeddingProviders: [embeddingProvider],
       });
       completedJobs = await drainEmbeddingMaintenance({
         run: () => maintenance.run(),

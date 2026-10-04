@@ -1,8 +1,14 @@
-import type { EmbeddingTask, MemoryMaintenanceLog } from "@corespeed/lore-core";
+import type {
+  EmbeddingMaintenanceLog,
+  EmbeddingProvider,
+  EmbeddingTask,
+  PostgresDatabase,
+} from "@corespeed/lore-core";
 import {
-  createMemoryMaintenanceCoordinator,
-  createMemoryMaintenanceModule,
-  pruneRetiringEmbeddingGenerations,
+  chunkMemoryContent,
+  createEmbeddingGenerationAdmin,
+  createEmbeddingMaintenance,
+  embeddingGenerationServing,
 } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryModule } from "../../src/modules/memories/service";
@@ -11,6 +17,23 @@ import { createMemoryTestContext } from "../support/memory-context";
 
 function fixtureVector(index: number): number[] {
   return Array.from({ length: 1024 }, (_, vectorIndex) => (vectorIndex === index ? 1 : 0));
+}
+
+/** A sweep with no lanes only prunes expired retiring generations. */
+async function pruneRetiringGenerations(database: PostgresDatabase): Promise<number> {
+  const maintenance = createEmbeddingMaintenance(database, {
+    embeddingProviders: [],
+    generationRetentionSeconds: 3_600,
+  });
+  return (await maintenance.sweep()).prunedGenerations;
+}
+
+function generationReport(database: PostgresDatabase, provider: EmbeddingProvider) {
+  return createEmbeddingGenerationAdmin(database).findReport(provider);
+}
+
+function activateGeneration(database: PostgresDatabase, provider: EmbeddingProvider) {
+  return createEmbeddingGenerationAdmin(database).activate(provider);
 }
 
 function fixtureProvider(embed: (texts: string[], task: EmbeddingTask) => Promise<number[][]>) {
@@ -47,17 +70,17 @@ test("Memory writes enqueue document embeddings without waiting for the provider
   );
   expect(tasks).toEqual(["query"]);
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.run(notifications[0])).resolves.toMatchObject({
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toMatchObject({
     status: "complete",
     jobId: notifications[0],
   });
   expect(tasks).toEqual(["query", "document"]);
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     const result = await transaction.query<{
       embedding_provider: string;
       embedding_model: string;
@@ -91,10 +114,12 @@ test("metadata-only updates do not send a Queue wake-up without a new job", asyn
     maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
   });
   const created = await memories.remember(testContext.alice, { content: "Already embedded." });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.run(notifications[0])).resolves.toMatchObject({ status: "complete" });
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toMatchObject({
+    status: "complete",
+  });
 
   await memories.update(testContext.alice, created.id, { metadata: { reviewed: true } });
 
@@ -113,10 +138,10 @@ test("failed providers release the lease with exponential retry state", async ()
   });
   await memories.remember(testContext.alice, { content: "Retry this embedding." });
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.run(notifications[0])).resolves.toEqual({
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toEqual({
     status: "retry",
     jobId: notifications[0],
     retryAfterSeconds: 30,
@@ -170,21 +195,29 @@ test("failed runs log and return exact retry and dead outcomes", async () => {
     return result.rows[0]?.count;
   });
   expect(deadChunkCount).toBeGreaterThan(1);
-  const logs: MemoryMaintenanceLog[] = [];
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const logs: EmbeddingMaintenanceLog[] = [];
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
     logger: (entry) => logs.push(entry),
   });
 
-  await expect(maintenance.run(retryJob)).resolves.toEqual({
+  await expect(maintenance.run({ jobId: retryJob })).resolves.toEqual({
     status: "retry",
     jobId: retryJob,
     retryAfterSeconds: 30,
   });
-  await expect(maintenance.run(deadJob)).resolves.toEqual({ status: "dead", jobId: deadJob });
+  await expect(maintenance.run({ jobId: deadJob })).resolves.toEqual({
+    status: "dead",
+    jobId: deadJob,
+  });
+  const generation = {
+    embeddingProvider: "fixture",
+    embeddingModel: "fixture-embedding-v1",
+    embeddingRevision: "fixture-v1",
+  };
   expect(logs).toEqual([
-    { event: "job_retry", jobId: retryJob, attempt: 1, chunkCount: 1 },
-    { event: "job_dead", jobId: deadJob, attempt: 1, chunkCount: deadChunkCount },
+    { ...generation, event: "job_retry", jobId: retryJob, attempt: 1, chunkCount: 1 },
+    { ...generation, event: "job_dead", jobId: deadJob, attempt: 1, chunkCount: deadChunkCount },
   ]);
   await testContext.close();
 });
@@ -200,15 +233,15 @@ test("dead jobs stay dead until the Memory or active embedding space changes", a
     await transaction.query("UPDATE memory_embedding_jobs SET max_attempts = 1");
   });
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
   await expect(maintenance.run()).resolves.toMatchObject({ status: "dead" });
-  await expect(maintenance.seedStale()).resolves.toEqual([]);
+  expect((await maintenance.sweep()).seeded).toEqual([]);
   await expect(maintenance.run()).resolves.toMatchObject({ status: "idle" });
 
   await memories.update(testContext.alice, created.id, { content: "A new version may retry." });
-  await expect(maintenance.seedStale()).resolves.toEqual([]);
+  expect((await maintenance.sweep()).seeded).toEqual([]);
   const statuses = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ memory_version: number; status: string }>(
       `SELECT memory_version, status::text
@@ -235,10 +268,10 @@ test("deployment sweeps bound and retire exhausted processing leases", async () 
     ),
   );
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.seedStale(1)).resolves.toEqual([]);
+  expect((await maintenance.sweep()).seeded).toEqual([]);
   const job = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ status: string }>("SELECT status::text FROM memory_embedding_jobs"),
   );
@@ -250,8 +283,8 @@ test("deployment sweeps prune expired terminal job history", async () => {
   const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
   const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
   await memories.remember(testContext.alice, { content: "Prune completed history." });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
   await expect(maintenance.run()).resolves.toMatchObject({ status: "complete" });
   await testContext.adminDatabase.transaction(async (transaction) => {
@@ -260,7 +293,7 @@ test("deployment sweeps prune expired terminal job history", async () => {
     );
   });
 
-  await expect(maintenance.seedStale()).resolves.toEqual([]);
+  expect((await maintenance.sweep()).seeded).toEqual([]);
 
   const jobs = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query("SELECT id FROM memory_embedding_jobs"),
@@ -279,14 +312,16 @@ test("stale jobs cannot write chunks after a Memory version changes", async () =
   const created = await memories.remember(testContext.alice, { content: "First version." });
   await memories.update(testContext.alice, created.id, { content: "Second version." });
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.run(notifications[0])).resolves.toEqual({
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toEqual({
     status: "idle",
     jobId: notifications[0],
   });
-  await expect(maintenance.run(notifications[1])).resolves.toMatchObject({ status: "complete" });
+  await expect(maintenance.run({ jobId: notifications[1] })).resolves.toMatchObject({
+    status: "complete",
+  });
 
   const statuses = await testContext.adminDatabase.transaction(async (transaction) => {
     const result = await transaction.query<{ memory_version: number; status: string }>(
@@ -302,6 +337,71 @@ test("stale jobs cannot write chunks after a Memory version changes", async () =
   ]);
 });
 
+test("a claim returns only chunks missing a vector, and a job missing none skips the provider", async () => {
+  const testContext = await createMemoryTestContext();
+  const notifications: string[] = [];
+  const embedded: string[][] = [];
+  const provider = fixtureProvider(async (texts) => {
+    embedded.push(texts);
+    return texts.map(() => fixtureVector(0));
+  });
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: provider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  const content = ["First", "Second", "Third"]
+    .map((word) => `${word} paragraph. `.repeat(70).trim())
+    .join("\n\n");
+  const chunks = chunkMemoryContent(content);
+  expect(chunks.length).toBeGreaterThan(2);
+  const created = await memories.remember(testContext.alice, { content });
+  const jobId = notifications[0];
+  if (!jobId) throw new Error("Expected an embedding job");
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
+  });
+  await expect(maintenance.run({ jobId })).resolves.toMatchObject({ status: "complete" });
+  expect(embedded).toEqual([chunks]);
+
+  const admin = <T extends Record<string, unknown>>(sql: string, params: unknown[] = []) =>
+    testContext.adminDatabase.transaction(
+      async (transaction) => (await transaction.query<T>(sql, params)).rows,
+    );
+  // Re-arming the succeeded job stands in for any later job of the same version.
+  const rearm = () =>
+    admin(
+      `UPDATE memory_embedding_jobs
+       SET status = 'pending', attempt_count = 0, completed_at = NULL,
+           available_at = now(), updated_at = now()
+       WHERE id = $1`,
+      [jobId],
+    );
+  const state = () =>
+    admin<{ status: string; vectors: number }>(
+      `SELECT job.status,
+              (SELECT count(*)::integer FROM memory_chunk_embeddings embedded
+               WHERE embedded.memory_id = job.memory_id) AS vectors
+       FROM memory_embedding_jobs job WHERE job.id = $1`,
+      [jobId],
+    );
+
+  await admin(
+    `DELETE FROM memory_chunk_embeddings embedded
+     USING memory_chunks chunk
+     WHERE chunk.id = embedded.chunk_id AND chunk.memory_id = $1 AND chunk.ordinal = 1`,
+    [created.id],
+  );
+  await rearm();
+  await expect(maintenance.run({ jobId })).resolves.toMatchObject({ status: "complete" });
+  expect(embedded.at(-1)).toEqual([chunks[1]]);
+  await expect(state()).resolves.toEqual([{ status: "succeeded", vectors: chunks.length }]);
+
+  await rearm();
+  await expect(maintenance.run({ jobId })).resolves.toEqual({ status: "complete", jobId });
+  expect(embedded).toHaveLength(2);
+  await expect(state()).resolves.toEqual([{ status: "succeeded", vectors: chunks.length }]);
+});
+
 test("a requested embedding hint cleans only its own stale job", async () => {
   const testContext = await createMemoryTestContext();
   const notifications: string[] = [];
@@ -315,10 +415,10 @@ test("a requested embedding hint cleans only its own stale job", async () => {
   await memories.update(testContext.alice, first.id, { content: "First new version." });
   await memories.update(testContext.alice, second.id, { content: "Second new version." });
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
-  await expect(maintenance.run(notifications[0])).resolves.toEqual({
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toEqual({
     status: "idle",
     jobId: notifications[0],
   });
@@ -413,7 +513,7 @@ test("request actors cannot inspect jobs and deleting a Memory cascades its job"
 
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       await transaction.query("SELECT id FROM memory_embedding_jobs");
     }),
   ).rejects.toMatchObject({ code: "42501" });
@@ -430,8 +530,8 @@ test("provider identity changes deterministically seed a replacement job", async
   const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
   const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
   await memories.remember(testContext.alice, { content: "Reindex when the model changes." });
-  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: firstProvider,
+  const firstMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [firstProvider],
   });
   await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
 
@@ -440,13 +540,13 @@ test("provider identity changes deterministically seed a replacement job", async
     model: "fixture-embedding-v2",
     revision: "fixture-v2",
   };
-  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: replacementProvider,
+  const replacementMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [replacementProvider],
   });
-  const seeded = await replacementMaintenance.seedStale();
+  const { seeded } = await replacementMaintenance.sweep();
 
   expect(seeded).toHaveLength(1);
-  await expect(replacementMaintenance.run(seeded[0])).resolves.toMatchObject({
+  await expect(replacementMaintenance.run({ jobId: seeded[0] })).resolves.toMatchObject({
     status: "complete",
   });
 });
@@ -457,21 +557,23 @@ test("embedding revisions build beside the active generation and cut over atomic
   const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
   const content = "Ada founded Acme. Grace acquired Acme. Lin leads Acme.";
   const created = await memories.remember(testContext.alice, { content, scope: "private" });
-  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: firstProvider,
+  const firstMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [firstProvider],
   });
   await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
 
   const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
-  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: replacementProvider,
+  const replacementMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [replacementProvider],
   });
-  const seeded = await replacementMaintenance.seedStale();
+  const { seeded } = await replacementMaintenance.sweep();
   expect(seeded).toHaveLength(1);
-  await expect(replacementMaintenance.run(seeded[0])).resolves.toMatchObject({
+  await expect(replacementMaintenance.run({ jobId: seeded[0] })).resolves.toMatchObject({
     status: "complete",
   });
-  await expect(replacementMaintenance.generationReport()).resolves.toMatchObject({
+  await expect(
+    generationReport(testContext.maintenanceDatabase, replacementProvider),
+  ).resolves.toMatchObject({
     status: "building",
     eligibleChunks: 1,
     embeddedChunks: 1,
@@ -492,7 +594,9 @@ test("embedding revisions build beside the active generation and cut over atomic
     { embedding_revision: "fixture-v2", status: "building" },
   ]);
 
-  await expect(replacementMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
+  await expect(
+    activateGeneration(testContext.maintenanceDatabase, replacementProvider),
+  ).resolves.toEqual(expect.any(String));
 
   const chunks = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ content: string; ordinal: number }>(
@@ -517,7 +621,9 @@ test("embedding revisions build beside the active generation and cut over atomic
     { embedding_revision: "fixture-v2", status: "active" },
   ]);
 
-  await expect(firstMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
+  await expect(activateGeneration(testContext.maintenanceDatabase, firstProvider)).resolves.toEqual(
+    expect.any(String),
+  );
   const afterRollback = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ embedding_revision: string; status: string }>(
       `SELECT embedding_revision, status
@@ -548,9 +654,7 @@ test("embedding revisions build beside the active generation and cut over atomic
          AND generation.status = 'retiring'`,
     ),
   );
-  await expect(
-    pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
-  ).resolves.toBe(0);
+  await expect(pruneRetiringGenerations(testContext.maintenanceDatabase)).resolves.toBe(0);
 
   await testContext.adminDatabase.transaction((transaction) =>
     transaction.query(
@@ -561,9 +665,7 @@ test("embedding revisions build beside the active generation and cut over atomic
          AND generation.status = 'retiring'`,
     ),
   );
-  await expect(
-    pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
-  ).resolves.toBe(1);
+  await expect(pruneRetiringGenerations(testContext.maintenanceDatabase)).resolves.toBe(1);
   const afterPrune = await testContext.adminDatabase.transaction((transaction) =>
     transaction.query<{ embedding_revision: string; status: string }>(
       "SELECT embedding_revision, status FROM embedding_generations",
@@ -582,31 +684,33 @@ test("rollout maintenance drains serving queue hints and both generations throug
   });
   await memories.remember(testContext.alice, { content: "Existing active-generation Memory." });
 
-  const servingMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: servingProvider,
+  const servingMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [servingProvider],
   });
-  await expect(servingMaintenance.run(notifications.shift())).resolves.toMatchObject({
+  await expect(servingMaintenance.run({ jobId: notifications.shift() })).resolves.toMatchObject({
     status: "complete",
   });
 
   const buildingProvider = { ...servingProvider, revision: "fixture-v2" };
-  const buildingMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: buildingProvider,
+  const buildingMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [buildingProvider],
   });
-  await expect(buildingMaintenance.seedStale()).resolves.toHaveLength(1);
+  expect((await buildingMaintenance.sweep()).seeded).toHaveLength(1);
 
-  const rollout = createMemoryMaintenanceCoordinator([servingMaintenance, buildingMaintenance]);
+  const rollout = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [servingProvider, buildingProvider],
+  });
   const buildingJobHint = (await buildingMaintenance.pending())[0];
-  expect(buildingJobHint).toEqual(expect.any(String));
+  expect(buildingJobHint).toEqual({ jobId: expect.any(String) });
   await expect(rollout.run(buildingJobHint)).resolves.toMatchObject({
     status: "complete",
-    jobId: buildingJobHint,
+    jobId: buildingJobHint?.jobId,
   });
 
   await memories.remember(testContext.alice, { content: "Written while v2 is building." });
   const servingJobHint = notifications.shift();
   expect(servingJobHint).toEqual(expect.any(String));
-  await expect(rollout.run(servingJobHint)).resolves.toMatchObject({
+  await expect(rollout.run({ jobId: servingJobHint })).resolves.toMatchObject({
     status: "complete",
     jobId: servingJobHint,
   });
@@ -614,20 +718,26 @@ test("rollout maintenance drains serving queue hints and both generations throug
   await memories.remember(testContext.alice, { content: "Lost Queue hint must be swept." });
   const lostServingHint = notifications.shift();
   expect(lostServingHint).toEqual(expect.any(String));
-  await rollout.seedStale(100);
-  await expect(rollout.pending(100)).resolves.toEqual(expect.arrayContaining([lostServingHint]));
+  await rollout.sweep();
+  await expect(rollout.pending(100)).resolves.toEqual(
+    expect.arrayContaining([{ jobId: lostServingHint }]),
+  );
 
   for (;;) {
     const result = await rollout.run();
     if (result.status === "idle") break;
   }
 
-  await expect(servingMaintenance.generationReport()).resolves.toMatchObject({
+  await expect(
+    generationReport(testContext.maintenanceDatabase, servingProvider),
+  ).resolves.toMatchObject({
     status: "active",
     missingChunks: 0,
     pendingJobs: 0,
   });
-  await expect(buildingMaintenance.generationReport()).resolves.toMatchObject({
+  await expect(
+    generationReport(testContext.maintenanceDatabase, buildingProvider),
+  ).resolves.toMatchObject({
     status: "building",
     missingChunks: 0,
     pendingJobs: 0,
@@ -639,20 +749,22 @@ test("an incomplete embedding generation cannot become active", async () => {
   const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
   const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
   await memories.remember(testContext.alice, { content: "Coverage must be complete." });
-  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: firstProvider,
+  const firstMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [firstProvider],
   });
   await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
 
   const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
-  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: replacementProvider,
+  const replacementMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [replacementProvider],
   });
-  await expect(replacementMaintenance.seedStale()).resolves.toHaveLength(1);
-  await expect(replacementMaintenance.activateGeneration()).rejects.toThrow(
-    /Embedding generation is not ready/,
-  );
-  await expect(replacementMaintenance.generationReport()).resolves.toMatchObject({
+  expect((await replacementMaintenance.sweep()).seeded).toHaveLength(1);
+  await expect(
+    activateGeneration(testContext.maintenanceDatabase, replacementProvider),
+  ).rejects.toThrow(/Embedding generation is not ready/);
+  await expect(
+    generationReport(testContext.maintenanceDatabase, replacementProvider),
+  ).resolves.toMatchObject({
     status: "building",
     missingChunks: 1,
     pendingJobs: 1,
@@ -665,18 +777,20 @@ test("expired retiring generations cancel abandoned pending jobs before pruning"
   const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
   await memories.remember(testContext.alice, { content: "Retire the old embedding space." });
 
-  const firstMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: firstProvider,
+  const firstMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [firstProvider],
   });
   await expect(firstMaintenance.run()).resolves.toMatchObject({ status: "complete" });
 
   const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
-  const replacementMaintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: replacementProvider,
+  const replacementMaintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [replacementProvider],
   });
-  await expect(replacementMaintenance.seedStale()).resolves.toHaveLength(1);
+  expect((await replacementMaintenance.sweep()).seeded).toHaveLength(1);
   await expect(replacementMaintenance.run()).resolves.toMatchObject({ status: "complete" });
-  await expect(replacementMaintenance.activateGeneration()).resolves.toEqual(expect.any(String));
+  await expect(
+    activateGeneration(testContext.maintenanceDatabase, replacementProvider),
+  ).resolves.toEqual(expect.any(String));
 
   await testContext.adminDatabase.transaction(async (transaction) => {
     await transaction.query(
@@ -704,10 +818,8 @@ test("expired retiring generations cancel abandoned pending jobs before pruning"
   );
   expect(retiredJob.rows).toHaveLength(1);
 
-  await expect(
-    pruneRetiringEmbeddingGenerations(testContext.maintenanceDatabase, 3_600),
-  ).resolves.toBe(1);
-  await expect(firstMaintenance.run(retiredJob.rows[0].id)).resolves.toEqual({
+  await expect(pruneRetiringGenerations(testContext.maintenanceDatabase)).resolves.toBe(1);
+  await expect(firstMaintenance.run({ jobId: retiredJob.rows[0].id })).resolves.toEqual({
     status: "idle",
     jobId: retiredJob.rows[0].id,
   });
@@ -754,14 +866,12 @@ test("a run whose lease is reclaimed mid-embed writes nothing and reports lost",
     content: "The provider stalls long enough for the lease to expire.",
   });
   const logs: string[] = [];
-  const stalled = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
-    leaseSeconds: 30,
+  const stalled = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
     logger: (entry) => logs.push(entry.event),
   });
-  const replacement = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
-    leaseSeconds: 30,
+  const replacement = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
 
   const stalledRun = stalled.run();
@@ -798,8 +908,8 @@ test("a run whose Memory is deleted mid-embed reports lost instead of failing", 
   const { provider, release, started } = pausedProvider(0, 0);
   const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
   const created = await memories.remember(testContext.alice, { content: "Forgotten mid-embed." });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider: provider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
   });
 
   const run = maintenance.run();
@@ -815,4 +925,215 @@ test("a run whose Memory is deleted mid-embed reports lost instead of failing", 
     ),
   );
   expect(leftovers.rows).toEqual([]);
+});
+
+test("a lane leases jobs for its provider's request deadline, or the default window without one", async () => {
+  const testContext = await createMemoryTestContext();
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: provider });
+  const created = await memories.remember(testContext.alice, { content: "A stalled claim." });
+  // Make the current job look claimed by a run that started this long ago.
+  const leasedSecondsAgo = (seconds: number) =>
+    testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(
+        `UPDATE memory_embedding_jobs
+         SET status = 'processing', attempt_count = 1, lease_token = gen_random_uuid(),
+             leased_at = now() - make_interval(secs => $1::double precision), updated_at = now()
+         WHERE status IN ('pending', 'processing')`,
+        [seconds],
+      ),
+    );
+  // No deadline (Ollama): 420 seconds. A 10-second deadline: 90 seconds.
+  const withoutDeadline = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
+  });
+  const withDeadline = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [{ ...provider, requestTimeoutMs: 10_000 }],
+  });
+
+  await leasedSecondsAgo(80);
+  await expect(withDeadline.run()).resolves.toEqual({ status: "idle" });
+  await leasedSecondsAgo(400);
+  await expect(withoutDeadline.run()).resolves.toEqual({ status: "idle" });
+  await leasedSecondsAgo(100);
+  await expect(withDeadline.run()).resolves.toMatchObject({ status: "complete" });
+
+  await memories.update(testContext.alice, created.id, { content: "Another stalled claim." });
+  await leasedSecondsAgo(430);
+  await expect(withoutDeadline.run()).resolves.toMatchObject({ status: "complete" });
+});
+
+test("a malformed queue message is invalid and claims nothing", async () => {
+  const testContext = await createMemoryTestContext();
+  const notifications: string[] = [];
+  const provider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: provider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  await memories.remember(testContext.alice, { content: "Only a well-formed hint runs this." });
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [provider],
+  });
+
+  // A queue message whose body is undefined is malformed too; only a call with no
+  // message at all claims any due job.
+  for (const message of [
+    undefined,
+    null,
+    "job",
+    7,
+    [],
+    {},
+    { jobId: 7 },
+    { id: notifications[0] },
+  ]) {
+    await expect(maintenance.run(message)).resolves.toEqual({ status: "invalid" });
+  }
+  const job = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ attempt_count: number; status: string }>(
+      "SELECT status::text, attempt_count FROM memory_embedding_jobs",
+    ),
+  );
+  expect(job.rows).toEqual([{ status: "pending", attempt_count: 0 }]);
+  await expect(maintenance.pending()).resolves.toEqual([{ jobId: notifications[0] }]);
+  await expect(maintenance.run({ jobId: notifications[0] })).resolves.toMatchObject({
+    status: "complete",
+    jobId: notifications[0],
+  });
+
+  const disabled = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [],
+  });
+  expect(disabled.enabled).toBe(false);
+  await expect(disabled.run({ jobId: notifications[0] })).resolves.toEqual({
+    status: "idle",
+    jobId: notifications[0],
+  });
+  await expect(disabled.pending()).resolves.toEqual([]);
+});
+
+test("unnamed claims rotate across generations so a rollout cannot starve serving", async () => {
+  const testContext = await createMemoryTestContext();
+  const embedded: string[] = [];
+  const servingProvider = fixtureProvider(async (texts) => {
+    embedded.push("serving");
+    return texts.map(() => fixtureVector(0));
+  });
+  const buildingProvider = {
+    ...fixtureProvider(async (texts) => {
+      embedded.push("building");
+      return texts.map(() => fixtureVector(1));
+    }),
+    revision: "fixture-v2",
+  };
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: servingProvider });
+  await memories.remember(testContext.alice, { content: "First serving job." });
+  await memories.remember(testContext.alice, { content: "Second serving job." });
+  const building = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [buildingProvider],
+  });
+  expect((await building.sweep()).seeded).toHaveLength(2);
+
+  const rollout = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [servingProvider, buildingProvider],
+  });
+  for (let round = 0; round < 4; round += 1) {
+    await expect(rollout.run()).resolves.toMatchObject({ status: "complete" });
+  }
+  expect(embedded).toEqual(["serving", "building", "serving", "building"]);
+  await expect(rollout.run()).resolves.toEqual({ status: "idle" });
+});
+
+test("a sweep prunes expired retiring generations, seeds missing vectors, and reports each lane", async () => {
+  const testContext = await createMemoryTestContext();
+  const firstProvider = fixtureProvider(async (texts) => texts.map(() => fixtureVector(0)));
+  const memories = createMemoryModule(testContext.database, { embeddingProvider: firstProvider });
+  await memories.remember(testContext.alice, { content: "Swept into a new embedding space." });
+  const first = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [firstProvider],
+  });
+  await expect(first.run()).resolves.toMatchObject({ status: "complete" });
+
+  const replacementProvider = { ...firstProvider, revision: "fixture-v2" };
+  const rollout = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [firstProvider, replacementProvider],
+    generationRetentionSeconds: 3_600,
+  });
+  const building = await rollout.sweep();
+  expect(building).toEqual({
+    prunedGenerations: 0,
+    seeded: [expect.any(String)],
+    generations: [
+      expect.objectContaining({ status: "active", missingChunks: 0, pendingJobs: 0 }),
+      expect.objectContaining({ status: "building", missingChunks: 1, pendingJobs: 1 }),
+    ],
+  });
+  await expect(rollout.run({ jobId: building.seeded[0] })).resolves.toMatchObject({
+    status: "complete",
+  });
+  await activateGeneration(testContext.maintenanceDatabase, replacementProvider);
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `UPDATE embedding_generations SET retired_at = now() - interval '2 hours'
+       WHERE status = 'retiring'`,
+    ),
+  );
+
+  const replacement = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [replacementProvider],
+    generationRetentionSeconds: 3_600,
+  });
+  await expect(replacement.sweep()).resolves.toEqual({
+    prunedGenerations: 1,
+    seeded: [],
+    generations: [expect.objectContaining({ status: "active", missingChunks: 0 })],
+  });
+});
+
+test("only an active or retiring generation of the exact identity is serving", async () => {
+  const testContext = await createMemoryTestContext();
+  const identity = {
+    provider: "fixture",
+    model: "fixture-embedding-v1",
+    dimensions: 1024,
+    revision: "fixture-v1",
+  };
+  const serving = (candidate: typeof identity) =>
+    testContext.database.transaction((transaction) =>
+      embeddingGenerationServing(transaction, candidate),
+    );
+  const setStatus = (status: string) =>
+    testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(
+        `UPDATE embedding_generations
+         SET status = $1::embedding_generation_status,
+             activated_at = CASE WHEN $1 = 'building' THEN NULL ELSE now() END,
+             retired_at = CASE WHEN $1 = 'retiring' THEN now() END`,
+        [status],
+      ),
+    );
+
+  await expect(serving(identity)).resolves.toBe(false);
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("SELECT lore.ensure_embedding_generation($1, $2, $3, $4)", [
+      identity.provider,
+      identity.model,
+      identity.dimensions,
+      identity.revision,
+    ]),
+  );
+  for (const [status, expected] of [
+    ["active", true],
+    ["retiring", true],
+    ["building", false],
+  ] as const) {
+    await setStatus(status);
+    await expect(serving(identity), status).resolves.toBe(expected);
+  }
+  await setStatus("active");
+  await expect(serving({ ...identity, dimensions: 1536 })).resolves.toBe(false);
+  await expect(serving({ ...identity, revision: "fixture-v2" })).resolves.toBe(false);
+  await expect(serving({ ...identity, model: "fixture-embedding-v2" })).resolves.toBe(false);
+  await expect(serving({ ...identity, provider: "other" })).resolves.toBe(false);
 });
