@@ -155,6 +155,83 @@ test("Agent credential resolves to the owning User and granted Workspace", async
   await testContext.close();
 });
 
+test("Agent authentication writes last_used_at at most once a minute and checks access every time", async () => {
+  const testContext = await createMemoryTestContext();
+  const access = createAccessModule(testContext.database);
+  const agent = await access.createAgent(testContext.alice, { name: "Busy assistant" });
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  const credential = await access.issueAgentCredential(testContext.alice, agent.id);
+  const authenticate = () =>
+    access.authenticateAgent(credential.token, testContext.alice.workspaceId);
+  const actor = {
+    workspaceId: testContext.alice.workspaceId,
+    userId: testContext.alice.userId,
+    agentId: agent.id,
+  };
+  // xmin changes whenever the row is written, even to an equal value.
+  const row = async () =>
+    (
+      await testContext.adminDatabase.transaction((transaction) =>
+        transaction.query<{ last_used_at: string | null; version: string }>(
+          `SELECT last_used_at::text, xmin::text AS version
+           FROM agent_credentials WHERE id = $1`,
+          [credential.id],
+        ),
+      )
+    ).rows[0];
+
+  expect((await row())?.last_used_at).toBeNull();
+  await expect(authenticate()).resolves.toEqual(actor);
+  const first = await row();
+  expect(first?.last_used_at).not.toBeNull();
+
+  // Within a minute nothing is written, but the Actor is still returned.
+  await expect(authenticate()).resolves.toEqual(actor);
+  await expect(row()).resolves.toEqual(first);
+
+  // Every check still runs inside that minute.
+  await expect(access.revokeAgentGrant(testContext.alice, agent.id)).resolves.toBe(true);
+  await expect(authenticate()).resolves.toBeNull();
+  await access.grantAgent(testContext.alice, agent.id, { permission: "read" });
+  await expect(authenticate()).resolves.toEqual(actor);
+  await testContext.suspendMembership(testContext.alice);
+  await expect(authenticate()).resolves.toBeNull();
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE memberships SET status = 'active' WHERE workspace_id = $1 AND user_id = $2",
+      [testContext.alice.workspaceId, testContext.alice.userId],
+    ),
+  );
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE agents SET status = 'disabled' WHERE id = $1", [agent.id]),
+  );
+  await expect(authenticate()).resolves.toBeNull();
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("UPDATE agents SET status = 'active' WHERE id = $1", [agent.id]),
+  );
+  await expect(authenticate()).resolves.toEqual(actor);
+  await expect(row()).resolves.toEqual(first);
+
+  // Older than a minute, it is written again.
+  await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      "UPDATE agent_credentials SET last_used_at = now() - interval '61 seconds' WHERE id = $1",
+      [credential.id],
+    ),
+  );
+  const stale = await row();
+  await expect(authenticate()).resolves.toEqual(actor);
+  const refreshed = await row();
+  expect(refreshed?.version).not.toBe(stale?.version);
+  expect(Date.parse(refreshed?.last_used_at ?? "")).toBeGreaterThan(
+    Date.parse(stale?.last_used_at ?? ""),
+  );
+
+  await expect(access.revokeAgentCredential(testContext.alice, credential.id)).resolves.toBe(true);
+  await expect(authenticate()).resolves.toBeNull();
+  await testContext.close();
+});
+
 test("Revoked Agent credential can no longer authenticate", async () => {
   const testContext = await createMemoryTestContext();
   const access = createAccessModule(testContext.database);

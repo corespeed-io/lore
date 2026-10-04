@@ -313,33 +313,38 @@ Chunks are matched by ordinal, not content: moving an ordinal would need `UPDATE
 
 All are forward-only. Revisions continue from 9, and each migration sets `compatible_from` (PR 0).
 
-**Migration 0010 (`transaction:false`, one statement at a time via the existing runner `scripts/database/lib/migration-statements.ts:45`):**
+The transactional migration runs first, because it adds the `compatible_from` column that both migrations' final UPDATE writes. (v3 of this spec listed the concurrent index migration first; it could not set `compatible_from` before the column existed.)
 
-| # | Statement | Lock | Blocks |
-| --- | --- | --- | --- |
-| 1 | `DROP INDEX CONCURRENTLY IF EXISTS memories_metadata_gin_idx` | SHARE UPDATE EXCLUSIVE on `memories`; waits for open transactions | No reads or writes |
-| 2 | `DROP INDEX CONCURRENTLY IF EXISTS memory_links_workspace_source_idx` | Same, on `memory_links` | No reads or writes |
-| 3 | `DROP INDEX CONCURRENTLY IF EXISTS memory_chunks_embedding_cosine_idx` | Same, on `memory_chunks` | No reads or writes |
-| 4 | `DROP INDEX CONCURRENTLY IF EXISTS memory_chunk_embeddings_chunk_idx`, then `CREATE INDEX CONCURRENTLY memory_chunk_embeddings_chunk_idx ON memory_chunk_embeddings (chunk_id)` | SHARE UPDATE EXCLUSIVE on `memory_chunk_embeddings`; waits for open transactions | No reads or writes |
-| 5 | `UPDATE lore_system_state SET schema_revision = 10, compatible_from = 9` | Row lock | — |
-
-Rerun safety: every create is preceded by a drop of its leftover, so an interrupted run replaces any `INVALID` index (the 0005 pattern).
-
-**Migration 0011 (transactional, `SET LOCAL lock_timeout = '5s'`).** Statements run in this order:
+**Migration 0010 (transactional, `SET LOCAL lock_timeout = '5s'`).** Statements run in this order:
 
 | # | Statement | Lock |
 | --- | --- | --- |
-| 1 | `CREATE OR REPLACE FUNCTION` claim, `append_memory_event`, `authenticate_agent_credential` | Function objects only; no table lock |
-| 2 | `ALTER TABLE memory_chunks DROP COLUMN embedding, embedding_provider, embedding_model, embedding_revision, embedded_at` (also drops their CHECK) | ACCESS EXCLUSIVE on `memory_chunks`; catalog-only, so it's brief |
-| 3 | `DROP POLICY memory_chunks_update ON memory_chunks` | Same lock, already held |
-| 4 | `REVOKE UPDATE ON memory_chunks FROM lore_app` | Catalog only |
-| 5 | `UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9` | Row lock |
+| 1 | `ALTER TABLE memory_chunks DROP COLUMN embedding, embedding_provider, embedding_model, embedding_revision, embedded_at` (also drops their CHECK and `memory_chunks_embedding_cosine_idx`) | ACCESS EXCLUSIVE on `memory_chunks`; catalog-only, so it's brief |
+| 2 | `DROP POLICY memory_chunks_update ON memory_chunks` | Same lock, already held |
+| 3 | `REVOKE UPDATE ON memory_chunks FROM lore_app` | Catalog only |
+| 4 | `CREATE OR REPLACE FUNCTION` claim, `append_memory_event`, `authenticate_agent_credential` | Function objects only; no table lock |
+| 5 | `ALTER TABLE lore_system_state ADD COLUMN compatible_from integer` with a CHECK (`NULL` or 1 to `schema_revision`) | ACCESS EXCLUSIVE on `lore_system_state` |
+| 6 | `CREATE OR REPLACE FUNCTION lore.portable_core_capabilities()` publishing `compatibleFrom` (`COALESCE(compatible_from, schema_revision)`) | Validating the SQL body takes ACCESS SHARE on `embedding_generations` and `lore_system_state` |
+| 7 | `UPDATE lore_system_state SET schema_revision = 10, compatible_from = 9` | Row lock |
 
-- **Lock order.** 0011 takes only one table lock, on `memory_chunks`, so it can't form a lock cycle with request writes, which lock `memories` before `memory_chunks`.
-- **Blocking and retry.** A write that already holds a `memory_chunks` lock delays 0011 by up to 5 s, and requests that arrive meanwhile queue behind it. If the timeout expires, nothing is recorded and the rerun repeats it.
+`memory_chunks` is locked before `lore_system_state`: a request write may hold `memory_chunks` for up to the 5 s timeout, and readiness reads `lore_system_state` under a 2 s statement timeout, so it must not wait behind that.
+
+**Migration 0011 (`transaction:false`, one statement at a time via the existing runner `scripts/database/lib/migration-statements.ts:45`):**
+
+| # | Statement | Lock | Blocks |
+| --- | --- | --- | --- |
+| 1 | `DROP INDEX CONCURRENTLY IF EXISTS memory_chunk_embeddings_chunk_idx`, then `CREATE INDEX CONCURRENTLY memory_chunk_embeddings_chunk_idx ON memory_chunk_embeddings (chunk_id)` | SHARE UPDATE EXCLUSIVE on `memory_chunk_embeddings`; waits for open transactions | No reads or writes |
+| 2 | `DROP INDEX CONCURRENTLY IF EXISTS memories_metadata_gin_idx` | SHARE UPDATE EXCLUSIVE on `memories`; waits for open transactions | No reads or writes |
+| 3 | `DROP INDEX CONCURRENTLY IF EXISTS memory_links_workspace_source_idx` | Same, on `memory_links` | No reads or writes |
+| 4 | `UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9` | Row lock | — |
+
+Rerun safety: every create is preceded by a drop of its leftover, so an interrupted run replaces any `INVALID` index (the 0005 pattern). `memory_chunks_embedding_cosine_idx` needs no concurrent drop: it goes with its column in 0010.
+
+- **Lock order.** 0010 takes only one exclusive lock that request traffic contends for, on `memory_chunks`, and never locks `memories`, so it can't form a lock cycle with request writes, which lock `memories` before `memory_chunks`.
+- **Blocking and retry.** A write that already holds a `memory_chunks` lock delays 0010 by up to 5 s, and requests that arrive meanwhile queue behind it. If the timeout expires, nothing is recorded and the rerun repeats it.
 - **Old instances keep working.** They never read the dropped columns (verified by search), so `compatible_from` stays 9.
 
-**Composite FK: deferred.** It would add relational integrity: a vector's `memory_id` would have to match its chunk's Memory. That costs SHARE ROW EXCLUSIVE on both tables to add, a separate `VALIDATE`, and a pre-check for mismatched rows. The `chunk_id` index in 0010 fixes the cascade cost without blocking writes. Integrity becomes its own follow-up if wanted (question 2).
+**Composite FK: deferred.** It would add relational integrity: a vector's `memory_id` would have to match its chunk's Memory. That costs SHARE ROW EXCLUSIVE on both tables to add, a separate `VALIDATE`, and a pre-check for mismatched rows. The `chunk_id` index in 0011 fixes the cascade cost without blocking writes. Integrity becomes its own follow-up if wanted (question 2).
 
 **PR 3 migrations** create functions and grants only, with no table locks. Each one raises `compatible_from` only if it removes something old instances call. It doesn't: `register_identity`, `is_active_member`, and `SET LOCAL ROLE` all remain.
 

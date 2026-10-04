@@ -546,9 +546,12 @@ migrations or replace a production database to bypass preflight.
 A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
 statement at a time. dbmate would send the whole file as one query, and PostgreSQL
 runs a multi-statement query as one transaction block, which `CREATE INDEX
-CONCURRENTLY` refuses. `0005` and `0008` are such migrations: they build the
-replay-scrub and import-provenance indexes concurrently so writes keep flowing
-during the build.
+CONCURRENTLY` refuses. `0005`, `0008`, and `0011` are such migrations: `0005` and
+`0008` build the replay-scrub and import-provenance indexes concurrently so writes
+keep flowing during the build, and `0011` builds the chunk-id index the chunk→vector
+cascade needs and drops two indexes no query can use (the Memory metadata GIN, which
+RLS keeps off the request path, and a Link index that duplicates a prefix of the
+Link natural key).
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous
@@ -581,6 +584,25 @@ window: run `0007`-`0009` in a maintenance window, or relax readiness gating unt
 chain completes and the new instances are up. Replay bodies stay scrubbed meanwhile,
 by the baseline JSON-path triggers.
 
+`0010` and `0011` stay compatible with revision-9 instances. `0010` is transactional
+under the same 5-second `lock_timeout`: it takes ACCESS EXCLUSIVE on `memory_chunks`
+to drop its unused embedding columns, their HNSW index, and its request UPDATE
+policy and grant (catalog-only, no rewrite), replaces three functions (partial
+embedding claims, outbound Link deletion events on forget, and an Agent
+`last_used_at` written at most once a minute), and only then takes
+`lore_system_state` to add `compatible_from`. A write already holding
+`memory_chunks` delays it up to 5 seconds while new Memory writes queue behind it;
+if the timeout expires nothing is recorded and a rerun repeats it. It never locks
+`memories`, so it cannot deadlock with request writes, which lock `memories` first.
+`0011` is concurrent as described above and blocks no reads or writes.
+
+`0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
+revision-9 application never reads the dropped columns, policy, or indexes, and a
+revision-9 worker embeds whatever chunks a claim returns and writes each by chunk
+id, so a partial claim completes (an empty one reaches its provider with no input,
+which the concrete adapters accept). Revision-9 instances therefore stay ready
+through both migrations: migrate first, then deploy.
+
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a
 database schema newer than this application. For production, set
@@ -604,8 +626,10 @@ through 9, serves only its own revision. A `compatibleFrom` that is present but
 null, not a positive integer, or above `schemaRevision` fails closed as
 `incompatible`, even at the application's own revision.
 
-From the next schema migration on, `lore_system_state` carries a `compatible_from`
-column that the capabilities function publishes, and every migration sets it. A
+From `0010` on, `lore_system_state` carries a `compatible_from` column that the
+capabilities function publishes, and every migration sets it in its final UPDATE
+(a test refuses one that does not, because the column has no default to fall back
+on). A
 migration that only adds what older instances never read keeps it; one that removes
 or changes something an older instance uses raises it to the oldest application
 revision that no longer depends on it. Review a migration's `compatible_from` together

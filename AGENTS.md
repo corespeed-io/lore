@@ -177,6 +177,29 @@ been removed. Lore now has a native implementation, split into two concepts
   `memoryLinkKindsPerPair`, `memoryLinksPerSource`, `memoryLinksPerTarget`,
   `memoryLinksPerOwner`, `memoryLinkList`, `graphLinks`); `CREATE OR REPLACE` keeps
   its grants.
+  `0010_partial_embedding_claims_and_chunk_cleanup.sql` (transactional, 5s
+  `lock_timeout`) drops the baseline's unused `memory_chunks` embedding columns
+  (`embedding`, `embedding_provider`, `embedding_model`, `embedding_revision`,
+  `embedded_at`, with their CHECK and HNSW index; vectors live only in
+  `memory_chunk_embeddings`), drops the `memory_chunks_update` policy and revokes
+  `lore_app` UPDATE on `memory_chunks` (chunks are only inserted and deleted), makes
+  `lore.claim_memory_embedding_job` return only the chunks lacking a vector in the
+  job's generation, makes forget's `lore.append_memory_event` record a
+  `memory_link.deleted` event for each outbound Link (the cascade's Link trigger
+  finds no source and records only inbound ones; the JSON-path replay scrub stays
+  verbatim), makes `lore.authenticate_agent_credential` write `last_used_at` only
+  when it is NULL or over 60 seconds old (the age is in the UPDATE predicate; every
+  access check still runs on every call), and adds `lore_system_state.compatible_from`,
+  published by `lore.portable_core_capabilities()` as `compatibleFrom`. It takes
+  ACCESS EXCLUSIVE on `memory_chunks` first and `lore_system_state` last, never
+  `memories`. `0011_trim_memory_indexes_concurrently.sql` (`transaction:false`) builds
+  `memory_chunk_embeddings_chunk_idx (chunk_id)`, which the chunk→vector cascade
+  lacked, and drops `memories_metadata_gin_idx` and `memory_links_workspace_source_idx`
+  (a strict prefix of the Link natural key). Both keep `compatible_from = 9`.
+  `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
+  with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
+  from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
+  that could silently carry over).
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
   CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities
@@ -184,7 +207,7 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 9) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 11) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -193,8 +216,9 @@ been removed. Lore now has a native implementation, split into two concepts
   newer schema only when its `compatibleFrom`, published by
   `lore.portable_core_capabilities()`, is at most the application's revision; a schema
   that publishes none (every revision through 9) serves only its own revision, and a
-  malformed value fails closed. From the next migration on, `lore_system_state` carries
-  `compatible_from` and every migration sets it to the oldest application revision it
+  malformed value fails closed. From 0010 on, `lore_system_state` carries
+  `compatible_from` and every migration sets it, in the same final UPDATE as
+  `schema_revision`, to the oldest application revision it
   still serves: keep it when old instances lose nothing, raise it when they would, and
   prove the choice with the old application against the migrated schema
   (docs/operations.md, "Schema compatibility and rolling deploys"). Capabilities copy
@@ -202,7 +226,7 @@ been removed. Lore now has a native implementation, split into two concepts
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (9), and
+  `tests/integration/api.test.ts` pin the current revision (11), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -677,6 +701,9 @@ been removed. Lore now has a native implementation, split into two concepts
   embedding jobs as independent loops, draining both generations sequentially
   within the embedding loop, while Cloudflare Queues are wake-up hints for both
   with a scheduled two-generation database sweep as the delivery backstop.
+  A claim returns only the job Memory's chunks that still lack a vector in the
+  job's generation, so a re-armed job embeds only what is missing, and a job with
+  nothing missing completes without a provider call.
   Embedding and Code Index maintenance return `lost`, a normal outcome, when
   another run took the lease or the Memory was deleted mid-embed; `--once` runs
   one cycle for CI. Mutation primitives return a `jobId` only when an embedding
@@ -968,8 +995,13 @@ and query budget as versioned Evaluation metadata rather than a User/Workspace o
 Memory search/list may constrain `scope`, `updatedAfter`, and exclusive
 `updatedBefore`, plus JSONB-containment `metadataFilter`. Apply these predicates to
 every lexical and dense candidate source before top-k and keep them in the Actor/RLS
-transaction; reranking must never restore a filtered result. Keep the GIN metadata
-index when changing benchmark or application filter paths.
+transaction; reranking must never restore a filtered result. `memories` has no
+metadata GIN index (0011 dropped it): `jsonb @>` is not leakproof, so under
+`lore_app`'s RLS policy it is always a filter and never an index condition, and the
+index only cost every Memory write.
+`tests/server/schema-revision-11-upgrade.test.ts` proves it with EXPLAIN under the
+request role and `enable_seqscan=off`; do not add one back without first fixing that
+request-path restriction and proving the win under `SET ROLE lore_app`.
 Every Memory API response (create, read, update, list, search, context packets,
 and Proposal acceptance) renders `createdAt`/`updatedAt` as RFC 3339 UTC with
 microsecond precision through lore-core's `memorySelectColumns`; a `SELECT *`

@@ -1,5 +1,6 @@
 import type { EmbeddingTask, MemoryMaintenanceLog } from "@corespeed/lore-core";
 import {
+  chunkMemoryContent,
   createMemoryMaintenanceCoordinator,
   createMemoryMaintenanceModule,
   pruneRetiringEmbeddingGenerations,
@@ -300,6 +301,71 @@ test("stale jobs cannot write chunks after a Memory version changes", async () =
     { memory_version: 1, status: "cancelled" },
     { memory_version: 2, status: "succeeded" },
   ]);
+});
+
+test("a claim returns only chunks missing a vector, and a job missing none skips the provider", async () => {
+  const testContext = await createMemoryTestContext();
+  const notifications: string[] = [];
+  const embedded: string[][] = [];
+  const provider = fixtureProvider(async (texts) => {
+    embedded.push(texts);
+    return texts.map(() => fixtureVector(0));
+  });
+  const memories = createMemoryModule(testContext.database, {
+    embeddingProvider: provider,
+    maintenanceNotifier: { notify: ({ jobId }) => notifications.push(jobId) },
+  });
+  const content = ["First", "Second", "Third"]
+    .map((word) => `${word} paragraph. `.repeat(70).trim())
+    .join("\n\n");
+  const chunks = chunkMemoryContent(content);
+  expect(chunks.length).toBeGreaterThan(2);
+  const created = await memories.remember(testContext.alice, { content });
+  const jobId = notifications[0];
+  if (!jobId) throw new Error("Expected an embedding job");
+  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
+    embeddingProvider: provider,
+  });
+  await expect(maintenance.run(jobId)).resolves.toMatchObject({ status: "complete" });
+  expect(embedded).toEqual([chunks]);
+
+  const admin = <T extends Record<string, unknown>>(sql: string, params: unknown[] = []) =>
+    testContext.adminDatabase.transaction(
+      async (transaction) => (await transaction.query<T>(sql, params)).rows,
+    );
+  // Re-arming the succeeded job stands in for any later job of the same version.
+  const rearm = () =>
+    admin(
+      `UPDATE memory_embedding_jobs
+       SET status = 'pending', attempt_count = 0, completed_at = NULL,
+           available_at = now(), updated_at = now()
+       WHERE id = $1`,
+      [jobId],
+    );
+  const state = () =>
+    admin<{ status: string; vectors: number }>(
+      `SELECT job.status,
+              (SELECT count(*)::integer FROM memory_chunk_embeddings embedded
+               WHERE embedded.memory_id = job.memory_id) AS vectors
+       FROM memory_embedding_jobs job WHERE job.id = $1`,
+      [jobId],
+    );
+
+  await admin(
+    `DELETE FROM memory_chunk_embeddings embedded
+     USING memory_chunks chunk
+     WHERE chunk.id = embedded.chunk_id AND chunk.memory_id = $1 AND chunk.ordinal = 1`,
+    [created.id],
+  );
+  await rearm();
+  await expect(maintenance.run(jobId)).resolves.toMatchObject({ status: "complete" });
+  expect(embedded.at(-1)).toEqual([chunks[1]]);
+  await expect(state()).resolves.toEqual([{ status: "succeeded", vectors: chunks.length }]);
+
+  await rearm();
+  await expect(maintenance.run(jobId)).resolves.toEqual({ status: "complete", jobId });
+  expect(embedded).toHaveLength(2);
+  await expect(state()).resolves.toEqual([{ status: "succeeded", vectors: chunks.length }]);
 });
 
 test("a requested embedding hint cleans only its own stale job", async () => {

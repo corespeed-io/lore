@@ -256,17 +256,21 @@ export function createMemoryMaintenanceModule(
       });
       if (!claimed) return { status: "idle", ...(jobId ? { jobId } : {}) };
 
+      // A claim returns only the chunks that still lack a vector in this
+      // generation. When none does, the job completes without a provider call.
       const chunks = claimed.chunks;
-      let vectors: string[];
+      let vectors: string[] = [];
       try {
-        vectors = embeddingVectorLiterals(
-          await provider.embed(
-            chunks.map((chunk) => chunk.content),
-            "document",
-          ),
-          chunks.length,
-          providerDimensions,
-        );
+        if (chunks.length > 0) {
+          vectors = embeddingVectorLiterals(
+            await provider.embed(
+              chunks.map((chunk) => chunk.content),
+              "document",
+            ),
+            chunks.length,
+            providerDimensions,
+          );
+        }
       } catch {
         return finishFailure(
           claimed,
@@ -289,32 +293,34 @@ export function createMemoryMaintenanceModule(
           if (lockedMemory.rows[0]?.locked !== true) {
             throw new Error("Maintenance job Memory was deleted before completion");
           }
-          const replacements = chunks.map((chunk, index) => ({
-            chunk_id: chunk.id,
-            embedding: vectors[index],
-          }));
-          const inserted = await transaction.query<{ id: string }>(
-            `INSERT INTO memory_chunk_embeddings (
-               generation_id, workspace_id, memory_id, chunk_id, embedding, embedded_at
-             )
-             SELECT
-               lore.current_maintenance_generation_id(),
-               $1,
-               $2,
-               replacement.chunk_id::uuid,
-               replacement.embedding::vector(${providerDimensions}),
-               now()
-             FROM jsonb_to_recordset($3::jsonb) AS replacement(
-               chunk_id text,
-               embedding text
-             )
-             ON CONFLICT (generation_id, chunk_id)
-             DO UPDATE SET embedding = EXCLUDED.embedding, embedded_at = now()
-             RETURNING chunk_id AS id`,
-            [claimed.workspace_id, claimed.memory_id, JSON.stringify(replacements)],
-          );
-          if (inserted.rows.length !== chunks.length) {
-            throw new Error("Maintenance job failed to replace every claimed chunk");
+          if (chunks.length > 0) {
+            const replacements = chunks.map((chunk, index) => ({
+              chunk_id: chunk.id,
+              embedding: vectors[index],
+            }));
+            const inserted = await transaction.query<{ id: string }>(
+              `INSERT INTO memory_chunk_embeddings (
+                 generation_id, workspace_id, memory_id, chunk_id, embedding, embedded_at
+               )
+               SELECT
+                 lore.current_maintenance_generation_id(),
+                 $1,
+                 $2,
+                 replacement.chunk_id::uuid,
+                 replacement.embedding::vector(${providerDimensions}),
+                 now()
+               FROM jsonb_to_recordset($3::jsonb) AS replacement(
+                 chunk_id text,
+                 embedding text
+               )
+               ON CONFLICT (generation_id, chunk_id)
+               DO UPDATE SET embedding = EXCLUDED.embedding, embedded_at = now()
+               RETURNING chunk_id AS id`,
+              [claimed.workspace_id, claimed.memory_id, JSON.stringify(replacements)],
+            );
+            if (inserted.rows.length !== chunks.length) {
+              throw new Error("Maintenance job failed to replace every claimed chunk");
+            }
           }
           const finished = await transaction.query<{ status: "succeeded" | null }>(
             `SELECT lore.finish_memory_embedding_job($1, $2, NULL, $3) AS status`,

@@ -401,6 +401,72 @@ test("Memory Link mutations append content-free events in the same transaction",
   expect(bobTargetEvents.rows).toEqual([]);
 });
 
+test("forgetting a Memory records the deletion of its outbound and inbound Links", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const forgotten = await memories.remember(testContext.alice, { content: "Forgotten source" });
+  const target = await memories.remember(testContext.alice, { content: "Surviving target" });
+  const bobSource = await memories.remember(testContext.bob, {
+    content: "Bob's source",
+    scope: "private",
+  });
+  const outbound = await graph.connect(testContext.alice, {
+    sourceMemoryId: forgotten.id,
+    targetMemoryId: target.id,
+    kind: "supports",
+  });
+  const inbound = await graph.connect(testContext.bob, {
+    sourceMemoryId: bobSource.id,
+    targetMemoryId: forgotten.id,
+    kind: "related",
+  });
+  if (!outbound || !inbound) throw new Error("Expected both Links to be created");
+
+  await expect(memories.forget(testContext.alice, forgotten.id)).resolves.toBe(true);
+
+  const deleted = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<Record<string, unknown>>(
+      `SELECT resource_id, source_memory_id, related_memory_id, owner_user_id, memory_scope,
+              actor_user_id, changed_fields,
+              expires_at BETWEEN now() + interval '29 days' AND now() + interval '31 days'
+                AS expires_in_30_days
+       FROM memory_events
+       WHERE event_type = 'memory_link.deleted'
+       ORDER BY sequence`,
+    ),
+  );
+  // Each Link's event names its source's owner and scope, as the Link trigger does;
+  // the outbound Link's source is the forgotten Memory itself.
+  const recorded = {
+    actor_user_id: testContext.alice.userId,
+    changed_fields: ["endpoints", "kind", "metadata", "weight"],
+    expires_in_30_days: true,
+  };
+  expect(deleted.rows).toEqual([
+    {
+      ...recorded,
+      resource_id: outbound.link.id,
+      source_memory_id: forgotten.id,
+      related_memory_id: target.id,
+      owner_user_id: testContext.alice.userId,
+      memory_scope: "shared",
+    },
+    {
+      ...recorded,
+      resource_id: inbound.link.id,
+      source_memory_id: bobSource.id,
+      related_memory_id: forgotten.id,
+      owner_user_id: testContext.bob.userId,
+      memory_scope: "private",
+    },
+  ]);
+  const remaining = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("SELECT id FROM memory_links"),
+  );
+  expect(remaining.rows).toEqual([]);
+});
+
 test("Workspace export is actor-visible, checksummed, dry-runnable, and replay-safe on import", async () => {
   const testContext = await createMemoryTestContext();
   const memories = createMemoryModule(testContext.database);
@@ -633,7 +699,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 9,
+    schemaRevision: 11,
     memoryChunking: {
       revision: "lore-memory-chunking-v2",
       maximumCharacters: 1_200,
@@ -711,14 +777,18 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 10 WHERE singleton"),
+    transaction.query(
+      "UPDATE lore_system_state SET schema_revision = 12, compatible_from = 12 WHERE singleton",
+    ),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 9 WHERE singleton"),
+    transaction.query(
+      "UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9 WHERE singleton",
+    ),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
@@ -735,9 +805,9 @@ test("readiness accepts a newer schema only inside the range its migrations decl
   const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
   const admin = (sql: string) =>
     testContext.adminDatabase.transaction((transaction) => transaction.query(sql));
-  // A later migration publishes compatible_from through the same SECURITY DEFINER
-  // function readiness already calls (lore_app cannot read lore_system_state). Stand
-  // in for it by wrapping this chain's function and editing what it returns.
+  // 0010 publishes compatible_from through the same SECURITY DEFINER function
+  // readiness already calls (lore_app cannot read lore_system_state). Stand in for
+  // other schemas by wrapping this chain's function and editing what it returns.
   await admin(
     "ALTER FUNCTION lore.portable_core_capabilities() RENAME TO published_core_capabilities",
   );
@@ -753,10 +823,14 @@ test("readiness accepts a newer schema only inside the range its migrations decl
   const schemaStatus = async () => (await operations.readiness()).components.schema;
   const next = LORE_SCHEMA_REVISION + 1;
 
-  // Without compatibleFrom a schema serves only its own revision, as before.
+  // This chain's own declaration serves this application.
   await publish(LORE_SCHEMA_REVISION, "base");
   await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
-  await publish(next, "base");
+
+  // Without compatibleFrom (revisions before 10) a schema serves only its own revision.
+  await publish(LORE_SCHEMA_REVISION, "base - 'compatibleFrom'");
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+  await publish(next, "base - 'compatibleFrom'");
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
