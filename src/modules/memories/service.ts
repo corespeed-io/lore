@@ -21,7 +21,6 @@ import {
   type MemorySearchResult as StoredMemorySearchResult,
   type UpdateMemory,
   type MemoryMutationOptions as VersionOptions,
-  validatedEmbeddingDimensions,
   validateMemoryMetadata,
   validateMemoryScope,
 } from "@corespeed/lore-core";
@@ -178,15 +177,6 @@ export function writtenMemoryReplayBody(workspaceId: string, memoryId: string): 
  * reads take one round trip, writes two (`docs/research/lore-core-db-wave-spec.md`).
  */
 export function createMemoryModule(database: PostgresDatabase, options: MemoryModuleOptions = {}) {
-  const dimensions = validatedEmbeddingDimensions(
-    options.embeddingDimensions ?? options.embeddingProvider?.dimensions ?? 1024,
-  );
-  if (options.embeddingProvider && options.embeddingProvider.dimensions !== dimensions) {
-    throw new Error(
-      "embeddingDimensions must match embeddingProvider.dimensions: " +
-        `the module is configured for ${dimensions} but the provider embeds at ${options.embeddingProvider.dimensions}`,
-    );
-  }
   const primitives = createCoreMutationPrimitives(options);
   const coreFor = (actor: RequestActor) =>
     createCoreMemoryModule(createMemoryStorage(database, actor), options);

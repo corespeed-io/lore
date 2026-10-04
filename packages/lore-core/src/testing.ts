@@ -7,7 +7,7 @@ import {
   type PostgresDatabase,
   type PostgresTransaction,
 } from "./db";
-import { createMemoryMaintenanceModule } from "./maintenance";
+import { createEmbeddingMaintenance } from "./maintenance";
 import { createMemoryModule, type MemoryScope } from "./memory";
 import {
   CORE_SCHEMA_CONTRACT,
@@ -400,8 +400,8 @@ export function runMemoryCoreContractSuite(
         content: "Semantic contract memory about tidal navigation charts.",
         scope: "shared",
       });
-      const maintenance = createMemoryMaintenanceModule(fixture.maintenanceDatabase, {
-        embeddingProvider: provider,
+      const maintenance = createEmbeddingMaintenance(fixture.maintenanceDatabase, {
+        embeddingProviders: [provider],
       });
       let guard = 0;
       for (;;) {

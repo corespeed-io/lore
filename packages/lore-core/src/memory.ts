@@ -932,8 +932,27 @@ export interface MemoryUpdateBatchOptions extends MemoryWriteBatchOptions {
 
 export interface MemoryMutationPrimitivesOptions {
   defaultMemoryScope?: MemoryScope;
+  /** The host's vector width; must equal `embeddingProvider.dimensions` when both are set. */
+  embeddingDimensions?: number;
   embeddingProvider?: EmbeddingProvider;
   maintenanceNotifier?: MemoryMaintenanceNotifier;
+}
+
+/** The configured vector width, refusing a provider that embeds at another one. */
+function configuredEmbeddingDimensions(options: {
+  embeddingDimensions?: number;
+  embeddingProvider?: EmbeddingProvider;
+}): number {
+  const dimensions = validatedEmbeddingDimensions(
+    options.embeddingDimensions ?? options.embeddingProvider?.dimensions ?? 1024,
+  );
+  if (options.embeddingProvider && options.embeddingProvider.dimensions !== dimensions) {
+    throw new Error(
+      "embeddingDimensions must match embeddingProvider.dimensions: " +
+        `the module is configured for ${dimensions} but the provider embeds at ${options.embeddingProvider.dimensions}`,
+    );
+  }
+  return dimensions;
 }
 
 /**
@@ -948,6 +967,7 @@ export interface MemoryMutationPrimitivesOptions {
  * round trip, and nothing may run in the transaction afterwards.
  */
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
+  configuredEmbeddingDimensions(options);
   const defaultMemoryScope = options.defaultMemoryScope ?? "shared";
   const embeddingProvider = options.embeddingProvider;
   const maintenanceNotifier = options.maintenanceNotifier;
@@ -1455,15 +1475,7 @@ export function createMemoryModule(
   const storageScope: MemoryStorageScope = storage;
   const contextGroupExpansion = normalizeContextGroupExpansion(options.contextGroupExpansion);
   const embeddingProvider = options.embeddingProvider;
-  const embeddingDimensions = validatedEmbeddingDimensions(
-    options.embeddingDimensions ?? embeddingProvider?.dimensions ?? 1024,
-  );
-  if (embeddingProvider && embeddingProvider.dimensions !== embeddingDimensions) {
-    throw new Error(
-      "embeddingDimensions must match embeddingProvider.dimensions: " +
-        `the module is configured for ${embeddingDimensions} but the provider embeds at ${embeddingProvider.dimensions}`,
-    );
-  }
+  const embeddingDimensions = configuredEmbeddingDimensions(options);
   const entityAliasRecall = options.entityAliasRecall ?? false;
   const evidenceNeighborChunks = Math.max(
     0,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { createMemoryMaintenanceModule, type EmbeddingProvider } from "@corespeed/lore-core";
+import { createEmbeddingMaintenance, type EmbeddingProvider } from "@corespeed/lore-core";
 import type {
   Episode,
   HumanActor,
@@ -858,8 +858,8 @@ try {
   const inspector = new Client({ connectionString: smokeDatabaseUrl });
   await inspector.connect();
   try {
-    const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, {
-      embeddingProvider: smokeEmbeddings,
+    const maintenance = createEmbeddingMaintenance(maintenanceDatabase, {
+      embeddingProviders: [smokeEmbeddings],
     });
     const paragraph = (text: string) => `${text} `.repeat(Math.ceil(900 / (text.length + 1)));
     const body = (...texts: string[]) => texts.map(paragraph).join("\n\n");
@@ -906,7 +906,7 @@ try {
         )
       ).rows;
 
-    assert.equal((await maintenance.run(await jobFor(1))).status, "complete");
+    assert.equal((await maintenance.run({ jobId: await jobFor(1) })).status, "complete");
     const original = await chunkState();
     assert.deepEqual(
       original.map((chunk) => chunk.embedded),
@@ -920,7 +920,7 @@ try {
     providerGate = new Promise((resolve) => {
       releaseProvider = resolve;
     });
-    const staleRun = maintenance.run(await jobFor(2));
+    const staleRun = maintenance.run({ jobId: await jobFor(2) });
     const providerDeadline = Date.now() + 10_000;
     while (embeddedTexts.length < 2) {
       if (Date.now() > providerDeadline)
@@ -943,7 +943,7 @@ try {
       "an unchanged chunk keeps its vector and a fenced completion writes none",
     );
 
-    assert.equal((await maintenance.run(await jobFor(3))).status, "complete");
+    assert.equal((await maintenance.run({ jobId: await jobFor(3) })).status, "complete");
     assert.deepEqual(
       embeddedTexts.map((texts) => texts.length),
       [3, 1, 2],

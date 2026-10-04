@@ -13,6 +13,12 @@ export interface EmbeddingProvider {
   model: string;
   dimensions: number;
   revision: string;
+  /**
+   * The longest one `embed` request may take, in milliseconds, when the adapter
+   * enforces a deadline. Omit it when the transport has none. Maintenance sizes
+   * its job lease from it; omitted, the lease is the default reclaim window.
+   */
+  requestTimeoutMs?: number;
   embed(texts: string[], task: EmbeddingTask): Promise<number[][]>;
 }
 

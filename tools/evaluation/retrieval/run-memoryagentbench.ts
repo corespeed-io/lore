@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   chunkMemoryContent,
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   RETRIEVAL_EVIDENCE_POLICY,
   RETRIEVAL_FEEDBACK_CANDIDATE_POLICY,
 } from "@corespeed/lore-core";
@@ -492,7 +492,9 @@ try {
         tripwireMemoryIds.set(questionId, tripwire.id);
       }
     }
-    const maintenance = createMemoryMaintenanceModule(maintenanceDatabase, { embeddingProvider });
+    const maintenance = createEmbeddingMaintenance(maintenanceDatabase, {
+      embeddingProviders: [embeddingProvider],
+    });
     const indexingStartedAt = performance.now();
     // Tolerates provider retries and backoff; only a dead job or sustained zero
     // progress aborts the run.

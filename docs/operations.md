@@ -239,8 +239,9 @@ The embedding lease is an ownership/reclaim window, not a watchdog. Ollama uses
 the default seven-minute window regardless of `LORE_EMBEDDING_TIMEOUT_MS`;
 expiry does not interrupt its HTTP request or record a timeout failure. Another
 worker can reclaim the job after expiry, while the lease token fences late
-completion by the old worker. SDK-backed providers with deadlines use their
-configured timeout to estimate a lease; retries and batching can still exceed it.
+completion by the old worker. The Google, OpenAI, and AI Gateway adapters enforce
+`LORE_EMBEDDING_TIMEOUT_MS` (clamped to 1–600 seconds) and their lease is estimated
+from that deadline; retries and batching can still exceed it.
 
 Inspect the maintenance logs and `bun run db:embedding:report` for a lack of
 progress, and verify that Ollama itself responds. Restore or restart Ollama with

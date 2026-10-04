@@ -1,6 +1,6 @@
 import type { EmbeddingTask } from "@corespeed/lore-core";
 import {
-  createMemoryMaintenanceModule,
+  createEmbeddingMaintenance,
   MemoryAccessDeniedError,
   RETRIEVAL_ENTITY_ALIAS_POLICY,
 } from "@corespeed/lore-core";
@@ -60,8 +60,8 @@ async function drainEmbeddings(
   testContext: MemoryTestContext,
   embeddingProvider: ReturnType<typeof felineEmbeddingProvider>,
 ): Promise<void> {
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain every deterministic document job before dense retrieval.
@@ -1984,8 +1984,8 @@ test("Hybrid search finds semantically related visible Memory without lexical ov
     content: "The orbital vehicle completed its burn.",
   });
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain the four deterministic document jobs before semantic search.
@@ -2032,8 +2032,8 @@ test("Bounded retrieval feedback follows a visible semantic hop without leaking 
     content: "Bob's classified birthplace record says Paris.",
     scope: "private",
   });
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   while ((await maintenance.run()).status === "complete") {
     // Drain deterministic document embedding jobs.
@@ -2313,12 +2313,12 @@ test("A metadata-only update notifies maintenance for the job it enqueues while 
   const [creationJob, updateJob] = notifications;
   expect(updateJob).not.toBe(creationJob);
 
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
   // The superseded version's job is cancelled; the notified job embeds the Memory.
-  await expect(maintenance.run(creationJob)).resolves.toMatchObject({ status: "idle" });
-  await expect(maintenance.run(updateJob)).resolves.toMatchObject({
+  await expect(maintenance.run({ jobId: creationJob })).resolves.toMatchObject({ status: "idle" });
+  await expect(maintenance.run({ jobId: updateJob })).resolves.toMatchObject({
     status: "complete",
     jobId: updateJob,
   });

@@ -19,7 +19,21 @@ export * from "./batch";
 export * from "./capabilities";
 export * from "./db";
 export * from "./graph";
-export * from "./maintenance";
+// Maintenance lanes and the lease rule stay internal; hosts drive the runner.
+export {
+  createEmbeddingGenerationAdmin,
+  createEmbeddingMaintenance,
+  type EmbeddingGenerationIdentity,
+  type EmbeddingGenerationReport,
+  type EmbeddingMaintenance,
+  type EmbeddingMaintenanceLog,
+  type EmbeddingMaintenanceOptions,
+  type EmbeddingMaintenanceRunResult,
+  type EmbeddingMaintenanceSweep,
+  embeddingGenerationServing,
+  type MemoryMaintenanceResult,
+  type MemoryMaintenanceStatus,
+} from "./maintenance";
 export * from "./memory";
 export * from "./memory-chunking";
 export * from "./memory-content";

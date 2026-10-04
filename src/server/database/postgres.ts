@@ -64,6 +64,8 @@ function transactionsOn(pool: Pool, role: LoreDatabaseRole): PostgresDatabase["t
       return result;
     } catch (error) {
       reusable = await handle.rollback();
+      // A batch may have committed before the callback threw.
+      if (handle.isCommitted()) handle.committed();
       throw error;
     } finally {
       client.release(reusable ? undefined : true);

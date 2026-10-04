@@ -98,12 +98,13 @@ export function createGoogleEmbeddingProvider(
   if (!apiKey) throw new Error("GEMINI_API_KEY is required for the Google embedding provider");
   const canonicalModel = supportedModel(configuration.model);
   const model = modelResource(canonicalModel);
+  const timeoutMs = Math.max(1_000, boundedInteger(options.timeoutMs, 120_000, 600_000));
   const client = new GoogleGenAI({
     apiKey,
     httpOptions: {
       baseUrl: apiBaseUrl(options.baseUrl ?? GOOGLE_EMBEDDING_BASE_URL),
       apiVersion: "v1beta",
-      timeout: Math.max(1_000, boundedInteger(options.timeoutMs, 120_000, 600_000)),
+      timeout: timeoutMs,
       retryOptions: { attempts: boundedInteger(options.maxRetries, 2, 5) + 1 },
     },
   });
@@ -114,6 +115,7 @@ export function createGoogleEmbeddingProvider(
     model: canonicalModel,
     dimensions: configuration.dimensions,
     revision: configuration.revision,
+    requestTimeoutMs: timeoutMs,
     async embed(texts: string[], task: EmbeddingTask): Promise<number[][]> {
       if (!texts.length) return [];
       const embeddings: number[][] = [];

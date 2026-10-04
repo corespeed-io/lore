@@ -291,8 +291,14 @@ Episode admission is an OSS operation: `episodes/service.ts` validates with Core
 `normalizedEpisode`, then calls the authorization-bearing `lore.record_episode`
 function and records request replay. Core's Observation module provides validation,
 store-bound reads, and deletion; its Episode evidence index still owns partitioning,
-embedding, and retrieval algorithms. Core maintenance keeps embedding leases and
-generation activation/pruning. Expired request replay and event cleanup,
+embedding, and retrieval algorithms. Core maintenance owns embedding lanes,
+leases, retries, seeding, and generation activation/pruning behind one runner,
+`createEmbeddingMaintenance` (`run`, `sweep`, `pending`), which the Bun worker's
+loops and the Cloudflare queue/scheduled handlers drive; a lane's lease comes from
+its provider's optional `requestTimeoutMs`, never from a provider name. Operator
+generation commands use `createEmbeddingGenerationAdmin`, and readiness uses
+`embeddingGenerationServing`. Hosts keep environment parsing, concurrency, loops,
+queue transport, and log format. Expired request replay and event cleanup,
 `purgeExpiredPortableCoreRecords`, lives in `src/modules/operations/maintenance.ts`.
 
 The `./testing` contract kit accepts host-bound contexts and a `testDatabase`
