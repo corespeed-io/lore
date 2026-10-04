@@ -1,12 +1,7 @@
 // OpenNext generates this module before Wrangler bundles the custom worker.
 
 import type { MemoryEmbeddingJobMessage } from "@corespeed/lore-core";
-import {
-  createMemoryMaintenanceCoordinator,
-  createMemoryMaintenanceModule,
-  embeddingMaintenanceLeaseSeconds,
-  pruneRetiringEmbeddingGenerations,
-} from "@corespeed/lore-core";
+import { createEmbeddingMaintenance } from "@corespeed/lore-core";
 import openNextWorker from "../../.open-next/worker.js";
 import { purgeExpiredPortableCoreRecords } from "../modules/operations/maintenance";
 import { isApiPath } from "../server/api/app";
@@ -37,31 +32,14 @@ function embeddingEnvironment(env: CloudflareEnv): Record<string, string | undef
 }
 
 function maintenanceForEnvironment(env: CloudflareEnv, database: RuntimePostgresDatabase) {
-  const providers = createMaintenanceEmbeddingProvidersFromEnvironment(
-    embeddingEnvironment(env),
-    (message) => console.warn(message),
-  );
-  if (providers.length === 0) return null;
-  return createMemoryMaintenanceCoordinator(
-    providers.map((provider) =>
-      createMemoryMaintenanceModule(database, {
-        embeddingProvider: provider,
-        leaseSeconds: embeddingMaintenanceLeaseSeconds(
-          provider.provider === "ollama" ? undefined : Number(env.LORE_EMBEDDING_TIMEOUT_MS),
-        ),
-        logger: (entry) =>
-          console.log(
-            JSON.stringify({
-              component: "memory-maintenance",
-              embeddingProvider: provider.provider,
-              embeddingModel: provider.model,
-              embeddingRevision: provider.revision,
-              ...entry,
-            }),
-          ),
-      }),
+  return createEmbeddingMaintenance(database, {
+    embeddingProviders: createMaintenanceEmbeddingProvidersFromEnvironment(
+      embeddingEnvironment(env),
+      (message) => console.warn(message),
     ),
-  );
+    generationRetentionSeconds: Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
+    logger: (entry) => console.log(JSON.stringify({ component: "memory-maintenance", ...entry })),
+  });
 }
 
 /** Connections for one queue batch or cron run; the handler closes them when it ends. */
@@ -69,14 +47,6 @@ function maintenanceDatabaseForEnvironment(env: CloudflareEnv): RuntimePostgresD
   return createRequestPostgresDatabase(
     { connectionString: env.MAINTENANCE_HYPERDRIVE.connectionString },
     { role: "lore_maintenance", pipeline: postgresPipeline(env.LORE_POSTGRES_PIPELINE, false) },
-  );
-}
-
-function isJobMessage(value: unknown): value is MemoryEmbeddingJobMessage {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    typeof (value as MemoryEmbeddingJobMessage).jobId === "string"
   );
 }
 
@@ -94,7 +64,7 @@ export default {
     const database = maintenanceDatabaseForEnvironment(env);
     try {
       const maintenance = maintenanceForEnvironment(env, database);
-      if (!maintenance) {
+      if (!maintenance.enabled) {
         batch.ackAll();
         return;
       }
@@ -102,14 +72,12 @@ export default {
       // Process sequentially to bound provider and pg client concurrency inside a
       // single isolate; Queue max_concurrency provides horizontal parallelism.
       for (const message of batch.messages) {
-        if (!isJobMessage(message.body)) {
-          console.warn("Lore discarded an invalid maintenance queue message");
-          message.ack();
-          continue;
-        }
         try {
-          const result = await maintenance.run(message.body.jobId);
-          if (result.status === "retry") {
+          const result = await maintenance.run(message.body);
+          if (result.status === "invalid") {
+            console.warn("Lore discarded an invalid maintenance queue message");
+            message.ack();
+          } else if (result.status === "retry") {
             message.retry({ delaySeconds: result.retryAfterSeconds });
           } else {
             message.ack();
@@ -131,15 +99,12 @@ export default {
   },
 
   async scheduled(_controller, env) {
-    const maintenanceDatabase = maintenanceDatabaseForEnvironment(env);
+    const database = maintenanceDatabaseForEnvironment(env);
     try {
-      const purged = await purgeExpiredPortableCoreRecords(maintenanceDatabase);
-      const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
-        maintenanceDatabase,
-        Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
-      );
-      const maintenance = maintenanceForEnvironment(env, maintenanceDatabase);
-      if (!maintenance) {
+      const purged = await purgeExpiredPortableCoreRecords(database);
+      const maintenance = maintenanceForEnvironment(env, database);
+      const sweep = await maintenance.sweep();
+      if (!maintenance.enabled) {
         console.log(
           JSON.stringify({
             component: "memory-maintenance",
@@ -147,35 +112,30 @@ export default {
             embeddingStatus: "disabled",
             purgedIdempotencyRecords: purged.idempotencyRecords,
             purgedMemoryEvents: purged.memoryEvents,
-            prunedEmbeddingGenerations,
+            prunedEmbeddingGenerations: sweep.prunedGenerations,
           }),
         );
         return;
       }
-      const seeded = await maintenance.seedStale(1_000);
-      const generations = await maintenance.generationReports();
       console.log(
         JSON.stringify({
           component: "memory-maintenance",
           event: "sweep_complete",
-          seededJobs: seeded.length,
+          seededJobs: sweep.seeded.length,
           purgedIdempotencyRecords: purged.idempotencyRecords,
           purgedMemoryEvents: purged.memoryEvents,
-          prunedEmbeddingGenerations,
-          embeddingGenerations: generations,
+          prunedEmbeddingGenerations: sweep.prunedGenerations,
+          embeddingGenerations: sweep.generations,
         }),
       );
       const pending = await maintenance.pending(1_000);
-      if (pending.length === 0) return;
       for (let offset = 0; offset < pending.length; offset += 100) {
         await env.MEMORY_MAINTENANCE_QUEUE.sendBatch(
-          pending
-            .slice(offset, offset + 100)
-            .map((jobId) => ({ body: { jobId } satisfies MemoryEmbeddingJobMessage })),
+          pending.slice(offset, offset + 100).map((body) => ({ body })),
         );
       }
     } finally {
-      await maintenanceDatabase.close();
+      await database.close();
     }
   },
 } satisfies ExportedHandler<CloudflareEnv, MemoryEmbeddingJobMessage>;

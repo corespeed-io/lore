@@ -747,6 +747,26 @@ been removed. Lore now has a native implementation, split into two concepts
   A claim returns only the job Memory's chunks that still lack a vector in the
   job's generation, so a re-armed job embeds only what is missing, and a job with
   nothing missing completes without a provider call.
+  Both hosts drive one runner, `createEmbeddingMaintenance(database,
+  { embeddingProviders, generationRetentionSeconds, logger })`, with one lane per
+  provider, serving first: `run(message?)` claims the job a `{ jobId }` queue
+  message names (trying each lane) or, with no message, any due job, rotating the
+  starting lane so a rollout cannot starve serving, and answers `invalid` for a
+  malformed message; `sweep()` prunes expired retiring generations (default 7-day,
+  minimum 1-hour retention), seeds at most 1,000 stale jobs per generation, and
+  reports each lane; `pending(limit)` returns `{ jobId }` messages for the
+  Cloudflare fan-out. A lane's lease comes from `EmbeddingProvider.requestTimeoutMs`:
+  the Google, OpenAI, and AI Gateway adapters publish their SDK timeout (from
+  `LORE_EMBEDDING_TIMEOUT_MS`, clamped to 1–600 s), and Ollama, whose SDK has no
+  deadline, publishes none and gets the default 420-second window. Log entries
+  carry the generation's provider/model/revision. The lanes, the lease rule, and
+  the round-robin coordinator are internal to the engine; hosts keep environment
+  parsing, concurrency, loops, queue transport, and log format.
+  `createEmbeddingGenerationAdmin(database)` (`findReport`, `activate`,
+  `requeueDeadJobs`) backs the `db:embedding:*` commands, and readiness asks
+  `embeddingGenerationServing(transaction, identity)`. The embedding-dimensions
+  check lives in `createMemoryMutationPrimitives`, so every host module that writes
+  Memories refuses a provider of another width.
   Embedding and Code Index maintenance return `lost`, a normal outcome, when
   another run took the lease or the Memory was deleted mid-embed; `--once` runs
   one cycle for CI. Hosts never see embedding job ids: the engine registers the

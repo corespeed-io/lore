@@ -1,4 +1,4 @@
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createEmbeddingMaintenance } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createMemoryProposalsModule } from "@/modules/proposals/service";
@@ -51,10 +51,10 @@ test("accepting a metadata-only update notifies maintenance exactly when it enqu
   expect(notifications).toHaveLength(2);
   const [creationJob, acceptanceJob] = notifications;
   expect(acceptanceJob).not.toBe(creationJob);
-  const maintenance = createMemoryMaintenanceModule(testContext.maintenanceDatabase, {
-    embeddingProvider,
+  const maintenance = createEmbeddingMaintenance(testContext.maintenanceDatabase, {
+    embeddingProviders: [embeddingProvider],
   });
-  await expect(maintenance.run(acceptanceJob)).resolves.toMatchObject({
+  await expect(maintenance.run({ jobId: acceptanceJob })).resolves.toMatchObject({
     status: "complete",
     jobId: acceptanceJob,
   });

@@ -140,3 +140,31 @@ test("maintenance provider factory deduplicates a build lane matching serving", 
 
   expect(providers).toHaveLength(1);
 });
+
+test("embedding providers publish the request deadline that sizes their maintenance lease", () => {
+  // Ollama's SDK sets no deadline, so maintenance falls back to its default lease.
+  expect(createEmbeddingProviderFromEnvironment({})).not.toHaveProperty("requestTimeoutMs");
+  const credentials = {
+    GEMINI_API_KEY: "test-key",
+    OPENAI_API_KEY: "test-key",
+    AI_GATEWAY_API_KEY: "test-key",
+  };
+  for (const [provider, model] of [
+    ["google", "gemini-embedding-2"],
+    ["openai", "text-embedding-3-small"],
+    ["vercel", "openai/text-embedding-3-small"],
+  ]) {
+    const env = { ...credentials, LORE_EMBEDDING_PROVIDER: provider, LORE_EMBEDDING_MODEL: model };
+    for (const [timeout, requestTimeoutMs] of [
+      [undefined, 120_000],
+      ["30000", 30_000],
+      ["900000", 600_000],
+      ["250", 1_000],
+    ] as const) {
+      expect(
+        createEmbeddingProviderFromEnvironment({ ...env, LORE_EMBEDDING_TIMEOUT_MS: timeout }),
+        `${provider} ${timeout}`,
+      ).toMatchObject({ provider, requestTimeoutMs });
+    }
+  }
+});
