@@ -7,7 +7,10 @@
 --
 -- compatible_from stays 9: an application or worker of revision 9 uses none of the
 -- objects removed here. Its worker embeds the chunks a claim returns and writes
--- each by chunk id, so a partial or empty claim still completes.
+-- each by chunk id, so a partial or empty claim still completes. Only a revision-9
+-- release whose readiness accepts compatible_from stays ready, though: an earlier
+-- one requires exact equality and turns unready when this commits, so that
+-- readiness release must be deployed everywhere first (docs/operations.md).
 --
 -- It takes ACCESS EXCLUSIVE on memory_chunks, then on lore_system_state at the end,
 -- and ACCESS SHARE on embedding_generations when the capabilities body is validated

@@ -421,7 +421,7 @@ The maintenance runner, lease rule, and generation admin API are consolidated in
 
 ### 9.1 Order and compatibility
 
-1. **PR 0** (app only), deployed everywhere.
+1. **PR 0** (app only), deployed everywhere as a release of its own. A revision-9 build without it requires exact equality and goes unready when 0010 commits, so 0010 must wait until no such build serves traffic (or run in a maintenance window).
 2. **PR 1** (app only).
 3. **PR 2:** migrate 0010 → 0011, then deploy. With PR 0 in place, old instances stay ready, because both migrations keep `compatible_from = 9`.
 4. **PR 3:** migrate, then deploy.

@@ -600,8 +600,14 @@ if the timeout expires nothing is recorded and a rerun repeats it. It never lock
 revision-9 application never reads the dropped columns, policy, or indexes, and a
 revision-9 worker embeds whatever chunks a claim returns and writes each by chunk
 id, so a partial claim completes (an empty one reaches its provider with no input,
-which the concrete adapters accept). Revision-9 instances therefore stay ready
-through both migrations: migrate first, then deploy.
+which the concrete adapters accept). Revision-9 instances therefore keep working
+through both migrations, but only those whose readiness accepts a compatible newer
+schema also stay ready: a revision-9 release from before that readiness change
+requires exact equality and reports the schema `incompatible`, and so answers 503,
+from the moment `0010` commits. Deploy the release with compatible-range readiness
+everywhere first, as a release of its own, and only then migrate and deploy the
+release that ships `0010` and `0011`; otherwise run the migration in a maintenance
+window.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a

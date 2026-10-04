@@ -269,3 +269,36 @@ test("Vercel AI Gateway adapter names itself in request failures without upstrea
     /^Vercel AI Gateway embedding request failed \(502\)$/,
   );
 });
+
+// A revision-9 worker embeds whatever its claim returns, and from schema revision 10 a
+// claim whose chunks all have vectors returns none.
+test("OpenAI-compatible adapters embed no texts without a request", async () => {
+  const requests: string[] = [];
+  const fetch = async (input: RequestInfo | URL) => {
+    requests.push(String(input));
+    return Response.json({ data: [] });
+  };
+  for (const provider of [
+    createOpenAIEmbeddingProvider(
+      {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        dimensions: 1024,
+        revision: "lore-embedding-v1",
+      },
+      { apiKey: "test-openai-key", fetch },
+    ),
+    createVercelAIGatewayEmbeddingProvider(
+      {
+        provider: "vercel",
+        model: "openai/text-embedding-3-small",
+        dimensions: 1024,
+        revision: "lore-embedding-v1",
+      },
+      { apiKey: "test-gateway-key", fetch },
+    ),
+  ]) {
+    await expect(provider.embed([], "document")).resolves.toEqual([]);
+  }
+  expect(requests).toEqual([]);
+});

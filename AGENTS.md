@@ -195,7 +195,10 @@ been removed. Lore now has a native implementation, split into two concepts
   `memories`. `0011_trim_memory_indexes_concurrently.sql` (`transaction:false`) builds
   `memory_chunk_embeddings_chunk_idx (chunk_id)`, which the chunk→vector cascade
   lacked, and drops `memories_metadata_gin_idx` and `memory_links_workspace_source_idx`
-  (a strict prefix of the Link natural key). Both keep `compatible_from = 9`.
+  (a strict prefix of the Link natural key). Both keep `compatible_from = 9`, but only a
+  revision-9 release with compatible-range readiness stays ready across them; one from
+  before it requires exact equality, so that readiness release ships alone, everywhere,
+  before `0010` runs (docs/operations.md).
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default

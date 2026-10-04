@@ -222,3 +222,21 @@ test("Ollama embeddings omit invalid JSON content from SDK parsing errors", asyn
     /^Ollama embedding request failed$/,
   );
 });
+
+// A revision-9 worker embeds whatever its claim returns, and from schema revision 10 a
+// claim whose chunks all have vectors returns none.
+test("Ollama adapter embeds no texts without a request", async () => {
+  const fetch = mockFetch(async () => Response.json({ embeddings: [] }));
+  const provider = createOllamaEmbeddingProvider(
+    {
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      dimensions: 1024,
+      revision: "lore-embedding-v2",
+    },
+    { baseUrl: "http://ollama.local:11434/", fetch },
+  );
+
+  await expect(provider.embed([], "document")).resolves.toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
+});
