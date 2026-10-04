@@ -174,7 +174,8 @@ test("hot human routes admit as a prefix: reads take one round trip, keyed write
     retrieve: { status: 200, statements: 6, waits: 1 },
     list: { status: 200, statements: 6, waits: 1 },
     search: { status: 200, statements: 6, waits: 1 },
-    update: { status: 200, statements: 13, waits: 2 },
+    // The locking read travels with the stored-chunk read the diff needs.
+    update: { status: 200, statements: 14, waits: 2 },
     link: { status: 201, statements: 8, waits: 2 },
     links: { status: 200, statements: 7, waits: 1 },
     graph: { status: 200, statements: 7, waits: 1 },
