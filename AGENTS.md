@@ -685,8 +685,10 @@ been removed. Lore now has a native implementation, split into two concepts
   transaction would see one frozen snapshot). The engine relies on READ COMMITTED:
   each statement's fresh snapshot is what lets a writer queued on the source lock
   see the Link its predecessor committed. A new Link's insert is `ON CONFLICT DO
-  NOTHING`, then a re-read replaces a Link the first read could not see (a target
-  briefly invisible, or a batch insert since), so neither race answers 500. The route
+  NOTHING`; when it finds the key taken by a Link the first read could not see (a
+  target briefly invisible, or a batch insert since), the whole connect runs once more
+  under a fresh lock, replacing that Link if it is visible now or inserting again if a
+  disconnect removed it in between, so neither race answers 500 or a false 404. The route
   refuses any query parameter but one `kind`, so a misspelled parameter cannot make a
   DELETE fall back to the default kind; the SDK refuses a kind with an unpaired
   surrogate, which URL encoding would turn into U+FFFD.
