@@ -1,5 +1,5 @@
 import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
-import type { PostgresDatabase, PostgresTransaction } from "./db";
+import { type PostgresDatabase, type PostgresTransaction, statement } from "./db";
 import { embeddingVectorLiterals } from "./vector";
 
 /**
@@ -74,17 +74,16 @@ export function embeddingMaintenanceLeaseSeconds(providerTimeoutMs = 120_000): n
   return Math.max(30, Math.min(Math.ceil((safeTimeoutMs * 3) / 1_000) + 60, 3_600));
 }
 
-async function installMaintenanceContext(
+/** The lease context travels with the transaction's next statement. */
+function installMaintenanceContext(
   transaction: PostgresTransaction,
   jobId: string,
   leaseToken: string,
-): Promise<void> {
-  await transaction.query(
-    `SELECT
-       set_config('lore.maintenance_job_id', $1, true),
-       set_config('lore.maintenance_lease_token', $2, true)`,
-    [jobId, leaseToken],
-  );
+): void {
+  transaction.setLocal({
+    "lore.maintenance_job_id": jobId,
+    "lore.maintenance_lease_token": leaseToken,
+  });
 }
 
 export async function pruneRetiringEmbeddingGenerations(
@@ -282,23 +281,22 @@ export function createMemoryMaintenanceModule(
 
       try {
         await database.transaction(async (transaction) => {
-          await installMaintenanceContext(transaction, claimed.id, leaseToken);
-          // Memory mutations lock the parent Memory before replacing chunks.
-          // Take the same parent-first order before the embedding insert obtains
-          // foreign-key locks on generation/chunk rows, preventing a chunk ↔
-          // Memory lock inversion with concurrent update/delete.
-          const lockedMemory = await transaction.query<{ locked: boolean }>(
-            "SELECT lore.lock_current_maintenance_memory() AS locked",
-          );
-          if (lockedMemory.rows[0]?.locked !== true) {
-            throw new Error("Maintenance job Memory was deleted before completion");
-          }
-          if (chunks.length > 0) {
-            const replacements = chunks.map((chunk, index) => ({
-              chunk_id: chunk.id,
-              embedding: vectors[index],
-            }));
-            const inserted = await transaction.query<{ id: string }>(
+          installMaintenanceContext(transaction, claimed.id, leaseToken);
+          const replacements = chunks.map((chunk, index) => ({
+            chunk_id: chunk.id,
+            embedding: vectors[index],
+          }));
+          // Memory mutations lock the parent Memory before replacing chunks. Take
+          // the same parent-first order before the embedding insert obtains
+          // foreign-key locks on generation/chunk rows, preventing a chunk ↔ Memory
+          // lock inversion with concurrent update/delete. The three statements
+          // share one round trip; COMMIT follows only once their results check out.
+          // A claim with no chunk left to embed inserts nothing and only finishes.
+          const [lockedMemory, inserted, finished] = await transaction.batch([
+            statement<{ locked: boolean }>(
+              "SELECT lore.lock_current_maintenance_memory() AS locked",
+            ),
+            statement<{ id: string }>(
               `INSERT INTO memory_chunk_embeddings (
                  generation_id, workspace_id, memory_id, chunk_id, embedding, embedded_at
                )
@@ -317,15 +315,18 @@ export function createMemoryMaintenanceModule(
                DO UPDATE SET embedding = EXCLUDED.embedding, embedded_at = now()
                RETURNING chunk_id AS id`,
               [claimed.workspace_id, claimed.memory_id, JSON.stringify(replacements)],
-            );
-            if (inserted.rows.length !== chunks.length) {
-              throw new Error("Maintenance job failed to replace every claimed chunk");
-            }
+            ),
+            statement<{ status: "succeeded" | null }>(
+              "SELECT lore.finish_memory_embedding_job($1, $2, NULL, $3) AS status",
+              [claimed.id, leaseToken, 1],
+            ),
+          ]);
+          if (lockedMemory.rows[0]?.locked !== true) {
+            throw new Error("Maintenance job Memory was deleted before completion");
           }
-          const finished = await transaction.query<{ status: "succeeded" | null }>(
-            `SELECT lore.finish_memory_embedding_job($1, $2, NULL, $3) AS status`,
-            [claimed.id, leaseToken, 1],
-          );
+          if (inserted.rows.length !== chunks.length) {
+            throw new Error("Maintenance job failed to replace every claimed chunk");
+          }
           if (finished.rows[0]?.status !== "succeeded") {
             throw new Error("Maintenance job lease was lost before success completion");
           }

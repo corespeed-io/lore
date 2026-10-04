@@ -1,4 +1,4 @@
-import type { PostgresTransaction } from "@corespeed/lore-core";
+import { type PostgresTransaction, statement } from "@corespeed/lore-core";
 import type { ActorContext } from "@/server/auth/actor-context";
 import { DomainError } from "@/server/errors";
 
@@ -46,11 +46,9 @@ function actorIdentity(actor: ActorContext): { id: string; kind: "agent" | "user
   return actor.agentId ? { id: actor.agentId, kind: "agent" } : { id: actor.userId, kind: "user" };
 }
 
-async function installRequestId(
-  transaction: PostgresTransaction,
-  requestId: string,
-): Promise<void> {
-  await transaction.query("SELECT set_config('lore.request_id', $1, true)", [requestId]);
+/** The request id travels with the transaction's next statement; no round trip of its own. */
+function installRequestId(transaction: PostgresTransaction, requestId: string): void {
+  transaction.setLocal({ "lore.request_id": requestId });
 }
 
 export async function beginMutation<Result>(
@@ -58,49 +56,49 @@ export async function beginMutation<Result>(
   actor: ActorContext,
   request?: IdempotencyRequest,
 ): Promise<MutationClaim<Result>> {
-  if (!request) {
-    const requestId = crypto.randomUUID();
-    await installRequestId(transaction, requestId);
-    return { requestId };
-  }
+  // A fresh id is the request id unless an expired key is reclaimed or replayed.
+  const requestId = crypto.randomUUID();
+  installRequestId(transaction, requestId);
+  if (!request) return { requestId };
 
   const identity = actorIdentity(actor);
-  const requestId = crypto.randomUUID();
-  const inserted = await transaction.query<{ id: string }>(
-    `INSERT INTO request_idempotency_records (
-       id, workspace_id, actor_user_id, actor_kind, actor_id,
-       operation, idempotency_key, request_sha256
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     ON CONFLICT (workspace_id, actor_kind, actor_id, operation, idempotency_key)
-       DO NOTHING
-     RETURNING id`,
-    [
-      requestId,
-      actor.workspaceId,
-      actor.userId,
-      identity.kind,
-      identity.id,
-      request.operation,
-      request.key,
-      request.requestHash,
-    ],
-  );
-  if (inserted.rows[0]) {
-    await installRequestId(transaction, requestId);
-    return { requestId };
-  }
+  // The claim and the lookup share one round trip. The lookup runs after the
+  // insert, so it finds this request's own row when the insert claimed the key,
+  // and otherwise the row that holds it, locked until this transaction ends.
+  const [inserted, existing] = await transaction.batch([
+    statement<{ id: string }>(
+      `INSERT INTO request_idempotency_records (
+         id, workspace_id, actor_user_id, actor_kind, actor_id,
+         operation, idempotency_key, request_sha256
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (workspace_id, actor_kind, actor_id, operation, idempotency_key)
+         DO NOTHING
+       RETURNING id`,
+      [
+        requestId,
+        actor.workspaceId,
+        actor.userId,
+        identity.kind,
+        identity.id,
+        request.operation,
+        request.key,
+        request.requestHash,
+      ],
+    ),
+    statement<IdempotencyRow>(
+      `SELECT id, request_sha256, status, response_body, expires_at
+       FROM request_idempotency_records
+       WHERE workspace_id = $1
+         AND actor_kind = $2
+         AND actor_id = $3
+         AND operation = $4
+         AND idempotency_key = $5
+       FOR UPDATE`,
+      [actor.workspaceId, identity.kind, identity.id, request.operation, request.key],
+    ),
+  ]);
+  if (inserted.rows[0]) return { requestId };
 
-  const existing = await transaction.query<IdempotencyRow>(
-    `SELECT id, request_sha256, status, response_body, expires_at
-     FROM request_idempotency_records
-     WHERE workspace_id = $1
-       AND actor_kind = $2
-       AND actor_id = $3
-       AND operation = $4
-       AND idempotency_key = $5
-     FOR UPDATE`,
-    [actor.workspaceId, identity.kind, identity.id, request.operation, request.key],
-  );
   const row = existing.rows[0];
   if (!row) throw new Error("Idempotency record became unavailable");
 
@@ -122,7 +120,7 @@ export async function beginMutation<Result>(
        WHERE id = $1`,
       [row.id, request.requestHash],
     );
-    await installRequestId(transaction, row.id);
+    installRequestId(transaction, row.id);
     return { requestId: row.id };
   }
 
@@ -134,7 +132,7 @@ export async function beginMutation<Result>(
   if (row.status !== "completed" || row.response_body === null) {
     throw new Error("Idempotent mutation did not reach a terminal state");
   }
-  await installRequestId(transaction, row.id);
+  installRequestId(transaction, row.id);
   return { requestId: row.id, replay: row.response_body as Result };
 }
 
@@ -185,25 +183,38 @@ export async function completeMutation(
   outcome: MutationOutcome,
   body: ReplayBody,
   idempotent: boolean,
+  options: { commit?: boolean } = {},
 ): Promise<void> {
   if (!idempotent) return;
-  const completed = await transaction.query<{ id: string }>(
-    `UPDATE request_idempotency_records
-     SET status = 'completed',
-         response_status = $2,
-         response_body = $3::jsonb,
-         subject_memory_id = $4,
-         subject_proposal_id = $5,
-         proposal_target_memory_id = $6,
-         proposal_accepted_memory_id = $7,
-         subject_episode_id = $8,
-         completed_at = now()
-     WHERE id = $1
-       AND status = 'in_progress'
-     RETURNING id`,
-    [requestId, LEGACY_RESPONSE_STATUS[outcome], JSON.stringify(body), ...replaySubjects(body)],
+  // With `commit`, COMMIT travels with the completion, so the guard must fail inside
+  // the statement: a ledger row this request no longer holds raises (22012) and the
+  // transaction ends in ROLLBACK instead of committing a key stuck in progress.
+  const [completed] = await transaction.batch(
+    [
+      statement<{ id: string | null }>(
+        `WITH completed AS (
+           UPDATE request_idempotency_records
+           SET status = 'completed',
+               response_status = $2,
+               response_body = $3::jsonb,
+               subject_memory_id = $4,
+               subject_proposal_id = $5,
+               proposal_target_memory_id = $6,
+               proposal_accepted_memory_id = $7,
+               subject_episode_id = $8,
+               completed_at = now()
+           WHERE id = $1
+             AND status = 'in_progress'
+           RETURNING id
+         )
+         SELECT (SELECT id FROM completed) AS id,
+                1 / (SELECT count(*) FROM completed)::integer AS guard`,
+        [requestId, LEGACY_RESPONSE_STATUS[outcome], JSON.stringify(body), ...replaySubjects(body)],
+      ),
+    ],
+    { commit: options.commit === true },
   );
-  if (!completed.rows[0]) throw new Error("Idempotency record completion failed");
+  if (!completed.rows[0]?.id) throw new Error("Idempotency record completion failed");
 }
 
 export function canonicalJson(value: unknown): string {

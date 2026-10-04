@@ -1,10 +1,11 @@
 import { expect, test } from "vitest";
 import type { EmbeddingProvider } from "./capabilities";
 import {
+  type ManagedTransactionDriver,
   type MemoryStorageContext,
+  managedTransactionDatabase,
   type PostgresDatabase,
   type PostgresTransaction,
-  transactionModes,
 } from "./db";
 import { createMemoryMaintenanceModule } from "./maintenance";
 import { createMemoryModule, type MemoryScope } from "./memory";
@@ -26,7 +27,7 @@ export { CORE_SCHEMA_CONTRACT, type SchemaContractGroupName } from "./schema-con
  * they resolve through search_path as the engine's own SQL does.
  */
 export async function missingSchemaContract(
-  transaction: PostgresTransaction,
+  transaction: Pick<PostgresTransaction, "query">,
   groups: readonly SchemaContractGroupName[],
 ): Promise<string[]> {
   const missing: string[] = [];
@@ -78,7 +79,10 @@ export async function missingSchemaContract(
   return missing;
 }
 
-async function enumLabels(transaction: PostgresTransaction, type: string): Promise<string[]> {
+async function enumLabels(
+  transaction: Pick<PostgresTransaction, "query">,
+  type: string,
+): Promise<string[]> {
   const result = await transaction.query<{ label: string }>(
     "SELECT enumlabel AS label FROM pg_enum WHERE enumtypid = to_regtype($1)",
     [type],
@@ -87,7 +91,7 @@ async function enumLabels(transaction: PostgresTransaction, type: string): Promi
 }
 
 async function missingTableContract(
-  transaction: PostgresTransaction,
+  transaction: Pick<PostgresTransaction, "query">,
   table: string,
   contract: TableContract,
 ): Promise<string[]> {
@@ -188,19 +192,14 @@ async function missingTableContract(
  * transaction initialization.
  */
 export function testDatabase(
-  postgres: PostgresDatabase,
-  initializeTransaction: (transaction: PostgresTransaction) => Promise<void>,
+  postgres: ManagedTransactionDriver,
+  initializeTransaction: (transaction: PostgresTransaction) => void | Promise<void>,
+  observe?: (sql: string) => void,
 ): PostgresDatabase {
-  return {
-    // PGlite begins its own transaction, so the modes are its first statement.
-    transaction: (use, options) =>
-      postgres.transaction(async (transaction) => {
-        const modes = transactionModes(options);
-        if (modes) await transaction.query(`SET TRANSACTION ${modes}`);
-        await initializeTransaction(transaction);
-        return use(transaction);
-      }),
-  };
+  return managedTransactionDatabase(postgres, {
+    initialize: initializeTransaction,
+    ...(observe ? { observe } : {}),
+  });
 }
 
 /** Deterministic, dependency-free embedding provider for contract tests. */

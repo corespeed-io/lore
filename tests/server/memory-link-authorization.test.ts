@@ -1,5 +1,5 @@
 import type { PostgresDatabase, PostgresTransaction } from "@corespeed/lore-core";
-import { MEMORY_LINK_LIMITS } from "@corespeed/lore-core";
+import { MEMORY_LINK_LIMITS, transactionThrough } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
@@ -370,7 +370,8 @@ test("a source made private keeps its owner's authority and hides the Link from 
 });
 
 /**
- * Run `interleave` inside the Link write's own transaction just before `statement`,
+ * Run `interleave` inside the Link write's own transaction just before the statement
+ * matching `statement` (the new-Link insert is the data-modifying CTE behind the counts),
  * which is where a concurrent READ COMMITTED writer's commit becomes visible. PGlite
  * has one session, so a real concurrent commit cannot be reproduced here.
  */
@@ -380,14 +381,16 @@ function interleaved(
   interleave: (transaction: PostgresTransaction) => Promise<void>,
 ): PostgresDatabase {
   return {
-    transaction: (use) =>
-      database.transaction((transaction) =>
-        use({
-          async query<Row>(sql: string, params?: unknown[]) {
-            if (statement.test(sql)) await interleave(transaction);
-            return transaction.query<Row>(sql, params);
-          },
-        }),
+    transaction: (use, options) =>
+      database.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, async <Row>(sql: string, params?: unknown[]) => {
+              if (statement.test(sql)) await interleave(transaction);
+              return transaction.query<Row>(sql, params);
+            }),
+          ),
+        options,
       ),
   };
 }
@@ -395,13 +398,13 @@ function interleaved(
 test("a target made private after the lock but before the insert reads as missing", async () => {
   const { context, ids } = await fixture();
   const racing = createMemoryGraphModule(
-    interleaved(context.database, /^\s*INSERT INTO memory_links/, async (transaction) => {
+    interleaved(context.database, /INSERT INTO memory_links/, async (transaction) => {
       // Alice's scope change commits between Bob's endpoint check and his insert.
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       await transaction.query("UPDATE memories SET scope = 'private' WHERE id = $1", [
         ids.aliceShared,
       ]);
-      await installActorContext(transaction, context.bob);
+      installActorContext(transaction, context.bob);
     }),
   );
 
@@ -419,11 +422,11 @@ test("a target made private after the read but before the update reads as missin
     interleaved(context.database, /^\s*UPDATE memory_links/, async (transaction) => {
       // Alice's scope change commits between Bob's locked read and his update, which
       // RLS then filters to zero rows without an error.
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       await transaction.query("UPDATE memories SET scope = 'private' WHERE id = $1", [
         ids.aliceShared,
       ]);
-      await installActorContext(transaction, context.bob);
+      installActorContext(transaction, context.bob);
     }),
   );
 
@@ -445,19 +448,19 @@ test("a Link hidden from the first read by a flickering target is replaced, not 
   await link(graph, context.bob, ids.bobShared, ids.aliceShared);
   const setTargetScope =
     (scope: "shared" | "private") => async (transaction: PostgresTransaction) => {
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       await transaction.query("UPDATE memories SET scope = $2 WHERE id = $1", [
         ids.aliceShared,
         scope,
       ]);
-      await installActorContext(transaction, context.bob);
+      installActorContext(transaction, context.bob);
     };
   let hidden = false;
   const flickering = createMemoryGraphModule(
     // Alice makes the target private just before Bob's Link read, and shared again
     // just before his insert, so the insert finds the natural key already taken.
     interleaved(
-      interleaved(context.database, /^\s*INSERT INTO memory_links/, setTargetScope("shared")),
+      interleaved(context.database, /INSERT INTO memory_links/, setTargetScope("shared")),
       /FROM memory_links\s+WHERE[\s\S]*FOR UPDATE/,
       async (transaction) => {
         if (hidden) return;
@@ -483,7 +486,7 @@ test("a target deleted past the lock reads as missing, while any other failure s
   const { context, ids } = await fixture();
   const failing = (error: Error) =>
     createMemoryGraphModule(
-      interleaved(context.database, /^\s*INSERT INTO memory_links/, async () => {
+      interleaved(context.database, /INSERT INTO memory_links/, async () => {
         throw error;
       }),
     );

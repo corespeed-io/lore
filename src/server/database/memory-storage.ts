@@ -17,7 +17,7 @@ export function createMemoryStorage(
     database: {
       transaction: (use, options) =>
         database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           return use(transaction);
         }, options),
     },

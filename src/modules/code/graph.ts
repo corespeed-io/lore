@@ -176,7 +176,7 @@ export function createCodeDependencyGraphModule(
       }
 
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         let subject: CodeGraphLocator;
         let subjectSymbolKey: string | null = null;
         let subjectSymbolKeySuffix: string | null = null;

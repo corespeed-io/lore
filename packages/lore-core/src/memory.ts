@@ -1,7 +1,13 @@
 import { queryInRecordBatches } from "./batch";
 import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
-import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "./db";
-import { isPostgresAccessDenied } from "./db";
+import type {
+  MemoryStorageContext,
+  MemoryStorageScope,
+  PostgresBatchOptions,
+  PostgresStatement,
+  PostgresTransaction,
+} from "./db";
+import { isPostgresAccessDenied, statement } from "./db";
 import { MEMORY_CHUNKING_REVISION } from "./memory-chunking";
 import {
   MemoryContentValidationError,
@@ -82,6 +88,12 @@ type EmbeddingJobMemory = Pick<
 
 // Bounds one bulk job INSERT's JSON parameter; each job row is a few hundred bytes.
 const EMBEDDING_JOB_BATCH_SIZE = 5_000;
+
+/**
+ * Queue messages one committed transaction sends at most: ten Queue batches, like
+ * one sweep. A bulk import's remaining jobs are delivered by the sweep.
+ */
+const MAXIMUM_COMMIT_NOTIFICATIONS = 1_000;
 
 interface NormalizedContextGroupExpansion {
   groupMetadataKey: string;
@@ -352,8 +364,7 @@ async function embedRetrievalQueries(
   return embeddings;
 }
 
-async function searchOneQuery(input: {
-  transaction: PostgresTransaction;
+interface SearchStatementInput {
   storageScope: MemoryStorageScope;
   query: string;
   queryEmbedding: string | null;
@@ -370,8 +381,11 @@ async function searchOneQuery(input: {
   metadataFilter: Record<string, unknown> | null;
   excludedMemoryIds?: string[];
   embeddingProvider?: EmbeddingProvider | undefined;
-}): Promise<MemorySearchResult[]> {
-  const result = await input.transaction.query<SearchRow>(
+}
+
+/** One hybrid retrieval statement; independent queries can share a batch. */
+function searchStatement(input: SearchStatementInput): PostgresStatement<SearchRow> {
+  return statement<SearchRow>(
     `WITH simple_lexical_candidates AS (
        SELECT
          chunk.id AS chunk_id,
@@ -716,7 +730,10 @@ async function searchOneQuery(input: {
       cjkLexicalGrams(input.query),
     ],
   );
-  return result.rows.map((row) => ({
+}
+
+function searchResults(rows: readonly SearchRow[]): MemorySearchResult[] {
+  return rows.map((row) => ({
     memory: memoryFromRow(row),
     score: Number(row.score),
     evidence: row.evidence,
@@ -724,17 +741,17 @@ async function searchOneQuery(input: {
   }));
 }
 
-async function insertChunks(
-  transaction: PostgresTransaction,
+/**
+ * Insert a Memory's chunks in one statement; ordinals follow the chunk order.
+ * Vectors live in generation-scoped memory_chunk_embeddings, so no per-chunk
+ * embedding columns are written.
+ */
+function chunkInsertStatement(
   workspaceId: string,
   memoryId: string,
   chunks: readonly string[],
-): Promise<void> {
-  if (chunks.length === 0) return;
-  // One round trip while the caller holds the Memory row lock; ordinals follow
-  // the chunk order. Vectors live in generation-scoped memory_chunk_embeddings,
-  // so no per-chunk embedding columns are written.
-  await transaction.query(
+): PostgresStatement {
+  return statement(
     `INSERT INTO memory_chunks (
        id, workspace_id, memory_id, ordinal, content, chunking_revision
      )
@@ -750,41 +767,27 @@ async function insertChunks(
   );
 }
 
-/** The embedding generation for this provider identity, created on first use. */
-async function embeddingGenerationId(
-  transaction: PostgresTransaction,
+/**
+ * Queue an embedding job for `memory`, resolving (and on first use creating) the
+ * provider's generation in the same statement. With `onlyWhenStale`, the job is
+ * inserted only when some chunk lacks a vector in that generation. The RETURNING
+ * list names no column, so it needs no SELECT privilege on this private table and
+ * reports exactly whether this statement inserted the job.
+ */
+function embeddingJobStatement(
+  memory: EmbeddingJobMemory,
+  jobId: string,
   embeddingProvider: EmbeddingProvider,
-): Promise<string> {
-  const generation = await transaction.query<{ id: string }>(
-    `SELECT id
-     FROM lore.ensure_embedding_generation($1, $2, $3, $4)`,
-    [
-      embeddingProvider.provider,
-      embeddingProvider.model,
-      embeddingProvider.dimensions,
-      embeddingProvider.revision,
-    ],
-  );
-  const generationId = generation.rows[0]?.id;
-  if (!generationId) throw new Error("Embedding generation could not be resolved");
-  return generationId;
-}
-
-async function enqueueEmbeddingJob(
-  transaction: PostgresTransaction,
-  memory: MemoryRow,
-  embeddingProvider: EmbeddingProvider,
-  onlyWhenStale = false,
-): Promise<string | null> {
-  const generationId = await embeddingGenerationId(transaction, embeddingProvider);
-  const jobId = crypto.randomUUID();
-  const inserted = await transaction.query<{ inserted: boolean }>(
+  onlyWhenStale: boolean,
+): PostgresStatement<{ inserted: boolean }> {
+  return statement<{ inserted: boolean }>(
     `INSERT INTO memory_embedding_jobs (
        id, workspace_id, memory_id, owner_user_id, memory_scope,
        memory_version, embedding_provider, embedding_model, embedding_revision,
        generation_id
      )
-     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $11
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, generation.id
+     FROM lore.ensure_embedding_generation($7, $8, $11, $9) generation
      WHERE NOT $10::boolean
         OR EXISTS (
           SELECT 1
@@ -794,7 +797,7 @@ async function enqueueEmbeddingJob(
             AND NOT EXISTS (
               SELECT 1
               FROM memory_chunk_embeddings embedded
-              WHERE embedded.generation_id = $11
+              WHERE embedded.generation_id = generation.id
                 AND embedded.chunk_id = chunk.id
             )
         )
@@ -810,16 +813,9 @@ async function enqueueEmbeddingJob(
       embeddingProvider.model,
       embeddingProvider.revision,
       onlyWhenStale,
-      generationId,
+      embeddingProvider.dimensions,
     ],
   );
-  // The request role deliberately holds INSERT but not SELECT on this private
-  // table. A RETURNING list that names no column needs no SELECT privilege and
-  // applies no SELECT policy, so it reports exactly the row this INSERT wrote
-  // without reading the table. Return the id only for an inserted job: a stale
-  // check that inserted nothing yields null, and every non-null id is a real
-  // job worth a maintenance notification.
-  return inserted.rows.length > 0 ? jobId : null;
 }
 
 /** A batch record's chunks; a content refusal names the record that broke the rule. */
@@ -877,32 +873,43 @@ export interface MemoryMutationPrimitivesOptions {
  * transactions (lore's Memory Proposals review is the canonical example).
  * Callers own the surrounding transaction, storage access policy,
  * authorization checks, and idempotency bookkeeping.
+ *
+ * Each single-Memory primitive sends its writes as one final batch. With
+ * `{ commit: true }` that batch also commits the transaction, saving the host a
+ * round trip, and nothing may run in the transaction afterwards.
  */
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
   const defaultMemoryScope = options.defaultMemoryScope ?? "shared";
   const embeddingProvider = options.embeddingProvider;
   const maintenanceNotifier = options.maintenanceNotifier;
 
-  function notifyMaintenance(jobId: string | null): void {
-    if (!jobId || !maintenanceNotifier) return;
-    try {
-      maintenanceNotifier.notify({ jobId });
-    } catch {
-      // The durable Postgres job remains discoverable by the maintenance sweep.
-      // A queue notification is only a latency optimization.
-    }
-  }
+  /**
+   * Jobs this primitive set queued, per transaction. The first one registers a
+   * single post-commit effect, so a host never sees job ids: a rolled-back
+   * transaction notifies nothing, and a committed one sends at most
+   * {@link MAXIMUM_COMMIT_NOTIFICATIONS} messages (the sweep finds the rest).
+   */
+  const queuedJobs = new WeakMap<PostgresTransaction, string[]>();
 
-  /** Notify many jobs after a bulk write, batched when the host transport supports it. */
-  function notifyMaintenanceMany(jobIds: readonly string[]): void {
+  function notifyAfterCommit(transaction: PostgresTransaction, jobIds: readonly string[]): void {
     if (jobIds.length === 0 || !maintenanceNotifier) return;
-    const messages = jobIds.map((jobId) => ({ jobId }));
-    try {
-      if (maintenanceNotifier.notifyMany) maintenanceNotifier.notifyMany(messages);
-      else for (const message of messages) maintenanceNotifier.notify(message);
-    } catch {
-      // As above: the sweep still discovers every durable job.
+    let queued = queuedJobs.get(transaction);
+    if (!queued) {
+      const jobs: string[] = [];
+      queued = jobs;
+      queuedJobs.set(transaction, jobs);
+      transaction.afterCommit(() => {
+        const messages = jobs.slice(0, MAXIMUM_COMMIT_NOTIFICATIONS).map((jobId) => ({ jobId }));
+        try {
+          if (maintenanceNotifier.notifyMany) maintenanceNotifier.notifyMany(messages);
+          else for (const message of messages) maintenanceNotifier.notify(message);
+        } catch {
+          // The durable Postgres job remains discoverable by the maintenance sweep.
+          // A queue notification is only a latency optimization.
+        }
+      });
     }
+    queued.push(...jobIds);
   }
 
   async function insertMemoryInTransaction(
@@ -910,12 +917,13 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     storageScope: MemoryStorageScope,
     input: RememberMemory,
     createdByAgentId: string | null = storageScope.sourceId ?? null,
-  ): Promise<{ jobId: string | null; memory: Memory }> {
+    batchOptions: PostgresBatchOptions = {},
+  ): Promise<{ memory: Memory }> {
     const { chunks } = prepareMemoryContent(input.content);
     const scope = input.scope === undefined ? defaultMemoryScope : validateMemoryScope(input.scope);
     const metadata = input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata);
     const id = crypto.randomUUID();
-    const result = await transaction.query<MemoryRow>(
+    const memoryInsert = statement<MemoryRow>(
       `INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
@@ -930,13 +938,39 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         JSON.stringify(metadata),
       ],
     );
-    const memory = result.rows[0];
+    const chunkInsert = chunkInsertStatement(storageScope.partitionId, id, chunks);
+    // The Memory, its chunks, and its first embedding job share one round trip.
+    // A new Memory always starts at version 1, which the job is fenced by.
+    if (!embeddingProvider) {
+      const [inserted] = await transaction.batch([memoryInsert, chunkInsert], batchOptions);
+      const memory = inserted.rows[0];
+      if (!memory) throw new Error("Memory insert returned no row");
+      return { memory: memoryFromRow(memory) };
+    }
+    const jobId = crypto.randomUUID();
+    const [inserted, , job] = await transaction.batch(
+      [
+        memoryInsert,
+        chunkInsert,
+        embeddingJobStatement(
+          {
+            id,
+            workspace_id: storageScope.partitionId,
+            owner_user_id: storageScope.ownerId,
+            scope,
+            version: 1,
+          },
+          jobId,
+          embeddingProvider,
+          false,
+        ),
+      ],
+      batchOptions,
+    );
+    const memory = inserted.rows[0];
     if (!memory) throw new Error("Memory insert returned no row");
-    await insertChunks(transaction, storageScope.partitionId, id, chunks);
-    const jobId = embeddingProvider
-      ? await enqueueEmbeddingJob(transaction, memory, embeddingProvider)
-      : null;
-    return { memory: memoryFromRow(memory), jobId };
+    if (job.rows.length > 0) notifyAfterCommit(transaction, [jobId]);
+    return { memory: memoryFromRow(memory) };
   }
 
   async function updateMemoryInTransaction(
@@ -945,9 +979,13 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     id: string,
     input: UpdateMemory,
     expectedVersion?: number,
-  ): Promise<{ chunksChanged: boolean; jobId: string | null; memory: Memory } | null> {
+    batchOptions: PostgresBatchOptions = {},
+  ): Promise<{ chunksChanged: boolean; memory: Memory } | null> {
     if (input.scope !== undefined) validateMemoryScope(input.scope);
     if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
+    // Under RLS a locking read also applies the update policy's condition, so a
+    // Memory this store may read but not write reads as absent before any version
+    // check.
     const current = await transaction.query<MemoryRow>(
       `SELECT *
        FROM memories
@@ -964,7 +1002,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const contentToEmbed =
       input.content ?? (input.scope === undefined ? null : currentMemory.content);
     const chunks = contentToEmbed === null ? null : prepareMemoryContent(contentToEmbed).chunks;
-    const result = await transaction.query<MemoryRow>(
+    const update = statement<MemoryRow>(
       `UPDATE memories
        SET content = COALESCE($3::text, content),
            scope = COALESCE($4::memory_scope, scope),
@@ -984,37 +1022,56 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         currentMemory.version,
       ],
     );
-    const updated = result.rows[0];
-    if (!updated) {
-      return null;
-    }
+    // The row is locked, so everything after the read is known and shares one
+    // round trip: the update, the chunk rewrite, and the job for the new version.
+    const tail: PostgresStatement<unknown>[] = [];
     if (chunks) {
-      await transaction.query(
-        "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
-        [storageScope.partitionId, id],
+      tail.push(
+        statement("DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2", [
+          storageScope.partitionId,
+          id,
+        ]),
+        chunkInsertStatement(storageScope.partitionId, id, chunks),
       );
-      await insertChunks(transaction, storageScope.partitionId, id, chunks);
     }
-    const jobId = embeddingProvider
-      ? await enqueueEmbeddingJob(transaction, updated, embeddingProvider, chunks === null)
-      : null;
-    return { memory: memoryFromRow(updated), jobId, chunksChanged: chunks !== null };
+    const jobId = crypto.randomUUID();
+    if (embeddingProvider) {
+      tail.push(
+        embeddingJobStatement(
+          {
+            id,
+            workspace_id: currentMemory.workspace_id,
+            owner_user_id: currentMemory.owner_user_id,
+            scope: input.scope ?? currentMemory.scope,
+            version: currentMemory.version + 1,
+          },
+          jobId,
+          embeddingProvider,
+          chunks === null,
+        ),
+      );
+    }
+    const [updated, ...rest] = await transaction.batch([update, ...tail], batchOptions);
+    const updatedMemory = updated.rows[0];
+    if (!updatedMemory) return null;
+    if (embeddingProvider && (rest.at(-1)?.rows.length ?? 0) > 0) {
+      notifyAfterCommit(transaction, [jobId]);
+    }
+    return { memory: memoryFromRow(updatedMemory), chunksChanged: chunks !== null };
   }
 
   /**
    * Enqueue first-embedding jobs for Memories a host inserted, with their chunks,
    * in this transaction without {@link insertMemoryInTransaction} (for example a
    * bounded bulk import that batches its row inserts). Every listed Memory must be
-   * new, so each allocated job id is guaranteed to exist; pass them to
-   * `notifyMaintenance` after commit. Returns no ids without an embedding provider.
+   * new. The jobs' queue notifications go out after this transaction commits. Does
+   * nothing without an embedding provider.
    */
   async function enqueueEmbeddingJobsInTransaction(
     transaction: PostgresTransaction,
     memories: readonly EmbeddingJobMemory[],
-  ): Promise<string[]> {
-    if (!embeddingProvider || memories.length === 0) return [];
-    const generationId = await embeddingGenerationId(transaction, embeddingProvider);
-    const jobIds: string[] = [];
+  ): Promise<void> {
+    if (!embeddingProvider || memories.length === 0) return;
     for (let offset = 0; offset < memories.length; offset += EMBEDDING_JOB_BATCH_SIZE) {
       const jobs = memories.slice(offset, offset + EMBEDDING_JOB_BATCH_SIZE).map((memory) => ({
         id: crypto.randomUUID(),
@@ -1031,57 +1088,70 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
            generation_id
          )
          SELECT job.id, job.workspace_id, job.memory_id, job.owner_user_id, job.memory_scope,
-                job.memory_version, $2, $3, $4, $5
-         FROM jsonb_to_recordset($1::jsonb) AS job(
-           id uuid, workspace_id uuid, memory_id uuid, owner_user_id uuid,
-           memory_scope memory_scope, memory_version integer
-         )`,
+                job.memory_version, $2, $3, $4, generation.id
+         FROM lore.ensure_embedding_generation($2, $3, $5, $4) generation,
+              jsonb_to_recordset($1::jsonb) AS job(
+                id uuid, workspace_id uuid, memory_id uuid, owner_user_id uuid,
+                memory_scope memory_scope, memory_version integer
+              )`,
         [
           JSON.stringify(jobs),
           embeddingProvider.provider,
           embeddingProvider.model,
           embeddingProvider.revision,
-          generationId,
+          embeddingProvider.dimensions,
         ],
       );
-      jobIds.push(...jobs.map((job) => job.id));
+      notifyAfterCommit(
+        transaction,
+        jobs.map((job) => job.id),
+      );
     }
-    return jobIds;
   }
 
   /**
-   * Delete one Memory under its row lock. Returns false when the store shows no
-   * such Memory; throws MemoryVersionConflictError on a stale expected version.
-   * Chunks, vectors, jobs, and Links go with it through the schema's cascades.
-   * A host that already read the row's version under `FOR UPDATE` in this
-   * transaction passes it as `lockedVersion`, and the engine skips its own read.
+   * Delete one Memory. Returns false when the store shows no such Memory, or one it
+   * may read but not write (RLS skips it in the DELETE and in the locking read
+   * alike, so write authority still precedes the version check). Throws
+   * MemoryVersionConflictError on a stale expected version. Chunks, vectors, jobs,
+   * and Links go with it through the schema's cascades. Under an expected version
+   * the delete and a locking version read share one round trip: the read finds
+   * nothing once the delete succeeded, and the current version after a miss.
    */
   async function forgetMemoryInTransaction(
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     id: string,
-    versions: { expectedVersion?: number | undefined; lockedVersion?: number | undefined } = {},
+    options: { expectedVersion?: number | undefined } & PostgresBatchOptions = {},
   ): Promise<boolean> {
-    const { expectedVersion, lockedVersion } = versions;
-    let version = lockedVersion;
-    if (version === undefined) {
-      const current = await transaction.query<{ version: number }>(
-        `SELECT version FROM memories
-         WHERE id = $1 AND workspace_id = $2
-         FOR UPDATE`,
-        [id, storageScope.partitionId],
-      );
-      version = current.rows[0]?.version;
-    }
-    if (version === undefined) return false;
-    if (expectedVersion !== undefined && version !== expectedVersion) {
-      throw new MemoryVersionConflictError(expectedVersion, version);
-    }
-    const result = await transaction.query<{ id: string }>(
-      `DELETE FROM memories WHERE id = $1 AND workspace_id = $2 AND version = $3 RETURNING id`,
-      [id, storageScope.partitionId, version],
+    const { expectedVersion } = options;
+    const [deleted, current] = await transaction.batch(
+      [
+        statement<{ id: string }>(
+          `DELETE FROM memories
+           WHERE id = $1
+             AND workspace_id = $2
+             AND ($3::integer IS NULL OR version = $3::integer)
+           RETURNING id`,
+          [id, storageScope.partitionId, expectedVersion ?? null],
+        ),
+        ...(expectedVersion === undefined
+          ? []
+          : [
+              statement<{ version: number }>(
+                `SELECT version FROM memories
+                 WHERE id = $1 AND workspace_id = $2
+                 FOR UPDATE`,
+                [id, storageScope.partitionId],
+              ),
+            ]),
+      ],
+      { commit: options.commit === true },
     );
-    return result.rows.length === 1;
+    if (deleted.rows.length === 1) return true;
+    const version = current?.rows[0]?.version;
+    if (expectedVersion === undefined || version === undefined) return false;
+    throw new MemoryVersionConflictError(expectedVersion, version);
   }
 
   /**
@@ -1094,7 +1164,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     transaction: PostgresTransaction,
     storageScope: MemoryStorageScope,
     records: readonly InsertMemoryRecord[],
-  ): Promise<{ jobIds: string[]; memories: Array<{ id: string; version: number }> }> {
+  ): Promise<{ memories: Array<{ id: string; version: number }> }> {
     const prepared = records.map((record, index) => ({
       // PostgreSQL returns uuid in lowercase; match RETURNING rows in that form.
       id: record.id.toLowerCase(),
@@ -1139,7 +1209,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       if (version === undefined) throw new Error("A batch-inserted Memory returned no row");
       return { id, scope, version };
     });
-    const jobIds = await enqueueEmbeddingJobsInTransaction(
+    await enqueueEmbeddingJobsInTransaction(
       transaction,
       memories.map(({ id, scope, version }) => ({
         id,
@@ -1149,7 +1219,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         version,
       })),
     );
-    return { jobIds, memories: memories.map(({ id, version }) => ({ id, version })) };
+    return { memories: memories.map(({ id, version }) => ({ id, version })) };
   }
 
   return {
@@ -1157,8 +1227,6 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     forgetMemoryInTransaction,
     insertMemoriesInTransaction,
     insertMemoryInTransaction,
-    notifyMaintenance,
-    notifyMaintenanceMany,
     updateMemoryInTransaction,
   };
 }
@@ -1202,20 +1270,15 @@ export function createMemoryModule(
     0,
     Math.min(options.semanticDistanceThreshold ?? 0.5, 2),
   );
-  const {
-    forgetMemoryInTransaction,
-    insertMemoryInTransaction,
-    notifyMaintenance,
-    updateMemoryInTransaction,
-  } = createMemoryMutationPrimitives(options);
+  const { forgetMemoryInTransaction, insertMemoryInTransaction, updateMemoryInTransaction } =
+    createMemoryMutationPrimitives(options);
 
   return {
     async remember(input: RememberMemory): Promise<Memory> {
       try {
         const created = await database.transaction((transaction) =>
-          insertMemoryInTransaction(transaction, storageScope, input),
+          insertMemoryInTransaction(transaction, storageScope, input, undefined, { commit: true }),
         );
-        notifyMaintenance(created.jobId);
         return created.memory;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
@@ -1228,13 +1291,19 @@ export function createMemoryModule(
     },
 
     async retrieve(id: string): Promise<Memory | null> {
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<MemoryRow>(
-          `SELECT ${memorySelectColumns()} FROM memories WHERE id = $1 AND workspace_id = $2`,
-          [id, storageScope.partitionId],
-        );
-        return result.rows[0] ? memoryFromRow(result.rows[0]) : null;
-      });
+      // One round trip: the read and COMMIT travel together with BEGIN and setup.
+      const [result] = await database.transaction((transaction) =>
+        transaction.batch(
+          [
+            statement<MemoryRow>(
+              `SELECT ${memorySelectColumns()} FROM memories WHERE id = $1 AND workspace_id = $2`,
+              [id, storageScope.partitionId],
+            ),
+          ],
+          { commit: true },
+        ),
+      );
+      return result.rows[0] ? memoryFromRow(result.rows[0]) : null;
     },
 
     async update(
@@ -1250,11 +1319,10 @@ export function createMemoryModule(
         return this.retrieve(id);
       }
       const updated = await database.transaction((transaction) =>
-        updateMemoryInTransaction(transaction, storageScope, id, input, options.expectedVersion),
+        updateMemoryInTransaction(transaction, storageScope, id, input, options.expectedVersion, {
+          commit: true,
+        }),
       );
-      // A job id is non-null only when this update inserted a job, including a
-      // metadata-only update whose chunks still lack current-generation vectors.
-      notifyMaintenance(updated?.jobId ?? null);
       return updated?.memory ?? null;
     },
 
@@ -1262,6 +1330,7 @@ export function createMemoryModule(
       return database.transaction((transaction) =>
         forgetMemoryInTransaction(transaction, storageScope, id, {
           expectedVersion: options.expectedVersion,
+          commit: true,
         }),
       );
     },
@@ -1270,11 +1339,13 @@ export function createMemoryModule(
       const limit = memoryListLimit(input.limit);
       const offset = memoryListOffset(input.offset);
       validateReadFilters(input);
-      return database.transaction(async (transaction) => {
-        const result = await transaction.query<MemoryRow>(
-          // ORDER BY is qualified: a bare updated_at would name the text output
-          // column, sorting strings instead of reading memories_workspace_updated_idx.
-          `SELECT ${memorySelectColumns("memory")}
+      const [result] = await database.transaction((transaction) =>
+        transaction.batch(
+          [
+            statement<MemoryRow>(
+              // ORDER BY is qualified: a bare updated_at would name the text output
+              // column, sorting strings instead of reading memories_workspace_updated_idx.
+              `SELECT ${memorySelectColumns("memory")}
            FROM memories memory
            WHERE memory.workspace_id = $1
              AND ($4::memory_scope IS NULL OR memory.scope = $4::memory_scope)
@@ -1292,20 +1363,23 @@ export function createMemoryModule(
            ORDER BY memory.updated_at DESC, memory.id
            LIMIT $2
            OFFSET $3`,
-          [
-            storageScope.partitionId,
-            limit,
-            offset,
-            input.scope ?? null,
-            input.updatedAfter ?? null,
-            input.updatedBefore ?? null,
-            input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
-            input.cursor?.updatedAt ?? null,
-            input.cursor?.id ?? null,
+              [
+                storageScope.partitionId,
+                limit,
+                offset,
+                input.scope ?? null,
+                input.updatedAfter ?? null,
+                input.updatedBefore ?? null,
+                input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+                input.cursor?.updatedAt ?? null,
+                input.cursor?.id ?? null,
+              ],
+            ),
           ],
-        );
-        return result.rows.map(memoryFromRow);
-      });
+          { commit: true },
+        ),
+      );
+      return result.rows.map(memoryFromRow);
     },
 
     async search(input: SearchMemory): Promise<MemorySearchResult[]> {
@@ -1338,31 +1412,36 @@ export function createMemoryModule(
         queries,
         embeddingDimensions,
       );
+      const queryStatements = queries.map((plannedQuery, index) =>
+        searchStatement({
+          storageScope,
+          query: plannedQuery,
+          queryEmbedding: queryEmbeddings[index] ?? null,
+          embeddingDimensions,
+          entityAliasRecall,
+          candidateLimit,
+          resultLimit,
+          semanticDistanceThreshold,
+          evidenceNeighborChunks,
+          evidenceTopChunks,
+          scope,
+          updatedAfter,
+          updatedBefore,
+          metadataFilter,
+          embeddingProvider,
+        }),
+      );
+      // Every planned query is known up front, so they share one round trip. Without
+      // context-group expansion COMMIT joins them; expansion reads the fused order,
+      // which TypeScript decides, so it follows in the same transaction.
       let fusionResults: MemorySearchResult[] = await database.transaction(async (transaction) => {
-        const resultSets: MemorySearchResult[][] = [];
-        for (const [index, plannedQuery] of queries.entries()) {
-          resultSets.push(
-            await searchOneQuery({
-              transaction,
-              storageScope,
-              query: plannedQuery,
-              queryEmbedding: queryEmbeddings[index] ?? null,
-              embeddingDimensions,
-              entityAliasRecall,
-              candidateLimit,
-              resultLimit,
-              semanticDistanceThreshold,
-              evidenceNeighborChunks,
-              evidenceTopChunks,
-              scope,
-              updatedAfter,
-              updatedBefore,
-              metadataFilter,
-              embeddingProvider,
-            }),
-          );
-        }
-        const fused = fuseQueryResults(resultSets, resultLimit) as InternalMemorySearchResult[];
+        const resultSets = await transaction.batch(queryStatements, {
+          commit: !contextGroupExpansion,
+        });
+        const fused = fuseQueryResults(
+          resultSets.map((resultSet) => searchResults(resultSet.rows)),
+          resultLimit,
+        ) as InternalMemorySearchResult[];
         return contextGroupExpansion
           ? expandContextGroupResults({
               transaction,
@@ -1396,49 +1475,55 @@ export function createMemoryModule(
           [feedback.query],
           embeddingDimensions,
         );
-        const feedbackRead = await database.transaction(async (transaction) => {
-          const stillVisible = await transaction.query<{ id: string }>(
-            `SELECT id
-             FROM memories
-             WHERE workspace_id = $1
-               AND id = ANY($2::uuid[])
-               AND ($3::memory_scope IS NULL OR scope = $3::memory_scope)
-               AND ($4::timestamptz IS NULL OR updated_at >= $4::timestamptz)
-               AND ($5::timestamptz IS NULL OR updated_at < $5::timestamptz)
-               AND ($6::jsonb IS NULL OR metadata @> $6::jsonb)`,
+        // The visibility check and the round's query are independent, so the round
+        // is one round trip including COMMIT.
+        const [stillVisible, feedbackRows] = await database.transaction((transaction) =>
+          transaction.batch(
             [
-              storageScope.partitionId,
-              [...firstPassResults, ...feedbackPool].map((result) => result.memory.id),
-              scope,
-              updatedAfter,
-              updatedBefore,
-              metadataFilter ? JSON.stringify(metadataFilter) : null,
+              statement<{ id: string }>(
+                `SELECT id
+                 FROM memories
+                 WHERE workspace_id = $1
+                   AND id = ANY($2::uuid[])
+                   AND ($3::memory_scope IS NULL OR scope = $3::memory_scope)
+                   AND ($4::timestamptz IS NULL OR updated_at >= $4::timestamptz)
+                   AND ($5::timestamptz IS NULL OR updated_at < $5::timestamptz)
+                   AND ($6::jsonb IS NULL OR metadata @> $6::jsonb)`,
+                [
+                  storageScope.partitionId,
+                  [...firstPassResults, ...feedbackPool].map((result) => result.memory.id),
+                  scope,
+                  updatedAfter,
+                  updatedBefore,
+                  metadataFilter ? JSON.stringify(metadataFilter) : null,
+                ],
+              ),
+              searchStatement({
+                storageScope,
+                query: feedback.query,
+                queryEmbedding: feedbackEmbedding ?? null,
+                embeddingDimensions,
+                entityAliasRecall,
+                candidateLimit,
+                resultLimit,
+                semanticDistanceThreshold,
+                evidenceNeighborChunks,
+                evidenceTopChunks,
+                scope,
+                updatedAfter,
+                updatedBefore,
+                metadataFilter,
+                excludedMemoryIds: [...feedbackSourceIds],
+                embeddingProvider,
+              }),
             ],
-          );
-          const results = await searchOneQuery({
-            transaction,
-            storageScope,
-            query: feedback.query,
-            queryEmbedding: feedbackEmbedding ?? null,
-            embeddingDimensions,
-            entityAliasRecall,
-            candidateLimit,
-            resultLimit,
-            semanticDistanceThreshold,
-            evidenceNeighborChunks,
-            evidenceTopChunks,
-            scope,
-            updatedAfter,
-            updatedBefore,
-            metadataFilter,
-            excludedMemoryIds: [...feedbackSourceIds],
-            embeddingProvider,
-          });
-          return {
-            results,
-            visibleMemoryIds: new Set(stillVisible.rows.map((row) => row.id)),
-          };
-        });
+            { commit: true },
+          ),
+        );
+        const feedbackRead = {
+          results: searchResults(feedbackRows.rows),
+          visibleMemoryIds: new Set(stillVisible.rows.map((row) => row.id)),
+        };
         const isStillVisible = (result: MemorySearchResult) =>
           feedbackRead.visibleMemoryIds.has(result.memory.id);
         firstPassResults = firstPassResults.filter(isStillVisible);

@@ -58,7 +58,7 @@ test("Memory writes enqueue document embeddings without waiting for the provider
   expect(tasks).toEqual(["query", "document"]);
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     const result = await transaction.query<{
       embedding_provider: string;
       embedding_model: string;
@@ -479,7 +479,7 @@ test("request actors cannot inspect jobs and deleting a Memory cascades its job"
 
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       await transaction.query("SELECT id FROM memory_embedding_jobs");
     }),
   ).rejects.toMatchObject({ code: "42501" });

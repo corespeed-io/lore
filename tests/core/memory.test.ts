@@ -19,7 +19,7 @@ async function replaceMemoryChunks(
   chunks: string[],
 ): Promise<void> {
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, actor);
+    installActorContext(transaction, actor);
     await transaction.query(
       "DELETE FROM memory_chunks WHERE workspace_id = $1 AND memory_id = $2",
       [actor.workspaceId, memoryId],
@@ -135,7 +135,7 @@ test("Memory chunking keeps pathological structured content within the derived c
 
   const memory = await memories.remember(testContext.alice, { content: fragmentedContent });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     const chunks = await transaction.query<{ chunking_revision: string; content: string }>(
       `SELECT content, chunking_revision
        FROM memory_chunks
@@ -246,7 +246,7 @@ test("Only the Memory owner can forget a Memory", async () => {
   await expect(memories.forget(testContext.alice, created.id)).resolves.toBe(true);
   await expect(memories.retrieve(testContext.alice, created.id)).resolves.toBeNull();
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query("SELECT id FROM memory_chunks WHERE memory_id = $1", [created.id]),
     ).resolves.toMatchObject({ rows: [] });
@@ -433,7 +433,7 @@ test("Changing Memory scope invalidates and rebuilds derived chunks", async () =
   });
   const chunkIds = async () =>
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       const result = await transaction.query<{ id: string }>(
         "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
         [created.id],
@@ -460,7 +460,7 @@ test("RLS denies direct access to another User's private Memory chunks", async (
   });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(
       transaction.query("SELECT id, content FROM memory_chunks WHERE memory_id = $1", [created.id]),
     ).resolves.toMatchObject({ rows: [] });

@@ -52,6 +52,8 @@ services:
       - "${LORE_BIND_ADDRESS:-127.0.0.1}:${LORE_PORT:-3000}:3000"
     environment:
       DATABASE_URL: postgres://lore_runtime:${LORE_DB_RUNTIME_PASSWORD:?Set LORE_DB_RUNTIME_PASSWORD in .env}@postgres:5432/lore
+      # Unset keeps pg pipelining on; 0 turns it off.
+      LORE_POSTGRES_PIPELINE: ${LORE_POSTGRES_PIPELINE:-}
       # No defaults: with AUTH_MODE and ALLOW_INSECURE unset, Lore fails closed and
       # rejects every request. Local no-auth access is an explicit .env opt-in.
       AUTH_MODE: ${AUTH_MODE:-}
@@ -140,6 +142,7 @@ services:
       # Unset keeps the worker default: one connection per embedding lane plus the
       # sweep and Code Index loops.
       LORE_MAINTENANCE_POOL_SIZE: ${LORE_MAINTENANCE_POOL_SIZE:-}
+      LORE_POSTGRES_PIPELINE: ${LORE_POSTGRES_PIPELINE:-}
       LORE_MAINTENANCE_CONCURRENCY: ${LORE_MAINTENANCE_CONCURRENCY:-1}
       LORE_MAINTENANCE_POLL_MS: ${LORE_MAINTENANCE_POLL_MS:-1000}
       LORE_MAINTENANCE_SWEEP_MS: ${LORE_MAINTENANCE_SWEEP_MS:-300000}

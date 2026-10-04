@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { type PostgresDatabase, transactionModes } from "@corespeed/lore-core";
+import { managedTransactionDatabase, type PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
@@ -58,16 +58,9 @@ try {
   );
   await postgres.exec("SET ROLE lore_app");
 
-  const database: PostgresDatabase = {
-    // PGlite begins its own transaction, so the requested modes are its first statement.
-    transaction: (use, options) =>
-      postgres.transaction(async (transaction) => {
-        const modes = transactionModes(options);
-        if (modes) await transaction.query(`SET TRANSACTION ${modes}`);
-        await transaction.query("SET LOCAL ROLE lore_app");
-        return use({ query: (sql, params) => transaction.query(sql, params) });
-      }),
-  };
+  const database: PostgresDatabase = managedTransactionDatabase(postgres, {
+    initialize: (transaction) => transaction.setLocal({ role: "lore_app" }),
+  });
   const alice: ActorContext = { workspaceId: VISIBLE_WORKSPACE_ID, userId: ALICE_USER_ID };
   const bob: ActorContext = { workspaceId: VISIBLE_WORKSPACE_ID, userId: BOB_USER_ID };
   const carol: ActorContext = {

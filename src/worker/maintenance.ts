@@ -9,7 +9,7 @@ import {
   createCodeIndexMaintenanceModule,
 } from "@/modules/code/indexing/maintenance";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createPostgresDatabase } from "@/server/database/postgres";
+import { createPostgresDatabase, postgresPipeline } from "@/server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
 import { registerLoreTelemetry } from "@/server/telemetry/register";
 import { observeOperation } from "@/server/telemetry/telemetry";
@@ -54,7 +54,10 @@ const database = createPostgresDatabase(
     connectionString,
     max: positiveInteger(process.env.LORE_MAINTENANCE_POOL_SIZE, workerConcurrency + 2),
   },
-  { role: "lore_maintenance" },
+  {
+    role: "lore_maintenance",
+    pipeline: postgresPipeline(process.env.LORE_POSTGRES_PIPELINE, true),
+  },
 );
 const maintenanceModules = embeddingProviders.map((embeddingProvider) =>
   createMemoryMaintenanceModule(database, {

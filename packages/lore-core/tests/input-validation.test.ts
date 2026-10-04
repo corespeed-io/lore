@@ -24,6 +24,7 @@ import {
   prepareMemoryContent,
   queryInRecordBatches,
   RECORD_BATCH_LIMITS,
+  transactionHandle,
   validateMemoryLink,
   validateMemoryMetadata,
 } from "../src/index";
@@ -60,14 +61,12 @@ const untouchedStorage: MemoryStorageContext = {
 describe("queryInRecordBatches", () => {
   function recordingTransaction() {
     const batches: Array<{ records: Array<{ n: number }>; parameters: unknown[] }> = [];
-    const transaction: PostgresTransaction = {
-      query: async <Row>(_sql: string, params: unknown[] = []) => {
-        const [json, ...parameters] = params;
-        const records = JSON.parse(json as string) as Array<{ n: number }>;
-        batches.push({ records, parameters });
-        return { rows: records.map((record) => ({ id: String(record.n) })) as Row[] };
-      },
-    };
+    const transaction: PostgresTransaction = transactionHandle(async (_sql, params) => {
+      const [json, ...parameters] = params;
+      const records = JSON.parse(json as string) as Array<{ n: number }>;
+      batches.push({ records, parameters });
+      return { rows: records.map((record) => ({ id: String(record.n) })) };
+    }).transaction;
     return { batches, transaction };
   }
 
@@ -303,12 +302,10 @@ describe("the engine validates before it writes", () => {
   /** A transaction that records every statement it is asked to run. */
   function watchedTransaction() {
     const statements: string[] = [];
-    const transaction: PostgresTransaction = {
-      query: async <Row>(sql: string) => {
-        statements.push(sql);
-        return { rows: [] as Row[] };
-      },
-    };
+    const transaction: PostgresTransaction = transactionHandle(async (sql) => {
+      statements.push(sql);
+      return { rows: [] };
+    }).transaction;
     return { statements, transaction };
   }
 

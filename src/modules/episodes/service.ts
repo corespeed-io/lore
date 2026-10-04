@@ -70,7 +70,7 @@ export function createObservationModule(database: PostgresDatabase) {
       const normalized = normalizedEpisode(input);
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const claim = await beginMutation<{ episode: Episode }>(
             transaction,
             actor,
@@ -152,7 +152,7 @@ export function createObservationModule(database: PostgresDatabase) {
     ): Promise<boolean> {
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const claim = await beginMutation<{ deleted: boolean }>(
             transaction,
             actor,

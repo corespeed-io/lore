@@ -1,4 +1,4 @@
-import { MemoryVersionConflictError } from "@corespeed/lore-core";
+import { MemoryVersionConflictError, transactionThrough } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { createCodeEvidenceModule } from "@/modules/code/evidence";
 import { createCodeIndexModule } from "@/modules/code/indexing/service";
@@ -72,7 +72,7 @@ test("Agent proposal remains private and non-canonical until its owner accepts i
     memories: [{ id: evidence.id }],
   });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     const events = await transaction.query<{ resource_id: string }>(
       "SELECT resource_id FROM memory_events ORDER BY sequence",
     );
@@ -304,7 +304,7 @@ test("Database review transition rejects a forged accepted receipt", async () =>
   });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query(
         `UPDATE memory_proposals
@@ -332,7 +332,7 @@ test("Database review transition rejects a forged accepted receipt", async () =>
     content: "Proposed canonical content",
   });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query(
         `UPDATE memory_proposals
@@ -403,14 +403,14 @@ test("Only the owner human can list or review an Agent proposal", async () => {
   await expect(memories.list(testContext.alice)).resolves.toEqual([]);
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, agentActor);
+    installActorContext(transaction, agentActor);
     await expect(
       transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposal.id]),
     ).resolves.toMatchObject({ rows: [] });
   });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     await expect(transaction.query("SELECT id FROM memory_proposals")).resolves.toMatchObject({
       rows: [],
     });
@@ -428,7 +428,7 @@ test("Deleting the submitting Agent preserves proposal content and actor kind", 
   });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await expect(
       transaction.query("UPDATE memory_proposals SET proposed_by_agent_id = NULL WHERE id = $1", [
         proposal.id,
@@ -526,16 +526,18 @@ test("Accepting an update locks its target Memory before the Proposal, like forg
   });
   const locks: string[] = [];
   const recording = createMemoryProposalsModule({
-    transaction: (use) =>
-      testContext.database.transaction((transaction) =>
-        use({
-          query: (sql, params) => {
-            if (/FOR UPDATE/.test(sql)) {
-              locks.push(/FROM memory_proposals/.test(sql) ? "proposal" : "memory");
-            }
-            return transaction.query(sql, params);
-          },
-        }),
+    transaction: (use, options) =>
+      testContext.database.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, (sql, params) => {
+              if (/FOR UPDATE/.test(sql)) {
+                locks.push(/FROM memory_proposals/.test(sql) ? "proposal" : "memory");
+              }
+              return transaction.query(sql, params);
+            }),
+          ),
+        options,
       ),
   });
 
@@ -649,7 +651,7 @@ test("Accepted update changes canonical content, chunks, and outbox in one trans
     version: original.version + 1,
   });
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     const chunks = await transaction.query<{ content: string }>(
       "SELECT content FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
       [original.id],
@@ -677,7 +679,7 @@ test("Accepting a metadata-only proposal preserves canonical chunks", async () =
     metadata: { state: "draft" },
   });
   const before = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     return transaction.query<{ id: string }>(
       "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
       [original.id],
@@ -692,7 +694,7 @@ test("Accepting a metadata-only proposal preserves canonical chunks", async () =
 
   const accepted = await memories.reviewProposal(testContext.alice, proposal.id, "accept");
   const after = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     return transaction.query<{ id: string }>(
       "SELECT id FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
       [original.id],
@@ -831,7 +833,7 @@ test("A read-only sibling Agent cannot submit or inspect another Agent proposal"
     memories.propose(readActor, { kind: "create", content: "Read-only suggestion" }),
   ).rejects.toBeInstanceOf(MemoryProposalAccessDeniedError);
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, readActor);
+    installActorContext(transaction, readActor);
     await expect(
       transaction.query("SELECT id FROM memory_proposals WHERE id = $1", [proposal.id]),
     ).resolves.toMatchObject({ rows: [] });

@@ -1,5 +1,5 @@
 import type { EmbeddingTask, PostgresDatabase } from "@corespeed/lore-core";
-import { createMemoryMaintenanceModule } from "@corespeed/lore-core";
+import { createMemoryMaintenanceModule, transactionThrough } from "@corespeed/lore-core";
 import { afterEach, expect, test } from "vitest";
 import { createMemoryGraphModule } from "@/modules/graph/service";
 import { createMemoryModule } from "@/modules/memories/service";
@@ -36,14 +36,16 @@ function archiveBytes(archive: WorkspaceArchive): number {
 
 function countingDatabase(database: PostgresDatabase, statements: string[]): PostgresDatabase {
   return {
-    transaction: (use) =>
-      database.transaction((transaction) =>
-        use({
-          query: (sql, params) => {
-            statements.push(sql);
-            return transaction.query(sql, params);
-          },
-        }),
+    transaction: (use, options) =>
+      database.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, (sql, params) => {
+              statements.push(sql);
+              return transaction.query(sql, params);
+            }),
+          ),
+        options,
       ),
   };
 }

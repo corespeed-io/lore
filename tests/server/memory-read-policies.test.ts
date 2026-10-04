@@ -78,7 +78,7 @@ async function readerAgent(
 
 async function visible(context: MemoryTestContext, actor: ActorContext) {
   return context.database.transaction(async (transaction) => {
-    await installActorContext(transaction, actor);
+    installActorContext(transaction, actor);
     const ids = async (sql: string) =>
       (await transaction.query<{ id: string }>(sql)).rows.map((row) => row.id).sort();
     return {
@@ -175,7 +175,7 @@ test("a revoked grant or a disabled Agent denies that Agent", async () => {
 test("the Workspace read check is planned once per statement, not per row", async () => {
   const { context } = await fixture();
   await context.database.transaction(async (transaction) => {
-    await installActorContext(transaction, context.alice);
+    installActorContext(transaction, context.alice);
     for (const sql of [
       "SELECT id FROM memories",
       "SELECT id FROM memory_chunks",

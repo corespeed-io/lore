@@ -27,14 +27,35 @@ been removed. Lore now has a native implementation, split into two concepts
 - **lore core** — `packages/lore-core` (`@corespeed/lore-core`) is the
   reusable memory engine: Memory CRUD + hybrid retrieval, content bounds,
   chunking v2, Memory Links/graph reads, leased embedding maintenance,
-  the `PostgresDatabase` seam and its `pg` adapter
-  (`./postgres`), the optional Episode/Observation capability group
+  the driver-free `PostgresDatabase` seam, the optional Episode/Observation capability group
   (`./episodes`), embedding/reranking/query-planning capability interfaces,
   and a host-pluggable schema-contract test kit (`./testing`). Factories bind a
   `MemoryStorageContext`; methods take no Actor. The host initializes and
   authorizes every storage transaction. Host-baked invariants are module
   options: `embeddingDimensions` (lore oss pins 1024) and
   `defaultMemoryScope` (lore oss keeps "shared").
+  **Core owns its SQL; the host owns connections** (Yunpeng, 2026-10-03). Core
+  imports no database driver (`biome.json` denies `pg`, `pg/**`, and
+  `pg-cloudflare` under `packages/lore-core`), and OSS's `pg` adapters live in
+  `src/server/database/postgres.ts`. A `PostgresTransaction` has four members:
+  `query`; `batch(statements, { commit })`, which sends statements whose inputs
+  are already known without waiting between them (pg 8.23 pipelining) while
+  PostgreSQL still runs them in order, each with its own READ COMMITTED snapshot,
+  and rethrows the first failure in statement order, `commit` sending COMMIT
+  behind them so a whole read costs one network wait and nothing may run
+  afterwards; `setLocal`, whose pending settings (role included) travel in one
+  statement ahead of the next; and `afterCommit`, whose effects run once COMMIT
+  succeeded and never after a rollback. Every adapter builds on
+  `transactionHandle(send)`, which sends `BEGIN` and pending settings with the
+  first statement; PGlite hosts use `managedTransactionDatabase` (`./testing`'s
+  `testDatabase` wraps it). A wrapper that observes, delays, or fails statements
+  must go through `transactionThrough`, which feeds batched statements through its
+  `query` one at a time, and must not query after the callback returns: the engine
+  may already have committed inside its last batch. The single-Memory write
+  primitives take `{ commit }` to commit in their final batch, which OSS passes
+  when no idempotency ledger row is left to complete.
+  `packages/lore-core/tests/transaction-handle.test.ts` pins the seam and each
+  engine operation's statements and network waits.
   **It is a package to enforce a boundary, not to ship an artifact.** It is
   `private`, has no build script and no `files`/`main`/`types`, `exports` points
   straight at `./src`, and `build:packages`/`packages:smoke` cover only the SDK,
@@ -249,8 +270,9 @@ been removed. Lore now has a native implementation, split into two concepts
   (`tests/support/memory-context.ts`, restore verification, the OSS-hosted engine
   contract test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
   `applyMigrationChain`/`migrationQueries`; never apply a migration file with one
-  `exec(fileContents)`. `pg` remains the runtime adapter behind the narrow
-  transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
+  `exec(fileContents)`. `pg` remains the runtime driver, owned by OSS
+  (`src/server/database/postgres.ts`) behind the driver-free transaction seam in
+  `packages/lore-core/src/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
   versions in `lore_schema_migrations`. The schema is live in production
   (CoreSpeed HaaS), so the recorded baseline is frozen: never edit an applied
@@ -709,10 +731,11 @@ been removed. Lore now has a native implementation, split into two concepts
   nothing missing completes without a provider call.
   Embedding and Code Index maintenance return `lost`, a normal outcome, when
   another run took the lease or the Memory was deleted mid-embed; `--once` runs
-  one cycle for CI. Mutation primitives return a `jobId` only when an embedding
-  job row was inserted (`RETURNING true` needs no SELECT grant); hosts notify on
-  any non-null id, including a metadata-only update whose prior embedding is still
-  pending. `bun run db:embedding:requeue-dead` re-arms one generation's dead
+  one cycle for CI. Hosts never see embedding job ids: the engine registers the
+  queue notification of every job row it inserted (`RETURNING true` needs no
+  SELECT grant), including a metadata-only update whose prior embedding is still
+  pending, as one post-commit effect of that transaction, which sends at most
+  1,000 messages (the sweep finds the rest) and nothing after a rollback. `bun run db:embedding:requeue-dead` re-arms one generation's dead
   embedding jobs after an outage (dry-run count unless `--apply`).
   `db:embedding:report` and `db:embedding:activate` require
   `LORE_EMBEDDING_BUILD_PROVIDER`/`MODEL` or `LORE_EMBEDDING_PROVIDER`/`MODEL`
@@ -1325,8 +1348,14 @@ Cloudflare specifics:
   adapter config and contains placeholder binding/auth values only.
 - Hyperdrive **must have query caching disabled**. RLS depends on transaction-local
   settings and permission revocation must be immediately visible.
-- Create a fresh `pg` client inside each Worker request context. Do not cache a
-  socket-backed Pool/Client globally across Worker requests.
+- Create the request pool (`createRequestPostgresDatabase`: at most two
+  connections, never evicted while idle) inside each Worker request, queue batch,
+  or cron run, and close it when that context ends (`waitUntil` after an API
+  response, `finally` for queue and cron handlers). Do not cache a socket-backed
+  Pool/Client globally across Worker requests. `LORE_POSTGRES_PIPELINE` (`1` or
+  `0`) turns pg pipelining on or off; it defaults on for self-host and off on
+  Workers until pipelined extended-protocol queries through Hyperdrive, errors and
+  aborts included, have been measured.
 - Migrations and runtime credentials stay separate. Run migrations from a trusted
   environment, then connect Hyperdrive with a non-owner login that can `SET ROLE
   lore_app`.

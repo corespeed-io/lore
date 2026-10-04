@@ -66,7 +66,7 @@ export function createIdentityModule(database: PostgresDatabase) {
     ): Promise<{ activeMember: boolean; user: User }> {
       return database.transaction(async (transaction) => {
         const user = await registerInTransaction(transaction, identity);
-        await installUserContext(transaction, { userId: user.id });
+        installUserContext(transaction, { userId: user.id });
         const membership = await transaction.query<{ active: boolean }>(
           "SELECT lore.is_active_member($1) AS active",
           [workspaceId],

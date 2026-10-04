@@ -9,6 +9,7 @@ import {
   type MemoryModuleOptions,
   type MemoryMutationPrimitivesOptions,
   type MemoryRow,
+  type PostgresBatchOptions,
   type PostgresDatabase,
   type PostgresTransaction,
   type RememberMemory,
@@ -50,8 +51,6 @@ export function memoryFromRow(row: MemoryRow): Memory {
 export function createMemoryMutationPrimitives(options: MemoryMutationPrimitivesOptions = {}) {
   const primitives = createCoreMutationPrimitives(options);
   return {
-    notifyMaintenance: primitives.notifyMaintenance,
-    notifyMaintenanceMany: primitives.notifyMaintenanceMany,
     /** Batch-insert Memories owned by the Actor's User, with chunks and embedding jobs. */
     insertMemoriesInTransaction(
       transaction: PostgresTransaction,
@@ -69,58 +68,56 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       actor: ActorContext,
       input: RememberMemory,
       createdByAgentId: string | null = actor.agentId ?? null,
+      batchOptions: PostgresBatchOptions = {},
     ) {
       const result = await primitives.insertMemoryInTransaction(
         transaction,
         memoryStorageInTransaction(transaction, actor),
         input,
         createdByAgentId,
+        batchOptions,
       );
       return { ...result, memory: memoryFromStorage(result.memory) };
     },
+    /**
+     * Null when the Memory is absent or this Actor may not write it: the engine's
+     * locking read applies the update policy under RLS before any version check.
+     */
     async updateMemoryInTransaction(
       transaction: PostgresTransaction,
       actor: ActorContext,
       id: string,
       input: UpdateMemory,
       expectedVersion?: number,
+      batchOptions: PostgresBatchOptions = {},
     ) {
-      const writable = await transaction.query<{ id: string }>(
-        `SELECT id FROM memories WHERE id = $1 AND workspace_id = $2
-         AND lore.can_write_memory(workspace_id, owner_user_id) FOR UPDATE`,
-        [id, actor.workspaceId],
-      );
-      if (!writable.rows[0]) return null;
       const result = await primitives.updateMemoryInTransaction(
         transaction,
         memoryStorageInTransaction(transaction, actor),
         id,
         input,
         expectedVersion,
+        batchOptions,
       );
       return result ? { ...result, memory: memoryFromStorage(result.memory) } : null;
     },
-    /** False when the Memory is absent or this Actor may not write it. */
+    /**
+     * False when the Memory is absent or this Actor may not write it: RLS skips such
+     * a row in the engine's delete and in its version read alike, so a Memory this
+     * Actor may not write reads as absent rather than as a version conflict.
+     */
     async forgetMemoryInTransaction(
       transaction: PostgresTransaction,
       actor: ActorContext,
       id: string,
       expectedVersion?: number,
+      batchOptions: PostgresBatchOptions = {},
     ): Promise<boolean> {
-      // One locking read proves write authority before the version check and hands
-      // the engine the locked version, so it does not lock the row again.
-      const writable = await transaction.query<{ version: number }>(
-        `SELECT version FROM memories WHERE id = $1 AND workspace_id = $2
-         AND lore.can_write_memory(workspace_id, owner_user_id) FOR UPDATE`,
-        [id, actor.workspaceId],
-      );
-      const lockedVersion = writable.rows[0]?.version;
-      if (lockedVersion === undefined) return false;
       return primitives.forgetMemoryInTransaction(
         transaction,
         memoryStorageInTransaction(transaction, actor),
         id,
-        { expectedVersion, lockedVersion },
+        { expectedVersion, ...batchOptions },
       );
     },
   };
@@ -137,12 +134,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         `the module is configured for ${dimensions} but the provider embeds at ${options.embeddingProvider.dimensions}`,
     );
   }
-  const {
-    forgetMemoryInTransaction,
-    insertMemoryInTransaction,
-    updateMemoryInTransaction,
-    notifyMaintenance,
-  } = createMemoryMutationPrimitives(options);
+  const { forgetMemoryInTransaction, insertMemoryInTransaction, updateMemoryInTransaction } =
+    createMemoryMutationPrimitives(options);
   const coreFor = (actor: ActorContext) =>
     createCoreMemoryModule(createMemoryStorage(database, actor), options);
   return {
@@ -153,34 +146,30 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
     ): Promise<Memory> {
       try {
         const created = await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const claim = await beginMutation<{ memory: Memory }>(
             transaction,
             actor,
             options.idempotency,
           );
-          if (claim.replay) {
-            return { memory: claim.replay.memory, jobId: null, replayed: true };
-          }
-          const access = await transaction.query<{ allowed: boolean }>(
-            "SELECT lore.can_write_memory($1, $2) AS allowed",
-            [actor.workspaceId, actor.userId],
-          );
-          if (access.rows[0]?.allowed !== true) {
-            throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace");
-          }
-          const inserted = await insertMemoryInTransaction(transaction, actor, input);
+          if (claim.replay) return claim.replay.memory;
+          // The memories_insert policy enforces write authority; a refusal is
+          // SQLSTATE 42501, answered below as MemoryAccessDeniedError. Without a
+          // ledger row to complete, COMMIT travels with the insert.
+          const inserted = await insertMemoryInTransaction(transaction, actor, input, undefined, {
+            commit: !options.idempotency,
+          });
           await completeMutation(
             transaction,
             claim.requestId,
             "created",
             { memory: inserted.memory },
             Boolean(options.idempotency),
+            { commit: true },
           );
-          return { ...inserted, replayed: false };
+          return inserted.memory;
         });
-        if (!created.replayed) notifyMaintenance(created.jobId);
-        return created.memory;
+        return created;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
           throw new MemoryAccessDeniedError("Actor cannot create Memory in this Workspace", {
@@ -210,21 +199,20 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         return this.retrieve(actor, id);
       }
       const updatedResult = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const claim = await beginMutation<{ memory: Memory | null }>(
           transaction,
           actor,
           options.idempotency,
         );
-        if (claim.replay) {
-          return { memory: claim.replay.memory, jobId: null };
-        }
+        if (claim.replay) return claim.replay.memory;
         const updated = await updateMemoryInTransaction(
           transaction,
           actor,
           id,
           input,
           options.expectedVersion,
+          { commit: !options.idempotency },
         );
         if (!updated) {
           await completeMutation(
@@ -233,8 +221,9 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
             "not_found",
             { memory: null },
             Boolean(options.idempotency),
+            { commit: true },
           );
-          return { memory: null, jobId: null };
+          return null;
         }
         await completeMutation(
           transaction,
@@ -242,13 +231,11 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           "ok",
           { memory: updated.memory },
           Boolean(options.idempotency),
+          { commit: true },
         );
-        return updated;
+        return updated.memory;
       });
-      // The engine returns a job id only when this update inserted a job, so an
-      // already-embedded metadata-only update sends no Queue message.
-      notifyMaintenance(updatedResult.jobId);
-      return updatedResult.memory;
+      return updatedResult;
     },
 
     async forget(
@@ -257,7 +244,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       options: MemoryMutationOptions = {},
     ): Promise<boolean> {
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const claim = await beginMutation<{ deleted: boolean }>(
           transaction,
           actor,
@@ -271,6 +258,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           actor,
           id,
           options.expectedVersion,
+          { commit: !options.idempotency },
         );
         await completeMutation(
           transaction,
@@ -278,6 +266,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           deleted ? "deleted" : "not_found",
           { deleted },
           Boolean(options.idempotency),
+          { commit: true },
         );
         return deleted;
       });

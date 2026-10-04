@@ -557,7 +557,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
       const commitOid = validateCommitOid(input.commitOid, CodeEvidenceValidationError);
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           // Assessment is side-effect-free; the database enforces it.
           await transaction.query("SET TRANSACTION READ ONLY");
           const cited = await evidenceById(transaction, actor.workspaceId, evidenceId);
@@ -615,7 +615,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
       if (memoryIds.length === 0) return [];
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           await transaction.query("SET TRANSACTION READ ONLY");
           // Citations of Memories outside the Actor's visibility are filtered by RLS.
           const cited = await transaction.query<EvidenceRow>(
@@ -672,7 +672,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
       }
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           await transaction.query(
             recordCodeEvidenceSql({
               anchors: `(
@@ -729,7 +729,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
     async list(actor, input) {
       const memoryId = validateUuid(input.memoryId, "memoryId", CodeEvidenceValidationError);
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const visible = await transaction.query<{ id: string }>(
           "SELECT id FROM memories WHERE workspace_id = $1 AND id = $2",
           [actor.workspaceId, memoryId],
@@ -753,7 +753,7 @@ export function createCodeEvidenceModule(database: PostgresDatabase): CodeEviden
       const commitOid = validateCommitOid(input.commitOid, CodeEvidenceValidationError);
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const cited = await evidenceById(transaction, actor.workspaceId, evidenceId);
           if (!cited) {
             throw new CodeEvidenceAccessDeniedError("Code Evidence is not visible to this Actor");

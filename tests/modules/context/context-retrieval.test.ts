@@ -719,8 +719,9 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
   const counted: PostgresDatabase = {
     transaction: (use, options) => {
       requested.push(options);
+      // The modes are fixed once the transaction starts, and the engine may commit
+      // inside its last batch, so they are read before the callback runs.
       return context.database.transaction(async (transaction) => {
-        const result = await use(transaction);
         const level = await transaction.query<{
           transaction_isolation: string;
           transaction_read_only: string;
@@ -730,7 +731,7 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
         isolation.push(
           `${level.rows[0]?.transaction_isolation}/${level.rows[0]?.transaction_read_only}`,
         );
-        return result;
+        return use(transaction);
       }, options);
     },
   };
@@ -759,12 +760,11 @@ test("one packet's Code reads after its searches share one repeatable-read snaps
     transaction: (use, options) =>
       context.database.transaction(async (transaction) => {
         await transaction.query("SELECT 1");
-        const result = await use(transaction);
         const level = await transaction.query<{ isolation: string; read_only: string }>(
           "SELECT current_setting('transaction_isolation') AS isolation, current_setting('transaction_read_only') AS read_only",
         );
         readingLevels.push(`${level.rows[0]?.isolation}/${level.rows[0]?.read_only}`);
-        return result;
+        return use(transaction);
       }, options),
   };
   await expect(

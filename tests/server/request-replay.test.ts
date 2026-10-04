@@ -99,7 +99,7 @@ test("a key reused after its record expires forgets the earlier subjects and com
   const inspected = new Error("roll back the inspected claim");
   await expect(
     testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       const claim = await beginMutation(
         transaction,
         testContext.alice,

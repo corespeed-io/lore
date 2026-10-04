@@ -11,7 +11,11 @@ import openNextWorker from "../../.open-next/worker.js";
 import { purgeExpiredPortableCoreRecords } from "../modules/operations/maintenance";
 import { isApiPath } from "../server/api/app";
 import { fetchCloudflareApi } from "../server/api/cloudflare";
-import { createRequestPostgresDatabase } from "../server/database/postgres";
+import {
+  createRequestPostgresDatabase,
+  postgresPipeline,
+  type RuntimePostgresDatabase,
+} from "../server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "../server/providers/embedding/factory";
 
 // Preserve any OpenNext Durable Object exports if a cache adapter enables them.
@@ -32,16 +36,12 @@ function embeddingEnvironment(env: CloudflareEnv): Record<string, string | undef
   };
 }
 
-function maintenanceForEnvironment(env: CloudflareEnv) {
+function maintenanceForEnvironment(env: CloudflareEnv, database: RuntimePostgresDatabase) {
   const providers = createMaintenanceEmbeddingProvidersFromEnvironment(
     embeddingEnvironment(env),
     (message) => console.warn(message),
   );
   if (providers.length === 0) return null;
-  const database = createRequestPostgresDatabase(
-    { connectionString: env.MAINTENANCE_HYPERDRIVE.connectionString },
-    { role: "lore_maintenance" },
-  );
   return createMemoryMaintenanceCoordinator(
     providers.map((provider) =>
       createMemoryMaintenanceModule(database, {
@@ -64,10 +64,11 @@ function maintenanceForEnvironment(env: CloudflareEnv) {
   );
 }
 
-function maintenanceDatabaseForEnvironment(env: CloudflareEnv) {
+/** Connections for one queue batch or cron run; the handler closes them when it ends. */
+function maintenanceDatabaseForEnvironment(env: CloudflareEnv): RuntimePostgresDatabase {
   return createRequestPostgresDatabase(
     { connectionString: env.MAINTENANCE_HYPERDRIVE.connectionString },
-    { role: "lore_maintenance" },
+    { role: "lore_maintenance", pipeline: postgresPipeline(env.LORE_POSTGRES_PIPELINE, false) },
   );
 }
 
@@ -90,82 +91,91 @@ export default {
   },
 
   async queue(batch, env) {
-    const maintenance = maintenanceForEnvironment(env);
-    if (!maintenance) {
-      batch.ackAll();
-      return;
-    }
+    const database = maintenanceDatabaseForEnvironment(env);
+    try {
+      const maintenance = maintenanceForEnvironment(env, database);
+      if (!maintenance) {
+        batch.ackAll();
+        return;
+      }
 
-    // Process sequentially to bound provider and pg client concurrency inside a
-    // single isolate; Queue max_concurrency provides horizontal parallelism.
-    for (const message of batch.messages) {
-      if (!isJobMessage(message.body)) {
-        console.warn("Lore discarded an invalid maintenance queue message");
-        message.ack();
-        continue;
-      }
-      try {
-        const result = await maintenance.run(message.body.jobId);
-        if (result.status === "retry") {
-          message.retry({ delaySeconds: result.retryAfterSeconds });
-        } else {
+      // Process sequentially to bound provider and pg client concurrency inside a
+      // single isolate; Queue max_concurrency provides horizontal parallelism.
+      for (const message of batch.messages) {
+        if (!isJobMessage(message.body)) {
+          console.warn("Lore discarded an invalid maintenance queue message");
           message.ack();
+          continue;
         }
-      } catch {
-        console.error(
-          JSON.stringify({
-            component: "memory-maintenance",
-            event: "job_infrastructure_error",
-            jobId: message.body.jobId,
-          }),
-        );
-        message.retry();
+        try {
+          const result = await maintenance.run(message.body.jobId);
+          if (result.status === "retry") {
+            message.retry({ delaySeconds: result.retryAfterSeconds });
+          } else {
+            message.ack();
+          }
+        } catch {
+          console.error(
+            JSON.stringify({
+              component: "memory-maintenance",
+              event: "job_infrastructure_error",
+              jobId: message.body.jobId,
+            }),
+          );
+          message.retry();
+        }
       }
+    } finally {
+      await database.close();
     }
   },
 
   async scheduled(_controller, env) {
     const maintenanceDatabase = maintenanceDatabaseForEnvironment(env);
-    const purged = await purgeExpiredPortableCoreRecords(maintenanceDatabase);
-    const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
-      maintenanceDatabase,
-      Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
-    );
-    const maintenance = maintenanceForEnvironment(env);
-    if (!maintenance) {
+    try {
+      const purged = await purgeExpiredPortableCoreRecords(maintenanceDatabase);
+      const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
+        maintenanceDatabase,
+        Number(env.LORE_EMBEDDING_ROLLBACK_SECONDS) || 604_800,
+      );
+      const maintenance = maintenanceForEnvironment(env, maintenanceDatabase);
+      if (!maintenance) {
+        console.log(
+          JSON.stringify({
+            component: "memory-maintenance",
+            event: "sweep_complete",
+            embeddingStatus: "disabled",
+            purgedIdempotencyRecords: purged.idempotencyRecords,
+            purgedMemoryEvents: purged.memoryEvents,
+            prunedEmbeddingGenerations,
+          }),
+        );
+        return;
+      }
+      const seeded = await maintenance.seedStale(1_000);
+      const generations = await maintenance.generationReports();
       console.log(
         JSON.stringify({
           component: "memory-maintenance",
           event: "sweep_complete",
-          embeddingStatus: "disabled",
+          seededJobs: seeded.length,
           purgedIdempotencyRecords: purged.idempotencyRecords,
           purgedMemoryEvents: purged.memoryEvents,
           prunedEmbeddingGenerations,
+          embeddingGenerations: generations,
         }),
       );
-      return;
-    }
-    const seeded = await maintenance.seedStale(1_000);
-    const generations = await maintenance.generationReports();
-    console.log(
-      JSON.stringify({
-        component: "memory-maintenance",
-        event: "sweep_complete",
-        seededJobs: seeded.length,
-        purgedIdempotencyRecords: purged.idempotencyRecords,
-        purgedMemoryEvents: purged.memoryEvents,
-        prunedEmbeddingGenerations,
-        embeddingGenerations: generations,
-      }),
-    );
-    const pending = await maintenance.pending(1_000);
-    if (pending.length === 0) return;
-    for (let offset = 0; offset < pending.length; offset += 100) {
-      await env.MEMORY_MAINTENANCE_QUEUE.sendBatch(
-        pending
-          .slice(offset, offset + 100)
-          .map((jobId) => ({ body: { jobId } satisfies MemoryEmbeddingJobMessage })),
-      );
+      const pending = await maintenance.pending(1_000);
+      if (pending.length === 0) return;
+      for (let offset = 0; offset < pending.length; offset += 100) {
+        await env.MEMORY_MAINTENANCE_QUEUE.sendBatch(
+          pending
+            .slice(offset, offset + 100)
+            .map((jobId) => ({ body: { jobId } satisfies MemoryEmbeddingJobMessage })),
+        );
+      }
+    } finally {
+      await maintenanceDatabase.close();
     }
   },
 } satisfies ExportedHandler<CloudflareEnv, MemoryEmbeddingJobMessage>;

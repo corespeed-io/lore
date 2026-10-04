@@ -110,7 +110,7 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
     "evaluation_results",
   ]) {
     await testContext.database.transaction(async (transaction) => {
-      await installActorContext(transaction, testContext.alice);
+      installActorContext(transaction, testContext.alice);
       const visible = await transaction.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM ${table}`,
       );
@@ -118,7 +118,7 @@ test("Evaluation run persists repeatable metrics without retrieving private neig
     });
     for (const deniedActor of [testContext.bob, testContext.carol]) {
       await testContext.database.transaction(async (transaction) => {
-        await installActorContext(transaction, deniedActor);
+        installActorContext(transaction, deniedActor);
         await expect(transaction.query(`SELECT id FROM ${table}`)).resolves.toMatchObject({
           rows: [],
         });
@@ -193,7 +193,7 @@ test("A crashed Evaluation run records fail-closed isolation metrics", async () 
     "provider unavailable",
   );
   const runId = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     const result = await transaction.query<{ id: string }>(
       "SELECT id FROM evaluation_runs WHERE suite_id = $1",
       [suite.id],
@@ -283,7 +283,7 @@ test("An abandoned running Evaluation run fails with a content-free reason on re
   });
   const [abandonedId, liveId] = [crypto.randomUUID(), crypto.randomUUID()];
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await transaction.query(
       `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id, started_at)
        VALUES ($1, $3, $4, $5, now() - interval '2 hours'),
