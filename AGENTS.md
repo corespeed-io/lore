@@ -1729,10 +1729,11 @@ registers a pending User (`PendingUser`, `lore.register_identity`) as the prefix
 its list. `tests/server/round-trip-budget.test.ts` pins every hot route's statements
 and network waits, and each search configuration's (dense, planner, feedback,
 context-group expansion, Memory-only context packets), for humans and Agents,
-through the real `pg` adapter. `tests/server/function-grants.test.ts` holds the
-grant matrix: no `lore` function is executable by `PUBLIC`, a NOINHERIT request login
-holds nothing before its role switch, and request and maintenance functions stay
-with `lore_app` and `lore_maintenance` respectively. For unsafe methods it
+through the real `pg` adapter. `tests/server/function-grants.test.ts` pins the
+full grant map, the grantees of every `lore` function (none is executable by
+`PUBLIC`, and each sits with `lore_app`, `lore_maintenance`, both, or its owner alone),
+so a migration that adds a function or changes a grant updates it on purpose; it also
+proves a NOINHERIT request login holds nothing before its role switch. For unsafe methods it
 returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of the
 URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
 passes even behind a Host-rewriting proxy, and clients that send neither header

@@ -987,21 +987,25 @@ try {
     );
     assert.equal(eventsAfter.rows[0]?.count, eventsBefore.rows[0]?.count);
 
-    // A provider-backed search on PostgreSQL: the query embeds before the first pass,
-    // and the admission prefix travels with the dense and lexical candidates.
-    const searchQuery = scoped.content.split(/\s+/).slice(0, 3).join(" ");
+    // A provider-backed search on PostgreSQL, through the dense channel alone. No
+    // lexical or CJK channel can match this query, and the fixture embeds every
+    // single text as the first basis vector, which the first chunk of each embedded
+    // batch also holds, so only a dense candidate can bring the Memory back. The
+    // query embeds before the first pass, whose admission prefix travels with it.
+    const denseOnlyQuery = "zqxvwerty plumbulous";
     const providerSearch = await expectJson<Array<{ memory: { id: string } }>>(
       await embeddingApp.request(
-        jsonRequest(`/api/v1/memories?q=${encodeURIComponent(searchQuery)}`, {
+        jsonRequest(`/api/v1/memories?q=${encodeURIComponent(denseOnlyQuery)}`, {
           headers: aliceHeaders,
         }),
       ),
       200,
       "search with an embedding provider",
     );
+    assert.deepEqual(embeddedTexts.at(-1), [denseOnlyQuery], "the search embedded its query");
     assert.ok(
       providerSearch.some((result) => result.memory.id === chunked.id),
-      "a provider-backed search finds the embedded Memory",
+      "the dense channel finds the embedded Memory without a lexical match",
     );
   } finally {
     await inspector.end();

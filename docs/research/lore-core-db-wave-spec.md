@@ -332,7 +332,8 @@ Waits are network round trips. Statements are shown where they differ. W = Worke
 | DELETE memory, keyed / unkeyed | 11 / 2, 8 / 1 | 10 / 2 |
 | PUT link | 8 / 2 | — |
 | DELETE link | 7 / 1 | — |
-| A refused read / write | 1 / 2 waits (the write's ROLLBACK) | same |
+| A refused read | 6 / 1 | 5 / 1 |
+| A refused write | 2 waits (the second is its ROLLBACK) | 2 waits |
 
 On Workers, with pipelining off until §9.2, every statement is a wait. For example, a Memory read costs 6 statements, where it cost 11–12 before.
 
@@ -345,7 +346,7 @@ On Workers, with pipelining off until §9.2, every statement is a wait. For exam
 
 ### 6.2 Update
 
-1. A `SELECT … FOR UPDATE` (RLS) locks the row. A row the caller can't write reads as absent before the version check, so the answer is 404 with no version leak. A stale `If-Match` still gets 409.
+1. A `SELECT … FOR UPDATE` (RLS) locks the row. A row the caller can't write reads as absent before the version check, so the answer is 404 with no version leak. A stale `If-Match` still gets 412 (`version_conflict`).
 2. The `UPDATE` runs only when `content`, `scope`, or `metadata` actually differ (`IS DISTINCT FROM`). When none differs, the locked row comes back with the same version, `updated_at`, and ETag, with no event and no job. Idempotent replay keeps today's semantics.
 3. **Empty PATCH.** A PATCH with no fields keeps today's bypass (`src/modules/memories/service.ts:205`) and returns the current row. It is covered by a test.
 
@@ -363,7 +364,7 @@ Chunks are matched by ordinal, not content: moving an ordinal would need `UPDATE
 
 ### 6.4 Forget, Links, Agent credentials
 
-- **Forget** runs `DELETE … [AND version = $expected] RETURNING`. When it deletes nothing, one locking read decides between 404 and 409. *As built:* the unkeyed path sends the locking version read in the same batch as the delete, so it costs no extra wait. The keyed path locks with its claim and deletes in the second batch (§4.3a).
+- **Forget** runs `DELETE … [AND version = $expected] RETURNING`. When it deletes nothing, one locking read decides between 404 and 412. *As built:* the unkeyed path sends the locking version read in the same batch as the delete, so it costs no extra wait. The keyed path locks with its claim and deletes in the second batch (§4.3a).
 - **Forget's events.** The `memories` BEFORE DELETE trigger also writes `memory_link.deleted` for each outbound Link, using the owner and scope from `OLD`. 0009's JSON-path replay scrub is kept verbatim.
 - **Agent `last_used_at`** is updated only when it is NULL or more than 60 s old, with the age condition in the `UPDATE` predicate. A `CASE` would still lock and write the row. Authentication still returns the Actor when no update happens, and revocation is checked on every request.
 
@@ -525,7 +526,7 @@ Manual port, per the distribution convention:
   - no-op update, stale `If-Match`, empty PATCH;
   - scope-only update;
   - partial chunk reuse and tail delete.
-- **Forget.** 404 versus 409.
+- **Forget.** 404 versus 412.
 - **Embedding claim:**
   - a partial claim;
   - an empty claim finishes without a provider call;
@@ -577,7 +578,7 @@ Also on real PostgreSQL: both vector widths, a provider-backed search configurat
 - **Done.** Each item is listed with the test that covers it:
   - core seam, boundary, and budgets: `packages/lore-core/tests/transaction-handle.test.ts`;
   - update semantics: `update-semantics.test.ts`;
-  - forget 404 versus 409;
+  - forget 404 versus 412;
   - partial and empty claims, and the claim fenced by version (also in the real-PostgreSQL smoke race);
   - notifications: at most 1,000, none on rollback, none for a no-op update, and effects after a committed throw.
 - **Done in OSS:**
@@ -590,12 +591,12 @@ Also on real PostgreSQL: both vector widths, a provider-backed search configurat
   - migrations from empty and from revision 9 with data, 0010's lock set, and a stopped 0011 rerun;
   - readiness across compatible revisions;
   - adapters: role per transaction, close and use-after-close, the error listener, and ROLLBACK failure;
-  - the grant guard (`tests/server/function-grants.test.ts`): no `PUBLIC`, a NOINHERIT login holds nothing before its role switch, and the request and maintenance roles stay on their own side.
+  - the grant guard (`tests/server/function-grants.test.ts`): the full grant map of all 75 `lore` functions is pinned (no `PUBLIC`; each one with `lore_app`, `lore_maintenance`, both, or only its owner), and a NOINHERIT login holds nothing before its role switch.
 - **Done on real PostgreSQL** (smoke):
   - concurrent same-key Link PUTs;
   - Proposals versus forget;
   - an embedding completion racing chunk-reusing updates;
-  - a provider-backed search;
+  - a provider-backed search that only the dense channel can satisfy;
   - a request pool kept across an idle pause past 10 seconds.
 - **Differs.** A human's search starts its prefix after the provider call, not concurrently with it (§4.3a). The test asserts that order.
 - **Not done:**
