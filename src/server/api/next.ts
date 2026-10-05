@@ -1,7 +1,11 @@
 import "server-only";
 import { handle } from "hono/vercel";
 import { configuredCodeRepositoriesFromEnvironment } from "@/modules/code/indexing/queue";
-import { createPostgresDatabase, type RuntimePostgresDatabase } from "@/server/database/postgres";
+import {
+  createPostgresDatabase,
+  postgresPipeline,
+  type RuntimePostgresDatabase,
+} from "@/server/database/postgres";
 import { getRuntimeMemoryModuleOptions } from "@/server/providers/runtime";
 import { createApi } from "./app";
 
@@ -11,10 +15,13 @@ const handler = handle(
     database() {
       if (!database) {
         if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
-        database = createPostgresDatabase({
-          connectionString: process.env.DATABASE_URL,
-          max: Number(process.env.DATABASE_POOL_SIZE ?? "10"),
-        });
+        database = createPostgresDatabase(
+          {
+            connectionString: process.env.DATABASE_URL,
+            max: Number(process.env.DATABASE_POOL_SIZE ?? "10"),
+          },
+          { pipeline: postgresPipeline(process.env.LORE_POSTGRES_PIPELINE, true) },
+        );
       }
       return database;
     },

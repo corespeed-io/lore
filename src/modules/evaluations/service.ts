@@ -305,7 +305,7 @@ export function createEvaluationModule(
   ): Promise<void> {
     const status: EvaluationRunStatus = error === null ? "completed" : "failed";
     await database.transaction(async (transaction) => {
-      await installActorContext(transaction, actor);
+      installActorContext(transaction, actor);
       await transaction.query(
         `UPDATE evaluation_runs
          SET status = $3, metrics = $4::jsonb, error = $5,
@@ -329,7 +329,7 @@ export function createEvaluationModule(
 
   async function getSuite(actor: ActorContext, suiteId: string): Promise<EvaluationSuite | null> {
     return database.transaction(async (transaction) => {
-      await installActorContext(transaction, actor);
+      installActorContext(transaction, actor);
       const suiteResult = await transaction.query<SuiteRow>(
         `SELECT * FROM evaluation_suites
          WHERE workspace_id = $1 AND id = $2 AND created_by_user_id = $3`,
@@ -350,7 +350,7 @@ export function createEvaluationModule(
 
   async function getRun(actor: ActorContext, runId: string): Promise<EvaluationRun | null> {
     return database.transaction(async (transaction) => {
-      await installActorContext(transaction, actor);
+      installActorContext(transaction, actor);
       await expireAbandonedRuns(transaction, actor, runId);
       const runResult = await transaction.query<RunRow>(
         `SELECT * FROM evaluation_runs
@@ -383,7 +383,7 @@ export function createEvaluationModule(
       if (!input.name.trim()) throw new Error("Evaluation suite name is required");
       if (!input.cases.length) throw new Error("Evaluation suite requires at least one case");
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const suiteId = crypto.randomUUID();
         const suiteResult = await transaction.query<SuiteRow>(
           `INSERT INTO evaluation_suites (
@@ -440,7 +440,7 @@ export function createEvaluationModule(
         Math.min(Math.trunc(input.limit ?? defaultSuiteList), maximumSuiteList),
       );
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         // Microsecond cursor text keeps pages exact across equal millisecond updates.
         const suiteResult = await transaction.query<SuitePageRow>(
           `SELECT *,
@@ -500,7 +500,7 @@ export function createEvaluationModule(
       if (!suite) throw new EvaluationSuiteNotFoundError("Evaluation suite not found");
       const runId = crypto.randomUUID();
       await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         await expireAbandonedRuns(transaction, actor, null);
         await transaction.query(
           `INSERT INTO evaluation_runs (id, workspace_id, suite_id, created_by_user_id)
@@ -540,7 +540,7 @@ export function createEvaluationModule(
           );
           const resultId = crypto.randomUUID();
           await database.transaction(async (transaction) => {
-            await installActorContext(transaction, actor);
+            installActorContext(transaction, actor);
             await transaction.query(
               `INSERT INTO evaluation_results (
                  id, workspace_id, run_id, case_id, created_by_user_id, retrieved_memory_ids,

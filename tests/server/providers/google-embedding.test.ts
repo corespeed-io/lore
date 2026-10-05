@@ -163,3 +163,14 @@ test("Google SDK honors zero retries and the adapter omits error bodies", async 
   );
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+// A revision-9 worker embeds whatever its claim returns, and from schema revision 10 a
+// claim whose chunks all have vectors returns none.
+test("Google adapter embeds no texts without a request", async () => {
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const provider = createGoogleEmbeddingProvider(configuration, { apiKey: "test-google-key" });
+
+  await expect(provider.embed([], "document")).resolves.toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
+});

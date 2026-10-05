@@ -1,4 +1,5 @@
 import type { MemoryModuleOptions, PostgresDatabase } from "@corespeed/lore-core";
+import { admittedActor, type PendingActor, type PendingUser } from "@/server/auth/actor-admission";
 import type { AuthPrincipal } from "@/server/auth/auth";
 import { createRequestContextResolver } from "@/server/auth/request-context";
 
@@ -38,6 +39,8 @@ export function createRequestDependencies(
 ) {
   let database: Promise<PostgresDatabase> | undefined;
   let resolver: ReturnType<typeof createRequestContextResolver> | undefined;
+  let actor: Promise<PendingActor> | undefined;
+  let user: Promise<PendingUser> | undefined;
   function getDatabase() {
     database ??= Promise.resolve().then(() => dependencies.database());
     return database;
@@ -51,8 +54,29 @@ export function createRequestDependencies(
     database: getDatabase,
     memoryOptions: () => dependencies.memoryOptions(),
     codeRepositories: () => dependencies.codeRepositories(),
-    resolveActor: async () => (await getResolver()).resolveActor(request, principal),
-    resolveUser: async () => (await getResolver()).resolveUser(request, principal),
+    /**
+     * The request's Actor, admitted by the first transaction that binds it; every
+     * caller in the request shares that one admission.
+     */
+    requestActor: () => {
+      actor ??= getResolver().then((resolved) => resolved.requestActor(request, principal));
+      return actor;
+    },
+    /** The admitted Actor, admitting it in a transaction of its own when still pending. */
+    resolveActor: async () => {
+      actor ??= getResolver().then((resolved) => resolved.requestActor(request, principal));
+      return admittedActor(await getDatabase(), await actor);
+    },
+    /** The request's human, registered by the first transaction that binds it. */
+    requestUser: () => {
+      user ??= getResolver().then((resolved) => resolved.requestUser(request, principal));
+      return user;
+    },
+    /** The registered User, registering it in a transaction of its own when still pending. */
+    resolveUser: async () => {
+      user ??= getResolver().then((resolved) => resolved.requestUser(request, principal));
+      return (await user).resolve(await getDatabase());
+    },
   };
 }
 

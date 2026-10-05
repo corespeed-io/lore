@@ -10,28 +10,26 @@ export interface UserContext {
   userId: string;
 }
 
-export async function installUserContext(
-  transaction: PostgresTransaction,
-  user: UserContext,
-): Promise<void> {
-  await transaction.query(
-    `SELECT
-       set_config('lore.workspace_id', '', true),
-       set_config('lore.user_id', $1, true),
-       set_config('lore.agent_id', '', true)`,
-    [user.userId],
-  );
+/**
+ * Bind the RLS identity of a User acting outside any Workspace. The settings travel
+ * with the transaction's next statement, so binding costs no round trip.
+ */
+export function installUserContext(transaction: PostgresTransaction, user: UserContext): void {
+  transaction.setLocal({
+    "lore.workspace_id": "",
+    "lore.user_id": user.userId,
+    "lore.agent_id": "",
+  });
 }
 
-export async function installActorContext(
-  transaction: PostgresTransaction,
-  actor: ActorContext,
-): Promise<void> {
-  await transaction.query(
-    `SELECT
-       set_config('lore.workspace_id', $1, true),
-       set_config('lore.user_id', $2, true),
-       set_config('lore.agent_id', $3, true)`,
-    [actor.workspaceId, actor.userId, actor.agentId ?? ""],
-  );
+/**
+ * Bind the RLS identity of an Actor in its Workspace. Every setting is written, so
+ * a transaction never keeps another Actor's values.
+ */
+export function installActorContext(transaction: PostgresTransaction, actor: ActorContext): void {
+  transaction.setLocal({
+    "lore.workspace_id": actor.workspaceId,
+    "lore.user_id": actor.userId,
+    "lore.agent_id": actor.agentId ?? "",
+  });
 }

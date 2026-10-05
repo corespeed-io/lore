@@ -1,10 +1,10 @@
 import { actorSecurity, errorSchema, jsonResponse, workspaceHeader } from "@/server/openapi/shared";
-import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
+import { DEPLOYMENT_FEATURES, DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 /** One `{ const }` schema per published value, in declaration order. */
 function constProperties(
-  values: Readonly<Record<string, number | string>>,
-): Record<string, { const: number | string }> {
+  values: Readonly<Record<string, boolean | number | string>>,
+): Record<string, { const: boolean | number | string }> {
   return Object.fromEntries(
     Object.entries(values).map(([name, value]) => [name, { const: value }]),
   );
@@ -101,34 +101,8 @@ export const operationsSchemas = {
       features: {
         type: "object",
         additionalProperties: false,
-        required: [
-          "idempotency",
-          "optimisticConcurrency",
-          "transactionalOutbox",
-          "workspacePortability",
-          "embeddingGenerations",
-          "cursorPagination",
-          "memoryProposals",
-          "observationEvidence",
-          "codeIndex",
-          "codeDependencies",
-          "codeEvidence",
-          "memoryLinks",
-        ],
-        properties: {
-          idempotency: { const: true },
-          optimisticConcurrency: { const: true },
-          transactionalOutbox: { const: true },
-          workspacePortability: { const: true },
-          embeddingGenerations: { const: true },
-          cursorPagination: { const: true },
-          memoryProposals: { const: true },
-          observationEvidence: { const: true },
-          codeIndex: { const: true },
-          codeDependencies: { const: true },
-          codeEvidence: { const: true },
-          memoryLinks: { const: true },
-        },
+        required: Object.keys(DEPLOYMENT_FEATURES),
+        properties: constProperties(DEPLOYMENT_FEATURES),
       },
       limits: {
         type: "object",

@@ -1,15 +1,10 @@
-import {
-  createMemoryMaintenanceCoordinator,
-  createMemoryMaintenanceModule,
-  embeddingMaintenanceLeaseSeconds,
-  pruneRetiringEmbeddingGenerations,
-} from "@corespeed/lore-core";
+import { createEmbeddingMaintenance } from "@corespeed/lore-core";
 import {
   cancelSupersededCodeIndexJobs,
   createCodeIndexMaintenanceModule,
 } from "@/modules/code/indexing/maintenance";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createPostgresDatabase } from "@/server/database/postgres";
+import { createPostgresDatabase, postgresPipeline } from "@/server/database/postgres";
 import { createMaintenanceEmbeddingProvidersFromEnvironment } from "@/server/providers/embedding/factory";
 import { registerLoreTelemetry } from "@/server/telemetry/register";
 import { observeOperation } from "@/server/telemetry/telemetry";
@@ -54,31 +49,16 @@ const database = createPostgresDatabase(
     connectionString,
     max: positiveInteger(process.env.LORE_MAINTENANCE_POOL_SIZE, workerConcurrency + 2),
   },
-  { role: "lore_maintenance" },
+  {
+    role: "lore_maintenance",
+    pipeline: postgresPipeline(process.env.LORE_POSTGRES_PIPELINE, true),
+  },
 );
-const maintenanceModules = embeddingProviders.map((embeddingProvider) =>
-  createMemoryMaintenanceModule(database, {
-    embeddingProvider,
-    leaseSeconds: embeddingMaintenanceLeaseSeconds(
-      // Ollama ignores the request timeout; use the default reclaim window.
-      embeddingProvider.provider === "ollama"
-        ? undefined
-        : positiveInteger(process.env.LORE_EMBEDDING_TIMEOUT_MS, 120_000),
-    ),
-    logger: (entry) =>
-      console.log(
-        JSON.stringify({
-          component: "memory-maintenance",
-          embeddingProvider: embeddingProvider.provider,
-          embeddingModel: embeddingProvider.model,
-          embeddingRevision: embeddingProvider.revision,
-          ...entry,
-        }),
-      ),
-  }),
-);
-const maintenance =
-  maintenanceModules.length > 0 ? createMemoryMaintenanceCoordinator(maintenanceModules) : null;
+const maintenance = createEmbeddingMaintenance(database, {
+  embeddingProviders,
+  generationRetentionSeconds: positiveInteger(process.env.LORE_EMBEDDING_ROLLBACK_SECONDS, 604_800),
+  logger: (entry) => console.log(JSON.stringify({ component: "memory-maintenance", ...entry })),
+});
 const codeIndexMaintenance =
   Object.keys(codeRepositories).length > 0
     ? createCodeIndexMaintenanceModule(database, {
@@ -103,10 +83,6 @@ if (!codeIndexMaintenance) {
 }
 const pollIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_POLL_MS, 1_000);
 const sweepIntervalMs = positiveInteger(process.env.LORE_MAINTENANCE_SWEEP_MS, 300_000);
-const embeddingRollbackSeconds = positiveInteger(
-  process.env.LORE_EMBEDDING_ROLLBACK_SECONDS,
-  604_800,
-);
 
 const stop = new AbortController();
 function requestStop(): void {
@@ -119,28 +95,23 @@ process.once("SIGTERM", requestStop);
 async function sweep(): Promise<void> {
   const result = await observeOperation("maintenance.sweep", async () => {
     const purged = await purgeExpiredPortableCoreRecords(database);
-    const prunedEmbeddingGenerations = await pruneRetiringEmbeddingGenerations(
-      database,
-      embeddingRollbackSeconds,
-    );
-    const seeded = maintenance ? await maintenance.seedStale(1_000) : [];
-    const generations = maintenance ? await maintenance.generationReports() : [];
+    const embeddings = await maintenance.sweep();
     const supersededCodeIndexJobs = codeIndexMaintenance
       ? await cancelSupersededCodeIndexJobs(database)
       : 0;
-    return { generations, prunedEmbeddingGenerations, purged, seeded, supersededCodeIndexJobs };
+    return { embeddings, purged, supersededCodeIndexJobs };
   });
   console.log(
     JSON.stringify({
       component: "memory-maintenance",
       event: "sweep_complete",
-      seededJobs: result.seeded.length,
+      seededJobs: result.embeddings.seeded.length,
       purgedIdempotencyRecords: result.purged.idempotencyRecords,
       purgedMemoryEvents: result.purged.memoryEvents,
-      prunedEmbeddingGenerations: result.prunedEmbeddingGenerations,
+      prunedEmbeddingGenerations: result.embeddings.prunedGenerations,
       supersededCodeIndexJobs: result.supersededCodeIndexJobs,
-      embeddingStatus: result.generations.length > 0 ? "configured" : "disabled",
-      embeddingGenerations: result.generations,
+      embeddingStatus: result.embeddings.generations.length > 0 ? "configured" : "disabled",
+      embeddingGenerations: result.embeddings.generations,
     }),
   );
 }
@@ -170,7 +141,7 @@ const loopOptions: MaintenanceLoopOptions = {
           observeOperation("code-index-maintenance.job", () => codeIndexMaintenance.run()),
       }
     : {}),
-  ...(maintenance
+  ...(maintenance.enabled
     ? { embeddingJob: () => observeOperation("maintenance.job", () => maintenance.run()) }
     : {}),
   onInfrastructureError: reportInfrastructureError,

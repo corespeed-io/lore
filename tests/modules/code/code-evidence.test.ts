@@ -154,7 +154,7 @@ test("RLS rejects a forged declaration-context fingerprint", async () => {
 
   await expect(
     context.database.transaction(async (transaction) => {
-      await installActorContext(transaction, context.alice);
+      installActorContext(transaction, context.alice);
       await transaction.query(
         `INSERT INTO memory_code_evidence (
            id, workspace_id, memory_id, repository_id,

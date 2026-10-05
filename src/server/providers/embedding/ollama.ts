@@ -69,6 +69,8 @@ export function createOllamaEmbeddingProvider(
     ...(options.fetch ? { fetch: options.fetch } : {}),
   });
   const batchSize = boundedBatchSize(options.batchSize);
+  // No requestTimeoutMs: the SDK sets no deadline on a non-streaming request, so
+  // maintenance claims jobs with its default lease.
   return {
     provider: configuration.provider,
     model: configuration.model,

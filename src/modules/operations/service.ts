@@ -1,9 +1,42 @@
-import type { PostgresDatabase } from "@corespeed/lore-core";
+import { embeddingGenerationServing, type PostgresDatabase } from "@corespeed/lore-core";
 import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/telemetry";
-import { DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
+import { DEPLOYMENT_FEATURES, DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 9;
+export const LORE_SCHEMA_REVISION = 11;
+
+function isSchemaRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+/**
+ * Whether an application built for `applicationRevision` may serve the schema that
+ * `lore.portable_core_capabilities()` describes. A schema older than the application
+ * never is. A newer one is when its migrations declared it: `compatibleFrom` names
+ * the oldest application revision the schema still serves, so a migration that only
+ * adds keeps it and one that removes something older instances use raises it. A
+ * schema that publishes no `compatibleFrom` (every revision through 9) serves only
+ * its own revision. Readiness fails closed on anything else: a missing or
+ * non-integer `schemaRevision`, or a `compatibleFrom` that is present but null, not
+ * an integer, below 1, or above `schemaRevision`.
+ *
+ * Only readiness tolerates a newer schema; migration preflight still refuses to run
+ * an application's migrations against a database newer than the application.
+ */
+export function schemaCompatibility(
+  capabilities: Readonly<Record<string, unknown>>,
+  applicationRevision = LORE_SCHEMA_REVISION,
+): "ok" | "incompatible" {
+  const { schemaRevision, compatibleFrom = schemaRevision } = capabilities;
+  if (!isSchemaRevision(schemaRevision) || !isSchemaRevision(compatibleFrom)) {
+    return "incompatible";
+  }
+  return compatibleFrom <= schemaRevision &&
+    compatibleFrom <= applicationRevision &&
+    applicationRevision <= schemaRevision
+    ? "ok"
+    : "incompatible";
+}
 
 /**
  * The only public tables that hold no tenant data and so carry no RLS: the
@@ -72,20 +105,7 @@ export interface DeploymentCapabilities {
   schemaRevision: number;
   deploymentId: string;
   memoryChunking: typeof MEMORY_CHUNKING_CAPABILITY;
-  features: {
-    idempotency: boolean;
-    optimisticConcurrency: boolean;
-    transactionalOutbox: boolean;
-    workspacePortability: boolean;
-    embeddingGenerations: boolean;
-    cursorPagination: boolean;
-    memoryProposals: boolean;
-    observationEvidence: boolean;
-    codeIndex: boolean;
-    codeDependencies: boolean;
-    codeEvidence: boolean;
-    memoryLinks: boolean;
-  };
+  features: typeof DEPLOYMENT_FEATURES;
   limits: typeof DEPLOYMENT_LIMITS;
   activeEmbeddingGeneration: {
     provider: string;
@@ -108,7 +128,6 @@ export interface ReadinessReport {
 
 interface ReadinessRow {
   capabilities: Record<string, unknown>;
-  embedding_matches: boolean;
   has_vector: boolean;
   role_name: string;
   rls_probe: boolean;
@@ -134,13 +153,26 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
           );
           const capabilities = result.rows[0]?.capabilities;
           if (!capabilities) throw new Error("Portable Core capabilities are unavailable");
-          // The database reports deployment state; limits come from the constants
-          // that enforce them (tests/server/schema-drift.test.ts keeps the frozen
-          // SQL copy equal).
+          // The database reports deployment state; features and limits come from
+          // the constants that enforce them (tests/server/schema-drift.test.ts keeps
+          // the frozen SQL copy equal). Only the fields this application publishes
+          // are copied, at every depth, because a newer compatible schema may add its own.
+          const generation = capabilities.activeEmbeddingGeneration;
           return {
-            ...capabilities,
+            apiVersion: capabilities.apiVersion,
+            schemaRevision: capabilities.schemaRevision,
+            deploymentId: capabilities.deploymentId,
             memoryChunking: MEMORY_CHUNKING_CAPABILITY,
+            features: DEPLOYMENT_FEATURES,
             limits: DEPLOYMENT_LIMITS,
+            activeEmbeddingGeneration: generation
+              ? {
+                  provider: generation.provider,
+                  model: generation.model,
+                  dimensions: generation.dimensions,
+                  revision: generation.revision,
+                }
+              : null,
           };
         }),
       );
@@ -164,7 +196,7 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
               `WITH required_tenant_state AS (
                  SELECT count(relation.oid) = count(*)
                    AND coalesce(bool_and(relation.relrowsecurity), false) AS present
-                 FROM unnest($6::text[]) AS required(table_name)
+                 FROM unnest($2::text[]) AS required(table_name)
                  LEFT JOIN pg_class relation
                    ON relation.oid = to_regclass('public.' || required.table_name)
                ), rls_state AS (
@@ -175,7 +207,7 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                    WHERE namespace.nspname = 'public'
                      AND relation.relkind IN ('r', 'p')
                      AND NOT relation.relrowsecurity
-                     AND NOT (relation.relname = ANY ($5::text[]))
+                     AND NOT (relation.relname = ANY ($1::text[]))
                      AND NOT EXISTS (
                        SELECT 1
                        FROM pg_depend dependency
@@ -192,15 +224,6 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                )
                SELECT
                  lore.portable_core_capabilities() AS capabilities,
-                 CASE WHEN $1::text IS NULL THEN true ELSE EXISTS (
-                   SELECT 1
-                   FROM embedding_generations generation
-                   WHERE generation.embedding_provider = $1
-                     AND generation.embedding_model = $2
-                     AND generation.embedding_dimensions = $3
-                     AND generation.embedding_revision = $4
-                     AND generation.status IN ('active', 'retiring')
-                 ) END AS embedding_matches,
                  EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS has_vector,
                  current_user AS role_name,
                  (SELECT enabled FROM rls_state)
@@ -210,31 +233,22 @@ export function createOperationsModule(database: PostgresDatabase, options: Oper
                    AND NULLIF(current_setting('lore.user_id', true), '') IS NULL
                    AND NULLIF(current_setting('lore.agent_id', true), '') IS NULL
                    AND NOT EXISTS (SELECT 1 FROM memories LIMIT 1) AS rls_probe`,
-              [
-                ...(options.embeddingIdentity
-                  ? [
-                      options.embeddingIdentity.provider,
-                      options.embeddingIdentity.model,
-                      options.embeddingIdentity.dimensions,
-                      options.embeddingIdentity.revision,
-                    ]
-                  : [null, null, null, null]),
-                [...NON_TENANT_PUBLIC_TABLES],
-                [...REQUIRED_TENANT_TABLES],
-              ],
+              [[...NON_TENANT_PUBLIC_TABLES], [...REQUIRED_TENANT_TABLES]],
             );
             const value = result.rows[0];
             if (!value) throw new Error("Readiness query returned no result");
-            return value;
+            const embeddingMatches = options.embeddingIdentity
+              ? await embeddingGenerationServing(transaction, options.embeddingIdentity)
+              : true;
+            return { ...value, embeddingMatches };
           }),
         );
         components.database = "ok";
         components.vector = row.has_vector ? "ok" : "unavailable";
         components.rlsRole =
           row.role_name === "lore_app" && row.rls_probe === true ? "ok" : "unavailable";
-        components.schema =
-          Number(row.capabilities.schemaRevision) === LORE_SCHEMA_REVISION ? "ok" : "incompatible";
-        if (options.embeddingConfigured && !row.embedding_matches) {
+        components.schema = schemaCompatibility(row.capabilities);
+        if (options.embeddingConfigured && !row.embeddingMatches) {
           components.embedding = "degraded";
         }
       } catch {

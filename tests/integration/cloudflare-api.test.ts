@@ -4,6 +4,7 @@ import { fetchCloudflareApi } from "@/server/api/cloudflare";
 // Exercise the Worker's real HTTP adapter, including Hono admission and errors.
 // Bindings fail if touched: public metadata must not need PostgreSQL or Queues.
 const bindings = {
+  LORE_POSTGRES_PIPELINE: "0",
   get HYPERDRIVE(): never {
     throw new Error("PostgreSQL binding unavailable");
   },

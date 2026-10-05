@@ -114,7 +114,9 @@ export const CORE_SCHEMA_CONTRACT = {
     types: ["vector"],
     enums: { memory_scope: MEMORY_SCOPES },
     values: { "embedding_generations.status": ["active", "retiring"] },
-    settings: [],
+    // A write primitive records what its write did here for the host's finish
+    // statements (MEMORY_WRITE_SETTING).
+    settings: ["lore.memory_write"],
   },
   /** Durable Memory Links and Graph reads. */
   graph: {
@@ -217,6 +219,7 @@ export const CORE_SCHEMA_CONTRACT = {
       "lore.list_pending_memory_embedding_jobs(text,text,text,integer,integer)",
       "lore.lock_current_maintenance_memory()",
       "lore.prune_retiring_embedding_generations(integer)",
+      "lore.requeue_dead_memory_embedding_jobs(uuid,boolean)",
     ],
     types: ["vector"],
     enums: {},

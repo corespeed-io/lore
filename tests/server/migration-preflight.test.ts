@@ -10,6 +10,7 @@ import {
   migrationQueries,
   parseMigration,
   splitMigrationStatements,
+  statementSql,
 } from "../../scripts/database/lib/migration-statements.ts";
 
 const migrations = [
@@ -109,10 +110,12 @@ test("transaction:false statements split only at line-ending semicolons outside 
 });
 
 test("the chain sends each transaction:false migration one statement at a time and every other whole", async () => {
-  // DROP/CREATE CONCURRENTLY pairs in each index-only migration, then its revision.
-  const concurrent: Record<string, { pairs: number; revision: number }> = {
-    "0005": { pairs: 6, revision: 5 },
-    "0008": { pairs: 5, revision: 8 },
+  // CONCURRENTLY statements in each index-only migration (a DROP before every
+  // CREATE, plus 0011's plain drops), then its revision.
+  const concurrent: Record<string, { statements: number; revision: number }> = {
+    "0005": { statements: 12, revision: 5 },
+    "0008": { statements: 10, revision: 8 },
+    "0011": { statements: 4, revision: 11 },
   };
   const versions: string[] = [];
   for (const migration of await migrationFiles()) {
@@ -123,8 +126,16 @@ test("the chain sends each transaction:false migration one statement at a time a
       expect(queries, migration.id).toHaveLength(1);
       continue;
     }
-    expect(queries, migration.id).toHaveLength(expected.pairs * 2 + 1);
+    expect(queries, migration.id).toHaveLength(expected.statements + 1);
     expect(queries.slice(0, -1).every((query) => /CONCURRENTLY/.test(query))).toBe(true);
+    // A stopped run repeats the whole file, so each build first drops its leftover.
+    for (const [index, query] of queries.entries()) {
+      const built = /^CREATE INDEX CONCURRENTLY (\w+) ON /.exec(statementSql(query))?.[1];
+      if (!built) continue;
+      expect(statementSql(queries[index - 1] ?? ""), migration.id).toBe(
+        `DROP INDEX CONCURRENTLY IF EXISTS public.${built};`,
+      );
+    }
     expect(queries.at(-1)).toMatch(
       new RegExp(
         `^UPDATE public\\.lore_system_state\\s+SET schema_revision = ${expected.revision},`,

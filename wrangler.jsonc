@@ -47,6 +47,7 @@
     "AUTH_MODE": "proxy",
     "ACCESS_TEAM_DOMAIN": "replace-me.cloudflareaccess.com",
     "ACCESS_AUD": "replace-with-access-audience",
+    "LORE_POSTGRES_PIPELINE": "0",
     "LORE_EMBEDDING_PROVIDER": "google",
     "LORE_EMBEDDING_MODEL": "gemini-embedding-2",
     "LORE_EMBEDDING_BUILD_PROVIDER": "",

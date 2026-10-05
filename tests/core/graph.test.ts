@@ -3,7 +3,7 @@ import {
   MEMORY_LINK_LIMITS,
   type MemoryGraph,
   type PostgresDatabase,
-  type PostgresTransaction,
+  transactionThrough,
 } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 import { MAX_WORKSPACE_ARCHIVE_LINKS } from "@/modules/portability/limits";
@@ -415,26 +415,31 @@ async function seedGraphReadFixture(testContext: MemoryTestContext) {
 /** Wrap a database to record every string `content` column the graph read returns. */
 function recordingDatabase(
   database: PostgresDatabase,
-  afterQuery?: (transaction: PostgresTransaction, rows: unknown[]) => Promise<void>,
+  beforeTransaction?: (index: number) => Promise<void>,
 ) {
   const contents: string[] = [];
+  let transactions = 0;
   const recording: PostgresDatabase = {
-    transaction: (use) =>
-      database.transaction((transaction) =>
-        use({
-          async query<Row>(sql: string, params?: unknown[]) {
-            const result = await transaction.query<Row>(sql, params);
-            const rows: unknown[] = result.rows;
-            for (const row of rows) {
-              if (row && typeof row === "object" && "content" in row) {
-                if (typeof row.content === "string") contents.push(row.content);
+    async transaction(use, options) {
+      await beforeTransaction?.(transactions);
+      transactions += 1;
+      return database.transaction(
+        (transaction) =>
+          use(
+            transactionThrough(transaction, async <Row>(sql: string, params?: unknown[]) => {
+              const result = await transaction.query<Row>(sql, params);
+              const rows: unknown[] = result.rows;
+              for (const row of rows) {
+                if (row && typeof row === "object" && "content" in row) {
+                  if (typeof row.content === "string") contents.push(row.content);
+                }
               }
-            }
-            await afterQuery?.(transaction, rows);
-            return result;
-          },
-        }),
-      ),
+              return result;
+            }),
+          ),
+        options,
+      );
+    },
   };
   return { database: recording, contents };
 }
@@ -604,20 +609,21 @@ test("Memory Graph reads bounded content without changing its nodes, labels, or 
   );
 });
 
-test("Memory Graph rereads complete content when a needed Memory changes between statements", async () => {
+test("Memory Graph rereads complete content when a needed Memory changes between snapshots", async () => {
   const testContext = await createMemoryTestContext();
   const fixture = await seedGraphReadFixture(testContext);
   let changed = false;
-  const recorded = recordingDatabase(testContext.database, async (transaction, rows) => {
-    const boundedRead = rows.some(
-      (row) => row && typeof row === "object" && "content_complete" in row,
-    );
-    if (changed || !boundedRead) return;
+  const recorded = recordingDatabase(testContext.database, async (index) => {
+    // The bounded read is the first transaction; the complete-content read is the
+    // second, with a later snapshot. A commit between them stands in for a
+    // concurrent writer.
+    if (index !== 1) return;
     changed = true;
-    // Stands in for a concurrent commit that the next statement's snapshot sees.
-    await transaction.query(
-      "UPDATE memories SET content = content || ' extra', version = version + 1 WHERE id = $1",
-      [fixture.id("isoLong")],
+    await testContext.adminDatabase.transaction((transaction) =>
+      transaction.query(
+        "UPDATE memories SET content = content || ' extra', version = version + 1 WHERE id = $1",
+        [fixture.id("isoLong")],
+      ),
     );
   });
 

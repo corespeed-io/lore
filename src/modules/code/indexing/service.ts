@@ -94,18 +94,13 @@ export function createCodeIndexModule(
 ): CodeIndexModule {
   const reader = createCodeIndexReadModule(database);
   const maintenanceLease = options.maintenanceLease ?? null;
-  async function installModuleContext(
-    transaction: PostgresTransaction,
-    actor: ActorContext,
-  ): Promise<void> {
-    await installActorContext(transaction, actor);
+  function installModuleContext(transaction: PostgresTransaction, actor: ActorContext): void {
+    installActorContext(transaction, actor);
     if (maintenanceLease) {
-      await transaction.query(
-        `SELECT
-           set_config('lore.code_index_job_id', $1, true),
-           set_config('lore.code_index_lease_token', $2, true)`,
-        [maintenanceLease.jobId, maintenanceLease.leaseToken],
-      );
+      transaction.setLocal({
+        "lore.code_index_job_id": maintenanceLease.jobId,
+        "lore.code_index_lease_token": maintenanceLease.leaseToken,
+      });
     }
   }
   const verifiedGitPreparations = new WeakMap<IndexCodeRevisionInput, VerifiedGitPreparation>();
@@ -118,7 +113,7 @@ export function createCodeIndexModule(
   ): Promise<ActiveGitRevisionRow | null> {
     if (maintenanceLease) return null;
     return database.transaction(async (transaction) => {
-      await installModuleContext(transaction, actor);
+      installModuleContext(transaction, actor);
       const result = await transaction.query<ActiveGitRevisionRow>(
         `SELECT revision.id, revision.repository_id, revision.source_digest,
            revision.tree_oid, revision.tree_digest, revision.file_count,
@@ -158,7 +153,7 @@ export function createCodeIndexModule(
       );
     }
     const staged = await database.transaction(async (transaction) => {
-      await installModuleContext(transaction, actor);
+      installModuleContext(transaction, actor);
       const allowed = await transaction.query<{ allowed: boolean }>(
         "SELECT lore.can_maintain_code_index($1, $2) AS allowed",
         [actor.workspaceId, maintenanceLease.repositoryId],
@@ -286,7 +281,7 @@ export function createCodeIndexModule(
       const dependenciesByPath = groupByPath(dependencies);
       for (const paths of checkpointPaths(files, artifactsByPath)) {
         await database.transaction(async (transaction) => {
-          await installModuleContext(transaction, actor);
+          installModuleContext(transaction, actor);
           await insertArtifactBatch(
             transaction,
             actor,
@@ -299,7 +294,7 @@ export function createCodeIndexModule(
         });
       }
       await database.transaction(async (transaction) => {
-        await installModuleContext(transaction, actor);
+        installModuleContext(transaction, actor);
         await insertDependencyEdges(
           transaction,
           actor,
@@ -362,7 +357,7 @@ export function createCodeIndexModule(
 
       try {
         return await database.transaction(async (transaction) => {
-          await installModuleContext(transaction, actor);
+          installModuleContext(transaction, actor);
           const allowed = maintenanceLease
             ? await transaction.query<{ allowed: boolean }>(
                 "SELECT lore.can_maintain_code_index($1, $2) AS allowed",

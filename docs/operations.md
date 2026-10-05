@@ -25,13 +25,16 @@ Lore uses a forward-only migration chain beginning with `0001_v1_baseline.sql`.
 `bun run db:migrate` initializes an empty database or upgrades an existing database
 whose migration ledger and checksums pass preflight. Applied migration files,
 including the production baseline, are immutable; schema changes require a new
-numbered migration. Readiness requires the database schema revision to match the
-running application.
+numbered migration. Readiness requires a database schema at the running
+application's revision, or a newer one whose migrations declare that they still
+serve it (see [Schema compatibility and rolling deploys](#schema-compatibility-and-rolling-deploys)).
 
 Memory responses carry a strong ETag such as `"memory-v3"`. `PATCH` and `DELETE`
 require that exact value in `If-Match`; a missing precondition returns
 `precondition_required` (428), while a stale version returns `version_conflict`
-(412). `POST`, `PATCH`, and `DELETE` accept an optional `Idempotency-Key`. Keys are
+(412). A `PATCH` whose fields all equal the stored Memory changes nothing: it
+answers 200 with the same version and ETag and records no event. `POST`, `PATCH`,
+and `DELETE` accept an optional `Idempotency-Key`. Keys are
 scoped by Workspace, Actor, and operation, expire after 24 hours, and store only a
 request hash plus the bounded response. Reusing a key with a different request
 returns `idempotency_conflict` (409).
@@ -236,8 +239,9 @@ The embedding lease is an ownership/reclaim window, not a watchdog. Ollama uses
 the default seven-minute window regardless of `LORE_EMBEDDING_TIMEOUT_MS`;
 expiry does not interrupt its HTTP request or record a timeout failure. Another
 worker can reclaim the job after expiry, while the lease token fences late
-completion by the old worker. SDK-backed providers with deadlines use their
-configured timeout to estimate a lease; retries and batching can still exceed it.
+completion by the old worker. The Google, OpenAI, and AI Gateway adapters enforce
+`LORE_EMBEDDING_TIMEOUT_MS` (clamped to 1–600 seconds) and their lease is estimated
+from that deadline; retries and batching can still exceed it.
 
 Inspect the maintenance logs and `bun run db:embedding:report` for a lack of
 progress, and verify that Ollama itself responds. Restore or restart Ollama with
@@ -481,7 +485,9 @@ counts show how many anchors you would affect.
 
 - `GET /livez` is process-only and never checks external dependencies.
 - `GET /readyz` verifies database access, the `lore_app` runtime role, schema/app
-  compatibility, pgvector, and a fail-closed RLS probe. The RLS check reads
+  compatibility (see
+  [Schema compatibility and rolling deploys](#schema-compatibility-and-rolling-deploys)),
+  pgvector, and a fail-closed RLS probe. The RLS check reads
   `pg_catalog`: every public table except the non-tenant `lore_system_state` and
   `lore_schema_migrations` must enable RLS, so a table added by a later migration
   is covered without editing a list. A table an extension owns (a `pg_depend` row
@@ -543,9 +549,12 @@ migrations or replace a production database to bypass preflight.
 A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
 statement at a time. dbmate would send the whole file as one query, and PostgreSQL
 runs a multi-statement query as one transaction block, which `CREATE INDEX
-CONCURRENTLY` refuses. `0005` and `0008` are such migrations: they build the
-replay-scrub and import-provenance indexes concurrently so writes keep flowing
-during the build.
+CONCURRENTLY` refuses. `0005`, `0008`, and `0011` are such migrations: `0005` and
+`0008` build the replay-scrub and import-provenance indexes concurrently so writes
+keep flowing during the build, and `0011` builds the chunk-id index the chunk→vector
+cascade needs and drops two indexes no query can use (the Memory metadata GIN, which
+RLS keeps off the request path, and a Link index that duplicates a prefix of the
+Link natural key).
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous
@@ -567,7 +576,9 @@ under a
 5-second `lock_timeout` and rewrite no rows, so
 on a busy database either may fail to take its locks, and a rerun of `bun run
 db:migrate` repeats it safely, because a stopped transactional migration records
-nothing. Readiness requires the exact schema revision, so from the moment `0007`
+nothing. Those revisions publish no `compatibleFrom` (see
+[Schema compatibility and rolling deploys](#schema-compatibility-and-rolling-deploys)),
+so readiness requires the exact schema revision for them: from the moment `0007`
 commits (revision 7) old instances report the schema incompatible, and new instances
 report it until `0009` commits (revision 9). No instance is ready in between, which
 spans `0008`'s concurrent index build, and that build waits for every transaction
@@ -575,6 +586,31 @@ already open. A rollout that routes only to ready instances serves nothing for t
 window: run `0007`-`0009` in a maintenance window, or relax readiness gating until the
 chain completes and the new instances are up. Replay bodies stay scrubbed meanwhile,
 by the baseline JSON-path triggers.
+
+`0010` and `0011` stay compatible with revision-9 instances. `0010` is transactional
+under the same 5-second `lock_timeout`: it takes ACCESS EXCLUSIVE on `memory_chunks`
+to drop its unused embedding columns, their HNSW index, and its request UPDATE
+policy and grant (catalog-only, no rewrite), replaces three functions (partial
+embedding claims, outbound Link deletion events on forget, and an Agent
+`last_used_at` written at most once a minute), and only then takes
+`lore_system_state` to add `compatible_from`. A write already holding
+`memory_chunks` delays it up to 5 seconds while new Memory writes queue behind it;
+if the timeout expires nothing is recorded and a rerun repeats it. It never locks
+`memories`, so it cannot deadlock with request writes, which lock `memories` first.
+`0011` is concurrent as described above and blocks no reads or writes.
+
+`0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
+revision-9 application never reads the dropped columns, policy, or indexes, and a
+revision-9 worker embeds whatever chunks a claim returns and writes each by chunk
+id, so a partial claim completes (an empty one reaches its provider with no input,
+which the concrete adapters accept). Revision-9 instances therefore keep working
+through both migrations, but only those whose readiness accepts a compatible newer
+schema also stay ready: a revision-9 release from before that readiness change
+requires exact equality and reports the schema `incompatible`, and so answers 503,
+from the moment `0010` commits. Deploy the release with compatible-range readiness
+everywhere first, as a release of its own, and only then migrate and deploy the
+release that ships `0010` and `0011`; otherwise run the migration in a maintenance
+window.
 
 The preflight blocks unsupported PostgreSQL versions, missing pgvector, insufficient
 create privilege, changed/unknown applied migration checksums, migration gaps, and a
@@ -585,3 +621,33 @@ flag is recorded as an advisory, never as proof that the backup exists.
 Always invoke migrations through `bun run db:migrate`. Production recovery is
 forward-only: the `down` sections are intentionally empty, so running `dbmate down`
 directly would remove a ledger version without reverting its schema changes.
+
+## Schema compatibility and rolling deploys
+
+Readiness reads the schema's state through `lore.portable_core_capabilities()`, the
+`SECURITY DEFINER` function `lore_app` may execute (it has no SELECT on
+`lore_system_state`). It reports the schema `ok` when the database's
+`schemaRevision` is at least the application's revision and the database's
+`compatibleFrom`, the oldest application revision the schema still serves, is at
+most the application's revision. A schema older than the application is always
+`incompatible`. A schema that publishes no `compatibleFrom`, which is every revision
+through 9, serves only its own revision. A `compatibleFrom` that is present but
+null, not a positive integer, or above `schemaRevision` fails closed as
+`incompatible`, even at the application's own revision.
+
+From `0010` on, `lore_system_state` carries a `compatible_from` column that the
+capabilities function publishes, and every migration sets it in its final UPDATE
+(a test refuses one that does not, because the column has no default to fall back
+on). A
+migration that only adds what older instances never read keeps it; one that removes
+or changes something an older instance uses raises it to the oldest application
+revision that no longer depends on it. Review a migration's `compatible_from` together
+with a test that runs the older application against the migrated schema: too low a
+value lets an instance that cannot work report ready.
+
+With such migrations, migrate first and then deploy: old instances stay ready
+against the newer schema, and new instances become ready once it is in place. A
+new instance against the old schema is `incompatible` until the migration commits.
+Only readiness tolerates a newer schema. The migration preflight still refuses a
+database newer than the application, so run `bun run db:migrate` from the new
+release.

@@ -62,6 +62,28 @@ export const DEPLOYMENT_LIMITS = {
   graphLinks: MEMORY_GRAPH_LIMITS.maximumLinks,
 } as const;
 
+/**
+ * The features a deployment publishes. Every one is a fixed property of the schema
+ * revision this application requires, so the response and the OpenAPI `const`
+ * values read this rather than the database's restatement, which a newer
+ * compatible schema may extend (tests/server/schema-drift.test.ts keeps the two
+ * equal on this application's own migration chain).
+ */
+export const DEPLOYMENT_FEATURES = {
+  idempotency: true,
+  optimisticConcurrency: true,
+  transactionalOutbox: true,
+  workspacePortability: true,
+  embeddingGenerations: true,
+  cursorPagination: true,
+  memoryProposals: true,
+  observationEvidence: true,
+  codeIndex: true,
+  codeDependencies: true,
+  codeEvidence: true,
+  memoryLinks: true,
+} as const;
+
 export const MEMORY_CHUNKING_CAPABILITY = {
   revision: MEMORY_CHUNKING_REVISION,
   maximumCharacters: MEMORY_CHUNK_MAXIMUM_CHARACTERS,

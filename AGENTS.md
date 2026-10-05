@@ -27,14 +27,49 @@ been removed. Lore now has a native implementation, split into two concepts
 - **lore core** — `packages/lore-core` (`@corespeed/lore-core`) is the
   reusable memory engine: Memory CRUD + hybrid retrieval, content bounds,
   chunking v2, Memory Links/graph reads, leased embedding maintenance,
-  the `PostgresDatabase` seam and its `pg` adapter
-  (`./postgres`), the optional Episode/Observation capability group
+  the driver-free `PostgresDatabase` seam, the optional Episode/Observation capability group
   (`./episodes`), embedding/reranking/query-planning capability interfaces,
   and a host-pluggable schema-contract test kit (`./testing`). Factories bind a
   `MemoryStorageContext`; methods take no Actor. The host initializes and
   authorizes every storage transaction. Host-baked invariants are module
   options: `embeddingDimensions` (lore oss pins 1024) and
   `defaultMemoryScope` (lore oss keeps "shared").
+  **Core owns its SQL; the host owns connections** (Yunpeng, 2026-10-03). Core
+  imports no database driver (`biome.json` denies `pg`, `pg/**`, and
+  `pg-cloudflare` under `packages/lore-core`), and OSS's `pg` adapters live in
+  `src/server/database/postgres.ts`. A `PostgresTransaction` has four members:
+  `query`; `batch(statements, { commit })`, which sends statements whose inputs
+  are already known without waiting between them (pg 8.23 pipelining) while
+  PostgreSQL still runs them in order, each with its own READ COMMITTED snapshot,
+  and rethrows the first failure in statement order, `commit` sending COMMIT
+  behind them so a whole read costs one network wait and nothing may run
+  afterwards; `setLocal`, whose pending settings (role included) travel in one
+  statement ahead of the next; and `afterCommit`, whose effects run once COMMIT
+  succeeded and never after a rollback. Every adapter builds on
+  `transactionHandle(send)`, which sends `BEGIN` and pending settings with the
+  first statement; PGlite hosts use `managedTransactionDatabase` (`./testing`'s
+  `testDatabase` wraps it). A wrapper that observes, delays, or fails statements
+  must go through `transactionThrough`, which feeds batched statements through its
+  `query` one at a time, and must not query after the callback returns: the engine
+  may already have committed inside its last batch. The single-Memory write
+  primitives take `{ commit }` to commit in their final batch, which OSS passes
+  when no idempotency ledger row is left to complete. An update is one locking
+  read, which also reads the stored chunks when content is given, and one final
+  batch, and it writes only what differs: when content, scope, and metadata all
+  equal the locked row it writes nothing (same version, `updatedAt`, and ETag; no
+  event, no job; a keyed no-op still completes its ledger row with that body).
+  Content changes are re-chunked in TypeScript and compared with the stored chunks
+  by ordinal, so only differing ordinals and the removed tail are deleted and
+  inserted (`lore_app` has no UPDATE on `memory_chunks`), and unchanged chunks keep
+  their ids and vectors; a prepend still re-embeds everything after it. Scope and
+  metadata changes never touch chunks. A job for the new version is queued only
+  when some chunk lacks a vector in the serving generation; older-version jobs are
+  cancelled at claim (`scripts/checks/smoke-memory-core.ts` commits an update while
+  an older version's provider call is in flight on PostgreSQL). Memory Proposal
+  acceptance passes `versionUnchanged`, because its review trigger accepts an
+  update receipt only at `base_memory_version + 1`.
+  `packages/lore-core/tests/transaction-handle.test.ts` pins the seam and each
+  engine operation's statements and network waits.
   **It is a package to enforce a boundary, not to ship an artifact.** It is
   `private`, has no build script and no `files`/`main`/`types`, `exports` points
   straight at `./src`, and `build:packages`/`packages:smoke` cover only the SDK,
@@ -152,7 +187,17 @@ been removed. Lore now has a native implementation, split into two concepts
   evidence check and a concurrent forget or update of that evidence can still abort one
   side with a retryable deadlock error. `tests/server/replay-subject-upgrade.test.ts`
   checks the tables each migration locks and the order 0009 creates its triggers in. `completeMutation` writes the columns from its `ReplayBody`, the only type it
-  accepts, and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
+  accepts (`completionStatement` also takes a `SqlReplayBody`, a body PostgreSQL
+  builds from the row the same batch just wrote, so a keyed Memory write completes
+  its ledger row in the write's own batch; `writtenMemoryReplayBody` is
+  `memoryFromRow` in SQL, and tests hold a replay equal to the first response; because
+  write authority can be revoked between a write's lock and its write, which then
+  matches no row, and a re-read cannot tell (the same policy may hide the row), the
+  engine's write statement records what it did in the transaction-local setting
+  `lore.memory_write` (`MEMORY_WRITE_SETTING`, listed in the schema contract), and
+  `conditionalCompletionStatements` takes the outcome and body from that record,
+  `not_found` when it is empty, as `tests/server/replay-write-race.test.ts` proves for
+  narrowed and revoked grants), and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
   columns during a rolling deploy; until then renaming a replayed key still needs a
@@ -177,6 +222,32 @@ been removed. Lore now has a native implementation, split into two concepts
   `memoryLinkKindsPerPair`, `memoryLinksPerSource`, `memoryLinksPerTarget`,
   `memoryLinksPerOwner`, `memoryLinkList`, `graphLinks`); `CREATE OR REPLACE` keeps
   its grants.
+  `0010_partial_embedding_claims_and_chunk_cleanup.sql` (transactional, 5s
+  `lock_timeout`) drops the baseline's unused `memory_chunks` embedding columns
+  (`embedding`, `embedding_provider`, `embedding_model`, `embedding_revision`,
+  `embedded_at`, with their CHECK and HNSW index; vectors live only in
+  `memory_chunk_embeddings`), drops the `memory_chunks_update` policy and revokes
+  `lore_app` UPDATE on `memory_chunks` (chunks are only inserted and deleted), makes
+  `lore.claim_memory_embedding_job` return only the chunks lacking a vector in the
+  job's generation, makes forget's `lore.append_memory_event` record a
+  `memory_link.deleted` event for each outbound Link (the cascade's Link trigger
+  finds no source and records only inbound ones; the JSON-path replay scrub stays
+  verbatim), makes `lore.authenticate_agent_credential` write `last_used_at` only
+  when it is NULL or over 60 seconds old (the age is in the UPDATE predicate; every
+  access check still runs on every call), and adds `lore_system_state.compatible_from`,
+  published by `lore.portable_core_capabilities()` as `compatibleFrom`. It takes
+  ACCESS EXCLUSIVE on `memory_chunks` first and `lore_system_state` last, never
+  `memories`. `0011_trim_memory_indexes_concurrently.sql` (`transaction:false`) builds
+  `memory_chunk_embeddings_chunk_idx (chunk_id)`, which the chunk→vector cascade
+  lacked, and drops `memories_metadata_gin_idx` and `memory_links_workspace_source_idx`
+  (a strict prefix of the Link natural key). Both keep `compatible_from = 9`, but only a
+  revision-9 release with compatible-range readiness stays ready across them; one from
+  before it requires exact equality, so that readiness release ships alone, everywhere,
+  before `0010` runs (docs/operations.md).
+  `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
+  with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
+  from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
+  that could silently carry over).
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
   CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities
@@ -184,13 +255,26 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 9) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 11) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
-  wrapper tolerates an older application constant, but readiness requires exact
-  equality and reports the schema incompatible. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (9), and
+  wrapper tolerates an older application constant, but readiness reports a schema
+  older than the application incompatible. Readiness (`schemaCompatibility`) accepts a
+  newer schema only when its `compatibleFrom`, published by
+  `lore.portable_core_capabilities()`, is at most the application's revision; a schema
+  that publishes none (every revision through 9) serves only its own revision, and a
+  malformed value fails closed. From 0010 on, `lore_system_state` carries
+  `compatible_from` and every migration sets it, in the same final UPDATE as
+  `schema_revision`, to the oldest application revision it
+  still serves: keep it when old instances lose nothing, raise it when they would, and
+  prove the choice with the old application against the migrated schema
+  (docs/operations.md, "Schema compatibility and rolling deploys"). Capabilities copy
+  only the fields this application publishes, so an older instance on a newer schema
+  never serves fields outside its OpenAPI contract; features, like limits, come from
+  `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
+  application. `tests/integration/portable-core.test.ts`,
+  `tests/integration/api.test.ts` pin the current revision (11), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -210,8 +294,9 @@ been removed. Lore now has a native implementation, split into two concepts
   (`tests/support/memory-context.ts`, restore verification, the OSS-hosted engine
   contract test, evaluation fixtures) and `migrate-dimensions.ts` replay the chain through
   `applyMigrationChain`/`migrationQueries`; never apply a migration file with one
-  `exec(fileContents)`. `pg` remains the runtime adapter behind the narrow
-  transaction interface in `packages/lore-core/src/db.ts`. The deployment wrapper serializes
+  `exec(fileContents)`. `pg` remains the runtime driver, owned by OSS
+  (`src/server/database/postgres.ts`) behind the driver-free transaction seam in
+  `packages/lore-core/src/db.ts`. The deployment wrapper serializes
   dbmate with a PostgreSQL advisory lock and stores SHA-256 values beside dbmate's
   versions in `lore_schema_migrations`. The schema is live in production
   (CoreSpeed HaaS), so the recorded baseline is frozen: never edit an applied
@@ -424,7 +509,8 @@ been removed. Lore now has a native implementation, split into two concepts
   which resolves the verified human Actor *inside* the active Workspace. The
   `agents` module (`src/modules/agents/service.ts`) owns a User's Agents, their
   Workspace grants, and issuing and revoking their credentials. `src/server/auth/`
-  keeps only authentication: Identity storage, request admission, Actor context,
+  keeps only authentication: Identity storage, request admission, Actor context and
+  its in-transaction admission (`actor-admission.ts`),
   and proving an Agent bearer token (`agent-credentials.ts`, which also defines the
   token format and stored hash the `agents` module issues). There is no separate
   `identity` module, and a four-file domain folder for one workspace-scoped endpoint
@@ -606,8 +692,10 @@ been removed. Lore now has a native implementation, split into two concepts
   transaction would see one frozen snapshot). The engine relies on READ COMMITTED:
   each statement's fresh snapshot is what lets a writer queued on the source lock
   see the Link its predecessor committed. A new Link's insert is `ON CONFLICT DO
-  NOTHING`, then a re-read replaces a Link the first read could not see (a target
-  briefly invisible, or a batch insert since), so neither race answers 500. The route
+  NOTHING`; when it finds the key taken by a Link the first read could not see (a
+  target briefly invisible, or a batch insert since), the whole connect runs once more
+  under a fresh lock, replacing that Link if it is visible now or inserting again if a
+  disconnect removed it in between, so neither race answers 500 or a false 404. The route
   refuses any query parameter but one `kind`, so a misspelled parameter cannot make a
   DELETE fall back to the default kind; the SDK refuses a kind with an unpaired
   surrogate, which URL encoding would turn into U+FFFD.
@@ -665,12 +753,36 @@ been removed. Lore now has a native implementation, split into two concepts
   embedding jobs as independent loops, draining both generations sequentially
   within the embedding loop, while Cloudflare Queues are wake-up hints for both
   with a scheduled two-generation database sweep as the delivery backstop.
+  A claim returns only the job Memory's chunks that still lack a vector in the
+  job's generation, so a re-armed job embeds only what is missing, and a job with
+  nothing missing completes without a provider call.
+  Both hosts drive one runner, `createEmbeddingMaintenance(database,
+  { embeddingProviders, generationRetentionSeconds, logger })`, with one lane per
+  provider, serving first: `run(message?)` claims the job a `{ jobId }` queue
+  message names (trying each lane) or, with no message, any due job, rotating the
+  starting lane so a rollout cannot starve serving, and answers `invalid` for a
+  malformed message; `sweep()` prunes expired retiring generations (default 7-day,
+  minimum 1-hour retention), seeds at most 1,000 stale jobs per generation, and
+  reports each lane; `pending(limit)` returns `{ jobId }` messages for the
+  Cloudflare fan-out. A lane's lease comes from `EmbeddingProvider.requestTimeoutMs`:
+  the Google, OpenAI, and AI Gateway adapters publish their SDK timeout (from
+  `LORE_EMBEDDING_TIMEOUT_MS`, clamped to 1–600 s), and Ollama, whose SDK has no
+  deadline, publishes none and gets the default 420-second window. Log entries
+  carry the generation's provider/model/revision. The lanes, the lease rule, and
+  the round-robin coordinator are internal to the engine; hosts keep environment
+  parsing, concurrency, loops, queue transport, and log format.
+  `createEmbeddingGenerationAdmin(database)` (`findReport`, `activate`,
+  `requeueDeadJobs`) backs the `db:embedding:*` commands, and readiness asks
+  `embeddingGenerationServing(transaction, identity)`. The embedding-dimensions
+  check lives in `createMemoryMutationPrimitives`, so every host module that writes
+  Memories refuses a provider of another width.
   Embedding and Code Index maintenance return `lost`, a normal outcome, when
   another run took the lease or the Memory was deleted mid-embed; `--once` runs
-  one cycle for CI. Mutation primitives return a `jobId` only when an embedding
-  job row was inserted (`RETURNING true` needs no SELECT grant); hosts notify on
-  any non-null id, including a metadata-only update whose prior embedding is still
-  pending. `bun run db:embedding:requeue-dead` re-arms one generation's dead
+  one cycle for CI. Hosts never see embedding job ids: the engine registers the
+  queue notification of every job row it inserted (`RETURNING true` needs no
+  SELECT grant), including a metadata-only update whose prior embedding is still
+  pending, as one post-commit effect of that transaction, which sends at most
+  1,000 messages (the sweep finds the rest) and nothing after a rollback. `bun run db:embedding:requeue-dead` re-arms one generation's dead
   embedding jobs after an outage (dry-run count unless `--apply`).
   `db:embedding:report` and `db:embedding:activate` require
   `LORE_EMBEDDING_BUILD_PROVIDER`/`MODEL` or `LORE_EMBEDDING_PROVIDER`/`MODEL`
@@ -678,7 +790,14 @@ been removed. Lore now has a native implementation, split into two concepts
   model), and print the provider/model/revision they acted on;
 - `src/server/api/idempotency.ts`, `src/modules/operations/maintenance.ts`,
   `src/modules/{portability,operations}/service.ts`, and `src/server/telemetry/telemetry.ts`
-  own OSS replay, expired replay/event cleanup, and operational integration.
+  own OSS replay, expired replay/event cleanup, and operational integration. A ledger
+  claim takes its Workspace and actor columns from the Actor bound to the transaction
+  (`lore.current_workspace_id()`, `lore.current_user_id()`, `lore.current_agent_id()`),
+  never from parameters, so it travels in the admission's round trip: a keyed Memory
+  write is two round trips (the admission, claim, and any locking read or delete;
+  then the write, its ledger completion, and COMMIT), and an unkeyed forget one. A
+  keyed forget locks the Memory with its claim and deletes in the second batch, so a
+  replay deletes nothing and a reclaimed key's events carry the ledger row's id.
   Memory mutation events are database triggers in the
   same transaction as source/link writes; deletion remains hard delete and leaves
   only a content-free, expiring tombstone. `/api/v1`, `/openapi.json`, `/livez`,
@@ -956,8 +1075,13 @@ and query budget as versioned Evaluation metadata rather than a User/Workspace o
 Memory search/list may constrain `scope`, `updatedAfter`, and exclusive
 `updatedBefore`, plus JSONB-containment `metadataFilter`. Apply these predicates to
 every lexical and dense candidate source before top-k and keep them in the Actor/RLS
-transaction; reranking must never restore a filtered result. Keep the GIN metadata
-index when changing benchmark or application filter paths.
+transaction; reranking must never restore a filtered result. `memories` has no
+metadata GIN index (0011 dropped it): `jsonb @>` is not leakproof, so under
+`lore_app`'s RLS policy it is always a filter and never an index condition, and the
+index only cost every Memory write.
+`tests/server/schema-revision-11-upgrade.test.ts` proves it with EXPLAIN under the
+request role and `enable_seqscan=off`; do not add one back without first fixing that
+request-path restriction and proving the win under `SET ROLE lore_app`.
 Every Memory API response (create, read, update, list, search, context packets,
 and Proposal acceptance) renders `createdAt`/`updatedAt` as RFC 3339 UTC with
 microsecond precision through lore-core's `memorySelectColumns`; a `SELECT *`
@@ -1078,7 +1202,7 @@ The v1 system must provide:
 - user-private and Workspace-shared Memory enforced with Postgres RLS;
 - owner-private Memory Proposals with human-only acceptance into canonical Memory;
 - deterministic background maintenance: chunking, embedding, indexing, retries,
-  re-indexing, and deletion/permission-change invalidation;
+  re-indexing, and cancelling jobs a later write made stale;
 - a Benchmark/Evaluation suite covering retrieval quality, isolation, latency, and
   cost.
 
@@ -1177,8 +1301,9 @@ database invariant, not a UI convention.
 - Postgres is the primary store. RLS must cover every tenant-owned table, including
   chunks, embeddings, graph/relationship data, credentials, and evaluation data.
 - A request resolves an authenticated User and an active Workspace, then installs
-  that context for the database transaction. Never trust a caller-supplied user or
-  Workspace id by itself.
+  that context for the database transaction; on hot routes the resolution is the
+  first transaction's prefix and binds the context from the database's own answer.
+  Never trust a caller-supplied user or Workspace id by itself.
 - An Identity is an authentication-provider identity mapped to an internal User.
   Proxy headers, OIDC claims, or local credentials authenticate; Memberships and
   grants authorize.
@@ -1198,8 +1323,10 @@ database invariant, not a UI convention.
 - Code dependency reads must select the same Workspace, repository, full commit OID,
   and active generation before traversing callers or callees. Unresolved and
   ambiguous targets remain explicit and never become guessed cross-file edges.
-- Deleting a Memory or changing its scope must invalidate its chunks, embeddings,
-  cached search results, and derived graph data.
+- Deleting a Memory removes its chunks, embeddings, jobs, and Links in the same
+  transaction. A scope change takes effect immediately and rewrites nothing: chunk,
+  embedding, Link, and Graph reads authorize through the parent Memory row's RLS
+  policy, and none of them stores scope.
 - HTTP update/delete requires a strong Memory ETag through `If-Match`; retries may
   use actor/operation-scoped `Idempotency-Key`. Keep the lock, version check, source
   write, chunk/job changes, replay record, and mutation event in one transaction.
@@ -1278,8 +1405,14 @@ Cloudflare specifics:
   adapter config and contains placeholder binding/auth values only.
 - Hyperdrive **must have query caching disabled**. RLS depends on transaction-local
   settings and permission revocation must be immediately visible.
-- Create a fresh `pg` client inside each Worker request context. Do not cache a
-  socket-backed Pool/Client globally across Worker requests.
+- Create the request pool (`createRequestPostgresDatabase`: at most two
+  connections, never evicted while idle) inside each Worker request, queue batch,
+  or cron run, and close it when that context ends (`waitUntil` after an API
+  response, `finally` for queue and cron handlers). Do not cache a socket-backed
+  Pool/Client globally across Worker requests. `LORE_POSTGRES_PIPELINE` (`1` or
+  `0`) turns pg pipelining on or off; it defaults on for self-host and off on
+  Workers until pipelined extended-protocol queries through Hyperdrive, errors and
+  aborts included, have been measured.
 - Migrations and runtime credentials stay separate. Run migrations from a trusted
   environment, then connect Hyperdrive with a non-owner login that can `SET ROLE
   lore_app`.
@@ -1300,7 +1433,7 @@ surfaces:
 - **Workspace access module:** select the active Workspace and validate Membership
   or Agent grant.
 - **Memory module:** remember, retrieve, search, update, and forget while hiding
-  chunking, indexing, provenance, and permission invalidation.
+  chunking, chunk reuse, indexing, and provenance.
 - **Observation module:** atomically record, list, retrieve, and explicitly forget
   bounded immutable Episodes while keeping their Observations outside canonical
   Memory retrieval and enforcing the same owner/scope/RLS rules.
@@ -1582,8 +1715,32 @@ framework-independent. Use `app.request()` for API tests, including middleware
 and routing. Preserve the unversioned aliases and v1 contract, HEAD/OPTIONS/405
 behavior, and shared admission policy in
 `src/server/auth/auth.ts`. `admitRequest` verifies the human credential once and
-passes the principal to the resolver, which registers the Identity and checks the
-requested Workspace's active Membership in one transaction. For unsafe methods it
+passes the principal on. Workspace admission is then the prefix of the request's
+first database transaction (`src/server/auth/actor-admission.ts`): a `PendingActor`
+sends its statements ahead of that transaction's own, without a round trip of its
+own, and they bind the RLS settings inside PostgreSQL from what they find. A human
+is resolved, never registered (`lore.resolve_identity` plus `lore.is_active_member`;
+Membership needs a registered User, so the prefix stays read-only and fits the
+engine's read-only snapshots); an Agent is `lore.authenticate_agent_credential`,
+which may record its use, so an Agent is admitted in a transaction of its own before
+a read-only or repeatable-read one (the Graph, context packets) and before a search
+that pays an embedding or planning provider, since its token is proved only in the
+database. A refused Actor binds nothing: RLS shows the statements behind it nothing
+and refuses their writes, and `actorTransaction` then answers
+`WorkspaceAccessError` (403) whatever they returned. Every transaction of one
+request shares its one admission: the first to run sends it, and a concurrent one
+waits for its outcome and binds it before sending anything. Memory reads, search, Links, Graph, and
+Memory-only context packets bind a pending Actor (`c.var.requestActor()`); other
+routes call `c.var.resolveActor()`, one round trip of its own. `GET /workspaces`
+registers a pending User (`PendingUser`, `lore.register_identity`) as the prefix of
+its list. `tests/server/round-trip-budget.test.ts` pins every hot route's statements
+and network waits, and each search configuration's (dense, planner, feedback,
+context-group expansion, Memory-only context packets), for humans and Agents,
+through the real `pg` adapter. `tests/server/function-grants.test.ts` pins the
+full grant map, the grantees of every `lore` function (none is executable by
+`PUBLIC`, and each sits with `lore_app`, `lore_maintenance`, both, or its owner alone),
+so a migration that adds a function or changes a grant updates it on purpose; it also
+proves a NOINHERIT request login holds nothing before its role switch. For unsafe methods it
 returns 403 for a cross-site `Sec-Fetch-Site`, or an `Origin` matching none of the
 URL host, `Host`, or first `X-Forwarded-Host`; `Sec-Fetch-Site: same-origin`
 passes even behind a Host-rewriting proxy, and clients that send neither header

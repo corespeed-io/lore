@@ -30,8 +30,6 @@ import {
   type WorkspaceArchiveFormat,
 } from "./limits";
 
-/** Embedding jobs an import wakes directly: ten Queue batches, like one sweep. */
-const MAX_IMPORT_MAINTENANCE_NOTIFICATIONS = 1_000;
 // Upper bounds for each serialized record beyond its measured JSON content (or kind)
 // and metadata: ids, timestamps, version or weight, property names, and separators.
 const ARCHIVE_MEMORY_OVERHEAD_BYTES = 256;
@@ -519,14 +517,13 @@ export function createPortabilityModule(
   options: PortabilityModuleOptions = {},
 ) {
   const { maximumArchiveBytes = MAX_WORKSPACE_ARCHIVE_BYTES, ...mutationOptions } = options;
-  const { insertMemoriesInTransaction, notifyMaintenanceMany } =
-    createMemoryMutationPrimitives(mutationOptions);
+  const { insertMemoriesInTransaction } = createMemoryMutationPrimitives(mutationOptions);
 
   return {
     async exportWorkspace(actor: ActorContext): Promise<WorkspaceArchive> {
       if (actor.agentId) throw new PortabilityAccessDeniedError("Workspace export requires a User");
       const exported = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const capabilities = await transaction.query<{ capabilities: Record<string, unknown> }>(
           "SELECT lore.portable_core_capabilities() AS capabilities",
         );
@@ -681,7 +678,7 @@ export function createPortabilityModule(
       }
       const dryRun = input.dryRun === true;
       const imported = await database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const allowed = await transaction.query<{ allowed: boolean }>(
           "SELECT lore.can_write_memory($1, $2) AS allowed",
           [actor.workspaceId, actor.userId],
@@ -699,7 +696,6 @@ export function createPortabilityModule(
           : new Map<string, string>();
         if (receipt && survivors.size === Object.keys(receipt.summary.memoryIdMap).length) {
           return {
-            jobIds: [],
             result: {
               ...receipt.summary,
               dryRun,
@@ -738,7 +734,6 @@ export function createPortabilityModule(
         );
         if (dryRun) {
           return {
-            jobIds: [],
             result: {
               archiveChecksum: checksum,
               dryRun: true,
@@ -773,7 +768,7 @@ export function createPortabilityModule(
           if (!importId) {
             const concurrent = await workspaceImportReceipt(transaction, actor, checksum, false);
             if (!concurrent) throw new Error("Import receipt became unavailable");
-            return { jobIds: [], result: { ...concurrent.summary, replayed: true } };
+            return { result: { ...concurrent.summary, replayed: true } };
           }
         }
         await transaction.query("SELECT set_config('lore.request_id', $1, true)", [importId]);
@@ -786,7 +781,7 @@ export function createPortabilityModule(
           memoryIdMap[memory.id] = targetId;
           return { memory, targetId };
         });
-        const inserted = await insertMemoriesInTransaction(
+        await insertMemoriesInTransaction(
           transaction,
           actor,
           targets.map(({ memory, targetId }) => ({
@@ -809,7 +804,6 @@ export function createPortabilityModule(
           })),
           [actor.workspaceId, importId],
         );
-        const jobIds = inserted.jobIds;
         const importedLinks = await insertMemoryLinksInTransaction(
           transaction,
           actor.workspaceId,
@@ -835,12 +829,10 @@ export function createPortabilityModule(
           importId,
           JSON.stringify(result),
         ]);
-        return { jobIds, result };
+        return { result };
       });
-      // Queue hints are post-commit latency optimizations; the jobs are durable.
-      // Wake maintenance for a bounded number of jobs; the scheduled sweep delivers the
-      // rest, so a 10,000-Memory import never fans out into thousands of queue sends.
-      notifyMaintenanceMany(imported.jobIds.slice(0, MAX_IMPORT_MAINTENANCE_NOTIFICATIONS));
+      // The engine wakes maintenance after commit for at most 1,000 of the imported
+      // jobs; the scheduled sweep delivers the rest.
       return imported.result;
     },
   };

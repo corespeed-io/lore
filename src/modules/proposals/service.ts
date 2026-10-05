@@ -275,7 +275,7 @@ export function createMemoryProposalsModule(
   database: PostgresDatabase,
   options: MemoryProposalsModuleOptions = {},
 ) {
-  const { insertMemoryInTransaction, notifyMaintenance, updateMemoryInTransaction } =
+  const { insertMemoryInTransaction, updateMemoryInTransaction } =
     createMemoryMutationPrimitives(options);
 
   async function proposalsFromRows(
@@ -388,10 +388,9 @@ export function createMemoryProposalsModule(
 
       try {
         return await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           const claim = await beginMutation<{ proposal: MemoryProposal }>(
             transaction,
-            actor,
             options.idempotency,
           );
           if (claim.replay) return claim.replay.proposal;
@@ -636,7 +635,7 @@ export function createMemoryProposalsModule(
         Math.min(input.limit ?? DEFAULT_MEMORY_PROPOSAL_LIST, MAXIMUM_MEMORY_PROPOSAL_LIST),
       );
       return database.transaction(async (transaction) => {
-        await installActorContext(transaction, actor);
+        installActorContext(transaction, actor);
         const result = await transaction.query<MemoryProposalRow>(
           `SELECT *
            FROM memory_proposals
@@ -662,7 +661,7 @@ export function createMemoryProposalsModule(
       }
       try {
         const reviewed = await database.transaction(async (transaction) => {
-          await installActorContext(transaction, actor);
+          installActorContext(transaction, actor);
           if (decision === "accept") {
             // Forgetting a Memory locks the Memory row and then, through its BEFORE
             // DELETE trigger, its Proposals. Accepting an update takes the same order —
@@ -722,7 +721,6 @@ export function createMemoryProposalsModule(
             return {
               proposal,
               memory: accepted?.rows[0] ? memoryFromRow(accepted.rows[0]) : null,
-              jobId: null,
             };
           }
 
@@ -738,11 +736,7 @@ export function createMemoryProposalsModule(
               [id, actor.workspaceId, actor.userId],
             );
             const [proposal] = await proposalsFromRows(transaction, rejected.rows);
-            return {
-              proposal,
-              memory: null,
-              jobId: null,
-            };
+            return { proposal, memory: null };
           }
 
           const [pending] = await proposalsFromRows(transaction, [current]);
@@ -758,7 +752,7 @@ export function createMemoryProposalsModule(
             }
           }
 
-          let applied: { jobId: string | null; memory: Memory } | null;
+          let applied: { memory: Memory } | null;
           if (current.kind === "create") {
             applied = {
               ...(await insertMemoryInTransaction(
@@ -786,6 +780,9 @@ export function createMemoryProposalsModule(
                 ...(current.changes_metadata ? { metadata: current.proposed_metadata } : {}),
               },
               current.base_memory_version,
+              // The review trigger accepts an update only at the next version, so an
+              // accepted Proposal equal to its target still records one.
+              { versionUnchanged: true },
             );
           }
           if (!applied) {
@@ -813,14 +810,9 @@ export function createMemoryProposalsModule(
             [actor.workspaceId, id, applied.memory.id, actor.userId],
           );
           const [proposal] = await proposalsFromRows(transaction, accepted.rows);
-          return {
-            proposal,
-            memory: applied.memory,
-            jobId: applied.jobId,
-          };
+          return { proposal, memory: applied.memory };
         });
-        notifyMaintenance(reviewed?.jobId ?? null);
-        return reviewed ? { proposal: reviewed.proposal, memory: reviewed.memory } : null;
+        return reviewed;
       } catch (error) {
         if (isPostgresAccessDenied(error)) {
           throw new MemoryProposalAccessDeniedError("Actor cannot review this Memory Proposal", {

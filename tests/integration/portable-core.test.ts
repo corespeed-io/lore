@@ -1,8 +1,13 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
-import { MemoryVersionConflictError } from "@corespeed/lore-core";
+import { MemoryVersionConflictError, transactionHandle } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
+import { DEPLOYMENT_FEATURES } from "@/modules/operations/limits";
 import { purgeExpiredPortableCoreRecords } from "@/modules/operations/maintenance";
-import { createOperationsModule, NON_TENANT_PUBLIC_TABLES } from "@/modules/operations/service";
+import {
+  createOperationsModule,
+  LORE_SCHEMA_REVISION,
+  NON_TENANT_PUBLIC_TABLES,
+} from "@/modules/operations/service";
 import { workspaceArchiveChecksum } from "@/modules/portability/checksum";
 import {
   MAX_WORKSPACE_ARCHIVE_LINKS,
@@ -49,34 +54,32 @@ function exportLimitDatabase(options: {
   };
   return {
     transaction: (use) =>
-      use({
-        async query<Row>(sql: string, params?: unknown[]): Promise<{ rows: Row[] }> {
+      use(
+        transactionHandle(async (sql, params) => {
           options.queries.push(sql);
-          if (sql.includes("set_config('lore.workspace_id'")) return { rows: [] };
+          if (sql.includes("set_config(") || sql === "COMMIT") return { rows: [] };
           if (sql.includes("portable_core_capabilities")) {
             return {
-              rows: [
-                { capabilities: { deploymentId: EXPORT_TEST_DEPLOYMENT_ID } },
-              ] as unknown as Row[],
+              rows: [{ capabilities: { deploymentId: EXPORT_TEST_DEPLOYMENT_ID } }],
             };
           }
           if (sql.includes("FROM memories")) {
             expect(sql).toContain("LIMIT $2");
             expect(params?.[1]).toBe(MAX_WORKSPACE_ARCHIVE_MEMORIES + 1);
             return {
-              rows: Array(options.memoryCount).fill(memory) as unknown as Row[],
+              rows: Array(options.memoryCount).fill(memory),
             };
           }
           if (sql.includes("FROM memory_links")) {
             expect(sql).toContain("LIMIT $3");
             expect(params?.[2]).toBe(MAX_WORKSPACE_ARCHIVE_LINKS + 1);
             return {
-              rows: Array(options.linkCount ?? 0).fill(link) as unknown as Row[],
+              rows: Array(options.linkCount ?? 0).fill(link),
             };
           }
           throw new Error(`Unexpected export test query: ${sql}`);
-        },
-      }),
+        }).transaction,
+      ),
   };
 }
 
@@ -225,7 +228,7 @@ test("Idempotency-Key scope is isolated by actor", async () => {
   await memories.remember(testContext.bob, input, { idempotency });
 
   const aliceRows = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     return transaction.query<{ actor_user_id: string }>(
       "SELECT actor_user_id FROM request_idempotency_records",
     );
@@ -270,7 +273,7 @@ test("transactional Memory events survive hard deletion without retaining conten
   await memories.forget(testContext.alice, privateMemory.id);
 
   const aliceEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     return transaction.query<{
       event_type: string;
       resource_id: string;
@@ -304,13 +307,13 @@ test("transactional Memory events survive hard deletion without retaining conten
   });
 
   const bobEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     return transaction.query<{ resource_id: string }>("SELECT resource_id FROM memory_events");
   });
   expect(bobEvents.rows).toEqual([{ resource_id: sharedMemory.id }]);
 
   const carolEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.carol);
+    installActorContext(transaction, testContext.carol);
     return transaction.query("SELECT resource_id FROM memory_events");
   });
   expect(carolEvents.rows).toEqual([]);
@@ -331,7 +334,7 @@ test("Memory Link mutations append content-free events in the same transaction",
   await graph.connect(testContext.alice, { ...endpoints, weight: 0.5 });
 
   await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.alice);
+    installActorContext(transaction, testContext.alice);
     await transaction.query("DELETE FROM memory_links WHERE id = $1", [link.id]);
   });
   const result = await testContext.adminDatabase.transaction((transaction) =>
@@ -379,7 +382,7 @@ test("Memory Link mutations append content-free events in the same transaction",
 
   await memories.update(testContext.alice, target.id, { scope: "private" });
   const bobLinkEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     return transaction.query(
       "SELECT resource_id FROM memory_events WHERE resource_type = 'memory_link'",
     );
@@ -387,13 +390,79 @@ test("Memory Link mutations append content-free events in the same transaction",
   expect(bobLinkEvents.rows).toEqual([]);
 
   const bobTargetEvents = await testContext.database.transaction(async (transaction) => {
-    await installActorContext(transaction, testContext.bob);
+    installActorContext(transaction, testContext.bob);
     return transaction.query(
       "SELECT resource_id FROM memory_events WHERE resource_type = 'memory' AND resource_id = $1",
       [target.id],
     );
   });
   expect(bobTargetEvents.rows).toEqual([]);
+});
+
+test("forgetting a Memory records the deletion of its outbound and inbound Links", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createMemoryModule(testContext.database);
+  const graph = createMemoryGraphModule(testContext.database);
+  const forgotten = await memories.remember(testContext.alice, { content: "Forgotten source" });
+  const target = await memories.remember(testContext.alice, { content: "Surviving target" });
+  const bobSource = await memories.remember(testContext.bob, {
+    content: "Bob's source",
+    scope: "private",
+  });
+  const outbound = await graph.connect(testContext.alice, {
+    sourceMemoryId: forgotten.id,
+    targetMemoryId: target.id,
+    kind: "supports",
+  });
+  const inbound = await graph.connect(testContext.bob, {
+    sourceMemoryId: bobSource.id,
+    targetMemoryId: forgotten.id,
+    kind: "related",
+  });
+  if (!outbound || !inbound) throw new Error("Expected both Links to be created");
+
+  await expect(memories.forget(testContext.alice, forgotten.id)).resolves.toBe(true);
+
+  const deleted = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<Record<string, unknown>>(
+      `SELECT resource_id, source_memory_id, related_memory_id, owner_user_id, memory_scope,
+              actor_user_id, changed_fields,
+              expires_at BETWEEN now() + interval '29 days' AND now() + interval '31 days'
+                AS expires_in_30_days
+       FROM memory_events
+       WHERE event_type = 'memory_link.deleted'
+       ORDER BY sequence`,
+    ),
+  );
+  // Each Link's event names its source's owner and scope, as the Link trigger does;
+  // the outbound Link's source is the forgotten Memory itself.
+  const recorded = {
+    actor_user_id: testContext.alice.userId,
+    changed_fields: ["endpoints", "kind", "metadata", "weight"],
+    expires_in_30_days: true,
+  };
+  expect(deleted.rows).toEqual([
+    {
+      ...recorded,
+      resource_id: outbound.link.id,
+      source_memory_id: forgotten.id,
+      related_memory_id: target.id,
+      owner_user_id: testContext.alice.userId,
+      memory_scope: "shared",
+    },
+    {
+      ...recorded,
+      resource_id: inbound.link.id,
+      source_memory_id: bobSource.id,
+      related_memory_id: forgotten.id,
+      owner_user_id: testContext.bob.userId,
+      memory_scope: "private",
+    },
+  ]);
+  const remaining = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query("SELECT id FROM memory_links"),
+  );
+  expect(remaining.rows).toEqual([]);
 });
 
 test("Workspace export is actor-visible, checksummed, dry-runnable, and replay-safe on import", async () => {
@@ -628,7 +697,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 9,
+    schemaRevision: 11,
     memoryChunking: {
       revision: "lore-memory-chunking-v2",
       maximumCharacters: 1_200,
@@ -706,14 +775,18 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   }
 
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 10 WHERE singleton"),
+    transaction.query(
+      "UPDATE lore_system_state SET schema_revision = 12, compatible_from = 12 WHERE singleton",
+    ),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
     status: "unready",
     components: { schema: "incompatible" },
   });
   await testContext.adminDatabase.transaction((transaction) =>
-    transaction.query("UPDATE lore_system_state SET schema_revision = 9 WHERE singleton"),
+    transaction.query(
+      "UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9 WHERE singleton",
+    ),
   );
 
   await testContext.adminDatabase.transaction((transaction) =>
@@ -723,6 +796,106 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
     status: "unready",
     components: { rlsRole: "unavailable" },
   });
+});
+
+test("readiness accepts a newer schema only inside the range its migrations declare", async () => {
+  const testContext = await createMemoryTestContext();
+  const operations = createOperationsModule(testContext.database, { embeddingConfigured: false });
+  const admin = (sql: string) =>
+    testContext.adminDatabase.transaction((transaction) => transaction.query(sql));
+  // 0010 publishes compatible_from through the same SECURITY DEFINER function
+  // readiness already calls (lore_app cannot read lore_system_state). Stand in for
+  // other schemas by wrapping this chain's function and editing what it returns.
+  await admin(
+    "ALTER FUNCTION lore.portable_core_capabilities() RENAME TO published_core_capabilities",
+  );
+  const publish = async (revision: number, published: string) => {
+    await admin(`UPDATE lore_system_state SET schema_revision = ${revision} WHERE singleton`);
+    await admin(
+      `CREATE OR REPLACE FUNCTION lore.portable_core_capabilities() RETURNS jsonb
+         LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'pg_catalog', 'public'
+         AS $body$ SELECT ${published} FROM lore.published_core_capabilities() AS base $body$`,
+    );
+    await admin("GRANT EXECUTE ON FUNCTION lore.portable_core_capabilities() TO lore_app");
+  };
+  const schemaStatus = async () => (await operations.readiness()).components.schema;
+  const next = LORE_SCHEMA_REVISION + 1;
+
+  // This chain's own declaration serves this application.
+  await publish(LORE_SCHEMA_REVISION, "base");
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+
+  // Without compatibleFrom (revisions before 10) a schema serves only its own revision.
+  await publish(LORE_SCHEMA_REVISION, "base - 'compatibleFrom'");
+  await expect(operations.readiness()).resolves.toMatchObject({ status: "ready" });
+  await publish(next, "base - 'compatibleFrom'");
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { schema: "incompatible" },
+  });
+
+  // A newer schema that still serves this application keeps it ready.
+  await publish(next, `base || '{"compatibleFrom": ${LORE_SCHEMA_REVISION}}'`);
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "ready",
+    components: { schema: "ok" },
+  });
+  await publish(next, `base || '{"compatibleFrom": 1}'`);
+  expect(await schemaStatus()).toBe("ok");
+
+  // One that removed something this application uses does not.
+  await publish(next, `base || '{"compatibleFrom": ${next}}'`);
+  await expect(operations.readiness()).resolves.toMatchObject({
+    status: "unready",
+    components: { schema: "incompatible" },
+  });
+
+  // A schema older than the application is never compatible, whatever it declares.
+  await publish(LORE_SCHEMA_REVISION - 1, `base || '{"compatibleFrom": 1}'`);
+  expect(await schemaStatus()).toBe("incompatible");
+
+  // A malformed declaration fails closed rather than falling back to exact equality.
+  for (const malformed of ["null", `"${LORE_SCHEMA_REVISION}"`, "8.5", "0", `${next + 1}`]) {
+    await publish(next, `base || '{"compatibleFrom": ${malformed}}'`);
+    expect(await schemaStatus(), malformed).toBe("incompatible");
+    await publish(LORE_SCHEMA_REVISION, `base || '{"compatibleFrom": ${malformed}}'`);
+    expect(await schemaStatus(), malformed).toBe("incompatible");
+  }
+
+  // Capabilities served by an older instance keep to that instance's contract, even
+  // when a newer schema publishes fields and features it does not know, nested ones
+  // included.
+  const generation = {
+    provider: "fixture",
+    model: "contract-v1",
+    dimensions: 1024,
+    revision: "fixture-v1",
+  };
+  await publish(
+    next,
+    `jsonb_set(base, '{features,futureFeature}', 'true') || jsonb_build_object(
+       'compatibleFrom', ${LORE_SCHEMA_REVISION},
+       'futureField', 1,
+       'activeEmbeddingGeneration', '${JSON.stringify({ ...generation, futureNested: true })}'::jsonb
+     )`,
+  );
+  expect(await schemaStatus()).toBe("ok");
+  const capabilities = await operations.capabilities();
+  expect(Object.keys(capabilities).sort()).toEqual(
+    [
+      "activeEmbeddingGeneration",
+      "apiVersion",
+      "deploymentId",
+      "features",
+      "limits",
+      "memoryChunking",
+      "schemaRevision",
+    ].sort(),
+  );
+  expect(capabilities).toMatchObject({ schemaRevision: next, features: DEPLOYMENT_FEATURES });
+  expect(capabilities.features).toEqual(DEPLOYMENT_FEATURES);
+  expect(capabilities.activeEmbeddingGeneration).toEqual(generation);
+  await testContext.close();
 });
 
 test("readiness requires RLS on every tenant table, including tables added later", async () => {
