@@ -5,6 +5,7 @@ import {
   type InsertMemoryRecord,
   isPostgresAccessDenied,
   type ListMemory,
+  MEMORY_WRITE_SETTING,
   MemoryAccessDeniedError,
   type MemoryModuleOptions,
   type MemoryMutationPrimitivesOptions,
@@ -23,7 +24,6 @@ import {
   type MemoryMutationOptions as VersionOptions,
   validateMemoryMetadata,
   validateMemoryScope,
-  type WrittenMemory,
 } from "@corespeed/lore-core";
 import {
   beginMutation,
@@ -149,52 +149,44 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
  * as the ledger completion runs, so the completion travels in the write's own
  * batch. It is `memoryFromRow` in SQL; tests hold the two equal.
  */
-export function writtenMemoryReplayBody(workspaceId: string, memoryId: string): SqlReplayBody {
+export function writtenMemoryReplayBody(memoryId: string): SqlReplayBody {
   return {
-    sql: (p) => `(SELECT jsonb_build_object('memory', jsonb_build_object(
-             'id', memory.id,
-             'workspaceId', memory.workspace_id,
-             'ownerUserId', memory.owner_user_id,
-             'createdByAgentId', memory.created_by_agent_id,
-             'scope', memory.scope,
-             'content', memory.content,
-             'metadata', memory.metadata,
-             'version', memory.version,
-             'createdAt', memory.created_at,
-             'updatedAt', memory.updated_at))
+    sql: () => `(SELECT jsonb_build_object('memory', jsonb_build_object(
+             'id', written ->> 'id',
+             'workspaceId', written ->> 'workspace_id',
+             'ownerUserId', written ->> 'owner_user_id',
+             'createdByAgentId', written -> 'created_by_agent_id',
+             'scope', written ->> 'scope',
+             'content', written ->> 'content',
+             'metadata', written -> 'metadata',
+             'version', (written ->> 'version')::integer,
+             'createdAt', written ->> 'created_at',
+             'updatedAt', written ->> 'updated_at'))
            FROM (
-             SELECT ${memorySelectColumns()}
-             FROM memories
-             WHERE workspace_id = ${p(workspaceId)} AND id = ${p(memoryId)}
-           ) AS memory)`,
+             SELECT nullif(current_setting('${MEMORY_WRITE_SETTING}', true), '')::jsonb AS written
+           ) AS recorded)`,
     subjects: { memory: { id: memoryId } },
   };
 }
 
 /**
- * The ledger completion of a keyed Memory write, sent in the write's own batch. It
- * records the write's outcome only when the Memory is as the write meant to leave
- * it, at the written version or gone; a write that matched no row (the Actor lost
- * write authority after its lock) is recorded as not_found, which is also what the
- * first response said, so a replay never claims a write that did not happen.
+ * The ledger completion of a keyed Memory write, sent in the write's own batch. The
+ * write statement records what it did (MEMORY_WRITE_SETTING), and the completion
+ * takes the outcome and body from that record, never from a re-read the same access
+ * policy could hide. A write that matched no row (the Actor lost write authority
+ * after its lock) is recorded as not_found, which is also what the first response
+ * said, so a replay never claims a write that did not happen, nor denies one that did.
  */
 function memoryWriteCompletion(
   requestId: string,
-  workspaceId: string,
-  written: WrittenMemory,
+  memoryId: string,
   outcome: "created" | "ok" | "deleted",
 ) {
   const deleted = outcome === "deleted";
   return conditionalCompletionStatements(
     requestId,
-    (p) =>
-      written.version === null
-        ? `NOT EXISTS (SELECT 1 FROM memories WHERE workspace_id = ${p(workspaceId)} AND id = ${p(written.id)})`
-        : `EXISTS (SELECT 1 FROM memories WHERE workspace_id = ${p(workspaceId)} AND id = ${p(written.id)} AND version = ${p(written.version)}::integer)`,
-    {
-      outcome,
-      body: deleted ? { deleted: true } : writtenMemoryReplayBody(workspaceId, written.id),
-    },
+    () => `coalesce(current_setting('${MEMORY_WRITE_SETTING}', true), '') <> ''`,
+    { outcome, body: deleted ? { deleted: true } : writtenMemoryReplayBody(memoryId) },
     { outcome: "not_found", body: deleted ? { deleted: false } : { memory: null } },
   );
 }
@@ -239,8 +231,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               commit: true,
               ...(keyed
                 ? {
-                    finish: (written: WrittenMemory) =>
-                      memoryWriteCompletion(claim.requestId, bound.workspaceId, written, "created"),
+                    finish: (memoryId: string) =>
+                      memoryWriteCompletion(claim.requestId, memoryId, "created"),
                   }
                 : {}),
             },
@@ -316,8 +308,8 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
               commit: true,
               ...(keyed
                 ? {
-                    finish: (written: WrittenMemory) =>
-                      memoryWriteCompletion(claim.requestId, bound.workspaceId, written, "ok"),
+                    finish: (memoryId: string) =>
+                      memoryWriteCompletion(claim.requestId, memoryId, "ok"),
                   }
                 : {}),
             },
@@ -388,8 +380,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           options.expectedVersion,
           {
             commit: true,
-            finish: (written) =>
-              memoryWriteCompletion(claim.requestId, actor.workspaceId, written, "deleted"),
+            finish: (written) => memoryWriteCompletion(claim.requestId, written, "deleted"),
           },
         );
       });

@@ -114,7 +114,9 @@ export const CORE_SCHEMA_CONTRACT = {
     types: ["vector"],
     enums: { memory_scope: MEMORY_SCOPES },
     values: { "embedding_generations.status": ["active", "retiring"] },
-    settings: [],
+    // A write primitive records what its write did here for the host's finish
+    // statements (MEMORY_WRITE_SETTING).
+    settings: ["lore.memory_write"],
   },
   /** Durable Memory Links and Graph reads. */
   graph: {

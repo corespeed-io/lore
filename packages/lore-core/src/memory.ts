@@ -908,25 +908,31 @@ export function memoryFromRow(row: MemoryRow): Memory {
 }
 
 /**
- * The row a write primitive's final batch is meant to leave: the Memory at this
- * version once the write applied, or none (`version: null`) once a delete applied.
- * A write can still match nothing in that batch, when the store stops letting the
- * caller write the row it locked (under RLS, a grant revoked meanwhile), so a host
- * whose `finish` statements record an outcome must check that the row is as meant.
+ * The transaction-local setting in which a write primitive's final batch records
+ * what its write did, for the host's `finish` statements to read: the row it wrote
+ * or left (the `memorySelectColumns` row as JSON), `{"id": …}` for a delete, or
+ * an empty string when the write matched no row. A write can match none after its
+ * lock, when the store stops letting the caller write the row (under RLS, a grant
+ * revoked meanwhile), and re-reading the row cannot tell: the same policy may hide
+ * it. The write statement records its own outcome, so nothing can hide that.
  */
-export interface WrittenMemory {
-  id: string;
-  version: number | null;
-}
+export const MEMORY_WRITE_SETTING = "lore.memory_write";
 
 /**
  * How a single-Memory write primitive ends its final batch. `finish` adds the
  * host's own statements to it, after the write, so a host's completion (an
- * idempotency ledger row, say) costs no round trip of its own; they may read the
- * Memory row the batch just wrote. With `commit`, COMMIT follows them.
+ * idempotency ledger row, say) costs no round trip of its own; they read what the
+ * write did from {@link MEMORY_WRITE_SETTING}. With `commit`, COMMIT follows them.
  */
 export interface MemoryWriteBatchOptions extends PostgresBatchOptions {
-  finish?: (written: WrittenMemory) => readonly PostgresStatement<unknown>[];
+  finish?: (memoryId: string) => readonly PostgresStatement<unknown>[];
+}
+
+/** A write statement that records its returned row in {@link MEMORY_WRITE_SETTING}. */
+function recordingWrite(write: string, recorded = "row_to_json(written)"): string {
+  return `WITH written AS (${write})
+     SELECT written.*, set_config('lore.memory_write', ${recorded}::text, true) AS recorded
+     FROM written`;
 }
 
 /**
@@ -1031,10 +1037,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const metadata = input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata);
     const id = crypto.randomUUID();
     const memoryInsert = statement<MemoryRow>(
-      `INSERT INTO memories (
+      recordingWrite(`INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-       RETURNING ${memorySelectColumns()}`,
+       RETURNING ${memorySelectColumns()}`),
       [
         id,
         storageScope.partitionId,
@@ -1046,11 +1052,13 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       ],
     );
     const chunkInsert = chunkInsertStatement(storageScope.partitionId, id, chunks);
+    // An insert either writes its row, which it records, or fails the batch.
+    if (batchOptions.finish) transaction.setLocal({ [MEMORY_WRITE_SETTING]: "" });
     // The Memory, its chunks, and its first embedding job share one round trip.
     // A new Memory always starts at version 1, which the job is fenced by.
     if (!embeddingProvider) {
       const [inserted] = await transaction.batch(
-        [memoryInsert, chunkInsert, ...(batchOptions.finish?.({ id, version: 1 }) ?? [])],
+        [memoryInsert, chunkInsert, ...(batchOptions.finish?.(id) ?? [])],
         { commit: batchOptions.commit === true },
       );
       const memory = inserted.rows[0];
@@ -1074,7 +1082,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
           embeddingProvider,
           false,
         ),
-        ...(batchOptions.finish?.({ id, version: 1 }) ?? []),
+        ...(batchOptions.finish?.(id) ?? []),
       ],
       { commit: batchOptions.commit === true },
     );
@@ -1198,17 +1206,18 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const scopeChanged = input.scope !== undefined && input.scope !== currentMemory.scope;
     const changed = contentChanged || scopeChanged || metadataChanged;
     if (!changed && options.versionUnchanged !== true) {
-      await transaction.batch(
-        options.finish?.({ id, version: currentMemory.version }) ?? [],
-        commit,
-      );
+      // Nothing is written: the locked row is what the write left.
+      if (options.finish) {
+        transaction.setLocal({ [MEMORY_WRITE_SETTING]: JSON.stringify(currentMemory) });
+      }
+      await transaction.batch(options.finish?.(id) ?? [], commit);
       return { memory: memoryFromRow(currentMemory), changed: false, chunksChanged: false };
     }
     // The row is locked, so everything after the read is known and shares one
     // round trip: the update, the replaced chunks, the job for the new version,
     // and the host's `finish` statements.
     const update = statement<MemoryRow>(
-      `UPDATE memories
+      recordingWrite(`UPDATE memories
          SET content = COALESCE($3::text, content),
              scope = COALESCE($4::memory_scope, scope),
              metadata = COALESCE($5::jsonb, metadata),
@@ -1217,7 +1226,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
          WHERE id = $1
            AND workspace_id = $2
            AND version = $6
-         RETURNING ${memorySelectColumns()}`,
+         RETURNING ${memorySelectColumns()}`),
       [
         id,
         storageScope.partitionId,
@@ -1267,8 +1276,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         ),
       );
     }
+    // Cleared first: an update that matches no row records nothing.
+    if (options.finish) transaction.setLocal({ [MEMORY_WRITE_SETTING]: "" });
     const results = await transaction.batch(
-      [update, ...tail, ...(options.finish?.({ id, version: currentMemory.version + 1 }) ?? [])],
+      [update, ...tail, ...(options.finish?.(id) ?? [])],
       commit,
     );
     const updatedMemory = results[0].rows[0];
@@ -1392,16 +1403,21 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       throw new MemoryVersionConflictError(expectedVersion, locked.row.version);
     }
     const id = locked.row.id;
+    // Cleared first: a delete that matches no row records nothing.
+    if (batchOptions.finish) transaction.setLocal({ [MEMORY_WRITE_SETTING]: "" });
     const [deleted] = await transaction.batch(
       [
         statement<{ id: string }>(
-          `DELETE FROM memories
-           WHERE id = $1
-             AND workspace_id = $2
-           RETURNING id`,
+          recordingWrite(
+            `DELETE FROM memories
+             WHERE id = $1
+               AND workspace_id = $2
+             RETURNING id`,
+            "json_build_object('id', written.id)",
+          ),
           [id, storageScope.partitionId],
         ),
-        ...(batchOptions.finish?.({ id, version: null }) ?? []),
+        ...(batchOptions.finish?.(id) ?? []),
       ],
       { commit: batchOptions.commit === true },
     );

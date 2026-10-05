@@ -168,20 +168,21 @@ test("hot human routes admit as a prefix: reads take one round trip, keyed write
 
   expect(budgets).toEqual({
     // BEGIN, role, admission (2), request id, claim and lookup; then the insert, its
-    // chunks, the ledger completion (applied or not, two statements), and COMMIT.
-    remember: { status: 201, statements: 12, waits: 2 },
+    // chunks, the cleared write record, the ledger completion (applied or not, two
+    // statements), and COMMIT.
+    remember: { status: 201, statements: 13, waits: 2 },
     replay: { status: 201, statements: 8, waits: 2 },
     rememberUnkeyed: { status: 201, statements: 8, waits: 2 },
     retrieve: { status: 200, statements: 6, waits: 1 },
     list: { status: 200, statements: 6, waits: 1 },
     search: { status: 200, statements: 6, waits: 1 },
     // The locking read travels with the stored-chunk read the diff needs.
-    update: { status: 200, statements: 15, waits: 2 },
+    update: { status: 200, statements: 16, waits: 2 },
     link: { status: 201, statements: 8, waits: 2 },
     links: { status: 200, statements: 7, waits: 1 },
     graph: { status: 200, statements: 7, waits: 1 },
     unlink: { status: 204, statements: 7, waits: 1 },
-    forget: { status: 204, statements: 12, waits: 2 },
+    forget: { status: 204, statements: 13, waits: 2 },
     forgetUnkeyed: { status: 204, statements: 8, waits: 1 },
   });
 });
@@ -222,11 +223,11 @@ test("hot Agent routes admit as a prefix, except where a snapshot or a provider 
       }),
     ),
   }).toEqual({
-    remember: { status: 201, statements: 11, waits: 2 },
+    remember: { status: 201, statements: 12, waits: 2 },
     retrieve: { status: 200, statements: 5, waits: 1 },
     search: { status: 200, statements: 5, waits: 1 },
     graph: { status: 200, statements: 9, waits: 2 },
-    forget: { status: 204, statements: 11, waits: 2 },
+    forget: { status: 204, statements: 12, waits: 2 },
   });
 });
 

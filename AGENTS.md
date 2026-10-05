@@ -192,9 +192,12 @@ been removed. Lore now has a native implementation, split into two concepts
   its ledger row in the write's own batch; `writtenMemoryReplayBody` is
   `memoryFromRow` in SQL, and tests hold a replay equal to the first response; because
   write authority can be revoked between a write's lock and its write, which then
-  matches no row, `conditionalCompletionStatements` records the outcome only when the
-  Memory is as the write meant to leave it and `not_found` otherwise, as
-  `tests/server/replay-write-race.test.ts` proves), and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
+  matches no row, and a re-read cannot tell (the same policy may hide the row), the
+  engine's write statement records what it did in the transaction-local setting
+  `lore.memory_write` (`MEMORY_WRITE_SETTING`, listed in the schema contract), and
+  `conditionalCompletionStatements` takes the outcome and body from that record,
+  `not_found` when it is empty, as `tests/server/replay-write-race.test.ts` proves for
+  narrowed and revoked grants), and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
   columns during a rolling deploy; until then renaming a replayed key still needs a
