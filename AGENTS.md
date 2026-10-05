@@ -190,7 +190,11 @@ been removed. Lore now has a native implementation, split into two concepts
   accepts (`completionStatement` also takes a `SqlReplayBody`, a body PostgreSQL
   builds from the row the same batch just wrote, so a keyed Memory write completes
   its ledger row in the write's own batch; `writtenMemoryReplayBody` is
-  `memoryFromRow` in SQL, and tests hold a replay equal to the first response), and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
+  `memoryFromRow` in SQL, and tests hold a replay equal to the first response; because
+  write authority can be revoked between a write's lock and its write, which then
+  matches no row, `conditionalCompletionStatements` records the outcome only when the
+  Memory is as the write meant to leave it and `not_found` otherwise, as
+  `tests/server/replay-write-race.test.ts` proves), and `tests/server/replay-scrub.test.ts` proves each scrub alone, by
   content. The JSON-path triggers and their 0005 indexes stay until the second
   release, because app instances older than revision 7 still write rows without the
   columns during a rolling deploy; until then renaming a replayed key still needs a

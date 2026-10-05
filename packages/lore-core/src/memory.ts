@@ -908,13 +908,25 @@ export function memoryFromRow(row: MemoryRow): Memory {
 }
 
 /**
+ * The row a write primitive's final batch is meant to leave: the Memory at this
+ * version once the write applied, or none (`version: null`) once a delete applied.
+ * A write can still match nothing in that batch, when the store stops letting the
+ * caller write the row it locked (under RLS, a grant revoked meanwhile), so a host
+ * whose `finish` statements record an outcome must check that the row is as meant.
+ */
+export interface WrittenMemory {
+  id: string;
+  version: number | null;
+}
+
+/**
  * How a single-Memory write primitive ends its final batch. `finish` adds the
  * host's own statements to it, after the write, so a host's completion (an
  * idempotency ledger row, say) costs no round trip of its own; they may read the
  * Memory row the batch just wrote. With `commit`, COMMIT follows them.
  */
 export interface MemoryWriteBatchOptions extends PostgresBatchOptions {
-  finish?: (memoryId: string) => readonly PostgresStatement<unknown>[];
+  finish?: (written: WrittenMemory) => readonly PostgresStatement<unknown>[];
 }
 
 /**
@@ -1038,7 +1050,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     // A new Memory always starts at version 1, which the job is fenced by.
     if (!embeddingProvider) {
       const [inserted] = await transaction.batch(
-        [memoryInsert, chunkInsert, ...(batchOptions.finish?.(id) ?? [])],
+        [memoryInsert, chunkInsert, ...(batchOptions.finish?.({ id, version: 1 }) ?? [])],
         { commit: batchOptions.commit === true },
       );
       const memory = inserted.rows[0];
@@ -1062,7 +1074,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
           embeddingProvider,
           false,
         ),
-        ...(batchOptions.finish?.(id) ?? []),
+        ...(batchOptions.finish?.({ id, version: 1 }) ?? []),
       ],
       { commit: batchOptions.commit === true },
     );
@@ -1186,7 +1198,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const scopeChanged = input.scope !== undefined && input.scope !== currentMemory.scope;
     const changed = contentChanged || scopeChanged || metadataChanged;
     if (!changed && options.versionUnchanged !== true) {
-      await transaction.batch(options.finish?.(id) ?? [], commit);
+      await transaction.batch(
+        options.finish?.({ id, version: currentMemory.version }) ?? [],
+        commit,
+      );
       return { memory: memoryFromRow(currentMemory), changed: false, chunksChanged: false };
     }
     // The row is locked, so everything after the read is known and shares one
@@ -1253,7 +1268,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       );
     }
     const results = await transaction.batch(
-      [update, ...tail, ...(options.finish?.(id) ?? [])],
+      [update, ...tail, ...(options.finish?.({ id, version: currentMemory.version + 1 }) ?? [])],
       commit,
     );
     const updatedMemory = results[0].rows[0];
@@ -1386,7 +1401,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
            RETURNING id`,
           [id, storageScope.partitionId],
         ),
-        ...(batchOptions.finish?.(id) ?? []),
+        ...(batchOptions.finish?.({ id, version: null }) ?? []),
       ],
       { commit: batchOptions.commit === true },
     );

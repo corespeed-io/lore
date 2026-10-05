@@ -263,7 +263,7 @@ Measured by `tests/server/round-trip-budget.test.ts` through the real `pg` adapt
 - **An Agent is admitted in a transaction of its own before a read-only or repeatable-read snapshot.** `authenticate_agent_credential` may write `last_used_at`. That write would fail under READ ONLY and could fail to serialize under REPEATABLE READ. An Agent's Graph read therefore costs 2 waits.
 - **A human's search sends its prefix with the first pass, after the provider calls, not concurrently with them.** That is still 1 wait after the embedding call, and one round trip fewer overall. An Agent's search that pays an embedding or planning provider is admitted first, as specified.
 - **A refused write costs a second wait for its ROLLBACK.** Its claim travelled with the admission. A refused read stays 1 wait.
-- **Writes split into two phases.** The core update primitive is a locking phase (`lockMemoryInTransaction`) and an apply phase (`updateLockedMemoryInTransaction`), so OSS can check the claim between them. The write primitives take a `finish` hook that appends the ledger completion to their final batch. The completion's body is built in SQL from the row just written (`writtenMemoryReplayBody`).
+- **Writes split into two phases.** The core update primitive is a locking phase (`lockMemoryInTransaction`) and an apply phase (`updateLockedMemoryInTransaction`), so OSS can check the claim between them. The write primitives take a `finish` hook that appends the ledger completion to their final batch. The completion's body is built in SQL from the row just written (`writtenMemoryReplayBody`). Write authority can be revoked between the lock and the write, so the write may match no row. The completion is therefore two statements: one records the outcome only when the Memory is as the write meant to leave it (at the written version, or gone), and the other records `not_found`, which is also what the first response said. A content update refused at its chunk rewrite (42501) rolls back whole and answers 404 (found in the ship review).
 - **A keyed forget locks first.** It locks with its claim and deletes in the second batch (`forgetLockedMemoryInTransaction`). A replay therefore deletes nothing, and a reclaimed key's events carry the ledger row's request id. An unkeyed forget sends its delete, version read, and COMMIT in one batch.
 - **One admission per request.** Of a request's concurrent transactions, the first to run sends the admission. The others wait for its outcome and bind it before sending anything (found in review).
 - **Memory-only context packets** take a pending Actor, as search does. A packet with a repository admits first, because Code reads need the Actor's ids.
@@ -327,9 +327,9 @@ Waits are network round trips. Statements are shown where they differ. W = Worke
 | Search, one feedback round | 11 / 2 | 10 / 2 |
 | Search, context-group expansion | 7 / 2 | 6 / 2 |
 | Context retrieve, Memory-only | as search | — |
-| POST memory, keyed / unkeyed | 11 / 2, 8 / 2 | 10 / 2 |
-| PATCH, keyed | 14 / 2 | — |
-| DELETE memory, keyed / unkeyed | 11 / 2, 8 / 1 | 10 / 2 |
+| POST memory, keyed / unkeyed | 12 / 2, 8 / 2 | 11 / 2 |
+| PATCH, keyed | 15 / 2 | — |
+| DELETE memory, keyed / unkeyed | 12 / 2, 8 / 1 | 11 / 2 |
 | PUT link | 8 / 2 | — |
 | DELETE link | 7 / 1 | — |
 | A refused read | 6 / 1 | 5 / 1 |

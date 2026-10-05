@@ -175,16 +175,61 @@ function replaySubjects(body: ReplayBody): (string | null)[] {
   ];
 }
 
+/** Binds a parameter while a statement's SQL is composed, returning its placeholder. */
+export type SqlParameter = (value: unknown) => string;
+
 /**
  * A response body PostgreSQL builds as the completion runs, so the completion can
- * travel in the same batch as the write whose row it describes. `sql` is an
- * expression whose parameters are numbered from $9; `subjects` names what the body
- * describes, for the scrub columns.
+ * travel in the same batch as the write whose row it describes. `sql` composes a
+ * jsonb expression, binding its parameters through `p`; `subjects` names what the
+ * body describes, for the scrub columns.
  */
 export interface SqlReplayBody {
-  sql: string;
-  params: readonly unknown[];
+  sql: (p: SqlParameter) => string;
   subjects: ReplayBody;
+}
+
+/** One way a mutation may end, as its ledger row records it. */
+export interface MutationCompletion {
+  outcome: MutationOutcome;
+  body: ReplayBody | SqlReplayBody;
+}
+
+function composed(build: (p: SqlParameter) => string): PostgresStatement<{ id: string | null }> {
+  const params: unknown[] = [];
+  const sql = build((value) => {
+    params.push(value);
+    return `$${params.length}`;
+  });
+  return statement<{ id: string | null }>(sql, params);
+}
+
+/** The ledger update that completes the row, held to `condition` when there is one. */
+function completedRow(
+  p: SqlParameter,
+  requestId: string,
+  { outcome, body }: MutationCompletion,
+  condition?: string,
+): string {
+  const built = "sql" in body ? body : null;
+  const [memory, proposal, target, accepted, episode] = replaySubjects(
+    built ? built.subjects : (body as ReplayBody),
+  );
+  return `completed AS (
+       UPDATE request_idempotency_records
+       SET status = 'completed',
+           response_status = ${p(LEGACY_RESPONSE_STATUS[outcome])},
+           response_body = ${built ? built.sql(p) : `${p(JSON.stringify(body))}::jsonb`},
+           subject_memory_id = ${p(memory)},
+           subject_proposal_id = ${p(proposal)},
+           proposal_target_memory_id = ${p(target)},
+           proposal_accepted_memory_id = ${p(accepted)},
+           subject_episode_id = ${p(episode)},
+           completed_at = now()
+       WHERE id = ${p(requestId)}
+         AND status = 'in_progress'${condition ? `\n         AND (${condition})` : ""}
+       RETURNING id
+     )`;
 }
 
 /**
@@ -198,34 +243,40 @@ export function completionStatement(
   outcome: MutationOutcome,
   body: ReplayBody | SqlReplayBody,
 ): PostgresStatement<{ id: string | null }> {
-  const built = "sql" in body ? body : null;
-  const subjects = built ? built.subjects : (body as ReplayBody);
-  return statement<{ id: string | null }>(
-    `WITH completed AS (
-       UPDATE request_idempotency_records
-       SET status = 'completed',
-           response_status = $2,
-           response_body = ${built ? `COALESCE(${built.sql}, $3::jsonb)` : "$3::jsonb"},
-           subject_memory_id = $4,
-           subject_proposal_id = $5,
-           proposal_target_memory_id = $6,
-           proposal_accepted_memory_id = $7,
-           subject_episode_id = $8,
-           completed_at = now()
-       WHERE id = $1
-         AND status = 'in_progress'
-       RETURNING id
-     )
+  return composed(
+    (p) => `WITH ${completedRow(p, requestId, { outcome, body })}
      SELECT (SELECT id FROM completed) AS id,
             1 / (SELECT count(*) FROM completed)::integer AS guard`,
-    [
-      requestId,
-      LEGACY_RESPONSE_STATUS[outcome],
-      built ? null : JSON.stringify(body),
-      ...replaySubjects(subjects),
-      ...(built ? built.params : []),
-    ],
   );
+}
+
+/**
+ * Two statements that complete this request's ledger row as `applied` when
+ * `condition` holds once the write ran, and as `otherwise` when it does not, for a
+ * write sent in the same batch that may match no row. Exactly one completes it;
+ * the second's guard raises (22012) when neither did, as `completionStatement`'s.
+ */
+export function conditionalCompletionStatements(
+  requestId: string,
+  condition: (p: SqlParameter) => string,
+  applied: MutationCompletion,
+  otherwise: MutationCompletion,
+): PostgresStatement<{ id: string | null }>[] {
+  return [
+    composed(
+      (p) => `WITH ${completedRow(p, requestId, applied, condition(p))}
+     SELECT (SELECT id FROM completed) AS id`,
+    ),
+    composed(
+      (p) => `WITH ${completedRow(p, requestId, otherwise, `NOT (${condition(p)})`)}
+     SELECT (SELECT id FROM completed) AS id,
+            1 / (
+              (SELECT count(*) FROM completed)
+              + (SELECT count(*) FROM request_idempotency_records
+                 WHERE id = ${p(requestId)} AND status = 'completed')
+            )::integer AS guard`,
+    ),
+  ];
 }
 
 export async function completeMutation(
