@@ -150,3 +150,20 @@ test("an applied keyed update and forget still record and replay their results",
   await expect(memories.forget(actor, memory.id, forgetOptions)).resolves.toBe(true);
   await expect(memories.forget(actor, memory.id, forgetOptions)).resolves.toBe(true);
 });
+
+test("a keyed no-op update writes nothing and replays the unchanged Memory, even after narrowing", async () => {
+  const { context, actor, agentId, memory } = await fixture();
+  // Equal content: nothing differs, so the batch carries no UPDATE, only the ledger
+  // completion, which finds the Memory at the version it already holds.
+  const change = { content: memory.content };
+  const racing = createMemoryModule(
+    interleaved(context.database, /^\s*WITH completed AS/, narrowGrant(context, actor, agentId)),
+  );
+  const options = { expectedVersion: 1, idempotency: await keyed("memory.update", change) };
+
+  const first = await racing.update(actor, memory.id, change, options);
+  expect(first).toEqual(memory);
+  await expect(
+    createMemoryModule(context.database).update(actor, memory.id, change, options),
+  ).resolves.toEqual(first);
+});
