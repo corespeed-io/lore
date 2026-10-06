@@ -22,7 +22,10 @@
 --     before fusing, so a mistake here can cost ranking quality but cannot reveal a
 --     row (tests/server/lexical-candidates.test.ts replaces this function with one
 --     that ignores visibility and shows search still hides every row it should).
---   * EXECUTE is granted to lore_app alone, and search_path is pinned.
+--   * EXECUTE is granted to lore_app alone. search_path is pinned with pg_temp last
+--     and every table is schema-qualified, so a caller's temporary table or view
+--     named memories or memory_chunks cannot stand in for the real one (pg_temp is
+--     otherwise searched first for relations, even in a SECURITY DEFINER function).
 --
 -- What it returns: exactly the candidates, with exactly the ranks, of the channels
 -- the engine's search statement ran under RLS through revision 11 (the reference
@@ -70,7 +73,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public;
 -- search evaluates the expression only on a lossy bitmap page.
 CREATE FUNCTION lore.extract_cjk_grams(input text) RETURNS text[]
     LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
-    SET search_path TO 'pg_catalog'
+    SET search_path TO 'pg_catalog', 'pg_temp'
     AS $$
   SELECT coalesce(array_agg(DISTINCT gram ORDER BY gram), '{}'::text[])
   FROM (
@@ -106,7 +109,7 @@ CREATE FUNCTION lore.lexical_candidates(
 ) RETURNS TABLE(channel text, chunk_id uuid, memory_id uuid, candidate_rank bigint)
     LANGUAGE sql STABLE SECURITY DEFINER
     ROWS 200
-    SET search_path TO 'pg_catalog', 'public'
+    SET search_path TO 'pg_catalog', 'public', 'pg_temp'
     SET plan_cache_mode TO 'force_custom_plan'
     AS $$
   WITH visible_memories AS NOT MATERIALIZED (
@@ -114,7 +117,7 @@ CREATE FUNCTION lore.lexical_candidates(
     -- materialized: every visible Memory, read once per search), so the planner
     -- drives each channel from its chunk index and looks Memories up by key.
     SELECT memory.id, memory.workspace_id, memory.updated_at
-    FROM memories memory
+    FROM public.memories memory
     WHERE memory.workspace_id = target_workspace_id
       AND target_workspace_id = lore.current_workspace_id()
       AND (SELECT lore.can_read_workspace(lore.current_workspace_id()))
@@ -133,7 +136,7 @@ CREATE FUNCTION lore.lexical_candidates(
         ORDER BY ts_rank_cd(chunk.search_vector, websearch_to_tsquery('simple', search_query), 32) DESC,
                  memory.updated_at DESC, chunk.ordinal DESC, chunk.id
       ) AS candidate_rank
-    FROM memory_chunks chunk
+    FROM public.memory_chunks chunk
     JOIN visible_memories memory
       ON memory.id = chunk.memory_id
      AND memory.workspace_id = chunk.workspace_id
@@ -151,7 +154,7 @@ CREATE FUNCTION lore.lexical_candidates(
         ORDER BY ts_rank_cd(chunk.search_vector_english, websearch_to_tsquery('english', search_query), 32) DESC,
                  memory.updated_at DESC, chunk.ordinal DESC, chunk.id
       ) AS candidate_rank
-    FROM memory_chunks chunk
+    FROM public.memory_chunks chunk
     JOIN visible_memories memory
       ON memory.id = chunk.memory_id
      AND memory.workspace_id = chunk.workspace_id
@@ -212,7 +215,7 @@ CREATE FUNCTION lore.lexical_candidates(
         WHERE vector.english @@ term.query
       ) AS score
     FROM relaxed_english_query terms
-    JOIN memory_chunks chunk
+    JOIN public.memory_chunks chunk
       ON chunk.workspace_id = target_workspace_id
      AND chunk.search_vector_english @@ terms.two_terms
     CROSS JOIN LATERAL (SELECT chunk.search_vector_english || ''::tsvector AS english OFFSET 0) vector
@@ -253,7 +256,7 @@ CREATE FUNCTION lore.lexical_candidates(
       matched.match_count,
       matched.specificity
     FROM query_entity_aliases query
-    JOIN memory_chunks chunk
+    JOIN public.memory_chunks chunk
       ON chunk.workspace_id = target_workspace_id
      AND chunk.entity_aliases && query.aliases
     CROSS JOIN LATERAL (
@@ -288,7 +291,7 @@ CREATE FUNCTION lore.lexical_candidates(
                  memory.updated_at DESC, chunk.ordinal DESC, chunk.id
       ) AS candidate_rank
     FROM unnest(cjk_query_grams) AS gram(gram)
-    JOIN memory_chunks chunk
+    JOIN public.memory_chunks chunk
       ON chunk.workspace_id = target_workspace_id
      AND lore.extract_cjk_grams(chunk.content) @> ARRAY[gram.gram]
     JOIN visible_memories memory

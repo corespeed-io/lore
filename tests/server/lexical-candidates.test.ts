@@ -185,6 +185,37 @@ test("the function fails closed: another Workspace's id, or no Actor, answers no
   expect(await run(null, context.alice.workspaceId)).toEqual([]);
 });
 
+test("a caller's temporary tables cannot stand in for the tables the definer function reads", async () => {
+  // pg_temp is searched first for relations unless search_path lists it, even inside
+  // a SECURITY DEFINER function, so the function names pg_temp last and qualifies its
+  // tables. Empty temporary look-alikes would otherwise make it answer nothing (or
+  // whatever rows the caller put in them).
+  const context = await createMemoryTestContext();
+  await seedCorpus(context);
+  const query: LexicalCandidateQuery = {
+    query: "staging retry budget Kestrel",
+    candidateLimit: 40,
+    entityAliasRecall: true,
+  };
+  const answer = (shadow: boolean) =>
+    context.database.transaction(async (transaction) => {
+      installActorContext(transaction, context.alice);
+      if (shadow) {
+        await transaction.query("CREATE TEMP TABLE memories (LIKE public.memories) ON COMMIT DROP");
+        await transaction.query(
+          "CREATE TEMP TABLE memory_chunks (LIKE public.memory_chunks) ON COMMIT DROP",
+        );
+      }
+      const [rows] = await transaction.batch([
+        lexicalCandidatesStatement(context.alice.workspaceId, query),
+      ]);
+      return rows.rows;
+    });
+  const expected = await answer(false);
+  expect(expected.length).toBeGreaterThan(0);
+  expect(await answer(true)).toEqual(expected);
+});
+
 test("only lore_app may execute the definer function, and both functions pin search_path", async () => {
   const context = await createMemoryTestContext();
   const functions = await context.adminDatabase.transaction(async (transaction) => {
@@ -208,13 +239,13 @@ test("only lore_app may execute the definer function, and both functions pin sea
       name: "extract_cjk_grams",
       definer: false,
       volatility: "i",
-      config: ["search_path=pg_catalog"],
+      config: ["search_path=pg_catalog, pg_temp"],
     },
     {
       name: "lexical_candidates",
       definer: true,
       volatility: "s",
-      config: ["search_path=pg_catalog, public", "plan_cache_mode=force_custom_plan"],
+      config: ["search_path=pg_catalog, public, pg_temp", "plan_cache_mode=force_custom_plan"],
     },
   ]);
   await expect(
