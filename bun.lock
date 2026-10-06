@@ -46,7 +46,7 @@
         "@types/pg": "^8.23.1",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
-        "dbmate": "2.35.1",
+        "dbmate": "2.36.0",
         "es-module-lexer": "^2.3.2",
         "typescript": "^7.0.2",
         "vitest": "^4.1.11",
@@ -270,19 +270,19 @@
 
     "@cspotcode/source-map-support": ["@cspotcode/source-map-support@0.8.1", "", { "dependencies": { "@jridgewell/trace-mapping": "0.3.9" } }, "sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw=="],
 
-    "@dbmate/darwin-arm64": ["@dbmate/darwin-arm64@2.35.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-M63uycMI/sBHdjlf9NOn3YO2rKz4m3gLo/1kJ2QceODO724nZ4hJbsyfVHTpKpuHd6lct4+Vnhuqfz7lS9dKhg=="],
+    "@dbmate/darwin-arm64": ["@dbmate/darwin-arm64@2.36.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-9NkTCUl4QxDypfiEvVoNucO+3xyKeVIAoIoX2GtCqfRLtMzZ9zvOWcDlLgvqeKDSYCTEziW9QldgH7RggbEmOQ=="],
 
-    "@dbmate/darwin-x64": ["@dbmate/darwin-x64@2.35.1", "", { "os": "darwin", "cpu": "x64" }, "sha512-03QeOqT/RZZhX+v1B2+pkd6HPhSeAjz43LOm7ljylKP/D+/VKbg1QkxAcehsO20i3s7hIxH9+I/WmPyffRwMxw=="],
+    "@dbmate/darwin-x64": ["@dbmate/darwin-x64@2.36.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-FmG84xyAm2s/pBXuB4jipjTJ4O4FDRv+XboXCKDGjVA7ZLJhUCl5HGQ6ih9HgWIsklriMvNcP/GnhlUdW3Ii1g=="],
 
-    "@dbmate/linux-arm": ["@dbmate/linux-arm@2.35.1", "", { "os": "linux", "cpu": "arm" }, "sha512-LOhSMHzTKcy5KbsFYsQnY36B6GLS6xH8BiBSaI84vTkwmbezggDIzGbZ4Eq+FCD9eMS7lLfmpmoOZoLrwbb3IQ=="],
+    "@dbmate/linux-arm": ["@dbmate/linux-arm@2.36.0", "", { "os": "linux", "cpu": "arm" }, "sha512-iUKfCdX5XwbPjA16oB6OJRSyeGCQnzJjVV2F59gKRo/xYhpcYrRe3jScq7IziSSUwrYQEjXARjC+vuMEKfhlXg=="],
 
-    "@dbmate/linux-arm64": ["@dbmate/linux-arm64@2.35.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-GqK2KVT2jbSe5vM16oHMpi0v6nvDwgeoM6M8k1XFV/RB1rfuG/33BMzTbgIsV91jLjed0PMeiQVvgWr41Se9Jg=="],
+    "@dbmate/linux-arm64": ["@dbmate/linux-arm64@2.36.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-oGTjl1HgegCQ+Hppf7C1c0pX8KZa/X+TbAVGVmlC2wO2swuqRcCl9PzAHTw9wXKazfnK4EqdeoUWi099qOfJ9Q=="],
 
-    "@dbmate/linux-ia32": ["@dbmate/linux-ia32@2.35.1", "", { "os": "linux", "cpu": "ia32" }, "sha512-e38FzTUdraDS2tdI34QHr8Gf68TOS8dPsVdfrl+y7La2hSn8UIMtQ43cMaExTyHo6uZ9mFKUeIxgwVgAxDrQbQ=="],
+    "@dbmate/linux-ia32": ["@dbmate/linux-ia32@2.36.0", "", { "os": "linux", "cpu": "ia32" }, "sha512-xLn1wZ3LSP6ed/8xM76AtHaFszDLEAFwT6t5dGOgOamufFIJVPmPY4v8khTZTnhbz1ZZka/KUC65nJOb9I1XRg=="],
 
-    "@dbmate/linux-x64": ["@dbmate/linux-x64@2.35.1", "", { "os": "linux", "cpu": "x64" }, "sha512-gdr9Q6vMMUaNYz8fv64oNSuoHYLjpeuZjahY6J7Dy4c6wQVcfLs7t3aiBCBxlvVkjJJIr5Ig3ApwqC0V2IojQA=="],
+    "@dbmate/linux-x64": ["@dbmate/linux-x64@2.36.0", "", { "os": "linux", "cpu": "x64" }, "sha512-LdLpgyuluwJ93rWcvJjdlsjJ8rBeeAH52h3dSk0zAMaLrQn49dup1/o2tFpG1jM9f767HkuXdBrrjy6ZwG9BSg=="],
 
-    "@dbmate/win32-x64": ["@dbmate/win32-x64@2.35.1", "", { "os": "win32", "cpu": "x64" }, "sha512-1pP+/oDEeOLvrvPdirM8VIi/+8v8Qf9fDOpNo3nRslQPaoOTJKsMaVLr5b5Ba/UrOisFYJmLKslgWvvjGAY7wg=="],
+    "@dbmate/win32-x64": ["@dbmate/win32-x64@2.36.0", "", { "os": "win32", "cpu": "x64" }, "sha512-gruX3BWHdwC01NcK0H7/aZCMJ8bnG5Sggxr0h4f5EZkIIYK/mezHb766A00cnsZ5dcX90nGD8ePRDKYrtoE/8w=="],
 
     "@dotenvx/dotenvx": ["@dotenvx/dotenvx@1.31.0", "", { "dependencies": { "commander": "^11.1.0", "dotenv": "^16.4.5", "eciesjs": "^0.4.10", "execa": "^5.1.1", "fdir": "^6.2.0", "ignore": "^5.3.0", "object-treeify": "1.1.33", "picomatch": "^4.0.2", "which": "^4.0.0" }, "bin": { "dotenvx": "src/cli/dotenvx.js", "git-dotenvx": "src/cli/dotenvx.js" } }, "sha512-GeDxvtjiRuoyWVU9nQneId879zIyNdL05bS7RKiqMkfBSKpHMWHLoRyRqjYWLaXmX/llKO1hTlqHDmatkQAjPA=="],
 
@@ -922,7 +922,7 @@
 
     "data-uri-to-buffer": ["data-uri-to-buffer@4.0.1", "", {}, "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A=="],
 
-    "dbmate": ["dbmate@2.35.1", "", { "optionalDependencies": { "@dbmate/darwin-arm64": "2.35.1", "@dbmate/darwin-x64": "2.35.1", "@dbmate/linux-arm": "2.35.1", "@dbmate/linux-arm64": "2.35.1", "@dbmate/linux-ia32": "2.35.1", "@dbmate/linux-x64": "2.35.1", "@dbmate/win32-x64": "2.35.1" }, "bin": { "dbmate": "dist/cli.js" } }, "sha512-TGhNRbSnlLeLjpV/m4uHJSwZhsJZEeE+IIl98UYbb6s63j1ZsPY6XuVWL6pl3YYyfupVh7pAye6iuOAYf3Maxw=="],
+    "dbmate": ["dbmate@2.36.0", "", { "optionalDependencies": { "@dbmate/darwin-arm64": "2.36.0", "@dbmate/darwin-x64": "2.36.0", "@dbmate/linux-arm": "2.36.0", "@dbmate/linux-arm64": "2.36.0", "@dbmate/linux-ia32": "2.36.0", "@dbmate/linux-x64": "2.36.0", "@dbmate/win32-x64": "2.36.0" }, "bin": { "dbmate": "dist/cli.js" } }, "sha512-O7oyA9Z9Lfo+JauW7+ZUUURll5xCYb7n130anDTfOdOeDaXP7+FMyeZ76cfGpBVt/eDShj6tbGbc8yR5VT3ulg=="],
 
     "debug": ["debug@4.4.3", "", { "dependencies": { "ms": "^2.1.3" } }, "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA=="],
 
