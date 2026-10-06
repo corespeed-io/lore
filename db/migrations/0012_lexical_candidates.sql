@@ -121,7 +121,7 @@ CREATE FUNCTION lore.lexical_candidates(
     WHERE memory.workspace_id = target_workspace_id
       AND target_workspace_id = lore.current_workspace_id()
       AND (SELECT lore.can_read_workspace(lore.current_workspace_id()))
-      AND (memory.scope = 'shared'::memory_scope OR memory.owner_user_id = lore.current_user_id())
+      AND (memory.scope = 'shared'::public.memory_scope OR memory.owner_user_id = lore.current_user_id())
       AND (scope_filter IS NULL OR memory.scope = scope_filter)
       AND (updated_after IS NULL OR memory.updated_at >= updated_after)
       AND (updated_before IS NULL OR memory.updated_at < updated_before)

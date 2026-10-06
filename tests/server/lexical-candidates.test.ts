@@ -185,11 +185,13 @@ test("the function fails closed: another Workspace's id, or no Actor, answers no
   expect(await run(null, context.alice.workspaceId)).toEqual([]);
 });
 
-test("a caller's temporary tables cannot stand in for the tables the definer function reads", async () => {
-  // pg_temp is searched first for relations unless search_path lists it, even inside
-  // a SECURITY DEFINER function, so the function names pg_temp last and qualifies its
-  // tables. Empty temporary look-alikes would otherwise make it answer nothing (or
-  // whatever rows the caller put in them).
+test("a caller's temporary relations cannot stand in for the tables the definer function reads", async () => {
+  // pg_temp is searched first for relations and types unless search_path lists it,
+  // even inside a SECURITY DEFINER function. A temporary view there would run as the
+  // definer, and a function it calls would execute with the definer's rights before
+  // any RLS read-back, which is how a reviewer read another Workspace's private
+  // content through an exception. The function lists pg_temp last and qualifies its
+  // relations and types; here every look-alike either answers nothing or trips.
   const context = await createMemoryTestContext();
   await seedCorpus(context);
   const query: LexicalCandidateQuery = {
@@ -197,13 +199,30 @@ test("a caller's temporary tables cannot stand in for the tables the definer fun
     candidateLimit: 40,
     entityAliasRecall: true,
   };
-  const answer = (shadow: boolean) =>
+  const answer = (shadow: "none" | "tables" | "views") =>
     context.database.transaction(async (transaction) => {
       installActorContext(transaction, context.alice);
-      if (shadow) {
+      if (shadow === "tables") {
         await transaction.query("CREATE TEMP TABLE memories (LIKE public.memories) ON COMMIT DROP");
         await transaction.query(
           "CREATE TEMP TABLE memory_chunks (LIKE public.memory_chunks) ON COMMIT DROP",
+        );
+      }
+      if (shadow === "views") {
+        await transaction.query(
+          `CREATE FUNCTION pg_temp.tripwire(text) RETURNS tsvector LANGUAGE plpgsql AS $$
+           BEGIN RAISE EXCEPTION 'a temporary relation was read: %', $1; END $$`,
+        );
+        await transaction.query(
+          `CREATE TEMP VIEW memory_chunks AS
+           SELECT chunk.id, chunk.workspace_id, chunk.memory_id, chunk.ordinal, chunk.content,
+                  chunk.chunking_revision, pg_temp.tripwire(chunk.content) AS search_vector,
+                  pg_temp.tripwire(chunk.content) AS search_vector_english, chunk.entity_aliases
+           FROM public.memory_chunks chunk`,
+        );
+        await transaction.query(
+          `CREATE TEMP VIEW memories AS
+           SELECT memory.*, pg_temp.tripwire(memory.content) AS tripped FROM public.memories memory`,
         );
       }
       const [rows] = await transaction.batch([
@@ -211,9 +230,10 @@ test("a caller's temporary tables cannot stand in for the tables the definer fun
       ]);
       return rows.rows;
     });
-  const expected = await answer(false);
+  const expected = await answer("none");
   expect(expected.length).toBeGreaterThan(0);
-  expect(await answer(true)).toEqual(expected);
+  expect(await answer("tables")).toEqual(expected);
+  expect(await answer("views")).toEqual(expected);
 });
 
 test("only lore_app may execute the definer function, and both functions pin search_path", async () => {
