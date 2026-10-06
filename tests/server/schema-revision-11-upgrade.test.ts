@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
@@ -34,7 +35,7 @@ const DROPPED_CHUNK_COLUMNS = [
 ];
 
 async function database() {
-  const postgres = await PGlite.create({ extensions: { pg_trgm, vector } });
+  const postgres = await PGlite.create({ extensions: { btree_gin, pg_trgm, vector } });
   onTestFinished(() => postgres.close());
   return postgres;
 }

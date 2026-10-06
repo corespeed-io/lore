@@ -2,6 +2,7 @@
 
 import { managedTransactionDatabase, type PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
@@ -236,7 +237,7 @@ async function bootstrapDatabase(): Promise<{
   forbiddenActor: ActorContext;
   postgres: PGlite;
 }> {
-  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+  const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   await postgres.waitReady;
   await applyMigrationChain((sql) => postgres.exec(sql));
   await postgres.query("INSERT INTO users (id, display_name) VALUES ($1, $2), ($3, $4)", [

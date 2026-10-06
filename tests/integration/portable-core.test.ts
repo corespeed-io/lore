@@ -697,7 +697,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await expect(operations.capabilities()).resolves.toMatchObject({
     apiVersion: "v1",
-    schemaRevision: 11,
+    schemaRevision: 13,
     memoryChunking: {
       revision: "lore-memory-chunking-v2",
       maximumCharacters: 1_200,
@@ -776,7 +776,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
 
   await testContext.adminDatabase.transaction((transaction) =>
     transaction.query(
-      "UPDATE lore_system_state SET schema_revision = 12, compatible_from = 12 WHERE singleton",
+      "UPDATE lore_system_state SET schema_revision = 14, compatible_from = 14 WHERE singleton",
     ),
   );
   await expect(operations.readiness()).resolves.toMatchObject({
@@ -785,7 +785,7 @@ test("Portable Core readiness checks schema, vector, and the RLS request role", 
   });
   await testContext.adminDatabase.transaction((transaction) =>
     transaction.query(
-      "UPDATE lore_system_state SET schema_revision = 11, compatible_from = 9 WHERE singleton",
+      "UPDATE lore_system_state SET schema_revision = 13, compatible_from = 9 WHERE singleton",
     ),
   );
 

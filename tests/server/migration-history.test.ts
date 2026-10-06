@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
@@ -24,7 +25,7 @@ const CONCURRENT_INDEXES = [
 ];
 
 async function database() {
-  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+  const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   await postgres.waitReady;
   onTestFinished(() => postgres.close());
   return postgres;

@@ -11,7 +11,7 @@ import {
   type MemoryStorageContext,
   MemoryVersionConflictError,
 } from "../src/index";
-import { missingSchemaContract, testDatabase } from "../src/testing";
+import { compareLexicalCandidates, missingSchemaContract, testDatabase } from "../src/testing";
 
 test("an independent storage host runs Memory CRUD and retrieval without OSS identity", async () => {
   const postgres = new PGlite({ extensions: { vector } });
@@ -40,6 +40,14 @@ test("an independent storage host runs Memory CRUD and retrieval without OSS ide
     await expect(memories.retrieve(created.id)).resolves.toEqual(created);
     const found = await memories.search({ query: "harbor observatory" });
     expect(found.map((result) => result.memory.id)).toEqual([created.id]);
+    // This host's lore.lexical_candidates is the reference channels over its partition.
+    for (const { query, host, reference } of await compareLexicalCandidates(storage, [
+      { query: "Harbor observatory sunrise", candidateLimit: 40, entityAliasRecall: true },
+      { query: "observatory opens", candidateLimit: 1 },
+      { query: "observatory", candidateLimit: 40, metadataFilter: { category: "none" } },
+    ])) {
+      expect(host, query.query).toEqual(reference);
+    }
     const chunks = await postgres.query<{ content: string }>(
       "SELECT content FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
       [created.id],
@@ -135,7 +143,7 @@ test("an empty database lacks every table, type, function, and enum a group name
         "memory: table memories",
         "memory: table memory_chunks",
         "memory: type vector",
-        "memory: function lore.extract_entity_aliases(text)",
+        "memory: function lore.lexical_candidates(uuid,text,text[],text[],integer,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
         "memory: enum memory_scope (shared, private)",
         "graph: table memory_links",
       ]),

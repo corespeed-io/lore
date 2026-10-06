@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, test } from "vitest";
@@ -7,7 +8,7 @@ import { expect, test } from "vitest";
 const baseline = new URL("../../db/migrations/0001_v1_baseline.sql", import.meta.url);
 
 test("the v1 baseline installs the complete Portable Core schema", async () => {
-  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+  const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   try {
     await postgres.waitReady;
     await postgres.exec(await readFile(baseline, "utf8"));

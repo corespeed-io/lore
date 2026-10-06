@@ -244,6 +244,17 @@ been removed. Lore now has a native implementation, split into two concepts
   revision-9 release with compatible-range readiness stays ready across them; one from
   before it requires exact equality, so that readiness release ships alone, everywhere,
   before `0010` runs (docs/operations.md).
+  `0012_lexical_candidates.sql` adds `btree_gin`, `lore.extract_cjk_grams`, and
+  `lore.lexical_candidates`, a SECURITY DEFINER function (EXECUTE: `lore_app` only,
+  `search_path` pinned) that runs the five lexical channels with the
+  `memories_select` predicate and returns chunk ids and per-channel ranks only;
+  `0013_index_lexical_channels_concurrently.sql` (`transaction:false`) builds the
+  Workspace-leading GINs it probes (`search_vector`, `search_vector_english`,
+  `entity_aliases`, and the expression `lore.extract_cjk_grams(content)`). Both keep
+  `compatible_from = 9`: they add objects older instances never name, and the CJK
+  index is an expression index because a stored generated column would rewrite
+  `memory_chunks` under ACCESS EXCLUSIVE. Until 0013 commits the function answers
+  the same candidates by scanning.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -255,7 +266,7 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 11) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 13) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -274,7 +285,7 @@ been removed. Lore now has a native implementation, split into two concepts
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (11), and
+  `tests/integration/api.test.ts` pin the current revision (13), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -921,21 +932,38 @@ been removed. Lore now has a native implementation, split into two concepts
   hybrid latency. The CJK channel exists because Postgres `simple`/`english` FTS
   cannot segment CJK — an entire punctuation-bounded run indexes as one token — so
   query-side Han/Hiragana/Katakana/Hangul runs become at most 24 three-code-point
-  grams probed with `LIKE` against chunk content under the same pre-top-k
-  Actor/RLS/scope/time/metadata filters, requiring two matched grams whenever the
-  query yields two or more. Grams are CJK-script letters by construction, so they
-  need no `LIKE` escaping. `memory_chunks` deliberately carries no content GIN
-  indexes — migration 0002 dropped the baseline `search_vector`/
-  `search_vector_english` GINs, and a proposed trigram index was rejected, once
-  `enable_seqscan=off` under `SET ROLE lore_app` proved RLS keeps non-leakproof
-  operators (`@@`, `LIKE`) out of index conditions, making every lexical channel
-  an RLS-bounded workspace scan regardless. Measured at 20k chunks: a selective
-  12-gram probe ~150ms beside ~95ms for one FTS channel, but cost tracks gram
-  selectivity, not the LIMIT — 14 common-connective grams materialized 200k
-  intermediate rows and ~590ms, the same shape as the relaxed-English channel.
-  The tsvector columns remain — they power the scan predicates. Do not add
-  content GIN indexes here without first fixing that request-path restriction
-  and proving the win under `SET ROLE lore_app`;
+  grams (a two-code-point run is its own gram), requiring two matched grams whenever
+  the query yields two or more. Under RLS no lexical channel can use an index:
+  `enable_seqscan=off` under `SET ROLE lore_app` proved the policy keeps non-leakproof
+  operators (`@@`, `@>`, `LIKE`) out of index conditions, which is why 0002 and 0003
+  dropped the chunk GINs and every channel was a Workspace scan. Since revision 12 the
+  channels run in the host's `lore.lexical_candidates` (`db/migrations/0012`), a
+  SECURITY DEFINER function that applies the `memories_select` predicate itself and
+  answers ids and ranks only, so 0013's Workspace-leading GINs serve it; the CJK
+  channel tests `lore.extract_cjk_grams(content) @> ARRAY[gram]`, which holds exactly
+  when `content LIKE '%gram%'` did. The engine reads every candidate back under RLS
+  before fusing, so an over-answering function cannot reveal a row. The function must
+  answer exactly what the reference channels in `@corespeed/lore-core/testing`
+  (`referenceLexicalCandidates`, the pre-revision-12 statement) answer through the
+  same policy: the engine contract suite and `tests/server/lexical-candidates.test.ts`
+  compare them for Users, Agents, revoked access, filters, and limits, and the latter
+  pins the grant, failing closed, the read-back, the CJK index terms over every code
+  point, and that each probe uses its index as the owner and cannot under RLS. A
+  change to a lexical channel changes the reference and the function together.
+  Measured on PostgreSQL 18 with lexical-only search (2026-10-06): a 76k-chunk
+  Workspace went from 10.9 s to 106 ms median (worst 11.9 s to 0.46 s, CJK 9.9 s to
+  52 ms) and a 1,500-Memory one from 99 to 31 ms, with every result id, score, and
+  evidence identical. Three things keep the common-word cases fast without changing
+  any rank: the relaxed channel finds chunks matching two or more terms with one GIN
+  probe (the OR of every pair of term queries) instead of reading every single-term
+  match; the relaxed and entity alias channels score each match once and then read
+  Memories in score order only until their top candidates are known; and the relaxed
+  channel reads each chunk's tsvector into memory once (`|| ''::tsvector` under
+  `OFFSET 0`), because about half of them are stored out of line and every column
+  reference would fetch them again. What remains is scoring every chunk that matches
+  two relaxed terms, which a query of words in a third of the Workspace makes about
+  16k chunks (~0.4 s). The
+  semantic channel still runs on the tables under RLS (a separate follow-up);
 - provider adapters and benchmark readers/judges prefer official OpenAI, Google Gen AI,
   Ollama, Cohere, and Voyage SDKs with their default transport. Use SDK-native timeout
   and retry configuration; do not wrap their fetch. Direct optional fetch injection

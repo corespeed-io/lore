@@ -549,12 +549,13 @@ migrations or replace a production database to bypass preflight.
 A `-- migrate:up transaction:false` migration is applied by the wrapper itself, one
 statement at a time. dbmate would send the whole file as one query, and PostgreSQL
 runs a multi-statement query as one transaction block, which `CREATE INDEX
-CONCURRENTLY` refuses. `0005`, `0008`, and `0011` are such migrations: `0005` and
-`0008` build the replay-scrub and import-provenance indexes concurrently so writes
-keep flowing during the build, and `0011` builds the chunk-id index the chunk→vector
+CONCURRENTLY` refuses. `0005`, `0008`, `0011`, and `0013` are such migrations: `0005`
+and `0008` build the replay-scrub and import-provenance indexes concurrently so writes
+keep flowing during the build, `0011` builds the chunk-id index the chunk→vector
 cascade needs and drops two indexes no query can use (the Memory metadata GIN, which
 RLS keeps off the request path, and a Link index that duplicates a prefix of the
-Link natural key).
+Link natural key), and `0013` builds the four Workspace-leading GIN indexes that
+lexical search probes through `lore.lexical_candidates`.
 While it is pending, dbmate sees a temporary copy of only the migrations before it.
 The wrapper commits the migration's closing `schema_revision` update in one
 transaction with its ledger row. A run that stops earlier leaves the previous
@@ -598,6 +599,15 @@ embedding claims, outbound Link deletion events on forget, and an Agent
 if the timeout expires nothing is recorded and a rerun repeats it. It never locks
 `memories`, so it cannot deadlock with request writes, which lock `memories` first.
 `0011` is concurrent as described above and blocks no reads or writes.
+
+`0012` and `0013` also keep `compatible_from` at 9. `0012` is transactional and only
+creates the `btree_gin` extension and two functions, so it locks no table beyond
+the ACCESS SHARE its function bodies take while being validated. From the moment it
+commits, a revision-13 instance answers lexical search through
+`lore.lexical_candidates`, which returns the same candidates as before by scanning
+until `0013`'s concurrent builds commit; older instances never call it. The
+expression index on `lore.extract_cjk_grams(content)` computes the CJK terms of every
+chunk once during its build (CPU, not locks) and on each chunk insert afterwards.
 
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a

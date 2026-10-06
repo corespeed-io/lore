@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { managedTransactionDatabase, type PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { applyMigrationChain } from "../../../scripts/database/lib/migration-preflight.ts";
@@ -32,7 +33,7 @@ if (!new Set(["dependency-stress", "foundation"]).has(suite)) {
 const strict = process.argv.includes("--strict");
 // PGlite restores this after its internal exit(99); Bun cannot clear it with undefined.
 process.exitCode ??= 0;
-const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
 await postgres.waitReady;
 
 try {
