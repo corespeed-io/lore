@@ -5,10 +5,13 @@ import {
   type MemoryStorageContext,
   managedTransactionDatabase,
   type PostgresDatabase,
+  type PostgresStatement,
   type PostgresTransaction,
+  statement,
 } from "./db";
 import { createEmbeddingMaintenance } from "./maintenance";
-import { createMemoryModule, type MemoryScope } from "./memory";
+import { createMemoryModule, type MemoryScope, RETRIEVAL_ENTITY_ALIAS_POLICY } from "./memory";
+import { cjkLexicalGrams, relaxedEnglishTerms } from "./retrieval/query";
 import {
   CORE_SCHEMA_CONTRACT,
   type SchemaContractGroup,
@@ -16,6 +19,8 @@ import {
   type TableContract,
 } from "./schema-contract";
 
+// The query side of the CJK channel, for hosts that verify their index terms cover it.
+export { cjkLexicalGrams } from "./retrieval/query";
 export { CORE_SCHEMA_CONTRACT, type SchemaContractGroupName } from "./schema-contract";
 
 /**
@@ -176,6 +181,244 @@ async function missingTableContract(
     }
   }
   return missing;
+}
+
+/** One lexical search, as the engine's search statement asks for it. */
+export interface LexicalCandidateQuery {
+  query: string;
+  candidateLimit: number;
+  scope?: MemoryScope | null;
+  updatedAfter?: string | null;
+  updatedBefore?: string | null;
+  metadataFilter?: Record<string, unknown> | null;
+  excludedMemoryIds?: readonly string[];
+  /** Whether the entity alias channel runs (the module's `entityAliasRecall`). */
+  entityAliasRecall?: boolean;
+}
+
+export interface LexicalCandidateRow {
+  channel: string;
+  chunk_id: string;
+  memory_id: string;
+  candidate_rank: number | string;
+}
+
+/** The arguments both statements bind, derived as the engine derives them. */
+function lexicalCandidateArguments(partitionId: string, input: LexicalCandidateQuery) {
+  return {
+    query: input.query,
+    partitionId,
+    candidateLimit: input.candidateLimit,
+    relaxedTerms: relaxedEnglishTerms(input.query),
+    scope: input.scope ?? null,
+    updatedAfter: input.updatedAfter ?? null,
+    updatedBefore: input.updatedBefore ?? null,
+    metadataFilter: input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+    excludedMemoryIds: [...(input.excludedMemoryIds ?? [])],
+    aliasLimit: input.entityAliasRecall ? RETRIEVAL_ENTITY_ALIAS_POLICY.maximumQueryAliases : 0,
+    cjkGrams: cjkLexicalGrams(input.query),
+  };
+}
+
+/** The host's `lore.lexical_candidates`, called with the engine's arguments. */
+export function lexicalCandidatesStatement(
+  partitionId: string,
+  input: LexicalCandidateQuery,
+): PostgresStatement<LexicalCandidateRow> {
+  const values = lexicalCandidateArguments(partitionId, input);
+  return statement<LexicalCandidateRow>(
+    `SELECT channel, chunk_id, memory_id, candidate_rank
+     FROM lore.lexical_candidates(
+       $1::uuid, $2::text, $3::text[], $4::text[], $5::integer, $6::memory_scope,
+       $7::timestamptz, $8::timestamptz, $9::jsonb, $10::uuid[], $11::integer
+     )
+     ORDER BY channel, candidate_rank`,
+    [
+      values.partitionId,
+      values.query,
+      values.relaxedTerms,
+      values.cjkGrams,
+      values.aliasLimit,
+      values.scope,
+      values.updatedAfter,
+      values.updatedBefore,
+      values.metadataFilter,
+      values.excludedMemoryIds,
+      values.candidateLimit,
+    ],
+  );
+}
+
+/**
+ * The lexical channels as the engine's search statement ran them on the tables
+ * through schema revision 11, which is what `lore.lexical_candidates` must answer:
+ * the same chunks, with the same ranks, in every channel, for the same caller. Run in
+ * a host transaction, it applies the host's access policy the way that statement
+ * did (for lore oss, RLS as lore_app), and the host's function must apply the same
+ * policy itself. It reads every chunk the caller may see, so it is a specification,
+ * never a request path.
+ */
+export function referenceLexicalCandidates(
+  partitionId: string,
+  input: LexicalCandidateQuery,
+): PostgresStatement<LexicalCandidateRow> {
+  const values = lexicalCandidateArguments(partitionId, input);
+  const filter = `($5::memory_scope IS NULL OR memory.scope = $5::memory_scope)
+         AND ($6::timestamptz IS NULL OR memory.updated_at >= $6::timestamptz)
+         AND ($7::timestamptz IS NULL OR memory.updated_at < $7::timestamptz)
+         AND ($8::jsonb IS NULL OR memory.metadata @> $8::jsonb)
+         AND NOT (memory.id = ANY($9::uuid[]))`;
+  return statement<LexicalCandidateRow>(
+    `WITH simple_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY ts_rank_cd(chunk.search_vector, websearch_to_tsquery('simple', $1), 32) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM memory_chunks chunk
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       WHERE chunk.workspace_id = $2::uuid AND ${filter}
+         AND chunk.search_vector @@ websearch_to_tsquery('simple', $1)
+       ORDER BY ts_rank_cd(chunk.search_vector, websearch_to_tsquery('simple', $1), 32) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     english_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY ts_rank_cd(chunk.search_vector_english, websearch_to_tsquery('english', $1), 32) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM memory_chunks chunk
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       WHERE chunk.workspace_id = $2::uuid AND ${filter}
+         AND chunk.search_vector_english @@ websearch_to_tsquery('english', $1)
+       ORDER BY ts_rank_cd(chunk.search_vector_english, websearch_to_tsquery('english', $1), 32) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     english_query_terms AS MATERIALIZED (
+       SELECT plainto_tsquery('english', term) AS query,
+         max(CASE
+               WHEN term ~ '^[[:upper:]][[:lower:]]' THEN 4.0
+               WHEN term ~ '[[:digit:]]' THEN 3.0
+               WHEN char_length(term) >= 10 THEN 1.5
+               ELSE 1.0
+             END) AS weight
+       FROM unnest($4::text[]) AS term
+       WHERE numnode(plainto_tsquery('english', term)) > 0
+       GROUP BY plainto_tsquery('english', term)
+     ),
+     relaxed_english_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY sum(ts_rank_cd(chunk.search_vector_english, term.query, 32) * term.weight) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM memory_chunks chunk
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       JOIN english_query_terms term ON chunk.search_vector_english @@ term.query
+       WHERE chunk.workspace_id = $2::uuid AND ${filter}
+       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
+       HAVING count(*) >= 2
+       ORDER BY sum(ts_rank_cd(chunk.search_vector_english, term.query, 32) * term.weight) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     query_entity_aliases AS MATERIALIZED (
+       SELECT alias
+       FROM unnest(lore.extract_entity_aliases($1)) WITH ORDINALITY AS extracted(alias, ordinal)
+       ORDER BY ordinal
+       LIMIT $10::integer
+     ),
+     entity_alias_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY count(*) DESC, max(char_length(query_alias.alias)) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM query_entity_aliases query_alias
+       JOIN memory_chunks chunk ON chunk.entity_aliases @> ARRAY[query_alias.alias]::text[]
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       WHERE chunk.workspace_id = $2::uuid AND ${filter}
+       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
+       ORDER BY count(*) DESC, max(char_length(query_alias.alias)) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     cjk_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM unnest($11::text[]) AS gram(gram)
+       JOIN memory_chunks chunk ON chunk.content LIKE ('%' || gram.gram || '%')
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       WHERE chunk.workspace_id = $2::uuid AND ${filter}
+       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
+       HAVING count(*) >= least(2, cardinality($11::text[]))
+       ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     )
+     SELECT 'simple' AS channel, chunk_id, memory_id, candidate_rank FROM simple_lexical
+     UNION ALL SELECT 'english', chunk_id, memory_id, candidate_rank FROM english_lexical
+     UNION ALL SELECT 'relaxed_english', chunk_id, memory_id, candidate_rank FROM relaxed_english_lexical
+     UNION ALL SELECT 'entity_alias', chunk_id, memory_id, candidate_rank FROM entity_alias_lexical
+     UNION ALL SELECT 'cjk', chunk_id, memory_id, candidate_rank FROM cjk_lexical
+     ORDER BY channel, candidate_rank`,
+    [
+      values.query,
+      values.partitionId,
+      values.candidateLimit,
+      values.relaxedTerms,
+      values.scope,
+      values.updatedAfter,
+      values.updatedBefore,
+      values.metadataFilter,
+      values.excludedMemoryIds,
+      values.aliasLimit,
+      values.cjkGrams,
+    ],
+  );
+}
+
+/** Candidates as comparable lines: `channel rank chunk memory`, in channel and rank order. */
+function candidateLines(rows: readonly LexicalCandidateRow[]): string[] {
+  return rows.map(
+    (row) => `${row.channel} ${Number(row.candidate_rank)} ${row.chunk_id} ${row.memory_id}`,
+  );
+}
+
+/**
+ * Run each query through the host's `lore.lexical_candidates` and through the
+ * reference channels, in one transaction of `storage`, and return both answers. A
+ * host passes when every pair is equal; the reference's answers should also be
+ * non-empty often enough to mean something.
+ */
+export async function compareLexicalCandidates(
+  storage: MemoryStorageContext,
+  queries: readonly LexicalCandidateQuery[],
+): Promise<{ query: LexicalCandidateQuery; host: string[]; reference: string[] }[]> {
+  return storage.database.transaction(async (transaction) => {
+    const results = await transaction.batch(
+      queries.flatMap((query) => [
+        lexicalCandidatesStatement(storage.partitionId, query),
+        referenceLexicalCandidates(storage.partitionId, query),
+      ]),
+    );
+    return queries.map((query, index) => ({
+      query,
+      host: candidateLines(results[2 * index]?.rows ?? []),
+      reference: candidateLines(results[2 * index + 1]?.rows ?? []),
+    }));
+  });
 }
 
 /**
@@ -343,6 +586,102 @@ export function runMemoryCoreContractSuite(
         content: "A memory written without an explicit scope.",
       });
       expect(memory.scope).toBe(defaultScope);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("contract: lore.lexical_candidates answers the reference lexical channels", async () => {
+    const fixture = await createFixture();
+    try {
+      const writers = {
+        alice: createMemoryModule(fixture.alice, moduleOptions),
+        bob: createMemoryModule(fixture.bob, moduleOptions),
+        carol: createMemoryModule(fixture.carol, moduleOptions),
+      };
+      const long = (lead: string) =>
+        `${lead}\n\n${"Background on the rollout and its retry budget. ".repeat(40)}\n\nKestrel owns the follow-up.`;
+      const seeds: [keyof typeof writers, string, MemoryScope, Record<string, unknown>?][] = [
+        [
+          "alice",
+          "Staging deploys run from the prod branch, not main.",
+          "shared",
+          { kind: "decision" },
+        ],
+        ["alice", "The staging deploy retry budget is two attempts.", "private"],
+        ["alice", "Project Kestrel ships the Hyperdrive pooling change on Friday.", "shared"],
+        [
+          "alice",
+          "Kestrel and Omega share one retry budget for staging deploys.",
+          "shared",
+          { kind: "decision" },
+        ],
+        ["alice", long("Deploy checklist for staging and prod."), "shared"],
+        ["alice", "生产环境的记忆召回质量在八月的专项审计中被评为需要重点改进。", "shared"],
+        ["alice", "记忆召回质量审计的结论由杭州团队提交给财务系统。", "private"],
+        ["alice", "ユーザーデータベースの週次バックアップは日曜深夜に実行されます。", "shared"],
+        ["bob", "Bob's private note: the staging retry budget is secretly three.", "private"],
+        ["bob", "Bob shares that Kestrel deploys go through the Omega queue.", "shared"],
+        ["bob", "鲍勃的私人记录：记忆召回质量审计的真实结论是完全达标。", "private"],
+        ["bob", "서버 재시작 절차는 운영 위키에 있습니다.", "shared"],
+        [
+          "carol",
+          "Another partition stages deploys with the same retry budget as Kestrel.",
+          "shared",
+        ],
+        ["carol", "另一个分区的记忆召回质量审计结论。", "shared"],
+      ];
+      const ids: string[] = [];
+      for (const [writer, content, scope, metadata] of seeds) {
+        const memory = await writers[writer].remember({
+          content,
+          scope,
+          ...(metadata ? { metadata } : {}),
+        });
+        ids.push(memory.id);
+      }
+      const queries = [
+        "staging deploy",
+        "Staging deploys run from the prod branch",
+        "what is the retry budget for staging deploys",
+        "Kestrel Omega retry",
+        "Project Kestrel Hyperdrive",
+        '"retry budget" -prod',
+        "记忆召回质量的审计结论是什么？",
+        "召回质量",
+        "データベースのバックアップ",
+        "서버 재시작",
+        "nothing matches this at all",
+      ];
+      const filtered = (query: string): LexicalCandidateQuery[] => [
+        { query, candidateLimit: 40, entityAliasRecall: true },
+        { query, candidateLimit: 2, entityAliasRecall: true },
+        { query, candidateLimit: 40 },
+        { query, candidateLimit: 40, entityAliasRecall: true, scope: "private" },
+        {
+          query,
+          candidateLimit: 40,
+          entityAliasRecall: true,
+          metadataFilter: { kind: "decision" },
+        },
+        { query, candidateLimit: 40, entityAliasRecall: true, excludedMemoryIds: ids.slice(0, 3) },
+        {
+          query,
+          candidateLimit: 40,
+          entityAliasRecall: true,
+          updatedBefore: "2000-01-01T00:00:00Z",
+        },
+      ];
+      let found = 0;
+      for (const storage of [fixture.alice, fixture.bob, fixture.carol]) {
+        const compared = await compareLexicalCandidates(storage, queries.flatMap(filtered));
+        for (const { query, host, reference } of compared) {
+          expect(host, JSON.stringify(query)).toEqual(reference);
+          found += reference.length;
+        }
+      }
+      // The comparison means something only when the channels find things.
+      expect(found).toBeGreaterThan(100);
     } finally {
       await fixture.close();
     }

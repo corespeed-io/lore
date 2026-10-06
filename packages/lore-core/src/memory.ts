@@ -389,204 +389,48 @@ interface SearchStatementInput {
   embeddingProvider?: EmbeddingProvider | undefined;
 }
 
-/** One hybrid retrieval statement; independent queries can share a batch. */
+/**
+ * One hybrid retrieval statement; independent queries can share a batch. The
+ * lexical channels (simple and English full text, relaxed English terms, exact
+ * entity aliases, CJK grams) come from `lore.lexical_candidates`, whose answer must
+ * equal the reference channels in `./testing` (`referenceLexicalCandidates`); the
+ * host runs them where its indexes can serve them, which under RLS a query on the
+ * tables cannot. The semantic channel runs here. Reciprocal-rank fusion (k = 60)
+ * scores each chunk across the channels.
+ */
 function searchStatement(input: SearchStatementInput): PostgresStatement<SearchRow> {
   return statement<SearchRow>(
-    `WITH simple_lexical_candidates AS (
+    `WITH lexical_candidates AS (
+       -- The lexical channels run in the host's lore.lexical_candidates, which answers
+       -- chunk ids and per-channel ranks only. Every candidate is read back here,
+       -- through the caller's own access policy, before it is fused: a row the store
+       -- would not show this caller is dropped, whatever the function answered.
        SELECT
-         chunk.id AS chunk_id,
-         memory.id AS memory_id,
+         candidate.chunk_id,
+         candidate.memory_id,
          chunk.ordinal AS chunk_ordinal,
          memory.updated_at AS memory_updated_at,
-         row_number() OVER (
-           ORDER BY ts_rank_cd(
-             chunk.search_vector,
-             websearch_to_tsquery('simple', $1),
-             32
-           ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM memory_chunks chunk
-       JOIN memories memory
-         ON memory.id = chunk.memory_id
-        AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = $2
-         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
-         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
-         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
-         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
-         AND NOT (memory.id = ANY($16::uuid[]))
-         AND chunk.search_vector @@ websearch_to_tsquery('simple', $1)
-       ORDER BY ts_rank_cd(
-         chunk.search_vector,
-         websearch_to_tsquery('simple', $1),
-         32
-       ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     english_lexical_candidates AS (
-       SELECT
-         chunk.id AS chunk_id,
-         memory.id AS memory_id,
-         chunk.ordinal AS chunk_ordinal,
-         memory.updated_at AS memory_updated_at,
-         row_number() OVER (
-           ORDER BY ts_rank_cd(
-             chunk.search_vector_english,
-             websearch_to_tsquery('english', $1),
-             32
-           ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM memory_chunks chunk
-       JOIN memories memory
-         ON memory.id = chunk.memory_id
-        AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = $2
-         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
-         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
-         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
-         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
-         AND NOT (memory.id = ANY($16::uuid[]))
-         AND chunk.search_vector_english @@ websearch_to_tsquery('english', $1)
-       ORDER BY ts_rank_cd(
-         chunk.search_vector_english,
-         websearch_to_tsquery('english', $1),
-         32
-       ) DESC, memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     english_query_terms AS MATERIALIZED (
-       SELECT
-         plainto_tsquery('english', term) AS query,
-         max(
-           CASE
-             WHEN term ~ '^[[:upper:]][[:lower:]]' THEN 4.0
-             WHEN term ~ '[[:digit:]]' THEN 3.0
-             WHEN char_length(term) >= 10 THEN 1.5
-             ELSE 1.0
-           END
-         ) AS weight
-       FROM unnest($10::text[]) AS term
-       WHERE numnode(plainto_tsquery('english', term)) > 0
-       GROUP BY plainto_tsquery('english', term)
-     ),
-     query_entity_aliases AS MATERIALIZED (
-       SELECT alias
-       FROM unnest(lore.extract_entity_aliases($1)) WITH ORDINALITY AS extracted(alias, ordinal)
-       WHERE $18::boolean
-       ORDER BY ordinal
-       LIMIT ${RETRIEVAL_ENTITY_ALIAS_POLICY.maximumQueryAliases}
-     ),
-     entity_alias_matches AS MATERIALIZED (
-       SELECT
-         chunk.id AS chunk_id,
-         memory.id AS memory_id,
-         chunk.ordinal AS chunk_ordinal,
-         memory.updated_at AS memory_updated_at,
-         count(*) AS alias_match_count,
-         max(char_length(query_alias.alias)) AS alias_specificity
-       FROM query_entity_aliases query_alias
+         candidate.candidate_rank
+       FROM lore.lexical_candidates(
+         $2::uuid,
+         $1::text,
+         $10::text[],
+         $19::text[],
+         CASE WHEN $18::boolean THEN ${RETRIEVAL_ENTITY_ALIAS_POLICY.maximumQueryAliases} ELSE 0 END,
+         $12::memory_scope,
+         $13::timestamptz,
+         $14::timestamptz,
+         $15::jsonb,
+         $16::uuid[],
+         $4::integer
+       ) candidate
        JOIN memory_chunks chunk
-         ON chunk.entity_aliases @> ARRAY[query_alias.alias]::text[]
+         ON chunk.workspace_id = $2
+        AND chunk.id = candidate.chunk_id
+        AND chunk.memory_id = candidate.memory_id
        JOIN memories memory
-         ON memory.id = chunk.memory_id
-        AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = $2
-         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
-         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
-         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
-         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
-         AND NOT (memory.id = ANY($16::uuid[]))
-       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
-       ORDER BY count(*) DESC, max(char_length(query_alias.alias)) DESC,
-                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     entity_alias_candidates AS (
-       SELECT
-         chunk_id,
-         memory_id,
-         chunk_ordinal,
-         memory_updated_at,
-         row_number() OVER (
-           ORDER BY alias_match_count DESC, alias_specificity DESC,
-                    memory_updated_at DESC, chunk_ordinal DESC, chunk_id
-         ) AS candidate_rank
-       FROM entity_alias_matches
-     ),
-     relaxed_english_lexical_candidates AS (
-       SELECT
-         chunk.id AS chunk_id,
-         memory.id AS memory_id,
-         chunk.ordinal AS chunk_ordinal,
-         memory.updated_at AS memory_updated_at,
-         row_number() OVER (
-           ORDER BY sum(ts_rank_cd(chunk.search_vector_english, term.query, 32) * term.weight) DESC,
-                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM memory_chunks chunk
-       JOIN memories memory
-         ON memory.id = chunk.memory_id
-        AND memory.workspace_id = chunk.workspace_id
-       JOIN english_query_terms term
-         ON chunk.search_vector_english @@ term.query
-       WHERE chunk.workspace_id = $2
-         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
-         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
-         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
-         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
-         AND NOT (memory.id = ANY($16::uuid[]))
-       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
-       HAVING count(*) >= 2
-       ORDER BY sum(ts_rank_cd(chunk.search_vector_english, term.query, 32) * term.weight) DESC,
-                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     cjk_lexical_matches AS MATERIALIZED (
-       SELECT
-         chunk.id AS chunk_id,
-         memory.id AS memory_id,
-         chunk.ordinal AS chunk_ordinal,
-         memory.updated_at AS memory_updated_at,
-         sum(char_length(gram.gram)) AS gram_specificity,
-         count(*) AS gram_match_count
-       FROM unnest($19::text[]) AS gram(gram)
-       JOIN memory_chunks chunk
-         ON chunk.content LIKE ('%' || gram.gram || '%')
-       JOIN memories memory
-         ON memory.id = chunk.memory_id
-        AND memory.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = $2
-         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
-         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
-         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
-         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
-         AND NOT (memory.id = ANY($16::uuid[]))
-       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
-       HAVING count(*) >= least(2, cardinality($19::text[]))
-       ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
-                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     cjk_lexical_candidates AS (
-       SELECT
-         chunk_id,
-         memory_id,
-         chunk_ordinal,
-         memory_updated_at,
-         row_number() OVER (
-           ORDER BY gram_specificity DESC, gram_match_count DESC,
-                    memory_updated_at DESC, chunk_ordinal DESC, chunk_id
-         ) AS candidate_rank
-       FROM cjk_lexical_matches
-     ),
-     lexical_candidates AS (
-       SELECT * FROM simple_lexical_candidates
-       UNION ALL
-       SELECT * FROM english_lexical_candidates
-       UNION ALL
-       SELECT * FROM relaxed_english_lexical_candidates
-       UNION ALL
-       SELECT * FROM cjk_lexical_candidates
+         ON memory.workspace_id = $2
+        AND memory.id = candidate.memory_id
      ),
      active_semantic_chunks AS MATERIALIZED (
        SELECT
@@ -642,11 +486,11 @@ function searchStatement(input: SearchStatementInput): PostgresStatement<SearchR
          max(memory_updated_at) AS memory_updated_at,
          sum(1.0 / (60.0 + candidate_rank)) AS score
        FROM (
-         SELECT * FROM lexical_candidates
+         SELECT chunk_id, memory_id, chunk_ordinal, memory_updated_at, candidate_rank
+         FROM lexical_candidates
          UNION ALL
-         SELECT * FROM semantic_candidates
-         UNION ALL
-         SELECT * FROM entity_alias_candidates
+         SELECT chunk_id, memory_id, chunk_ordinal, memory_updated_at, candidate_rank
+         FROM semantic_candidates
        ) candidates
        GROUP BY chunk_id, memory_id, chunk_ordinal
      ),

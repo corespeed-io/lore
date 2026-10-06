@@ -12,6 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { managedTransactionDatabase, type PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { Ollama } from "ollama/browser";
@@ -195,8 +196,8 @@ async function createDatabase(dataDir: string | null): Promise<{
   postgres: PGlite;
 }> {
   const postgres = dataDir
-    ? new PGlite(dataDir, { extensions: { pg_trgm, vector } })
-    : new PGlite({ extensions: { pg_trgm, vector } });
+    ? new PGlite(dataDir, { extensions: { btree_gin, pg_trgm, vector } })
+    : new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   await postgres.waitReady;
   const schema = await postgres.query<{ users: string | null }>(
     "SELECT to_regclass('public.users')::text AS users",

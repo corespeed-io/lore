@@ -1,6 +1,7 @@
 import type { PostgresDatabase } from "@corespeed/lore-core";
 import { testDatabase } from "@corespeed/lore-core/testing";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { onTestFinished } from "vitest";
@@ -37,7 +38,7 @@ export interface MemoryTestContext {
 let template: Promise<Blob> | undefined;
 
 async function createTemplate(): Promise<Blob> {
-  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+  const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   try {
     await postgres.waitReady;
     await migrate(postgres);
@@ -70,7 +71,7 @@ async function createTemplate(): Promise<Blob> {
 export async function createMemoryTestContext(): Promise<MemoryTestContext> {
   template ??= createTemplate();
   const postgres = new PGlite({
-    extensions: { pg_trgm, vector },
+    extensions: { btree_gin, pg_trgm, vector },
     loadDataDir: await template,
   });
   try {

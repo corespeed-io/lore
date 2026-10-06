@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { managedTransactionDatabase, type PostgresDatabase } from "@corespeed/lore-core";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
@@ -221,7 +222,7 @@ function seedSql(bomCommitOid: string): string {
 
 test("upgrading to 0004 cancels superseded jobs and removes never-activated BOM-only revisions", async () => {
   const { repositoryPath, commitOid } = await bomRepository();
-  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+  const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   onTestFinished(() => postgres.close());
   await postgres.waitReady;
   await applyMigrations(postgres, (number) => number <= 3);

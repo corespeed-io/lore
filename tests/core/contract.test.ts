@@ -13,6 +13,7 @@ import {
   testDatabase,
 } from "@corespeed/lore-core/testing";
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, test } from "vitest";
@@ -33,7 +34,7 @@ const OPERATIONS = "20000000-0000-4000-8000-000000000001";
 const RESEARCH = "20000000-0000-4000-8000-000000000002";
 
 async function createLoreFixture(): Promise<MemoryCoreContractFixture> {
-  const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+  const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
   await postgres.waitReady;
   // lore oss's own chain applier: it sends a transaction:false migration one
   // statement at a time, which a single multi-statement exec cannot do.

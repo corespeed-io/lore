@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { expect, onTestFinished, test } from "vitest";
@@ -44,7 +45,7 @@ async function subjects(postgres: PGlite) {
 }
 
 test("an upgrade does not backfill older replay rows, and a reclaim clears stale subjects", async () => {
-  const postgres = await PGlite.create({ extensions: { pg_trgm, vector } });
+  const postgres = await PGlite.create({ extensions: { btree_gin, pg_trgm, vector } });
   onTestFinished(() => postgres.close());
   await applyMigrations(postgres, (number) => number <= 6);
 
@@ -140,7 +141,7 @@ test.each([
 ])(
   "%s locks only the tables it must",
   async (version, expected) => {
-    const postgres = await PGlite.create({ extensions: { pg_trgm, vector } });
+    const postgres = await PGlite.create({ extensions: { btree_gin, pg_trgm, vector } });
     onTestFinished(() => postgres.close());
     const target = Number.parseInt(version, 10);
     await applyMigrations(postgres, (number) => number < target);

@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { btree_gin } from "@electric-sql/pglite/contrib/btree_gin";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -13,7 +14,7 @@ import {
   verifyRestoredDatabase,
 } from "../../scripts/database/restore.ts";
 
-const postgres = new PGlite({ extensions: { pg_trgm, vector } });
+const postgres = new PGlite({ extensions: { btree_gin, pg_trgm, vector } });
 const verify = () => verifyRestoredDatabase((sql) => postgres.query(sql));
 
 beforeAll(async () => {

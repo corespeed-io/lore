@@ -110,7 +110,13 @@ export const CORE_SCHEMA_CONTRACT = {
         ],
       },
     },
-    functions: ["lore.extract_entity_aliases(text)"],
+    // The lexical channels. The host defines the body, applying its own access
+    // policy, and it must answer exactly what referenceLexicalCandidates
+    // (`./testing`) answers through that policy; the generated memory_chunks columns
+    // above are what both read. The engine reads every candidate back itself.
+    functions: [
+      "lore.lexical_candidates(uuid,text,text[],text[],integer,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
+    ],
     types: ["vector"],
     enums: { memory_scope: MEMORY_SCOPES },
     values: { "embedding_generations.status": ["active", "retiring"] },
