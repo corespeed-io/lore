@@ -125,7 +125,7 @@ TypeScript SDK, the CLI, and the full MCP tool list.
   current, moved, changed, deleted, ambiguous, or unverifiable.
 - **One grounded context packet** — `POST /api/v1/context/retrieve` returns Memory,
   exact-revision Code, citation state, conflicts, and a receipt in one request.
-- **A navigable memory graph** — durable Memory Links written from every client,
+- **A navigable memory graph** — durable Memory Links written from the SDK, CLI, and MCP,
   visible-node-safe edges, derived affinity, and clickable `[[reference]]` wikilinks.
 - **Agent-ready interfaces** — versioned HTTP APIs, a TypeScript SDK with generated
   contracts, a CLI, and an external MCP adapter.
@@ -173,8 +173,8 @@ bun run build
 bun run packages:smoke
 ```
 
-All of these must pass before you open a pull request. Deployment changes also need
-the [OpenNext/Wrangler dry run](docs/reference.md#verify-changes).
+All of these and the [deployment dry runs](docs/reference.md#verify-changes) must
+pass before you open a pull request.
 
 Working with a coding agent? [`AGENTS.md`](AGENTS.md) is the single source of truth
 for repository architecture and security constraints.
