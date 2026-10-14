@@ -52,6 +52,7 @@ import {
   memoryKeyOf,
   pairedBootstrap95,
   rawSourceKeyForMemory,
+  requireMemoryInsideCap,
 } from "./memory-source-expansion";
 
 function present<T>(value: T | null | undefined): T {
@@ -653,7 +654,7 @@ function describeArms(
   const answerable = category(record) !== "abstention";
   return Object.fromEntries(
     Object.entries(packets).map(([name, { packet, query }]) => {
-      const rendered = renderBenchmarkReaderInput(question, packet, maximumCharacters);
+      const rendered = requireMemoryInsideCap(question, memory, packet, maximumCharacters);
       const raw = packet.filter((item) => item.channel === "raw");
       const rawSessions = [...new Set(raw.map((item) => item.sessionId))];
       const gold = answerable

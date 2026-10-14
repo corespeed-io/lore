@@ -95,18 +95,33 @@ function renderedLength(question: string, packet: readonly EvidencePacketItem[])
   return renderBenchmarkReaderInput(question, [...packet], Number.MAX_SAFE_INTEGER).length;
 }
 
+/**
+ * Throws unless every Memory excerpt reaches the reader whole. Every arm must pass:
+ * the alternating arms may lose raw text past the cap, never Memory evidence.
+ */
+export function requireMemoryInsideCap(
+  question: string,
+  memory: readonly EvidencePacketItem[],
+  packet: readonly EvidencePacketItem[],
+  maximumCharacters: number,
+): string {
+  const rendered = renderBenchmarkReaderInput(question, [...packet], maximumCharacters);
+  for (const item of memory) {
+    if (!rendered.includes(item.text.trim())) throw new Error("Memory evidence was cut");
+  }
+  return rendered;
+}
+
+/** Source arms are built to fit, so they must also render without any cut. */
 function requireIntactMemory(
   question: string,
   memory: readonly EvidencePacketItem[],
   packet: readonly EvidencePacketItem[],
   maximumCharacters: number,
 ): void {
-  const rendered = renderBenchmarkReaderInput(question, [...packet], maximumCharacters);
+  const rendered = requireMemoryInsideCap(question, memory, packet, maximumCharacters);
   if (rendered.length !== renderedLength(question, packet))
     throw new Error("Source packet exceeds the reader cap");
-  for (const item of memory) {
-    if (!rendered.includes(item.text.trim())) throw new Error("Memory evidence was cut");
-  }
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   mcnemarExactP,
   pairedBootstrap95,
   rawSourceKeyForMemory,
+  requireMemoryInsideCap,
 } from "../../tools/evaluation/retrieval/memory-source-expansion";
 import { renderBenchmarkReaderInput } from "../../tools/evaluation/shared/benchmark-reader";
 import { codexTurnUsage } from "../../tools/evaluation/shared/codex-exec";
@@ -194,6 +195,17 @@ describe("the parallel dual order", () => {
         [raw("x", "3"), raw("y", "4"), raw("z", "5")],
       ).map((item) => item.id),
     ).toEqual(["memory:a", "raw:x", "memory:b", "raw:y", "raw:z"]);
+  });
+
+  it("may lose raw text past the cap, never a Memory excerpt", () => {
+    const facts = [memory("a", "A".repeat(300)), memory("b", "B".repeat(300))];
+    const fits = alternatePacket(facts, [raw("x", "x".repeat(200)), raw("y", "y".repeat(5_000))]);
+    const cap = renderBenchmarkReaderInput("Q?", fits, Number.MAX_SAFE_INTEGER).length - 1_000;
+    expect(requireMemoryInsideCap("Q?", facts, fits, cap)).toHaveLength(cap);
+    const pushesMemoryOut = alternatePacket(facts, [raw("x", "x".repeat(5_000))]);
+    expect(() => requireMemoryInsideCap("Q?", facts, pushesMemoryOut, 2_000)).toThrow(
+      "Memory evidence was cut",
+    );
   });
 });
 

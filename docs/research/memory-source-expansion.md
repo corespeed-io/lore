@@ -62,7 +62,11 @@ Extracted facts paraphrase turns, so the proxy reads near zero for `memory`.
 Every arm uses the same ten Memory excerpts: the frozen top 10 that the baseline
 retrieved, replayed verbatim from its saved packets. No arm re-runs Memory search,
 so Memory evidence is identical across arms. Raw text is added only inside the
-baseline's 24,000-UTF-16-unit reader cap, and Memory excerpts are never cut.
+baseline's 24,000-UTF-16-unit reader cap, and Memory excerpts are never cut. The
+runner checks this for every arm (`requireMemoryInsideCap`). Re-rendered from the
+saved packets, all 5,000 Memory excerpts of every arm reach the reader whole, and
+every answer's input hash matches its packet. One `raw-hybrid` packet crosses the
+cap and loses raw text at its tail.
 
 - `dual-lexical`: the baseline's own dual packet. Independent raw lexical search
   with the original question; Memory and raw ranks alternate.
