@@ -11,8 +11,11 @@
  * Phases (BENCHMARK_DATABASE_URL names a disposable database containing "bench"):
  *   --prepare            seed every raw session as an Observation (no model call)
  *   --embed              embed raw chunks with gemini-embedding-2 (GEMINI_API_KEY)
+ *   --link               store each frozen top-10 excerpt as a Memory and cite its
+ *                        session Observation through Memory Observation Evidence
  *   --retrieve           build every arm's packet and offline diagnostics; the
- *                        dense arms only for questions whose chunks are embedded
+ *                        dense arms only for questions whose chunks are embedded,
+ *                        the linked arms only for questions already linked
  *   --answer <arm> --profile <name>
  *                        reader + judge for one arm under one answer profile
  *   --rejudge <arm>      a second gemini-codex judgment of Memory-only and one arm
@@ -27,7 +30,9 @@ import { EPISODE_EVIDENCE_RETRIEVAL_POLICY } from "@corespeed/lore-core/episodes
 import OpenAI from "openai";
 import pg from "pg";
 import { createEpisodeEvidenceModule } from "../../../src/modules/episodes/evidence";
+import { createMemoryObservationEvidenceModule } from "../../../src/modules/episodes/observation-evidence";
 import { createObservationModule } from "../../../src/modules/episodes/service";
+import { createMemoryModule } from "../../../src/modules/memories/service";
 import { createPostgresDatabase } from "../../../src/server/database/postgres";
 import { createGoogleEmbeddingProvider } from "../../../src/server/providers/embedding/google";
 import {
@@ -104,9 +109,14 @@ const ARMS = {
     "Half the raw budget to whole Memory-hit sessions, the rest to raw-keywords excerpts from other sessions",
   "combined-hybrid":
     "Half the raw budget to whole Memory-hit sessions, the rest to raw-hybrid excerpts from other sessions",
+  "linked-sources":
+    "Product path: each Memory cites its session Observation; the read API's sources follow the whole Memory list",
+  "linked-sources-interleaved":
+    "Product path read, each source placed after its first citing Memory as in source-session",
 } as const;
 type ArmName = keyof typeof ARMS;
 const DENSE_ARMS: readonly ArmName[] = ["raw-hybrid", "source-hybrid", "combined-hybrid"];
+const LINKED_ARMS: readonly ArmName[] = ["linked-sources", "linked-sources-interleaved"];
 const isArm = (value: string | undefined): value is ArmName =>
   value !== undefined && Object.hasOwn(ARMS, value);
 
@@ -234,6 +244,27 @@ const ANSWER_PROFILES = {
     },
     judge: { transport: "codex-exec-chatgpt", model: "gpt-5.5", reasoningEffort: "low" as const },
   },
+  /**
+   * The same reader with GPT-5.6-Sol judging. A ChatGPT Codex login stopped
+   * offering GPT-5.5 on 2026-10-14, so later arms pair within this profile. A
+   * gemini-codex reader answer with the identical input is reused and judged again.
+   */
+  "gemini-codex-sol": {
+    reader: {
+      model: "gemini-3.5-flash",
+      transport: "google-interactions-v1beta",
+      instructionSha256: baselineReader.instructionSha256,
+      decoding: baselineReader.decoding,
+      profile: baselineReader.profile,
+      maximumContextCharacters: baselineReader.maximumContextCharacters,
+    },
+    judge: {
+      transport: "codex-exec-chatgpt",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "low" as const,
+    },
+    readerAnswersFrom: "gemini-codex",
+  },
 } as const;
 type ProfileName = keyof typeof ANSWER_PROFILES;
 const isProfile = (value: string | undefined): value is ProfileName =>
@@ -268,6 +299,19 @@ const protocol = {
     minimumTrimmedSource: 200,
     combinedSourceShare: 0.5,
     combinedRawOrder: "excerpts from sessions not already attached, appended in raw rank order",
+  },
+  linkedSources: {
+    schemaRevision: 14,
+    memories:
+      "one Memory per frozen top-10 excerpt, its content the excerpt, written through the Memory module",
+    citation:
+      "each Memory cites the Observation of its benchmark session through createMemoryObservationEvidenceModule.cite",
+    read: "createMemoryObservationEvidenceModule.read with the Memory ids in their frozen rank order",
+    groupedBudget:
+      "maximumCharacters = the UTF-16 cap minus the Memory-only input; the renderer cuts any overhang",
+    interleavedBudget: "maximumCharacters = 100000, then the source-session attach rule",
+    sourceText:
+      "Session date: <Observation sessionDate>\n<Observation content>, as in source-session",
   },
   answerProfiles: ANSWER_PROFILES,
   rubric: {
@@ -461,6 +505,138 @@ async function embed(record: LongMemEvalRecord) {
   console.log(`embedded ${record.question_id}: ${chunks} chunks`);
 }
 
+type LinkRecord = {
+  questionId: string;
+  links: Array<{
+    memoryKey: string;
+    memoryId: string;
+    observationId: string;
+    sourceKey: string;
+    sessionId: string;
+    sessionDate: string;
+  }>;
+};
+const factsReplayCorpus = "longmemeval-facts-replay-v1";
+
+/**
+ * The product path for the source arms. Each frozen top-10 excerpt becomes a
+ * Memory, and the Memory cites the Observation of its session through Memory
+ * Observation Evidence, under RLS. The benchmark key stands in for what the writing
+ * agent knew it read; the citation and every later read are the product's own.
+ */
+async function link(record: LongMemEvalRecord): Promise<void> {
+  const path = `${directory}/links/${record.question_id}.json`;
+  if (await load<LinkRecord>(path)) return;
+  const prior = await baseline(record);
+  const actor = { workspaceId: workspaceIdFor(record.question_id), userId: alice };
+  const ready = (await admin.query("SELECT name FROM workspaces WHERE id=$1", [actor.workspaceId]))
+    .rows[0];
+  if (ready?.name !== `Raw evidence ready ${record.question_id}`)
+    throw new Error(`${record.question_id}: run --prepare first`);
+  const observations = await admin.query<{
+    id: string;
+    key: string;
+    session_id: string;
+    session_date: string;
+  }>(
+    `SELECT observation.id, observation.metadata->>'benchmarkKey' AS key,
+       observation.metadata->>'sessionId' AS session_id,
+       observation.metadata->>'sessionDate' AS session_date
+     FROM observations observation
+     JOIN episodes episode
+       ON episode.workspace_id = observation.workspace_id AND episode.id = observation.episode_id
+     WHERE observation.workspace_id = $1 AND episode.owner_user_id = $2`,
+    [actor.workspaceId, alice],
+  );
+  const byKey = new Map(observations.rows.map((row) => [row.key, row]));
+  const memories = createMemoryModule(database, {
+    embeddingDimensions: protocol.episodeDenseEmbeddings.dimensions,
+  });
+  const evidence = createMemoryObservationEvidenceModule(database);
+  const links: LinkRecord["links"] = [];
+  for (const item of prior.arms.memory.packet) {
+    const memoryKey = memoryKeyOf(item);
+    const sourceKey = rawSourceKeyForMemory(memoryKey);
+    const observation = byKey.get(sourceKey);
+    if (!observation) throw new Error(`${record.question_id}: no Observation for ${sourceKey}`);
+    // A rerun after a stop reuses the Memory it already wrote.
+    const existing = await admin.query<{ id: string }>(
+      `SELECT id FROM memories
+       WHERE workspace_id = $1 AND owner_user_id = $2
+         AND metadata->>'benchmarkKey' = $3 AND metadata->>'corpus' = $4`,
+      [actor.workspaceId, alice, memoryKey, factsReplayCorpus],
+    );
+    const memoryId =
+      existing.rows[0]?.id ??
+      (
+        await memories.remember(actor, {
+          content: item.text,
+          scope: "private",
+          metadata: {
+            questionId: record.question_id,
+            benchmarkKey: memoryKey,
+            corpus: factsReplayCorpus,
+          },
+        })
+      ).id;
+    const cited = await evidence.cite(actor, { memoryId, observationId: observation.id });
+    if (!cited) throw new Error(`${record.question_id}: the citation of ${sourceKey} was refused`);
+    links.push({
+      memoryKey,
+      memoryId,
+      observationId: observation.id,
+      sourceKey,
+      sessionId: observation.session_id,
+      sessionDate: observation.session_date,
+    });
+  }
+  await save(path, { questionId: record.question_id, links } satisfies LinkRecord);
+}
+
+/** The two linked packets, read through the product's Memory Observation Evidence. */
+async function linkedPackets(
+  actor: { workspaceId: string; userId: string },
+  question: string,
+  memory: EvidencePacketItem[],
+  links: LinkRecord,
+): Promise<{ grouped: EvidencePacketItem[]; interleaved: EvidencePacketItem[] }> {
+  const evidence = createMemoryObservationEvidenceModule(database);
+  const byMemory = new Map(links.links.map((entry) => [entry.memoryKey, entry]));
+  const byObservation = new Map(links.links.map((entry) => [entry.observationId, entry]));
+  const memoryIds = memory.map((item) => present(byMemory.get(memoryKeyOf(item))).memoryId);
+  const toItem = (source: { observationId: string; content: string }): EvidencePacketItem => {
+    const entry = present(byObservation.get(source.observationId));
+    if (entry.sourceKey === tripwireKey) throw new Error("RLS ISOLATION FAILURE");
+    return {
+      id: `raw:${entry.sourceKey}`,
+      channel: "raw",
+      sessionId: entry.sessionId,
+      text: `Session date: ${entry.sessionDate}\n${source.content}`,
+    };
+  };
+  const remaining =
+    maximumCharacters - renderBenchmarkReaderInput(question, memory, maximumCharacters).length;
+  const grouped =
+    remaining > 0
+      ? await evidence.read(actor, { memoryIds, maximumCharacters: remaining })
+      : { sources: [] };
+  const whole = await evidence.read(actor, { memoryIds, maximumCharacters: 100_000 });
+  return {
+    grouped: [...memory, ...grouped.sources.map(toItem)],
+    interleaved: attachSourcesToMemory({
+      question,
+      memory,
+      sources: new Map(
+        whole.sources.map((source) => [
+          present(byObservation.get(source.observationId)).sourceKey,
+          toItem(source),
+        ]),
+      ),
+      maximumCharacters,
+    }),
+  };
+}
+
 async function denseReady(record: LongMemEvalRecord): Promise<boolean> {
   const row = (
     await admin.query<{ missing: number }>(
@@ -505,8 +681,13 @@ async function retrieve(record: LongMemEvalRecord): Promise<void> {
     embeddingProvider !== undefined &&
     missing.some((arm) => DENSE_ARMS.includes(arm)) &&
     (await denseReady(record));
-  // Existing arms are never rebuilt; dense arms wait for complete embeddings.
-  const wanted = missing.filter((arm) => dense || !DENSE_ARMS.includes(arm));
+  // Existing arms are never rebuilt; dense arms wait for complete embeddings, and
+  // linked arms for --link.
+  const links = await load<LinkRecord>(`${directory}/links/${record.question_id}.json`);
+  const wanted = missing.filter(
+    (arm) =>
+      (dense || !DENSE_ARMS.includes(arm)) && (links !== undefined || !LINKED_ARMS.includes(arm)),
+  );
   if (!wanted.length) return;
   const prior = await baseline(record);
   const actor = { workspaceId: workspaceIdFor(record.question_id), userId: alice };
@@ -601,6 +782,10 @@ async function retrieve(record: LongMemEvalRecord): Promise<void> {
       maximumCharacters,
       sourceShare: protocol.packet.combinedSourceShare,
     });
+  const linked =
+    links && wanted.some((arm) => LINKED_ARMS.includes(arm))
+      ? await linkedPackets(actor, question, memory, links)
+      : undefined;
   type Built = { packet: EvidencePacketItem[]; query?: string };
   const builders: Record<ArmName, () => Built> = {
     memory: () => ({ packet: memory }),
@@ -623,6 +808,8 @@ async function retrieve(record: LongMemEvalRecord): Promise<void> {
     "source-hybrid": () => ({ packet: attach(bySource(sourceHybrid)), query: record.question }),
     "combined-keywords": () => ({ packet: combine(toPacket(rawKeywords)), query: keywords }),
     "combined-hybrid": () => ({ packet: combine(toPacket(rawHybrid)), query: record.question }),
+    "linked-sources": () => ({ packet: present(linked).grouped }),
+    "linked-sources-interleaved": () => ({ packet: present(linked).interleaved }),
   };
   const packets = Object.fromEntries(wanted.map((arm) => [arm, builders[arm]()]));
   const arms = { ...existing?.arms, ...describeArms(record, question, memory, packets) };
@@ -690,7 +877,7 @@ type AnswerArm = {
   answer: string;
   inputTokens: number | null;
   outputTokens: number | null;
-  reused?: "baseline-memory" | "baseline-dual" | "identical-input";
+  reused?: "baseline-memory" | "baseline-dual" | "identical-input" | "same-reader";
   correct?: boolean;
   judgment?: string;
   judgeInputTokens?: number | null;
@@ -890,9 +1077,14 @@ async function answer(arm: ArmName, selected: LongMemEvalRecord[], profileName: 
         outputTokens: response.usage?.completion_tokens ?? null,
       };
     }
-    const { model, reasoningEffort } = ANSWER_PROFILES["gemini-codex"].judge;
+    if (profileName === "baseline")
+      throw new Error("The baseline profile judges through the gateway");
+    const { model, reasoningEffort } = ANSWER_PROFILES[profileName].judge;
     return runCodexText({ model, prompt, reasoningEffort });
   };
+  // A profile with the same reader reuses that profile's answers, never its judgments.
+  const readerSource =
+    "readerAnswersFrom" in profile ? (profile.readerAnswersFrom as ProfileName) : undefined;
   await mkdir(answersDirectory(profileName), { recursive: true });
   let completed = 0;
   // One process per profile: arms of a question share one answer file.
@@ -916,6 +1108,12 @@ async function answer(arm: ArmName, selected: LongMemEvalRecord[], profileName: 
         : [];
     const packet = retrieval.arms[arm]?.packet;
     if (!packet) throw new Error(`${record.question_id}: no ${arm} packet; run --retrieve first`);
+    const siblingArms = readerSource
+      ? Object.values(
+          (await load<AnswerRecord>(`${answersDirectory(readerSource)}/${record.question_id}.json`))
+            ?.arms ?? {},
+        )
+      : [];
     if (!result.arms[arm]) {
       const input = rendered(packet);
       const inputSha256 = sha(input);
@@ -936,6 +1134,15 @@ async function answer(arm: ArmName, selected: LongMemEvalRecord[], profileName: 
         };
       } else if (fromArm) {
         result.arms[arm] = { ...fromArm, reused: "identical-input" };
+      } else if (siblingArms.some((other) => other.inputSha256 === inputSha256)) {
+        const other = present(siblingArms.find((sibling) => sibling.inputSha256 === inputSha256));
+        result.arms[arm] = {
+          inputSha256,
+          answer: other.answer,
+          inputTokens: other.inputTokens,
+          outputTokens: other.outputTokens,
+          reused: "same-reader",
+        };
       } else {
         const response = await withRetries(`${record.question_id} reader`, async () => {
           const result = await reader.answer({ question, evidence: packet });
@@ -1159,6 +1366,14 @@ try {
       await save(usagePath, total);
       console.log(JSON.stringify({ run: embeddingUsage, total }));
     }
+  } else if (process.argv.includes("--link")) {
+    await mkdir(`${directory}/links`, { recursive: true });
+    let done = 0;
+    await parallel(selected, 6, async (record) => {
+      await link(record);
+      if (++done % 50 === 0) console.log(`linked ${done}/${selected.length}`);
+    });
+    console.log("Linking complete");
   } else if (process.argv.includes("--retrieve")) {
     let done = 0;
     await parallel(records, 8, async (record) => {
@@ -1174,7 +1389,7 @@ try {
       throw new Error(`--profile needs one of ${Object.keys(ANSWER_PROFILES).join(", ")}`);
     if (profileName === "baseline" && !process.env.AI_GATEWAY_API_KEY)
       throw new Error("AI_GATEWAY_API_KEY is required");
-    if (profileName === "gemini-codex" && !geminiKey) throw new Error("GEMINI_API_KEY is required");
+    if (profileName !== "baseline" && !geminiKey) throw new Error("GEMINI_API_KEY is required");
     // The Memory arm comes first: every other arm is paired against it.
     if (arm !== "memory") await answer("memory", selected, profileName);
     await answer(arm, selected, profileName);
