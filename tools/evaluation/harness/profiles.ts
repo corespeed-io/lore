@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import OpenAI from "openai";
 import {
   type BenchmarkReaderProvider,
@@ -6,6 +6,7 @@ import {
   renderBenchmarkReaderInput,
 } from "../shared/benchmark-reader";
 import { runCodexText } from "../shared/codex-exec";
+import { datasetIsVerified, downloadDataset } from "../shared/dataset-download";
 import { identityHash, sha256 } from "./hash";
 import type { Dataset } from "./types";
 
@@ -153,8 +154,27 @@ export const LONGMEMEVAL_RUBRIC = {
   sha256: "ecce9c4c79dc89d99534ac17b383a5cbb5b9f0c69ee98adaf0684742e3d95251",
 } as const;
 
-export function longMemEvalRubricTemplates(): string[] {
-  const source = readFileSync(LONGMEMEVAL_RUBRIC.path, "utf8");
+/**
+ * Where the pinned rubric comes from. Kept apart from LONGMEMEVAL_RUBRIC, which is
+ * part of every verdict key: changing that object would discard every verdict.
+ */
+const LONGMEMEVAL_RUBRIC_SOURCE = {
+  url: `https://raw.githubusercontent.com/xiaowu0162/LongMemEval/${LONGMEMEVAL_RUBRIC.upstreamCommit}/src/evaluation/evaluate_qa.py`,
+  bytes: 7_436,
+} as const;
+
+/** The five V1 templates, downloading and verifying the pinned file on first use. */
+export async function longMemEvalRubricTemplates(): Promise<string[]> {
+  const pinned = { bytes: LONGMEMEVAL_RUBRIC_SOURCE.bytes, sha256: LONGMEMEVAL_RUBRIC.sha256 };
+  if (!(await datasetIsVerified(LONGMEMEVAL_RUBRIC.path, pinned))) {
+    await downloadDataset({
+      url: LONGMEMEVAL_RUBRIC_SOURCE.url,
+      outputPath: LONGMEMEVAL_RUBRIC.path,
+      expected: pinned,
+      label: "LongMemEval evaluate_qa.py",
+    });
+  }
+  const source = await readFile(LONGMEMEVAL_RUBRIC.path, "utf8");
   if (sha256(source) !== LONGMEMEVAL_RUBRIC.sha256) {
     throw new Error(`${LONGMEMEVAL_RUBRIC.path} does not match the pinned rubric`);
   }

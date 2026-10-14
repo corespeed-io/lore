@@ -66,7 +66,8 @@ export function createScorer(id: ScorerId): Scorer {
       },
     };
   }
-  const templates = longMemEvalRubricTemplates();
+  // Loaded on the first grade, so reading `binary` or `identity` needs no file.
+  let templates: Promise<string[]> | undefined;
   return {
     id,
     binary: true,
@@ -74,7 +75,9 @@ export function createScorer(id: ScorerId): Scorer {
     needsJudge: true,
     async grade(evalCase, answer, judge) {
       if (!judge) throw new Error("longmemeval-judge-v1 needs a judge profile");
-      const response = await judge.call(longMemEvalRubricPrompt(templates, evalCase, answer));
+      templates ??= longMemEvalRubricTemplates();
+      const prompt = longMemEvalRubricPrompt(await templates, evalCase, answer);
+      const response = await judge.call(prompt);
       const verdict = rubricVerdict(response.text);
       return {
         score: verdict === "yes" ? 1 : 0,
