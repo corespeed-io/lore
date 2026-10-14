@@ -67,7 +67,7 @@ export const episodesPaths = {
     post: {
       operationId: "indexEpisodeEvidence",
       description:
-        "Idempotently rebuild exact source chunks for an owned historical Episode. New Episodes are indexed atomically on admission. No model calls.",
+        "Idempotently build exact lexical source chunks for an owned Episode. Recording does not index, and search never indexes. No model calls.",
       parameters: [
         workspaceHeader,
         {

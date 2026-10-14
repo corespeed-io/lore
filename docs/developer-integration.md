@@ -144,11 +144,13 @@ const dependencies = await memories.queryCodeDependencies({
 The Workspace client also provides `listEpisodes`, `recordEpisode`, `getEpisode`,
 bounded `getObservations`, `searchEpisodeEvidence`, `indexEpisodeEvidence`, and `forgetEpisode`, plus `listMemoryProposals`,
 `proposeMemory`, and `reviewMemoryProposal` alongside the canonical Memory methods.
-An Observation is durable raw evidence, separate from canonical Memory. New
-Episodes are indexed in their recording transaction and can immediately be searched
-with `searchEpisodeEvidence` (HTTP `POST /api/v1/episodes/search`):
+An Observation is durable raw evidence, separate from canonical Memory. Recording
+does not index it. Build an Episode's lexical index with `indexEpisodeEvidence`
+(HTTP `POST /api/v1/episodes/{id}/index`), then search it with
+`searchEpisodeEvidence` (HTTP `POST /api/v1/episodes/search`):
 
 ```ts
+await memories.indexEpisodeEvidence(episode.id); // once per Episode; repeats change nothing
 const evidence = await memories.searchEpisodeEvidence({
   query: "release",
   limit: 5,
@@ -171,9 +173,11 @@ read-only MCP tool `lore_search_evidence`; continue using `lore_search` for cano
 decisions and conventions. A host that needs both should explicitly call both and
 keep their results distinguishable.
 
-Previously recorded Episodes need an explicit owner-authorized
-`indexEpisodeEvidence(episodeId)` (CLI `lore episode index <episode-id>`) before
-search. Repeated builds are safe. Search never indexes as a side effect. The
+Only the Episode's owner, or an Agent acting for the owner, may index it (CLI
+`lore episode index <episode-id>`, MCP `lore_index_evidence`). Repeated builds are
+safe. Search never indexes as a side effect. Recording does not index because the
+lexical index takes about 8× the stored raw text and many Episodes are never
+searched directly. The
 existing optional hybrid Core path used by evaluation is unchanged; this public
 slice does not add background Episode embeddings. Retrieval currently scans
 RLS-visible chunks; do not assume the existing GIN indexes accelerate this path.
@@ -372,6 +376,7 @@ It exposes:
 
 - `lore_list`, `lore_search`, and `lore_get` as read-only Memory tools;
 - `lore_search_evidence` as separate read-only retrieval of original Observation excerpts;
+- `lore_index_evidence` to build one Episode's lexical index, idempotently;
 - `lore_observe` to durably record a bounded, non-canonical Episode;
 - `lore_remember` as a non-destructive mutation tool;
 - `lore_propose` as a non-destructive submission for explicit human review;
@@ -475,7 +480,8 @@ of 1 to 128 visible ASCII characters, the HTTP `Idempotency-Key` rule; the adapt
 and SDK reject any other key before sending the request. A caller retrying an
 operation after losing the response must reuse the same key; omitting it creates a
 fresh operation. `lore_link` and `lore_unlink` take no key: a Link's natural key
-already makes a retry safe.
+already makes a retry safe. `lore_index_evidence` takes none either: building the
+same Episode's index again changes nothing.
 
 AutoDream is not part of this adapter. A future AutoDream process must remain an
 explicit opt-in extension outside Portable Core; it may record Observations and

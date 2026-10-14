@@ -287,10 +287,11 @@ fact Memories' share is apportioned by chunk count (39,098 of 289,812 chunks).
 | + raw dense vectors and their HNSW index | +154 MB | 7.6× | 91.8% (`combined-hybrid`) |
 
 `source-session` reads its sources by key and needs no raw index. The link table
-does not exist yet; a few ids per Memory would add little. The lexical row is what
-Episode admission now builds on every recording: about 8× the raw text it
-indexes. On this benchmark it gave no answer gain over reading the linked sessions,
-though direct raw search (`lore_search_evidence`) needs it.
+does not exist yet; a few ids per Memory would add little. The lexical row costs
+about 8× the raw text it indexes. On this benchmark it gave no answer gain over
+reading the linked sessions, though direct raw search (`lore_search_evidence`) needs
+it. So recording an Episode does not build it; an owner builds it on request with
+`POST /api/v1/episodes/{id}/index` (decided 2026-10-14).
 
 **Latency.** Warm, on the local PostgreSQL 18 database, 100 questions:
 
@@ -362,10 +363,9 @@ The steps:
 3. **Guard abstention before turning it on.** The source arms lost 2 of 30
    false-premise questions. Measure a reader instruction or evidence labeling that
    separates raw conversation from canonical Memory, as its own run.
-4. **Keep raw indexes optional.** Decide whether Episode admission should keep
-   building lexical chunks on every recording. They cost about 8× the raw text
-   they index and gave no answer gain here, but direct raw search needs them. Build
-   the dense Episode lane only after dense passes the confirmation above.
+4. **Keep raw indexes optional.** Recording builds no lexical index; an owner
+   builds one on request, for direct raw search. Build the dense Episode lane only
+   after dense passes the confirmation above.
 
 Two limits apply. This ran in the 1536-dimension benchmark space with
 `gemini-embedding-2`; Lore deployments use 1024 dimensions. And the benchmark's

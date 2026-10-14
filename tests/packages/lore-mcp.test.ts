@@ -110,6 +110,11 @@ function memoryLink(): MemoryLink {
 function fakeMemories(): LoreMcpMemoryClient {
   return {
     searchEpisodeEvidence: vi.fn().mockResolvedValue([]),
+    indexEpisodeEvidence: vi.fn().mockResolvedValue({
+      episodeId: EPISODE_ID,
+      chunkCount: 3,
+      indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2",
+    }),
     recordEpisode: vi.fn().mockResolvedValue(episode()),
     forgetMemory: vi.fn().mockResolvedValue(undefined),
     getMemory: vi.fn().mockResolvedValue(memory()),
@@ -383,6 +388,7 @@ describe("Lore external MCP adapter", () => {
       "lore_list",
       "lore_search",
       "lore_search_evidence",
+      "lore_index_evidence",
       "lore_get",
       "lore_remember",
       "lore_observe",
@@ -760,6 +766,36 @@ describe("Lore external MCP adapter", () => {
     });
     expect(memories.searchMemories).not.toHaveBeenCalled();
     expect(memories.remember).not.toHaveBeenCalled();
+  });
+
+  test("lore_index_evidence builds one Episode's index and is idempotent", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "lore_index_evidence")?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    const result = await client.callTool({
+      name: "lore_index_evidence",
+      arguments: { episodeId: EPISODE_ID },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(memories.indexEpisodeEvidence).toHaveBeenCalledWith(EPISODE_ID);
+    expect(result.structuredContent).toEqual({
+      index: {
+        episodeId: EPISODE_ID,
+        chunkCount: 3,
+        indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2",
+      },
+    });
+    const invalid = await client.callTool({
+      name: "lore_index_evidence",
+      arguments: { episodeId: "not-a-uuid" },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(memories.indexEpisodeEvidence).toHaveBeenCalledTimes(1);
   });
 
   test("raw evidence MCP reports result cuts instead of exceeding the response ceiling", async () => {
