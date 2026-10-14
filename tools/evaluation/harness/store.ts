@@ -1,6 +1,4 @@
-import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import pg from "pg";
 import { sha256 } from "./hash";
 import type { Packet, RetrievalMetrics } from "./types";
 
@@ -82,135 +80,234 @@ export interface CaseResult {
   grading: string | null;
 }
 
+/** Anything that runs a parameterized statement: a `pg` Pool, or PGlite in tests. */
+export type StoreQuery = (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+
+/** The database every sandbox pointed at one eval server shares. */
+export const STORE_DATABASE = "lore_eval_store";
+
+const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS embeddings (key text PRIMARY KEY, vector real[] NOT NULL)",
+  `CREATE TABLE IF NOT EXISTS answers (key text PRIMARY KEY, answer text NOT NULL,
+     input_tokens integer, output_tokens integer, created_at timestamptz NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS verdicts (key text PRIMARY KEY, score double precision NOT NULL,
+     label text NOT NULL, input_tokens integer, output_tokens integer,
+     created_at timestamptz NOT NULL DEFAULT now())`,
+  `CREATE TABLE IF NOT EXISTS runs (id text PRIMARY KEY, ref_sha text NOT NULL,
+     dataset text NOT NULL, tier text NOT NULL, system text NOT NULL, identity jsonb NOT NULL,
+     created_at text NOT NULL)`,
+  "CREATE TABLE IF NOT EXISTS packets (sha text PRIMARY KEY, packet text NOT NULL)",
+  `CREATE TABLE IF NOT EXISTS results (run text NOT NULL, case_id text NOT NULL,
+     category text NOT NULL, packet_sha text NOT NULL, retrieval jsonb NOT NULL,
+     latency_ms double precision NOT NULL, isolation_failure boolean NOT NULL,
+     answer_key text, verdict_key text, score double precision, grading text,
+     PRIMARY KEY (run, case_id))`,
+  `CREATE TABLE IF NOT EXISTS events (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+     run text NOT NULL, kind text NOT NULL, at text NOT NULL, detail jsonb NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS events_run ON events (run, id)",
+  `CREATE TABLE IF NOT EXISTS corpora (database text NOT NULL, workspace_id text NOT NULL,
+     unit text NOT NULL, corpus text NOT NULL, last_used_at timestamptz NOT NULL,
+     PRIMARY KEY (database, workspace_id))`,
+];
+
+/** `$1, $2, ...` rows of `width` parameters each, for one multi-row statement. */
+const placeholders = (rows: number, width: number) =>
+  Array.from(
+    { length: rows },
+    (_, row) =>
+      `(${Array.from({ length: width }, (_, column) => `$${row * width + column + 1}`).join(", ")})`,
+  ).join(", ");
+
 /**
- * The harness's one durable store: content-addressed embeddings, reader answers,
- * and scorer verdicts shared by every run, plus each run's packets and results.
- * Keys hash everything that decides the value, so a hit is always a valid reuse.
+ * A `real[]` literal holding each value's float32 exactly. Drivers write -0 as "0",
+ * which would store +0, so the sign is written out.
+ */
+export function realArrayLiteral(values: readonly number[]): string {
+  return `{${Array.from(Float32Array.from(values), (value) =>
+    Object.is(value, -0) ? "-0" : String(value),
+  ).join(",")}}`;
+}
+
+/** At most this many rows per multi-row statement, well under PostgreSQL's 65,535 parameters. */
+const BATCH_ROWS = 500;
+
+async function inBatches<T>(items: readonly T[], use: (batch: T[]) => Promise<void>) {
+  for (let start = 0; start < items.length; start += BATCH_ROWS) {
+    await use(items.slice(start, start + BATCH_ROWS));
+  }
+}
+
+interface ResultRow {
+  case_id: string;
+  category: string;
+  packet_sha: string;
+  retrieval: RetrievalMetrics;
+  latency_ms: number;
+  isolation_failure: boolean;
+  answer_key: string | null;
+  verdict_key: string | null;
+  score: number | null;
+  grading: string | null;
+}
+
+/**
+ * The harness's one durable store, a database on the eval server, so every
+ * sandbox pointed at that server shares it: content-addressed embeddings, reader
+ * answers, and scorer verdicts, plus each run's packets, results, and events, and
+ * which Workspaces runs used. Keys hash everything that decides the value, so a hit
+ * is always a valid reuse, and concurrent writers of one key write the same value.
  */
 export class EvalStore {
-  readonly db: Database;
+  private constructor(
+    private readonly query: StoreQuery,
+    private readonly end: () => Promise<void>,
+  ) {}
 
-  constructor(path: string) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new Database(path, { create: true });
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 30000");
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS embeddings (key TEXT PRIMARY KEY, vector BLOB NOT NULL);
-      CREATE TABLE IF NOT EXISTS answers (
-        key TEXT PRIMARY KEY, answer TEXT NOT NULL,
-        input_tokens INTEGER, output_tokens INTEGER, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS verdicts (
-        key TEXT PRIMARY KEY, score REAL NOT NULL, label TEXT NOT NULL,
-        input_tokens INTEGER, output_tokens INTEGER, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (
-        id TEXT PRIMARY KEY, ref_sha TEXT NOT NULL, dataset TEXT NOT NULL, tier TEXT NOT NULL,
-        system TEXT NOT NULL, identity TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS packets (
-        sha TEXT PRIMARY KEY, packet TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS results (
-        run TEXT NOT NULL, case_id TEXT NOT NULL, category TEXT NOT NULL,
-        packet_sha TEXT NOT NULL, retrieval TEXT NOT NULL, latency_ms REAL NOT NULL,
-        isolation_failure INTEGER NOT NULL, answer_key TEXT, verdict_key TEXT, score REAL,
-        grading TEXT, PRIMARY KEY (run, case_id));
-      CREATE TABLE IF NOT EXISTS events (
-        run TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL, detail TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS events_run ON events (run, at);
-      CREATE TABLE IF NOT EXISTS corpora (
-        database TEXT NOT NULL, workspace_id TEXT NOT NULL, unit TEXT NOT NULL,
-        corpus TEXT NOT NULL, last_used_at TEXT NOT NULL,
-        PRIMARY KEY (database, workspace_id));
-    `);
-    // Stores from before gradings were recorded: their scores are regraded on next use.
-    const columns = this.db.query("PRAGMA table_info(results)").all() as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "grading")) {
-      this.db.exec("ALTER TABLE results ADD COLUMN grading TEXT");
-    }
-  }
-
-  close(): void {
-    this.db.close();
-  }
-
-  embedding(key: string): Float32Array | undefined {
-    const row = this.db.query("SELECT vector FROM embeddings WHERE key = ?").get(key) as {
-      vector: Uint8Array;
-    } | null;
-    if (!row) return undefined;
-    const bytes = row.vector;
-    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-  }
-
-  saveEmbeddings(entries: ReadonlyArray<[string, readonly number[]]>): void {
-    const insert = this.db.prepare("INSERT OR IGNORE INTO embeddings (key, vector) VALUES (?, ?)");
-    this.db.transaction(() => {
-      for (const [key, vector] of entries) {
-        insert.run(key, new Uint8Array(Float32Array.from(vector).buffer));
+  /** Open the shared store on an eval server, creating its database on first use. */
+  static async open(serverUrl: string, log?: (message: string) => void): Promise<EvalStore> {
+    const admin = new pg.Client({ connectionString: serverUrl });
+    await admin.connect();
+    try {
+      await admin.query("SELECT pg_advisory_lock(hashtext($1))", [STORE_DATABASE]);
+      const exists = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [
+        STORE_DATABASE,
+      ]);
+      if (!exists.rows.length) {
+        log?.(`creating ${STORE_DATABASE}`);
+        await admin.query(`CREATE DATABASE "${STORE_DATABASE}"`);
       }
-    })();
+      await admin.query("SELECT pg_advisory_unlock(hashtext($1))", [STORE_DATABASE]);
+    } finally {
+      await admin.end();
+    }
+    const url = new URL(serverUrl);
+    url.pathname = `/${STORE_DATABASE}`;
+    const pool = new pg.Pool({ connectionString: url.toString(), max: 4 });
+    // Two sandboxes may open a new store at once; one creates its tables.
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [STORE_DATABASE]);
+      for (const statement of SCHEMA) await client.query(statement);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return new EvalStore(
+      (text, params) => pool.query(text, params as unknown[]),
+      () => pool.end(),
+    );
   }
 
-  answer(key: string): StoredAnswer | undefined {
-    const row = this.db
-      .query("SELECT answer, input_tokens, output_tokens FROM answers WHERE key = ?")
-      .get(key) as {
-      answer: string;
-      input_tokens: number | null;
-      output_tokens: number | null;
-    } | null;
-    return row
-      ? { answer: row.answer, inputTokens: row.input_tokens, outputTokens: row.output_tokens }
-      : undefined;
+  /** A store over any connection, such as PGlite in tests. */
+  static async over(query: StoreQuery, end: () => Promise<void> = async () => {}) {
+    for (const statement of SCHEMA) await query(statement);
+    return new EvalStore(query, end);
   }
 
-  saveAnswer(key: string, answer: StoredAnswer): void {
-    this.db
-      .query(
-        "INSERT OR REPLACE INTO answers (key, answer, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run(key, answer.answer, answer.inputTokens, answer.outputTokens, new Date().toISOString());
+  async close(): Promise<void> {
+    await this.end();
   }
 
-  verdict(key: string): StoredVerdict | undefined {
-    const row = this.db
-      .query("SELECT score, label, input_tokens, output_tokens FROM verdicts WHERE key = ?")
-      .get(key) as {
-      score: number;
-      label: string;
-      input_tokens: number | null;
-      output_tokens: number | null;
-    } | null;
-    return row
-      ? {
+  private async rows<T>(text: string, params?: unknown[]): Promise<T[]> {
+    return (await this.query(text, params)).rows as T[];
+  }
+
+  /** The stored vectors among `keys`. */
+  async embeddings(keys: readonly string[]): Promise<Map<string, Float32Array>> {
+    const found = new Map<string, Float32Array>();
+    if (!keys.length) return found;
+    const rows = await this.rows<{ key: string; vector: number[] }>(
+      "SELECT key, vector FROM embeddings WHERE key = ANY($1::text[])",
+      [keys],
+    );
+    for (const row of rows) found.set(row.key, Float32Array.from(row.vector));
+    return found;
+  }
+
+  async saveEmbeddings(entries: ReadonlyArray<[string, readonly number[]]>): Promise<void> {
+    await inBatches(entries, async (batch) => {
+      await this.query(
+        `INSERT INTO embeddings (key, vector) VALUES ${batch
+          .map((_, row) => `($${2 * row + 1}, $${2 * row + 2}::real[])`)
+          .join(", ")}
+         ON CONFLICT (key) DO NOTHING`,
+        batch.flatMap(([key, vector]) => [key, realArrayLiteral(vector)]),
+      );
+    });
+  }
+
+  async answers(keys: readonly string[]): Promise<Map<string, StoredAnswer>> {
+    const rows = keys.length
+      ? await this.rows<{
+          key: string;
+          answer: string;
+          input_tokens: number | null;
+          output_tokens: number | null;
+        }>(
+          "SELECT key, answer, input_tokens, output_tokens FROM answers WHERE key = ANY($1::text[])",
+          [[...new Set(keys)]],
+        )
+      : [];
+    return new Map(
+      rows.map((row) => [
+        row.key,
+        { answer: row.answer, inputTokens: row.input_tokens, outputTokens: row.output_tokens },
+      ]),
+    );
+  }
+
+  async saveAnswer(key: string, answer: StoredAnswer): Promise<void> {
+    await this.query(
+      `INSERT INTO answers (key, answer, input_tokens, output_tokens) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (key) DO NOTHING`,
+      [key, answer.answer, answer.inputTokens, answer.outputTokens],
+    );
+  }
+
+  async verdicts(keys: readonly string[]): Promise<Map<string, StoredVerdict>> {
+    const rows = keys.length
+      ? await this.rows<{
+          key: string;
+          score: number;
+          label: string;
+          input_tokens: number | null;
+          output_tokens: number | null;
+        }>(
+          `SELECT key, score, label, input_tokens, output_tokens FROM verdicts
+           WHERE key = ANY($1::text[])`,
+          [[...new Set(keys)]],
+        )
+      : [];
+    return new Map(
+      rows.map((row) => [
+        row.key,
+        {
           score: row.score,
           label: row.label,
           inputTokens: row.input_tokens,
           outputTokens: row.output_tokens,
-        }
-      : undefined;
+        },
+      ]),
+    );
   }
 
-  saveVerdict(key: string, verdict: StoredVerdict): void {
-    this.db
-      .query(
-        "INSERT OR REPLACE INTO verdicts (key, score, label, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        key,
-        verdict.score,
-        verdict.label,
-        verdict.inputTokens,
-        verdict.outputTokens,
-        new Date().toISOString(),
-      );
+  async saveVerdict(key: string, verdict: StoredVerdict): Promise<void> {
+    await this.query(
+      `INSERT INTO verdicts (key, score, label, input_tokens, output_tokens)
+       VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING`,
+      [key, verdict.score, verdict.label, verdict.inputTokens, verdict.outputTokens],
+    );
   }
 
-  saveRun(run: RunRecord): void {
-    this.db
-      .query(
-        "INSERT OR IGNORE INTO runs (id, ref_sha, dataset, tier, system, identity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
+  async saveRun(run: RunRecord): Promise<void> {
+    await this.query(
+      `INSERT INTO runs (id, ref_sha, dataset, tier, system, identity, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+      [
         run.id,
         run.refSha,
         run.dataset,
@@ -218,19 +315,20 @@ export class EvalStore {
         run.system,
         JSON.stringify(run.identity),
         run.createdAt,
-      );
+      ],
+    );
   }
 
-  run(id: string): RunRecord | undefined {
-    const row = this.db.query("SELECT * FROM runs WHERE id = ?").get(id) as {
+  async run(id: string): Promise<RunRecord | undefined> {
+    const [row] = await this.rows<{
       id: string;
       ref_sha: string;
       dataset: string;
       tier: string;
       system: string;
-      identity: string;
+      identity: unknown;
       created_at: string;
-    } | null;
+    }>("SELECT * FROM runs WHERE id = $1", [id]);
     return row
       ? {
           id: row.id,
@@ -238,123 +336,132 @@ export class EvalStore {
           dataset: row.dataset,
           tier: row.tier,
           system: row.system,
-          identity: JSON.parse(row.identity),
+          identity: row.identity,
           createdAt: row.created_at,
         }
       : undefined;
   }
 
-  savePacket(packet: Packet): string {
+  /** Store a Packet's items under the SHA-256 of their exact JSON, and return it. */
+  async savePacket(packet: Packet): Promise<string> {
     const body = JSON.stringify(packet.items);
     const sha = sha256(body);
-    this.db.query("INSERT OR IGNORE INTO packets (sha, packet) VALUES (?, ?)").run(sha, body);
+    await this.query(
+      "INSERT INTO packets (sha, packet) VALUES ($1, $2) ON CONFLICT (sha) DO NOTHING",
+      [sha, body],
+    );
     return sha;
   }
 
-  packet(sha: string): Packet["items"] {
-    const row = this.db.query("SELECT packet FROM packets WHERE sha = ?").get(sha) as {
-      packet: string;
-    } | null;
-    if (!row) throw new Error(`Packet ${sha} is missing from the store`);
-    return JSON.parse(row.packet);
+  async packets(shas: readonly string[]): Promise<Map<string, Packet["items"]>> {
+    const rows = shas.length
+      ? await this.rows<{ sha: string; packet: string }>(
+          "SELECT sha, packet FROM packets WHERE sha = ANY($1::text[])",
+          [[...new Set(shas)]],
+        )
+      : [];
+    const found = new Map(rows.map((row) => [row.sha, JSON.parse(row.packet)]));
+    for (const sha of shas) {
+      if (!found.has(sha)) throw new Error(`Packet ${sha} is missing from the store`);
+    }
+    return found;
   }
 
-  saveResult(run: string, result: CaseResult): void {
-    this.db
-      .query(
-        `INSERT OR REPLACE INTO results (run, case_id, category, packet_sha, retrieval, latency_ms,
-          isolation_failure, answer_key, verdict_key, score, grading)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        run,
-        result.caseId,
-        result.category,
-        result.packetSha,
-        JSON.stringify(result.retrieval),
-        result.latencyMs,
-        result.isolationFailure ? 1 : 0,
-        result.answerKey,
-        result.verdictKey,
-        result.score,
-        result.grading,
+  async saveResults(run: string, results: readonly CaseResult[]): Promise<void> {
+    await inBatches(results, async (batch) => {
+      await this.query(
+        `INSERT INTO results (run, case_id, category, packet_sha, retrieval, latency_ms,
+           isolation_failure, answer_key, verdict_key, score, grading)
+         VALUES ${placeholders(batch.length, 11)}
+         ON CONFLICT (run, case_id) DO UPDATE SET category = excluded.category,
+           packet_sha = excluded.packet_sha, retrieval = excluded.retrieval,
+           latency_ms = excluded.latency_ms, isolation_failure = excluded.isolation_failure,
+           answer_key = excluded.answer_key, verdict_key = excluded.verdict_key,
+           score = excluded.score, grading = excluded.grading`,
+        batch.flatMap((result) => [
+          run,
+          result.caseId,
+          result.category,
+          result.packetSha,
+          JSON.stringify(result.retrieval),
+          result.latencyMs,
+          result.isolationFailure,
+          result.answerKey,
+          result.verdictKey,
+          result.score,
+          result.grading,
+        ]),
       );
+    });
   }
 
-  saveEvent(run: string, event: RunEvent): void {
-    this.db
-      .query("INSERT INTO events (run, kind, at, detail) VALUES (?, ?, ?, ?)")
-      .run(run, event.kind, event.at, JSON.stringify(event.detail));
-  }
-
-  events(run: string): RunEvent[] {
-    const rows = this.db
-      .query("SELECT kind, at, detail FROM events WHERE run = ? ORDER BY at, rowid")
-      .all(run) as Array<{ kind: RunEvent["kind"]; at: string; detail: string }>;
-    // The store writes only these two shapes.
-    return rows.map(
-      (row) => ({ kind: row.kind, at: row.at, detail: JSON.parse(row.detail) }) as RunEvent,
+  async results(run: string): Promise<CaseResult[]> {
+    const rows = await this.rows<ResultRow>(
+      "SELECT * FROM results WHERE run = $1 ORDER BY case_id",
+      [run],
     );
-  }
-
-  /** Record that a run is using these Workspaces now, so clean-up keeps them. */
-  touchCorpora(
-    database: string,
-    entries: ReadonlyArray<{ workspaceId: string; unit: string; corpus: string }>,
-  ): void {
-    const upsert = this.db.prepare(
-      `INSERT INTO corpora (database, workspace_id, unit, corpus, last_used_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (database, workspace_id) DO UPDATE SET last_used_at = excluded.last_used_at`,
-    );
-    const now = new Date().toISOString();
-    this.db.transaction(() => {
-      for (const entry of entries) {
-        upsert.run(database, entry.workspaceId, entry.unit, entry.corpus, now);
-      }
-    })();
-  }
-
-  /** Workspaces of one database that some run used at or after `since`. */
-  corporaUsedSince(database: string, since: string): Set<string> {
-    const rows = this.db
-      .query("SELECT workspace_id FROM corpora WHERE database = ? AND last_used_at >= ?")
-      .all(database, since) as Array<{ workspace_id: string }>;
-    return new Set(rows.map((row) => row.workspace_id));
-  }
-
-  forgetCorpora(database: string, workspaceIds: readonly string[]): void {
-    const remove = this.db.prepare("DELETE FROM corpora WHERE database = ? AND workspace_id = ?");
-    this.db.transaction(() => {
-      for (const id of workspaceIds) remove.run(database, id);
-    })();
-  }
-
-  results(run: string): CaseResult[] {
-    const rows = this.db
-      .query("SELECT * FROM results WHERE run = ? ORDER BY case_id")
-      .all(run) as Array<{
-      case_id: string;
-      category: string;
-      packet_sha: string;
-      retrieval: string;
-      latency_ms: number;
-      isolation_failure: number;
-      answer_key: string | null;
-      verdict_key: string | null;
-      score: number | null;
-      grading: string | null;
-    }>;
     return rows.map((row) => ({
       caseId: row.case_id,
       category: row.category,
       packetSha: row.packet_sha,
-      retrieval: JSON.parse(row.retrieval),
+      retrieval: row.retrieval,
       latencyMs: row.latency_ms,
-      isolationFailure: row.isolation_failure === 1,
+      isolationFailure: row.isolation_failure,
       answerKey: row.answer_key,
       verdictKey: row.verdict_key,
       score: row.score,
       grading: row.grading,
     }));
+  }
+
+  async saveEvent(run: string, event: RunEvent): Promise<void> {
+    await this.query("INSERT INTO events (run, kind, at, detail) VALUES ($1, $2, $3, $4)", [
+      run,
+      event.kind,
+      event.at,
+      JSON.stringify(event.detail),
+    ]);
+  }
+
+  async events(run: string): Promise<RunEvent[]> {
+    const rows = await this.rows<{ kind: RunEvent["kind"]; at: string; detail: unknown }>(
+      "SELECT kind, at, detail FROM events WHERE run = $1 ORDER BY id",
+      [run],
+    );
+    // The store writes only these two shapes.
+    return rows.map((row) => ({ kind: row.kind, at: row.at, detail: row.detail }) as RunEvent);
+  }
+
+  /** Record that a run is using these Workspaces now, so clean-up keeps them. */
+  async touchCorpora(
+    database: string,
+    entries: ReadonlyArray<{ workspaceId: string; unit: string; corpus: string }>,
+  ): Promise<void> {
+    await inBatches(entries, async (batch) => {
+      await this.query(
+        `INSERT INTO corpora (database, workspace_id, unit, corpus, last_used_at)
+         SELECT database, workspace_id, unit, corpus, now()
+         FROM (VALUES ${placeholders(batch.length, 4)}) AS used (database, workspace_id, unit, corpus)
+         ON CONFLICT (database, workspace_id) DO UPDATE SET last_used_at = excluded.last_used_at`,
+        batch.flatMap((entry) => [database, entry.workspaceId, entry.unit, entry.corpus]),
+      );
+    });
+  }
+
+  /** Workspaces of one database that some run used at or after `since`. */
+  async corporaUsedSince(database: string, since: Date): Promise<Set<string>> {
+    const rows = await this.rows<{ workspace_id: string }>(
+      "SELECT workspace_id FROM corpora WHERE database = $1 AND last_used_at >= $2",
+      [database, since.toISOString()],
+    );
+    return new Set(rows.map((row) => row.workspace_id));
+  }
+
+  async forgetCorpora(database: string, workspaceIds: readonly string[]): Promise<void> {
+    if (!workspaceIds.length) return;
+    await this.query("DELETE FROM corpora WHERE database = $1 AND workspace_id = ANY($2::text[])", [
+      database,
+      workspaceIds,
+    ]);
   }
 }

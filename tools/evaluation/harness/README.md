@@ -5,18 +5,50 @@ own code path on fixed slices of public memory benchmarks, then compares a
 candidate with a base ref under one rule, fixed before any result is read.
 
 ```sh
-export LORE_EVAL_SERVER_URL=postgres://postgres@127.0.0.1:5433/postgres  # may create lore_eval_bench_* databases
-export GEMINI_API_KEY=…                                                   # embeddings and the reader
+export LORE_EVAL_SERVER_URL=postgres://…   # the team's shared eval server; see below
+export GEMINI_API_KEY=…                    # new embeddings and reader calls
 
 bun run eval run  --dataset locomo,longmemeval-s --tier smoke
 bun run eval gate --base origin/main --dataset locomo,longmemeval-s --tier standard
 bun run eval report --run <id> [--vs <base run id>]
-bun run eval gc [--older-than-days 14]   # drop corpora no run used lately
+bun run eval gc [--older-than-days 14]                       # drop corpora no run used lately
+bun run eval warm --from-database lore_longmemeval_bench_1536 # copy a Lore database's vectors, read-only
 ```
 
 `--candidate` defaults to the working tree, uncommitted changes included. Reports
 are written to `evaluation/results/harness/reports/`. A gate that finds a
-regression exits 1.
+regression exits 1. Pinned datasets download on first use, checksum-verified.
+
+## One shared server
+
+Everything the harness keeps lives on the PostgreSQL server `LORE_EVAL_SERVER_URL`
+names:
+
+- **`lore_eval_store`:** embeddings, answers, verdicts, runs, packets, results,
+  provenance events, and which corpora were used when.
+- **`lore_eval_bench_<dims>_<digest of db/migrations>`:** one database of seeded
+  corpora per migration chain.
+
+Point every sandbox at the same server and they share all of it: a fresh sandbox
+reuses every corpus, embedding, answer, and verdict another one already paid for.
+The team's server is the Railway `lore-benchmarks` Postgres. Ask the team for its
+URL, and never commit or print it. The harness only creates and writes its own
+databases there. `warm` reads another database read-only, so a frozen corpus
+such as `lore_longmemeval_bench_1536` stays as it is.
+
+Sandboxes may share the server at the same time:
+
+- **Seeding.** A Unit's Workspace is seeded under an advisory lock, so a second
+  sandbox waits and then reuses it.
+- **Clean-up.** `gc` waits for no one: it skips a database while a collection
+  holds it.
+- **Cached values.** Concurrent writes of one cached value keep the first.
+
+What stays per sandbox:
+
+- the ref worktrees and their `bun install`;
+- the downloaded datasets;
+- the Codex login the default judge needs.
 
 ## How a run works
 
@@ -92,10 +124,11 @@ An answer line gives the answers and verdicts taken from the store and made new.
 - **Budget guard.** The reader cost is estimated before any call. A run stops if
   the estimate is over `--budget-usd` (default $10).
 
-All of this lives on one machine: the store, the worktrees, and the
-`lore_eval_bench_*` databases. A fresh sandbox starts empty. Its first standard
-gate seeds and embeds every corpus and pays every reader and judge call. Copy
-`evaluation/results/harness/store.sqlite` to carry the caches over.
+- **Warming from a Lore database.** `warm` copies the document vectors another
+  Lore database holds, keyed as the harness keys them. Its source session is
+  read-only, which it checks first. It compares every vector the store already
+  holds and stops before writing more if one differs by over 1e-5. Its summary
+  states how many it read, compared, and added, and the largest difference.
 
 ## The gate rule
 

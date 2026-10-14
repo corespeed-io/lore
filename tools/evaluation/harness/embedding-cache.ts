@@ -2,6 +2,26 @@ import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
 import { sha256 } from "./hash";
 import type { EvalStore } from "./store";
 
+/** The embedding space a vector belongs to. */
+export interface EmbeddingSpace {
+  provider: string;
+  model: string;
+  dimensions: number;
+  revision: string;
+}
+
+/**
+ * The store key of one embedding: its space, task, and exact text, NUL-separated.
+ * `eval warm` computes the same key in SQL; a test holds the two equal.
+ */
+export function embeddingCacheKey(space: EmbeddingSpace, task: EmbeddingTask, text: string) {
+  return sha256(
+    [space.provider, space.model, String(space.dimensions), space.revision, task, text].join(
+      "\u0000",
+    ),
+  );
+}
+
 export interface EmbeddingCacheCounters {
   cached: number;
   embedded: number;
@@ -21,9 +41,7 @@ export function cachedEmbeddingProvider(
   store: EvalStore,
 ): { provider: EmbeddingProvider; counters: EmbeddingCacheCounters } {
   const counters: EmbeddingCacheCounters = { cached: 0, embedded: 0, requests: 0, failures: 0 };
-  const space = `${provider.provider}\u0000${provider.model}\u0000${provider.dimensions}\u0000${provider.revision}`;
-  const keyFor = (text: string, task: EmbeddingTask) =>
-    sha256(`${space}\u0000${task}\u0000${text}`);
+  const keyFor = (text: string, task: EmbeddingTask) => embeddingCacheKey(provider, task, text);
   const cached: EmbeddingProvider = {
     provider: provider.provider,
     model: provider.model,
@@ -34,8 +52,9 @@ export function cachedEmbeddingProvider(
       : { requestTimeoutMs: provider.requestTimeoutMs }),
     async embed(texts, task) {
       const keys = texts.map((text) => keyFor(text, task));
+      const stored = await store.embeddings(keys);
       const vectors: Array<number[] | undefined> = keys.map((key) => {
-        const hit = store.embedding(key);
+        const hit = stored.get(key);
         return hit ? Array.from(hit) : undefined;
       });
       const missing = vectors.flatMap((vector, index) => (vector ? [] : [index]));
@@ -63,7 +82,7 @@ export function cachedEmbeddingProvider(
           vectors[index] = vector;
           entries.push([keys[index] ?? "", vector]);
         }
-        store.saveEmbeddings(entries);
+        await store.saveEmbeddings(entries);
       }
       return vectors.map((vector) => vector ?? []);
     },

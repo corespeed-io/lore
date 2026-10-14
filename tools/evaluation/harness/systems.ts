@@ -117,11 +117,12 @@ export function memorySearchSystem(options: {
     | undefined;
   const connect = async (databaseUrl: string) => {
     if (!databases) {
-      const admin = new pg.Pool({ connectionString: databaseUrl, max: 6 });
+      // Small pools: several sandboxes may share one eval server.
+      const admin = new pg.Pool({ connectionString: databaseUrl, max: 4 });
       databases = {
-        request: createPostgresDatabase({ connectionString: databaseUrl, max: 12 }),
+        request: createPostgresDatabase({ connectionString: databaseUrl, max: 8 }),
         maintenance: createPostgresDatabase(
-          { connectionString: databaseUrl, max: 8 },
+          { connectionString: databaseUrl, max: 6 },
           { role: "lore_maintenance" },
         ),
         admin,
@@ -161,100 +162,132 @@ export function memorySearchSystem(options: {
         embeddingDimensions: EMBEDDING_SPACE.dimensions,
       });
       const outcome: IngestOutcome = { seeded: 0, reused: 0, verifiedChunks: 0 };
-      const pending: EvalUnit[] = [];
+      const reuse = async (unit: EvalUnit, workspaceId: string) => {
+        // A ready Workspace is reused only after it is checked again.
+        const checked = await coverage(admin, workspaceId, unit);
+        if ("problem" in checked) {
+          throw new Error(
+            `Workspace ${workspaceId} for ${unit.key} is marked ready but holds ${checked.problem}`,
+          );
+        }
+        outcome.reused += 1;
+        outcome.verifiedChunks += checked.chunks;
+      };
+      const nameOf = async (workspaceId: string) =>
+        (
+          await admin.query<{ name: string }>("SELECT name FROM workspaces WHERE id = $1", [
+            workspaceId,
+          ])
+        ).rows[0]?.name;
+      const unready: EvalUnit[] = [];
       for (const unit of units) {
         const workspaceId = context.workspaceIdFor(unit);
-        const existing = await admin.query<{ name: string }>(
-          "SELECT name FROM workspaces WHERE id = $1",
-          [workspaceId],
-        );
-        const name = existing.rows[0]?.name;
-        if (name === `eval ready ${unit.key}`) {
-          // A ready Workspace is reused only after it is checked again.
-          const checked = await coverage(admin, workspaceId, unit);
-          if ("problem" in checked) {
-            throw new Error(
-              `Workspace ${workspaceId} for ${unit.key} is marked ready but holds ${checked.problem}`,
+        if ((await nameOf(workspaceId)) === `eval ready ${unit.key}`) {
+          await reuse(unit, workspaceId);
+        } else {
+          unready.push(unit);
+        }
+      }
+      if (!unready.length) return outcome;
+      // Sandboxes sharing a server seed each Unit once. Locks are taken in Workspace
+      // order, so two batches never wait on each other; whoever waits finds the Unit
+      // ready afterwards and reuses it.
+      const locker = await admin.connect();
+      const held: string[] = [];
+      try {
+        const pending: EvalUnit[] = [];
+        for (const unit of [...unready].sort((left, right) =>
+          context.workspaceIdFor(left).localeCompare(context.workspaceIdFor(right)),
+        )) {
+          const workspaceId = context.workspaceIdFor(unit);
+          await locker.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [workspaceId]);
+          held.push(workspaceId);
+          const name = await nameOf(workspaceId);
+          if (name === `eval ready ${unit.key}`) {
+            await reuse(unit, workspaceId);
+            continue;
+          }
+          // Nobody holds this Unit's lock, so a Workspace still building was left by
+          // a seed that stopped part way: drop it and seed again.
+          if (name) await admin.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
+          pending.push(unit);
+        }
+        let seeded = 0;
+        await parallel(pending, 6, async (unit) => {
+          const workspaceId = context.workspaceIdFor(unit);
+          await admin.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [
+            workspaceId,
+            `eval building ${unit.key}`,
+          ]);
+          await admin.query(
+            "INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'member')",
+            [workspaceId, ALICE, BOB],
+          );
+          for (const record of unit.records) {
+            await alice.remember(
+              { workspaceId, userId: ALICE },
+              {
+                content: record.text,
+                scope: "private",
+                metadata: {
+                  evalUnit: unit.key,
+                  evalKey: record.key,
+                  ...(record.anchorKey ? { evalAnchorKey: record.anchorKey } : {}),
+                },
+              },
             );
           }
-          outcome.reused += 1;
-          outcome.verifiedChunks += checked.chunks;
-          continue;
-        }
-        // A seed that stopped part way is disposable: drop it and seed again.
-        if (name) await admin.query("DELETE FROM workspaces WHERE id = $1", [workspaceId]);
-        pending.push(unit);
-      }
-      let seeded = 0;
-      await parallel(pending, 6, async (unit) => {
-        const workspaceId = context.workspaceIdFor(unit);
-        await admin.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [
-          workspaceId,
-          `eval building ${unit.key}`,
-        ]);
-        await admin.query(
-          "INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'member')",
-          [workspaceId, ALICE, BOB],
-        );
-        for (const record of unit.records) {
-          await alice.remember(
-            { workspaceId, userId: ALICE },
-            {
-              content: record.text,
-              scope: "private",
-              metadata: {
-                evalUnit: unit.key,
-                evalKey: record.key,
-                ...(record.anchorKey ? { evalAnchorKey: record.anchorKey } : {}),
+          for (const [index, tripwire] of unit.tripwires.entries()) {
+            await bob.remember(
+              { workspaceId, userId: BOB },
+              {
+                content: tripwire,
+                scope: "private",
+                metadata: { evalUnit: unit.key, evalTripwire: index },
               },
-            },
-          );
-        }
-        for (const [index, tripwire] of unit.tripwires.entries()) {
-          await bob.remember(
-            { workspaceId, userId: BOB },
-            {
-              content: tripwire,
-              scope: "private",
-              metadata: { evalUnit: unit.key, evalTripwire: index },
-            },
-          );
-        }
-        if (++seeded % 25 === 0) context.log(`seeded ${seeded}/${pending.length} units`);
-      });
-      if (pending.length) {
-        const drain = createEmbeddingMaintenance(maintenance, { embeddingProviders: [provider] });
-        await drainEmbeddingMaintenance({
-          run: () => drain.run(),
-          concurrency: 8,
-          pendingJobCount: async () =>
-            Number(
-              (
-                await admin.query<{ count: string }>(
-                  "SELECT count(*)::text AS count FROM memory_embedding_jobs WHERE status = 'pending'",
-                )
-              ).rows[0]?.count ?? 0,
-            ),
-          onProgress: (completed, round) => {
-            if (completed % 1_000 < round) context.log(`embedded ${completed} Memories`);
-          },
-        });
-        if (counters.failures) throw new Error("Embedding failed during ingestion");
-        for (const unit of pending) {
-          const workspaceId = context.workspaceIdFor(unit);
-          // A job can end without a provider failure (a lost lease, a database
-          // error); only a Workspace whose every chunk has its vector is ready.
-          const checked = await coverage(admin, workspaceId, unit);
-          if ("problem" in checked) {
-            throw new Error(`Seeding ${unit.key} left ${checked.problem}`);
+            );
           }
-          await admin.query("UPDATE workspaces SET name = $2 WHERE id = $1", [
-            workspaceId,
-            `eval ready ${unit.key}`,
-          ]);
-          outcome.seeded += 1;
-          outcome.verifiedChunks += checked.chunks;
+          if (++seeded % 25 === 0) context.log(`seeded ${seeded}/${pending.length} units`);
+        });
+        if (pending.length) {
+          const drain = createEmbeddingMaintenance(maintenance, { embeddingProviders: [provider] });
+          await drainEmbeddingMaintenance({
+            run: () => drain.run(),
+            concurrency: 6,
+            pendingJobCount: async () =>
+              Number(
+                (
+                  await admin.query<{ count: string }>(
+                    "SELECT count(*)::text AS count FROM memory_embedding_jobs WHERE status = 'pending'",
+                  )
+                ).rows[0]?.count ?? 0,
+              ),
+            onProgress: (completed, round) => {
+              if (completed % 1_000 < round) context.log(`embedded ${completed} Memories`);
+            },
+          });
+          if (counters.failures) throw new Error("Embedding failed during ingestion");
+          for (const unit of pending) {
+            const workspaceId = context.workspaceIdFor(unit);
+            // A job can end without a provider failure (a lost lease, a database
+            // error); only a Workspace whose every chunk has its vector is ready.
+            const checked = await coverage(admin, workspaceId, unit);
+            if ("problem" in checked) {
+              throw new Error(`Seeding ${unit.key} left ${checked.problem}`);
+            }
+            await admin.query("UPDATE workspaces SET name = $2 WHERE id = $1", [
+              workspaceId,
+              `eval ready ${unit.key}`,
+            ]);
+            outcome.seeded += 1;
+            outcome.verifiedChunks += checked.chunks;
+          }
         }
+      } finally {
+        for (const workspaceId of held) {
+          await locker.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [workspaceId]);
+        }
+        locker.release();
       }
       return outcome;
     },
