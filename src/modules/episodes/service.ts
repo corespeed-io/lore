@@ -1,6 +1,5 @@
 import { isPostgresAccessDenied, type PostgresDatabase } from "@corespeed/lore-core";
 import {
-  createEpisodeEvidenceModule as createCoreEpisodeEvidenceModule,
   createObservationModule as createCoreObservationModule,
   type ListEpisodes,
   normalizedEpisode,
@@ -98,11 +97,6 @@ export function createObservationModule(database: PostgresDatabase) {
             memoryStorageInTransaction(transaction, actor),
           ).retrieve(recorded.id);
           if (!stored) throw new Error("Recorded Episode was not readable in its transaction");
-          // Exact source chunks commit with admission and replay state. No model
-          // call or extracted fact is needed to make raw evidence searchable.
-          await createCoreEpisodeEvidenceModule(
-            memoryStorageInTransaction(transaction, actor),
-          ).index({ episodeId: recorded.id });
           const episode = toEpisode(stored);
           await completeMutation(
             transaction,

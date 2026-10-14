@@ -15,7 +15,7 @@ afterEach(() => {
   for (const key of ["AUTH_MODE", "ALLOW_INSECURE", "LORE_LOCAL_SUBJECT"]) delete process.env[key];
 });
 
-test("SDK → HTTP records immediately searchable correction evidence without changing Memory", async () => {
+test("SDK → HTTP indexes recorded correction evidence on request without changing Memory", async () => {
   process.env.AUTH_MODE = "none";
   process.env.ALLOW_INSECURE = "1";
   process.env.LORE_LOCAL_SUBJECT = "episode-search-http";
@@ -51,6 +51,11 @@ test("SDK → HTTP records immediately searchable correction evidence without ch
   const episode = await workspace.recordEpisode(input, { idempotencyKey: "correction-episode" });
   const replay = await workspace.recordEpisode(input, { idempotencyKey: "correction-episode" });
   expect(replay.id).toBe(episode.id);
+  // Recording builds no index; the owner builds it on request. Repeating it is safe.
+  expect(await workspace.searchEpisodeEvidence({ query: "发版" })).toEqual([]);
+  const indexed = await workspace.indexEpisodeEvidence(episode.id);
+  expect(indexed.chunkCount).toBe(2);
+  expect(await workspace.indexEpisodeEvidence(episode.id)).toEqual(indexed);
   const results = await workspace.searchEpisodeEvidence({
     query: "发版",
     scope: "private",
@@ -81,13 +86,11 @@ test("SDK → HTTP records immediately searchable correction evidence without ch
     await workspace.searchEpisodeEvidence({ query: "发版", metadata: { project: "other" } }),
   ).toEqual([]);
   expect(await workspace.searchEpisodeEvidence({ query: "发版", scope: "shared" })).toEqual([]);
-  // Rebuild an older Episode whose derived index is absent. Repeated builds do not duplicate chunks.
+  // A rebuilt index, after its chunks are gone, is the same index.
   await context.adminDatabase.transaction((tx) =>
     tx.query("DELETE FROM episode_evidence_chunks WHERE episode_id = $1", [episode.id]),
   );
   expect(await workspace.searchEpisodeEvidence({ query: "发版" })).toEqual([]);
-  const indexed = await workspace.indexEpisodeEvidence(episode.id);
-  expect(indexed.chunkCount).toBe(2);
   expect(await workspace.indexEpisodeEvidence(episode.id)).toEqual(indexed);
   expect(await workspace.searchEpisodeEvidence({ query: "发版" })).toHaveLength(1);
   for (const body of [
@@ -113,7 +116,12 @@ test("raw evidence applies Workspace, private/shared, metadata and Agent grants 
   const context = await createMemoryTestContext();
   const observations = createObservationModule(context.database);
   const evidence = createEpisodeEvidenceModule(context.database);
-  const shared = await observations.record(context.alice, {
+  const recordIndexed = async (...[actor, input]: Parameters<typeof observations.record>) => {
+    const episode = await observations.record(actor, input);
+    await evidence.index(actor, { episodeId: episode.id });
+    return episode;
+  };
+  const shared = await recordIndexed(context.alice, {
     kind: "event",
     scope: "shared",
     observations: [
@@ -121,13 +129,13 @@ test("raw evidence applies Workspace, private/shared, metadata and Agent grants 
     ],
   });
   for (let i = 0; i < 5; i++)
-    await observations.record(context.alice, {
+    await recordIndexed(context.alice, {
       kind: "event",
       observations: [
         { kind: "event", content: "release 发版 private", metadata: { project: "hidden" } },
       ],
     });
-  await observations.record(context.carol, {
+  await recordIndexed(context.carol, {
     kind: "event",
     scope: "shared",
     observations: [{ kind: "event", content: "release 发版 cross-workspace" }],
@@ -167,29 +175,32 @@ test("raw evidence applies Workspace, private/shared, metadata and Agent grants 
   expect(await evidence.search(context.bob, { query: "发版" })).toEqual([]);
 });
 
-test("index admission failure rolls back Episode and Observations together", async () => {
+test("recording writes no index, and a failed index build leaves the Episode recorded", async () => {
   const context = await createMemoryTestContext();
   await context.adminDatabase.transaction((tx) =>
     tx.query("REVOKE INSERT ON episode_evidence_chunks FROM lore_app"),
   );
+  const episode = await createObservationModule(context.database).record(context.alice, {
+    kind: "event",
+    observations: [{ kind: "event", content: "Recorded before any index" }],
+  });
   await expect(
-    createObservationModule(context.database).record(context.alice, {
-      kind: "event",
-      observations: [{ kind: "event", content: "Never partially admitted" }],
-    }),
+    createEpisodeEvidenceModule(context.database).index(context.alice, { episodeId: episode.id }),
   ).rejects.toThrow();
   const counts = await context.adminDatabase.transaction((tx) =>
-    tx.query<{ episodes: string; observations: string }>(
-      "SELECT (SELECT count(*)::text FROM episodes) AS episodes, (SELECT count(*)::text FROM observations) AS observations",
+    tx.query<{ episodes: string; observations: string; chunks: string }>(
+      `SELECT (SELECT count(*)::text FROM episodes) AS episodes,
+              (SELECT count(*)::text FROM observations) AS observations,
+              (SELECT count(*)::text FROM episode_evidence_chunks) AS chunks`,
     ),
   );
-  expect(counts.rows).toEqual([{ episodes: "0", observations: "0" }]);
+  expect(counts.rows).toEqual([{ episodes: "1", observations: "1", chunks: "0" }]);
 });
 
-test("raw whitespace never blocks admission, and excerpts stay exact spans", async () => {
+test("raw whitespace never blocks indexing, and excerpts stay exact spans", async () => {
   const context = await createMemoryTestContext();
-  // Each holds a whitespace-only part no chunk row may carry. On f0245a5 these
-  // Observations were admitted unindexed; admission must still accept them.
+  // Each holds a whitespace-only part no chunk row may carry. Indexing must
+  // accept them and leave the recorded Observations exactly as written.
   const contents = [
     `begin${" ".repeat(2_400)}end`,
     `${"word ".repeat(100)}trailing${"\n".repeat(1_300)}`,
@@ -200,6 +211,8 @@ test("raw whitespace never blocks admission, and excerpts stay exact spans", asy
     observations: contents.map((content) => ({ kind: "document_fragment" as const, content })),
   });
   expect(episode.observations.map((observation) => observation.content)).toEqual(contents);
+  const evidence = createEpisodeEvidenceModule(context.database, { evidenceNeighborChunks: 2 });
+  await evidence.index(context.alice, { episodeId: episode.id });
 
   const stored = await context.adminDatabase.transaction((tx) =>
     tx.query<{ observation_id: string; chunk_ordinal: number; content: string }>(
@@ -222,7 +235,6 @@ test("raw whitespace never blocks admission, and excerpts stay exact spans", asy
     );
   }
 
-  const evidence = createEpisodeEvidenceModule(context.database, { evidenceNeighborChunks: 2 });
   expect(
     await evidence.index(context.alice, { episodeId: episode.id, mode: "verify" }),
   ).toMatchObject({ observationCount: 3, chunkCount: stored.rows.length });

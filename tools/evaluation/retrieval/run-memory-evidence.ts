@@ -306,11 +306,13 @@ async function seed(record: LongMemEvalRecord) {
     ],
   );
   const observations = createObservationModule(database);
+  // Recording does not index raw evidence; each Episode is indexed explicitly.
+  const evidence = createEpisodeEvidenceModule(database);
   let batch: typeof raw = [];
   let characters = 0;
   const flush = async () => {
     if (!batch.length) return;
-    await observations.record(actor, {
+    const episode = await observations.record(actor, {
       kind: "conversation",
       scope: "private",
       observations: batch.map((source) => ({
@@ -331,6 +333,7 @@ async function seed(record: LongMemEvalRecord) {
         },
       })),
     });
+    await evidence.index(actor, { episodeId: episode.id });
     batch = [];
     characters = 0;
   };
@@ -350,25 +353,24 @@ async function seed(record: LongMemEvalRecord) {
       metadata: { benchmarkPartition: `${qid}#facts`, benchmarkKey: "__bob_private_tripwire__" },
     },
   );
-  await observations.record(
-    { workspaceId, userId: bob },
-    {
-      kind: "conversation",
-      scope: "private",
-      observations: [
-        {
-          kind: "message",
-          content: tripwire,
-          metadata: {
-            questionId: qid,
-            sessionId: "__bob_private_tripwire__",
-            benchmarkKey: "__bob_private_tripwire__",
-            corpus: "longmemeval-raw-v1",
-          },
+  const bobActor = { workspaceId, userId: bob };
+  const canary = await observations.record(bobActor, {
+    kind: "conversation",
+    scope: "private",
+    observations: [
+      {
+        kind: "message",
+        content: tripwire,
+        metadata: {
+          questionId: qid,
+          sessionId: "__bob_private_tripwire__",
+          benchmarkKey: "__bob_private_tripwire__",
+          corpus: "longmemeval-raw-v1",
         },
-      ],
-    },
-  );
+      },
+    ],
+  });
+  await evidence.index(bobActor, { episodeId: canary.id });
   const coverage = (
     await admin.query(
       `SELECT

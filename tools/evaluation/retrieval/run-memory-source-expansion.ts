@@ -358,6 +358,9 @@ async function seed(record: LongMemEvalRecord) {
   );
   const actor = { workspaceId, userId: alice };
   const observations = createObservationModule(database);
+  // Recording does not index raw evidence; each Episode's lexical chunks are
+  // built explicitly, with no model call. --embed adds their vectors.
+  const evidence = createEpisodeEvidenceModule(database);
   // The baseline's exact batching, rendering, dates, and metadata, so the same
   // Observations produce the same exact evidence chunks.
   const raw = sources(record);
@@ -365,7 +368,7 @@ async function seed(record: LongMemEvalRecord) {
   let characters = 0;
   const flush = async () => {
     if (!batch.length) return;
-    await observations.record(actor, {
+    const episode = await observations.record(actor, {
       kind: "conversation",
       scope: "private",
       observations: batch.map((source) => ({
@@ -386,6 +389,7 @@ async function seed(record: LongMemEvalRecord) {
         },
       })),
     });
+    await evidence.index(actor, { episodeId: episode.id });
     batch = [];
     characters = 0;
   };
@@ -396,20 +400,19 @@ async function seed(record: LongMemEvalRecord) {
     characters += source.text.length;
   }
   await flush();
-  await observations.record(
-    { workspaceId, userId: bob },
-    {
-      kind: "conversation",
-      scope: "private",
-      observations: [
-        {
-          kind: "message",
-          content: `Confidential Bob private answer. ${record.question}\n${record.answer}`,
-          metadata: { questionId: qid, sessionId: tripwireKey, benchmarkKey: tripwireKey, corpus },
-        },
-      ],
-    },
-  );
+  const bobActor = { workspaceId, userId: bob };
+  const canary = await observations.record(bobActor, {
+    kind: "conversation",
+    scope: "private",
+    observations: [
+      {
+        kind: "message",
+        content: `Confidential Bob private answer. ${record.question}\n${record.answer}`,
+        metadata: { questionId: qid, sessionId: tripwireKey, benchmarkKey: tripwireKey, corpus },
+      },
+    ],
+  });
+  await evidence.index(bobActor, { episodeId: canary.id });
   const coverage = (
     await admin.query<{ observations: number; chunks: number }>(
       `SELECT
