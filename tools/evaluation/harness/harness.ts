@@ -302,6 +302,8 @@ export interface AnswerInput {
   store: EvalStore;
   dataset: Dataset;
   runIds: readonly string[];
+  /** Bound profiles to use instead of binding `reader` and `judge` by name; for tests. */
+  bound?: { reader: BoundReader; judge?: BoundJudge };
   reader: ReaderProfileName;
   judge: JudgeProfileName;
   geminiApiKey: string;
@@ -319,9 +321,12 @@ export interface AnswerInput {
 export async function answer(input: AnswerInput): Promise<void> {
   const { store, dataset } = input;
   const startedAt = new Date();
-  const reader: BoundReader = bindReader(input.reader, dataset, input.geminiApiKey);
+  const reader: BoundReader =
+    input.bound?.reader ?? bindReader(input.reader, dataset, input.geminiApiKey);
   const scorer: Scorer = createScorer(dataset.scorer);
-  const judge: BoundJudge | undefined = scorer.needsJudge ? bindJudge(input.judge) : undefined;
+  const judge: BoundJudge | undefined = scorer.needsJudge
+    ? (input.bound?.judge ?? bindJudge(input.judge))
+    : undefined;
   const grading = gradingIdentity(reader.identityHash, scorer.identity, judge?.identity ?? null);
   // A score from another reader, scorer, or judge is graded again, from cached
   // answers and verdicts where they exist, so one comparison never mixes graders.
@@ -385,12 +390,12 @@ export async function answer(input: AnswerInput): Promise<void> {
     );
     readerTokens.input += response.inputTokens ?? 0;
     readerTokens.output += response.outputTokens ?? 0;
-    const stored = {
+    // The stored answer, which is another sandbox's when it saved this key first.
+    const stored = await store.saveAnswer(item.answerKey, {
       answer: response.text,
       inputTokens: response.inputTokens,
       outputTokens: response.outputTokens,
-    };
-    await store.saveAnswer(item.answerKey, stored);
+    });
     storedAnswers.set(item.answerKey, stored);
   });
   // Grade each distinct answer once: base and candidate often share one.
@@ -418,8 +423,7 @@ export async function answer(input: AnswerInput): Promise<void> {
     const verdict = await retrying(`${item.evalCase.id} grade`, 5, () =>
       scorer.grade(item.evalCase, item.answerText, judge),
     );
-    await store.saveVerdict(item.verdictKey, verdict);
-    storedVerdicts.set(item.verdictKey, verdict);
+    storedVerdicts.set(item.verdictKey, await store.saveVerdict(item.verdictKey, verdict));
     if (++gradedCount % 100 === 0)
       input.log(`${dataset.id}: graded ${gradedCount}/${ungraded.size}`);
   });

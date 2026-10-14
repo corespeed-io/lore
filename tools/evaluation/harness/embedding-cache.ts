@@ -76,13 +76,18 @@ export function cachedEmbeddingProvider(
           throw new Error("Embedding provider returned the wrong number of vectors");
         }
         counters.embedded += fresh.length;
-        const entries: Array<[string, number[]]> = [];
-        for (const [position, index] of missing.entries()) {
-          const vector = fresh[position] ?? [];
-          vectors[index] = vector;
-          entries.push([keys[index] ?? "", vector]);
+        const entries: Array<[string, number[]]> = missing.map((index, position) => [
+          keys[index] ?? "",
+          fresh[position] ?? [],
+        ]);
+        // Another sandbox may have stored some of these keys meanwhile; embed with
+        // the stored vectors, so every corpus and query uses one value per key.
+        const stored = await store.saveEmbeddings(entries);
+        for (const index of missing) {
+          const winner = stored.get(keys[index] ?? "");
+          if (!winner) throw new Error("An embedding is missing right after it was saved");
+          vectors[index] = Array.from(winner);
         }
-        await store.saveEmbeddings(entries);
       }
       return vectors.map((vector) => vector ?? []);
     },

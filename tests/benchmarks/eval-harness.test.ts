@@ -11,6 +11,7 @@ import {
   embeddingCacheKey,
 } from "../../tools/evaluation/harness/embedding-cache";
 import {
+  answer,
   CORPUS_ENTRIES,
   compareRuns,
   gradingIdentity,
@@ -30,7 +31,7 @@ import {
 } from "../../tools/evaluation/harness/stats";
 import { EvalStore } from "../../tools/evaluation/harness/store";
 import { selectTier } from "../../tools/evaluation/harness/tiers";
-import type { EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
+import type { Dataset, EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
 import { warmFromDatabase } from "../../tools/evaluation/harness/warm";
 
 /** The shared store's real SQL, on an in-process PostgreSQL. */
@@ -554,5 +555,149 @@ describe("warming the store from another Lore database", () => {
     );
     await store.close();
     await db.close();
+  });
+});
+
+describe("sandboxes racing on one key", () => {
+  /** Two sandboxes' stores over one database. */
+  async function twoStores() {
+    const db = new PGlite();
+    const query = (text: string, params?: unknown[]) => db.query(text, params as unknown[]);
+    return {
+      mine: await EvalStore.over(query),
+      theirs: await EvalStore.over(query),
+      close: () => db.close(),
+    };
+  }
+
+  it("hands every writer the first stored answer, verdict, and vector", async () => {
+    const { mine, theirs, close } = await twoStores();
+    await theirs.saveAnswer("a", { answer: "London", inputTokens: 1, outputTokens: 1 });
+    expect(
+      await mine.saveAnswer("a", { answer: "Paris", inputTokens: 2, outputTokens: 2 }),
+    ).toEqual({ answer: "London", inputTokens: 1, outputTokens: 1 });
+    await theirs.saveVerdict("v", { score: 0, label: "no", inputTokens: null, outputTokens: null });
+    expect(
+      (
+        await mine.saveVerdict("v", {
+          score: 1,
+          label: "yes",
+          inputTokens: null,
+          outputTokens: null,
+        })
+      ).label,
+    ).toBe("no");
+    await theirs.saveEmbeddings([["e", [1, 2]]]);
+    const stored = await mine.saveEmbeddings([
+      ["e", [3, 4]],
+      ["f", [5, 6]],
+    ]);
+    expect(Array.from(stored.get("e") ?? [])).toEqual([1, 2]);
+    expect(Array.from(stored.get("f") ?? [])).toEqual([5, 6]);
+    await close();
+  });
+
+  it("embeds with the vector another sandbox stored while this one was calling the provider", async () => {
+    const { mine, theirs, close } = await twoStores();
+    const space = { provider: "test", model: "m", dimensions: 2, revision: "r" };
+    const { provider } = cachedEmbeddingProvider(
+      {
+        ...space,
+        async embed(texts) {
+          await theirs.saveEmbeddings([[embeddingCacheKey(space, "query", "q"), [0.25, 0.75]]]);
+          return texts.map(() => [0.5, 0.5]);
+        },
+      },
+      mine,
+    );
+    expect(await provider.embed(["q"], "query")).toEqual([[0.25, 0.75]]);
+    await close();
+  });
+
+  it("grades the answer another sandbox stored first, never its own", async () => {
+    const { mine, theirs, close } = await twoStores();
+    const evalCase: EvalCase = {
+      id: "c1",
+      unitKey: "u",
+      category: "single-hop",
+      question: "Where does Alice live?",
+      readerQuestion: "Where does Alice live?",
+      searchQuery: "Where does Alice live?",
+      answer: "London",
+      evidenceKeys: [],
+      abstention: false,
+      scoring: { locomoCategory: 4 },
+    };
+    const dataset: Dataset = {
+      id: "d",
+      revision: "r",
+      scorer: "locomo-f1",
+      reader: { maximumContextCharacters: 1_000 },
+      index: async () => [],
+      async *units() {
+        yield { key: "u", records: [], cases: [evalCase], tripwires: [] };
+      },
+    };
+    const packetSha = await mine.savePacket({
+      items: [{ id: "m", text: "Alice moved to London.", sourceKeys: [] }],
+      latencyMs: 1,
+    });
+    await mine.saveRun({
+      id: "run",
+      refSha: "x",
+      dataset: "d",
+      tier: "standard",
+      system: "s",
+      identity: {},
+      createdAt: "2026-10-14T00:00:00.000Z",
+    });
+    await mine.saveResults("run", [
+      {
+        caseId: "c1",
+        category: "single-hop",
+        packetSha,
+        retrieval: { gold: 0, anyHit: false, allHit: false, reciprocalRank: 0 },
+        latencyMs: 1,
+        isolationFailure: false,
+        answerKey: null,
+        verdictKey: null,
+        score: null,
+        grading: null,
+      },
+    ]);
+    const render = (question: string, evidence: Array<{ id: string; text: string }>) =>
+      `${question}|${evidence.map((item) => item.text).join("|")}`;
+    await answer({
+      store: mine,
+      dataset,
+      runIds: ["run"],
+      reader: "gemini-3.5-flash",
+      judge: "gpt-5.6-sol",
+      geminiApiKey: "",
+      budgetUsd: 1,
+      log: () => {},
+      bound: {
+        reader: {
+          identity: { reader: "fake" },
+          identityHash: "fake-reader",
+          render,
+          async answer(question, evidence) {
+            // Another sandbox answers the same input first.
+            await theirs.saveAnswer(sha256(`fake-reader\u0000${render(question, evidence)}`), {
+              answer: "London",
+              inputTokens: 1,
+              outputTokens: 1,
+            });
+            return { text: "Paris", inputTokens: 1, outputTokens: 1 };
+          },
+        },
+      },
+    });
+    const [result] = await mine.results("run");
+    expect(result?.score).toBe(1);
+    expect(
+      (await mine.answers([result?.answerKey ?? ""])).get(result?.answerKey ?? "")?.answer,
+    ).toBe("London");
+    await close();
   });
 });

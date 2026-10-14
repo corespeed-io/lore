@@ -234,7 +234,14 @@ export class EvalStore {
     return found;
   }
 
-  async saveEmbeddings(entries: ReadonlyArray<[string, readonly number[]]>): Promise<void> {
+  /**
+   * Store vectors that are not stored yet, and return what the store holds for
+   * every key afterwards. When another sandbox stored a key first, its vector is
+   * the one returned, so every caller embeds with the same value.
+   */
+  async saveEmbeddings(
+    entries: ReadonlyArray<[string, readonly number[]]>,
+  ): Promise<Map<string, Float32Array>> {
     await inBatches(entries, async (batch) => {
       await this.query(
         `INSERT INTO embeddings (key, vector) VALUES ${batch
@@ -244,6 +251,7 @@ export class EvalStore {
         batch.flatMap(([key, vector]) => [key, realArrayLiteral(vector)]),
       );
     });
+    return this.embeddings(entries.map(([key]) => key));
   }
 
   async answers(keys: readonly string[]): Promise<Map<string, StoredAnswer>> {
@@ -266,12 +274,21 @@ export class EvalStore {
     );
   }
 
-  async saveAnswer(key: string, answer: StoredAnswer): Promise<void> {
+  /**
+   * Store an answer unless one is stored, and return the stored one. A sandbox that
+   * lost the race grades the winner's answer, never its own, so one key always
+   * means one answer. The read is a separate statement: one statement's snapshot
+   * would not see a row another session committed while the insert waited.
+   */
+  async saveAnswer(key: string, answer: StoredAnswer): Promise<StoredAnswer> {
     await this.query(
       `INSERT INTO answers (key, answer, input_tokens, output_tokens) VALUES ($1, $2, $3, $4)
        ON CONFLICT (key) DO NOTHING`,
       [key, answer.answer, answer.inputTokens, answer.outputTokens],
     );
+    const stored = (await this.answers([key])).get(key);
+    if (!stored) throw new Error(`Answer ${key} is missing right after it was saved`);
+    return stored;
   }
 
   async verdicts(keys: readonly string[]): Promise<Map<string, StoredVerdict>> {
@@ -301,12 +318,16 @@ export class EvalStore {
     );
   }
 
-  async saveVerdict(key: string, verdict: StoredVerdict): Promise<void> {
+  /** Store a verdict unless one is stored, and return the stored one, as `saveAnswer`. */
+  async saveVerdict(key: string, verdict: StoredVerdict): Promise<StoredVerdict> {
     await this.query(
       `INSERT INTO verdicts (key, score, label, input_tokens, output_tokens)
        VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING`,
       [key, verdict.score, verdict.label, verdict.inputTokens, verdict.outputTokens],
     );
+    const stored = (await this.verdicts([key])).get(key);
+    if (!stored) throw new Error(`Verdict ${key} is missing right after it was saved`);
+    return stored;
   }
 
   async saveRun(run: RunRecord): Promise<void> {
