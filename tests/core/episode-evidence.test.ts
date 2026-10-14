@@ -1,4 +1,4 @@
-import type { EmbeddingTask } from "@corespeed/lore-core";
+import { chunkMemoryContent, type EmbeddingTask } from "@corespeed/lore-core";
 import { EPISODE_EVIDENCE_INDEX_REVISION } from "@corespeed/lore-core/episodes";
 import { expect, test } from "vitest";
 import {
@@ -56,6 +56,18 @@ test("Episode evidence indexes an oversized raw trajectory without inventing can
       metadata: { trajectoryId: "trajectory-a" },
     },
   ]);
+  const [result] = await evidence.search(testContext.alice, { query: "needle-zebracode" });
+  const excerpt = result?.excerpts[0];
+  if (!excerpt) throw new Error("Missing source excerpt");
+  expect(excerpt.observationId).toBe(episode.observations[0]?.id);
+  expect(excerpt.chunkStartOrdinal).toBeGreaterThan(0);
+  expect(excerpt.content).toBe(
+    chunkMemoryContent(content)
+      .slice(excerpt.chunkStartOrdinal, excerpt.chunkEndOrdinal + 1)
+      .join(""),
+  );
+  expect(excerpt.content).toContain("needle-zebracode");
+  expect(excerpt.content.length).toBeLessThan(content.length);
   await expect(
     evidence.search(testContext.bob, {
       query: "needle-zebracode",

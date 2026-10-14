@@ -10,6 +10,7 @@ import {
   validateObservationKind,
 } from "@corespeed/lore-core/episodes";
 import { Hono } from "hono";
+import { createEpisodeEvidenceModule } from "@/modules/episodes/evidence";
 import { createObservationModule } from "@/modules/episodes/service";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
@@ -65,6 +66,39 @@ function episodeObservations(value: unknown): RecordObservation[] {
 }
 
 export const episodes = new Hono<ApiEnv>()
+  .post("/search", async (c) => {
+    const actor = await c.var.resolveActor();
+    const body = await jsonObject(c.req.raw);
+    if (typeof body.query !== "string") throw new BadRequestError("query must be a string");
+    if (body.limit !== undefined && typeof body.limit !== "number") {
+      throw new BadRequestError("limit must be a number");
+    }
+    const query = body.query;
+    const limit = body.limit;
+    const evidence = createEpisodeEvidenceModule(await c.var.database());
+    const results = await observeOperation("episode.search", () =>
+      evidence.search(actor, {
+        query,
+        ...(limit === undefined ? {} : { limit }),
+        ...(body.scope === undefined ? {} : { scope: memoryScope(body.scope) }),
+        ...(body.metadata === undefined ? {} : { metadataFilter: metadata(body.metadata) }),
+      }),
+    );
+    return c.json(results);
+  })
+  .post("/:id/index", async (c) => {
+    const episodeId = uuidString(c.req.param("id"), "episodeId");
+    const actor = await c.var.resolveActor();
+    const evidence = createEpisodeEvidenceModule(await c.var.database());
+    const indexed = await observeOperation("episode.index", () =>
+      evidence.index(actor, { episodeId }),
+    );
+    return c.json({
+      episodeId: indexed.episodeId,
+      chunkCount: indexed.chunkCount,
+      indexRevision: indexed.indexRevision,
+    });
+  })
   .get("/", async (c) => {
     const observations = createObservationModule(await c.var.database());
     const request = c.req.raw;

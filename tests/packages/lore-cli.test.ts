@@ -852,3 +852,43 @@ test.each<[string, string[], RegExp]>([
     expect(fetchMock).not.toHaveBeenCalled();
   },
 );
+
+test("CLI raw evidence search sends a bounded read request through the SDK", async () => {
+  const captured = captureIo();
+  const fetchMock = vi.fn().mockResolvedValue(Response.json([]));
+  expect(
+    await runLoreCli(
+      [
+        "episode",
+        "search",
+        "发版",
+        "--scope",
+        "private",
+        "--metadata",
+        '{"project":"lore"}',
+        "--limit",
+        "3",
+      ],
+      {
+        environment: {
+          LORE_URL: "https://lore.example.test",
+          LORE_WORKSPACE_ID: WORKSPACE_ID,
+          LORE_AGENT_TOKEN: AGENT_TOKEN,
+        },
+        fetch: fetchMock,
+        io: captured.io,
+      },
+    ),
+  ).toBe(0);
+  const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(url.pathname).toBe("/api/v1/episodes/search");
+  expect(init.method).toBe("POST");
+  expect(new Headers(init.headers).get("x-lore-workspace-id")).toBe(WORKSPACE_ID);
+  expect(JSON.parse(String(init.body))).toEqual({
+    query: "发版",
+    scope: "private",
+    metadata: { project: "lore" },
+    limit: 3,
+  });
+  expect(JSON.parse(captured.stdout.join(""))).toEqual([]);
+});

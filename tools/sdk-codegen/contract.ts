@@ -150,11 +150,13 @@ export function clientContract(document: unknown) {
         `${memories}/[q]/schema/maxLength`,
         `${context}/query/maxLength`,
         `${context}/memoryQuery/maxLength`,
+        `${schemas}/SearchEpisodeEvidenceInput/properties/query/maxLength`,
       ]),
       // One bound serves the Memory list and search, and the Episode list.
       memoryListLimit: same(integer, document, [
         `${memories}/[limit]/schema/maximum`,
         "/paths/~1api~1v1~1episodes/get/parameters/[limit]/schema/maximum",
+        `${schemas}/SearchEpisodeEvidenceInput/properties/limit/maximum`,
       ]),
       // One default serves the Memory list and the Episode list; a search has its own.
       memoryListLimitDefault: same(integer, document, [

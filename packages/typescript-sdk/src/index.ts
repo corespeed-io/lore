@@ -31,6 +31,12 @@ export type Episode = Schema<"Episode">;
 export type EpisodeSummary = Schema<"EpisodeSummary">;
 export type EpisodeKind = EpisodeSummary["kind"];
 export type Observation = Schema<"Observation">;
+export type EpisodeEvidenceSearchResult = Schema<"EpisodeEvidenceSearchResult">;
+export type EpisodeEvidenceExcerpt = Schema<"EpisodeEvidenceExcerpt">;
+export type EpisodeEvidenceIndex = Schema<"EpisodeEvidenceIndex">;
+export type SearchEpisodeEvidenceInput = Schema<"SearchEpisodeEvidenceInput"> & {
+  signal?: AbortSignal;
+};
 export type ObservationKind = Observation["kind"];
 export type RecordEpisodeInput = Schema<"RecordEpisodeInput">;
 export type CreateMemoryInput = Schema<"CreateMemoryInput">;
@@ -1176,6 +1182,55 @@ export class LoreWorkspaceClient {
       { workspaceId: this.workspaceId, signal: input.signal },
     );
     return { episodes: data, nextCursor: response.headers.get("x-lore-next-cursor") };
+  }
+
+  async searchEpisodeEvidence(
+    input: SearchEpisodeEvidenceInput,
+  ): Promise<readonly EpisodeEvidenceSearchResult[]> {
+    const query = input.query.trim();
+    if (query.length > LIMITS.memorySearchQueryLength) {
+      throw new TypeError(`query exceeds ${LIMITS.memorySearchQueryLength} characters`);
+    }
+    const limit = normalizedLimit(input.limit, LIMITS.memorySearchLimitDefault);
+    if (input.scope !== undefined && !LORE_CONTRACT.vocabularies.memoryScopes.includes(input.scope))
+      throw new TypeError("Invalid scope");
+    if (
+      input.metadata !== undefined &&
+      JSON.stringify(input.metadata).length > LIMITS.memoryMetadataSerializedLength
+    ) {
+      throw new TypeError(
+        `metadata exceeds ${LIMITS.memoryMetadataSerializedLength} serialized characters`,
+      );
+    }
+    return (
+      await this.transport.json<readonly EpisodeEvidenceSearchResult[]>("api/v1/episodes/search", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        signal: input.signal,
+        body: {
+          query,
+          limit,
+          ...(input.scope === undefined ? {} : { scope: input.scope }),
+          ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        },
+      })
+    ).data;
+  }
+
+  async indexEpisodeEvidence(
+    episodeId: string,
+    signal?: AbortSignal,
+  ): Promise<EpisodeEvidenceIndex> {
+    return (
+      await this.transport.json<EpisodeEvidenceIndex>(
+        `api/v1/episodes/${normalizedUuid(episodeId, "episodeId")}/index`,
+        {
+          method: "POST",
+          workspaceId: this.workspaceId,
+          signal,
+        },
+      )
+    ).data;
   }
 
   async recordEpisode(input: RecordEpisodeInput, options: MutationOptions = {}): Promise<Episode> {

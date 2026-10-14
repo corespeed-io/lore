@@ -6,7 +6,15 @@ import {
 } from "../capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "../db";
 import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
-import { memorySearchLimit, memorySearchQuery } from "../memory-input";
+import {
+  memorySearchLimit,
+  memorySearchQuery,
+  validateMemoryMetadata,
+  validateMemoryScope,
+} from "../memory-input";
+import type { MemoryScope } from "../memory-types";
+import { cjkLexicalGrams } from "../retrieval/query";
+import { utcTimestampSql } from "../timestamp";
 import {
   boundedInteger,
   boundedNumber,
@@ -18,8 +26,8 @@ import { embeddingVectorLiteral, embeddingVectorLiterals } from "../vector";
 export const EPISODE_EVIDENCE_INDEX_REVISION =
   `lore-episode-evidence-v1+${MEMORY_CHUNKING_REVISION}` as const;
 export const EPISODE_EVIDENCE_RETRIEVAL_POLICY = {
-  revision: "episode-hybrid-grouped-evidence-v1",
-  candidateGeneration: "independent-rls-and-source-scoped-lexical-dense",
+  revision: "episode-hybrid-grouped-evidence-v2",
+  candidateGeneration: "independent-rls-and-source-scoped-lexical-cjk-dense",
   fusion: "weighted-rrf-with-optional-planning-and-reranking",
   grouping: "episode-or-explicit-metadata-source-key",
 } as const;
@@ -44,8 +52,21 @@ export interface SearchEpisodeEvidence {
   query: string;
   limit?: number;
   metadataFilter?: Record<string, unknown>;
+  scope?: MemoryScope;
   groupMetadataKey?: string;
   sourceKeys?: readonly string[];
+}
+
+export interface EpisodeEvidenceExcerpt {
+  indexRevision: typeof EPISODE_EVIDENCE_INDEX_REVISION;
+  episodeId: string;
+  observationId: string;
+  observationOrdinal: number;
+  observedAt: string;
+  chunkStartOrdinal: number;
+  chunkEndOrdinal: number;
+  content: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface EpisodeEvidenceSearchResult {
@@ -54,6 +75,7 @@ export interface EpisodeEvidenceSearchResult {
   observationIds: string[];
   metadata: Record<string, unknown>;
   evidence: string;
+  excerpts: EpisodeEvidenceExcerpt[];
   score: number;
   rerankScore?: number;
 }
@@ -101,6 +123,10 @@ interface PersistedEvidenceChunk {
 }
 
 interface SearchRow {
+  observation_ordinal: number;
+  observed_at: string;
+  chunk_start_ordinal: number;
+  chunk_end_ordinal: number;
   episode_id: string;
   observation_id: string;
   metadata: Record<string, unknown>;
@@ -258,6 +284,17 @@ function groupRows(
   const groups = new Map<string, EpisodeEvidenceSearchResult>();
   for (const row of rows) {
     const sourceKey = sourceKeyFor(row, groupMetadataKey);
+    const excerpt: EpisodeEvidenceExcerpt = {
+      indexRevision: EPISODE_EVIDENCE_INDEX_REVISION,
+      episodeId: row.episode_id,
+      observationId: row.observation_id,
+      observationOrdinal: row.observation_ordinal,
+      observedAt: row.observed_at,
+      chunkStartOrdinal: row.chunk_start_ordinal,
+      chunkEndOrdinal: row.chunk_end_ordinal,
+      content: row.evidence,
+      metadata: row.metadata,
+    };
     const existing = groups.get(sourceKey);
     if (!existing) {
       groups.set(sourceKey, {
@@ -266,6 +303,7 @@ function groupRows(
         observationIds: [row.observation_id],
         metadata: row.metadata,
         evidence: row.evidence,
+        excerpts: [excerpt],
         score: Number(row.score),
       });
       continue;
@@ -276,6 +314,7 @@ function groupRows(
       !existing.observationIds.includes(row.observation_id)
     ) {
       existing.observationIds.push(row.observation_id);
+      existing.excerpts.push(excerpt);
       existing.evidence += `\n\n${row.evidence}`;
     }
     existing.score = Math.max(existing.score, Number(row.score));
@@ -296,6 +335,7 @@ async function searchOneQuery(input: {
   metadataFilter: Record<string, unknown> | null;
   groupMetadataKey?: string | undefined;
   sourceKeys: readonly string[];
+  scope: MemoryScope | undefined;
   embeddingProvider?: EmbeddingProvider | undefined;
   embeddingDimensions: number;
 }): Promise<EpisodeEvidenceSearchResult[]> {
@@ -319,6 +359,7 @@ async function searchOneQuery(input: {
         AND episode.workspace_id = chunk.workspace_id
        WHERE chunk.workspace_id = $2
          AND chunk.index_revision = $11
+         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
          AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
          AND (
            $10::text IS NULL
@@ -350,6 +391,7 @@ async function searchOneQuery(input: {
         AND episode.workspace_id = chunk.workspace_id
        WHERE chunk.workspace_id = $2
          AND chunk.index_revision = $11
+         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
          AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
          AND (
            $10::text IS NULL
@@ -360,6 +402,29 @@ async function searchOneQuery(input: {
        ORDER BY ts_rank_cd(chunk.search_vector_english, websearch_to_tsquery('english', $1), 32) DESC,
                 observation.observed_at DESC, chunk.observation_ordinal DESC,
                 chunk.chunk_ordinal DESC, chunk.id
+       LIMIT $4
+     ),
+     cjk_lexical_candidates AS (
+       SELECT chunk.id AS chunk_id, chunk.episode_id, chunk.observation_id,
+         row_number() OVER (ORDER BY matches.count DESC, observation.observed_at DESC,
+           chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id) AS candidate_rank
+       FROM episode_evidence_chunks chunk
+       JOIN observations observation ON observation.id = chunk.observation_id
+         AND observation.workspace_id = chunk.workspace_id
+       JOIN episodes episode ON episode.id = chunk.episode_id
+         AND episode.workspace_id = chunk.workspace_id
+       CROSS JOIN LATERAL (
+         SELECT count(*) AS count FROM unnest($15::text[]) gram
+         WHERE strpos(normalize(chunk.content, NFC), gram) > 0
+       ) matches
+       WHERE chunk.workspace_id = $2 AND chunk.index_revision = $11
+         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
+         AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
+         AND ($10::text IS NULL OR cardinality($12::text[]) = 0
+           OR observation.metadata->>$10 = ANY($12::text[]))
+         AND matches.count > 0
+       ORDER BY matches.count DESC, observation.observed_at DESC,
+         chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
        LIMIT $4
      ),
      active_semantic_chunks AS MATERIALIZED (
@@ -385,6 +450,7 @@ async function searchOneQuery(input: {
        WHERE $3::text IS NOT NULL
          AND chunk.workspace_id = $2
          AND chunk.index_revision = $11
+         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
          AND generation.embedding_provider = $6
          AND generation.embedding_model = $7
          AND generation.embedding_revision = $8
@@ -423,6 +489,8 @@ async function searchOneQuery(input: {
          UNION ALL
          SELECT * FROM english_lexical_candidates
          UNION ALL
+         SELECT * FROM cjk_lexical_candidates
+         UNION ALL
          SELECT * FROM semantic_candidates
        ) candidates
        GROUP BY chunk_id, episode_id, observation_id
@@ -438,6 +506,10 @@ async function searchOneQuery(input: {
        ranked.episode_id,
        ranked.observation_id,
        observation.metadata,
+       observation.ordinal AS observation_ordinal,
+       ${utcTimestampSql("observation.observed_at")} AS observed_at,
+       evidence.chunk_start_ordinal,
+       evidence.chunk_end_ordinal,
        ranked.score,
        evidence.content AS evidence
      FROM ranked_observations ranked
@@ -445,7 +517,9 @@ async function searchOneQuery(input: {
        ON observation.id = ranked.observation_id
       AND observation.workspace_id = $2
      JOIN LATERAL (
-       SELECT string_agg(selected.content, '' ORDER BY selected.chunk_ordinal, selected.id) AS content
+       SELECT string_agg(selected.content, '' ORDER BY selected.chunk_ordinal, selected.id) AS content,
+         min(selected.chunk_ordinal) AS chunk_start_ordinal,
+         max(selected.chunk_ordinal) AS chunk_end_ordinal
        FROM (
          SELECT anchor_chunk.chunk_ordinal
          FROM reciprocal_rank anchor
@@ -477,6 +551,8 @@ async function searchOneQuery(input: {
       [...input.sourceKeys],
       input.resultLimit * input.evidenceTopObservations * 4,
       input.evidenceNeighborChunks,
+      cjkLexicalGrams(input.query),
+      input.scope ?? null,
     ],
   );
   return groupRows(
@@ -781,6 +857,8 @@ export function createEpisodeEvidenceModule(
     async search(input: SearchEpisodeEvidence): Promise<EpisodeEvidenceSearchResult[]> {
       const query = memorySearchQuery(input.query);
       const limit = memorySearchLimit(input.limit);
+      if (input.metadataFilter !== undefined) validateMemoryMetadata(input.metadataFilter);
+      if (input.scope !== undefined) validateMemoryScope(input.scope);
       const sourceKeys = [...new Set(input.sourceKeys ?? [])];
       if (sourceKeys.length && !input.groupMetadataKey) {
         throw new LoreValidationError("sourceKeys", "sourceKeys require groupMetadataKey");
@@ -835,6 +913,7 @@ export function createEpisodeEvidenceModule(
               metadataFilter: input.metadataFilter ?? null,
               groupMetadataKey: input.groupMetadataKey,
               sourceKeys,
+              scope: input.scope,
               embeddingProvider,
               embeddingDimensions,
             }),

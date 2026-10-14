@@ -142,9 +142,43 @@ const dependencies = await memories.queryCodeDependencies({
 ```
 
 The Workspace client also provides `listEpisodes`, `recordEpisode`, `getEpisode`,
-bounded `getObservations`, and `forgetEpisode`, plus `listMemoryProposals`,
+bounded `getObservations`, `searchEpisodeEvidence`, `indexEpisodeEvidence`, and `forgetEpisode`, plus `listMemoryProposals`,
 `proposeMemory`, and `reviewMemoryProposal` alongside the canonical Memory methods.
-An Observation is durable raw evidence, not searchable Memory. Observation evidence is
+An Observation is durable raw evidence, separate from canonical Memory. New
+Episodes are indexed in their recording transaction and can immediately be searched
+with `searchEpisodeEvidence` (HTTP `POST /api/v1/episodes/search`):
+
+```ts
+const evidence = await memories.searchEpisodeEvidence({
+  query: "release",
+  limit: 5,
+  metadata: { project: "lore" }, // Observation metadata, filtered before top-k
+});
+for (const result of evidence) {
+  for (const excerpt of result.excerpts) {
+    console.log(excerpt.observationId, excerpt.observedAt, excerpt.content);
+  }
+}
+```
+
+This public path uses English keyword and CJK substring retrieval, with no model
+call. It is not semantic question answering. Each excerpt includes Episode and
+Observation ids plus `indexRevision` and inclusive `chunkStartOrdinal` / `chunkEndOrdinal` under
+`lore-episode-evidence-v1+lore-memory-chunking-v2`. Source timestamps help compare
+claims; newer evidence is not automatically authoritative. Search does not modify
+Memory, accept Proposals, or resolve contradictions. Agents can call the separate
+read-only MCP tool `lore_search_evidence`; continue using `lore_search` for canonical
+decisions and conventions. A host that needs both should explicitly call both and
+keep their results distinguishable.
+
+Previously recorded Episodes need an explicit owner-authorized
+`indexEpisodeEvidence(episodeId)` (CLI `lore episode index <episode-id>`) before
+search. Repeated builds are safe. Search never indexes as a side effect. The
+existing optional hybrid Core path used by evaluation is unchanged; this public
+slice does not add background Episode embeddings. Retrieval currently scans
+RLS-visible chunks; do not assume the existing GIN indexes accelerate this path.
+
+Observation evidence is
 resolved again under the reviewing human's current RLS visibility. Proposal Code
 Evidence is instead frozen as an exact commit/path/symbol/digest anchor at submission
 and copied transactionally onto the accepted Memory without re-resolution. All three
@@ -298,6 +332,8 @@ printf %s "suggested fact" | bun --no-env-file packages/cli/dist/bin.js memory p
 printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":"raw evidence"}]}' \
   | bun --no-env-file packages/cli/dist/bin.js episode record --stdin --idempotency-key episode-1
 bun --no-env-file packages/cli/dist/bin.js episode list --scope private
+bun --no-env-file packages/cli/dist/bin.js episode search "release" --limit 5
+bun --no-env-file packages/cli/dist/bin.js episode index EPISODE_UUID
 bun --no-env-file packages/cli/dist/bin.js code dependencies callers \
   --repository corespeed/lore --commit FULL_COMMIT_OID \
   --symbol createMemoryModule --limit 50
@@ -334,7 +370,8 @@ bun --no-env-file packages/mcp/dist/bin.js
 
 It exposes:
 
-- `lore_list`, `lore_search`, and `lore_get` as read-only tools;
+- `lore_list`, `lore_search`, and `lore_get` as read-only Memory tools;
+- `lore_search_evidence` as separate read-only retrieval of original Observation excerpts;
 - `lore_observe` to durably record a bounded, non-canonical Episode;
 - `lore_remember` as a non-destructive mutation tool;
 - `lore_propose` as a non-destructive submission for explicit human review;

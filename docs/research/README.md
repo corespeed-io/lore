@@ -9,6 +9,8 @@ revision and workload. Proposed experiments are not shipped capabilities.
 ## Retained benchmark reports
 
 - [Memory chunking v2](memory-chunking-v2-benchmark.md) — reconstruction and retrieval checks.
+- [Frozen facts plus Episode evidence](memory-episode-dual-retrieval-baseline.md) — paired 500-question LongMemEval-S accuracy, source recall, and input cost.
+- [Memory hits and raw sources](memory-source-expansion.md) — source expansion, keyword rewrite, and dense raw arms against frozen Memory, 500 questions.
 - [Code-aware Memory foundation](code-aware-memory-evaluation-baseline.md) — Artifact and citation correctness.
 - [Code dependency stress](code-aware-memory-dependency-stress-baseline.md) — adversarial dependency resolution.
 - [Code dependency graph](code-dependency-graph-benchmark.md) — graph correctness, coverage, and cost.

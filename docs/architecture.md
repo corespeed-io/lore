@@ -289,7 +289,15 @@ storage requirements for the capabilities that use them.
 
 Episode admission is an OSS operation: `episodes/service.ts` validates with Core's
 `normalizedEpisode`, then calls the authorization-bearing `lore.record_episode`
-function and records request replay. Core's Observation module provides validation,
+function, builds its exact lexical evidence chunks, and records request replay in
+one transaction without model calls. Public Episode evidence search is a separate
+read-only POST operation (`/api/v1/episodes/search`), with simple/English FTS and
+CJK substring candidates filtered by RLS, Episode scope, and Observation metadata
+before top-k. Results retain exact source chunk locators and source timestamps.
+It does not feed the Memory/Code context packet or promote facts into Memory.
+Owner-only `/api/v1/episodes/{id}/index` rebuilds historical missing chunks;
+search never writes. There is no public Episode embedding maintenance lane yet.
+Core's Observation module provides validation,
 store-bound reads, and deletion; its Episode evidence index still owns partitioning,
 embedding, and retrieval algorithms. Core maintenance owns embedding lanes,
 leases, retries, seeding, and generation activation/pruning behind one runner,

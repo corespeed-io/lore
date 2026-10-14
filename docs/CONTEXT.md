@@ -122,7 +122,10 @@ _Avoid_: Source, Agent session, conversation Memory
 **Observation**:
 An immutable, durable piece of evidence recorded inside one Episode, such as a
 message, tool result, document fragment, or event. It remains until explicitly
-forgotten, may support a Memory Proposal, and is not canonical Memory.
+forgotten, may support a Memory Proposal, and is not canonical Memory. Raw evidence
+retrieval returns exact Observation excerpts with their Episode/Observation ids,
+source timestamp, and index revision and inclusive chunk ordinals. A timestamp describes when the
+source was observed; it does not decide which conflicting claim is correct.
 _Avoid_: Source, raw Memory, automatic Memory
 
 **Memory Proposal**:
