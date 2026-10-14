@@ -49,6 +49,10 @@ Commands:
   memory link <source-memory-id> <target-memory-id> [--kind KIND] [--weight N] [--metadata JSON]
   memory unlink <source-memory-id> <target-memory-id> [--kind KIND]
   memory links <memory-id> [--direction outbound|inbound] [--limit N] [--cursor CURSOR]
+  memory cite <memory-id> <observation-id>
+  memory uncite <memory-id> <observation-id>
+  memory evidence <memory-id>
+  memory sources <memory-id>... [--max-characters N]
   episode search <query>|--stdin [--limit N] [--scope shared|private] [--metadata JSON]
   episode index <episode-id>
   episode list [--limit N] [--cursor CURSOR] [--kind conversation|workflow|document|event] [--scope shared|private]
@@ -321,6 +325,7 @@ export async function runLoreCli(
         kind: { type: "string", multiple: true },
         "idempotency-key": { type: "string" },
         limit: { type: "string" },
+        "max-characters": { type: "string" },
         metadata: { type: "string" },
         offset: { type: "string" },
         "observation-evidence": { type: "string", multiple: true },
@@ -781,6 +786,50 @@ export async function runLoreCli(
         await workspace.unlinkMemories(key);
         output(io, { deleted: true }, pretty);
       }
+      return 0;
+    }
+
+    if (group === "memory" && (action === "cite" || action === "uncite")) {
+      exactPositionals(parsed.positionals, 4, `memory ${action} <memory-id> <observation-id>`);
+      allowedOptions(parsed.values, []);
+      const key = {
+        memoryId: requiredPosition(parsed.positionals, 2, "memory id"),
+        observationId: requiredPosition(parsed.positionals, 3, "observation id"),
+      };
+      if (action === "cite") {
+        output(io, await workspace.citeMemoryObservationEvidence(key), pretty);
+      } else {
+        await workspace.removeMemoryObservationEvidence(key);
+        output(io, { deleted: true }, pretty);
+      }
+      return 0;
+    }
+    if (group === "memory" && action === "evidence") {
+      exactPositionals(parsed.positionals, 3, "memory evidence <memory-id>");
+      allowedOptions(parsed.values, []);
+      output(
+        io,
+        await workspace.listMemoryObservationEvidence(
+          requiredPosition(parsed.positionals, 2, "memory id"),
+        ),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "memory" && action === "sources") {
+      if (parsed.positionals.length < 3) {
+        throw new CliUsageError("Usage: memory sources <memory-id>... [--max-characters N]");
+      }
+      allowedOptions(parsed.values, ["max-characters"]);
+      const maximumCharacters = optionInteger(parsed.values["max-characters"], "--max-characters");
+      output(
+        io,
+        await workspace.readMemorySources({
+          memoryIds: parsed.positionals.slice(2),
+          ...(maximumCharacters === undefined ? {} : { maximumCharacters }),
+        }),
+        pretty,
+      );
       return 0;
     }
 

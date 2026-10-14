@@ -3,7 +3,7 @@ import { methodNotAllowed } from "hono/method-not-allowed";
 import { agentCredentials, agents } from "@/modules/agents/routes";
 import { code, codeEvidence, memoryCodeEvidence } from "@/modules/code/routes";
 import { context } from "@/modules/context/routes";
-import { episodes, observations } from "@/modules/episodes/routes";
+import { episodes, memoryObservationEvidence, observations } from "@/modules/episodes/routes";
 import { evaluations } from "@/modules/evaluations/routes";
 import { graph, memoryLinks } from "@/modules/graph/routes";
 import { memories } from "@/modules/memories/routes";
@@ -63,6 +63,7 @@ export function createApi(dependencies: ApiDependencies) {
     .route("/episodes", episodes)
     .route("/observations", observations)
     .route("/memories", memoryCodeEvidence)
+    .route("/memories", memoryObservationEvidence)
     .route("/memories", memoryLinks)
     .route("/memory-proposals", proposals)
     .route("/workspaces", portability);

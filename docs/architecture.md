@@ -297,6 +297,11 @@ before top-k. Results retain exact source chunk locators and source timestamps.
 It does not feed the Memory/Code context packet or promote facts into Memory.
 Owner-only `/api/v1/episodes/{id}/index` builds an Episode's exact lexical chunks
 on request, idempotently and without model calls; search never writes. There is no public Episode embedding maintenance lane yet.
+Memory Observation Evidence (`episodes/observation-evidence.ts`, migration 0014) lets
+a Memory cite the Observations it came from and lets an Actor read them back, bounded,
+when a Memory lacks a detail. It is OSS SQL under RLS, like Memory Code Evidence:
+both endpoints authorize through their own tables' policies, and Proposal acceptance
+copies a Proposal's surviving Observation evidence in its transaction.
 Core's Observation module provides validation,
 store-bound reads, and deletion; its Episode evidence index still owns partitioning,
 embedding, and retrieval algorithms. Core maintenance owns embedding lanes,

@@ -7,10 +7,12 @@ import {
   MAX_OBSERVATION_CONTENT_CHARACTERS,
   OBSERVATION_KINDS,
 } from "@corespeed/lore-core/episodes";
+import { MEMORY_OBSERVATION_EVIDENCE_LIMITS } from "@/modules/episodes/observation-evidence";
 import { CURSOR_MAXIMUM_LENGTH } from "@/server/api/input";
 import {
   idempotencyHeader,
   jsonResponse,
+  memoryIdParameter,
   memoryScopeSchema,
   metadataSchema,
   requestBody,
@@ -47,7 +49,7 @@ const episodeSummaryRequired = [
   "createdAt",
 ] as const;
 
-export const episodesPaths = {
+const recordingPaths = {
   "/api/v1/episodes/search": {
     post: {
       operationId: "searchEpisodeEvidence",
@@ -216,7 +218,7 @@ export const episodesPaths = {
   },
 };
 
-export const episodesSchemas = {
+const recordingSchemas = {
   SearchEpisodeEvidenceInput: {
     type: "object",
     additionalProperties: false,
@@ -376,3 +378,168 @@ export const episodesSchemas = {
     },
   },
 };
+
+const evidenceLimits = MEMORY_OBSERVATION_EVIDENCE_LIMITS;
+
+const observationEvidenceKeyParameters = [
+  workspaceHeader,
+  memoryIdParameter,
+  {
+    name: "observationId",
+    in: "path",
+    required: true,
+    schema: { type: "string", format: "uuid" },
+  },
+];
+
+const observationEvidencePaths = {
+  "/api/v1/memories/observation-evidence/read": {
+    post: {
+      operationId: "readMemoryObservationEvidence",
+      description: `Read the original Observations the given Memories cite, for an answer the Memories alone could not give. Read-only. Memories are read in the given order, such as search rank, and each one's Observations oldest observed first; an Observation cited by several is returned once with every citing Memory. Whole Observations fill the character budget (code points, default ${evidenceLimits.defaultReadCharacters}); the first one past it is cut to fit and the rest are listed as omitted. A Memory or Observation the Actor cannot see contributes nothing. The content is raw recorded evidence, not canonical Memory.`,
+      parameters: [workspaceHeader],
+      requestBody: requestBody({ $ref: "#/components/schemas/ReadMemoryObservationEvidenceInput" }),
+      responses: {
+        "200": jsonResponse("Cited Observations within the budget", {
+          $ref: "#/components/schemas/MemorySourceRead",
+        }),
+        "400": { $ref: "#/components/responses/Error" },
+      },
+    },
+  },
+  "/api/v1/memories/{memoryId}/observation-evidence": {
+    get: {
+      operationId: "listMemoryObservationEvidence",
+      description:
+        "The Observations a visible Memory cites, oldest observed first. A citation is listed only while its Observation's Episode is visible to the Actor. A missing or invisible Memory is a 404.",
+      parameters: [workspaceHeader, memoryIdParameter],
+      responses: {
+        "200": jsonResponse("The Memory's visible Observation citations", {
+          type: "array",
+          maxItems: evidenceLimits.maximumObservationsPerMemory,
+          items: { $ref: "#/components/schemas/MemoryObservationEvidence" },
+        }),
+        "400": { $ref: "#/components/responses/Error" },
+        "404": { $ref: "#/components/responses/Error" },
+      },
+    },
+  },
+  "/api/v1/memories/{memoryId}/observation-evidence/{observationId}": {
+    put: {
+      operationId: "citeMemoryObservationEvidence",
+      description: `Record that the Memory came from this Observation; repeating it is safe. The Memory must be writable and the Observation visible to the Actor; a missing, invisible, or unwritable endpoint is one 404. A Memory cites at most ${evidenceLimits.maximumObservationsPerMemory} Observations, counting only citations the Actor can see; one more is a 409 memory_observation_evidence_capacity_exceeded. Forgetting the Memory or the Observation's Episode removes the citation.`,
+      parameters: observationEvidenceKeyParameters,
+      responses: {
+        "200": jsonResponse("Existing citation, unchanged", {
+          $ref: "#/components/schemas/MemoryObservationEvidence",
+        }),
+        "201": jsonResponse("Created citation", {
+          $ref: "#/components/schemas/MemoryObservationEvidence",
+        }),
+        "400": { $ref: "#/components/responses/Error" },
+        "404": { $ref: "#/components/responses/Error" },
+        "409": { $ref: "#/components/responses/Error" },
+      },
+    },
+    delete: {
+      operationId: "removeMemoryObservationEvidence",
+      description:
+        "Remove the citation. A citation that does not exist, or whose Memory this Actor may not write or whose Observation it cannot see, is one 404.",
+      parameters: observationEvidenceKeyParameters,
+      responses: {
+        "204": { description: "Removed" },
+        "400": { $ref: "#/components/responses/Error" },
+        "404": { $ref: "#/components/responses/Error" },
+      },
+    },
+  },
+};
+
+const observationEvidenceSchemas = {
+  MemoryObservationEvidence: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "memoryId",
+      "observationId",
+      "episodeId",
+      "observationOrdinal",
+      "observationKind",
+      "observedAt",
+      "createdByUserId",
+      "createdByAgentId",
+      "createdAt",
+    ],
+    properties: {
+      memoryId: { type: "string", format: "uuid" },
+      observationId: { type: "string", format: "uuid" },
+      episodeId: { type: "string", format: "uuid" },
+      observationOrdinal: { type: "integer", minimum: 0 },
+      observationKind: { type: "string", enum: [...OBSERVATION_KINDS] },
+      observedAt: { type: "string", format: "date-time" },
+      createdByUserId: { type: "string", format: "uuid" },
+      createdByAgentId: { oneOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
+      createdAt: { type: "string", format: "date-time" },
+    },
+  },
+  ReadMemoryObservationEvidenceInput: {
+    type: "object",
+    additionalProperties: false,
+    required: ["memoryIds"],
+    properties: {
+      memoryIds: {
+        type: "array",
+        minItems: 1,
+        maxItems: evidenceLimits.maximumReadMemories,
+        uniqueItems: true,
+        items: { type: "string", format: "uuid" },
+      },
+      maximumCharacters: {
+        type: "integer",
+        minimum: 1,
+        maximum: evidenceLimits.maximumReadCharacters,
+        default: evidenceLimits.defaultReadCharacters,
+      },
+    },
+  },
+  MemorySourceObservation: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "observationId",
+      "episodeId",
+      "observationOrdinal",
+      "observationKind",
+      "observedAt",
+      "memoryIds",
+      "content",
+      "contentTruncated",
+    ],
+    properties: {
+      observationId: { type: "string", format: "uuid" },
+      episodeId: { type: "string", format: "uuid" },
+      observationOrdinal: { type: "integer", minimum: 0 },
+      observationKind: { type: "string", enum: [...OBSERVATION_KINDS] },
+      observedAt: { type: "string", format: "date-time" },
+      memoryIds: {
+        type: "array",
+        minItems: 1,
+        items: { type: "string", format: "uuid" },
+      },
+      content: { type: "string", maxLength: MAX_OBSERVATION_CONTENT_CHARACTERS },
+      contentTruncated: { type: "boolean" },
+    },
+  },
+  MemorySourceRead: {
+    type: "object",
+    additionalProperties: false,
+    required: ["sources", "omittedObservationIds"],
+    properties: {
+      sources: { type: "array", items: { $ref: "#/components/schemas/MemorySourceObservation" } },
+      omittedObservationIds: { type: "array", items: { type: "string", format: "uuid" } },
+    },
+  },
+};
+
+export const episodesPaths = { ...recordingPaths, ...observationEvidencePaths };
+export const episodesSchemas = { ...recordingSchemas, ...observationEvidenceSchemas };

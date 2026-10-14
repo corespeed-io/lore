@@ -11,6 +11,7 @@ import {
 } from "@corespeed/lore-core/episodes";
 import { Hono } from "hono";
 import { createEpisodeEvidenceModule } from "@/modules/episodes/evidence";
+import { createMemoryObservationEvidenceModule } from "@/modules/episodes/observation-evidence";
 import { createObservationModule } from "@/modules/episodes/service";
 import type { ApiEnv } from "@/server/api/dependencies";
 import {
@@ -187,3 +188,72 @@ export const observations = new Hono<ApiEnv>().get("/", async (c) => {
   );
   return c.json(visible);
 });
+
+/**
+ * Memory Observation Evidence, versioned-only under /api/v1/memories. A citation
+ * is addressed by its natural key (Memory, Observation), so PUT and DELETE are
+ * safe to repeat and take no Idempotency-Key.
+ */
+export const memoryObservationEvidence = new Hono<ApiEnv>()
+  .post("/observation-evidence/read", async (c) => {
+    const actor = await c.var.resolveActor();
+    const body = await jsonObject(c.req.raw);
+    for (const key of Object.keys(body)) {
+      if (key !== "memoryIds" && key !== "maximumCharacters") {
+        throw new BadRequestError("A source read accepts only memoryIds and maximumCharacters");
+      }
+    }
+    if (!Array.isArray(body.memoryIds) || body.memoryIds.some((id) => typeof id !== "string")) {
+      throw new BadRequestError("memoryIds must be an array of UUIDs");
+    }
+    if (body.maximumCharacters !== undefined && typeof body.maximumCharacters !== "number") {
+      throw new BadRequestError("maximumCharacters must be a number");
+    }
+    const memoryIds = body.memoryIds as string[];
+    const maximumCharacters = body.maximumCharacters;
+    const evidence = createMemoryObservationEvidenceModule(await c.var.database());
+    const read = await observeOperation("memory-observation-evidence.read", () =>
+      evidence.read(actor, {
+        memoryIds,
+        ...(maximumCharacters === undefined ? {} : { maximumCharacters }),
+      }),
+    );
+    return c.json(read);
+  })
+  .get("/:id/observation-evidence", async (c) => {
+    const memoryId = uuidString(c.req.param("id"), "memoryId");
+    const actor = await c.var.resolveActor();
+    const evidence = createMemoryObservationEvidenceModule(await c.var.database());
+    const listed = await observeOperation("memory-observation-evidence.list", () =>
+      evidence.list(actor, { memoryId }),
+    );
+    if (!listed) throw new NotFoundError("Memory not found");
+    return c.json(listed);
+  })
+  .put("/:id/observation-evidence/:observationId", async (c) => {
+    const key = {
+      memoryId: uuidString(c.req.param("id"), "memoryId"),
+      observationId: uuidString(c.req.param("observationId"), "observationId"),
+    };
+    const actor = await c.var.resolveActor();
+    const evidence = createMemoryObservationEvidenceModule(await c.var.database());
+    const cited = await observeOperation("memory-observation-evidence.cite", () =>
+      evidence.cite(actor, key),
+    );
+    // One answer for a missing or unwritable Memory and a missing or invisible Observation.
+    if (!cited) throw new NotFoundError("Memory or Observation not found");
+    return c.json(cited.evidence, cited.created ? 201 : 200);
+  })
+  .delete("/:id/observation-evidence/:observationId", async (c) => {
+    const key = {
+      memoryId: uuidString(c.req.param("id"), "memoryId"),
+      observationId: uuidString(c.req.param("observationId"), "observationId"),
+    };
+    const actor = await c.var.resolveActor();
+    const evidence = createMemoryObservationEvidenceModule(await c.var.database());
+    const removed = await observeOperation("memory-observation-evidence.remove", () =>
+      evidence.remove(actor, key),
+    );
+    if (!removed) throw new NotFoundError("Memory Observation Evidence not found");
+    return c.body(null, 204);
+  });

@@ -3,7 +3,7 @@ import { observeOperation, runtimeDependencyStatus } from "@/server/telemetry/te
 import { DEPLOYMENT_FEATURES, DEPLOYMENT_LIMITS, MEMORY_CHUNKING_CAPABILITY } from "./limits";
 
 export const LORE_API_VERSION = "v1";
-export const LORE_SCHEMA_REVISION = 13;
+export const LORE_SCHEMA_REVISION = 14;
 
 function isSchemaRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
@@ -89,6 +89,7 @@ export const REQUIRED_TENANT_TABLES = [
   "memory_events",
   "memory_import_provenance",
   "memory_links",
+  "memory_observation_evidence",
   "memory_proposal_code_evidence",
   "memory_proposal_evidence",
   "memory_proposal_observation_evidence",

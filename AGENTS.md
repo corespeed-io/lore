@@ -255,6 +255,14 @@ been removed. Lore now has a native implementation, split into two concepts
   index is an expression index because a stored generated column would rewrite
   `memory_chunks` under ACCESS EXCLUSIVE. Until 0013 commits the function answers
   the same candidates by scanning.
+  `0014_memory_observation_evidence.sql` (transactional, 5s `lock_timeout`) adds
+  `memory_observation_evidence`, a Memory's citation of an Observation it came from,
+  ids only. RLS shows a row only while both its Memory and its Observation's Episode
+  are visible; an insert needs Memory write authority and a visible Observation and
+  records the citing Actor; `lore_app` may SELECT, INSERT, and DELETE, never UPDATE.
+  Forgetting either side cascades. Its foreign keys are added agents, users,
+  observations, memories, the order Agent deletion locks them, so it cannot deadlock
+  with request paths. It keeps `compatible_from = 9`: older instances never name it.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -266,7 +274,7 @@ been removed. Lore now has a native implementation, split into two concepts
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 13) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 14) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -285,7 +293,7 @@ been removed. Lore now has a native implementation, split into two concepts
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (13), and
+  `tests/integration/api.test.ts` pin the current revision (14), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -821,7 +829,9 @@ been removed. Lore now has a native implementation, split into two concepts
   exact commit/path/symbol/declaration/chunk-ordinal/declaration-context/content
   digests under submission-time RLS and acceptance copies
   it transactionally to Memory Code Evidence without re-resolution; it must survive
-  rebuildable Artifact pruning.
+  rebuildable Artifact pruning. Acceptance copies the Proposal's surviving Observation
+  evidence to Memory Observation Evidence in the same transaction, and fails with
+  `memory_observation_evidence_capacity_exceeded` rather than pass the per-Memory bound.
   Pending proposals never enter Memory browse/search/Graph/export/outbox. Update
   acceptance is exact-version and never silently rebases; future opt-in AutoDream
   work must use this boundary instead of silently persisting generated content.
@@ -867,7 +877,25 @@ been removed. Lore now has a native implementation, split into two concepts
   available to evaluation, without adding a background Episode embedding job.
   In the index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical
-  Memory. Any future automatic retention must be an explicit opt-in deployment policy;
+  Memory. A Memory may cite the Observations it came from (Memory Observation
+  Evidence, `src/modules/episodes/observation-evidence.ts`, migration 0014), so an
+  agent can read the original text when a Memory lacks a detail; the agent decides
+  when, never Lore (`docs/research/memory-source-expansion.md`). `PUT`/`DELETE
+  /api/v1/memories/{id}/observation-evidence/{observationId}` cite and remove by
+  natural key with no Idempotency-Key (201/200 and 204; one 404 for an unwritable
+  Memory or invisible Observation), at most 50 citations the Actor can see per Memory
+  (409 `memory_observation_evidence_capacity_exceeded`); `GET
+  .../observation-evidence` lists them; `POST /api/v1/memories/observation-evidence/read`
+  returns the cited Observations of 1 to 20 Memories in the given order, each Memory's
+  oldest observed first, each Observation once, whole until a code-point budget
+  (default 24,000, at most 100,000), the first one past it cut and the rest listed as
+  omitted, reading lengths first so no more text leaves the database than fits. SDK
+  `citeMemoryObservationEvidence`, `removeMemoryObservationEvidence`,
+  `listMemoryObservationEvidence`, and `readMemorySources`; CLI `memory
+  cite|uncite|evidence|sources`; MCP `lore_cite_evidence`, destructive
+  `lore_uncite_evidence`, and read-only `lore_read_evidence`, which `lore_search`
+  points agents to. Workspace export carries no Episodes, so it carries no citations
+  either. Any future automatic retention must be an explicit opt-in deployment policy;
 - The API route handlers and canonical OpenAPI document define one public API contract.
   `packages/typescript-sdk` generates its public types from that document and owns
   the integration client used by the frontend. `packages/cli` and the external
@@ -1279,6 +1307,7 @@ Workspace ──< Code Repository ──< Code Revision ──< Code Revision Fi
                                                                         └──< Code Dependency Edge
                  └──────────────< Code Index Job
 Memory ──< Memory Code Evidence >── Code citation anchor
+Memory ──< Memory Observation Evidence >── Observation
 ```
 
 Memory isolation rules:
@@ -1302,7 +1331,9 @@ Memory isolation rules:
   accepted Code anchors are copied atomically onto the canonical Memory.
 - An Observation is immutable evidence, not Memory. It inherits owner/scope
   visibility from its Episode, remains until explicit Episode forget, and never
-  enters ordinary Memory retrieval or Graph.
+  enters ordinary Memory retrieval or Graph. A Memory's citation of an Observation
+  is visible only while both are visible, so a shared Memory never reveals a private
+  Observation, not even its id.
 - Visibility and write authority are separate: sharing a Memory does not transfer
   ownership or grant other members permission to mutate it. Only the owner User or
   an authorized Agent acting for that User may mutate it.
@@ -1325,7 +1356,8 @@ The relational model centers on:
 - `agents`, `agent_workspace_grants`, `agent_credentials`;
 - `memories`, `memory_chunks`, `memory_links`, Memory Proposals/evidence, and
   embedding/index state;
-- `episodes` and `observations` for durable non-canonical evidence;
+- `episodes` and `observations` for durable non-canonical evidence, and
+  `memory_observation_evidence` for a Memory's citations of them;
 - `code_repositories`, `code_revisions`, `code_revision_files`,
   `code_index_generations`, `code_artifact_payloads`, `code_symbol_sets`,
   `code_symbol_payloads`, `code_dependency_sets`, `code_dependency_payloads`,

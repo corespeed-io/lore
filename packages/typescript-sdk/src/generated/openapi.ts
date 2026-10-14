@@ -423,6 +423,58 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/memories/{memoryId}/observation-evidence": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /** @description The Observations a visible Memory cites, oldest observed first. A citation is listed only while its Observation's Episode is visible to the Actor. A missing or invisible Memory is a 404. */
+        readonly get: operations["listMemoryObservationEvidence"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/memories/{memoryId}/observation-evidence/{observationId}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        /** @description Record that the Memory came from this Observation; repeating it is safe. The Memory must be writable and the Observation visible to the Actor; a missing, invisible, or unwritable endpoint is one 404. A Memory cites at most 50 Observations, counting only citations the Actor can see; one more is a 409 memory_observation_evidence_capacity_exceeded. Forgetting the Memory or the Observation's Episode removes the citation. */
+        readonly put: operations["citeMemoryObservationEvidence"];
+        readonly post?: never;
+        /** @description Remove the citation. A citation that does not exist, or whose Memory this Actor may not write or whose Observation it cannot see, is one 404. */
+        readonly delete: operations["removeMemoryObservationEvidence"];
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/memories/observation-evidence/read": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** @description Read the original Observations the given Memories cite, for an answer the Memories alone could not give. Read-only. Memories are read in the given order, such as search rank, and each one's Observations oldest observed first; an Observation cited by several is returned once with every citing Memory. Whole Observations fill the character budget (code points, default 24000); the first one past it is cut to fit and the rest are listed as omitted. A Memory or Observation the Actor cannot see contributes nothing. The content is raw recorded evidence, not canonical Memory. */
+        readonly post: operations["readMemoryObservationEvidence"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/memory-proposals": {
         readonly parameters: {
             readonly query?: never;
@@ -955,7 +1007,7 @@ export interface components {
              * @description Stable failure code. A later release may add codes, so clients must accept a code they do not know and classify it by HTTP status.
              * @enum {string}
              */
-            readonly code: "access_denied" | "agent_not_disabled" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "memory_link_capacity_exceeded" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
+            readonly code: "access_denied" | "agent_not_disabled" | "authentication_required" | "idempotency_conflict" | "internal_error" | "invalid_archive" | "invalid_request" | "memory_link_capacity_exceeded" | "memory_observation_evidence_capacity_exceeded" | "method_not_allowed" | "not_found" | "payload_too_large" | "precondition_required" | "proposal_capacity_exceeded" | "proposal_review_conflict" | "transaction_conflict" | "version_conflict" | "workspace_export_limit_exceeded";
             readonly error: string;
         };
         readonly EvaluationCase: {
@@ -1156,6 +1208,24 @@ export interface components {
             /** Format: uuid */
             readonly workspaceId: string;
         };
+        readonly MemoryObservationEvidence: {
+            /** Format: date-time */
+            readonly createdAt: string;
+            readonly createdByAgentId: string | null;
+            /** Format: uuid */
+            readonly createdByUserId: string;
+            /** Format: uuid */
+            readonly episodeId: string;
+            /** Format: uuid */
+            readonly memoryId: string;
+            /** Format: uuid */
+            readonly observationId: string;
+            /** @enum {string} */
+            readonly observationKind: "message" | "tool_call" | "tool_result" | "document_fragment" | "event";
+            readonly observationOrdinal: number;
+            /** Format: date-time */
+            readonly observedAt: string;
+        };
         readonly MemoryProposal: {
             readonly acceptedMemoryId: string | null;
             readonly baseMemoryVersion: number | null;
@@ -1275,6 +1345,24 @@ export interface components {
             readonly rerankScore?: number;
             readonly score: number;
         };
+        readonly MemorySourceObservation: {
+            readonly content: string;
+            readonly contentTruncated: boolean;
+            /** Format: uuid */
+            readonly episodeId: string;
+            readonly memoryIds: readonly string[];
+            /** Format: uuid */
+            readonly observationId: string;
+            /** @enum {string} */
+            readonly observationKind: "message" | "tool_call" | "tool_result" | "document_fragment" | "event";
+            readonly observationOrdinal: number;
+            /** Format: date-time */
+            readonly observedAt: string;
+        };
+        readonly MemorySourceRead: {
+            readonly omittedObservationIds: readonly string[];
+            readonly sources: readonly components["schemas"]["MemorySourceObservation"][];
+        };
         readonly Observation: {
             readonly content: string;
             /** Format: date-time */
@@ -1332,6 +1420,11 @@ export interface components {
             };
             /** @enum {string} */
             readonly status: "ready" | "degraded" | "unready";
+        };
+        readonly ReadMemoryObservationEvidenceInput: {
+            /** @default 24000 */
+            readonly maximumCharacters?: number;
+            readonly memoryIds: readonly string[];
         };
         readonly RecordEpisodeInput: {
             /** @enum {string} */
@@ -2635,6 +2728,121 @@ export interface operations {
             };
             readonly 400: components["responses"]["Error"];
             readonly 404: components["responses"]["Error"];
+        };
+    };
+    readonly listMemoryObservationEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description The Memory's visible Observation citations */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["MemoryObservationEvidence"][];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
+        };
+    };
+    readonly citeMemoryObservationEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+                readonly observationId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Existing citation, unchanged */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryObservationEvidence"];
+                };
+            };
+            /** @description Created citation */
+            readonly 201: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemoryObservationEvidence"];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
+            readonly 409: components["responses"]["Error"];
+        };
+    };
+    readonly removeMemoryObservationEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly memoryId: string;
+                readonly observationId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Removed */
+            readonly 204: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
+            };
+            readonly 400: components["responses"]["Error"];
+            readonly 404: components["responses"]["Error"];
+        };
+    };
+    readonly readMemoryObservationEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["ReadMemoryObservationEvidenceInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Cited Observations within the budget */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["MemorySourceRead"];
+                };
+            };
+            readonly 400: components["responses"]["Error"];
         };
     };
     readonly listMemoryProposals: {

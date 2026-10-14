@@ -187,6 +187,22 @@ export function clientContract(document: unknown) {
         `${limits}/observationContentCharacters/const`,
       ),
       observationBatchRead: integer(document, `${limits}/observationBatchRead/const`),
+      memoryObservationEvidence: integer(
+        document,
+        "/paths/~1api~1v1~1memories~1{memoryId}~1observation-evidence/get/responses/200/content/application~1json/schema/maxItems",
+      ),
+      memorySourceReadMemories: integer(
+        document,
+        `${schemas}/ReadMemoryObservationEvidenceInput/properties/memoryIds/maxItems`,
+      ),
+      memorySourceReadCharacters: integer(
+        document,
+        `${schemas}/ReadMemoryObservationEvidenceInput/properties/maximumCharacters/maximum`,
+      ),
+      memorySourceReadCharactersDefault: integer(
+        document,
+        `${schemas}/ReadMemoryObservationEvidenceInput/properties/maximumCharacters/default`,
+      ),
       codeSearchResults: integer(document, `${limits}/codeSearchResults/const`),
       codeDependencyResults: integer(document, `${limits}/codeDependencyResults/const`),
       codeQueryLength: same(integer, document, [

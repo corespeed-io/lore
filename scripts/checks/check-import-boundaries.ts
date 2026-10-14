@@ -65,7 +65,7 @@ export const MODULES: Record<string, ModuleDeclaration> = {
     ],
   },
   context: { dependsOn: ["code", "memories"], exports: [] },
-  episodes: { dependsOn: [], exports: ["browser/data.ts"] },
+  episodes: { dependsOn: [], exports: ["browser/data.ts", "observation-evidence.ts"] },
   evaluations: { dependsOn: ["memories"], exports: [] },
   graph: { dependsOn: ["memories"], exports: [] },
   memories: {

@@ -93,10 +93,10 @@ with the `websearch_to_tsquery` OR. A chunk then needs any term, not every term.
 ### The source mapping is a benchmark convenience
 
 A fact Memory's metadata names the session it was extracted from. The source arms
-use that key to find the raw Observation. **Production Memories have no such link.**
-Proposals keep `evidenceObservationIds`, but acceptance does not copy them to the
-Memory, and Proposal content expires. This experiment measures the strategy, not
-an implemented feature.
+use that key to find the raw Observation. **When this ran, production Memories had
+no such link.** Schema revision 14 adds it as Memory Observation Evidence: direct
+citations, and Proposal acceptance copying `evidenceObservationIds`. This
+experiment still used the benchmark key, so it measures the strategy, not that path.
 
 ## Why raw text helps here
 
@@ -201,6 +201,14 @@ the frozen benchmark's embedding space.
 **Isolation.** Each question has its own Workspace and a Bob-private raw canary
 that also carries a vector. Searches run as `lore_app` under RLS. No canary was
 returned by any search, lexical or dense.
+
+**Re-verified after the follow-up changes** (2026-10-14, `main` at `dacf222`, after
+the whitespace partition fix and index-on-request). Index verification recomputed
+every Episode's chunks with the merged code: 1,000 Episodes and 250,710 chunks,
+identical to those the run used. Rebuilding every arm's packet from scratch gave
+5,500 of 5,500 packets byte-identical to the saved ones, and each saved answer's
+input hash matched. The reader would see the same input, so the scores stand
+without new reader or judge calls.
 
 ## Reading raw text only when Memory declines
 
@@ -349,17 +357,18 @@ unchanged until the path below is built and measured on real links.
 
 The steps:
 
-1. **Record which Observations a Memory came from.** Add a new RLS-protected table
-   that links a Memory to an Observation and, when known, its chunk range (forward
-   migration). Memory Links cannot carry this: both of their ends are Memories.
-   Copy a Proposal's `evidenceObservationIds` at acceptance, and let direct writes
-   cite their source Observations. Forgetting either side removes the link.
-   **This is the open question.** A Memory written without a citation has nothing to
+1. **Record which Observations a Memory came from.** Built in schema revision 14 as
+   Memory Observation Evidence: an RLS-protected table (Memory Links cannot carry
+   this, since both of their ends are Memories). Proposal acceptance copies
+   `evidenceObservationIds`, and direct writes cite through their own call.
+   Forgetting either side removes the citation. It links whole Observations: this
+   run never used a span, since it trimmed only the tail of the last source.
+   **The open question remains.** A Memory written without a citation has nothing to
    expand, and this benchmark's session keys hid that.
 2. **Read in two steps.** Answer from the Memory hits. When the answer declines,
    add the whole linked Observations in Memory rank order inside the reader
-   budget. Use the span only to choose what to trim. Reading the sources took 4 ms
-   here.
+   budget. The read is built (`readMemorySources`, MCP `lore_read_evidence`); the
+   agent decides when to call it. Reading the sources took 4 ms here.
 3. **Guard abstention before turning it on.** The source arms lost 2 of 30
    false-premise questions. Measure a reader instruction or evidence labeling that
    separates raw conversation from canonical Memory, as its own run.

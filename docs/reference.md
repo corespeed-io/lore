@@ -594,6 +594,11 @@ accepted only while both the credential and Workspace grant remain active.
   owner-only `POST /api/v1/episodes/:id/index` to build an Episode's exact chunks
   on request. Recording does not index. Search is lexical (English
   keywords and CJK substrings); canonical Memory retrieval remains separate.
+- `PUT`/`DELETE /api/v1/memories/:id/observation-evidence/:observationId` to cite or
+  remove an Observation a Memory came from, `GET /api/v1/memories/:id/observation-evidence`
+  to list a Memory's citations, and read-only `POST
+  /api/v1/memories/observation-evidence/read` to read the cited Observations of up to
+  20 Memories within a code-point budget
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
 - `/api/evaluations/suites`, suite runs, and run results. The Suite list is paged:
   50 per page by default (`limit` up to 100), with the next page's opaque `cursor`
@@ -667,7 +672,8 @@ remember/update/forget, `lore_link`/`lore_unlink` for Memory Links by natural ke
 read-only `lore_links` to list one Memory's Links,
 `lore_observe` for non-canonical Episode evidence, `lore_index_evidence` to build
 one Episode's lexical index, `lore_search_evidence` for read-only original excerpts
-with source timestamps and locators, and
+with source timestamps and locators, `lore_read_evidence`, `lore_cite_evidence`, and
+`lore_uncite_evidence` for the Observations a Memory came from, and
 `lore_propose` for owner-reviewed suggestions in exactly the configured Actor and
 Workspace. Supply the same `idempotencyKey` when retrying a mutation whose response
 was lost:

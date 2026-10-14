@@ -23,6 +23,7 @@ import {
   type CodeEvidenceRelationship,
   isCodeEvidenceRelationship,
 } from "@/modules/code/evidence-contract";
+import { citeProposalObservationEvidence } from "@/modules/episodes/observation-evidence";
 import type { Memory } from "@/modules/memories/service";
 import { createMemoryMutationPrimitives, memoryFromRow } from "@/modules/memories/service";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
@@ -809,6 +810,13 @@ export function createMemoryProposalsModule(
             }),
             [actor.workspaceId, id, applied.memory.id, actor.userId],
           );
+          // Every cited Observation was locked visible above, so each copy passes RLS.
+          await citeProposalObservationEvidence(transaction, {
+            workspaceId: actor.workspaceId,
+            proposalId: id,
+            memoryId: applied.memory.id,
+            userId: actor.userId,
+          });
           const [proposal] = await proposalsFromRows(transaction, accepted.rows);
           return { proposal, memory: applied.memory };
         });
