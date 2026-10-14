@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { codeIdentity } from "../../tools/evaluation/harness/code";
 import { cachedEmbeddingProvider } from "../../tools/evaluation/harness/embedding-cache";
 import {
+  CORPUS_ENTRIES,
   compareRuns,
   gradingIdentity,
+  RUN_ENTRIES,
   retrievalMetrics,
   unitWorkspaceId,
   uuidFromHash,
@@ -297,6 +299,26 @@ describe("what a run may reuse", () => {
     expect(codeIdentity([join(edited, "entry.ts")], edited).digest).not.toBe(identity.digest);
     const relocked = checkout({ ...files, "bun.lock": "lock v2\n" });
     expect(codeIdentity([join(relocked, "entry.ts")], relocked).digest).not.toBe(identity.digest);
+  });
+
+  it("keys runs by everything that stores results, and corpora by the ingest path only", () => {
+    const harness = join(process.cwd(), "tools/evaluation/harness");
+    const closure = (entries: readonly string[]) =>
+      codeIdentity(
+        entries.map((entry) => join(harness, entry)),
+        process.cwd(),
+      ).paths;
+    const run = closure(RUN_ENTRIES);
+    const corpus = closure(CORPUS_ENTRIES);
+    for (const file of ["store.ts", "harness.ts", "datasets.ts", "systems.ts"]) {
+      expect(run).toContain(`tools/evaluation/harness/${file}`);
+    }
+    expect(run).toContain("packages/lore-core/src/memory-chunking.ts");
+    // Storage and reporting edits must not seed new corpora.
+    expect(corpus).not.toContain("tools/evaluation/harness/store.ts");
+    expect(corpus).not.toContain("tools/evaluation/harness/run-eval.ts");
+    expect(corpus).toContain("packages/lore-core/src/memory-chunking.ts");
+    expect(corpus).toContain("src/modules/memories/service.ts");
   });
 
   it("refuses code that resolves outside the checkout", () => {

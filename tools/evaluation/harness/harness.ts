@@ -110,9 +110,13 @@ export interface CollectInput {
 
 const HARNESS_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 /** The files whose imports decide what a System stores. */
-const CORPUS_ENTRIES = ["systems.ts"];
-/** The files whose imports decide a Packet: the corpus, the dataset adapters, and collection. */
-const RUN_ENTRIES = ["harness.ts", "datasets.ts", "systems.ts"];
+export const CORPUS_ENTRIES = ["systems.ts"];
+/**
+ * The files whose imports decide a run's stored results: the corpus, the dataset
+ * adapters, collection, and the store that saves Packets and results (which
+ * harness.ts imports as types only, so its closure would miss it).
+ */
+export const RUN_ENTRIES = ["harness.ts", "datasets.ts", "systems.ts", "store.ts"];
 /** Held shared by every collection, and exclusively by clean-up, in each eval database. */
 export const CORPUS_LOCK = "lore-eval-corpora";
 

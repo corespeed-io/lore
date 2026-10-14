@@ -11,6 +11,8 @@ export interface CodeIdentity {
   /** SHA-256 over every source file the entries reach, plus bun.lock and Bun's version. */
   digest: string;
   files: number;
+  /** The hashed files, relative to the checkout and sorted. */
+  paths: string[];
   /** The checkout the files were read from. */
   root: string;
 }
@@ -53,10 +55,16 @@ export function codeIdentity(entries: readonly string[], checkoutRoot: string): 
     }
   }
   const lock = join(root, "bun.lock");
-  const parts = [...sources.entries()]
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .map(([path, source]) => `${path}\u0000${source}`);
+  const sorted = [...sources.entries()].sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  const parts = sorted.map(([path, source]) => `${path}\u0000${source}`);
   parts.push(`bun.lock\u0000${existsSync(lock) ? readFileSync(lock, "utf8") : ""}`);
   parts.push(`bun\u0000${Bun.version}`);
-  return { digest: sha256(parts.join("\u0001")), files: sources.size, root };
+  return {
+    digest: sha256(parts.join("\u0001")),
+    files: sources.size,
+    paths: sorted.map(([path]) => path),
+    root,
+  };
 }
