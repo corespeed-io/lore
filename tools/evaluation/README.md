@@ -7,6 +7,7 @@ excluded from the runtime image.
 
 | Directory | Purpose | Command families (`bun run …`) |
 | --- | --- | --- |
+| [`harness/`](harness/README.md) | The eval harness: a change against a base ref on fixed slices of LongMemEval-S and LoCoMo, through the product path, with one pre-registered gate rule | `eval` |
 | [`retrieval/`](retrieval/) | Synthetic and external-dataset retrieval runners, dataset parsing, and the shared retrieval suite | `benchmark:retrieval`, `benchmark:longmemeval*`, `benchmark:locomo*`, `benchmark:memoryagentbench*` |
 | [`code/`](code/) | Code indexing/search and Memory-to-Code evidence evaluations | `benchmark:code-index`, `benchmark:code-search`, `evaluate:code-aware-memory`, `evaluate:code-aware-memory:stress` |
 | [`context/`](context/) | Joint Memory + Code retrieval with synthetic and real-Git evidence | `evaluate:joint-memory-code`, `evaluate:joint-memory-code:real` |

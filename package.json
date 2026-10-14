@@ -56,6 +56,7 @@
     "evaluate:joint-memory-code": "bun tools/evaluation/context/evaluate-joint-memory-code.ts",
     "evaluate:joint-memory-code:real": "bun tools/evaluation/context/evaluate-joint-memory-code-real.ts",
     "benchmark:retrieval": "bun tools/evaluation/retrieval/run-retrieval.ts",
+    "eval": "bun --no-env-file tools/evaluation/harness/run-eval.ts",
     "benchmark:longmemeval:fetch": "bun tools/evaluation/retrieval/fetch-longmemeval.ts",
     "benchmark:longmemeval": "bun tools/evaluation/retrieval/run-longmemeval.ts",
     "benchmark:longmemeval:smoke": "bun tools/evaluation/retrieval/run-longmemeval.ts --split oracle --max-cases 10",
