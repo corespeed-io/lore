@@ -75,6 +75,12 @@ async function coverage(
   return { chunks: chunks ?? 0 };
 }
 
+/** Units seeded at once, and embedding leases drained at once, per sandbox. */
+const SEED_UNITS_AT_ONCE = 16;
+const DRAIN_LEASES = 16;
+const sleep = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
 async function parallel<T>(
   items: readonly T[],
   concurrency: number,
@@ -117,12 +123,17 @@ export function memorySearchSystem(options: {
     | undefined;
   const connect = async (databaseUrl: string) => {
     if (!databases) {
-      // Small pools: several sandboxes may share one eval server.
+      // Pools sized so two sandboxes seeding at once stay under a 100-connection
+      // server; idle connections close, so seeding's free up for the drain.
       const admin = new pg.Pool({ connectionString: databaseUrl, max: 4 });
       databases = {
-        request: createPostgresDatabase({ connectionString: databaseUrl, max: 8 }),
+        request: createPostgresDatabase({
+          connectionString: databaseUrl,
+          max: SEED_UNITS_AT_ONCE,
+          idleTimeoutMillis: 5_000,
+        }),
         maintenance: createPostgresDatabase(
-          { connectionString: databaseUrl, max: 6 },
+          { connectionString: databaseUrl, max: DRAIN_LEASES, idleTimeoutMillis: 5_000 },
           { role: "lore_maintenance" },
         ),
         admin,
@@ -213,47 +224,74 @@ export function memorySearchSystem(options: {
           pending.push(unit);
         }
         let seeded = 0;
-        await parallel(pending, 6, async (unit) => {
-          const workspaceId = context.workspaceIdFor(unit);
-          await admin.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [
-            workspaceId,
-            `eval building ${unit.key}`,
-          ]);
-          await admin.query(
-            "INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'member')",
-            [workspaceId, ALICE, BOB],
-          );
-          for (const record of unit.records) {
-            await alice.remember(
-              { workspaceId, userId: ALICE },
-              {
-                content: record.text,
-                scope: "private",
-                metadata: {
-                  evalUnit: unit.key,
-                  evalKey: record.key,
-                  ...(record.anchorKey ? { evalAnchorKey: record.anchorKey } : {}),
+        const drain = createEmbeddingMaintenance(maintenance, { embeddingProviders: [provider] });
+        // Seeding is bound by round trips, not compute (about 107 ms to Railway), so
+        // embedding jobs drain while later Memories are still being written, as a
+        // deployment's worker does. Records within a Unit stay in order, so their
+        // updated_at order, which ranking uses to break ties, is the same every seed.
+        let seeding = true;
+        let drainFailure: unknown;
+        const background = Promise.all(
+          Array.from({ length: DRAIN_LEASES }, async () => {
+            while (seeding && drainFailure === undefined) {
+              try {
+                const result = await drain.run();
+                if (result.status === "dead") {
+                  throw new Error(`Embedding job ${result.jobId ?? "unknown"} ended as dead`);
+                }
+                if (result.status !== "complete") await sleep(500);
+              } catch (error) {
+                drainFailure = error;
+              }
+            }
+          }),
+        );
+        try {
+          await parallel(pending, SEED_UNITS_AT_ONCE, async (unit) => {
+            const workspaceId = context.workspaceIdFor(unit);
+            await admin.query("INSERT INTO workspaces (id, name) VALUES ($1, $2)", [
+              workspaceId,
+              `eval building ${unit.key}`,
+            ]);
+            await admin.query(
+              "INSERT INTO memberships (workspace_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'member')",
+              [workspaceId, ALICE, BOB],
+            );
+            for (const record of unit.records) {
+              await alice.remember(
+                { workspaceId, userId: ALICE },
+                {
+                  content: record.text,
+                  scope: "private",
+                  metadata: {
+                    evalUnit: unit.key,
+                    evalKey: record.key,
+                    ...(record.anchorKey ? { evalAnchorKey: record.anchorKey } : {}),
+                  },
                 },
-              },
-            );
-          }
-          for (const [index, tripwire] of unit.tripwires.entries()) {
-            await bob.remember(
-              { workspaceId, userId: BOB },
-              {
-                content: tripwire,
-                scope: "private",
-                metadata: { evalUnit: unit.key, evalTripwire: index },
-              },
-            );
-          }
-          if (++seeded % 25 === 0) context.log(`seeded ${seeded}/${pending.length} units`);
-        });
+              );
+            }
+            for (const [index, tripwire] of unit.tripwires.entries()) {
+              await bob.remember(
+                { workspaceId, userId: BOB },
+                {
+                  content: tripwire,
+                  scope: "private",
+                  metadata: { evalUnit: unit.key, evalTripwire: index },
+                },
+              );
+            }
+            if (++seeded % 25 === 0) context.log(`seeded ${seeded}/${pending.length} units`);
+          });
+        } finally {
+          seeding = false;
+          await background;
+        }
+        if (drainFailure !== undefined) throw drainFailure;
         if (pending.length) {
-          const drain = createEmbeddingMaintenance(maintenance, { embeddingProviders: [provider] });
           await drainEmbeddingMaintenance({
             run: () => drain.run(),
-            concurrency: 6,
+            concurrency: DRAIN_LEASES,
             pendingJobCount: async () =>
               Number(
                 (

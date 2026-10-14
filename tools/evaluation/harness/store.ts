@@ -182,7 +182,13 @@ export class EvalStore {
     }
     const url = new URL(serverUrl);
     url.pathname = `/${STORE_DATABASE}`;
-    const pool = new pg.Pool({ connectionString: url.toString(), max: 4 });
+    // Embedding leases look their vectors up here; six connections serve sixteen
+    // leases, and keep two seeding sandboxes under a 100-connection server.
+    const pool = new pg.Pool({
+      connectionString: url.toString(),
+      max: 6,
+      idleTimeoutMillis: 5_000,
+    });
     // Two sandboxes may open a new store at once; one creates its tables.
     const client = await pool.connect();
     try {
