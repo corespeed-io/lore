@@ -37,6 +37,7 @@ import {
   summarize,
   tierAnswers,
 } from "./harness";
+import { sha256 } from "./hash";
 import {
   isJudgeProfile,
   isReaderProfile,
@@ -44,7 +45,7 @@ import {
   type ReaderProfileName,
 } from "./profiles";
 import { createScorer } from "./scorers";
-import { EvalStore, type RunEvent, sha256 } from "./store";
+import { EvalStore, type RunEvent } from "./store";
 import { memorySearchSystem } from "./systems";
 import { isTier, type TierName } from "./tiers";
 
@@ -227,7 +228,7 @@ function provenance(event: RunEvent): string {
   }
   const { detail } = event;
   return [
-    `answer ${event.at} · reader ${detail.reader}${detail.judge ? `, judge ${detail.judge}` : ""}`,
+    `answer ${event.at} · reader ${detail.reader}${detail.judge ? `, judge ${detail.judge}` : ""} (grading ${detail.grading ?? "unrecorded"})`,
     `answers ${count(detail.cases.answersFromStore)} from store, ${count(detail.cases.answersNew)} new`,
     `verdicts ${count(detail.cases.verdictsFromStore)} from store, ${count(detail.cases.verdictsNew)} new`,
     `this call: ${count(detail.readerCalls)} reader calls (~$${detail.estimatedReaderUsd}), ${count(detail.gradeCalls)} gradings`,
@@ -247,7 +248,7 @@ function summaryMarkdown(summary: RunSummary): string {
       ? ` (95% ${percent(summary.score.interval95[0])}–${percent(summary.score.interval95[1])})`
       : "";
     lines.push(
-      `- Answer score: ${percent(summary.score.mean)}${interval} over ${summary.answered} cases; reader input ${Math.round(summary.readerTokens.input / Math.max(1, summary.answered))} tokens per case`,
+      `- Answer score: ${percent(summary.score.mean)}${interval} over ${summary.answered} cases, grading ${summary.gradings.join(" + ") || "unrecorded"}; reader input ${Math.round(summary.readerTokens.input / Math.max(1, summary.answered))} tokens per case`,
     );
   }
   lines.push("- Provenance:", ...summary.events.map((event) => `  - ${provenance(event)}`));

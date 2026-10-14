@@ -1,5 +1,6 @@
 import type { EmbeddingProvider, EmbeddingTask } from "@corespeed/lore-core";
-import { type EvalStore, sha256 } from "./store";
+import { sha256 } from "./hash";
+import type { EvalStore } from "./store";
 
 export interface EmbeddingCacheCounters {
   cached: number;

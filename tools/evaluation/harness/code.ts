@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { sha256 } from "./store";
+import { sha256 } from "./hash";
 
 /**
  * What code a checkout would run, read from the files themselves. Two checkouts

@@ -9,13 +9,16 @@ export function mcnemarExactP(wins: number, losses: number): number {
   const total = wins + losses;
   if (total === 0) return 1;
   const smaller = Math.min(wins, losses);
-  let tail = 0;
-  let coefficient = 1;
-  for (let k = 0; k <= smaller; k++) {
-    if (k > 0) coefficient = (coefficient * (total - k + 1)) / k;
-    tail += coefficient / 2 ** total;
+  // Binomial(total, 1/2) tail in log space: 2^total and C(total, k) leave
+  // floating-point range past about 1,000 discordant pairs.
+  let logTerm = -total * Math.LN2;
+  let logTail = logTerm;
+  for (let k = 1; k <= smaller; k++) {
+    logTerm += Math.log((total - k + 1) / k);
+    const top = Math.max(logTail, logTerm);
+    logTail = top + Math.log(Math.exp(logTail - top) + Math.exp(logTerm - top));
   }
-  return Math.min(1, 2 * tail);
+  return Math.min(1, 2 * Math.exp(logTail));
 }
 
 /** Deterministic paired bootstrap 95% interval of the mean delta (fixed LCG seed). */

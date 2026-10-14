@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { codeIdentity } from "./code";
 import { ensureEvalDatabase } from "./database";
+import { identityHash, sha256 } from "./hash";
 import {
   type BoundJudge,
   type BoundReader,
@@ -14,7 +15,7 @@ import {
 } from "./profiles";
 import { createScorer, type Scorer } from "./scorers";
 import { type GateResult, gate, type PairedScore, wilson95 } from "./stats";
-import { type CaseResult, type EvalStore, identityHash, type RunEvent, sha256 } from "./store";
+import type { CaseResult, EvalStore, RunEvent } from "./store";
 import { EMBEDDING_SPACE } from "./systems";
 import { selectTier, TIERS, type TierName } from "./tiers";
 import type {
@@ -255,6 +256,7 @@ export async function collect(input: CollectInput): Promise<string> {
         answerKey: null,
         verdictKey: null,
         score: null,
+        grading: null,
       });
       if (++searched % 50 === 0) {
         input.log(`${dataset.id}: collected ${done.size + searched}/${selected.size}`);
@@ -275,6 +277,15 @@ export async function collect(input: CollectInput): Promise<string> {
     await lock.end();
   }
   return runId;
+}
+
+/** The reader, scorer, and judge behind a score. Scores compare only under one. */
+export function gradingIdentity(
+  reader: string,
+  scorer: Record<string, unknown>,
+  judge: Record<string, unknown> | null,
+): string {
+  return identityHash({ reader, scorer, judge }).slice(0, 16);
 }
 
 /** gemini-3.5-flash list prices on 2026-10-13; output includes thinking. */
@@ -304,10 +315,13 @@ export async function answer(input: AnswerInput): Promise<void> {
   const reader: BoundReader = bindReader(input.reader, dataset, input.geminiApiKey);
   const scorer: Scorer = createScorer(dataset.scorer);
   const judge: BoundJudge | undefined = scorer.needsJudge ? bindJudge(input.judge) : undefined;
+  const grading = gradingIdentity(reader.identityHash, scorer.identity, judge?.identity ?? null);
+  // A score from another reader, scorer, or judge is graded again, from cached
+  // answers and verdicts where they exist, so one comparison never mixes graders.
   const pending = input.runIds.flatMap((runId) =>
     store
       .results(runId)
-      .filter((result) => result.score === null)
+      .filter((result) => result.score === null || result.grading !== grading)
       .map((result) => ({ runId, result })),
   );
   if (!pending.length) return;
@@ -399,6 +413,7 @@ export async function answer(input: AnswerInput): Promise<void> {
       answerKey: item.answerKey,
       verdictKey: item.verdictKey,
       score: verdict.score,
+      grading,
     });
     const counts = perRun.get(item.runId) ?? {
       answersFromStore: 0,
@@ -420,6 +435,7 @@ export async function answer(input: AnswerInput): Promise<void> {
         reader: input.reader,
         scorer: dataset.scorer,
         judge: judge ? input.judge : null,
+        grading,
         cases: counts,
         // Shared by every run in this call: distinct inputs read, answers graded.
         readerCalls: uncached.size,
@@ -444,6 +460,8 @@ export interface RunSummary {
   categories: Record<string, { cases: number; score: number | null; allHit: number | null }>;
   latencyMs: { p50: number; p95: number };
   readerTokens: { input: number; output: number };
+  /** The gradings behind the run's scores; one, once it is answered. */
+  gradings: string[];
   /** Every step that touched the run, oldest first. */
   events: RunEvent[];
 }
@@ -522,6 +540,9 @@ export function summarize(store: EvalStore, runId: string, binary: boolean): Run
       input: answers.reduce((sum, stored) => sum + (stored.inputTokens ?? 0), 0),
       output: answers.reduce((sum, stored) => sum + (stored.outputTokens ?? 0), 0),
     },
+    gradings: [
+      ...new Set(scored.flatMap((result) => (result.grading ? [result.grading] : []))),
+    ].sort(),
     events: store.events(runId),
   };
 }
@@ -553,6 +574,21 @@ export function compareRuns(
   if (pairs.length !== candidate.length || pairs.length !== base.size) {
     throw new Error(
       "The two runs do not cover the same cases; compare runs of one dataset and tier",
+    );
+  }
+  const gradings = new Set(
+    pairs.flatMap(({ base: left, candidate: right }) =>
+      [left, right].flatMap((result) => (result.score === null ? [] : [String(result.grading)])),
+    ),
+  );
+  if (gradings.has("null")) {
+    throw new Error(
+      "A run holds scores from before gradings were recorded; answer it again (free from the store) before comparing",
+    );
+  }
+  if (gradings.size > 1) {
+    throw new Error(
+      `The two runs were graded under ${gradings.size} reader/scorer/judge combinations; answer both under one before comparing`,
     );
   }
   const isolation = candidate.filter((result) => result.isolationFailure).length;

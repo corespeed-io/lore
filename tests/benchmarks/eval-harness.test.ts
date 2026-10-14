@@ -6,10 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { codeIdentity } from "../../tools/evaluation/harness/code";
 import { cachedEmbeddingProvider } from "../../tools/evaluation/harness/embedding-cache";
 import {
+  compareRuns,
+  gradingIdentity,
   retrievalMetrics,
   unitWorkspaceId,
   uuidFromHash,
 } from "../../tools/evaluation/harness/harness";
+import { identityHash, sha256 } from "../../tools/evaluation/harness/hash";
 import { longMemEvalRubricPrompt, rubricVerdict } from "../../tools/evaluation/harness/scorers";
 import {
   compare,
@@ -18,7 +21,7 @@ import {
   type PairedScore,
   wilson95,
 } from "../../tools/evaluation/harness/stats";
-import { EvalStore, identityHash, sha256 } from "../../tools/evaluation/harness/store";
+import { EvalStore } from "../../tools/evaluation/harness/store";
 import { selectTier } from "../../tools/evaluation/harness/tiers";
 import type { EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
 
@@ -80,6 +83,21 @@ describe("the pre-registered gate", () => {
     });
   });
 
+  it("stays exact past a thousand discordant pairs, where 2^n overflows", () => {
+    // References from Python's math.lgamma, summed in log space.
+    expect(mcnemarExactP(470, 600) / 7.876132164651816e-5).toBeCloseTo(1, 9);
+    expect(mcnemarExactP(2_000, 2_300) / 5.079935568926816e-6).toBeCloseTo(1, 9);
+    const result = gate(
+      pairs([
+        ["a", 0, 1, 470],
+        ["a", 1, 0, 600],
+        ["a", 1, 1, 2_000],
+      ]),
+      true,
+    );
+    expect(result.verdict).toBe("regressed");
+  });
+
   it("calls noise no evidence, for binary and continuous scores alike", () => {
     expect(
       gate(
@@ -104,6 +122,8 @@ describe("the pre-registered gate", () => {
 
   it("matches the exact McNemar and Wilson references", () => {
     expect(mcnemarExactP(34, 9)).toBeCloseTo(0.000170155, 8);
+    expect(mcnemarExactP(5, 0)).toBe(0.0625);
+    expect(mcnemarExactP(3, 3)).toBe(1);
     const [low, high] = wilson95(422, 500);
     expect(low).toBeCloseTo(0.8098, 3);
     expect(high).toBeCloseTo(0.8729, 3);
@@ -316,6 +336,7 @@ describe("what a run may reuse", () => {
         reader: "r",
         scorer: "locomo-f1",
         judge: null,
+        grading: "g1",
         cases: { answersFromStore: 3, answersNew: 1, verdictsFromStore: 4, verdictsNew: 0 },
         readerCalls: 1,
         gradeCalls: 0,
@@ -332,6 +353,76 @@ describe("what a run may reuse", () => {
     expect(store.corporaUsedSince("db", "2999-01-01T00:00:00.000Z").size).toBe(0);
     store.forgetCorpora("db", ["w1"]);
     expect(store.corporaUsedSince("db", "2000-01-01T00:00:00.000Z").size).toBe(0);
+    store.close();
+  });
+});
+
+describe("comparing answered runs", () => {
+  const seed = (store: EvalStore, run: string, gradings: Array<string | null>, score = 1) => {
+    store.saveRun({
+      id: run,
+      refSha: run,
+      dataset: "d",
+      tier: "standard",
+      system: "s",
+      identity: {},
+      createdAt: "2026-10-14T00:00:00.000Z",
+    });
+    for (const [index, grading] of gradings.entries()) {
+      store.saveResult(run, {
+        caseId: `c${index}`,
+        category: "a",
+        packetSha: "p",
+        retrieval: { gold: 1, anyHit: true, allHit: true, reciprocalRank: 1 },
+        latencyMs: 1,
+        isolationFailure: false,
+        answerKey: "a",
+        verdictKey: "v",
+        score,
+        grading,
+      });
+    }
+  };
+
+  it("names the reader, scorer, and judge behind every score", () => {
+    const base = gradingIdentity("reader", { scorer: "longmemeval" }, { model: "sol" });
+    expect(gradingIdentity("reader", { scorer: "longmemeval" }, { model: "sol" })).toBe(base);
+    expect(gradingIdentity("reader", { scorer: "longmemeval" }, { model: "4o" })).not.toBe(base);
+    expect(gradingIdentity("other", { scorer: "longmemeval" }, { model: "sol" })).not.toBe(base);
+    expect(gradingIdentity("reader", { scorer: "f1" }, null)).not.toBe(base);
+  });
+
+  it("refuses to compare scores from two graders", () => {
+    const store = new EvalStore(":memory:");
+    seed(store, "base", ["judge-a", "judge-a"], 0);
+    seed(store, "candidate", ["judge-b", "judge-b"], 1);
+    expect(() => compareRuns(store, "base", "candidate", true)).toThrow("graded under 2");
+    store.close();
+  });
+
+  it("refuses a run whose own scores mix graders", () => {
+    const store = new EvalStore(":memory:");
+    seed(store, "base", ["judge-a", "judge-a"]);
+    seed(store, "candidate", ["judge-a", "judge-b"]);
+    expect(() => compareRuns(store, "base", "candidate", true)).toThrow("graded under 2");
+    store.close();
+  });
+
+  it("refuses scores whose grader was never recorded, even on both sides", () => {
+    const store = new EvalStore(":memory:");
+    seed(store, "base", [null, null]);
+    seed(store, "candidate", [null, null]);
+    expect(() => compareRuns(store, "base", "candidate", true)).toThrow("answer it again");
+    store.close();
+  });
+
+  it("compares runs graded alike", () => {
+    const store = new EvalStore(":memory:");
+    seed(store, "base", ["judge-a", "judge-a"]);
+    seed(store, "candidate", ["judge-a", "judge-a"]);
+    const comparison = compareRuns(store, "base", "candidate", true);
+    expect(comparison.answers?.verdict).toBe("no-evidence");
+    expect(comparison.candidate.gradings).toEqual(["judge-a"]);
     store.close();
   });
 });

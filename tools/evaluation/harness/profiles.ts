@@ -6,7 +6,7 @@ import {
   renderBenchmarkReaderInput,
 } from "../shared/benchmark-reader";
 import { runCodexText } from "../shared/codex-exec";
-import { identityHash, sha256 } from "./store";
+import { identityHash, sha256 } from "./hash";
 import type { Dataset } from "./types";
 
 /**

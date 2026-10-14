@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pg from "pg";
-import { sha256 } from "./store";
+import { sha256 } from "./hash";
 
 /**
  * One disposable database per migration chain and embedding width. Two refs with

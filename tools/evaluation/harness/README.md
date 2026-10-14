@@ -81,6 +81,11 @@ An answer line gives the answers and verdicts taken from the store and made new.
 - **Answers and verdicts** are keyed by the exact reader input and by scorer,
   judge, case, and answer. A gate pays the reader only for changed Packets. It
   grades each distinct answer once.
+- **Every score records its grading:** the reader, scorer, and judge behind it.
+  Answering under another profile regrades every score that lacks that grading,
+  from cached answers and verdicts where they exist. A comparison refuses runs
+  whose scores came from more than one grading, so a judge change can never pass
+  for a system change.
 - **Old refs work too.** A git ref runs in its own worktree under
   `~/.cache/lore-eval/worktrees`, with this checkout's harness copied over it.
   The provenance line shows its engine loaded from that worktree.

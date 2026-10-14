@@ -1,25 +1,8 @@
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { sha256 } from "./hash";
 import type { Packet, RetrievalMetrics } from "./types";
-
-export const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
-/** A stable hash of a JSON value; object keys are sorted so key order never matters. */
-export function identityHash(value: unknown): string {
-  return sha256(JSON.stringify(sortKeys(value)));
-}
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, sortKeys(entry)]),
-    );
-  }
-  return value;
-}
 
 export interface StoredAnswer {
   answer: string;
@@ -65,6 +48,8 @@ export interface AnswerDetail {
   reader: string;
   scorer: string;
   judge: string | null;
+  /** `gradingIdentity` of the reader, scorer, and judge; absent in older events. */
+  grading?: string;
   cases: {
     answersFromStore: number;
     answersNew: number;
@@ -93,6 +78,8 @@ export interface CaseResult {
   answerKey: string | null;
   verdictKey: string | null;
   score: number | null;
+  /** The reader, scorer, and judge that produced `score`; null until graded. */
+  grading: string | null;
 }
 
 /**
@@ -125,7 +112,7 @@ export class EvalStore {
         run TEXT NOT NULL, case_id TEXT NOT NULL, category TEXT NOT NULL,
         packet_sha TEXT NOT NULL, retrieval TEXT NOT NULL, latency_ms REAL NOT NULL,
         isolation_failure INTEGER NOT NULL, answer_key TEXT, verdict_key TEXT, score REAL,
-        PRIMARY KEY (run, case_id));
+        grading TEXT, PRIMARY KEY (run, case_id));
       CREATE TABLE IF NOT EXISTS events (
         run TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL, detail TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_run ON events (run, at);
@@ -134,6 +121,11 @@ export class EvalStore {
         corpus TEXT NOT NULL, last_used_at TEXT NOT NULL,
         PRIMARY KEY (database, workspace_id));
     `);
+    // Stores from before gradings were recorded: their scores are regraded on next use.
+    const columns = this.db.query("PRAGMA table_info(results)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "grading")) {
+      this.db.exec("ALTER TABLE results ADD COLUMN grading TEXT");
+    }
   }
 
   close(): void {
@@ -271,7 +263,8 @@ export class EvalStore {
     this.db
       .query(
         `INSERT OR REPLACE INTO results (run, case_id, category, packet_sha, retrieval, latency_ms,
-          isolation_failure, answer_key, verdict_key, score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          isolation_failure, answer_key, verdict_key, score, grading)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run,
@@ -284,6 +277,7 @@ export class EvalStore {
         result.answerKey,
         result.verdictKey,
         result.score,
+        result.grading,
       );
   }
 
@@ -348,6 +342,7 @@ export class EvalStore {
       answer_key: string | null;
       verdict_key: string | null;
       score: number | null;
+      grading: string | null;
     }>;
     return rows.map((row) => ({
       caseId: row.case_id,
@@ -359,6 +354,7 @@ export class EvalStore {
       answerKey: row.answer_key,
       verdictKey: row.verdict_key,
       score: row.score,
+      grading: row.grading,
     }));
   }
 }
