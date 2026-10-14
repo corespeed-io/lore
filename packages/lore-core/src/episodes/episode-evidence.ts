@@ -5,7 +5,7 @@ import {
   validatedEmbeddingDimensions,
 } from "../capabilities";
 import type { MemoryStorageContext, MemoryStorageScope, PostgresTransaction } from "../db";
-import { chunkMemoryContent, MEMORY_CHUNKING_REVISION } from "../memory-chunking";
+import { MEMORY_CHUNKING_REVISION, partitionMemoryContent } from "../memory-chunking";
 import {
   memorySearchLimit,
   memorySearchQuery,
@@ -169,14 +169,26 @@ async function readEpisodeSource(
   return observations.rows;
 }
 
+/**
+ * Every Observation is partitioned exactly, as Memory content is. A raw
+ * Observation may hold whitespace no chunk can carry (the chunk table refuses
+ * whitespace-only rows), so a whitespace-only part keeps its ordinal but is not
+ * stored. Nothing searchable is lost, and the Observation itself stays as written.
+ */
 function prepareChunks(observations: readonly ObservationRow[]): PreparedEvidenceChunk[] {
   return observations.flatMap((observation) =>
-    chunkMemoryContent(observation.content).map((content, chunkOrdinal) => ({
-      observationId: observation.id,
-      observationOrdinal: observation.ordinal,
-      chunkOrdinal,
-      content,
-    })),
+    partitionMemoryContent(observation.content).flatMap((content, chunkOrdinal) =>
+      content.trim()
+        ? [
+            {
+              observationId: observation.id,
+              observationOrdinal: observation.ordinal,
+              chunkOrdinal,
+              content,
+            },
+          ]
+        : [],
+    ),
   );
 }
 
@@ -534,6 +546,17 @@ async function searchOneQuery(input: {
         AND selected.index_revision = $11
         AND selected.chunk_ordinal BETWEEN anchor.chunk_ordinal - $14
                                        AND anchor.chunk_ordinal + $14
+        -- A whitespace-only part is never stored. Neighbors stop at it, so an
+        -- excerpt is always one exact span of its Observation.
+        AND (
+          SELECT count(*)
+          FROM episode_evidence_chunks span
+          WHERE span.workspace_id = $2
+            AND span.observation_id = ranked.observation_id
+            AND span.index_revision = $11
+            AND span.chunk_ordinal BETWEEN least(selected.chunk_ordinal, anchor.chunk_ordinal)
+                                       AND greatest(selected.chunk_ordinal, anchor.chunk_ordinal)
+        ) = abs(selected.chunk_ordinal - anchor.chunk_ordinal) + 1
      ) evidence ON true
      ORDER BY ranked.score DESC, ranked.observation_id`,
     [

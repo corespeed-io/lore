@@ -1,3 +1,4 @@
+import { partitionMemoryContent } from "@corespeed/lore-core";
 import { EPISODE_EVIDENCE_INDEX_REVISION } from "@corespeed/lore-core/episodes";
 import { LoreClient } from "@corespeed/lore-sdk";
 import { afterEach, expect, test } from "vitest";
@@ -183,4 +184,54 @@ test("index admission failure rolls back Episode and Observations together", asy
     ),
   );
   expect(counts.rows).toEqual([{ episodes: "0", observations: "0" }]);
+});
+
+test("raw whitespace never blocks admission, and excerpts stay exact spans", async () => {
+  const context = await createMemoryTestContext();
+  // Each holds a whitespace-only part no chunk row may carry. On f0245a5 these
+  // Observations were admitted unindexed; admission must still accept them.
+  const contents = [
+    `begin${" ".repeat(2_400)}end`,
+    `${"word ".repeat(100)}trailing${"\n".repeat(1_300)}`,
+    `${" ".repeat(1_250)}leading\r\n${"\t".repeat(40)}tabs`,
+  ];
+  const episode = await createObservationModule(context.database).record(context.alice, {
+    kind: "document",
+    observations: contents.map((content) => ({ kind: "document_fragment" as const, content })),
+  });
+  expect(episode.observations.map((observation) => observation.content)).toEqual(contents);
+
+  const stored = await context.adminDatabase.transaction((tx) =>
+    tx.query<{ observation_id: string; chunk_ordinal: number; content: string }>(
+      `SELECT observation_id, chunk_ordinal, content FROM episode_evidence_chunks
+       ORDER BY observation_ordinal, chunk_ordinal`,
+    ),
+  );
+  for (const [index, content] of contents.entries()) {
+    const parts = partitionMemoryContent(content);
+    expect(parts.join("")).toBe(content);
+    expect(parts.some((part) => !part.trim())).toBe(true);
+    expect(
+      stored.rows
+        .filter((row) => row.observation_id === episode.observations[index]?.id)
+        .map(({ chunk_ordinal, content }) => ({ chunk_ordinal, content })),
+    ).toEqual(
+      parts.flatMap((part, ordinal) =>
+        part.trim() ? [{ chunk_ordinal: ordinal, content: part }] : [],
+      ),
+    );
+  }
+
+  const evidence = createEpisodeEvidenceModule(context.database, { evidenceNeighborChunks: 2 });
+  expect(
+    await evidence.index(context.alice, { episodeId: episode.id, mode: "verify" }),
+  ).toMatchObject({ observationCount: 3, chunkCount: stored.rows.length });
+  for (const term of ["begin", "end", "trailing", "tabs"]) {
+    const [result] = await evidence.search(context.alice, { query: term });
+    const excerpt = result?.excerpts[0];
+    expect(excerpt?.content).toContain(term);
+    const source = contents[episode.observations.findIndex((o) => o.id === excerpt?.observationId)];
+    // Neighbors never join across a skipped part, so each excerpt is one span.
+    expect(source).toContain(excerpt?.content);
+  }
 });

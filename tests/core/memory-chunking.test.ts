@@ -1,4 +1,4 @@
-import { chunkMemoryContent } from "@corespeed/lore-core";
+import { chunkMemoryContent, partitionMemoryContent } from "@corespeed/lore-core";
 import { expect, test } from "vitest";
 
 function expectValidPartition(content: string, chunks: readonly string[], maximumLength: number) {
@@ -63,6 +63,27 @@ test("Memory chunking exactly reconstructs an adversarial formatted corpus", () 
 
 test("Memory chunking rejects an unindexable whitespace-only partition", () => {
   expect(() => chunkMemoryContent(`a${" ".repeat(30)}b`, 10)).toThrow("whitespace-only chunk");
+});
+
+test("the partition behind Memory chunking keeps whitespace-only parts and stays exact", () => {
+  const samples = [
+    `a${" ".repeat(30)}b`,
+    `begin${" ".repeat(2_400)}end`,
+    `${"word ".repeat(100)}trailing${"\n".repeat(1_300)}`,
+    `${" ".repeat(50)}leading\r\n${"\t".repeat(40)}tabs`,
+  ];
+  for (const content of samples) {
+    for (const maximumLength of [10, 1_200]) {
+      const parts = partitionMemoryContent(content, maximumLength);
+      expect(parts.join("")).toBe(content);
+      expect(parts.every((part) => part && Array.from(part).length <= maximumLength)).toBe(true);
+    }
+  }
+  expect(
+    partitionMemoryContent(`a${" ".repeat(30)}b`, 10).filter((part) => !part.trim()),
+  ).not.toHaveLength(0);
+  const content = "First paragraph.\n\nSecond paragraph with more words.";
+  expect(partitionMemoryContent(content, 18)).toEqual(chunkMemoryContent(content, 18));
 });
 
 test("Memory chunking rejects invalid maximum lengths", () => {

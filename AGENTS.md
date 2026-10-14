@@ -847,7 +847,11 @@ been removed. Lore now has a native implementation, split into two concepts
   `lore.record_episode` and request replay; Core owns normalized Episode validation,
   storage reads/deletion, and the separate, rebuildable hybrid
   retrieval index. New Episode admission builds exact lexical chunks in the same
-  transaction as recording and idempotency replay; no provider is called. Public
+  transaction as recording and idempotency replay; no provider is called. The
+  chunks are the `partitionMemoryContent` parts of each Observation, but a
+  whitespace-only part is not stored (the chunk table refuses it), so raw
+  whitespace never blocks admission and the Observation stays as written; neighbor
+  expansion stops at such a part, so every excerpt is one exact span. Public
   `POST /api/v1/episodes/search`, SDK `searchEpisodeEvidence`, CLI `episode search`,
   and read-only MCP `lore_search_evidence` search raw evidence separately from
   canonical Memory. This first public path is lexical (simple/English FTS plus

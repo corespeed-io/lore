@@ -79,7 +79,13 @@ function preferredBoundary(
   return selected;
 }
 
-export function chunkMemoryContent(
+/**
+ * The `lore-memory-chunking-v2` partition: non-overlapping parts of at most
+ * `maximumLength` code points that concatenate back to `content` exactly. A part
+ * may be whitespace only; `chunkMemoryContent` refuses that for Memory, and the
+ * Episode evidence index leaves such parts unindexed.
+ */
+export function partitionMemoryContent(
   content: string,
   maximumLength = MEMORY_CHUNK_MAXIMUM_CHARACTERS,
 ): string[] {
@@ -89,7 +95,7 @@ export function chunkMemoryContent(
   if (!content) return [];
 
   const points = Array.from(content);
-  const chunks: string[] = [];
+  const parts: string[] = [];
   for (let start = 0; start < points.length; ) {
     let hardEnd = Math.min(start + maximumLength, points.length);
     if (hardEnd < points.length && points[hardEnd - 1] === "\r" && points[hardEnd] === "\n") {
@@ -99,14 +105,21 @@ export function chunkMemoryContent(
       hardEnd === points.length
         ? hardEnd
         : preferredBoundary(points, start, hardEnd, maximumLength);
-    const chunk = points.slice(start, end).join("");
-    if (!chunk.trim()) {
-      throw new MemoryChunkingError(
-        "Memory content would produce a whitespace-only chunk and cannot be indexed safely",
-      );
-    }
-    chunks.push(chunk);
+    parts.push(points.slice(start, end).join(""));
     start = end;
+  }
+  return parts;
+}
+
+export function chunkMemoryContent(
+  content: string,
+  maximumLength = MEMORY_CHUNK_MAXIMUM_CHARACTERS,
+): string[] {
+  const chunks = partitionMemoryContent(content, maximumLength);
+  if (chunks.some((chunk) => !chunk.trim())) {
+    throw new MemoryChunkingError(
+      "Memory content would produce a whitespace-only chunk and cannot be indexed safely",
+    );
   }
   return chunks;
 }
