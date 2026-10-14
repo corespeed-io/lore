@@ -34,6 +34,9 @@ export type Observation = Schema<"Observation">;
 export type EpisodeEvidenceSearchResult = Schema<"EpisodeEvidenceSearchResult">;
 export type EpisodeEvidenceExcerpt = Schema<"EpisodeEvidenceExcerpt">;
 export type EpisodeEvidenceIndex = Schema<"EpisodeEvidenceIndex">;
+export type MemoryObservationEvidence = Schema<"MemoryObservationEvidence">;
+export type MemorySourceObservation = Schema<"MemorySourceObservation">;
+export type MemorySourceRead = Schema<"MemorySourceRead">;
 export type SearchEpisodeEvidenceInput = Schema<"SearchEpisodeEvidenceInput"> & {
   signal?: AbortSignal;
 };
@@ -191,6 +194,27 @@ export interface MemoryLinkPage {
   /** Newest first. */
   links: readonly MemoryLink[];
   nextCursor: string | null;
+}
+
+/** The natural key of one Memory's citation of one Observation. */
+export interface MemoryObservationEvidenceKey {
+  memoryId: string;
+  observationId: string;
+  signal?: AbortSignal;
+}
+
+export interface CitedMemoryObservationEvidence {
+  evidence: MemoryObservationEvidence;
+  /** False when the Memory already cited this Observation. */
+  created: boolean;
+}
+
+export interface ReadMemorySourcesInput {
+  /** Memories in the order their sources should be read, such as search rank. */
+  memoryIds: readonly string[];
+  /** Characters (code points) to return in total. */
+  maximumCharacters?: number;
+  signal?: AbortSignal;
 }
 
 export interface LinkedMemories {
@@ -1427,6 +1451,78 @@ export class LoreWorkspaceClient {
     });
   }
 
+  /** The Observations a visible Memory cites, oldest observed first. */
+  async listMemoryObservationEvidence(
+    memoryId: string,
+    signal?: AbortSignal,
+  ): Promise<readonly MemoryObservationEvidence[]> {
+    return (
+      await this.transport.json<readonly MemoryObservationEvidence[]>(
+        `api/v1/memories/${normalizedUuid(memoryId, "memoryId")}/observation-evidence`,
+        { workspaceId: this.workspaceId, signal },
+      )
+    ).data;
+  }
+
+  /**
+   * Record that a Memory came from an Observation; repeating it is safe. The Memory
+   * must be writable and the Observation visible, or the call fails `not_found`.
+   */
+  async citeMemoryObservationEvidence(
+    input: MemoryObservationEvidenceKey,
+  ): Promise<CitedMemoryObservationEvidence> {
+    const { data, response } = await this.transport.json<MemoryObservationEvidence>(
+      memoryObservationEvidencePath(input),
+      { method: "PUT", workspaceId: this.workspaceId, signal: input.signal },
+    );
+    return { evidence: data, created: response.status === 201 };
+  }
+
+  /**
+   * Remove a citation. A `not_found` error means this Actor has no such citation to
+   * remove, which after a retried call includes one already removed.
+   */
+  async removeMemoryObservationEvidence(input: MemoryObservationEvidenceKey): Promise<void> {
+    await this.transport.json<void>(memoryObservationEvidencePath(input), {
+      method: "DELETE",
+      workspaceId: this.workspaceId,
+      signal: input.signal,
+    });
+  }
+
+  /**
+   * Read the original Observations the given Memories cite, within a character
+   * budget. Use it when the Memories alone do not answer; the content is raw
+   * recorded evidence, not canonical Memory.
+   */
+  async readMemorySources(input: ReadMemorySourcesInput): Promise<MemorySourceRead> {
+    const memoryIds = [...new Set(input.memoryIds.map((id) => normalizedUuid(id, "memoryIds")))];
+    if (memoryIds.length < 1 || memoryIds.length > LIMITS.memorySourceReadMemories) {
+      throw new TypeError(
+        `memoryIds must name 1 to ${LIMITS.memorySourceReadMemories} distinct Memories`,
+      );
+    }
+    const maximumCharacters = input.maximumCharacters;
+    if (
+      maximumCharacters !== undefined &&
+      (!Number.isInteger(maximumCharacters) ||
+        maximumCharacters < 1 ||
+        maximumCharacters > LIMITS.memorySourceReadCharacters)
+    ) {
+      throw new TypeError(
+        `maximumCharacters must be an integer from 1 through ${LIMITS.memorySourceReadCharacters}`,
+      );
+    }
+    return (
+      await this.transport.json<MemorySourceRead>("api/v1/memories/observation-evidence/read", {
+        method: "POST",
+        workspaceId: this.workspaceId,
+        signal: input.signal,
+        body: { memoryIds, ...(maximumCharacters === undefined ? {} : { maximumCharacters }) },
+      })
+    ).data;
+  }
+
   async forgetMemory(memoryId: string, options: VersionedMutationOptions): Promise<void> {
     const version = positiveVersion(options.expectedVersion);
     await this.transport.json<void>(`api/v1/memories/${normalizedUuid(memoryId, "memoryId")}`, {
@@ -1454,6 +1550,10 @@ function memoryLinkPath(input: MemoryLinkKey): string {
   // refused rather than sent as a different, possibly existing, kind.
   if (LONE_SURROGATE.test(input.kind)) throw new TypeError("kind must be well-formed Unicode");
   return `${path}?${new URLSearchParams({ kind: input.kind })}`;
+}
+
+function memoryObservationEvidencePath(input: MemoryObservationEvidenceKey): string {
+  return `api/v1/memories/${normalizedUuid(input.memoryId, "memoryId")}/observation-evidence/${normalizedUuid(input.observationId, "observationId")}`;
 }
 
 function positiveVersion(value: number): number {

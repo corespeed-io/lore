@@ -3,7 +3,9 @@
 External stdio Model Context Protocol adapter for Lore. It exposes bounded Memory
 read and write tools, durable non-canonical `lore_observe` Episode recording,
 `lore_index_evidence` to index one Episode, separate read-only
-`lore_search_evidence` for original Observation excerpts, and
+`lore_search_evidence` for original Observation excerpts, read-only
+`lore_read_evidence` for the Observations given Memories came from (cited with
+`lore_cite_evidence`, removed with destructive `lore_uncite_evidence`), and
 human-reviewed `lore_propose` submissions for one configured Actor and Workspace.
 `lore_propose.codeEvidence` accepts bounded `{ artifactId, relationship }` entries,
 freezes exact Code anchors for human review, and copies them to the Memory only on

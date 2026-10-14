@@ -110,6 +110,9 @@ function memoryLink(): MemoryLink {
 function fakeMemories(): LoreMcpMemoryClient {
   return {
     searchEpisodeEvidence: vi.fn().mockResolvedValue([]),
+    citeMemoryObservationEvidence: vi.fn(),
+    readMemorySources: vi.fn().mockResolvedValue({ sources: [], omittedObservationIds: [] }),
+    removeMemoryObservationEvidence: vi.fn().mockResolvedValue(undefined),
     indexEpisodeEvidence: vi.fn().mockResolvedValue({
       episodeId: EPISODE_ID,
       chunkCount: 3,
@@ -398,6 +401,9 @@ describe("Lore external MCP adapter", () => {
       "lore_link",
       "lore_links",
       "lore_unlink",
+      "lore_read_evidence",
+      "lore_cite_evidence",
+      "lore_uncite_evidence",
       "lore_retrieve_context",
       "lore_code_search",
       "lore_code_dependencies",
@@ -796,6 +802,121 @@ describe("Lore external MCP adapter", () => {
     });
     expect(invalid.isError).toBe(true);
     expect(memories.indexEpisodeEvidence).toHaveBeenCalledTimes(1);
+  });
+
+  test("lore_read_evidence reads cited sources in rank order within the response ceiling", async () => {
+    const memories = fakeMemories();
+    const first = "20000000-0000-4000-8000-000000000001";
+    const second = "20000000-0000-4000-8000-000000000002";
+    const source = (index: number, content: string) => ({
+      observationId: `70000000-0000-4000-8000-00000000000${index}`,
+      episodeId: EPISODE_ID,
+      observationOrdinal: index,
+      observationKind: "message" as const,
+      observedAt: "2026-10-01T10:00:00.000000Z",
+      memoryIds: [first],
+      content,
+      contentTruncated: false,
+    });
+    vi.mocked(memories.readMemorySources).mockResolvedValue({
+      sources: [source(1, "The assistant suggested C, G, Am, F."), source(2, "\\".repeat(90_000))],
+      omittedObservationIds: ["70000000-0000-4000-8000-000000000003"],
+    });
+    const client = await connect(memories);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "lore_read_evidence")?.annotations).toMatchObject({
+      readOnlyHint: true,
+    });
+    const result = await client.callTool({
+      name: "lore_read_evidence",
+      arguments: { memoryIds: [first, second] },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(memories.readMemorySources).toHaveBeenCalledWith({
+      memoryIds: [first, second],
+      maximumCharacters: 24_000,
+    });
+    expect(structuredLength(result)).toBeLessThanOrEqual(128_000);
+    const content = result.structuredContent as {
+      sources: { content: string; contentTruncated: boolean }[];
+      omittedObservationIds: string[];
+    };
+    expect(content.sources[0]).toMatchObject({
+      content: "The assistant suggested C, G, Am, F.",
+      contentTruncated: false,
+    });
+    // Escaped backslashes double in JSON, so the second source is cut to fit.
+    expect(content.sources[1]?.contentTruncated).toBe(true);
+    expect(content.omittedObservationIds).toEqual(["70000000-0000-4000-8000-000000000003"]);
+
+    const invalid = await client.callTool({
+      name: "lore_read_evidence",
+      arguments: { memoryIds: [] },
+    });
+    expect(invalid.isError).toBe(true);
+
+    // A source after the one that fills the ceiling is omitted, and its id still fits.
+    vi.mocked(memories.readMemorySources).mockResolvedValue({
+      sources: [source(1, "\\".repeat(90_000)), source(2, "Final detail.")],
+      omittedObservationIds: [],
+    });
+    const full = await client.callTool({
+      name: "lore_read_evidence",
+      arguments: { memoryIds: [first], maxCharacters: 100_000 },
+    });
+    expect(full.isError).not.toBe(true);
+    expect(structuredLength(full)).toBeLessThanOrEqual(128_000);
+    expect(full.structuredContent).toMatchObject({
+      omittedObservationIds: ["70000000-0000-4000-8000-000000000002"],
+      truncated: true,
+    });
+  });
+
+  test("lore_cite_evidence cites each Observation and reports the invisible ones", async () => {
+    const memories = fakeMemories();
+    const memoryId = "20000000-0000-4000-8000-000000000001";
+    const [created, existing, missing] = [1, 2, 3].map(
+      (index) => `70000000-0000-4000-8000-00000000000${index}`,
+    );
+    vi.mocked(memories.citeMemoryObservationEvidence).mockImplementation(async (input) => {
+      if (input.observationId === missing) {
+        throw new LoreApiError("Memory or Observation not found", 404, "not_found");
+      }
+      return {
+        created: input.observationId === created,
+        evidence: { memoryId, observationId: input.observationId } as never,
+      };
+    });
+    const client = await connect(memories);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "lore_cite_evidence")?.annotations).toMatchObject({
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    expect(tools.find((tool) => tool.name === "lore_uncite_evidence")?.annotations).toMatchObject({
+      destructiveHint: true,
+    });
+    const result = await client.callTool({
+      name: "lore_cite_evidence",
+      arguments: { memoryId, observationIds: [created, existing, missing, created] },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({
+      results: [
+        { observationId: created, status: "created" },
+        { observationId: existing, status: "existing" },
+        { observationId: missing, status: "not_found" },
+      ],
+    });
+    const removed = await client.callTool({
+      name: "lore_uncite_evidence",
+      arguments: { memoryId, observationId: existing },
+    });
+    expect(removed.structuredContent).toEqual({ deleted: true });
+    expect(memories.removeMemoryObservationEvidence).toHaveBeenCalledWith({
+      memoryId,
+      observationId: existing,
+    });
   });
 
   test("raw evidence MCP reports result cuts instead of exceeding the response ceiling", async () => {

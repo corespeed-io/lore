@@ -107,7 +107,10 @@ function fixtureMemories(): LoreMcpMemoryClient {
     searchEpisodeEvidence: async () => {
       throw new Error("Raw evidence search is outside this Memory policy fixture");
     },
+    citeMemoryObservationEvidence: async () => unavailable(),
     indexEpisodeEvidence: async () => unavailable(),
+    readMemorySources: async () => unavailable(),
+    removeMemoryObservationEvidence: async () => unavailable(),
     recordEpisode: async () => unavailable(),
     forgetMemory: async () => unavailable(),
     getMemory: async () => memory,

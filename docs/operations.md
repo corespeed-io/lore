@@ -609,6 +609,15 @@ until `0013`'s concurrent builds commit; older instances never call it. The
 expression index on `lore.extract_cjk_grams(content)` computes the CJK terms of every
 chunk once during its build (CPU, not locks) and on each chunk insert afterwards.
 
+`0014` keeps `compatible_from` at 9 too. It is transactional and adds one empty
+table, `memory_observation_evidence`, with its index, policies, and grants. Each of
+its four foreign keys takes SHARE ROW EXCLUSIVE on `agents`, `users`, `observations`,
+and `memories` in that order until commit, so writes to those tables wait for at
+most the 5-second `lock_timeout`; if it expires nothing is recorded and a rerun
+repeats it. The order matches Agent deletion, which locks `agents` before
+`memories`, so the two cannot deadlock. Older instances never name the table, and a
+Memory or Episode they forget removes its rows through the foreign keys.
+
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a
 revision-9 worker embeds whatever chunks a claim returns and writes each by chunk

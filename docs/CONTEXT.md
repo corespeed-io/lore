@@ -136,7 +136,8 @@ anchors visible at submission, and binds an update to one exact Memory version. 
 proposal is not searchable Memory and cannot change canonical Memory until that User
 explicitly accepts it. Acceptance also requires every cited Observation to remain
 visible and atomically copies frozen Code anchors onto the accepted Memory without
-re-resolving them. A content-free Observation id and the immutable Code locator/digest
+re-resolving them, and copies the surviving cited Observations as Memory Observation
+Evidence. A content-free Observation id and the immutable Code locator/digest
 survive deletion of their rebuildable source rows so missing evidence cannot be
 silently ignored. Memory, Observation, and Code evidence share one 50-item limit.
 Each owner has at most 100 pending proposals in one Workspace; reviewing one frees
@@ -144,6 +145,15 @@ capacity for another submission.
 Pending and reviewed proposal content expires after 30 days. Forgetting a target or
 accepted Memory removes its associated proposal content immediately.
 _Avoid_: Draft Memory, automatic Memory, AutoDream result
+
+**Memory Observation Evidence**:
+A canonical Memory's citation of an Observation it came from. It stores ids only.
+It is visible only while both the Memory and the Observation's Episode are visible,
+needs write authority over the Memory to add or remove, and disappears when either
+side is forgotten. Reading a Memory's sources returns the cited Observations'
+original text within a budget, as recorded evidence rather than Memory, for an
+answer the Memory alone cannot give.
+_Avoid_: Source link, Memory Link (a Link joins two Memories), provenance
 
 ## Code-aware evidence
 

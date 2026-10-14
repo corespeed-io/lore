@@ -63,6 +63,7 @@ export const REQUIRED_TENANT_TABLES = [
   "memory_events",
   "memory_import_provenance",
   "memory_links",
+  "memory_observation_evidence",
   "memory_proposal_code_evidence",
   "memory_proposal_evidence",
   "memory_proposal_observation_evidence",

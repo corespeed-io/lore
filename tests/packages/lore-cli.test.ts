@@ -526,6 +526,81 @@ test("CLI links and unlinks Memories by natural key", async () => {
   expect(deleteInit.method).toBe("DELETE");
 });
 
+test("CLI cites, lists, reads, and removes a Memory's source Observations", async () => {
+  const memoryId = "20000000-0000-4000-8000-000000000001";
+  const otherMemoryId = "20000000-0000-4000-8000-000000000002";
+  const observationId = "70000000-0000-4000-8000-000000000001";
+  const evidence = {
+    memoryId,
+    observationId,
+    episodeId: "60000000-0000-4000-8000-000000000001",
+    observationOrdinal: 0,
+    observationKind: "message",
+    observedAt: "2026-10-01T10:00:00.000000Z",
+    createdByUserId: "30000000-0000-4000-8000-000000000001",
+    createdByAgentId: null,
+    createdAt: "2026-10-14T00:00:00.000000Z",
+  };
+  const read = { sources: [], omittedObservationIds: [] };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json(evidence, { status: 201 }))
+    .mockResolvedValueOnce(Response.json([evidence]))
+    .mockResolvedValueOnce(Response.json(read))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+  const run = (args: string[]) => {
+    const captured = captureIo();
+    return runLoreCli(args, {
+      environment: {
+        LORE_URL: "https://lore.example.test",
+        LORE_WORKSPACE_ID: WORKSPACE_ID,
+        LORE_AGENT_TOKEN: AGENT_TOKEN,
+      },
+      fetch: fetchMock,
+      io: captured.io,
+    }).then((exitCode) => ({ exitCode, stdout: captured.stdout.join("") }));
+  };
+
+  const cited = await run(["memory", "cite", memoryId, observationId]);
+  expect(cited.exitCode).toBe(0);
+  expect(JSON.parse(cited.stdout)).toEqual({ evidence, created: true });
+  const listed = await run(["memory", "evidence", memoryId]);
+  expect(JSON.parse(listed.stdout)).toEqual([evidence]);
+  const sources = await run([
+    "memory",
+    "sources",
+    memoryId,
+    otherMemoryId,
+    "--max-characters",
+    "4000",
+  ]);
+  expect(JSON.parse(sources.stdout)).toEqual(read);
+  const removed = await run(["memory", "uncite", memoryId, observationId]);
+  expect(JSON.parse(removed.stdout)).toEqual({ deleted: true });
+
+  const calls = fetchMock.mock.calls as [URL, RequestInit][];
+  const path = `/api/v1/memories/${memoryId}/observation-evidence`;
+  expect(calls.map(([url, init]) => [init.method ?? "GET", url.pathname])).toEqual([
+    ["PUT", `${path}/${observationId}`],
+    ["GET", path],
+    ["POST", "/api/v1/memories/observation-evidence/read"],
+    ["DELETE", `${path}/${observationId}`],
+  ]);
+  expect(JSON.parse(String(calls[2]?.[1].body))).toEqual({
+    memoryIds: [memoryId, otherMemoryId],
+    maximumCharacters: 4000,
+  });
+
+  for (const args of [
+    ["memory", "cite", memoryId],
+    ["memory", "sources"],
+    ["memory", "evidence", memoryId, "--limit", "2"],
+  ]) {
+    expect((await run(args)).exitCode, args.join(" ")).toBe(2);
+  }
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+});
+
 test("CLI links with the default kind and reports a missing Link as not_found", async () => {
   const source = "20000000-0000-4000-8000-000000000001";
   const target = "20000000-0000-4000-8000-000000000002";
