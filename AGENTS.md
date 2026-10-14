@@ -846,22 +846,24 @@ been removed. Lore now has a native implementation, split into two concepts
   Source. `src/modules/episodes/service.ts` owns authorized recording through
   `lore.record_episode` and request replay; Core owns normalized Episode validation,
   storage reads/deletion, and the separate, rebuildable hybrid
-  retrieval index. New Episode admission builds exact lexical chunks in the same
-  transaction as recording and idempotency replay; no provider is called. The
-  chunks are the `partitionMemoryContent` parts of each Observation, but a
-  whitespace-only part is not stored (the chunk table refuses it), so raw
-  whitespace never blocks admission and the Observation stays as written; neighbor
-  expansion stops at such a part, so every excerpt is one exact span. Public
+  retrieval index. Recording an Episode builds no index (the user's 2026-10-14
+  decision: the lexical index takes about 8× the stored raw text, and following a
+  Memory to its source needs none). The owner, or an Agent acting for the owner,
+  builds one Episode's exact lexical chunks on request with `POST
+  /api/v1/episodes/{id}/index`, SDK `indexEpisodeEvidence`, CLI `episode index`, or
+  MCP `lore_index_evidence`; it is idempotent, calls no provider, and searches never
+  backfill as a side effect. The chunks are the `partitionMemoryContent` parts of
+  each Observation, but a whitespace-only part is not stored (the chunk table
+  refuses it), so raw whitespace never blocks indexing and the Observation stays as
+  written; neighbor expansion stops at such a part, so every excerpt is one exact
+  span. Public
   `POST /api/v1/episodes/search`, SDK `searchEpisodeEvidence`, CLI `episode search`,
   and read-only MCP `lore_search_evidence` search raw evidence separately from
   canonical Memory. This first public path is lexical (simple/English FTS plus
   bounded CJK substring grams), not semantic QA or automatic conflict resolution.
   Metadata and Episode scope filter every channel before top-k. Excerpts carry
   Episode/Observation ids, source `observedAt`, and index revision and inclusive exact chunk ordinals;
-  chronology is evidence, not an authority rule. An owner may rebuild an older
-  Episode's missing index with `POST /api/v1/episodes/{id}/index`, SDK
-  `indexEpisodeEvidence`, or CLI `episode index`; searches never backfill as a
-  side effect. The existing optional dense/planning/reranking Core seam remains
+  chronology is evidence, not an authority rule. The existing optional dense/planning/reranking Core seam remains
   available to evaluation, without adding a background Episode embedding job.
   In the index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical

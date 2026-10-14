@@ -251,7 +251,7 @@ export interface paths {
         };
         readonly get?: never;
         readonly put?: never;
-        /** @description Idempotently rebuild exact source chunks for an owned historical Episode. New Episodes are indexed atomically on admission. No model calls. */
+        /** @description Idempotently build exact lexical source chunks for an owned Episode. Recording does not index, and search never indexes. No model calls. */
         readonly post: operations["indexEpisodeEvidence"];
         readonly delete?: never;
         readonly options?: never;
