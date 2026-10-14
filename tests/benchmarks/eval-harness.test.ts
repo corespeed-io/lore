@@ -701,3 +701,89 @@ describe("sandboxes racing on one key", () => {
     await close();
   });
 });
+
+describe("answering a run named twice", () => {
+  it("answers a run once when a gate's base and candidate share it", async () => {
+    const db = new PGlite();
+    const store = await EvalStore.over((text, params) => db.query(text, params as unknown[]));
+    const evalCase: EvalCase = {
+      id: "c1",
+      unitKey: "u",
+      category: "single-hop",
+      question: "Where does Alice live?",
+      readerQuestion: "Where does Alice live?",
+      searchQuery: "Where does Alice live?",
+      answer: "London",
+      evidenceKeys: [],
+      abstention: false,
+      scoring: { locomoCategory: 4 },
+    };
+    const dataset: Dataset = {
+      id: "d",
+      revision: "r",
+      scorer: "locomo-f1",
+      reader: { maximumContextCharacters: 1_000 },
+      index: async () => [],
+      async *units() {
+        yield { key: "u", records: [], cases: [evalCase], tripwires: [] };
+      },
+    };
+    const packetSha = await store.savePacket({
+      items: [{ id: "m", text: "Alice moved to London.", sourceKeys: [] }],
+      latencyMs: 1,
+    });
+    await store.saveRun({
+      id: "shared",
+      refSha: "x",
+      dataset: "d",
+      tier: "standard",
+      system: "s",
+      identity: {},
+      createdAt: "2026-10-14T00:00:00.000Z",
+    });
+    await store.saveResults("shared", [
+      {
+        caseId: "c1",
+        category: "single-hop",
+        packetSha,
+        retrieval: { gold: 0, anyHit: false, allHit: false, reciprocalRank: 0 },
+        latencyMs: 1,
+        isolationFailure: false,
+        answerKey: null,
+        verdictKey: null,
+        score: null,
+        grading: null,
+      },
+    ]);
+    let calls = 0;
+    await answer({
+      store,
+      dataset,
+      runIds: ["shared", "shared"],
+      reader: "gemini-3.5-flash",
+      judge: "gpt-5.6-sol",
+      geminiApiKey: "",
+      budgetUsd: 1,
+      log: () => {},
+      bound: {
+        reader: {
+          identity: { reader: "fake" },
+          identityHash: "fake-reader",
+          render: (question) => question,
+          async answer() {
+            calls += 1;
+            return { text: "London", inputTokens: 1, outputTokens: 1 };
+          },
+        },
+      },
+    });
+    expect(calls).toBe(1);
+    expect((await store.results("shared"))[0]?.score).toBe(1);
+    expect((await store.events("shared")).filter((event) => event.kind === "answer")).toHaveLength(
+      1,
+    );
+    const comparison = await compareRuns(store, "shared", "shared", false);
+    expect(comparison.changedPackets).toBe(0);
+    await db.close();
+  });
+});

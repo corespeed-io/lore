@@ -330,9 +330,11 @@ export async function answer(input: AnswerInput): Promise<void> {
   const grading = gradingIdentity(reader.identityHash, scorer.identity, judge?.identity ?? null);
   // A score from another reader, scorer, or judge is graded again, from cached
   // answers and verdicts where they exist, so one comparison never mixes graders.
+  // A gate whose base and candidate share one run passes it twice; answer it once.
+  const runIds = [...new Set(input.runIds)];
   const pending = (
     await Promise.all(
-      input.runIds.map(async (runId) =>
+      runIds.map(async (runId) =>
         (
           await store.results(runId)
         )

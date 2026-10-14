@@ -292,11 +292,16 @@ export function memorySearchSystem(options: {
           await drainEmbeddingMaintenance({
             run: () => drain.run(),
             concurrency: DRAIN_LEASES,
+            // This batch's jobs still waiting or leased. Another sandbox's drain may
+            // hold a lease on one, so the drain waits for it (or for its lease to
+            // expire and be claimed here) rather than leaving a chunk without a vector.
             pendingJobCount: async () =>
               Number(
                 (
                   await admin.query<{ count: string }>(
-                    "SELECT count(*)::text AS count FROM memory_embedding_jobs WHERE status = 'pending'",
+                    `SELECT count(*)::text AS count FROM memory_embedding_jobs
+                     WHERE workspace_id = ANY($1::uuid[]) AND status IN ('pending', 'processing')`,
+                    [pending.map((unit) => context.workspaceIdFor(unit))],
                   )
                 ).rows[0]?.count ?? 0,
               ),
