@@ -589,7 +589,11 @@ accepted only while both the credential and Workspace grant remain active.
   Link by its natural key (source, target, `?kind=`), and `GET
   /api/v1/memories/:id/links` to page through one Memory's visible Links
   (`direction=outbound|inbound`, newest first, `x-lore-next-cursor`)
-- `/api/v1/episodes`, `/api/v1/episodes/:id`, and bounded Observation evidence reads
+- `/api/v1/episodes`, `/api/v1/episodes/:id`, and bounded Observation evidence reads;
+  read-only `POST /api/v1/episodes/search` for original source excerpts and
+  owner-only `POST /api/v1/episodes/:id/index` to rebuild historical exact chunks.
+  New Episodes are indexed atomically with recording. Search is lexical (English
+  keywords and CJK substrings); canonical Memory retrieval remains separate.
 - `/api/agents`, `/api/agents/:id/credentials`, and grant/credential revocation
 - `/api/evaluations/suites`, suite runs, and run results. The Suite list is paged:
   50 per page by default (`limit` up to 100), with the next page's opaque `cursor`
@@ -661,7 +665,8 @@ printf '%s' '{"kind":"conversation","observations":[{"kind":"message","content":
 The stdio MCP adapter exposes bounded list/search/get, direct version-safe
 remember/update/forget, `lore_link`/`lore_unlink` for Memory Links by natural key,
 read-only `lore_links` to list one Memory's Links,
-`lore_observe` for non-canonical Episode evidence, and
+`lore_observe` for non-canonical Episode evidence, `lore_search_evidence` for
+read-only original excerpts with source timestamps and locators, and
 `lore_propose` for owner-reviewed suggestions in exactly the configured Actor and
 Workspace. Supply the same `idempotencyKey` when retrying a mutation whose response
 was lost:

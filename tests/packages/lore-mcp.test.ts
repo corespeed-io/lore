@@ -109,6 +109,7 @@ function memoryLink(): MemoryLink {
 
 function fakeMemories(): LoreMcpMemoryClient {
   return {
+    searchEpisodeEvidence: vi.fn().mockResolvedValue([]),
     recordEpisode: vi.fn().mockResolvedValue(episode()),
     forgetMemory: vi.fn().mockResolvedValue(undefined),
     getMemory: vi.fn().mockResolvedValue(memory()),
@@ -381,6 +382,7 @@ describe("Lore external MCP adapter", () => {
     expect(tools.map((tool) => tool.name)).toEqual([
       "lore_list",
       "lore_search",
+      "lore_search_evidence",
       "lore_get",
       "lore_remember",
       "lore_observe",
@@ -692,6 +694,107 @@ describe("Lore external MCP adapter", () => {
     const full = await propose(20);
     expect(full.isError).not.toBe(true);
     expect(memories.proposeMemory).toHaveBeenCalledOnce();
+  });
+
+  test("lore_search_evidence returns bounded, traceable raw excerpts through its own read-only tool", async () => {
+    const memories = fakeMemories();
+    const source = episode().observations[0];
+    if (!source) throw new Error("Missing fixture Observation");
+    vi.mocked(memories.searchEpisodeEvidence).mockResolvedValue([
+      {
+        sourceKey: EPISODE_ID,
+        episodeIds: [EPISODE_ID],
+        observationIds: [source.id],
+        evidence: "later correction",
+        metadata: {},
+        score: 0.1,
+        excerpts: [
+          {
+            indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2",
+            episodeId: EPISODE_ID,
+            observationId: source.id,
+            observationOrdinal: 0,
+            observedAt: source.observedAt,
+            chunkStartOrdinal: 4,
+            chunkEndOrdinal: 4,
+            content: "later correction",
+            metadata: { project: "lore", large: "x".repeat(2_000) },
+          },
+        ],
+      },
+    ]);
+    const client = await connect(memories);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "lore_search_evidence")?.annotations).toMatchObject({
+      readOnlyHint: true,
+    });
+    const result = await client.callTool({
+      name: "lore_search_evidence",
+      arguments: { query: "release", scope: "private", metadata: { project: "lore" } },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(memories.searchEpisodeEvidence).toHaveBeenCalledWith({
+      query: "release",
+      limit: 10,
+      scope: "private",
+      metadata: { project: "lore" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      results: [
+        {
+          sourceKey: EPISODE_ID,
+          excerpts: [
+            {
+              indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2",
+              episodeId: EPISODE_ID,
+              observationId: source.id,
+              observedAt: source.observedAt,
+              chunkStartOrdinal: 4,
+              content: "later correction",
+              contentTruncated: false,
+              metadataTruncated: true,
+            },
+          ],
+        },
+      ],
+    });
+    expect(memories.searchMemories).not.toHaveBeenCalled();
+    expect(memories.remember).not.toHaveBeenCalled();
+  });
+
+  test("raw evidence MCP reports result cuts instead of exceeding the response ceiling", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.searchEpisodeEvidence).mockResolvedValue(
+      Array.from({ length: 25 }, () => ({
+        sourceKey: EPISODE_ID,
+        episodeIds: [EPISODE_ID],
+        observationIds: [],
+        metadata: {},
+        evidence: "x".repeat(8_000),
+        score: 0.1,
+        excerpts: Array.from({ length: 5 }, (_, ordinal) => ({
+          indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2",
+          episodeId: EPISODE_ID,
+          observationId: "70000000-0000-4000-8000-000000000001",
+          observationOrdinal: ordinal,
+          observedAt: "2026-10-01T10:00:00Z",
+          chunkStartOrdinal: 0,
+          chunkEndOrdinal: 0,
+          content: "\\".repeat(2_400),
+          metadata: { note: "m".repeat(800) },
+        })),
+      })),
+    );
+    const client = await connect(memories);
+    const result = await client.callTool({
+      name: "lore_search_evidence",
+      arguments: { query: "evidence", limit: 25 },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ truncated: true });
+    expect(structuredLength(result)).toBeLessThanOrEqual(128_000);
+    expect(structuredArray(result, "results").length).toBeGreaterThan(0);
+    expect(structuredArray(result, "results").length).toBeLessThan(25);
   });
 
   test("lore_search and lore_list apply their documented default limits", async () => {

@@ -242,6 +242,40 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/episodes/{episodeId}/index": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** @description Idempotently rebuild exact source chunks for an owned historical Episode. New Episodes are indexed atomically on admission. No model calls. */
+        readonly post: operations["indexEpisodeEvidence"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
+    readonly "/api/v1/episodes/search": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly get?: never;
+        readonly put?: never;
+        /** @description Read-only lexical retrieval of original Observation excerpts. Does not search or create canonical Memory. Filters apply before ranking; timestamps are source chronology, not a guarantee that the newest claim is true. */
+        readonly post: operations["searchEpisodeEvidence"];
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/evaluations/runs/{runId}": {
         readonly parameters: {
             readonly query?: never;
@@ -858,6 +892,42 @@ export interface components {
             /** Format: uuid */
             readonly workspaceId: string;
         };
+        readonly EpisodeEvidenceExcerpt: {
+            readonly chunkEndOrdinal: number;
+            readonly chunkStartOrdinal: number;
+            readonly content: string;
+            /** Format: uuid */
+            readonly episodeId: string;
+            /** @constant */
+            readonly indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2";
+            readonly metadata: {
+                readonly [key: string]: unknown;
+            };
+            /** Format: uuid */
+            readonly observationId: string;
+            readonly observationOrdinal: number;
+            /** Format: date-time */
+            readonly observedAt: string;
+        };
+        readonly EpisodeEvidenceIndex: {
+            readonly chunkCount: number;
+            /** Format: uuid */
+            readonly episodeId: string;
+            /** @constant */
+            readonly indexRevision: "lore-episode-evidence-v1+lore-memory-chunking-v2";
+        };
+        readonly EpisodeEvidenceSearchResult: {
+            readonly episodeIds: readonly string[];
+            readonly evidence: string;
+            readonly excerpts: readonly components["schemas"]["EpisodeEvidenceExcerpt"][];
+            readonly metadata: {
+                readonly [key: string]: unknown;
+            };
+            readonly observationIds: readonly string[];
+            readonly rerankScore?: number;
+            readonly score: number;
+            readonly sourceKey: string;
+        };
         readonly EpisodeSummary: {
             /** Format: date-time */
             readonly createdAt: string;
@@ -1358,6 +1428,16 @@ export interface components {
         readonly RevalidateMemoryCodeEvidenceInput: {
             readonly commitOid: string;
             readonly repositoryKey: string;
+        };
+        readonly SearchEpisodeEvidenceInput: {
+            /** @default 10 */
+            readonly limit?: number;
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            readonly query: string;
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
         };
         readonly UpdateAgentInput: {
             readonly name?: string;
@@ -2068,6 +2148,57 @@ export interface operations {
                 content?: never;
             };
             readonly 404: components["responses"]["Error"];
+        };
+    };
+    readonly indexEpisodeEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path: {
+                readonly episodeId: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Lexical evidence index */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["EpisodeEvidenceIndex"];
+                };
+            };
+            readonly 403: components["responses"]["Error"];
+        };
+    };
+    readonly searchEpisodeEvidence: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header: {
+                readonly "x-lore-workspace-id": string;
+            };
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        readonly requestBody: {
+            readonly content: {
+                readonly "application/json": components["schemas"]["SearchEpisodeEvidenceInput"];
+            };
+        };
+        readonly responses: {
+            /** @description Actor-visible raw evidence with exact chunk locators */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": readonly components["schemas"]["EpisodeEvidenceSearchResult"][];
+                };
+            };
         };
     };
     readonly getEvaluationRun: {

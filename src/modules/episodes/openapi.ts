@@ -1,5 +1,6 @@
-import { MEMORY_LIST_LIMITS } from "@corespeed/lore-core";
+import { MEMORY_LIST_LIMITS, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import {
+  EPISODE_EVIDENCE_INDEX_REVISION,
   EPISODE_KINDS,
   MAX_EPISODE_OBSERVATIONS,
   MAX_OBSERVATION_BATCH_READ,
@@ -47,6 +48,43 @@ const episodeSummaryRequired = [
 ] as const;
 
 export const episodesPaths = {
+  "/api/v1/episodes/search": {
+    post: {
+      operationId: "searchEpisodeEvidence",
+      description:
+        "Read-only lexical retrieval of original Observation excerpts. Does not search or create canonical Memory. Filters apply before ranking; timestamps are source chronology, not a guarantee that the newest claim is true.",
+      parameters: [workspaceHeader],
+      requestBody: requestBody({ $ref: "#/components/schemas/SearchEpisodeEvidenceInput" }),
+      responses: {
+        "200": jsonResponse("Actor-visible raw evidence with exact chunk locators", {
+          type: "array",
+          items: { $ref: "#/components/schemas/EpisodeEvidenceSearchResult" },
+        }),
+      },
+    },
+  },
+  "/api/v1/episodes/{episodeId}/index": {
+    post: {
+      operationId: "indexEpisodeEvidence",
+      description:
+        "Idempotently rebuild exact source chunks for an owned historical Episode. New Episodes are indexed atomically on admission. No model calls.",
+      parameters: [
+        workspaceHeader,
+        {
+          name: "episodeId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      responses: {
+        "200": jsonResponse("Lexical evidence index", {
+          $ref: "#/components/schemas/EpisodeEvidenceIndex",
+        }),
+        "403": { $ref: "#/components/responses/Error" },
+      },
+    },
+  },
   "/api/v1/episodes": {
     get: {
       operationId: "listEpisodes",
@@ -179,6 +217,81 @@ export const episodesPaths = {
 };
 
 export const episodesSchemas = {
+  SearchEpisodeEvidenceInput: {
+    type: "object",
+    additionalProperties: false,
+    required: ["query"],
+    properties: {
+      query: { type: "string", maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: MEMORY_SEARCH_LIMITS.maximumLimit,
+        default: MEMORY_SEARCH_LIMITS.defaultLimit,
+      },
+      scope: memoryScopeSchema,
+      metadata: metadataSchema,
+    },
+  },
+  EpisodeEvidenceIndex: {
+    type: "object",
+    additionalProperties: false,
+    required: ["episodeId", "chunkCount", "indexRevision"],
+    properties: {
+      episodeId: { type: "string", format: "uuid" },
+      chunkCount: { type: "integer", minimum: 1 },
+      indexRevision: { type: "string", const: EPISODE_EVIDENCE_INDEX_REVISION },
+    },
+  },
+  EpisodeEvidenceExcerpt: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "indexRevision",
+      "episodeId",
+      "observationId",
+      "observationOrdinal",
+      "observedAt",
+      "chunkStartOrdinal",
+      "chunkEndOrdinal",
+      "content",
+      "metadata",
+    ],
+    properties: {
+      indexRevision: { type: "string", const: EPISODE_EVIDENCE_INDEX_REVISION },
+      episodeId: { type: "string", format: "uuid" },
+      observationId: { type: "string", format: "uuid" },
+      observationOrdinal: { type: "integer", minimum: 0, maximum: MAX_EPISODE_OBSERVATIONS - 1 },
+      observedAt: { type: "string", format: "date-time" },
+      chunkStartOrdinal: { type: "integer", minimum: 0 },
+      chunkEndOrdinal: { type: "integer", minimum: 0 },
+      content: { type: "string" },
+      metadata: metadataSchema,
+    },
+  },
+  EpisodeEvidenceSearchResult: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "sourceKey",
+      "episodeIds",
+      "observationIds",
+      "metadata",
+      "evidence",
+      "excerpts",
+      "score",
+    ],
+    properties: {
+      sourceKey: { type: "string" },
+      episodeIds: { type: "array", items: { type: "string", format: "uuid" } },
+      observationIds: { type: "array", items: { type: "string", format: "uuid" } },
+      metadata: metadataSchema,
+      evidence: { type: "string" },
+      excerpts: { type: "array", items: { $ref: "#/components/schemas/EpisodeEvidenceExcerpt" } },
+      score: { type: "number" },
+      rerankScore: { type: "number" },
+    },
+  },
   RecordObservationInput: {
     type: "object",
     additionalProperties: false,

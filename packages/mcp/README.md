@@ -1,7 +1,8 @@
 # `@corespeed/lore-mcp`
 
 External stdio Model Context Protocol adapter for Lore. It exposes bounded Memory
-read and write tools, durable non-canonical `lore_observe` Episode recording, and
+read and write tools, durable non-canonical `lore_observe` Episode recording, separate
+read-only `lore_search_evidence` for original Observation excerpts, and
 human-reviewed `lore_propose` submissions for one configured Actor and Workspace.
 `lore_propose.codeEvidence` accepts bounded `{ artifactId, relationship }` entries,
 freezes exact Code anchors for human review, and copies them to the Memory only on
@@ -51,7 +52,16 @@ specialist Memory, Code search, or dependency tools only for bounded follow-up.
 
 Memory tools accept one coherent canonical record, with a hard limit of 32,000
 Unicode characters and 64 derived chunks. Use `lore_observe` with a document
-Episode for longer raw source material.
+Episode for longer raw source material. New Episodes commit exact source chunks
+with recording; `lore_search_evidence` retrieves bounded excerpts with source
+timestamps, Episode/Observation ids, and index revision and inclusive chunk ordinals. Its first public
+path is lexical (English keywords and CJK substrings), with no model dependency.
+Metadata and Episode scope filters apply before ranking. It never promotes facts
+into Memory or resolves contradictions automatically. Output metadata/content cuts
+are explicit; top-level `truncated` marks results dropped at the response ceiling.
+Use `lore_search` as well when canonical decisions or conventions are relevant.
+Older Episodes require an explicit owner-authorized index rebuild through SDK
+`indexEpisodeEvidence` or CLI `episode index`.
 
 See the repository's [developer integration guide](https://github.com/corespeed-io/lore/blob/main/docs/developer-integration.md)
 for secure configuration.

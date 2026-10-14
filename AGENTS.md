@@ -846,7 +846,24 @@ been removed. Lore now has a native implementation, split into two concepts
   Source. `src/modules/episodes/service.ts` owns authorized recording through
   `lore.record_episode` and request replay; Core owns normalized Episode validation,
   storage reads/deletion, and the separate, rebuildable hybrid
-  retrieval index: exact Observation partitions and generation-scoped vectors stay
+  retrieval index. New Episode admission builds exact lexical chunks in the same
+  transaction as recording and idempotency replay; no provider is called. The
+  chunks are the `partitionMemoryContent` parts of each Observation, but a
+  whitespace-only part is not stored (the chunk table refuses it), so raw
+  whitespace never blocks admission and the Observation stays as written; neighbor
+  expansion stops at such a part, so every excerpt is one exact span. Public
+  `POST /api/v1/episodes/search`, SDK `searchEpisodeEvidence`, CLI `episode search`,
+  and read-only MCP `lore_search_evidence` search raw evidence separately from
+  canonical Memory. This first public path is lexical (simple/English FTS plus
+  bounded CJK substring grams), not semantic QA or automatic conflict resolution.
+  Metadata and Episode scope filter every channel before top-k. Excerpts carry
+  Episode/Observation ids, source `observedAt`, and index revision and inclusive exact chunk ordinals;
+  chronology is evidence, not an authority rule. An owner may rebuild an older
+  Episode's missing index with `POST /api/v1/episodes/{id}/index`, SDK
+  `indexEpisodeEvidence`, or CLI `episode index`; searches never backfill as a
+  side effect. The existing optional dense/planning/reranking Core seam remains
+  available to evaluation, without adding a background Episode embedding job.
+  In the index: exact Observation partitions and generation-scoped vectors stay
   under Episode RLS, may be source-scoped before top-k, and never become canonical
   Memory. Any future automatic retention must be an explicit opt-in deployment policy;
 - The API route handlers and canonical OpenAPI document define one public API contract.
@@ -1597,6 +1614,15 @@ Benchmark is part of the product quality system even without AutoDream.
   no-answer case and records the policy in provenance, so Lore reports positive
   retrieval and no-answer accuracy separately. `noAnswerAccuracy` is null when a
   suite has no no-answer cases.
+- `tools/evaluation/retrieval/run-memory-evidence.ts` pairs the frozen LongMemEval-S
+  fact Memories with raw Episode evidence. `run-memory-source-expansion.ts` replays
+  that run's saved Memory top 10 verbatim and adds raw text from a re-seeded
+  disposable 1536-dimension database, never cutting Memory evidence inside the
+  reader cap (`docs/research/memory-source-expansion.md`). Its fact-to-session
+  mapping is benchmark metadata; production Memories have no Observation link yet.
+  Arms pair only within one answer profile. A Codex judge on a ChatGPT login cannot
+  run `gpt-4o`, so the `gemini-codex` profile (direct Gemini reader, GPT-5.5 judge)
+  re-answers Memory-only and is not comparable to GPT-4o-judged scores.
 - `evaluation/external/longmemeval-v2.json` pins the newer V2 questions, haystacks,
   and 1.2 GB textual trajectory file. `benchmark:longmemeval-v2:fetch` defaults to
   metadata-only and requires an explicit `small`/`medium` argument before fetching

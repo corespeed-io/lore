@@ -49,6 +49,8 @@ Commands:
   memory link <source-memory-id> <target-memory-id> [--kind KIND] [--weight N] [--metadata JSON]
   memory unlink <source-memory-id> <target-memory-id> [--kind KIND]
   memory links <memory-id> [--direction outbound|inbound] [--limit N] [--cursor CURSOR]
+  episode search <query>|--stdin [--limit N] [--scope shared|private] [--metadata JSON]
+  episode index <episode-id>
   episode list [--limit N] [--cursor CURSOR] [--kind conversation|workflow|document|event] [--scope shared|private]
   episode record --stdin [--idempotency-key KEY]
   episode get <episode-id>
@@ -419,6 +421,34 @@ export async function runLoreCli(
             ? { symbol: parsed.values.symbol }
             : { path: parsed.values.path }),
         }),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "episode" && action === "search") {
+      const fromStdin = parsed.values.stdin === true;
+      exactPositionals(parsed.positionals, fromStdin ? 2 : 3, "episode search <query>|--stdin");
+      allowedOptions(parsed.values, ["limit", "scope", "metadata", "stdin"]);
+      output(
+        io,
+        await workspace.searchEpisodeEvidence({
+          query: fromStdin
+            ? await stdinValue(io, LORE_CONTRACT.limits.memorySearchQueryLength, "query")
+            : requiredPosition(parsed.positionals, 2, "query"),
+          limit: optionInteger(parsed.values.limit, "--limit"),
+          scope: optionScope(parsed.values.scope),
+          metadata: optionMetadata(parsed.values.metadata),
+        }),
+        pretty,
+      );
+      return 0;
+    }
+    if (group === "episode" && action === "index") {
+      exactPositionals(parsed.positionals, 3, "episode index <episode-id>");
+      allowedOptions(parsed.values, []);
+      output(
+        io,
+        await workspace.indexEpisodeEvidence(requiredPosition(parsed.positionals, 2, "episode id")),
         pretty,
       );
       return 0;

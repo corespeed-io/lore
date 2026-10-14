@@ -104,6 +104,9 @@ function fixtureGuardArtifact(commitOid: string): CodeArtifact {
 function fixtureMemories(): LoreMcpMemoryClient {
   const memory = fixtureMemory();
   return {
+    searchEpisodeEvidence: async () => {
+      throw new Error("Raw evidence search is outside this Memory policy fixture");
+    },
     recordEpisode: async () => unavailable(),
     forgetMemory: async () => unavailable(),
     getMemory: async () => memory,
