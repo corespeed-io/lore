@@ -854,6 +854,22 @@ describe("Lore external MCP adapter", () => {
       arguments: { memoryIds: [] },
     });
     expect(invalid.isError).toBe(true);
+
+    // A source after the one that fills the ceiling is omitted, and its id still fits.
+    vi.mocked(memories.readMemorySources).mockResolvedValue({
+      sources: [source(1, "\\".repeat(90_000)), source(2, "Final detail.")],
+      omittedObservationIds: [],
+    });
+    const full = await client.callTool({
+      name: "lore_read_evidence",
+      arguments: { memoryIds: [first], maxCharacters: 100_000 },
+    });
+    expect(full.isError).not.toBe(true);
+    expect(structuredLength(full)).toBeLessThanOrEqual(128_000);
+    expect(full.structuredContent).toMatchObject({
+      omittedObservationIds: ["70000000-0000-4000-8000-000000000002"],
+      truncated: true,
+    });
   });
 
   test("lore_cite_evidence cites each Observation and reports the invisible ones", async () => {

@@ -1058,8 +1058,15 @@ function registerLinkTools(server: McpServer, memories: LoreMcpMemoryClient): vo
           maximumCharacters: maxCharacters,
         });
         // The read is already within maxCharacters; JSON escaping may still need a cut.
-        const envelope = { sources: [], omittedObservationIds: read.omittedObservationIds };
-        let remaining = remainingOutputCharacters({ ...envelope, truncated: true });
+        // Any source may end up omitted here, so its id is reserved up front.
+        let remaining = remainingOutputCharacters({
+          sources: [],
+          omittedObservationIds: [
+            ...read.sources.map((source) => source.observationId),
+            ...read.omittedObservationIds,
+          ],
+          truncated: true,
+        });
         const sources: z.infer<typeof sourceObservationSchema>[] = [];
         const omitted: string[] = [];
         for (const source of read.sources) {
