@@ -12,7 +12,6 @@ import {
 } from "../../tools/evaluation/harness/embedding-cache";
 import {
   answer,
-  CORPUS_ENTRIES,
   compareRuns,
   gradingIdentity,
   RUN_ENTRIES,
@@ -21,7 +20,9 @@ import {
   uuidFromHash,
 } from "../../tools/evaluation/harness/harness";
 import { identityHash, sha256 } from "../../tools/evaluation/harness/hash";
+import { memorySourcesSystem } from "../../tools/evaluation/harness/memory-sources";
 import { longMemEvalRubricPrompt, rubricVerdict } from "../../tools/evaluation/harness/scorers";
+import { sourceLayout } from "../../tools/evaluation/harness/source-layout";
 import {
   compare,
   gate,
@@ -30,6 +31,7 @@ import {
   wilson95,
 } from "../../tools/evaluation/harness/stats";
 import { EvalStore } from "../../tools/evaluation/harness/store";
+import { memorySearchSystem } from "../../tools/evaluation/harness/systems";
 import { selectTier } from "../../tools/evaluation/harness/tiers";
 import type { Dataset, EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
 import { warmFromDatabase } from "../../tools/evaluation/harness/warm";
@@ -337,24 +339,42 @@ describe("what a run may reuse", () => {
     expect(codeIdentity([join(relocked, "entry.ts")], relocked).digest).not.toBe(identity.digest);
   });
 
-  it("keys runs by everything that stores results, and corpora by the ingest path only", () => {
+  it("keys runs by everything that stores results, and corpora by the ingest path only", async () => {
     const harness = join(process.cwd(), "tools/evaluation/harness");
-    const closure = (entries: readonly string[]) =>
-      codeIdentity(
-        entries.map((entry) => join(harness, entry)),
-        process.cwd(),
-      ).paths;
-    const run = closure(RUN_ENTRIES);
-    const corpus = closure(CORPUS_ENTRIES);
-    for (const file of ["store.ts", "harness.ts", "datasets.ts", "systems.ts"]) {
-      expect(run).toContain(`tools/evaluation/harness/${file}`);
+    const closure = (entries: readonly string[]) => codeIdentity(entries, process.cwd()).paths;
+    const store = await memoryStore();
+    for (const system of [
+      memorySearchSystem({ store, geminiApiKey: "unused-in-this-test" }),
+      memorySourcesSystem({ store, geminiApiKey: "unused-in-this-test", layout: sourceLayout }),
+    ]) {
+      const run = closure([
+        ...RUN_ENTRIES.map((entry) => join(harness, entry)),
+        ...system.runEntries,
+      ]);
+      const corpus = closure(system.corpusEntries);
+      for (const file of ["store.ts", "harness.ts", "datasets.ts", "system-common.ts"]) {
+        expect(run).toContain(`tools/evaluation/harness/${file}`);
+      }
+      expect(run).toContain("packages/lore-core/src/memory-chunking.ts");
+      // Storage, reporting, and layout edits must not seed new corpora.
+      for (const file of ["store.ts", "run-eval.ts", "source-layout.ts"]) {
+        expect(corpus).not.toContain(`tools/evaluation/harness/${file}`);
+      }
+      expect(corpus).not.toContain("packages/typescript-sdk/src/index.ts");
+      expect(corpus).toContain("packages/lore-core/src/memory-chunking.ts");
+      expect(corpus).toContain("src/modules/memories/service.ts");
     }
-    expect(run).toContain("packages/lore-core/src/memory-chunking.ts");
-    // Storage and reporting edits must not seed new corpora.
-    expect(corpus).not.toContain("tools/evaluation/harness/store.ts");
-    expect(corpus).not.toContain("tools/evaluation/harness/run-eval.ts");
-    expect(corpus).toContain("packages/lore-core/src/memory-chunking.ts");
-    expect(corpus).toContain("src/modules/memories/service.ts");
+    // The layout's SDK is part of a sources run, so an SDK change gets new packets.
+    const sources = memorySourcesSystem({
+      store,
+      geminiApiKey: "unused-in-this-test",
+      layout: sourceLayout,
+    });
+    expect(closure(sources.runEntries)).toContain("packages/typescript-sdk/src/index.ts");
+    expect(closure(sources.corpusEntries)).toContain(
+      "src/modules/episodes/observation-evidence.ts",
+    );
+    await store.close();
   });
 
   it("refuses code that resolves outside the checkout", () => {

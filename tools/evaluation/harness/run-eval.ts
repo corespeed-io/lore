@@ -5,6 +5,7 @@
  *
  *   bun tools/evaluation/harness/run-eval.ts run  --dataset locomo --tier smoke
  *   bun tools/evaluation/harness/run-eval.ts gate --base origin/main --dataset longmemeval-s,locomo --tier standard
+ *   bun tools/evaluation/harness/run-eval.ts gate --base origin/main --system memory-sources --dataset longmemeval-s-facts --tier standard
  *   bun tools/evaluation/harness/run-eval.ts report --run <id> [--vs <id>]
  *   bun tools/evaluation/harness/run-eval.ts gc [--older-than-days 14]
  *   bun tools/evaluation/harness/run-eval.ts warm --from-database <name>
@@ -41,6 +42,7 @@ import {
   tierAnswers,
 } from "./harness";
 import { sha256 } from "./hash";
+import { memorySourcesSystem } from "./memory-sources";
 import {
   isJudgeProfile,
   isReaderProfile,
@@ -48,6 +50,7 @@ import {
   type ReaderProfileName,
 } from "./profiles";
 import { createScorer } from "./scorers";
+import { sourceLayout } from "./source-layout";
 import { EvalStore, type RunEvent } from "./store";
 import { memorySearchSystem } from "./systems";
 import { isTier, type TierName } from "./tiers";
@@ -88,6 +91,7 @@ const { values, positionals } = parseArgs({
   options: {
     dataset: { type: "string" },
     tier: { type: "string", default: "smoke" },
+    system: { type: "string", default: "memory-search" },
     ref: { type: "string", default: "worktree" },
     base: { type: "string" },
     candidate: { type: "string", default: "worktree" },
@@ -115,6 +119,22 @@ function datasetsOption(): DatasetName[] {
   }
   return names as DatasetName[];
 }
+/** The product paths the harness can measure. */
+const SYSTEMS = {
+  "memory-search": (store: EvalStore, geminiApiKey: string) =>
+    memorySearchSystem({ store, geminiApiKey }),
+  "memory-sources": (store: EvalStore, geminiApiKey: string) =>
+    memorySourcesSystem({ store, geminiApiKey, layout: sourceLayout }),
+} as const;
+type SystemName = keyof typeof SYSTEMS;
+function systemOption(): SystemName {
+  const name = values.system ?? "memory-search";
+  if (!Object.hasOwn(SYSTEMS, name)) {
+    throw new Error(`--system must be one of ${Object.keys(SYSTEMS).join(", ")}`);
+  }
+  return name as SystemName;
+}
+
 function tierOption(): TierName {
   if (!isTier(values.tier)) throw new Error("--tier must be smoke, standard, or full");
   return values.tier;
@@ -131,7 +151,7 @@ function profiles(): { reader: ReaderProfileName; judge: JudgeProfileName; budge
 /** Collect in this checkout, under the code it holds. */
 async function collectHere(dataset: DatasetName, tier: TierName, refSha: string): Promise<string> {
   const store = await openStore();
-  const system = memorySearchSystem({ store, geminiApiKey: required("GEMINI_API_KEY") });
+  const system = SYSTEMS[systemOption()](store, required("GEMINI_API_KEY"));
   try {
     const runId = await collect({
       store,
@@ -194,6 +214,8 @@ async function collectAt(ref: string, dataset: DatasetName, tier: TierName): Pro
       dataset,
       "--tier",
       tier,
+      "--system",
+      systemOption(),
       "--ref-sha",
       sha,
     ],

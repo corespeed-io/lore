@@ -16,7 +16,7 @@ import {
 import { createScorer, type Scorer } from "./scorers";
 import { type GateResult, gate, type PairedScore, wilson95 } from "./stats";
 import type { CaseResult, EvalStore, RunEvent } from "./store";
-import { EMBEDDING_SPACE } from "./systems";
+import { EMBEDDING_SPACE } from "./system-common";
 import { selectTier, TIERS, type TierName } from "./tiers";
 import type {
   Dataset,
@@ -109,14 +109,13 @@ export interface CollectInput {
 }
 
 const HARNESS_DIRECTORY = dirname(fileURLToPath(import.meta.url));
-/** The files whose imports decide what a System stores. */
-export const CORPUS_ENTRIES = ["systems.ts"];
 /**
- * The files whose imports decide a run's stored results: the corpus, the dataset
- * adapters, collection, and the store that saves Packets and results (which
- * harness.ts imports as types only, so its closure would miss it).
+ * The harness files whose imports decide a run's stored results, beside the
+ * System's own entries: the dataset adapters, collection, and the store that saves
+ * Packets and results (which harness.ts imports as types only, so its closure
+ * would miss it). What a System stores is decided by its `corpusEntries` alone.
  */
-export const RUN_ENTRIES = ["harness.ts", "datasets.ts", "systems.ts", "store.ts"];
+export const RUN_ENTRIES = ["harness.ts", "datasets.ts", "store.ts"];
 /** Held shared by every collection, and exclusively by clean-up, in each eval database. */
 export const CORPUS_LOCK = "lore-eval-corpora";
 
@@ -135,9 +134,11 @@ export async function collect(input: CollectInput): Promise<string> {
   const { store, dataset, tier, system } = input;
   const startedAt = new Date();
   const selected = selectTier(await dataset.index(), tier, dataset.tierSizes?.[tier]);
-  const at = (entries: string[]) => entries.map((entry) => join(HARNESS_DIRECTORY, entry));
-  const corpusCode = codeIdentity(at(CORPUS_ENTRIES), input.checkoutRoot);
-  const runCode = codeIdentity(at(RUN_ENTRIES), input.checkoutRoot);
+  const corpusCode = codeIdentity(system.corpusEntries, input.checkoutRoot);
+  const runCode = codeIdentity(
+    [...RUN_ENTRIES.map((entry) => join(HARNESS_DIRECTORY, entry)), ...system.runEntries],
+    input.checkoutRoot,
+  );
   const engine = realpathSync(Bun.resolveSync("@corespeed/lore-core", HARNESS_DIRECTORY));
   const database = await ensureEvalDatabase({
     serverUrl: input.serverUrl,
