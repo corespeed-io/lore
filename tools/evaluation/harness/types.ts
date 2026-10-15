@@ -16,6 +16,16 @@ export interface CorpusRecord {
   anchorKey?: string;
   observedAt?: string;
   metadata?: Record<string, string | number | boolean>;
+  /** Keys of the Unit's sources this record was made from; a system may cite them. */
+  cites?: string[];
+}
+
+/** One raw source a Unit's records came from, such as a whole conversation session. */
+export interface SourceRecord {
+  key: string;
+  text: string;
+  /** RFC 3339 time the source was recorded. */
+  observedAt: string;
 }
 
 export type ScorerId = "longmemeval-judge-v1" | "locomo-f1";
@@ -45,6 +55,8 @@ export interface EvalUnit {
   cases: EvalCase[];
   /** Private text another user owns; any search that returns it is an isolation failure. */
   tripwires: string[];
+  /** The raw sources `records` cite, for systems that store and read them. */
+  sources?: SourceRecord[];
 }
 
 export interface DatasetCaseIndex {
@@ -117,6 +129,13 @@ export interface IngestOutcome {
 
 export interface EvalSystem {
   id: string;
+  /**
+   * Files whose imports decide what this system stores: the corpus key hashes their
+   * code. Keep retrieval-only code, such as an injected layout, out of them.
+   */
+  corpusEntries: string[];
+  /** Files whose imports decide its Packets besides the corpus; part of the run key. */
+  runEntries: string[];
   /** What is ingested, in words; the code digest covers how. Part of the corpus key. */
   ingestIdentity(): Record<string, unknown>;
   /** Everything that decides a Packet besides the code; part of the run key. */

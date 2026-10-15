@@ -12,7 +12,6 @@ import {
 } from "../../tools/evaluation/harness/embedding-cache";
 import {
   answer,
-  CORPUS_ENTRIES,
   compareRuns,
   gradingIdentity,
   RUN_ENTRIES,
@@ -21,7 +20,9 @@ import {
   uuidFromHash,
 } from "../../tools/evaluation/harness/harness";
 import { identityHash, sha256 } from "../../tools/evaluation/harness/hash";
+import { memorySourcesSystem } from "../../tools/evaluation/harness/memory-sources";
 import { longMemEvalRubricPrompt, rubricVerdict } from "../../tools/evaluation/harness/scorers";
+import { sourceLayout, sourceLayoutFor } from "../../tools/evaluation/harness/source-layout";
 import {
   compare,
   gate,
@@ -30,6 +31,7 @@ import {
   wilson95,
 } from "../../tools/evaluation/harness/stats";
 import { EvalStore } from "../../tools/evaluation/harness/store";
+import { memorySearchSystem } from "../../tools/evaluation/harness/systems";
 import { selectTier } from "../../tools/evaluation/harness/tiers";
 import type { Dataset, EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
 import { warmFromDatabase } from "../../tools/evaluation/harness/warm";
@@ -337,24 +339,42 @@ describe("what a run may reuse", () => {
     expect(codeIdentity([join(relocked, "entry.ts")], relocked).digest).not.toBe(identity.digest);
   });
 
-  it("keys runs by everything that stores results, and corpora by the ingest path only", () => {
+  it("keys runs by everything that stores results, and corpora by the ingest path only", async () => {
     const harness = join(process.cwd(), "tools/evaluation/harness");
-    const closure = (entries: readonly string[]) =>
-      codeIdentity(
-        entries.map((entry) => join(harness, entry)),
-        process.cwd(),
-      ).paths;
-    const run = closure(RUN_ENTRIES);
-    const corpus = closure(CORPUS_ENTRIES);
-    for (const file of ["store.ts", "harness.ts", "datasets.ts", "systems.ts"]) {
-      expect(run).toContain(`tools/evaluation/harness/${file}`);
+    const closure = (entries: readonly string[]) => codeIdentity(entries, process.cwd()).paths;
+    const store = await memoryStore();
+    for (const system of [
+      memorySearchSystem({ store, geminiApiKey: "unused-in-this-test" }),
+      memorySourcesSystem({ store, geminiApiKey: "unused-in-this-test", layout: sourceLayout }),
+    ]) {
+      const run = closure([
+        ...RUN_ENTRIES.map((entry) => join(harness, entry)),
+        ...system.runEntries,
+      ]);
+      const corpus = closure(system.corpusEntries);
+      for (const file of ["store.ts", "harness.ts", "datasets.ts", "system-common.ts"]) {
+        expect(run).toContain(`tools/evaluation/harness/${file}`);
+      }
+      expect(run).toContain("packages/lore-core/src/memory-chunking.ts");
+      // Storage, reporting, and layout edits must not seed new corpora.
+      for (const file of ["store.ts", "run-eval.ts", "source-layout.ts"]) {
+        expect(corpus).not.toContain(`tools/evaluation/harness/${file}`);
+      }
+      expect(corpus).not.toContain("packages/typescript-sdk/src/index.ts");
+      expect(corpus).toContain("packages/lore-core/src/memory-chunking.ts");
+      expect(corpus).toContain("src/modules/memories/service.ts");
     }
-    expect(run).toContain("packages/lore-core/src/memory-chunking.ts");
-    // Storage and reporting edits must not seed new corpora.
-    expect(corpus).not.toContain("tools/evaluation/harness/store.ts");
-    expect(corpus).not.toContain("tools/evaluation/harness/run-eval.ts");
-    expect(corpus).toContain("packages/lore-core/src/memory-chunking.ts");
-    expect(corpus).toContain("src/modules/memories/service.ts");
+    // The layout's SDK is part of a sources run, so an SDK change gets new packets.
+    const sources = memorySourcesSystem({
+      store,
+      geminiApiKey: "unused-in-this-test",
+      layout: sourceLayout,
+    });
+    expect(closure(sources.runEntries)).toContain("packages/typescript-sdk/src/index.ts");
+    expect(closure(sources.corpusEntries)).toContain(
+      "src/modules/episodes/observation-evidence.ts",
+    );
+    await store.close();
   });
 
   it("refuses code that resolves outside the checkout", () => {
@@ -383,6 +403,30 @@ describe("what a run may reuse", () => {
       unitWorkspaceId("corpus-a", { ...unit, records: [{ key: "r1", text: "Alice moved." }] }),
     ).not.toBe(id);
     expect(unitWorkspaceId("corpus-a", { ...unit, tripwires: ["other"] })).not.toBe(id);
+    // The id of a Unit without sources does not depend on the field existing.
+    expect(id).toBe(
+      uuidFromHash(
+        identityHash({
+          corpus: "corpus-a",
+          unit: unit.key,
+          records: unit.records,
+          tripwires: unit.tripwires,
+        }),
+      ),
+    );
+    const withSources: EvalUnit = {
+      ...unit,
+      sources: [{ key: "s1", text: "Session text.", observedAt: "2023-05-20T02:21:00.000Z" }],
+    };
+    const sourced = unitWorkspaceId("corpus-a", withSources);
+    expect(sourced).not.toBe(id);
+    for (const changed of [
+      { key: "s2", text: "Session text.", observedAt: "2023-05-20T02:21:00.000Z" },
+      { key: "s1", text: "Other text.", observedAt: "2023-05-20T02:21:00.000Z" },
+      { key: "s1", text: "Session text.", observedAt: "2023-05-21T02:21:00.000Z" },
+    ]) {
+      expect(unitWorkspaceId("corpus-a", { ...withSources, sources: [changed] })).not.toBe(sourced);
+    }
   });
 
   it("keeps provenance per run and remembers which corpora were used", async () => {
@@ -785,5 +829,61 @@ describe("answering a run named twice", () => {
     const comparison = await compareRuns(store, "shared", "shared", false);
     expect(comparison.changedPackets).toBe(0);
     await db.close();
+  });
+});
+
+describe("the order an agent reads sources in", () => {
+  const memoryIds = ["m1", "m2", "m3"];
+  const sources = [
+    { observationId: "o1", memoryIds: ["m1"] },
+    { observationId: "o2", memoryIds: ["m3"] },
+    { observationId: "o3", memoryIds: ["m1", "m2"] },
+  ];
+
+  it("puts every Memory first when the checkout has two calls", () => {
+    const layout = sourceLayoutFor(undefined, "x");
+    expect(layout.name).toMatch(/^two calls/);
+    expect(layout.arrange(memoryIds, sources)).toEqual([
+      { kind: "memory", index: 0 },
+      { kind: "memory", index: 1 },
+      { kind: "memory", index: 2 },
+      { kind: "source", index: 0 },
+      { kind: "source", index: 1 },
+      { kind: "source", index: 2 },
+    ]);
+  });
+
+  it("puts each Memory's sources after it when the SDK exports attachMemorySources", () => {
+    // The contract a checkout's SDK may export: each source after its first citing result.
+    const attachMemorySources = (
+      results: ReadonlyArray<{ memory: { id: string } }>,
+      read: { sources: ReadonlyArray<{ observationId: string; memoryIds: readonly string[] }> },
+    ) =>
+      results.map((_, index) => ({
+        sources: read.sources.filter(
+          (source) =>
+            results.findIndex((other) => source.memoryIds.includes(other.memory.id)) === index,
+        ),
+      }));
+    const layout = sourceLayoutFor(attachMemorySources, "x");
+    expect(layout.name).toMatch(/^sdk attachMemorySources/);
+    expect(layout.arrange(memoryIds, sources)).toEqual([
+      { kind: "memory", index: 0 },
+      { kind: "source", index: 0 },
+      { kind: "source", index: 2 },
+      { kind: "memory", index: 1 },
+      { kind: "memory", index: 2 },
+      { kind: "source", index: 1 },
+    ]);
+    // This checkout's SDK has none, so its runs read as an agent's two calls do.
+    expect(sourceLayout.name).toMatch(/^two calls/);
+  });
+
+  it("refuses an SDK order that leaves a source out", () => {
+    const dropsAll = (results: ReadonlyArray<{ memory: { id: string } }>) =>
+      results.map(() => ({ sources: [] }));
+    expect(() => sourceLayoutFor(dropsAll, "x").arrange(memoryIds, sources)).toThrow(
+      "placed 0 of 3 sources",
+    );
   });
 });

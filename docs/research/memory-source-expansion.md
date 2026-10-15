@@ -382,6 +382,34 @@ session keys stand in for the link of step 1. A Memory written directly by an ag
 without a citation has no source to expand; then only independent raw search can
 help, and that needs a raw index.
 
+## Order alone: each Memory's sources beside it (2026-10-15)
+
+The product-path rerun had put each source right after its Memory and scored 450
+against 442 for the API's order (10 fixed, 2 broken, p = 0.039). That run changed
+two things at once: the order, and the rule that sizes the sources. The eval
+harness then tested the order alone.
+
+- **Setup:**
+  - Command: `bun run eval gate --base origin/main --system memory-sources
+    --dataset longmemeval-s-facts --tier standard`.
+  - Questions: 140, stratified.
+  - Records: fact Memories, each citing its whole session.
+  - Read: the same sources at the same default budget on both sides.
+  - Base: main's order, as `lore_search` then `lore_read_evidence` returns it:
+    every Memory first.
+  - Candidate: each Memory then its own sources, through
+    `lore_search withSources` (branch `experiment/lore-search-with-sources`,
+    4638d76).
+  - Reader: Gemini 3.5 Flash. Judge: GPT-5.6 Sol.
+- **Result:**
+  - Answers: 87.9% against 89.3%, 6 fixed and 4 broken, McNemar p = 0.75, 95%
+    interval [−2.9, +5.7] points.
+  - Retrieval: identical.
+  - Verdict: `no-evidence`, so `withSources` was not shipped.
+- **Reading:** order alone moves little. The earlier gain more likely came from
+  the sizing rule. That is unverified: gate the sizing rule alone before changing
+  how `lore_read_evidence` fills its budget.
+
 ## Artifacts and reproduction
 
 Runner: [run-memory-source-expansion.ts](../../tools/evaluation/retrieval/run-memory-source-expansion.ts);

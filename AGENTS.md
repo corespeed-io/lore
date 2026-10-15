@@ -1678,6 +1678,14 @@ Benchmark is part of the product quality system even without AutoDream.
     - Units seeded and reused;
     - embeddings, answers, and verdicts from the store and new.
     State reuse only from those lines.
+  - **Systems:** `--system memory-search` (default) stores each record as a
+    Memory and asks one search. `--system memory-sources` also stores each
+    source as an Observation the record's Memory cites, and reads those sources
+    after the search. It lays them out as the checkout's SDK does: with an
+    `attachMemorySources` export, each Memory then its sources; without it (main),
+    every Memory first, as `lore_search` then `lore_read_evidence` returns them. Use it with `--dataset longmemeval-s-facts`, the frozen corpus's fact
+    Memories (pinned export). The frozen corpus's tripwire fact restates the gold
+    answer and is never a record.
   - **Before claiming a change helps:** run `bun run eval gate --base
     origin/main --tier standard` and put the report in the PR.
 - `tools/evaluation/retrieval/run-memory-evidence.ts` pairs the frozen LongMemEval-S
