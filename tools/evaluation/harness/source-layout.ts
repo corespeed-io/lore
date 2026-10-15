@@ -4,6 +4,8 @@ import * as sdk from "@corespeed/lore-sdk";
 /** One cited Observation from a source read, as far as the layout needs it. */
 export interface LayoutSource {
   observationId: string;
+  /** The Memories, among those read, that cite it. */
+  memoryIds: readonly string[];
 }
 
 /** A reading order: indexes into the search results and into the read's sources. */
@@ -22,53 +24,59 @@ export interface SourceLayout {
 /** The SDK function that places each Memory's sources after it, where a checkout has one. */
 type AttachMemorySources = (
   results: ReadonlyArray<{ memory: { id: string } }>,
-  read: { sources: readonly LayoutSource[]; omittedObservationIds: readonly string[] },
+  read: { sources: readonly LayoutSource[] },
 ) => ReadonlyArray<{ sources: readonly LayoutSource[] }>;
 
-// A ref from before the SDK had it lacks the export, so it is looked up, not imported.
-const exported: unknown = (sdk as Record<string, unknown>).attachMemorySources;
-
 /**
- * The order an agent reads a Memory search and its sources in, under the code
- * checked out here. With the SDK's `attachMemorySources`, as `lore_search
- * withSources` uses it, each Memory is followed by its own sources. Without it,
- * an agent searches and then calls `lore_read_evidence`, so every Memory comes
- * first and the sources follow in the read's order. Both read the same sources.
+ * The order an agent reads a Memory search and its sources in. With the SDK's
+ * `attachMemorySources`, as `lore_search withSources` uses it, each Memory is
+ * followed by its own sources. Without it, an agent searches and then calls
+ * `lore_read_evidence`, so every Memory comes first and the sources follow in the
+ * read's order. Both read the same sources.
  */
-export const sourceLayout: SourceLayout = {
-  entry: fileURLToPath(import.meta.url),
-  name:
-    typeof exported === "function"
-      ? "sdk attachMemorySources: each Memory, then its sources"
-      : "two calls: every Memory, then the source read in its order",
-  arrange(memoryIds, sources) {
-    if (typeof exported !== "function") {
-      return [
+export function sourceLayoutFor(attach: unknown, entry: string): SourceLayout {
+  if (typeof attach !== "function") {
+    return {
+      entry,
+      name: "two calls: every Memory, then the source read in its order",
+      arrange: (memoryIds, sources) => [
         ...memoryIds.map((_, index) => ({ kind: "memory" as const, index })),
         ...sources.map((_, index) => ({ kind: "source" as const, index })),
-      ];
-    }
-    const attached = (exported as AttachMemorySources)(
-      memoryIds.map((id) => ({ memory: { id } })),
-      { sources, omittedObservationIds: [] },
-    );
-    if (!Array.isArray(attached) || attached.length !== memoryIds.length) {
-      throw new Error("attachMemorySources must return one entry per search result");
-    }
-    const position = new Map(sources.map((source, index) => [source.observationId, index]));
-    const used = new Set<number>();
-    const arrangement: Arrangement = [];
-    for (const [index, entry] of attached.entries()) {
-      arrangement.push({ kind: "memory", index });
-      for (const source of entry.sources) {
-        const sourceIndex = position.get(source.observationId);
-        if (sourceIndex === undefined || used.has(sourceIndex)) {
-          throw new Error(`attachMemorySources placed ${source.observationId} wrongly`);
-        }
-        used.add(sourceIndex);
-        arrangement.push({ kind: "source", index: sourceIndex });
+      ],
+    };
+  }
+  return {
+    entry,
+    name: "sdk attachMemorySources: each Memory, then its sources",
+    arrange(memoryIds, sources) {
+      const attached = (attach as AttachMemorySources)(
+        memoryIds.map((id) => ({ memory: { id } })),
+        { sources },
+      );
+      if (!Array.isArray(attached) || attached.length !== memoryIds.length) {
+        throw new Error("attachMemorySources must return one entry per search result");
       }
-    }
-    return arrangement;
-  },
-};
+      const position = new Map(sources.map((source, index) => [source.observationId, index]));
+      const used = new Set<number>();
+      const arrangement: Arrangement = [];
+      for (const [index, entry] of attached.entries()) {
+        arrangement.push({ kind: "memory", index });
+        for (const source of entry.sources) {
+          const sourceIndex = position.get(source.observationId);
+          if (sourceIndex === undefined || used.has(sourceIndex)) {
+            throw new Error(`attachMemorySources placed ${source.observationId} wrongly`);
+          }
+          used.add(sourceIndex);
+          arrangement.push({ kind: "source", index: sourceIndex });
+        }
+      }
+      return arrangement;
+    },
+  };
+}
+
+// A ref from before the SDK had it lacks the export, so it is looked up, not imported.
+export const sourceLayout = sourceLayoutFor(
+  (sdk as Record<string, unknown>).attachMemorySources,
+  fileURLToPath(import.meta.url),
+);

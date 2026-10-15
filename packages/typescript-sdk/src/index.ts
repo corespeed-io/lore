@@ -217,6 +217,48 @@ export interface ReadMemorySourcesInput {
   signal?: AbortSignal;
 }
 
+/** A Memory search with the cited sources of its first results, one read's worth. */
+export interface SearchMemoriesWithSourcesInput extends MemorySearchInput {
+  /** Characters (code points) of source text to return in total; the read's default when unset. */
+  maximumSourceCharacters?: number;
+}
+
+/** A search result followed by the sources it is the first result to cite. */
+export type MemorySearchResultWithSources = MemorySearchResult & {
+  sources: MemorySourceObservation[];
+};
+
+export interface MemorySearchWithSources {
+  results: MemorySearchResultWithSources[];
+  /** Cited Observations the source budget left out, in reading order. */
+  omittedObservationIds: string[];
+}
+
+/**
+ * Place each source after the first result, in rank order, that cites it, keeping
+ * the read's order among one result's sources. The reading order this gives is
+ * each Memory followed by what it came from. A source no result cites is dropped.
+ */
+export function attachMemorySources<R extends { memory: { id: string } }>(
+  results: readonly R[],
+  read: { sources: readonly MemorySourceObservation[] },
+): Array<R & { sources: MemorySourceObservation[] }> {
+  const rank = new Map<string, number>();
+  for (const [index, result] of results.entries()) {
+    if (!rank.has(result.memory.id)) rank.set(result.memory.id, index);
+  }
+  const attached = results.map((result) => ({
+    ...result,
+    sources: [] as MemorySourceObservation[],
+  }));
+  for (const source of read.sources) {
+    let first = Number.POSITIVE_INFINITY;
+    for (const memoryId of source.memoryIds) first = Math.min(first, rank.get(memoryId) ?? first);
+    attached[first]?.sources.push(source);
+  }
+  return attached;
+}
+
 export interface LinkedMemories {
   link: MemoryLink;
   /** False when a Link with this natural key already existed. */
@@ -936,6 +978,32 @@ export class LoreWorkspaceClient {
         signal: input.signal,
       })
     ).data;
+  }
+
+  /**
+   * Search Memories and read what the results cite in one step: each result is
+   * followed by its own sources, within one source budget filled in rank order.
+   * Sources are read for the first results a read accepts; later ones carry none.
+   * The sources are raw recorded evidence, not canonical Memory.
+   */
+  async searchMemoriesWithSources(
+    input: SearchMemoriesWithSourcesInput,
+  ): Promise<MemorySearchWithSources> {
+    const { maximumSourceCharacters, ...search } = input;
+    const results = await this.searchMemories(search);
+    const cited = results.slice(0, LIMITS.memorySourceReadMemories);
+    if (!cited.length) return { results: [], omittedObservationIds: [] };
+    const read = await this.readMemorySources({
+      memoryIds: cited.map((result) => result.memory.id),
+      ...(maximumSourceCharacters === undefined
+        ? {}
+        : { maximumCharacters: maximumSourceCharacters }),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    return {
+      results: attachMemorySources(results, read),
+      omittedObservationIds: [...read.omittedObservationIds],
+    };
   }
 
   async searchCode(input: CodeSearchInput): Promise<readonly CodeArtifact[]> {

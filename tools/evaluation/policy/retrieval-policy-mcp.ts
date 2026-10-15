@@ -103,6 +103,11 @@ function fixtureGuardArtifact(commitOid: string): CodeArtifact {
 
 function fixtureMemories(): LoreMcpMemoryClient {
   const memory = fixtureMemory();
+  const result = {
+    memory,
+    score: 0.95,
+    evidence: "Proposal review must remain human-only before canonical Memory changes.",
+  };
   return {
     searchEpisodeEvidence: async () => {
       throw new Error("Raw evidence search is outside this Memory policy fixture");
@@ -120,13 +125,12 @@ function fixtureMemories(): LoreMcpMemoryClient {
     listMemories: async () => ({ memories: [memory], nextCursor: null }),
     proposeMemory: async () => unavailable(),
     remember: async () => unavailable(),
-    searchMemories: async () => [
-      {
-        memory,
-        score: 0.95,
-        evidence: "Proposal review must remain human-only before canonical Memory changes.",
-      },
-    ],
+    searchMemories: async () => [result],
+    // The fixture cites no sources, so a search with sources returns none.
+    searchMemoriesWithSources: async () => ({
+      results: [{ ...result, sources: [] }],
+      omittedObservationIds: [],
+    }),
     updateMemory: async () => unavailable(),
   };
 }

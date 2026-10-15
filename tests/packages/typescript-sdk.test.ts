@@ -5,6 +5,7 @@ import type {
   RetrievalGroundingReasonCode,
 } from "@corespeed/lore-sdk";
 import {
+  attachMemorySources,
   LORE_CONTRACT,
   LoreApiError,
   LoreClient,
@@ -1340,5 +1341,95 @@ describe("client bounds from LORE_CONTRACT", () => {
       memoryLimit: LIMITS.contextMemoryLimitDefault,
       codeLimit: LIMITS.contextCodeLimitDefault,
     });
+  });
+});
+
+describe("search with sources", () => {
+  const id = (index: number) => `20000000-0000-4000-8000-00000000000${index}`;
+  const source = (index: number, memoryIds: string[]) => ({
+    observationId: `70000000-0000-4000-8000-00000000000${index}`,
+    episodeId: "60000000-0000-4000-8000-000000000001",
+    observationOrdinal: index,
+    observationKind: "message" as const,
+    observedAt: "2026-10-01T10:00:00.000000Z",
+    memoryIds,
+    content: `source ${index}`,
+    contentTruncated: false,
+  });
+  const result = (index: number) => ({
+    memory: memory({ id: id(index) }),
+    score: 1 / index,
+    evidence: `memory ${index}`,
+  });
+
+  test("attaches each source to the first result that cites it, in read order", () => {
+    const results = [result(1), result(2), result(3)];
+    const attached = attachMemorySources(results, {
+      sources: [
+        source(1, [id(2)]),
+        source(2, [id(3), id(1)]),
+        source(3, [id(3)]),
+        source(4, [id(9)]),
+      ],
+    });
+    expect(attached.map((entry) => entry.memory.id)).toEqual([id(1), id(2), id(3)]);
+    expect(attached.map((entry) => entry.sources.map((item) => item.content))).toEqual([
+      ["source 2"],
+      ["source 1"],
+      ["source 3"],
+    ]);
+    expect(attached[0]?.evidence).toBe("memory 1");
+  });
+
+  test("reads the first results' sources once and returns them in place", async () => {
+    const results = Array.from({ length: 22 }, (_, index) => ({
+      memory: memory({ id: `20000000-0000-4000-8000-0000000000${String(index + 10)}` }),
+      score: 1,
+      evidence: `memory ${index}`,
+    }));
+    const cited = source(1, [results[1]?.memory.id ?? ""]);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(results))
+      .mockResolvedValueOnce(
+        Response.json({
+          sources: [cited],
+          omittedObservationIds: ["70000000-0000-4000-8000-000000000009"],
+        }),
+      );
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    const found = await workspace.searchMemoriesWithSources({
+      query: "harbor",
+      limit: 22,
+      maximumSourceCharacters: 5_000,
+    });
+    expect(found.results).toHaveLength(22);
+    expect(found.results[1]?.sources).toEqual([cited]);
+    expect(found.results[0]?.sources).toEqual([]);
+    expect(found.omittedObservationIds).toEqual(["70000000-0000-4000-8000-000000000009"]);
+    const [, [readUrl, readInit]] = fetchMock.mock.calls as [unknown, [URL, RequestInit]];
+    expect(readUrl.pathname).toBe("/api/v1/memories/observation-evidence/read");
+    expect(JSON.parse(String(readInit.body))).toEqual({
+      memoryIds: results
+        .slice(0, LORE_CONTRACT.limits.memorySourceReadMemories)
+        .map((item) => item.memory.id),
+      maximumCharacters: 5_000,
+    });
+  });
+
+  test("makes no source read when the search finds nothing", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json([]));
+    const workspace = new LoreClient({
+      baseUrl: "http://127.0.0.1:3000",
+      fetch: fetchMock,
+    }).workspace(WORKSPACE_ID);
+    await expect(workspace.searchMemoriesWithSources({ query: "harbor" })).resolves.toEqual({
+      results: [],
+      omittedObservationIds: [],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

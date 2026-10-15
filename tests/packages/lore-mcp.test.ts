@@ -132,6 +132,9 @@ function fakeMemories(): LoreMcpMemoryClient {
       .mockResolvedValue([
         { memory: memory(), score: 0.9, rerankScore: 0.8, evidence: "authorized evidence" },
       ]),
+    searchMemoriesWithSources: vi
+      .fn()
+      .mockResolvedValue({ results: [], omittedObservationIds: [] }),
     updateMemory: vi.fn().mockResolvedValue(memory({ version: 3 })),
   };
 }
@@ -802,6 +805,78 @@ describe("Lore external MCP adapter", () => {
     });
     expect(invalid.isError).toBe(true);
     expect(memories.indexEpisodeEvidence).toHaveBeenCalledTimes(1);
+  });
+
+  test("lore_search withSources puts each result's sources after it, within the ceiling", async () => {
+    const memories = fakeMemories();
+    const first = "20000000-0000-4000-8000-000000000001";
+    const second = "20000000-0000-4000-8000-000000000002";
+    const source = (index: number, memoryId: string, content: string) => ({
+      observationId: `70000000-0000-4000-8000-00000000000${index}`,
+      episodeId: EPISODE_ID,
+      observationOrdinal: index,
+      observationKind: "message" as const,
+      observedAt: "2026-10-01T10:00:00.000000Z",
+      memoryIds: [memoryId],
+      content,
+      contentTruncated: false,
+    });
+    vi.mocked(memories.searchMemoriesWithSources).mockResolvedValue({
+      results: [
+        {
+          memory: memory({ id: first }),
+          score: 0.9,
+          evidence: "The user picked a chord progression.",
+          sources: [source(1, first, "The assistant suggested C, G, Am, F.")],
+        },
+        {
+          memory: memory({ id: second }),
+          score: 0.8,
+          evidence: "The user plays guitar.",
+          sources: [source(2, second, "\\".repeat(90_000))],
+        },
+      ],
+      omittedObservationIds: ["70000000-0000-4000-8000-000000000003"],
+    });
+    const client = await connect(memories);
+    const result = await client.callTool({
+      name: "lore_search",
+      arguments: { query: "chords", withSources: true },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(memories.searchMemories).not.toHaveBeenCalled();
+    expect(memories.searchMemoriesWithSources).toHaveBeenCalledWith({
+      query: "chords",
+      limit: 10,
+      maximumSourceCharacters: 24_000,
+    });
+    expect(structuredLength(result)).toBeLessThanOrEqual(128_000);
+    const content = result.structuredContent as {
+      results: {
+        memory: { id: string };
+        sources: { content: string; contentTruncated: boolean }[];
+      }[];
+      omittedObservationIds: string[];
+      truncated: boolean;
+    };
+    expect(content.results.map((entry) => entry.memory.id)).toEqual([first, second]);
+    expect(content.results[0]?.sources).toMatchObject([
+      { content: "The assistant suggested C, G, Am, F.", contentTruncated: false },
+    ]);
+    // Escaped backslashes double in JSON, so the second result's source is cut to fit.
+    expect(content.results[1]?.sources[0]?.contentTruncated).toBe(true);
+    expect(content.omittedObservationIds).toEqual(["70000000-0000-4000-8000-000000000003"]);
+  });
+
+  test("lore_search without withSources reads no sources", async () => {
+    const memories = fakeMemories();
+    const client = await connect(memories);
+    const result = await client.callTool({ name: "lore_search", arguments: { query: "harbor" } });
+    expect(result.isError).not.toBe(true);
+    expect(memories.searchMemoriesWithSources).not.toHaveBeenCalled();
+    const content = result.structuredContent as { results: Record<string, unknown>[] };
+    expect(content.results[0]).not.toHaveProperty("sources");
+    expect(content).not.toHaveProperty("omittedObservationIds");
   });
 
   test("lore_read_evidence reads cited sources in rank order within the response ceiling", async () => {

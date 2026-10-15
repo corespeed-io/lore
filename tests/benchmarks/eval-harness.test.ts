@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EmbeddingProvider } from "@corespeed/lore-core";
+import { attachMemorySources } from "@corespeed/lore-sdk";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,7 +23,7 @@ import {
 import { identityHash, sha256 } from "../../tools/evaluation/harness/hash";
 import { memorySourcesSystem } from "../../tools/evaluation/harness/memory-sources";
 import { longMemEvalRubricPrompt, rubricVerdict } from "../../tools/evaluation/harness/scorers";
-import { sourceLayout } from "../../tools/evaluation/harness/source-layout";
+import { sourceLayout, sourceLayoutFor } from "../../tools/evaluation/harness/source-layout";
 import {
   compare,
   gate,
@@ -805,5 +806,42 @@ describe("answering a run named twice", () => {
     const comparison = await compareRuns(store, "shared", "shared", false);
     expect(comparison.changedPackets).toBe(0);
     await db.close();
+  });
+});
+
+describe("the order an agent reads sources in", () => {
+  const memoryIds = ["m1", "m2", "m3"];
+  const sources = [
+    { observationId: "o1", memoryIds: ["m1"] },
+    { observationId: "o2", memoryIds: ["m3"] },
+    { observationId: "o3", memoryIds: ["m1", "m2"] },
+  ];
+
+  it("puts every Memory first when the checkout has two calls", () => {
+    const layout = sourceLayoutFor(undefined, "x");
+    expect(layout.name).toMatch(/^two calls/);
+    expect(layout.arrange(memoryIds, sources)).toEqual([
+      { kind: "memory", index: 0 },
+      { kind: "memory", index: 1 },
+      { kind: "memory", index: 2 },
+      { kind: "source", index: 0 },
+      { kind: "source", index: 1 },
+      { kind: "source", index: 2 },
+    ]);
+  });
+
+  it("puts each Memory's sources after it with the SDK's attachMemorySources", () => {
+    const layout = sourceLayoutFor(attachMemorySources, "x");
+    expect(layout.name).toMatch(/^sdk attachMemorySources/);
+    expect(layout.arrange(memoryIds, sources)).toEqual([
+      { kind: "memory", index: 0 },
+      { kind: "source", index: 0 },
+      { kind: "source", index: 2 },
+      { kind: "memory", index: 1 },
+      { kind: "memory", index: 2 },
+      { kind: "source", index: 1 },
+    ]);
+    // This checkout's SDK has it, so its runs use it.
+    expect(sourceLayout.name).toBe(layout.name);
   });
 });
