@@ -403,6 +403,30 @@ describe("what a run may reuse", () => {
       unitWorkspaceId("corpus-a", { ...unit, records: [{ key: "r1", text: "Alice moved." }] }),
     ).not.toBe(id);
     expect(unitWorkspaceId("corpus-a", { ...unit, tripwires: ["other"] })).not.toBe(id);
+    // The id of a Unit without sources does not depend on the field existing.
+    expect(id).toBe(
+      uuidFromHash(
+        identityHash({
+          corpus: "corpus-a",
+          unit: unit.key,
+          records: unit.records,
+          tripwires: unit.tripwires,
+        }),
+      ),
+    );
+    const withSources: EvalUnit = {
+      ...unit,
+      sources: [{ key: "s1", text: "Session text.", observedAt: "2023-05-20T02:21:00.000Z" }],
+    };
+    const sourced = unitWorkspaceId("corpus-a", withSources);
+    expect(sourced).not.toBe(id);
+    for (const changed of [
+      { key: "s2", text: "Session text.", observedAt: "2023-05-20T02:21:00.000Z" },
+      { key: "s1", text: "Other text.", observedAt: "2023-05-20T02:21:00.000Z" },
+      { key: "s1", text: "Session text.", observedAt: "2023-05-21T02:21:00.000Z" },
+    ]) {
+      expect(unitWorkspaceId("corpus-a", { ...withSources, sources: [changed] })).not.toBe(sourced);
+    }
   });
 
   it("keeps provenance per run and remembers which corpora were used", async () => {

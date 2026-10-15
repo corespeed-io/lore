@@ -35,8 +35,8 @@ export function uuidFromHash(hex: string): string {
 
 /**
  * A Unit's Workspace id: the corpus key (dataset, database, ingest code) plus the
- * Unit's exact records and tripwires. Any difference in what would be stored
- * gives a different Workspace.
+ * Unit's exact records, tripwires, and sources. Any difference in what would be
+ * stored gives a different Workspace.
  */
 export function unitWorkspaceId(corpusKey: string, unit: EvalUnit): string {
   return uuidFromHash(
@@ -45,6 +45,8 @@ export function unitWorkspaceId(corpusKey: string, unit: EvalUnit): string {
       unit: unit.key,
       records: unit.records,
       tripwires: unit.tripwires,
+      // Absent for Units without sources, so their ids are unchanged.
+      sources: unit.sources,
     }),
   );
 }
