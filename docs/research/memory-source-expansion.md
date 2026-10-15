@@ -382,12 +382,11 @@ session keys stand in for the link of step 1. A Memory written directly by an ag
 without a citation has no source to expand; then only independent raw search can
 help, and that needs a raw index.
 
-## Order alone: each Memory's sources beside it (2026-10-15)
+## Order alone: each Memory's sources beside it (2026-10-15, corrected)
 
 The product-path rerun had put each source right after its Memory and scored 450
-against 442 for the API's order (10 fixed, 2 broken, p = 0.039). That run changed
-two things at once: the order, and the rule that sizes the sources. The eval
-harness then tested the order alone.
+against 442 for the API's order (10 fixed, 2 broken, p = 0.039). The eval harness
+then tested the order alone.
 
 - **Setup:**
   - Command: `bun run eval gate --base origin/main --system memory-sources
@@ -406,9 +405,45 @@ harness then tested the order alone.
     interval [−2.9, +5.7] points.
   - Retrieval: identical.
   - Verdict: `no-evidence`, so `withSources` was not shipped.
-- **Reading:** order alone moves little. The earlier gain more likely came from
-  the sizing rule. That is unverified: gate the sizing rule alone before changing
-  how `lore_read_evidence` fills its budget.
+- **Reading:** the two runs point the same way, and neither settles it. Both
+  earlier arms already sized sources alike: in rank order, cutting the first one
+  past the budget. So the earlier win was not a sizing effect, as this section first
+  said; more likely it was noise. One difference is untested: the earlier reader
+  cap left the sources about 12,000 characters, while this gate gave them 24,000.
+
+## Do sources help at all? All 500 questions (2026-10-15)
+
+The eval harness reran the core question on every LongMemEval-S question:
+fact Memories alone, against the same Memories plus the sources they cite.
+
+- **Setup:**
+  - Commands: `bun run eval run --system memory-search` and `--system
+    memory-sources`, both `--dataset longmemeval-s-facts --tier full`.
+  - The same search, reader (Gemini 3.5 Flash), and judge (GPT-5.6 Sol).
+  - Sources read in rank order at the default 24,000-character budget.
+- **Answers:** 84.2% against 89.4%: +5.2 points, 95% interval [+2.6, +7.8], 38
+  fixed and 12 broken, McNemar p = 0.0003. This reproduces the earlier +5.4
+  (421 to 448).
+- **Where the gain is:**
+  - single-session-assistant: +21.4 (12 fixed, 0 broken).
+  - single-session-preference: +20.0 (7 to 1).
+  - multi-session: +5.8 (10 to 3).
+- **What it costs:**
+  - Reader input: 2,229 to 7,664 tokens per question, 3.4 times as much.
+  - Abstention: 96.7% to 83.3%, 0 fixed and 4 broken of 30.
+- **The abstention losses:** three are real. The raw text holds a nearby
+  detail, and the reader answers a false-premise question instead of declining
+  (a job title it corrects but still answers, an estimated fare, a university).
+  The fourth is a judge miss: the reader said no visit was recorded and answered
+  0, which the gold answer is.
+- **Verdict:** `no-evidence` under the pre-registered rule. The gain is
+  significant, but a category regressed by 3 or more net cases, even without the
+  judge miss.
+
+So reading sources stays an agent's decision (`lore_read_evidence`), not a
+default. Making it more prominent first needs an abstention guard, measured on
+its own. Reading only when Memory declines would not be that guard: a correct
+abstention looks like a decline, so it would trigger the same reading.
 
 ## Artifacts and reproduction
 
