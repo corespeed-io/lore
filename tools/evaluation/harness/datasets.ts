@@ -15,7 +15,9 @@ import {
   isLongMemEvalAbstention,
   type LongMemEvalRecord,
   longMemEvalManifest,
+  longMemEvalSessionKeys,
   parseLongMemEvalRecord,
+  renderLongMemEvalSession,
   toLongMemEvalPartition,
 } from "../retrieval/longmemeval";
 import { datasetIsVerified, downloadDataset } from "../shared/dataset-download";
@@ -43,36 +45,29 @@ async function pinnedDataset(path: string, file: FileIntegrity, url: string, lab
   await downloadDataset({ url, outputPath: path, expected: file, label });
 }
 
-/**
- * LongMemEval-S: one Unit per question, one record per haystack session (split at
- * turn boundaries past the 32k Memory bound, parts anchored to the session), and
- * the official V1 rubric. Sessions render exactly as the retrieval benchmark does.
- */
-export function longMemEvalS(): Dataset {
+/** The pinned LongMemEval-S records, their categories, and each one's Unit. */
+function longMemEvalSource() {
   const file = longMemEvalManifest.files.s;
   const path = resolve("evaluation/datasets/longmemeval", file.filename);
   const category = (record: LongMemEvalRecord) =>
     isLongMemEvalAbstention(record) ? "abstention" : record.question_type;
   let verified: Promise<void> | undefined;
-  const records = async function* () {
-    verified ??= pinnedDataset(
-      path,
-      file,
-      `${longMemEvalManifest.source}/resolve/${longMemEvalManifest.revision}/${file.filename}`,
-      "LongMemEval s",
-    );
-    await verified;
-    for await (const value of readJsonArray(path)) yield parseLongMemEvalRecord(value);
-  };
   return {
-    id: "longmemeval-s",
     revision: `${longMemEvalManifest.revision}:${file.sha256}`,
-    scorer: "longmemeval-judge-v1",
-    // The reader's default instruction and the experiments' 24,000-unit cap.
-    reader: { maximumContextCharacters: 24_000 },
-    async index() {
+    category,
+    async *records() {
+      verified ??= pinnedDataset(
+        path,
+        file,
+        `${longMemEvalManifest.source}/resolve/${longMemEvalManifest.revision}/${file.filename}`,
+        "LongMemEval s",
+      );
+      await verified;
+      for await (const value of readJsonArray(path)) yield parseLongMemEvalRecord(value);
+    },
+    async index(): Promise<DatasetCaseIndex[]> {
       const index: DatasetCaseIndex[] = [];
-      for await (const record of records()) {
+      for await (const record of this.records()) {
         index.push({
           id: record.question_id,
           unitKey: record.question_id,
@@ -81,39 +76,57 @@ export function longMemEvalS(): Dataset {
       }
       return index;
     },
+    unitFor(record: LongMemEvalRecord): EvalUnit {
+      const partition = toLongMemEvalPartition(record);
+      const evalCase: EvalCase = {
+        id: record.question_id,
+        unitKey: record.question_id,
+        category: category(record),
+        question: record.question,
+        readerQuestion: `Question time: ${record.question_date}\n${record.question}`,
+        searchQuery: record.question,
+        answer: String(record.answer),
+        evidenceKeys: isLongMemEvalAbstention(record) ? [] : record.answer_session_ids,
+        abstention: isLongMemEvalAbstention(record),
+        scoring: { questionType: record.question_type },
+      };
+      return {
+        key: record.question_id,
+        records: partition.memories
+          .filter((memory) => memory.owner === "alice")
+          .map(
+            (memory): CorpusRecord => ({
+              key: memory.key,
+              text: memory.content,
+              ...(memory.anchorKey ? { anchorKey: memory.anchorKey } : {}),
+            }),
+          ),
+        cases: [evalCase],
+        tripwires: partition.memories
+          .filter((memory) => memory.owner === "bob")
+          .map((memory) => memory.content),
+      };
+    },
+  };
+}
+
+/**
+ * LongMemEval-S: one Unit per question, one record per haystack session (split at
+ * turn boundaries past the 32k Memory bound, parts anchored to the session), and
+ * the official V1 rubric. Sessions render exactly as the retrieval benchmark does.
+ */
+export function longMemEvalS(): Dataset {
+  const source = longMemEvalSource();
+  return {
+    id: "longmemeval-s",
+    revision: source.revision,
+    scorer: "longmemeval-judge-v1",
+    // The reader's default instruction and the experiments' 24,000-unit cap.
+    reader: { maximumContextCharacters: 24_000 },
+    index: () => source.index(),
     async *units(caseIds) {
-      for await (const record of records()) {
-        if (!caseIds.has(record.question_id)) continue;
-        const partition = toLongMemEvalPartition(record);
-        const evalCase: EvalCase = {
-          id: record.question_id,
-          unitKey: record.question_id,
-          category: category(record),
-          question: record.question,
-          readerQuestion: `Question time: ${record.question_date}\n${record.question}`,
-          searchQuery: record.question,
-          answer: String(record.answer),
-          evidenceKeys: isLongMemEvalAbstention(record) ? [] : record.answer_session_ids,
-          abstention: isLongMemEvalAbstention(record),
-          scoring: { questionType: record.question_type },
-        };
-        const unit: EvalUnit = {
-          key: record.question_id,
-          records: partition.memories
-            .filter((memory) => memory.owner === "alice")
-            .map(
-              (memory): CorpusRecord => ({
-                key: memory.key,
-                text: memory.content,
-                ...(memory.anchorKey ? { anchorKey: memory.anchorKey } : {}),
-              }),
-            ),
-          cases: [evalCase],
-          tripwires: partition.memories
-            .filter((memory) => memory.owner === "bob")
-            .map((memory) => memory.content),
-        };
-        yield unit;
+      for await (const record of source.records()) {
+        if (caseIds.has(record.question_id)) yield source.unitFor(record);
       }
     },
   };
@@ -206,7 +219,7 @@ export function longMemEvalSessionTime(value: string): string {
  * Memory's would be; the gold answer sessions are used only to score retrieval.
  */
 export function longMemEvalSFacts(): Dataset {
-  const base = longMemEvalS();
+  const source = longMemEvalSource();
   const path = resolve(LONGMEMEVAL_FACTS.path);
   let loaded: Promise<Map<string, LongMemEvalFact[]>> | undefined;
   const facts = () =>
@@ -227,28 +240,37 @@ export function longMemEvalSFacts(): Dataset {
     })());
   return {
     id: "longmemeval-s-facts",
-    revision: `${base.revision}:${LONGMEMEVAL_FACTS.corpus}:${LONGMEMEVAL_FACTS.file.sha256}`,
-    scorer: base.scorer,
+    revision: `${source.revision}:${LONGMEMEVAL_FACTS.corpus}:${LONGMEMEVAL_FACTS.file.sha256}`,
+    scorer: "longmemeval-judge-v1",
     // Room for a full search (10 Memories) plus a full default source read (24,000),
     // so the reader sees every item of either layout and only their order differs.
     reader: { maximumContextCharacters: 60_000 },
-    index: () => base.index(),
+    index: () => source.index(),
     async *units(caseIds) {
       const byQuestion = await facts();
-      for await (const unit of base.units(caseIds)) {
-        // A session's parts join back into the whole session, its one source.
-        const sessionOf = new Map<string, string>();
-        const texts = new Map<string, string>();
-        for (const record of unit.records) {
-          const session = record.anchorKey ?? record.key;
-          sessionOf.set(record.key, session);
-          texts.set(session, (texts.get(session) ?? "") + record.text);
-        }
-        const sources: SourceRecord[] = [...texts].map(([key, text]) => {
-          const header = /^Conversation session at (.+)\n/.exec(text)?.[1];
-          if (!header) throw new Error(`${unit.key}: session ${key} has no date line`);
-          return { key, text, observedAt: longMemEvalSessionTime(header) };
+      for await (const record of source.records()) {
+        if (!caseIds.has(record.question_id)) continue;
+        const unit = source.unitFor(record);
+        // Each session is one source, rendered whole: a session split into part
+        // Memories is still one recorded conversation.
+        const { keys } = longMemEvalSessionKeys(record);
+        const sources: SourceRecord[] = record.haystack_sessions.map((turns, index) => {
+          const date = record.haystack_dates[index] ?? "";
+          return {
+            key: keys[index] ?? "",
+            text: renderLongMemEvalSession(date, turns),
+            observedAt: longMemEvalSessionTime(date),
+          };
         });
+        const sourceKeys = new Set(sources.map((item) => item.key));
+        const sessionOf = new Map<string, string>();
+        for (const memory of unit.records) {
+          const session = memory.anchorKey ?? memory.key;
+          if (!sourceKeys.has(session)) {
+            throw new Error(`${unit.key}: Memory ${memory.key} names no session`);
+          }
+          sessionOf.set(memory.key, session);
+        }
         const unitFacts = (byQuestion.get(unit.key) ?? []).filter(
           (fact) => fact.key !== LONGMEMEVAL_TRIPWIRE_KEY,
         );

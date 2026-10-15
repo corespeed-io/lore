@@ -192,22 +192,45 @@ function renderSessionParts(date: string, turns: LongMemEvalTurn[]): string[] {
   return parts.length ? parts : [header];
 }
 
+/**
+ * A whole session as one text: exactly what renderSessionParts writes for a
+ * session that fits one Memory, with no part headers for one that does not.
+ */
+export function renderLongMemEvalSession(date: string, turns: LongMemEvalTurn[]): string {
+  return [
+    `Conversation session at ${date}`,
+    ...turns.filter((item) => item.content.trim()).map((turn) => `${turn.role}: ${turn.content}`),
+  ]
+    .join("\n\n")
+    .trim();
+}
+
+/** Each haystack session's key: its id, suffixed by occurrence when the id repeats. */
+export function longMemEvalSessionKeys(record: LongMemEvalRecord): {
+  keys: string[];
+  occurrences: number[];
+} {
+  const seen = new Map<string, number>();
+  const occurrences: number[] = [];
+  const keys = record.haystack_session_ids.map((sessionId) => {
+    const occurrence = (seen.get(sessionId) ?? 0) + 1;
+    seen.set(sessionId, occurrence);
+    occurrences.push(occurrence);
+    return occurrence === 1 ? sessionId : `${sessionId}::occurrence:${occurrence}`;
+  });
+  if (new Set(keys).size !== keys.length) {
+    throw new Error(`LongMemEval record ${record.question_id} cannot disambiguate session ids`);
+  }
+  return { keys, occurrences };
+}
+
 export function toLongMemEvalPartition(
   record: LongMemEvalRecord,
   options: Pick<LongMemEvalAdapterOptions, "limit"> = {},
 ): RetrievalBenchmarkPartition {
   const tripwireKey = "__bob_private_tripwire__";
-  const sessionOccurrences = new Map<string, number>();
-  const sessionOccurrenceByIndex: number[] = [];
-  const sessionKeys = record.haystack_session_ids.map((sessionId) => {
-    const occurrence = (sessionOccurrences.get(sessionId) ?? 0) + 1;
-    sessionOccurrences.set(sessionId, occurrence);
-    sessionOccurrenceByIndex.push(occurrence);
-    return occurrence === 1 ? sessionId : `${sessionId}::occurrence:${occurrence}`;
-  });
-  if (new Set(sessionKeys).size !== sessionKeys.length) {
-    throw new Error(`LongMemEval record ${record.question_id} cannot disambiguate session ids`);
-  }
+  const { keys: sessionKeys, occurrences: sessionOccurrenceByIndex } =
+    longMemEvalSessionKeys(record);
   return {
     key: record.question_id,
     name: `LongMemEval ${record.question_id}`,

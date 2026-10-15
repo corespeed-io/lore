@@ -70,6 +70,12 @@ export function sourceLayoutFor(attach: unknown, entry: string): SourceLayout {
           arrangement.push({ kind: "source", index: sourceIndex });
         }
       }
+      // Order is the only difference a layout may make: every source is placed.
+      if (used.size !== sources.length) {
+        throw new Error(
+          `attachMemorySources placed ${used.size} of ${sources.length} sources; every source must be placed`,
+        );
+      }
       return arrangement;
     },
   };

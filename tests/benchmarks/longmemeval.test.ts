@@ -7,8 +7,10 @@ import {
   isLongMemEvalAbstention,
   LONGMEMEVAL_ABSTENTION_POLICY,
   LONGMEMEVAL_QUESTION_TYPES,
+  longMemEvalSessionKeys,
   parseLongMemEvalRecord,
   readLongMemEvalPartitions,
+  renderLongMemEvalSession,
   toLongMemEvalPartition,
 } from "../../tools/evaluation/retrieval/longmemeval";
 import {
@@ -247,4 +249,54 @@ test("sessions beyond the canonical content bound split into anchored parts", ()
   for (const marker of ["alpha", "beta", "gamma"]) {
     expect(joined).toContain(marker);
   }
+});
+
+test("a whole session renders as its one Memory would, and once when it is split", () => {
+  const partition = toLongMemEvalPartition(fixture);
+  expect(
+    renderLongMemEvalSession(fixture.haystack_dates[1] ?? "", fixture.haystack_sessions[1] ?? []),
+  ).toBe(partition.memories[1]?.content);
+  // Three 15,000-character turns split into two part Memories, each with the header.
+  const turns = ["a", "b", "c"].map((letter) => ({
+    role: "user",
+    content: letter.repeat(15_000),
+    has_answer: false,
+  }));
+  const split = parseLongMemEvalRecord({
+    ...fixture,
+    haystack_session_ids: ["long"],
+    haystack_dates: ["2026/08/01 (Sat) 09:00"],
+    haystack_sessions: [turns],
+    answer_session_ids: ["long"],
+  });
+  const parts = toLongMemEvalPartition(split).memories.filter((memory) => memory.owner === "alice");
+  expect(parts.length).toBeGreaterThan(1);
+  const whole = renderLongMemEvalSession(split.haystack_dates[0] ?? "", turns);
+  expect(whole.split("Conversation session at").length - 1).toBe(1);
+  expect(whole).toBe(
+    [
+      "Conversation session at 2026/08/01 (Sat) 09:00",
+      ...turns.map((turn) => `user: ${turn.content}`),
+    ].join("\n\n"),
+  );
+});
+
+test("session keys are the partition's, suffixed by occurrence", () => {
+  const record = parseLongMemEvalRecord({
+    ...fixture,
+    haystack_session_ids: ["duplicate", "duplicate", "session-2"],
+    haystack_dates: ["2026/08/01 (Sat) 09:00", "2026/08/02 (Sun) 09:00", "2026/08/06 (Thu) 16:00"],
+    haystack_sessions: [
+      fixture.haystack_sessions[0],
+      fixture.haystack_sessions[0],
+      fixture.haystack_sessions[1],
+    ],
+  });
+  const { keys } = longMemEvalSessionKeys(record);
+  expect(keys).toEqual(["duplicate", "duplicate::occurrence:2", "session-2"]);
+  expect(
+    toLongMemEvalPartition(record)
+      .memories.filter((memory) => memory.owner === "alice")
+      .map((memory) => memory.key),
+  ).toEqual(keys);
 });

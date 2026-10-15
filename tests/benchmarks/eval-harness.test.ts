@@ -878,4 +878,12 @@ describe("the order an agent reads sources in", () => {
     // This checkout's SDK has none, so its runs read as an agent's two calls do.
     expect(sourceLayout.name).toMatch(/^two calls/);
   });
+
+  it("refuses an SDK order that leaves a source out", () => {
+    const dropsAll = (results: ReadonlyArray<{ memory: { id: string } }>) =>
+      results.map(() => ({ sources: [] }));
+    expect(() => sourceLayoutFor(dropsAll, "x").arrange(memoryIds, sources)).toThrow(
+      "placed 0 of 3 sources",
+    );
+  });
 });
