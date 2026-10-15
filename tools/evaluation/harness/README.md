@@ -59,16 +59,50 @@ What stays per sandbox:
    `standard` has 20 per category (50 for LoCoMo) and answers them. `full` has
    every case. A case's place in its category is its SHA-256 order, never its
    outcome, so a tier holds the same questions on every branch.
-3. **Collect.** The system under test (`systems.ts`; today `memory-search`, the
-   shipped Memory path) writes every record into Lore as an Alice-private Memory,
-   embeds it through leased maintenance, and answers each case with one Memory
-   search at the deployment's default knobs. The evidence Packet and its
-   retrieval metrics are stored. A search that returns a tripwire is an isolation
-   failure, and any isolation failure fails a gate.
+3. **Collect.** The system under test (`--system`; see Systems below) writes
+   every record into Lore through the product's own modules, embeds it through
+   leased maintenance, and answers each case at the deployment's default knobs.
+   The evidence Packet and its retrieval metrics are stored. A Packet that holds a
+   tripwire is an isolation failure, and any isolation failure fails a gate.
 4. **Answer.** A pinned reader profile answers each Packet. The dataset's scorer
    grades the answer: the LongMemEval V1 rubric through a pinned judge, or
    LoCoMo's token F1.
 5. **Compare.** Cases pair across the two runs.
+
+## Systems and datasets
+
+| `--system` | Stores | A question is |
+| --- | --- | --- |
+| `memory-search` (default, `systems.ts`) | each record as an Alice-private Memory | one Memory search |
+| `memory-sources` (`memory-sources.ts`) | each source as an Alice-private Observation, and each record as a Memory citing the sources it came from | one Memory search, then one read of the cited sources at the product's default budget |
+
+`memory-sources` lays its Packet out the way the checked-out code would show it
+to an agent (`source-layout.ts`):
+
+- **When the checkout's SDK exports `attachMemorySources`:** each Memory, then
+  its own sources. Main has none. `experiment/lore-search-with-sources` adds it
+  behind `lore_search withSources`, which the 2026-10-15 gate did not ship.
+- **Without it:** the two calls an agent makes, `lore_search` then
+  `lore_read_evidence`. Every Memory comes first, then the sources in the read's
+  order.
+
+Both read the same sources, and every run records which layout it used. Bob's
+tripwire is a private Memory citing a private Observation, so a leak through
+either path fails.
+
+| `--dataset` | Unit | Records | Score |
+| --- | --- | --- | --- |
+| `longmemeval-s` | one question | each session (split past 32k) | LongMemEval V1 rubric, judged |
+| `longmemeval-s-facts` | one question | the session's extracted facts, citing the whole session as their source | the same |
+| `locomo` | one conversation | each dialog turn | token F1 |
+
+`longmemeval-s-facts` uses the frozen corpus's fact Memories (`longmemeval-facts-v1`,
+one extractor model and instruction). They are exported once, read-only, and
+pinned by SHA-256. The frozen corpus also extracted a fact from Bob's tripwire
+in every question. That fact restates the gold answer, so it is excluded, and
+each question must have exactly one fact per session Memory. Its reader has room
+for a full search plus a full default source read (60,000 characters), so
+either layout reaches the reader whole.
 
 ## What is reused, and how it is proved
 
@@ -172,9 +206,13 @@ with a new judge: stored answers are graded again and no reader call is repeated
 
 - **A dataset:** implement `Dataset` in `datasets.ts` (index, units, scorer,
   reader instruction) and add it to `DATASETS`.
-- **A system:** implement `EvalSystem` in `systems.ts`: ingest identity,
-  retrieval identity, ingest, retrieve, and usage. Ingest must report what it
-  seeded and reused. Keep it in `systems.ts`, or add its file to `CORPUS_ENTRIES`
-  and `RUN_ENTRIES` in `harness.ts`, so its code is part of the keys. Examples:
-  Memory plus linked sources, or Episode search.
+- **A system:** implement `EvalSystem` in its own file: ingest identity,
+  retrieval identity, ingest, retrieve, and usage.
+  - Seed through `seedUnits` (`system-common.ts`), which owns the locks, the
+    drain, and the checks. Ingest must report what it seeded and reused.
+  - Declare `corpusEntries`, the files that decide what it stores, and
+    `runEntries`, the files that also decide its Packets. Keep retrieval-only code
+    out of `corpusEntries`, so changing it never seeds a new corpus.
+  - Register it in `SYSTEMS` in `run-eval.ts`.
+  - Example to add next: Episode search.
 - **A scorer:** add it to `scorers.ts` with its identity.
