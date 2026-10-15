@@ -17,9 +17,23 @@ import {
   parseLongMemEvalRecord,
   toLongMemEvalPartition,
 } from "../retrieval/longmemeval";
-import { verifyFile } from "../shared/file-integrity";
+import { datasetIsVerified, downloadDataset } from "../shared/dataset-download";
+import type { FileIntegrity } from "../shared/file-integrity";
 import { readJsonArray } from "../shared/json-array";
 import type { CorpusRecord, Dataset, DatasetCaseIndex, EvalCase, EvalUnit } from "./types";
+
+/**
+ * Verify a pinned dataset file, downloading it first when this checkout has none,
+ * so a fresh sandbox needs no separate fetch step. A file that exists but fails
+ * its checksum is an error, never silently replaced.
+ */
+async function pinnedDataset(path: string, file: FileIntegrity, url: string, label: string) {
+  if (await datasetIsVerified(path, file)) return;
+  process.stderr.write(
+    `[eval] downloading ${label} (${file.bytes.toLocaleString("en-US")} bytes)\n`,
+  );
+  await downloadDataset({ url, outputPath: path, expected: file, label });
+}
 
 /**
  * LongMemEval-S: one Unit per question, one record per haystack session (split at
@@ -33,7 +47,12 @@ export function longMemEvalS(): Dataset {
     isLongMemEvalAbstention(record) ? "abstention" : record.question_type;
   let verified: Promise<void> | undefined;
   const records = async function* () {
-    verified ??= verifyFile(path, file);
+    verified ??= pinnedDataset(
+      path,
+      file,
+      `${longMemEvalManifest.source}/resolve/${longMemEvalManifest.revision}/${file.filename}`,
+      "LongMemEval s",
+    );
     await verified;
     for await (const value of readJsonArray(path)) yield parseLongMemEvalRecord(value);
   };
@@ -101,9 +120,12 @@ export function locomo(): Dataset {
   const path = resolve("evaluation/datasets/locomo", file.filename);
   let loaded: Promise<ReturnType<typeof parseLocomoSample>[]> | undefined;
   const samples = () =>
-    (loaded ??= verifyFile(path, file).then(() =>
-      (JSON.parse(readFileSync(path, "utf8")) as unknown[]).map(parseLocomoSample),
-    ));
+    (loaded ??= pinnedDataset(
+      path,
+      file,
+      `https://raw.githubusercontent.com/snap-research/locomo/${locomoManifest.revision}/${file.path}`,
+      "LoCoMo (CC BY-NC 4.0)",
+    ).then(() => (JSON.parse(readFileSync(path, "utf8")) as unknown[]).map(parseLocomoSample)));
   const positive = (value: LocomoCategory) =>
     (LOCOMO_POSITIVE_CATEGORIES as readonly LocomoCategory[]).includes(value);
   const caseId = (sampleId: string, key: string) => `locomo:${sampleId}:${key}`;

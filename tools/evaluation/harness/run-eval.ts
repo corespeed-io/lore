@@ -7,10 +7,13 @@
  *   bun tools/evaluation/harness/run-eval.ts gate --base origin/main --dataset longmemeval-s,locomo --tier standard
  *   bun tools/evaluation/harness/run-eval.ts report --run <id> [--vs <id>]
  *   bun tools/evaluation/harness/run-eval.ts gc [--older-than-days 14]
+ *   bun tools/evaluation/harness/run-eval.ts warm --from-database <name>
  *
  * Environment: LORE_EVAL_SERVER_URL (a PostgreSQL server the harness may create
  * lore_eval_bench_* databases on), GEMINI_API_KEY (embeddings and reader), and
- * optionally LORE_EVAL_STORE (default evaluation/results/harness/store.sqlite).
+ * Everything shared lives on that server: the store database (lore_eval_store),
+ * and one corpus database per migration chain. Point every sandbox at one server
+ * and they share embeddings, answers, verdicts, runs, and seeded corpora.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -48,6 +51,7 @@ import { createScorer } from "./scorers";
 import { EvalStore, type RunEvent } from "./store";
 import { memorySearchSystem } from "./systems";
 import { isTier, type TierName } from "./tiers";
+import { warmFromDatabase } from "./warm";
 
 const log = (message: string) => process.stderr.write(`[eval] ${message}\n`);
 const checkoutRoot = process.cwd();
@@ -91,16 +95,14 @@ const { values, positionals } = parseArgs({
     judge: { type: "string", default: "gpt-5.6-sol" },
     "budget-usd": { type: "string", default: "10" },
     "ref-sha": { type: "string" },
-    store: { type: "string" },
     run: { type: "string" },
     vs: { type: "string" },
     "older-than-days": { type: "string", default: "14" },
+    "from-database": { type: "string" },
   },
 });
 const command = positionals[0];
-const storePath = resolve(
-  values.store ?? process.env.LORE_EVAL_STORE ?? "evaluation/results/harness/store.sqlite",
-);
+const openStore = () => EvalStore.open(required("LORE_EVAL_SERVER_URL"), log);
 
 function datasetsOption(): DatasetName[] {
   const names = (values.dataset ?? "")
@@ -128,7 +130,7 @@ function profiles(): { reader: ReaderProfileName; judge: JudgeProfileName; budge
 
 /** Collect in this checkout, under the code it holds. */
 async function collectHere(dataset: DatasetName, tier: TierName, refSha: string): Promise<string> {
-  const store = new EvalStore(storePath);
+  const store = await openStore();
   const system = memorySearchSystem({ store, geminiApiKey: required("GEMINI_API_KEY") });
   try {
     const runId = await collect({
@@ -141,15 +143,12 @@ async function collectHere(dataset: DatasetName, tier: TierName, refSha: string)
       refSha,
       log,
     });
-    const event = store
-      .events(runId)
-      .filter((entry) => entry.kind === "collect")
-      .at(-1);
+    const event = (await store.events(runId)).filter((entry) => entry.kind === "collect").at(-1);
     if (event) log(`${dataset}: ${provenance(event)}`);
     return runId;
   } finally {
     await system.close();
-    store.close();
+    await store.close();
   }
 }
 
@@ -179,6 +178,8 @@ async function collectAt(ref: string, dataset: DatasetName, tier: TierName): Pro
   cpSync(join(checkoutRoot, "tools/evaluation/harness"), harness, { recursive: true });
   const datasets = join(directory, "evaluation/datasets");
   if (!existsSync(datasets)) {
+    // The target must exist: a fresh sandbox downloads datasets through this link.
+    mkdirSync(join(checkoutRoot, "evaluation/datasets"), { recursive: true });
     mkdirSync(join(directory, "evaluation"), { recursive: true });
     symlinkSync(join(checkoutRoot, "evaluation/datasets"), datasets);
   }
@@ -195,8 +196,6 @@ async function collectAt(ref: string, dataset: DatasetName, tier: TierName): Pro
       tier,
       "--ref-sha",
       sha,
-      "--store",
-      storePath,
     ],
     { cwd: directory, env: process.env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
   );
@@ -320,7 +319,7 @@ function writeReport(name: string, markdown: string, json: unknown): void {
 async function answerRuns(dataset: DatasetName, runIds: string[], tier: TierName) {
   if (!tierAnswers(tier)) return;
   const { reader, judge, budgetUsd } = profiles();
-  const store = new EvalStore(storePath);
+  const store = await openStore();
   try {
     await answer({
       store,
@@ -333,7 +332,7 @@ async function answerRuns(dataset: DatasetName, runIds: string[], tier: TierName
       log,
     });
   } finally {
-    store.close();
+    await store.close();
   }
 }
 
@@ -350,11 +349,13 @@ if (command === "collect") {
   for (const dataset of datasetsOption()) {
     const runId = await collectAt(values.ref ?? "worktree", dataset, tier);
     await answerRuns(dataset, [runId], tier);
-    const store = new EvalStore(storePath);
+    const store = await openStore();
     sections.push(
-      summaryMarkdown(summarize(store, runId, createScorer(DATASETS[dataset]().scorer).binary)),
+      summaryMarkdown(
+        await summarize(store, runId, createScorer(DATASETS[dataset]().scorer).binary),
+      ),
     );
-    store.close();
+    await store.close();
     runs[dataset] = runId;
   }
   const markdown = sections.join("\n\n");
@@ -368,11 +369,19 @@ if (command === "collect") {
     const baseRun = await collectAt(values.base, dataset, tier);
     const candidateRun = await collectAt(values.candidate ?? "worktree", dataset, tier);
     await answerRuns(dataset, [baseRun, candidateRun], tier);
-    const store = new EvalStore(storePath);
-    comparisons.push(
-      compareRuns(store, baseRun, candidateRun, createScorer(DATASETS[dataset]().scorer).binary),
-    );
-    store.close();
+    const store = await openStore();
+    try {
+      comparisons.push(
+        await compareRuns(
+          store,
+          baseRun,
+          candidateRun,
+          createScorer(DATASETS[dataset]().scorer).binary,
+        ),
+      );
+    } finally {
+      await store.close();
+    }
   }
   const verdicts = comparisons.map(
     (comparison) => (comparison.answers ?? comparison.retrieval).verdict,
@@ -396,24 +405,27 @@ if (command === "collect") {
   process.exitCode = overall === "regressed" ? 1 : 0;
 } else if (command === "report") {
   if (!values.run) throw new Error("report needs --run <id>");
-  const store = new EvalStore(storePath);
-  const run = store.run(values.run);
-  if (!run) throw new Error(`Unknown run ${values.run}`);
-  const dataset = run.dataset as DatasetName;
-  const binary = createScorer(DATASETS[dataset]().scorer).binary;
-  process.stdout.write(
-    `${values.vs ? comparisonMarkdown(compareRuns(store, values.vs, values.run, binary)) : summaryMarkdown(summarize(store, values.run, binary))}\n`,
-  );
-  store.close();
+  const store = await openStore();
+  try {
+    const run = await store.run(values.run);
+    if (!run) throw new Error(`Unknown run ${values.run}`);
+    const dataset = run.dataset as DatasetName;
+    const binary = createScorer(DATASETS[dataset]().scorer).binary;
+    process.stdout.write(
+      `${values.vs ? comparisonMarkdown(await compareRuns(store, values.vs, values.run, binary)) : summaryMarkdown(await summarize(store, values.run, binary))}\n`,
+    );
+  } finally {
+    await store.close();
+  }
 } else if (command === "gc") {
   // Drop eval Workspaces no run has used lately, then databases left with none.
   const days = Number(values["older-than-days"]);
   if (!Number.isFinite(days) || days < 0) throw new Error("--older-than-days must be a number");
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const since = new Date(Date.now() - days * 86_400_000);
   const serverUrl = required("LORE_EVAL_SERVER_URL");
   const server = new pg.Client({ connectionString: serverUrl });
   await server.connect();
-  const store = new EvalStore(storePath);
+  const store = await openStore();
   try {
     const databases = await server.query<{ datname: string }>(
       "SELECT datname FROM pg_database WHERE datname LIKE 'lore\\_eval\\_bench\\_%' ORDER BY datname",
@@ -433,13 +445,13 @@ if (command === "collect") {
           log(`${datname}: a collection is running there; skipped`);
           continue;
         }
-        const keep = store.corporaUsedSince(datname, since);
+        const keep = await store.corporaUsedSince(datname, since);
         const workspaces = await client.query<{ id: string }>(
           "SELECT id FROM workspaces WHERE name LIKE 'eval ready %' OR name LIKE 'eval building %'",
         );
         const stale = workspaces.rows.map((row) => row.id).filter((id) => !keep.has(id));
         for (const id of stale) await client.query("DELETE FROM workspaces WHERE id = $1", [id]);
-        store.forgetCorpora(datname, stale);
+        await store.forgetCorpora(datname, stale);
         remaining = Number(
           (await client.query<{ n: string }>("SELECT count(*)::text AS n FROM workspaces")).rows[0]
             ?.n ?? 0,
@@ -456,12 +468,37 @@ if (command === "collect") {
       }
     }
   } finally {
-    store.close();
+    await store.close();
     await server.end();
+  }
+} else if (command === "warm") {
+  // Copy vectors another Lore database on the same server holds, read-only.
+  const name = values["from-database"];
+  if (!name) throw new Error("warm needs --from-database <name> on the eval server");
+  const source = new URL(required("LORE_EVAL_SERVER_URL"));
+  source.pathname = `/${name}`;
+  const client = new pg.Client({
+    connectionString: source.toString(),
+    options: "-c default_transaction_read_only=on -c statement_timeout=120000",
+  });
+  await client.connect();
+  const store = await openStore();
+  try {
+    const report = await warmFromDatabase({
+      source: (text, params) => client.query(text, params),
+      store,
+      log,
+    });
+    log(
+      `warm from ${name}: read ${report.read.toLocaleString("en-US")} vectors, added ${report.added.toLocaleString("en-US")}, compared ${report.compared.toLocaleString("en-US")} the store already held (largest difference ${report.maxDifference}), ${report.seconds} s`,
+    );
+  } finally {
+    await store.close();
+    await client.end();
   }
 } else {
   process.stderr.write(
-    "Usage: run-eval.ts run|gate|report|gc — see the header of tools/evaluation/harness/run-eval.ts\n",
+    "Usage: run-eval.ts run|gate|report|gc|warm — see the header of tools/evaluation/harness/run-eval.ts\n",
   );
   process.exitCode = 2;
 }

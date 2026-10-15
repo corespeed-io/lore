@@ -2,10 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EmbeddingProvider } from "@corespeed/lore-core";
+import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
 import { afterEach, describe, expect, it } from "vitest";
 import { codeIdentity } from "../../tools/evaluation/harness/code";
-import { cachedEmbeddingProvider } from "../../tools/evaluation/harness/embedding-cache";
 import {
+  cachedEmbeddingProvider,
+  embeddingCacheKey,
+} from "../../tools/evaluation/harness/embedding-cache";
+import {
+  answer,
   CORPUS_ENTRIES,
   compareRuns,
   gradingIdentity,
@@ -25,7 +31,17 @@ import {
 } from "../../tools/evaluation/harness/stats";
 import { EvalStore } from "../../tools/evaluation/harness/store";
 import { selectTier } from "../../tools/evaluation/harness/tiers";
-import type { EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
+import type { Dataset, EvalCase, EvalUnit } from "../../tools/evaluation/harness/types";
+import { warmFromDatabase } from "../../tools/evaluation/harness/warm";
+
+/** The shared store's real SQL, on an in-process PostgreSQL. */
+async function memoryStore(): Promise<EvalStore> {
+  const db = new PGlite();
+  return EvalStore.over(
+    (text, params) => db.query(text, params as unknown[]),
+    () => db.close(),
+  );
+}
 
 const pairs = (
   rows: Array<[category: string, base: number, candidate: number, count: number]>,
@@ -159,7 +175,7 @@ describe("the store and embedding cache", () => {
   });
 
   it("answers repeated texts from the store and counts provider failures", async () => {
-    const store = new EvalStore(":memory:");
+    const store = await memoryStore();
     const calls: string[][] = [];
     let fail = false;
     const base: EmbeddingProvider = {
@@ -189,22 +205,42 @@ describe("the store and embedding cache", () => {
     fail = true;
     await expect(provider.embed(["new"], "document")).rejects.toThrow("provider down");
     expect(counters.failures).toBe(1);
-    store.close();
+    await store.close();
   });
 
-  it("keeps runs, packets, answers, and verdicts by content", () => {
-    const store = new EvalStore(":memory:");
-    const sha = store.savePacket({
-      items: [{ id: "m", text: "t", sourceKeys: ["k"] }],
-      latencyMs: 3,
+  it("keeps runs, packets, answers, and verdicts by content, first writer winning", async () => {
+    const store = await memoryStore();
+    const items = [{ id: "m", text: "t", sourceKeys: ["k"] }];
+    const sha = await store.savePacket({ items, latencyMs: 3 });
+    expect(sha).toBe(sha256(JSON.stringify(items)));
+    expect((await store.packets([sha])).get(sha)).toEqual(items);
+    await expect(store.packets(["missing"])).rejects.toThrow("missing from the store");
+    await store.saveAnswer("a", { answer: "yes", inputTokens: 10, outputTokens: 2 });
+    await store.saveAnswer("a", { answer: "other", inputTokens: 1, outputTokens: 1 });
+    expect((await store.answers(["a", "a", "b"])).get("a")).toEqual({
+      answer: "yes",
+      inputTokens: 10,
+      outputTokens: 2,
     });
-    expect(sha).toBe(sha256(JSON.stringify([{ id: "m", text: "t", sourceKeys: ["k"] }])));
-    expect(store.packet(sha)).toEqual([{ id: "m", text: "t", sourceKeys: ["k"] }]);
-    store.saveAnswer("a", { answer: "yes", inputTokens: 10, outputTokens: 2 });
-    expect(store.answer("a")).toEqual({ answer: "yes", inputTokens: 10, outputTokens: 2 });
-    store.saveVerdict("v", { score: 1, label: "yes", inputTokens: null, outputTokens: null });
-    expect(store.verdict("v")?.score).toBe(1);
-    store.close();
+    await store.saveVerdict("v", { score: 1, label: "yes", inputTokens: null, outputTokens: null });
+    expect((await store.verdicts(["v"])).get("v")?.score).toBe(1);
+    await store.close();
+  });
+
+  it("returns every stored vector bit for bit, past one batch", async () => {
+    const store = await memoryStore();
+    const tricky = [0.1, -1 / 3, 1e-30, 3.4028234663852886e38, -0, 123456.789];
+    const entries: Array<[string, number[]]> = Array.from({ length: 1_203 }, (_, index) => [
+      `k${index}`,
+      tricky.map((value) => value * (index + 1)),
+    ]);
+    await store.saveEmbeddings(entries);
+    const found = await store.embeddings(entries.map(([key]) => key));
+    expect(found.size).toBe(1_203);
+    for (const [key, values] of entries) {
+      expect(Array.from(found.get(key) ?? [])).toEqual(Array.from(Float32Array.from(values)));
+    }
+    await store.close();
   });
 });
 
@@ -349,9 +385,9 @@ describe("what a run may reuse", () => {
     expect(unitWorkspaceId("corpus-a", { ...unit, tripwires: ["other"] })).not.toBe(id);
   });
 
-  it("keeps provenance per run and remembers which corpora were used", () => {
-    const store = new EvalStore(":memory:");
-    store.saveEvent("run", {
+  it("keeps provenance per run and remembers which corpora were used", async () => {
+    const store = await memoryStore();
+    await store.saveEvent("run", {
       kind: "answer",
       at: "2026-10-14T00:00:00.000Z",
       detail: {
@@ -366,22 +402,24 @@ describe("what a run may reuse", () => {
         estimatedReaderUsd: 0,
       },
     });
-    expect(store.events("run")).toMatchObject([
+    expect(await store.events("run")).toMatchObject([
       { kind: "answer", detail: { cases: { answersNew: 1 } } },
     ]);
-    expect(store.events("other")).toEqual([]);
-    store.touchCorpora("db", [{ workspaceId: "w1", unit: "u1", corpus: "c" }]);
-    expect(store.corporaUsedSince("db", "2000-01-01T00:00:00.000Z")).toEqual(new Set(["w1"]));
-    expect(store.corporaUsedSince("db", "2999-01-01T00:00:00.000Z").size).toBe(0);
-    store.forgetCorpora("db", ["w1"]);
-    expect(store.corporaUsedSince("db", "2000-01-01T00:00:00.000Z").size).toBe(0);
-    store.close();
+    expect(await store.events("other")).toEqual([]);
+    await store.touchCorpora("db", [{ workspaceId: "w1", unit: "u1", corpus: "c" }]);
+    await store.touchCorpora("db", [{ workspaceId: "w1", unit: "u1", corpus: "c" }]);
+    expect(await store.corporaUsedSince("db", new Date("2000-01-01"))).toEqual(new Set(["w1"]));
+    expect((await store.corporaUsedSince("db", new Date("2999-01-01"))).size).toBe(0);
+    expect((await store.corporaUsedSince("other", new Date("2000-01-01"))).size).toBe(0);
+    await store.forgetCorpora("db", ["w1"]);
+    expect((await store.corporaUsedSince("db", new Date("2000-01-01"))).size).toBe(0);
+    await store.close();
   });
 });
 
 describe("comparing answered runs", () => {
-  const seed = (store: EvalStore, run: string, gradings: Array<string | null>, score = 1) => {
-    store.saveRun({
+  const seed = async (store: EvalStore, run: string, gradings: Array<string | null>, score = 1) => {
+    await store.saveRun({
       id: run,
       refSha: run,
       dataset: "d",
@@ -390,8 +428,9 @@ describe("comparing answered runs", () => {
       identity: {},
       createdAt: "2026-10-14T00:00:00.000Z",
     });
-    for (const [index, grading] of gradings.entries()) {
-      store.saveResult(run, {
+    await store.saveResults(
+      run,
+      gradings.map((grading, index) => ({
         caseId: `c${index}`,
         category: "a",
         packetSha: "p",
@@ -402,8 +441,8 @@ describe("comparing answered runs", () => {
         verdictKey: "v",
         score,
         grading,
-      });
-    }
+      })),
+    );
   };
 
   it("names the reader, scorer, and judge behind every score", () => {
@@ -414,37 +453,337 @@ describe("comparing answered runs", () => {
     expect(gradingIdentity("reader", { scorer: "f1" }, null)).not.toBe(base);
   });
 
-  it("refuses to compare scores from two graders", () => {
-    const store = new EvalStore(":memory:");
-    seed(store, "base", ["judge-a", "judge-a"], 0);
-    seed(store, "candidate", ["judge-b", "judge-b"], 1);
-    expect(() => compareRuns(store, "base", "candidate", true)).toThrow("graded under 2");
-    store.close();
+  it("refuses to compare scores from two graders", async () => {
+    const store = await memoryStore();
+    await seed(store, "base", ["judge-a", "judge-a"], 0);
+    await seed(store, "candidate", ["judge-b", "judge-b"], 1);
+    await expect(compareRuns(store, "base", "candidate", true)).rejects.toThrow("graded under 2");
+    await store.close();
   });
 
-  it("refuses a run whose own scores mix graders", () => {
-    const store = new EvalStore(":memory:");
-    seed(store, "base", ["judge-a", "judge-a"]);
-    seed(store, "candidate", ["judge-a", "judge-b"]);
-    expect(() => compareRuns(store, "base", "candidate", true)).toThrow("graded under 2");
-    store.close();
+  it("refuses a run whose own scores mix graders", async () => {
+    const store = await memoryStore();
+    await seed(store, "base", ["judge-a", "judge-a"]);
+    await seed(store, "candidate", ["judge-a", "judge-b"]);
+    await expect(compareRuns(store, "base", "candidate", true)).rejects.toThrow("graded under 2");
+    await store.close();
   });
 
-  it("refuses scores whose grader was never recorded, even on both sides", () => {
-    const store = new EvalStore(":memory:");
-    seed(store, "base", [null, null]);
-    seed(store, "candidate", [null, null]);
-    expect(() => compareRuns(store, "base", "candidate", true)).toThrow("answer it again");
-    store.close();
+  it("refuses scores whose grader was never recorded, even on both sides", async () => {
+    const store = await memoryStore();
+    await seed(store, "base", [null, null]);
+    await seed(store, "candidate", [null, null]);
+    await expect(compareRuns(store, "base", "candidate", true)).rejects.toThrow("answer it again");
+    await store.close();
   });
 
-  it("compares runs graded alike", () => {
-    const store = new EvalStore(":memory:");
-    seed(store, "base", ["judge-a", "judge-a"]);
-    seed(store, "candidate", ["judge-a", "judge-a"]);
-    const comparison = compareRuns(store, "base", "candidate", true);
+  it("compares runs graded alike", async () => {
+    const store = await memoryStore();
+    await seed(store, "base", ["judge-a", "judge-a"]);
+    await seed(store, "candidate", ["judge-a", "judge-a"]);
+    const comparison = await compareRuns(store, "base", "candidate", true);
     expect(comparison.answers?.verdict).toBe("no-evidence");
     expect(comparison.candidate.gradings).toEqual(["judge-a"]);
-    store.close();
+    await store.close();
+  });
+});
+
+describe("warming the store from another Lore database", () => {
+  const space = { provider: "google", model: "m", dimensions: 3, revision: "r1" };
+  /** A read-only source with a generation, three chunks, and two sharing one text. */
+  async function source() {
+    const db = new PGlite({ extensions: { vector } });
+    await db.exec(`
+      CREATE EXTENSION vector;
+      CREATE TABLE embedding_generations (id uuid PRIMARY KEY, embedding_provider text,
+        embedding_model text, embedding_dimensions integer, embedding_revision text);
+      CREATE TABLE memory_chunks (id uuid PRIMARY KEY, content text);
+      CREATE TABLE memory_chunk_embeddings (generation_id uuid, chunk_id uuid, embedding vector,
+        PRIMARY KEY (generation_id, chunk_id));
+      INSERT INTO embedding_generations VALUES
+        ('00000000-0000-4000-8000-000000000001', 'google', 'm', 3, 'r1');
+      INSERT INTO memory_chunks VALUES
+        ('00000000-0000-4000-8000-0000000000a1', 'alpha'),
+        ('00000000-0000-4000-8000-0000000000a2', 'beta'),
+        ('00000000-0000-4000-8000-0000000000a3', 'alpha');
+      INSERT INTO memory_chunk_embeddings VALUES
+        ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a1', '[0.1,0.2,0.3]'),
+        ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a2', '[0.4,0.5,0.6]'),
+        ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-0000000000a3', '[0.1,0.2,0.3]');
+      SET default_transaction_read_only = on;
+    `);
+    return db;
+  }
+  const query = (db: PGlite) => (text: string, params?: unknown[]) =>
+    db.query(text, params as unknown[]);
+
+  it("copies vectors under the harness's own keys, page by page, writing nothing at the source", async () => {
+    const db = await source();
+    const store = await memoryStore();
+    const alpha = embeddingCacheKey(space, "document", "alpha");
+    await store.saveEmbeddings([[alpha, [0.1, 0.2, 0.3]]]);
+    const report = await warmFromDatabase({
+      source: query(db),
+      store,
+      batchSize: 2,
+      log: () => {},
+    });
+    expect(report).toMatchObject({ read: 3, added: 1, compared: 2, maxDifference: 0 });
+    const beta = embeddingCacheKey(space, "document", "beta");
+    expect(Array.from((await store.embeddings([beta])).get(beta) ?? [])).toEqual(
+      Array.from(Float32Array.from([0.4, 0.5, 0.6])),
+    );
+    await expect(
+      db.query("INSERT INTO memory_chunks VALUES (gen_random_uuid(), 'x')"),
+    ).rejects.toThrow("read-only");
+    await store.close();
+    await db.close();
+  });
+
+  it("stops when a vector disagrees with the store, and refuses a writable source", async () => {
+    const db = await source();
+    const store = await memoryStore();
+    await store.saveEmbeddings([[embeddingCacheKey(space, "document", "alpha"), [0.1, 0.2, 0.4]]]);
+    await expect(warmFromDatabase({ source: query(db), store, log: () => {} })).rejects.toThrow(
+      "differs from the store's",
+    );
+    const beta = embeddingCacheKey(space, "document", "beta");
+    expect((await store.embeddings([beta])).size).toBe(0);
+    await db.exec("SET default_transaction_read_only = off");
+    await expect(warmFromDatabase({ source: query(db), store, log: () => {} })).rejects.toThrow(
+      "not read-only",
+    );
+    await store.close();
+    await db.close();
+  });
+});
+
+describe("sandboxes racing on one key", () => {
+  /** Two sandboxes' stores over one database. */
+  async function twoStores() {
+    const db = new PGlite();
+    const query = (text: string, params?: unknown[]) => db.query(text, params as unknown[]);
+    return {
+      mine: await EvalStore.over(query),
+      theirs: await EvalStore.over(query),
+      close: () => db.close(),
+    };
+  }
+
+  it("hands every writer the first stored answer, verdict, and vector", async () => {
+    const { mine, theirs, close } = await twoStores();
+    await theirs.saveAnswer("a", { answer: "London", inputTokens: 1, outputTokens: 1 });
+    expect(
+      await mine.saveAnswer("a", { answer: "Paris", inputTokens: 2, outputTokens: 2 }),
+    ).toEqual({ answer: "London", inputTokens: 1, outputTokens: 1 });
+    await theirs.saveVerdict("v", { score: 0, label: "no", inputTokens: null, outputTokens: null });
+    expect(
+      (
+        await mine.saveVerdict("v", {
+          score: 1,
+          label: "yes",
+          inputTokens: null,
+          outputTokens: null,
+        })
+      ).label,
+    ).toBe("no");
+    await theirs.saveEmbeddings([["e", [1, 2]]]);
+    const stored = await mine.saveEmbeddings([
+      ["e", [3, 4]],
+      ["f", [5, 6]],
+    ]);
+    expect(Array.from(stored.get("e") ?? [])).toEqual([1, 2]);
+    expect(Array.from(stored.get("f") ?? [])).toEqual([5, 6]);
+    await close();
+  });
+
+  it("embeds with the vector another sandbox stored while this one was calling the provider", async () => {
+    const { mine, theirs, close } = await twoStores();
+    const space = { provider: "test", model: "m", dimensions: 2, revision: "r" };
+    const { provider } = cachedEmbeddingProvider(
+      {
+        ...space,
+        async embed(texts) {
+          await theirs.saveEmbeddings([[embeddingCacheKey(space, "query", "q"), [0.25, 0.75]]]);
+          return texts.map(() => [0.5, 0.5]);
+        },
+      },
+      mine,
+    );
+    expect(await provider.embed(["q"], "query")).toEqual([[0.25, 0.75]]);
+    await close();
+  });
+
+  it("grades the answer another sandbox stored first, never its own", async () => {
+    const { mine, theirs, close } = await twoStores();
+    const evalCase: EvalCase = {
+      id: "c1",
+      unitKey: "u",
+      category: "single-hop",
+      question: "Where does Alice live?",
+      readerQuestion: "Where does Alice live?",
+      searchQuery: "Where does Alice live?",
+      answer: "London",
+      evidenceKeys: [],
+      abstention: false,
+      scoring: { locomoCategory: 4 },
+    };
+    const dataset: Dataset = {
+      id: "d",
+      revision: "r",
+      scorer: "locomo-f1",
+      reader: { maximumContextCharacters: 1_000 },
+      index: async () => [],
+      async *units() {
+        yield { key: "u", records: [], cases: [evalCase], tripwires: [] };
+      },
+    };
+    const packetSha = await mine.savePacket({
+      items: [{ id: "m", text: "Alice moved to London.", sourceKeys: [] }],
+      latencyMs: 1,
+    });
+    await mine.saveRun({
+      id: "run",
+      refSha: "x",
+      dataset: "d",
+      tier: "standard",
+      system: "s",
+      identity: {},
+      createdAt: "2026-10-14T00:00:00.000Z",
+    });
+    await mine.saveResults("run", [
+      {
+        caseId: "c1",
+        category: "single-hop",
+        packetSha,
+        retrieval: { gold: 0, anyHit: false, allHit: false, reciprocalRank: 0 },
+        latencyMs: 1,
+        isolationFailure: false,
+        answerKey: null,
+        verdictKey: null,
+        score: null,
+        grading: null,
+      },
+    ]);
+    const render = (question: string, evidence: Array<{ id: string; text: string }>) =>
+      `${question}|${evidence.map((item) => item.text).join("|")}`;
+    await answer({
+      store: mine,
+      dataset,
+      runIds: ["run"],
+      reader: "gemini-3.5-flash",
+      judge: "gpt-5.6-sol",
+      geminiApiKey: "",
+      budgetUsd: 1,
+      log: () => {},
+      bound: {
+        reader: {
+          identity: { reader: "fake" },
+          identityHash: "fake-reader",
+          render,
+          async answer(question, evidence) {
+            // Another sandbox answers the same input first.
+            await theirs.saveAnswer(sha256(`fake-reader\u0000${render(question, evidence)}`), {
+              answer: "London",
+              inputTokens: 1,
+              outputTokens: 1,
+            });
+            return { text: "Paris", inputTokens: 1, outputTokens: 1 };
+          },
+        },
+      },
+    });
+    const [result] = await mine.results("run");
+    expect(result?.score).toBe(1);
+    expect(
+      (await mine.answers([result?.answerKey ?? ""])).get(result?.answerKey ?? "")?.answer,
+    ).toBe("London");
+    await close();
+  });
+});
+
+describe("answering a run named twice", () => {
+  it("answers a run once when a gate's base and candidate share it", async () => {
+    const db = new PGlite();
+    const store = await EvalStore.over((text, params) => db.query(text, params as unknown[]));
+    const evalCase: EvalCase = {
+      id: "c1",
+      unitKey: "u",
+      category: "single-hop",
+      question: "Where does Alice live?",
+      readerQuestion: "Where does Alice live?",
+      searchQuery: "Where does Alice live?",
+      answer: "London",
+      evidenceKeys: [],
+      abstention: false,
+      scoring: { locomoCategory: 4 },
+    };
+    const dataset: Dataset = {
+      id: "d",
+      revision: "r",
+      scorer: "locomo-f1",
+      reader: { maximumContextCharacters: 1_000 },
+      index: async () => [],
+      async *units() {
+        yield { key: "u", records: [], cases: [evalCase], tripwires: [] };
+      },
+    };
+    const packetSha = await store.savePacket({
+      items: [{ id: "m", text: "Alice moved to London.", sourceKeys: [] }],
+      latencyMs: 1,
+    });
+    await store.saveRun({
+      id: "shared",
+      refSha: "x",
+      dataset: "d",
+      tier: "standard",
+      system: "s",
+      identity: {},
+      createdAt: "2026-10-14T00:00:00.000Z",
+    });
+    await store.saveResults("shared", [
+      {
+        caseId: "c1",
+        category: "single-hop",
+        packetSha,
+        retrieval: { gold: 0, anyHit: false, allHit: false, reciprocalRank: 0 },
+        latencyMs: 1,
+        isolationFailure: false,
+        answerKey: null,
+        verdictKey: null,
+        score: null,
+        grading: null,
+      },
+    ]);
+    let calls = 0;
+    await answer({
+      store,
+      dataset,
+      runIds: ["shared", "shared"],
+      reader: "gemini-3.5-flash",
+      judge: "gpt-5.6-sol",
+      geminiApiKey: "",
+      budgetUsd: 1,
+      log: () => {},
+      bound: {
+        reader: {
+          identity: { reader: "fake" },
+          identityHash: "fake-reader",
+          render: (question) => question,
+          async answer() {
+            calls += 1;
+            return { text: "London", inputTokens: 1, outputTokens: 1 };
+          },
+        },
+      },
+    });
+    expect(calls).toBe(1);
+    expect((await store.results("shared"))[0]?.score).toBe(1);
+    expect((await store.events("shared")).filter((event) => event.kind === "answer")).toHaveLength(
+      1,
+    );
+    const comparison = await compareRuns(store, "shared", "shared", false);
+    expect(comparison.changedPackets).toBe(0);
+    await db.close();
   });
 });

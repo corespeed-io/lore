@@ -163,7 +163,7 @@ export async function collect(input: CollectInput): Promise<string> {
     system: system.id,
     retrieval: system.retrievalIdentity(),
   }).slice(0, 16);
-  store.saveRun({
+  await store.saveRun({
     id: runId,
     refSha: input.refSha,
     dataset: dataset.id,
@@ -180,7 +180,7 @@ export async function collect(input: CollectInput): Promise<string> {
     },
     createdAt: startedAt.toISOString(),
   });
-  const done = new Set(store.results(runId).map((result) => result.caseId));
+  const done = new Set((await store.results(runId)).map((result) => result.caseId));
   const ingested: IngestOutcome = { seeded: 0, reused: 0, verifiedChunks: 0 };
   let searched = 0;
   let failure: string | undefined;
@@ -203,7 +203,7 @@ export async function collect(input: CollectInput): Promise<string> {
       },
     });
   if (done.size === selected.size) {
-    record();
+    await record();
     return runId;
   }
   // Clean-up refuses to run while any collection holds this lock.
@@ -229,7 +229,7 @@ export async function collect(input: CollectInput): Promise<string> {
     const units = batch.filter((unit) => unit.cases.some((evalCase) => !done.has(evalCase.id)));
     batch = [];
     if (!units.length) return;
-    store.touchCorpora(
+    await store.touchCorpora(
       database.name,
       units.map((unit) => ({
         workspaceId: context.workspaceIdFor(unit),
@@ -250,18 +250,21 @@ export async function collect(input: CollectInput): Promise<string> {
       const packet = await retrying(`${evalCase.id} retrieve`, 3, () =>
         system.retrieve(context, unit, evalCase),
       );
-      store.saveResult(runId, {
-        caseId: evalCase.id,
-        category: evalCase.category,
-        packetSha: store.savePacket(packet),
-        retrieval: retrievalMetrics(packet.items, evalCase.evidenceKeys),
-        latencyMs: packet.latencyMs,
-        isolationFailure: packet.items.some((item) => item.id === "tripwire"),
-        answerKey: null,
-        verdictKey: null,
-        score: null,
-        grading: null,
-      });
+      const packetSha = await store.savePacket(packet);
+      await store.saveResults(runId, [
+        {
+          caseId: evalCase.id,
+          category: evalCase.category,
+          packetSha,
+          retrieval: retrievalMetrics(packet.items, evalCase.evidenceKeys),
+          latencyMs: packet.latencyMs,
+          isolationFailure: packet.items.some((item) => item.id === "tripwire"),
+          answerKey: null,
+          verdictKey: null,
+          score: null,
+          grading: null,
+        },
+      ]);
       if (++searched % 50 === 0) {
         input.log(`${dataset.id}: collected ${done.size + searched}/${selected.size}`);
       }
@@ -277,7 +280,7 @@ export async function collect(input: CollectInput): Promise<string> {
     failure = error instanceof Error ? error.message.slice(0, 500) : String(error);
     throw error;
   } finally {
-    record();
+    await record();
     await lock.end();
   }
   return runId;
@@ -299,6 +302,8 @@ export interface AnswerInput {
   store: EvalStore;
   dataset: Dataset;
   runIds: readonly string[];
+  /** Bound profiles to use instead of binding `reader` and `judge` by name; for tests. */
+  bound?: { reader: BoundReader; judge?: BoundJudge };
   reader: ReaderProfileName;
   judge: JudgeProfileName;
   geminiApiKey: string;
@@ -316,27 +321,38 @@ export interface AnswerInput {
 export async function answer(input: AnswerInput): Promise<void> {
   const { store, dataset } = input;
   const startedAt = new Date();
-  const reader: BoundReader = bindReader(input.reader, dataset, input.geminiApiKey);
+  const reader: BoundReader =
+    input.bound?.reader ?? bindReader(input.reader, dataset, input.geminiApiKey);
   const scorer: Scorer = createScorer(dataset.scorer);
-  const judge: BoundJudge | undefined = scorer.needsJudge ? bindJudge(input.judge) : undefined;
+  const judge: BoundJudge | undefined = scorer.needsJudge
+    ? (input.bound?.judge ?? bindJudge(input.judge))
+    : undefined;
   const grading = gradingIdentity(reader.identityHash, scorer.identity, judge?.identity ?? null);
   // A score from another reader, scorer, or judge is graded again, from cached
   // answers and verdicts where they exist, so one comparison never mixes graders.
-  const pending = input.runIds.flatMap((runId) =>
-    store
-      .results(runId)
-      .filter((result) => result.score === null || result.grading !== grading)
-      .map((result) => ({ runId, result })),
-  );
+  // A gate whose base and candidate share one run passes it twice; answer it once.
+  const runIds = [...new Set(input.runIds)];
+  const pending = (
+    await Promise.all(
+      runIds.map(async (runId) =>
+        (
+          await store.results(runId)
+        )
+          .filter((result) => result.score === null || result.grading !== grading)
+          .map((result) => ({ runId, result })),
+      ),
+    )
+  ).flat();
   if (!pending.length) return;
   const cases = new Map<string, EvalCase>();
   for await (const unit of dataset.units(new Set(pending.map(({ result }) => result.caseId)))) {
     for (const evalCase of unit.cases) cases.set(evalCase.id, evalCase);
   }
+  const packets = await store.packets(pending.map(({ result }) => result.packetSha));
   const prepared = pending.map(({ runId, result }) => {
     const evalCase = cases.get(result.caseId);
     if (!evalCase) throw new Error(`${result.caseId} is no longer in ${dataset.id}`);
-    const evidence = store.packet(result.packetSha).map(({ id, text }) => ({ id, text }));
+    const evidence = (packets.get(result.packetSha) ?? []).map(({ id, text }) => ({ id, text }));
     const rendered = reader.render(evalCase.readerQuestion, evidence);
     return {
       runId,
@@ -347,8 +363,11 @@ export async function answer(input: AnswerInput): Promise<void> {
       rendered,
     };
   });
+  const storedAnswers = await store.answers(prepared.map((item) => item.answerKey));
   const uncached = new Map(
-    prepared.filter((item) => !store.answer(item.answerKey)).map((item) => [item.answerKey, item]),
+    prepared
+      .filter((item) => !storedAnswers.has(item.answerKey))
+      .map((item) => [item.answerKey, item]),
   );
   const estimate = [...uncached.values()].reduce(
     (total, item) =>
@@ -373,15 +392,17 @@ export async function answer(input: AnswerInput): Promise<void> {
     );
     readerTokens.input += response.inputTokens ?? 0;
     readerTokens.output += response.outputTokens ?? 0;
-    store.saveAnswer(item.answerKey, {
+    // The stored answer, which is another sandbox's when it saved this key first.
+    const stored = await store.saveAnswer(item.answerKey, {
       answer: response.text,
       inputTokens: response.inputTokens,
       outputTokens: response.outputTokens,
     });
+    storedAnswers.set(item.answerKey, stored);
   });
   // Grade each distinct answer once: base and candidate often share one.
   const graded = prepared.map((item) => {
-    const stored = store.answer(item.answerKey);
+    const stored = storedAnswers.get(item.answerKey);
     if (!stored) throw new Error(`${item.evalCase.id}: answer missing after reading`);
     const verdictKey = identityHash({
       scorer: scorer.identity,
@@ -393,15 +414,18 @@ export async function answer(input: AnswerInput): Promise<void> {
     });
     return { ...item, answerText: stored.answer, verdictKey };
   });
+  const storedVerdicts = await store.verdicts(graded.map((item) => item.verdictKey));
   const ungraded = new Map(
-    graded.filter((item) => !store.verdict(item.verdictKey)).map((item) => [item.verdictKey, item]),
+    graded
+      .filter((item) => !storedVerdicts.has(item.verdictKey))
+      .map((item) => [item.verdictKey, item]),
   );
   let gradedCount = 0;
   await parallel([...ungraded.values()], judge ? 12 : 32, async (item) => {
     const verdict = await retrying(`${item.evalCase.id} grade`, 5, () =>
       scorer.grade(item.evalCase, item.answerText, judge),
     );
-    store.saveVerdict(item.verdictKey, verdict);
+    storedVerdicts.set(item.verdictKey, await store.saveVerdict(item.verdictKey, verdict));
     if (++gradedCount % 100 === 0)
       input.log(`${dataset.id}: graded ${gradedCount}/${ungraded.size}`);
   });
@@ -409,16 +433,19 @@ export async function answer(input: AnswerInput): Promise<void> {
     string,
     { answersFromStore: number; answersNew: number; verdictsFromStore: number; verdictsNew: number }
   >();
+  const updates = new Map<string, CaseResult[]>();
   for (const item of graded) {
-    const verdict = store.verdict(item.verdictKey);
+    const verdict = storedVerdicts.get(item.verdictKey);
     if (!verdict) throw new Error(`${item.evalCase.id}: verdict missing after grading`);
-    store.saveResult(item.runId, {
+    const list = updates.get(item.runId) ?? [];
+    list.push({
       ...item.result,
       answerKey: item.answerKey,
       verdictKey: item.verdictKey,
       score: verdict.score,
       grading,
     });
+    updates.set(item.runId, list);
     const counts = perRun.get(item.runId) ?? {
       answersFromStore: 0,
       answersNew: 0,
@@ -431,8 +458,9 @@ export async function answer(input: AnswerInput): Promise<void> {
     else counts.verdictsFromStore += 1;
     perRun.set(item.runId, counts);
   }
+  for (const [runId, list] of updates) await store.saveResults(runId, list);
   for (const [runId, counts] of perRun) {
-    store.saveEvent(runId, {
+    await store.saveEvent(runId, {
       kind: "answer",
       at: startedAt.toISOString(),
       detail: {
@@ -478,10 +506,14 @@ const percentile = (values: number[], p: number) => {
 const average = (values: number[]) =>
   values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 
-export function summarize(store: EvalStore, runId: string, binary: boolean): RunSummary {
-  const run = store.run(runId);
+export async function summarize(
+  store: EvalStore,
+  runId: string,
+  binary: boolean,
+): Promise<RunSummary> {
+  const run = await store.run(runId);
   if (!run) throw new Error(`Run ${runId} is not in the store`);
-  const results = store.results(runId);
+  const results = await store.results(runId);
   const withEvidence = results.filter((result) => result.retrieval.gold > 0);
   const scored = results.filter((result) => result.score !== null);
   const scores = scored.map((result) => result.score ?? 0);
@@ -503,10 +535,11 @@ export function summarize(store: EvalStore, runId: string, binary: boolean): Run
         : null,
     };
   }
-  const answers = scored.flatMap((result) => {
-    const stored = result.answerKey ? store.answer(result.answerKey) : undefined;
-    return stored ? [stored] : [];
-  });
+  const answers = [
+    ...(
+      await store.answers(scored.flatMap((result) => (result.answerKey ? [result.answerKey] : [])))
+    ).values(),
+  ];
   return {
     runId,
     refSha: run.refSha,
@@ -547,7 +580,7 @@ export function summarize(store: EvalStore, runId: string, binary: boolean): Run
     gradings: [
       ...new Set(scored.flatMap((result) => (result.grading ? [result.grading] : []))),
     ].sort(),
-    events: store.events(runId),
+    events: await store.events(runId),
   };
 }
 
@@ -563,14 +596,14 @@ export interface RunComparison {
   changedPackets: number;
 }
 
-export function compareRuns(
+export async function compareRuns(
   store: EvalStore,
   baseRunId: string,
   candidateRunId: string,
   binary: boolean,
-): RunComparison {
-  const base = new Map(store.results(baseRunId).map((result) => [result.caseId, result]));
-  const candidate = store.results(candidateRunId);
+): Promise<RunComparison> {
+  const base = new Map((await store.results(baseRunId)).map((result) => [result.caseId, result]));
+  const candidate = await store.results(candidateRunId);
   const pairs = candidate.flatMap((result) => {
     const other = base.get(result.caseId);
     return other ? [{ base: other, candidate: result }] : [];
@@ -618,9 +651,9 @@ export function compareRuns(
     }));
   const summaryBinary = binary;
   return {
-    dataset: store.run(candidateRunId)?.dataset ?? "",
-    base: summarize(store, baseRunId, summaryBinary),
-    candidate: summarize(store, candidateRunId, summaryBinary),
+    dataset: (await store.run(candidateRunId))?.dataset ?? "",
+    base: await summarize(store, baseRunId, summaryBinary),
+    candidate: await summarize(store, candidateRunId, summaryBinary),
     answers: scorePairs.length === pairs.length ? gate(scorePairs, binary, isolation) : null,
     retrieval: gate(retrievalPairs, true, isolation),
     changedPackets: pairs.filter(

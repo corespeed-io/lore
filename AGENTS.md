@@ -1657,12 +1657,19 @@ Benchmark is part of the product quality system even without AutoDream.
     isolation failure, is `regressed` (exit 1). `improved` needs a significant
     gain and no category regression. Everything else is `no-evidence`, which
     never counts as an improvement.
-  - **Store:** one SQLite store (`evaluation/results/harness/store.sqlite`)
-    caches embeddings by text and answers and verdicts by exact input, so a gate
-    pays only for cases whose evidence changed.
-  - **Databases:** one `lore_eval_bench_<dims>_<digest of db/migrations>`
-    database per migration chain on `LORE_EVAL_SERVER_URL`, never truncated.
-    `bun run eval gc` drops Workspaces no run used in 14 days.
+  - **One shared server:** `LORE_EVAL_SERVER_URL` names the PostgreSQL server
+    that holds everything.
+    - `lore_eval_store` caches embeddings by text, and answers and verdicts by
+      exact input, so a gate pays only for cases whose evidence changed.
+    - One `lore_eval_bench_<dims>_<digest of db/migrations>` database per
+      migration chain holds seeded corpora, never truncated. Each Unit is seeded
+      under an advisory lock.
+    - The team uses the Railway `lore-benchmarks` Postgres (URL from the team,
+      never committed), so every sandbox starts warm.
+    - `bun run eval gc` drops Workspaces no run used in 14 days.
+    - `bun run eval warm --from-database <name>` copies a Lore database's
+      vectors read-only. The frozen `lore_longmemeval_bench_1536` is a source
+      only, never written.
   - **Reuse is proved, not assumed.** Run ids hash the code each checkout
     imports (`code.ts`), not a ref name or revision constant. Corpus Workspaces
     hash the ingest code plus each Unit's records, and are checked for full
@@ -1670,8 +1677,7 @@ Benchmark is part of the product quality system even without AutoDream.
     - where it ran, and whose lore-core it loaded;
     - Units seeded and reused;
     - embeddings, answers, and verdicts from the store and new.
-    State reuse only from those lines. All caches are local to one machine, so a
-    fresh sandbox starts cold.
+    State reuse only from those lines.
   - **Before claiming a change helps:** run `bun run eval gate --base
     origin/main --tier standard` and put the report in the PR.
 - `tools/evaluation/retrieval/run-memory-evidence.ts` pairs the frozen LongMemEval-S
@@ -1931,7 +1937,7 @@ bun run benchmark:locomo:fetch # fetch the pinned CC BY-NC ACL 2024 dataset
 bun run benchmark:locomo # run the local categories 1-4 QA/F1 profile
 bun run benchmark:memoryagentbench:fetch # fetch the pinned Conflict Resolution slice
 bun run benchmark:memoryagentbench # run the local conflict/multi-hop profile
-bun run eval gate --base origin/main --dataset locomo,longmemeval-s --tier standard # judge a change against main
+bun run eval gate --base origin/main --dataset locomo,longmemeval-s --tier standard # judge a change against main (LORE_EVAL_SERVER_URL: the shared eval server)
 bun run typecheck  # generate Next types, then check application and Bun scripts
 bun run lint       # biome check .
 bun run format     # biome check --write .
