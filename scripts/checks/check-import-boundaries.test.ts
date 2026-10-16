@@ -752,8 +752,8 @@ test("import.meta reads, an escaped literal, and a folded resolve read as intend
 });
 
 test("the guard's documented limits stay as documented", () => {
-  // AGENTS.md and computedImports name these as unchecked; a change that starts
-  // catching one should update both.
+  // docs/agent-conventions.md and computedImports name these as unchecked; a
+  // change that starts catching one should update both.
   for (const line of [
     'const { getBuiltinModule } = process; export const a = getBuiltinModule("node:fs");',
     'export const b = process["getBuiltinModule"]("node:fs");',

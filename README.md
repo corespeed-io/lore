@@ -177,7 +177,8 @@ All of these and the [deployment dry runs](docs/reference.md#verify-changes) mus
 pass before you open a pull request.
 
 Working with a coding agent? [`AGENTS.md`](AGENTS.md) is the single source of truth
-for repository architecture and security constraints.
+for repository architecture and security constraints. It indexes the detailed rules
+for each area in [`docs/agent-conventions.md`](docs/agent-conventions.md).
 
 ## License
 

@@ -12,6 +12,7 @@
 | Operate, back up, restore, or migrate Lore | [Operations and portability](operations.md) |
 | Work on the interface | [Design system](DESIGN.md) |
 | Contribute code | [Contributing](../.github/CONTRIBUTING.md) |
+| Work on Lore with a coding agent | [Agent instructions](../AGENTS.md) and [agent conventions by area](agent-conventions.md) |
 | Find development and database commands | [Script index](../scripts/README.md) |
 | Run quality and performance measurements | [Evaluation tool index](../tools/evaluation/README.md) |
 
