@@ -433,7 +433,7 @@ does not change the code-index revision or stored artifact format.
    `require()` of a string literal. `architecture:check` refuses loads no scan can
    resolve, such as a computed `import()` or `require()` specifier, an aliased
    `require`, `import.meta.require`, `process.getBuiltinModule`, and value imports of
-   `node:module`. [`AGENTS.md`](../AGENTS.md) lists the exact rules and the limits
+   `node:module`. [`agent-conventions.md`](agent-conventions.md) lists the exact rules and the limits
    the guard does not cover.
 
 ## Scripts and tests
