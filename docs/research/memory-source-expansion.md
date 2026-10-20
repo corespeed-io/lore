@@ -441,9 +441,12 @@ fact Memories alone, against the same Memories plus the sources they cite.
   judge miss.
 
 So reading sources stays an agent's decision (`lore_read_evidence`), not a
-default. Making it more prominent first needs an abstention guard, measured on
-its own. Reading only when Memory declines would not be that guard: a correct
-abstention looks like a decline, so it would trigger the same reading.
+default, and nothing more is built for now (decided 2026-10-20). The tool's
+description already says the text is raw recorded conversation, not canonical
+Memory, and may hold statements later corrected. Making sources a default would
+first need an abstention guard, measured on its own. Reading only when Memory
+declines would not be that guard: a correct abstention looks like a decline, so
+it would trigger the same reading.
 
 ## Artifacts and reproduction
 
