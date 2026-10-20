@@ -406,10 +406,11 @@ then tested the order alone.
   - Retrieval: identical.
   - Verdict: `no-evidence`, so `withSources` was not shipped.
 - **Reading:** the two runs point the same way, and neither settles it. Both
-  earlier arms already sized sources alike: in rank order, cutting the first one
-  past the budget. So the earlier win was not a sizing effect, as this section first
-  said; more likely it was noise. One difference is untested: the earlier reader
-  cap left the sources about 12,000 characters, while this gate gave them 24,000.
+  earlier arms already sized sources alike: what the 24,000-character reader cap
+  left after the Memories, in rank order, cutting the first one past it. So the
+  earlier win was not a sizing effect, as this section first said; more likely it
+  was noise. One difference is untested: the earlier cap left the sources about
+  15,600 characters a question on average, while this gate gave them 24,000.
 
 ## Do sources help at all? All 500 questions (2026-10-15)
 
