@@ -423,8 +423,10 @@ fact Memories alone, against the same Memories plus the sources they cite.
   - The same search, reader (Gemini 3.5 Flash), and judge (GPT-5.6 Sol).
   - Sources read in rank order at the default 24,000-character budget.
 - **Answers:** 84.2% against 89.4%: +5.2 points, 95% interval [+2.6, +7.8], 38
-  fixed and 12 broken, McNemar p = 0.0003. This reproduces the earlier +5.4
-  (421 to 448).
+  fixed and 12 broken, McNemar p = 0.0003. With the same reader and judge
+  models, the earlier product-path rerun scored 421 to 442 (+4.2) in this order,
+  at about 15,600 source characters a question. That was a separate run, so the
+  two are not paired.
 - **Where the gain is:**
   - single-session-assistant: +21.4 (12 fixed, 0 broken).
   - single-session-preference: +20.0 (7 to 1).
