@@ -12,5 +12,5 @@
 - [ ] Tenant-owned data is covered by RLS and negative isolation tests
 - [ ] Retrieval filters Workspace/private visibility before ranking
 - [ ] No generic upstream-tool passthrough or unrestricted request-path service role
-- [ ] Updated `AGENTS.md` if I changed behavior agents rely on (commands, flows, gotchas)
+- [ ] Updated `AGENTS.md` or `docs/agent-conventions.md` if I changed behavior agents rely on (commands, flows, gotchas)
 - [ ] Updated `docs/CONTEXT.md` if I changed canonical domain language

@@ -142,8 +142,8 @@ An answer line gives the answers and verdicts taken from the store and made new.
   the benchmark space for every chunk. A reused Workspace is checked again.
 - **Embeddings** are cached by provider, model, width, revision, task, and exact
   text. Maintenance embeds each chunk's text as is. The cache trusts the
-  provider revision: AGENTS.md requires a new revision for any change to query or
-  document preprocessing.
+  provider revision: `docs/agent-conventions.md` requires a new revision for
+  any change to query or document preprocessing.
 - **Answers and verdicts** are keyed by the exact reader input and by scorer,
   judge, case, and answer. A gate pays the reader only for changed Packets. It
   grades each distinct answer once.

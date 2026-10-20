@@ -173,7 +173,7 @@ const PUBLIC_ERROR_BODY = new RegExp(
 // The shared responder builds every error body from HTTP_STATUS. The Edge admission
 // path in auth.ts builds its one body (in `denial`) from the same table so the
 // engine stays out of middleware. The development Graph benchmark route is outside
-// the public contract (AGENTS.md).
+// the public contract (docs/agent-conventions.md).
 const PUBLIC_ERROR_OWNERS = new Map([
   [join("src", "server", "api", "errors.ts"), Number.POSITIVE_INFINITY],
   [join("src", "server", "auth", "auth.ts"), 1],
