@@ -723,7 +723,11 @@ whoever owns it.
   `lore_links` lists one Memory's Links.
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
   their items under the 128,000-character MCP output ceiling and report omitted
-  trailing items with `truncated: true`. The SDK and MCP enforce the server's
+  trailing items with `truncated: true`. `lore_list` and `lore_search` instead give
+  every field of a row a fixed JSON budget, so 25 maximal rows always fit: a title
+  past 300 or a gloss past 500 characters of JSON is cut and marked `titleTruncated`
+  or `glossTruncated`, as content and metadata are; detail and mutation responses
+  return both whole. The SDK and MCP enforce the server's
   visible-ASCII Idempotency-Key rule client-side. Every vocabulary, bound, default,
   and pattern a client checks or sends before a request comes from `LORE_CONTRACT`, which
   `sdk:generate` reads out of the OpenAPI document by explicit path, from every

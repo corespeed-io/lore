@@ -139,6 +139,16 @@ const MAX_MCP_SOURCE_CHARACTERS = 100_000;
 /** A source cut shorter than this is dropped as omitted rather than returned. */
 const MINIMUM_MCP_SOURCE_CHARACTERS = 200;
 const SUMMARY_METADATA_BUDGET = 900;
+/**
+ * Title and gloss JSON budgets in list and search rows: room for a typical name, cut
+ * and flagged past it, so 25 rows of maximal names, metadata, and text still fit the
+ * output ceiling. Detail and mutation responses return both whole.
+ */
+const SUMMARY_NAME_BUDGETS = { title: 300, gloss: 500 } as const;
+const WHOLE_NAMES = {
+  title: Number.POSITIVE_INFINITY,
+  gloss: Number.POSITIVE_INFINITY,
+} as const;
 const DETAIL_CONTENT_BUDGET = 96_000;
 const DETAIL_METADATA_BUDGET = 16_000;
 const CODE_ARTIFACT_CONTENT_BUDGET = 8_000;
@@ -211,10 +221,12 @@ const memoryIdentitySchema = z.object({
     .string()
     .max(LIMITS.memoryTitleCharacters * 2)
     .nullable(),
+  titleTruncated: z.boolean(),
   gloss: z
     .string()
     .max(LIMITS.memoryGlossCharacters * 2)
     .nullable(),
+  glossTruncated: z.boolean(),
   version: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -351,12 +363,27 @@ function boundedMetadata(
   return { metadata: {}, metadataTruncated: true };
 }
 
-function mcpMemorySummary(memory: Memory, metadataBudget: number): McpMemorySummary {
+/** A title or gloss within its JSON budget; none stays null. */
+function boundedName(value: string | null, jsonCharacterBudget: number) {
+  return value === null
+    ? { truncated: false, value: null }
+    : boundedString(value, jsonCharacterBudget);
+}
+
+function mcpMemorySummary(
+  memory: Memory,
+  metadataBudget: number,
+  nameBudgets: { title: number; gloss: number },
+): McpMemorySummary {
+  const title = boundedName(memory.title, nameBudgets.title);
+  const gloss = boundedName(memory.gloss, nameBudgets.gloss);
   return {
     id: memory.id,
     scope: memory.scope,
-    title: memory.title,
-    gloss: memory.gloss,
+    title: title.value,
+    titleTruncated: title.truncated,
+    gloss: gloss.value,
+    glossTruncated: gloss.truncated,
     ...boundedMetadata(memory.metadata, metadataBudget),
     version: memory.version,
     createdAt: memory.createdAt,
@@ -364,10 +391,15 @@ function mcpMemorySummary(memory: Memory, metadataBudget: number): McpMemorySumm
   };
 }
 
-function mcpMemory(memory: Memory, contentBudget: number, metadataBudget: number): McpMemory {
+function mcpMemory(
+  memory: Memory,
+  contentBudget: number,
+  metadataBudget: number,
+  nameBudgets: { title: number; gloss: number } = WHOLE_NAMES,
+): McpMemory {
   const content = boundedString(memory.content, contentBudget);
   return {
-    ...mcpMemorySummary(memory, metadataBudget),
+    ...mcpMemorySummary(memory, metadataBudget, nameBudgets),
     content: content.value,
     contentTruncated: content.truncated,
   };
@@ -535,7 +567,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
         const page = await memories.listMemories(input);
         return success({
           memories: page.memories.map((memory) =>
-            mcpMemory(memory, LIST_CONTENT_BUDGET, SUMMARY_METADATA_BUDGET),
+            mcpMemory(memory, LIST_CONTENT_BUDGET, SUMMARY_METADATA_BUDGET, SUMMARY_NAME_BUDGETS),
           ),
           nextCursor: page.nextCursor,
         });
@@ -572,7 +604,11 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
           results: results.map((result) => {
             const evidence = boundedString(result.evidence, SEARCH_EVIDENCE_BUDGET);
             return {
-              memory: mcpMemorySummary(result.memory, SUMMARY_METADATA_BUDGET),
+              memory: mcpMemorySummary(
+                result.memory,
+                SUMMARY_METADATA_BUDGET,
+                SUMMARY_NAME_BUDGETS,
+              ),
               score: result.score,
               ...(result.rerankScore === undefined ? {} : { rerankScore: result.rerankScore }),
               evidence: evidence.value,
@@ -880,8 +916,9 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
               input.content !== undefined ||
               input.scope !== undefined ||
               input.title !== undefined ||
+              input.gloss !== undefined ||
               input.metadata !== undefined,
-            { message: "content, scope, title, or metadata is required" },
+            { message: "content, scope, title, gloss, or metadata is required" },
           )
           .refine(
             (input) =>

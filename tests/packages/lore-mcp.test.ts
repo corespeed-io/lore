@@ -14,7 +14,7 @@ import type {
   MemoryProposal,
   RetrievedContext,
 } from "@corespeed/lore-sdk";
-import { LoreApiError } from "@corespeed/lore-sdk";
+import { LORE_CONTRACT, LoreApiError } from "@corespeed/lore-sdk";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -678,6 +678,37 @@ describe("Lore external MCP adapter", () => {
       },
     });
     expect(JSON.stringify(result.structuredContent)).not.toContain("Proposed fact");
+  });
+
+  test("lore_propose accepts an update that changes or removes only the gloss", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.proposeMemory).mockResolvedValue(proposal());
+    const client = await connect(memories);
+
+    for (const gloss of ["  Roll back a failed deploy first  ", null]) {
+      const result = await client.callTool({
+        name: "lore_propose",
+        arguments: { kind: "update", targetMemoryId: MEMORY_ID, expectedVersion: 2, gloss },
+      });
+      expect(result.isError).not.toBe(true);
+    }
+    expect(vi.mocked(memories.proposeMemory).mock.calls.map(([input]) => input)).toEqual([
+      {
+        kind: "update",
+        targetMemoryId: MEMORY_ID,
+        expectedVersion: 2,
+        gloss: "Roll back a failed deploy first",
+      },
+      { kind: "update", targetMemoryId: MEMORY_ID, expectedVersion: 2, gloss: null },
+    ]);
+    const empty = await client.callTool({
+      name: "lore_propose",
+      arguments: { kind: "update", targetMemoryId: MEMORY_ID, expectedVersion: 2 },
+    });
+    expect(empty.isError).toBe(true);
+    expect(JSON.stringify(empty.content)).toContain(
+      "content, scope, title, gloss, or metadata is required",
+    );
   });
 
   test("counts every Proposal evidence kind against one published total", async () => {
@@ -1374,6 +1405,58 @@ describe("Lore external MCP adapter", () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("Lore request failed");
     expect(JSON.stringify(result.content)).not.toContain("lore_agent_secret");
+  });
+
+  test("25 rows with maximal titles and glosses still fit, cut and flagged; detail keeps them whole", async () => {
+    const memories = fakeMemories();
+    // Astral characters take two UTF-16 units each, the most a title or gloss can cost.
+    const named = memory({
+      title: "🧭".repeat(LORE_CONTRACT.limits.memoryTitleCharacters),
+      gloss: "🧭".repeat(LORE_CONTRACT.limits.memoryGlossCharacters),
+      content: "c".repeat(10_000),
+      metadata: { note: "m".repeat(880) },
+    });
+    vi.mocked(memories.listMemories).mockResolvedValueOnce({
+      memories: Array.from({ length: 25 }, () => named),
+      nextCursor: null,
+    });
+    vi.mocked(memories.searchMemories).mockResolvedValueOnce(
+      Array.from({ length: 25 }, () => ({
+        memory: named,
+        score: 0.123456789,
+        rerankScore: 0.987654321,
+        evidence: "e".repeat(10_000),
+      })),
+    );
+    vi.mocked(memories.getMemory).mockResolvedValueOnce(named);
+    const client = await connect(memories);
+
+    const listed = await client.callTool({ name: "lore_list", arguments: { limit: 25 } });
+    const searched = await client.callTool({
+      name: "lore_search",
+      arguments: { query: "authorized", limit: 25 },
+    });
+    for (const [result, path] of [
+      [listed, "memories.0"],
+      [searched, "results.0.memory"],
+    ] as const) {
+      expect(result.isError).not.toBe(true);
+      expect(structuredLength(result)).toBeLessThanOrEqual(MAX_MCP_OUTPUT_CHARACTERS);
+      expect(result.structuredContent).toHaveProperty(`${path}.titleTruncated`, true);
+      expect(result.structuredContent).toHaveProperty(`${path}.glossTruncated`, true);
+    }
+    expect(structuredArray(listed, "memories")).toHaveLength(25);
+    expect(structuredArray(searched, "results")).toHaveLength(25);
+
+    const detail = await client.callTool({ name: "lore_get", arguments: { memoryId: MEMORY_ID } });
+    expect(detail.structuredContent).toMatchObject({
+      memory: {
+        title: named.title,
+        titleTruncated: false,
+        gloss: named.gloss,
+        glossTruncated: false,
+      },
+    });
   });
 
   test("bounds list and search output without duplicating full Memory content", async () => {

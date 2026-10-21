@@ -539,7 +539,9 @@ must not treat an unresolved target as proof that no runtime dependency exists.
 MCP output has an independent 128,000-character structured-output ceiling. List
 uses bounded content previews, search returns bounded evidence without duplicating
 full Memory content, and detail/mutation responses mark `contentTruncated` or
-`metadataTruncated` when a value cannot safely fit. `lore_code_search`,
+`metadataTruncated` when a value cannot safely fit. List and search rows cut a long
+title or gloss and mark `titleTruncated` or `glossTruncated`; detail and mutation
+responses return both whole. `lore_code_search`,
 `lore_retrieve_context`, and `lore_code_dependencies` share the ceiling across the
 items one call returns: each excerpt gets an equal share of the characters left,
 and items that still cannot fit are dropped from the end and reported with
