@@ -36,6 +36,7 @@
     "build:packages": "bun run sdk:check && bun run --cwd packages/typescript-sdk build && bun run --cwd packages/cli build && bun run --cwd packages/mcp build",
     "packages:smoke": "bun run sdk:check && bun --no-env-file scripts/build/package-smoke.ts",
     "smoke:memory-core": "bun scripts/checks/smoke-memory-core.ts",
+    "smoke:title-backfill": "bun --no-env-file scripts/checks/smoke-title-backfill.ts",
     "smoke:next": "bun scripts/checks/smoke-next.ts",
     "db:migrate": "bun --no-env-file scripts/database/migrate.ts",
     "db:preflight": "bun --no-env-file scripts/database/run-preflight.ts",

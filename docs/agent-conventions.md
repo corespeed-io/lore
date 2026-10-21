@@ -383,7 +383,10 @@ whoever owns it.
   string `metadata.title`, trimmed with JavaScript's `trim` set, into an empty title
   when it obeys the rule, advances that Memory's version (not `updated_at`), moves its
   waiting embedding jobs to the new version so a claim does not cancel them, and
-  validates the CHECKs; nothing is copied into a gloss. `0017_index_memory_names_concurrently.sql`
+  validates the CHECKs; nothing is copied into a gloss. It judges and reads each row
+  in one UPDATE on `memories`, never through a join of its own snapshot, so a request
+  that commits while the copy waits on its row wins: READ COMMITTED re-checks the
+  latest row. `bun run smoke:title-backfill` proves it on PostgreSQL in CI. `0017_index_memory_names_concurrently.sql`
   (`transaction:false`) builds the Workspace-leading name GINs over
   `lore.memory_name_text(title, gloss)`. All three keep `compatible_from = 9`: an
   older instance writes neither field, keeps both on update, and fuses the name

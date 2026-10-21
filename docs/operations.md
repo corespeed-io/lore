@@ -529,6 +529,16 @@ LORE_SMOKE_DATABASE_URL=postgres://postgres:password@localhost:5432/lore_memory_
   bun run smoke:memory-core
 ```
 
+`bun run smoke:title-backfill` takes the same kind of fresh, empty disposable database
+and leaves it at schema revision 16. It holds a request's uncommitted writes on three
+Memories while `0016` copies titles, commits them during the wait, and checks that
+each request's change wins. CI runs it in the PostgreSQL job.
+
+```bash
+LORE_SMOKE_DATABASE_URL=postgres://postgres:password@localhost:5432/lore_title_backfill_smoke_local \
+  bun run smoke:title-backfill
+```
+
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (and
 optionally `OTEL_EXPORTER_OTLP_HEADERS`) to export Next.js and Lore spans through OTLP. Lore's
 custom span attributes contain only bounded operation/outcome/error-class names.
@@ -634,7 +644,9 @@ call.
 into its title when the text obeys the title rule, advancing that Memory's version
 (and its ETag) but not `updated_at`, and moving any embedding job still waiting for
 the old version to the new one; it takes only row locks, and then validates the
-CHECKs under SHARE UPDATE EXCLUSIVE. Metadata is left exactly as written; a title
+CHECKs under SHARE UPDATE EXCLUSIVE. A request that changes a Memory while the copy
+waits on that row wins: the copy judges and reads the row again as the request left
+it. Metadata is left exactly as written; a title
 too long or on several lines stays only there. Nothing fills a gloss: the writing
 agent supplies one from now on, and older Memories have none. `0017` builds the
 three name indexes concurrently, like `0013`. An older instance writes neither

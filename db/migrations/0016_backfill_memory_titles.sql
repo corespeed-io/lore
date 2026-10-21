@@ -22,33 +22,30 @@
 -- It takes ROW EXCLUSIVE on memories and memory_embedding_jobs and row locks on the
 -- Memories it titles, never a lock that blocks reads, and VALIDATE CONSTRAINT takes
 -- SHARE UPDATE EXCLUSIVE, which blocks neither reads nor writes. lock_timeout bounds
--- the wait for a row a request holds. compatible_from stays 9: an older application
--- never reads the title column.
+-- the wait for a row a request holds; a request that commits during the wait wins,
+-- since the copy then judges that row again as the request left it.
+-- compatible_from stays 9: an older application never reads the title column.
 SET LOCAL lock_timeout = '5s';
 
-WITH candidate AS (
-  -- JavaScript's String.prototype.trim set, which the UI trimmed with.
-  SELECT
-    memory.workspace_id,
-    memory.id,
-    btrim(
-      memory.metadata ->> 'title',
-      E'\t\n\u000B\f\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF'
-    ) AS title
-  FROM public.memories memory
+WITH titled AS (
+  -- One UPDATE on memories judges and reads each row itself, never through a join
+  -- of its own snapshot: a row a request changed while this waited on it is judged
+  -- again, and copied from, as the request committed it (READ COMMITTED re-check).
+  UPDATE public.memories memory
+  SET title = btrim(memory.metadata ->> 'title', trim_set.characters),
+      version = memory.version + 1
+  FROM (
+    -- JavaScript's String.prototype.trim set, which the UI trimmed with.
+    VALUES (E'\t\n\u000B\f\r \u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF')
+  ) trim_set (characters)
   WHERE memory.title IS NULL
     AND jsonb_typeof(memory.metadata -> 'title') = 'string'
-),
-titled AS (
-  UPDATE public.memories memory
-  SET title = candidate.title,
-      version = memory.version + 1
-  FROM candidate
-  WHERE memory.workspace_id = candidate.workspace_id
-    AND memory.id = candidate.id
-    AND char_length(candidate.title) <= 256
-    AND candidate.title !~ '[\u0001-\u001F\u007F-\u009F\u2028\u2029]'
-    AND candidate.title ~ '[^ \u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF]'
+    AND (
+      SELECT char_length(trimmed.title) <= 256
+        AND trimmed.title !~ '[\u0001-\u001F\u007F-\u009F\u2028\u2029]'
+        AND trimmed.title ~ '[^ \u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF]'
+      FROM (SELECT btrim(memory.metadata ->> 'title', trim_set.characters) AS title) trimmed
+    )
   RETURNING memory.workspace_id, memory.id, memory.version
 )
 UPDATE public.memory_embedding_jobs job
