@@ -22,6 +22,7 @@ import {
   jsonObject,
   optionalTimestamp,
   queryInteger,
+  searchTranslations,
   uuidString,
 } from "@/server/api/input";
 import { memoryScope, metadata } from "@/server/api/shared-schemas";
@@ -80,6 +81,7 @@ export const episodes = new Hono<ApiEnv>()
     const results = await observeOperation("episode.search", () =>
       evidence.search(actor, {
         query,
+        translations: searchTranslations(body.translations, "translations"),
         ...(limit === undefined ? {} : { limit }),
         ...(body.scope === undefined ? {} : { scope: memoryScope(body.scope) }),
         ...(body.metadata === undefined ? {} : { metadataFilter: metadata(body.metadata) }),

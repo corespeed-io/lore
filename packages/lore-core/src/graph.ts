@@ -245,6 +245,7 @@ export interface ReadMemoryGraph {
 interface GraphMemoryRow {
   id: string;
   scope: MemoryScope;
+  title: string | null;
   /** The whole content when `content_complete`, otherwise a leading prefix. */
   content: string;
   content_complete: boolean;
@@ -281,7 +282,7 @@ interface StoredGraphLinks {
 
 type GraphMemory = Pick<
   Memory,
-  "id" | "scope" | "content" | "metadata" | "updatedAt" | "version"
+  "id" | "scope" | "title" | "content" | "metadata" | "updatedAt" | "version"
 > & {
   /** False when `content` is only a leading prefix of the Memory content. */
   contentComplete: boolean;
@@ -370,10 +371,7 @@ function prefixPreview(prefix: string, limit: number): string | null {
 
 /** The node label, or null when a content prefix cannot decide it. */
 function memoryLabel(memory: GraphMemory): string | null {
-  const configured = memory.metadata.title;
-  if (typeof configured === "string" && configured.trim()) {
-    return memoryPreview(configured, 96);
-  }
+  if (memory.title !== null) return memoryPreview(memory.title, 96);
   const { content } = memory;
   const firstLine = content.split(/\r?\n/, 1)[0] ?? "";
   const firstSentence = firstLine.split(SENTENCE_BREAK, 1)[0] ?? "";
@@ -431,6 +429,7 @@ function toMemory(row: GraphMemoryRow): GraphMemory {
   return {
     id: row.id,
     scope: row.scope,
+    title: row.title,
     content: row.content,
     contentComplete: row.content_complete,
     metadata: row.metadata,
@@ -602,6 +601,7 @@ function graphStatements(partitionId: string, limit: number, prefixCharacters: n
     `SELECT
        id,
        scope,
+       title,
        metadata,
        version,
        updated_at,

@@ -15,6 +15,8 @@ function memory(id: string): Memory {
     ownerUserId: "10000000-0000-4000-8000-000000000001",
     createdByAgentId: null,
     scope: "shared",
+    title: null,
+    gloss: null,
     content: `Memory ${id}`,
     metadata: {},
     version: 1,

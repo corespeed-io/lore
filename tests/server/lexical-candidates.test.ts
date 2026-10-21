@@ -19,7 +19,8 @@ import { createMemoryTestContext, type MemoryTestContext } from "../support/memo
 // nothing it answers can reach a caller that RLS would not show it. The engine's
 // contract suite compares the channels for two human Users; this file adds Agents,
 // revoked access, failing closed, the grant, the RLS read-back, the CJK index terms,
-// and the plans.
+// and the plans. Revision 15 added name channels over titles and English glosses; the
+// corpus names some Memories so every comparison covers them too.
 
 const RESEARCH_WORKSPACE_ID = "20000000-0000-4000-8000-000000000002";
 
@@ -27,7 +28,14 @@ async function seedCorpus(context: MemoryTestContext) {
   const memories = createMemoryModule(context.database);
   const long = (lead: string) =>
     `${lead}\n\n${"Background on the rollout and its retry budget. ".repeat(40)}\n\nKestrel owns the follow-up.`;
-  const seeds: [ActorContext, string, "shared" | "private", Record<string, unknown>?][] = [
+  const seeds: [
+    ActorContext,
+    string,
+    "shared" | "private",
+    Record<string, unknown>?,
+    string?,
+    string?,
+  ][] = [
     [
       context.alice,
       "Staging deploys run from the prod branch, not main.",
@@ -53,13 +61,40 @@ async function seedCorpus(context: MemoryTestContext) {
     [context.bob, "O'Brien's staging deploys reuse the HAAS-62 retry budget.", "shared"],
     [context.carol, "Research stages deploys with the same retry budget as Kestrel.", "shared"],
     [context.carol, "研究团队的记忆召回质量审计结论。", "shared"],
+    // Titled Memories whose content shares no word with their title, so only the title
+    // channels can find them by it.
+    [context.alice, "Pools open per request.", "shared", undefined, "Hyperdrive pooling rollout"],
+    [context.alice, "Two attempts, then page.", "private", undefined, "Staging retry escalation"],
+    [context.alice, "周日深夜执行。", "shared", undefined, "数据库每周备份计划"],
+    [context.bob, "Only Bob reads this.", "private", undefined, "Bob's Hyperdrive pooling secrets"],
+    [context.bob, "鲍勃自己的。", "private", undefined, "数据库备份的私人笔记"],
+    [context.carol, "Research note.", "shared", undefined, "Hyperdrive pooling in Research"],
+    // Glossed Memories: content in another language, found in English by the gloss.
+    [
+      context.alice,
+      "部署失败后先回滚，再排查。",
+      "shared",
+      undefined,
+      undefined,
+      "Roll back a failed deploy first, then investigate",
+    ],
+    [
+      context.bob,
+      "鲍勃的回滚笔记。",
+      "private",
+      undefined,
+      "回滚",
+      "Bob's private rollback notes for failed deploys",
+    ],
   ];
   const ids: string[] = [];
-  for (const [actor, content, scope, metadata] of seeds) {
+  for (const [actor, content, scope, metadata, title, gloss] of seeds) {
     const memory = await memories.remember(actor, {
       content,
       scope,
       ...(metadata ? { metadata } : {}),
+      ...(title ? { title } : {}),
+      ...(gloss ? { gloss } : {}),
     });
     ids.push(memory.id);
   }
@@ -89,6 +124,13 @@ const QUERIES = [
   "HAAS-62 semantic budget",
   "O'Brien's Kestrel budget",
   "Kestrel Hyperdrive Omega staging retry budget deploys checklist prod branch Friday",
+  // Name channels: a title alone, a question about one, a CJK one, and English
+  // queries that only a gloss answers.
+  "Hyperdrive pooling",
+  "how do we escalate a staging retry",
+  "数据库备份",
+  "rollback",
+  "what do we do after a failed deploy",
 ];
 
 function variants(query: string): LexicalCandidateQuery[] {
@@ -132,6 +174,7 @@ test("the function answers the RLS channels for Users, Agents, and revoked acces
   const bobAgent = await readerAgent(context, context.bob);
 
   let found = 0;
+  const nameChannels = new Set<string>();
   for (const actor of [
     context.alice,
     context.bob,
@@ -144,9 +187,19 @@ test("the function answers the RLS channels for Users, Agents, and revoked acces
         reference,
       );
       found += reference.length;
+      for (const line of reference) {
+        const channel = line.split(" ", 1)[0] ?? "";
+        if (channel.startsWith("name_")) nameChannels.add(channel);
+      }
     }
   }
   expect(found).toBeGreaterThan(200);
+  expect([...nameChannels].sort()).toEqual([
+    "name_cjk",
+    "name_english",
+    "name_relaxed_english",
+    "name_simple",
+  ]);
 
   // A revoked grant and a suspended Membership see nothing either way.
   await context.adminDatabase.transaction((transaction) =>
@@ -396,36 +449,60 @@ test("each channel's probe uses its Workspace-leading index as the function's ow
        FROM memories WHERE content LIKE 'filler note %'`,
     );
     await transaction.query("ANALYZE memory_chunks");
+    await transaction.query("ANALYZE memories");
   });
   const probes = [
     [
       "memory_chunks_workspace_search_idx",
-      "chunk.search_vector @@ websearch_to_tsquery('simple', 'staging retry')",
+      "memory_chunks",
+      "candidate.search_vector @@ websearch_to_tsquery('simple', 'staging retry')",
     ],
     [
       "memory_chunks_workspace_search_english_idx",
-      "chunk.search_vector_english @@ plainto_tsquery('english', 'deploys')",
+      "memory_chunks",
+      "candidate.search_vector_english @@ plainto_tsquery('english', 'deploys')",
     ],
-    ["memory_chunks_workspace_entity_aliases_idx", "chunk.entity_aliases @> ARRAY['Kestrel']"],
+    [
+      "memory_chunks_workspace_entity_aliases_idx",
+      "memory_chunks",
+      "candidate.entity_aliases @> ARRAY['Kestrel']",
+    ],
     [
       "memory_chunks_workspace_cjk_grams_idx",
-      "lore.extract_cjk_grams(chunk.content) @> ARRAY['召回质']",
+      "memory_chunks",
+      "lore.extract_cjk_grams(candidate.content) @> ARRAY['召回质']",
+    ],
+    // The name channels (0017) probe memories through the same expressions.
+    [
+      "memories_workspace_name_search_idx",
+      "memories",
+      "to_tsvector('simple', lore.memory_name_text(candidate.title, candidate.gloss)) @@ websearch_to_tsquery('simple', 'Hyperdrive')",
+    ],
+    [
+      "memories_workspace_name_search_english_idx",
+      "memories",
+      "to_tsvector('english', lore.memory_name_text(candidate.title, candidate.gloss)) @@ plainto_tsquery('english', 'rollback')",
+    ],
+    [
+      "memories_workspace_name_cjk_grams_idx",
+      "memories",
+      "lore.extract_cjk_grams(lore.memory_name_text(candidate.title, candidate.gloss)) @> ARRAY['数据库']",
     ],
   ] as const;
-  const plan = (asRequest: boolean, condition: string) =>
+  const plan = (asRequest: boolean, from: string, condition: string) =>
     (asRequest ? context.database : context.adminDatabase).transaction(async (transaction) => {
       if (asRequest) installActorContext(transaction, context.alice);
       await transaction.query("SET LOCAL enable_seqscan = off");
       const result = await transaction.query<{ "QUERY PLAN": string }>(
-        `EXPLAIN SELECT chunk.id FROM memory_chunks chunk
-         WHERE chunk.workspace_id = '${context.alice.workspaceId}'::uuid AND ${condition}`,
+        `EXPLAIN SELECT candidate.id FROM ${from} candidate
+         WHERE candidate.workspace_id = '${context.alice.workspaceId}'::uuid AND ${condition}`,
       );
       return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
     });
-  for (const [index, condition] of probes) {
-    expect(await plan(false, condition), index).toMatch(
+  for (const [index, from, condition] of probes) {
+    expect(await plan(false, from, condition), index).toMatch(
       new RegExp(`Bitmap Index Scan on ${index}\\b`),
     );
-    expect(await plan(true, condition), index).not.toContain(index);
+    expect(await plan(true, from, condition), index).not.toContain(index);
   }
 });

@@ -24,6 +24,12 @@ export interface RetrievalBenchmarkCaseFixture {
   actor?: RetrievalBenchmarkActor;
   category?: string;
   query: string;
+  /**
+   * The query in other languages, as a calling agent would send them. Only the
+   * `+translations` variants search them, and the `+wrong-translations` variants
+   * search them for other cases, so every other variant scores the query alone.
+   */
+  translations?: string[];
   expectedKeys: string[];
   forbiddenKeys?: string[];
   limit: number;

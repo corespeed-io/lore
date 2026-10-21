@@ -74,6 +74,61 @@ test("CLI remembers through the SDK without accepting secret flags", async () =>
   });
 });
 
+test("CLI sends a title and gloss on remember, and sets or removes them on update", async () => {
+  const memoryId = "20000000-0000-4000-8000-000000000001";
+  const environment = {
+    LORE_URL: "https://lore.example.test",
+    LORE_WORKSPACE_ID: WORKSPACE_ID,
+    LORE_AGENT_TOKEN: AGENT_TOKEN,
+  };
+  const body = async (args: string[]) => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: memoryId, version: 2 }));
+    const captured = captureIo();
+    expect(await runLoreCli(args, { environment, fetch: fetchMock, io: captured.io })).toBe(0);
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    return JSON.parse(String(init.body)) as unknown;
+  };
+  await expect(body(["memory", "remember", "Keep this", "--title", "Kept note"])).resolves.toEqual({
+    content: "Keep this",
+    title: "Kept note",
+  });
+  await expect(
+    body(["memory", "update", memoryId, "--version", "1", "--title", "Renamed"]),
+  ).resolves.toEqual({ title: "Renamed" });
+  await expect(
+    body(["memory", "update", memoryId, "--version", "1", "--no-title"]),
+  ).resolves.toEqual({ title: null });
+  await expect(
+    body(["memory", "remember", "港口的铁链", "--gloss", "The harbour chain"]),
+  ).resolves.toEqual({ content: "港口的铁链", gloss: "The harbour chain" });
+  await expect(
+    body(["memory", "update", memoryId, "--version", "1", "--no-gloss", "--title", "Chain"]),
+  ).resolves.toEqual({ title: "Chain", gloss: null });
+
+  for (const [args, message] of [
+    [["memory", "remember", "Keep this", "--title", "  "], "--title must not be blank"],
+    [
+      ["memory", "remember", "Keep this", "--title", "x".repeat(257)],
+      "--title may contain at most 256 characters",
+    ],
+    [
+      ["memory", "update", memoryId, "--version", "1", "--title", "A", "--no-title"],
+      "--title and --no-title cannot be combined",
+    ],
+    [
+      ["memory", "remember", "Keep this", "--gloss", "x".repeat(513)],
+      "--gloss may contain at most 512 characters",
+    ],
+    [["memory", "remember", "Keep this", "--no-title"], "--no-title"],
+  ] as const) {
+    const refused = captureIo();
+    const fetchMock = vi.fn();
+    expect(await runLoreCli([...args], { environment, fetch: fetchMock, io: refused.io })).toBe(2);
+    expect(refused.stderr.join("")).toContain(message);
+    expect(fetchMock).not.toHaveBeenCalled();
+  }
+});
+
 test("CLI queries bounded exact-revision Code Dependencies without accepting a local path", async () => {
   const captured = captureIo();
   const commitOid = "a".repeat(40);
@@ -310,7 +365,7 @@ test("CLI submits versioned update proposals and rejects an empty patch", async 
   );
   expect(invalidExitCode).toBe(2);
   expect(invalid.stderr.join("")).toContain(
-    "memory propose update requires --content, --scope, or --metadata",
+    "memory propose update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, or --metadata",
   );
 });
 
@@ -695,6 +750,39 @@ test("CLI lists one page of a Memory's Links with its next cursor", async () => 
     direction: "inbound",
     cursor: "prev",
   });
+});
+
+test("CLI sends each repeated --translation with a Memory or evidence search", async () => {
+  const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+  for (const group of ["memory", "episode"]) {
+    const captured = captureIo();
+    const exitCode = await runLoreCli(
+      [group, "search", "failed deploy", "--translation", "部署失败", "--translation", "échec"],
+      { environment: { LORE_WORKSPACE_ID: WORKSPACE_ID }, fetch: fetchMock, io: captured.io },
+    );
+    expect(exitCode).toBe(0);
+  }
+  const [memoryUrl] = fetchMock.mock.calls[0] as [URL, RequestInit];
+  expect(new URL(String(memoryUrl)).searchParams.getAll("translation")).toEqual([
+    "部署失败",
+    "échec",
+  ]);
+  const [, evidenceRequest] = fetchMock.mock.calls[1] as [URL, RequestInit];
+  expect(JSON.parse(String(evidenceRequest.body))).toMatchObject({
+    translations: ["部署失败", "échec"],
+  });
+
+  const refused = captureIo();
+  const translations = ["a", "b", "c", "d"].flatMap((text) => ["--translation", text]);
+  expect(
+    await runLoreCli(["memory", "search", "failed deploy", ...translations], {
+      environment: { LORE_WORKSPACE_ID: WORKSPACE_ID },
+      fetch: fetchMock,
+      io: refused.io,
+    }),
+  ).not.toBe(0);
+  expect(refused.stderr.join("")).toContain("translations may hold at most 3 queries");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 test("CLI accepts private query text through stdin instead of argv", async () => {

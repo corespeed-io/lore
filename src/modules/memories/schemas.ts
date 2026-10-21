@@ -6,8 +6,12 @@ import {
 import { z } from "zod/v4";
 import {
   JsonValueSchema,
+  MemoryGlossInputSchema,
+  MemoryGlossSchema,
   MemoryMetadataSchema,
   MemoryScopeSchema,
+  MemoryTitleInputSchema,
+  MemoryTitleSchema,
 } from "@/server/api/shared-schemas";
 
 // The OSS Memory wire schemas. Each delegates to the engine's input rules.
@@ -31,6 +35,8 @@ export const MemorySchema = z.object({
   ownerUserId: z.uuid(),
   createdByAgentId: z.uuid().nullable(),
   scope: MemoryScopeSchema,
+  title: MemoryTitleSchema.nullable(),
+  gloss: MemoryGlossSchema.nullable(),
   content: MemoryContentSchema,
   metadata: MemoryMetadataSchema,
   version: z.number().int().positive(),
@@ -42,6 +48,9 @@ export const MemorySchema = z.object({
 export const CreateMemoryInputSchema = z.object({
   content: z.string({ error: "content is required" }).trim().pipe(MemoryContentSchema),
   scope: MemoryScopeSchema.meta({ default: "shared" }).optional(),
+  title: MemoryTitleInputSchema.optional(),
+  // English, when the content is in another language.
+  gloss: MemoryGlossInputSchema.optional(),
   metadata: MemoryMetadataSchema.optional(),
 });
 
@@ -49,7 +58,11 @@ export const UpdateMemoryInputSchema = CreateMemoryInputSchema.partial()
   .extend({ scope: MemoryScopeSchema.optional() })
   .refine(
     (value) =>
-      value.content !== undefined || value.scope !== undefined || value.metadata !== undefined,
+      value.content !== undefined ||
+      value.scope !== undefined ||
+      value.title !== undefined ||
+      value.gloss !== undefined ||
+      value.metadata !== undefined,
     { message: "At least one Memory field is required" },
   )
   .meta({ minProperties: 1 });

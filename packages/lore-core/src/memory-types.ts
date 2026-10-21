@@ -11,6 +11,10 @@ export interface Memory {
   ownerId: string;
   sourceId: string | null;
   scope: MemoryScope;
+  /** A one-line plain-text name, separate from content, or null for none. */
+  title: string | null;
+  /** An English rendering of content in another language, or null for none. */
+  gloss: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;
@@ -21,6 +25,10 @@ export interface Memory {
 export interface RememberMemory {
   content: string;
   scope?: MemoryScope;
+  /** Omitted or null for none. */
+  title?: string | null;
+  /** Omitted or null for none. */
+  gloss?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -33,6 +41,8 @@ export interface InsertMemoryRecord {
    */
   id: string;
   scope: MemoryScope;
+  title?: string | null;
+  gloss?: string | null;
   content: string;
   metadata: Record<string, unknown>;
   /**
@@ -45,6 +55,10 @@ export interface InsertMemoryRecord {
 export interface UpdateMemory {
   content?: string;
   scope?: MemoryScope;
+  /** A new title, null to remove it, or omitted to keep it. */
+  title?: string | null;
+  /** A new gloss, null to remove it, or omitted to keep it. */
+  gloss?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -54,6 +68,11 @@ export interface MemoryMutationOptions {
 
 export interface SearchMemory {
   query: string;
+  /**
+   * The same question in other languages. Search runs each beside the query and
+   * fuses them into one ranking, so it also matches Memories written in them.
+   */
+  translations?: readonly string[];
   limit?: number;
   metadataFilter?: Record<string, unknown>;
   scope?: MemoryScope;
@@ -146,6 +165,8 @@ export interface MemoryRow {
   owner_user_id: string;
   created_by_agent_id: string | null;
   scope: MemoryScope;
+  title: string | null;
+  gloss: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;

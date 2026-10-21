@@ -137,6 +137,11 @@ export interface MemorySearchInput {
   limit?: number;
   metadata?: Record<string, unknown>;
   query: string;
+  /**
+   * The same question in other languages. Search runs each beside the query and
+   * fuses the results into one ranking.
+   */
+  translations?: readonly string[];
   scope?: MemoryScope;
   updatedAfter?: string;
   updatedBefore?: string;
@@ -317,6 +322,26 @@ function normalizedLimit(
     throw new TypeError(`limit must be an integer from 1 to ${maximum}`);
   }
   return value;
+}
+
+/** A search's translations, trimmed, each a query the server accepts; none is undefined. */
+function normalizedTranslations(
+  value: readonly string[] | undefined,
+  name: string,
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (value.length > LIMITS.memorySearchTranslations) {
+    throw new TypeError(`${name} may hold at most ${LIMITS.memorySearchTranslations} queries`);
+  }
+  return value.map((item) => {
+    const translation = item.trim();
+    if (!translation || translation.length > LIMITS.memorySearchQueryLength) {
+      throw new TypeError(
+        `${name} must hold queries of 1 to ${LIMITS.memorySearchQueryLength} characters`,
+      );
+    }
+    return translation;
+  });
 }
 
 function normalizedTimeoutMs(value: number | null | undefined): number | null {
@@ -925,10 +950,12 @@ export class LoreWorkspaceClient {
     if (!query || query.length > LIMITS.memorySearchQueryLength) {
       throw new TypeError(`query must contain 1 to ${LIMITS.memorySearchQueryLength} characters`);
     }
+    const translations = normalizedTranslations(input.translations, "translations");
     const params = new URLSearchParams({
       q: query,
       limit: String(normalizedLimit(input.limit, LIMITS.memorySearchLimitDefault)),
     });
+    for (const translation of translations ?? []) params.append("translation", translation);
     addMemoryFilters(params, input);
     return (
       await this.transport.json<readonly MemorySearchResult[]>(`api/v1/memories?${params}`, {
@@ -1011,6 +1038,10 @@ export class LoreWorkspaceClient {
         `memoryQuery must contain 1 to ${LIMITS.memorySearchQueryLength} characters`,
       );
     }
+    const memoryTranslations = normalizedTranslations(
+      input.memoryTranslations,
+      "memoryTranslations",
+    );
     const codeQuery = input.codeQuery?.trim();
     if (codeQuery !== undefined && (!codeQuery || codeQuery.length > LIMITS.codeQueryLength)) {
       throw new TypeError(`codeQuery must contain 1 to ${LIMITS.codeQueryLength} characters`);
@@ -1024,6 +1055,7 @@ export class LoreWorkspaceClient {
           ...requestInput,
           query,
           ...(memoryQuery === undefined ? {} : { memoryQuery }),
+          ...(memoryTranslations === undefined ? {} : { memoryTranslations }),
           ...(codeQuery === undefined ? {} : { codeQuery }),
           ...(repositoryKey === undefined ? {} : { repositoryKey, commitOid }),
           route,
@@ -1215,6 +1247,7 @@ export class LoreWorkspaceClient {
     if (query.length > LIMITS.memorySearchQueryLength) {
       throw new TypeError(`query exceeds ${LIMITS.memorySearchQueryLength} characters`);
     }
+    const translations = normalizedTranslations(input.translations, "translations");
     const limit = normalizedLimit(input.limit, LIMITS.memorySearchLimitDefault);
     if (input.scope !== undefined && !LORE_CONTRACT.vocabularies.memoryScopes.includes(input.scope))
       throw new TypeError("Invalid scope");
@@ -1233,6 +1266,7 @@ export class LoreWorkspaceClient {
         signal: input.signal,
         body: {
           query,
+          ...(translations === undefined ? {} : { translations }),
           limit,
           ...(input.scope === undefined ? {} : { scope: input.scope }),
           ...(input.metadata === undefined ? {} : { metadata: input.metadata }),

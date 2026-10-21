@@ -146,11 +146,42 @@ export function clientContract(document: unknown) {
         document,
         `${schemas}/Memory/properties/metadata/x-lore-maxSerializedLength`,
       ),
+      // One title bound and one gloss bound serve Memories, Proposals, archives, and
+      // context packets.
+      memoryTitleCharacters: same(integer, document, [
+        `${limits}/memoryTitleCharacters/const`,
+        `${schemas}/Memory/properties/title/anyOf/0/maxLength`,
+        `${schemas}/CreateMemoryInput/properties/title/anyOf/0/maxLength`,
+        `${schemas}/UpdateMemoryInput/properties/title/anyOf/0/maxLength`,
+        `${schemas}/CreateMemoryProposalCreateInput/properties/title/oneOf/0/maxLength`,
+        `${schemas}/MemoryProposal/properties/proposedTitle/oneOf/0/maxLength`,
+        `${schemas}/WorkspaceArchiveMemory/properties/title/oneOf/0/maxLength`,
+        `${schemas}/RetrievedMemoryContext/properties/title/oneOf/0/maxLength`,
+      ]),
+      memoryGlossCharacters: same(integer, document, [
+        `${limits}/memoryGlossCharacters/const`,
+        `${schemas}/Memory/properties/gloss/anyOf/0/maxLength`,
+        `${schemas}/CreateMemoryInput/properties/gloss/anyOf/0/maxLength`,
+        `${schemas}/UpdateMemoryInput/properties/gloss/anyOf/0/maxLength`,
+        `${schemas}/CreateMemoryProposalCreateInput/properties/gloss/oneOf/0/maxLength`,
+        `${schemas}/MemoryProposal/properties/proposedGloss/oneOf/0/maxLength`,
+        `${schemas}/WorkspaceArchiveMemory/properties/gloss/oneOf/0/maxLength`,
+        `${schemas}/RetrievedMemoryContext/properties/gloss/oneOf/0/maxLength`,
+      ]),
       memorySearchQueryLength: same(integer, document, [
         `${memories}/[q]/schema/maxLength`,
         `${context}/query/maxLength`,
         `${context}/memoryQuery/maxLength`,
         `${schemas}/SearchEpisodeEvidenceInput/properties/query/maxLength`,
+        `${memories}/[translation]/schema/items/maxLength`,
+        `${context}/memoryTranslations/items/maxLength`,
+        `${schemas}/SearchEpisodeEvidenceInput/properties/translations/items/maxLength`,
+      ]),
+      // One bound on a query's translations serves Memory, context, and evidence search.
+      memorySearchTranslations: same(integer, document, [
+        `${memories}/[translation]/schema/maxItems`,
+        `${context}/memoryTranslations/maxItems`,
+        `${schemas}/SearchEpisodeEvidenceInput/properties/translations/maxItems`,
       ]),
       // One bound serves the Memory list and search, and the Episode list.
       memoryListLimit: same(integer, document, [

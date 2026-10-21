@@ -29,13 +29,14 @@ const TITLE_LIMIT = 96;
 const TITLE_SOURCE_LIMIT = 300;
 
 /** A metadata string a Memory carries, trimmed, or null when it has none. */
-function metadataText(memory: Memory, key: "title" | "type" | "source"): string | null {
+function metadataText(memory: Memory, key: "type" | "source"): string | null {
   const value = memory.metadata[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/** The Memory's own title, read as a line of the body's Markdown would be, or null. */
 function configuredTitle(memory: Memory): string | null {
-  return metadataText(memory, "title");
+  return memory.title;
 }
 
 /** A text's first line. The split stops there, however long the body. */
@@ -152,10 +153,15 @@ export function memoryMetadataText(memory: Memory): string | null {
   return Object.keys(memory.metadata).length === 0 ? null : metadataSource(memory.metadata);
 }
 
-/** A configured `metadata.title` as written, hidden controls as markers, or null. */
+/** A Memory's title as written, hidden controls as markers, or null. */
 export function memoryConfiguredTitle(memory: Memory): string | null {
   const configured = configuredTitle(memory);
   return configured === null ? null : revealHidden(configured);
+}
+
+/** A Memory's English gloss as written, hidden controls as markers, or null. */
+export function memoryGloss(memory: Memory): string | null {
+  return memory.gloss === null ? null : revealHidden(memory.gloss);
 }
 
 /** A first line written as a title: a heading, or a line that opens with a bold or 【…】 run. */

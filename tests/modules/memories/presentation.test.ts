@@ -41,6 +41,8 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     ownerUserId: "20000000-0000-4000-8000-000000000001",
     createdByAgentId: null,
     scope: "private",
+    title: null,
+    gloss: null,
     content: "A durable fact",
     metadata: {},
     version: 1,
@@ -135,16 +137,12 @@ test("a title taken from the first line shows its text, not its Markdown", () =>
     "Rename snake_case_name, then ship",
   );
   expect(titleOf("# 中文_注意_中文")).toBe("中文_注意_中文");
-  // A configured title shows its text, as a first line does.
-  expect(memoryTitle(memory({ content: "**x**", metadata: { title: "## **Set** title" } }))).toBe(
-    "Set title",
-  );
-  // A configured title that is only markup still shows what was set.
-  expect(memoryTitle(memory({ content: "x", metadata: { title: "****" } }))).toBe("****");
-  // However long a configured title is, the title shows at most the limit.
-  expect(memoryTitle(memory({ metadata: { title: "**".repeat(4_000) } }))).toBe(
-    `${"*".repeat(95)}…`,
-  );
+  // A title shows its text, as a first line does.
+  expect(memoryTitle(memory({ content: "**x**", title: "## **Set** title" }))).toBe("Set title");
+  // A title that is only markup still shows what was set.
+  expect(memoryTitle(memory({ content: "x", title: "****" }))).toBe("****");
+  // However long a title is, a row shows at most the limit.
+  expect(memoryTitle(memory({ title: "**".repeat(128) }))).toBe(`${"*".repeat(95)}…`);
 });
 
 test("plain text keeps a code span as written and drops the rest of the inline markup", () => {
@@ -245,8 +243,8 @@ test("a title line goes before a heading, a quote, or a list item of its own", (
 });
 
 test("the body keeps a first line the title would not show as written", () => {
-  const kept = (content: string, metadata: Memory["metadata"] = {}) =>
-    expect(memoryBody(memory({ content, metadata }))).toBe(content);
+  const kept = (content: string, title: string | null = null) =>
+    expect(memoryBody(memory({ content, title }))).toBe(content);
 
   // Not a title: plain text, a hashtag, seven hashes, a non-breaking space, an unclosed run.
   for (const line of [
@@ -259,8 +257,8 @@ test("the body keeps a first line the title would not show as written", () => {
   ]) {
     kept(`${line}\nBody`);
   }
-  // A configured title leaves the content whole.
-  kept("# Heading\nBody", { title: "Configured" });
+  // A title leaves the content whole.
+  kept("# Heading\nBody", "Configured");
   // Markup past the title's own markers: links, code, bold, strikethrough, escapes,
   // entities, autolinks, and table pipes.
   for (const line of [
@@ -305,8 +303,9 @@ test("the body keeps a first line the title would not show as written", () => {
   kept(`**${"x".repeat(97)}**\nBody`);
 });
 
-test("a blank or non-text configured title falls back to the first line, then to Untitled", () => {
-  expect(memoryTitle(memory({ content: "# Heading\nBody", metadata: { title: "   " } }))).toBe(
+test("without a title the first line names a Memory, then Untitled; metadata.title does not", () => {
+  // Schema revision 16 copied metadata.title into the title; the UI reads only the title.
+  expect(memoryTitle(memory({ content: "# Heading\nBody", metadata: { title: "Old" } }))).toBe(
     "Heading",
   );
   expect(memoryTitle(memory({ content: "First line", metadata: { title: 42 } }))).toBe(
@@ -355,7 +354,7 @@ test("controls that reorder or hide text show as markers, and emoji stay whole",
   expect(metadataSource({ limit: "\u200F100 250" })).toBe('{\n  "limit": "⟨U+200F⟩100 250"\n}');
   expect(plainInline("Pay \u202E4321")).toBe("Pay ⟨U+202E⟩4321");
   expect(memoryTitle(memory({ content: "Pay \u202E4321\nBody" }))).toBe("Pay ⟨U+202E⟩4321");
-  expect(memoryTitle(memory({ metadata: { title: "a\u2066b" } }))).toBe("a⟨U+2066⟩b");
+  expect(memoryTitle(memory({ title: "a\u2066b" }))).toBe("a⟨U+2066⟩b");
 });
 
 test("tag characters after a flag that do not spell a flag still show as markers", () => {
@@ -395,8 +394,8 @@ test("only the three subdivision flags keep their tags; any other flag-shaped ru
   expect(revealHidden(`\u{1F3F4}${tags("gbxyz")}\u{E007F}`)).toContain("⟨U+E0078⟩");
 });
 
-test("a configured title whose words show nothing shows as written, hidden controls as markers", () => {
-  const title = (value: string) => memoryTitle(memory({ metadata: { title: value } }));
+test("a title whose words show nothing shows as written, hidden controls as markers", () => {
+  const title = (value: string) => memoryTitle(memory({ title: value }));
   expect(title("**\u200B\u2060**")).toBe("**\u200B\u2060**");
   expect(title("[\u202E](https://example.test)")).toBe("⟨U+202E⟩");
   // An image with no words shows its source, as the body does, its controls encoded.
@@ -405,9 +404,9 @@ test("a configured title whose words show nothing shows as written, hidden contr
   );
 });
 
-test("Memory detail shows a configured title whole, and as written beside it", () => {
+test("Memory detail shows a title whole, and as written beside it", () => {
   const long = `Decision record: ${"we moved the embedding worker to independent leases ".repeat(3).trim()}`;
-  const titled = memory({ metadata: { title: ` [Approved](https://x.example) ${long} ` } });
+  const titled = memory({ title: `[Approved](https://x.example) ${long}` });
   expect(memoryTitle(titled)).toHaveLength(96);
   expect(memoryDetailTitle(titled)).toBe(`Approved ${long}`);
   expect(memoryConfiguredTitle(titled)).toBe(`[Approved](https://x.example) ${long}`);
@@ -415,7 +414,7 @@ test("Memory detail shows a configured title whole, and as written beside it", (
   const untitled = memory({ content: `# ${long}\nBody` });
   expect(memoryDetailTitle(untitled)).toBe(memoryTitle(untitled));
   expect(memoryConfiguredTitle(untitled)).toBeNull();
-  expect(memoryConfiguredTitle(memory({ metadata: { title: "a\u202Eb" } }))).toBe("a⟨U+202E⟩b");
+  expect(memoryConfiguredTitle(memory({ title: "a\u202Eb" }))).toBe("a⟨U+202E⟩b");
 });
 
 test("a title line whose markers overflow the title stays in the body", () => {
@@ -482,31 +481,25 @@ test("text shows nothing when it holds only spaces, zero-width characters, or ch
   expect(memoryTitle(memory({ content: "**\u2800**\nBody" }))).toBe("Untitled memory");
   expect(memoryTitle(memory({ content: "\uFFFC\nBody" }))).toBe("Untitled memory");
   expect(memoryTitle(memory({ content: "&#xFFFC;\nBody" }))).toBe("Untitled memory");
-  const configured = memory({ metadata: { title: "**\u3164**" } });
+  const configured = memory({ title: "**\u3164**" });
   expect(memoryTitle(configured)).toBe("**\u3164**");
   expect(memoryDetailTitle(configured)).toBe("**\u3164**");
 });
 
-test("Memory detail shows a configured title whose words show nothing whole, as written", () => {
+test("Memory detail shows a title whose words show nothing whole, as written", () => {
   const blank = `**${"\u200B".repeat(200)}**`;
-  expect(memoryDetailTitle(memory({ metadata: { title: blank } }))).toBe(blank);
-  expect(memoryTitle(memory({ metadata: { title: blank } }))).toHaveLength(96);
+  expect(memoryDetailTitle(memory({ title: blank }))).toBe(blank);
+  expect(memoryTitle(memory({ title: blank }))).toHaveLength(96);
 });
 
-test("a configured title whose words show nothing and run past what a row reads says it was cut", () => {
-  // Whitespace collapses the read under 96, so only the 300-character cut can add "…".
-  const blank = `\u200B${" ".repeat(400)}x`;
-  expect(memoryTitle(memory({ metadata: { title: blank } }))).toBe("\u200B…");
-  // A title and a first line that read the same 300 characters differ by the cut.
+test("a first line that runs past what a row reads says it was cut", () => {
+  // A title holds at most 256 characters, under the 300 a row reads, so only a first
+  // line can be cut there. Two that read the same 300 characters differ by the cut.
   const whole = `# Deploy${" ".repeat(292)}`;
   expect(memoryTitle(memory({ content: `${whole}\nBody` }))).toBe("Deploy");
   expect(memoryTitle(memory({ content: `${whole}only after the freeze lifts\nBody` }))).toBe(
     "Deploy…",
   );
-  // A title across lines reads its lines as one, in rows and in detail.
-  const lines = memory({ metadata: { title: "# A\nB" } });
-  expect(memoryDetailTitle(lines)).toBe("# A B");
-  expect(memoryTitle(lines)).toBe("# A B");
 });
 
 test("a text cache holds at most its limit, the oldest entry going first", () => {
@@ -528,24 +521,16 @@ test("a text cache holds at most its limit, the oldest entry going first", () =>
   expect(read("c")).toBe("c!6");
 });
 
-test("Memory detail reads a configured title as long as metadata allows in linear time", () => {
-  // Rows read 300 characters of a title, but detail reads all of it, up to the
-  // 100,000-character metadata bound; quadratic parsing would take seconds here.
+test("Memory detail reads the longest title of the densest markup at once", () => {
+  // A title holds at most 256 characters, so detail parses at most that much.
   const units = ["[", "![", "*a", "_a", "[[a|", "[a](http://(", "~~a", "<"];
-  for (const title of [
-    ...units.map((unit) => unit.repeat(Math.floor(99_000 / unit.length))),
-    // A heading's closing run is found in linear time too.
-    `# a${" ".repeat(99_000)}#x`,
-    `# a${"\t".repeat(99_000)}#x`,
-    `# a${"#".repeat(99_000)}x`,
-  ]) {
+  for (const unit of units) {
+    const title = unit.repeat(Math.floor(256 / unit.length));
     const started = performance.now();
-    memoryDetailTitle(memory({ metadata: { title } }));
-    expect(performance.now() - started, title.slice(0, 12)).toBeLessThan(3_000);
+    memoryDetailTitle(memory({ title }));
+    expect(performance.now() - started, title.slice(0, 12)).toBeLessThan(500);
   }
-  expect(memoryDetailTitle(memory({ metadata: { title: "[".repeat(99_000) } }))).toHaveLength(
-    99_000,
-  );
+  expect(memoryDetailTitle(memory({ title: "[".repeat(256) }))).toHaveLength(256);
 });
 
 test("a snippet shows an ordered item's number as the body does", () => {
@@ -589,15 +574,13 @@ test("a title whose source runs past what it reads says it was cut", () => {
   expect(memoryTitle(padded)).toBe("Deploy…");
   expect(memoryBody(padded)).toBe(padded.content);
   // Words that reduce to fewer than the title shows still end in "…" when cut.
-  const cut = memoryTitle(memory({ metadata: { title: `**Owner:** ${"&amp;".repeat(100)}` } }));
+  const cut = memoryTitle(memory({ content: `**Owner:** ${"&amp;".repeat(100)}\nBody` }));
   // The cut may split an entity, whose start then shows as written.
   expect(cut.startsWith("Owner: &&")).toBe(true);
   expect(cut.endsWith("…")).toBe(true);
   expect(cut.length).toBeLessThan(96);
   // The cut falls between the halves of the emoji at 299, which it keeps whole or drops.
-  const astral = memoryTitle(
-    memory({ metadata: { title: `${"&amp;".repeat(59)}abcd\u{1F600}tail` } }),
-  );
+  const astral = memoryTitle(memory({ content: `${"&amp;".repeat(59)}abcd\u{1F600}tail\nBody` }));
   expect(LONE_SURROGATE.test(astral)).toBe(false);
   expect(astral.endsWith("…")).toBe(true);
 });
@@ -712,7 +695,13 @@ test("a title cut short ends in an ellipsis with no space before it, whatever it
   expect(memoryTitle(memory({ content: `**Deploy**${" ".repeat(1_000)}rest\nBody` }))).toBe(
     "Deploy…",
   );
-  expect(memoryTitle(memory({ metadata: { title: padded } }))).toBe("Deploy…");
+  // A title cut at the row limit ends the same way.
+  expect(memoryTitle(memory({ title: `Deploy${" ".repeat(200)}${"x".repeat(50)}` }))).toBe(
+    `Deploy ${"x".repeat(50)}`,
+  );
+  expect(memoryTitle(memory({ title: `Deploy ${"x".repeat(200)}` }))).toBe(
+    `Deploy ${"x".repeat(88)}…`,
+  );
 });
 
 test("row titles are read once per source, whatever object carries it", () => {
@@ -721,10 +710,10 @@ test("row titles are read once per source, whatever object carries it", () => {
   const started = performance.now();
   for (let index = 0; index < 5_000; index += 1) memoryTitle(memory({ content }));
   expect(performance.now() - started).toBeLessThan(300);
-  // A configured title and a first line with the same text are separate titles.
+  // A title and a first line with the same text are separate titles.
   const same = "\u200B";
   expect(memoryTitle(memory({ content: same }))).toBe("Untitled memory");
-  expect(memoryTitle(memory({ metadata: { title: same } }))).toBe("\u200B");
+  expect(memoryTitle(memory({ title: same }))).toBe("\u200B");
 });
 
 test("a row excerpt collapses whitespace, marks hidden controls, and says when it was cut", () => {

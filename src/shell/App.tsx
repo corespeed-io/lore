@@ -6,7 +6,7 @@ import type {
   MemoryScope,
   WorkspaceSummary,
 } from "@corespeed/lore-sdk";
-import { MEMORY_CONTENT_LIMITS } from "@corespeed/lore-sdk";
+import { LORE_CONTRACT, MEMORY_CONTENT_LIMITS } from "@corespeed/lore-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentsView } from "@/modules/agents/browser/AgentsView";
 import { useLoreGraph } from "@/modules/graph/browser/data";
@@ -29,6 +29,9 @@ import { parseRoute, routeUrl } from "@/shell/route";
 import { Sidebar } from "@/shell/Sidebar";
 import { applyMemoryChange, type MemoryReadCaches } from "./memory-cache";
 import { useLoreMutations } from "./use-lore-mutations";
+
+const MEMORY_TITLE_CHARACTERS = LORE_CONTRACT.limits.memoryTitleCharacters;
+const MEMORY_GLOSS_CHARACTERS = LORE_CONTRACT.limits.memoryGlossCharacters;
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Dashboard",
@@ -289,7 +292,12 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     writeRoute({ tab: "search", type });
   }
 
-  async function saveEditor(content: string, scope: MemoryScope) {
+  async function saveEditor(
+    content: string,
+    scope: MemoryScope,
+    title: string | null,
+    gloss: string | null,
+  ) {
     if (!activeWorkspaceId || !editor) return;
     setMutationError(null);
     try {
@@ -297,6 +305,8 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         id: editor.memory?.id,
         content,
         scope,
+        title,
+        gloss,
         version: editor.memory?.version,
       });
       await applyMemoryChange({ kind: "saved", memory: saved }, memoryCaches);
@@ -625,13 +635,25 @@ function MemoryEditor({
   saving: boolean;
   error: string | null;
   onClose: () => void;
-  onSave: (content: string, scope: MemoryScope) => Promise<void>;
+  onSave: (
+    content: string,
+    scope: MemoryScope,
+    title: string | null,
+    gloss: string | null,
+  ) => Promise<void>;
 }) {
   const [content, setContent] = useState(memory?.content ?? "");
+  const [title, setTitle] = useState(memory?.title ?? "");
+  const [gloss, setGloss] = useState(memory?.gloss ?? "");
   const [scope, setScope] = useState<MemoryScope>(memory?.scope ?? "shared");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const contentCharacterCount = Array.from(content).length;
   const contentTooLong = contentCharacterCount > MEMORY_CONTENT_LIMITS.maximumCharacters;
+  // The server trims a title and counts its characters; an empty one means none.
+  const titleCharacterCount = Array.from(title.trim()).length;
+  const titleTooLong = titleCharacterCount > MEMORY_TITLE_CHARACTERS;
+  const glossCharacterCount = Array.from(gloss.trim()).length;
+  const glossTooLong = glossCharacterCount > MEMORY_GLOSS_CHARACTERS;
   const contentBeyondRecommendation =
     contentCharacterCount > MEMORY_CONTENT_LIMITS.recommendedCharacters;
 
@@ -661,8 +683,8 @@ function MemoryEditor({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (content.trim() && !contentTooLong) {
-              void onSave(content.trim(), scope);
+            if (content.trim() && !contentTooLong && !titleTooLong && !glossTooLong) {
+              void onSave(content.trim(), scope, title.trim() || null, gloss.trim() || null);
             }
           }}
         >
@@ -680,6 +702,25 @@ function MemoryEditor({
               Close
             </button>
           </header>
+          <label htmlFor="memory-editor-title-input">Title</label>
+          <input
+            id="memory-editor-title-input"
+            value={title}
+            maxLength={MEMORY_TITLE_CHARACTERS * 2}
+            aria-describedby={titleTooLong ? "memory-editor-title-guidance" : undefined}
+            aria-invalid={titleTooLong}
+            placeholder="Optional"
+            onChange={(event) => setTitle(event.target.value)}
+          />
+          {titleTooLong && (
+            <p
+              id="memory-editor-title-guidance"
+              className="memory-editor-guidance memory-editor-guidance-error"
+            >
+              {titleCharacterCount.toLocaleString()} /{MEMORY_TITLE_CHARACTERS.toLocaleString()}{" "}
+              characters
+            </p>
+          )}
           <label htmlFor="memory-editor-content">Content</label>
           <textarea
             ref={textareaRef}
@@ -705,6 +746,24 @@ function MemoryEditor({
               ? " · Store long source material as document evidence."
               : ""}
           </p>
+          <label htmlFor="memory-editor-gloss-input">English gloss</label>
+          <input
+            id="memory-editor-gloss-input"
+            value={gloss}
+            maxLength={MEMORY_GLOSS_CHARACTERS * 2}
+            aria-describedby="memory-editor-gloss-guidance"
+            aria-invalid={glossTooLong}
+            placeholder="Optional"
+            onChange={(event) => setGloss(event.target.value)}
+          />
+          <p
+            id="memory-editor-gloss-guidance"
+            className={`memory-editor-guidance${glossTooLong ? " memory-editor-guidance-error" : ""}`}
+          >
+            {glossTooLong
+              ? `${glossCharacterCount.toLocaleString()} /${MEMORY_GLOSS_CHARACTERS.toLocaleString()} characters`
+              : "For content not in English: its meaning in English, so English search finds it."}
+          </p>
           <fieldset className="memory-scope-control">
             <legend>Visibility</legend>
             {(["shared", "private"] as const).map((value) => (
@@ -726,7 +785,7 @@ function MemoryEditor({
             <button
               type="submit"
               className="memory-editor-primary"
-              disabled={saving || !content.trim() || contentTooLong}
+              disabled={saving || !content.trim() || contentTooLong || titleTooLong || glossTooLong}
             >
               {saving ? "Saving…" : memory ? "Save changes" : "Remember"}
             </button>

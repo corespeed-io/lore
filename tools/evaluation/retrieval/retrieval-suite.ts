@@ -42,6 +42,9 @@ interface LoadedCase {
   category: string;
   actor: ActorContext;
   query: string;
+  translations: string[] | undefined;
+  /** Another case's translations, so a variant can measure what a wrong one costs. */
+  wrongTranslations: string[] | undefined;
   metadataFilter: Record<string, unknown>;
   limit: number;
   expectedMemoryIds: string[];
@@ -620,6 +623,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
           category,
           actor: actors[benchmarkCase.actor ?? "alice"],
           query: benchmarkCase.query,
+          translations: benchmarkCase.translations,
+          wrongTranslations: undefined,
           metadataFilter: { benchmarkPartition: partition.key },
           limit: benchmarkCase.limit,
           expectedMemoryIds: benchmarkCase.expectedKeys.map((key) =>
@@ -742,6 +747,8 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       useRetrievalFeedback?: boolean;
       useRecency?: boolean;
       useReranking?: boolean;
+      /** Search each case's own translations, or another case's, or none. */
+      translations?: "own" | "wrong";
       retrievalLimit?: number;
       rerankCandidateLimit?: number;
       rerankDiversityLambda?: number;
@@ -791,6 +798,12 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
         const caseStartedAt = performance.now();
         const retrieved = await memoryModule.search(benchmarkCase.actor, {
           query: benchmarkCase.query,
+          translations:
+            variant.translations === "own"
+              ? benchmarkCase.translations
+              : variant.translations === "wrong"
+                ? benchmarkCase.wrongTranslations
+                : undefined,
           limit: variant.retrievalLimit ?? benchmarkCase.limit,
           metadataFilter: benchmarkCase.metadataFilter,
         });
@@ -845,6 +858,7 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
           : null,
         entityAliasRecall: variant.useEntityAliases ?? false,
         queryPlanning: variant.useQueryPlanning ?? false,
+        searchTranslations: variant.translations ?? "none",
         retrievalFeedbackQueries: variant.useRetrievalFeedback
           ? configuredRetrievalFeedbackQueries
           : 0,
@@ -936,9 +950,40 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
       };
     }
 
+    // Cases that carry translations add variants that search them; every other variant
+    // searches the query alone, so a suite with translations keeps its baselines. The
+    // wrong-translation variants give every case, no-answer cases included, the
+    // translations of the next case that has some and expects other Memories, so they
+    // measure what a confidently wrong translation costs.
+    const translated = loadedCases.filter((benchmarkCase) => benchmarkCase.translations?.length);
+    const hasTranslations = translated.length > 0;
+    for (const [index, benchmarkCase] of loadedCases.entries()) {
+      const expected = benchmarkCase.expectedMemoryIds.join(",");
+      for (let step = 1; step <= translated.length; step += 1) {
+        const other = translated[(index + step) % translated.length];
+        if (other && other !== benchmarkCase && other.expectedMemoryIds.join(",") !== expected) {
+          benchmarkCase.wrongTranslations = other.translations;
+          break;
+        }
+      }
+    }
     const variants: Awaited<ReturnType<typeof runVariant>>[] = [
       await runVariant({ label: "lexical", useEmbeddings: false }),
     ];
+    if (hasTranslations) {
+      variants.push(
+        await runVariant({
+          label: "lexical+translations",
+          useEmbeddings: false,
+          translations: "own",
+        }),
+        await runVariant({
+          label: "lexical+wrong-translations",
+          useEmbeddings: false,
+          translations: "wrong",
+        }),
+      );
+    }
     if (configuredEntityAliasRecall) {
       variants.push(
         await runVariant({
@@ -965,6 +1010,22 @@ export async function runRetrievalBenchmarkSuite(input: RunRetrievalBenchmarkInp
           useEmbeddings: true,
         }),
       );
+      if (hasTranslations) {
+        variants.push(
+          await runVariant({
+            label: `hybrid+translations@${threshold}`,
+            semanticDistanceThreshold: threshold,
+            useEmbeddings: true,
+            translations: "own",
+          }),
+          await runVariant({
+            label: `hybrid+wrong-translations@${threshold}`,
+            semanticDistanceThreshold: threshold,
+            useEmbeddings: true,
+            translations: "wrong",
+          }),
+        );
+      }
       for (const retrievalLimit of retrievalLimits) {
         variants.push(
           await runVariant({

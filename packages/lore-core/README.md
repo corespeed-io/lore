@@ -154,9 +154,21 @@ its own:
   `MEMORY_LINK_LIMITS.maximumKindLength`, stored as given) and weight (0 through 1;
   a nonzero value PostgreSQL `real` would round to zero is refused, while the
   `1e-45` PostgreSQL prints for its smallest `real` is accepted), list/search/Graph
-  limits and offsets, scope, metadata, and Episode evidence search inputs all throw
-  `LoreValidationError`.
+  limits and offsets, scope, metadata, search translations (`memorySearchTranslations`:
+  at most `MEMORY_SEARCH_LIMITS.maximumTranslations`, each a non-blank query), and
+  Episode evidence search inputs all throw `LoreValidationError`.
   `graph.connect` used to trim its kind and clamp its weight.
+- **A Memory has an optional `title` and `gloss`.** Each is a string or null on
+  `Memory`; `RememberMemory`, `InsertMemoryRecord`, and `UpdateMemory` take them (on
+  update, null removes one and omission keeps it). `validateMemoryTitle` and
+  `validateMemoryGloss` refuse one that is blank, longer than its limit (256 and 512
+  code points), or holds a control character or line break; they never trim. A gloss
+  is an English rendering of content in another language, supplied by the writer.
+  The `memories` table needs nullable `title` and `gloss` columns (the schema
+  contract lists them), and `lore.lexical_candidates` four name channels
+  (`name_simple`, `name_english`, `name_relaxed_english`, `name_cjk`) over the title
+  and gloss that answer the Memory's first chunk, as `referenceLexicalCandidates`
+  specifies. Graph labels read the title, not `metadata.title`.
 - **`graph.connect` is an upsert by natural key; `graph.disconnect` deletes by it.**
   A Link is identified by (source, target, kind). `connect` creates it, or replaces
   an existing one's weight and metadata (omitted fields return to their defaults),

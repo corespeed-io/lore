@@ -1,13 +1,23 @@
 // Workspace archive bounds, shared by import/export and the published contract.
 
 /**
- * Every archive format import accepts, oldest first. They differ only in how the
- * checksum orders object keys (`checksum.ts`).
+ * Every archive format import accepts, oldest first. v1 and v2 differ only in how the
+ * checksum orders object keys (`checksum.ts`); v3 orders them as v2 does and gives
+ * every Memory its title and gloss, which the earlier formats cannot carry. A release
+ * that imports only v1 and v2 refuses a v3 archive rather than drop them.
  */
-export const WORKSPACE_ARCHIVE_FORMATS = ["lore-workspace-v1", "lore-workspace-v2"] as const;
+export const WORKSPACE_ARCHIVE_FORMATS = [
+  "lore-workspace-v1",
+  "lore-workspace-v2",
+  "lore-workspace-v3",
+] as const;
 export type WorkspaceArchiveFormat = (typeof WORKSPACE_ARCHIVE_FORMATS)[number];
 /** The format export writes: the newest one import accepts. */
-export const WORKSPACE_ARCHIVE_FORMAT: WorkspaceArchiveFormat = "lore-workspace-v2";
+export const WORKSPACE_ARCHIVE_FORMAT: WorkspaceArchiveFormat = "lore-workspace-v3";
+/** The formats whose Memories carry a title and gloss, which each must state (null for none). */
+export const TITLED_WORKSPACE_ARCHIVE_FORMATS: readonly WorkspaceArchiveFormat[] = [
+  "lore-workspace-v3",
+];
 export const MAX_WORKSPACE_ARCHIVE_MEMORIES = 10_000;
 export const MAX_WORKSPACE_ARCHIVE_LINKS = 50_000;
 /** The largest accepted import request body, in UTF-8 bytes. */

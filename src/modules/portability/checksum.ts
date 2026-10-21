@@ -6,15 +6,20 @@ import type { WorkspaceArchiveFormat } from "./limits";
  * format's serialization is permanent, independent of request-replay hashing, which
  * may change at any deploy. Never change one; add a format instead.
  *
- * The formats differ only in how object keys sort:
+ * The formats differ in how object keys sort:
  * - `lore-workspace-v1` sorts them with the default-locale `localeCompare`, as the
  *   first archives were written. A runtime's collation decides that order.
- * - `lore-workspace-v2` sorts them by UTF-16 code unit, the same in every runtime.
+ * - `lore-workspace-v2` and `lore-workspace-v3` sort them by UTF-16 code unit, the
+ *   same in every runtime. v3 differs from v2 in its payload (Memory titles and
+ *   glosses), not in its serialization.
  */
+const byCodeUnit = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+
 const KEY_ORDER: Readonly<Record<WorkspaceArchiveFormat, (left: string, right: string) => number>> =
   {
     "lore-workspace-v1": (left, right) => left.localeCompare(right),
-    "lore-workspace-v2": (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+    "lore-workspace-v2": byCodeUnit,
+    "lore-workspace-v3": byCodeUnit,
   };
 
 function archiveCanonicalJson(

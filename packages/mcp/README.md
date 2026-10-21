@@ -37,7 +37,9 @@ The result keeps Memory, Code, anchors, conflicts, and a retrieval receipt in
 separate bounded fields; the tool never accepts a Workspace or repository path.
 The original `query` always controls routing. Optional `memoryQuery` and
 `codeQuery` carry agent-planned channel queries in the same request and are echoed
-in the receipt so retrieval remains auditable.
+in the receipt so retrieval remains auditable. Optional `memoryTranslations` carry
+the Memory query in other languages, as `translations` do for `lore_search` and
+`lore_search_evidence`: Lore searches each beside the query and returns one ranking.
 
 Hosts should apply Lore's `required | auto | off` grounding policy before model
 tool selection; `@corespeed/lore-sdk` exports the versioned gate as

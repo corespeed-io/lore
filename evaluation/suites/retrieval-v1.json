@@ -1,7 +1,7 @@
 {
   "name": "Lore retrieval paraphrase, abstention, and isolation",
-  "version": 2,
-  "description": "Deterministic multilingual retrieval fixture with paraphrases, close distractors, no-answer queries, user-private tripwires, and CJK-substring cases whose Chinese and Japanese runs defeat Postgres 'simple' tokenization.",
+  "version": 3,
+  "description": "Deterministic multilingual retrieval fixture with paraphrases, close distractors, no-answer queries, user-private tripwires, CJK-substring cases whose Chinese and Japanese runs defeat Postgres 'simple' tokenization, and cross-lingual cases whose translations only the +translations variants search.",
   "thresholds": [0.35, 0.4, 0.45, 0.5],
   "memories": [
     {
@@ -250,6 +250,7 @@
       "key": "polaris",
       "category": "cross-lingual",
       "query": "When and where is the Polaris weekly sync?",
+      "translations": ["北极星项目每周的同步会议在什么时间和地点？"],
       "expectedKeys": ["polaris"],
       "limit": 5
     },
@@ -257,6 +258,7 @@
       "key": "allergy",
       "category": "cross-lingual",
       "query": "Kenji 不能吃哪些食物？",
+      "translations": ["What foods must Kenji avoid?"],
       "expectedKeys": ["allergy"],
       "limit": 5
     },
@@ -342,6 +344,62 @@
       "category": "cjk-mixed",
       "query": "Effect A 的对账报告由哪个团队负责提交？",
       "expectedKeys": ["pipeline-cn"],
+      "limit": 5
+    },
+    {
+      "key": "recall-audit-en",
+      "category": "cross-lingual",
+      "query": "What did the August audit conclude about memory recall quality in production?",
+      "translations": ["八月的审计对生产环境的记忆召回质量有什么结论？"],
+      "expectedKeys": ["recall-audit"],
+      "limit": 5
+    },
+    {
+      "key": "freeze-en",
+      "category": "cross-lingual",
+      "query": "How long are production deployments frozen over the Lunar New Year holiday?",
+      "translations": ["农历新年假期生产部署冻结多久？"],
+      "expectedKeys": ["freeze-cn"],
+      "limit": 5
+    },
+    {
+      "key": "pipeline-en",
+      "category": "cross-lingual",
+      "query": "Which team submits the Effect A reconciliation report?",
+      "translations": ["Effect A 的对账报告由哪个团队提交？"],
+      "expectedKeys": ["pipeline-cn"],
+      "limit": 5
+    },
+    {
+      "key": "db-backup-ja-en",
+      "category": "cross-lingual",
+      "query": "When does the weekly user database backup run?",
+      "translations": ["ユーザーデータベースの週次バックアップはいつ実行されますか？"],
+      "expectedKeys": ["db-backup-ja"],
+      "limit": 5
+    },
+    {
+      "key": "deploy-approval-ja-en",
+      "category": "cross-lingual",
+      "query": "Which team approves deployments, and on which day?",
+      "translations": ["デプロイ承認はどのチームが何曜日に行いますか？"],
+      "expectedKeys": ["deploy-approval-ja"],
+      "limit": 5
+    },
+    {
+      "key": "release-zh",
+      "category": "cross-lingual",
+      "query": "周末前生产部署几点停止？",
+      "translations": ["What time do production deployments stop before the weekend?"],
+      "expectedKeys": ["release"],
+      "limit": 5
+    },
+    {
+      "key": "no-door-code-en",
+      "category": "cross-lingual-no-answer",
+      "query": "What is the physical door code for the data center?",
+      "translations": ["数据中心的物理门禁密码是多少？"],
+      "expectedKeys": [],
       "limit": 5
     },
     {

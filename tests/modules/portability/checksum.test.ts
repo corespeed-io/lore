@@ -22,6 +22,10 @@ function payload(format: WorkspaceArchiveFormat) {
         id: "40000000-0000-4000-8000-000000000001",
         ownerUserId: "10000000-0000-4000-8000-000000000001",
         scope: "shared",
+        // v3 carries each Memory's title and gloss; earlier formats cannot.
+        ...(format === "lore-workspace-v3"
+          ? { title: "Golden archive títle", gloss: "Golden archive gloss" }
+          : {}),
         content: "Golden archive Memory.",
         metadata: { Zeta: 1, alpha: [true, null, "é"], Beta: { b: 2, a: 1 } },
         version: 1,
@@ -38,6 +42,7 @@ function payload(format: WorkspaceArchiveFormat) {
 test.each([
   ["lore-workspace-v1", "61050e6e9b44b9f9523a07cc29184af5d5edc96f00e84ed243a70c3dc555ed3d"],
   ["lore-workspace-v2", "c99028f88147ceba6d6a6a616cbe9793a3471528b0a7b3dd2b7b5246b0930658"],
+  ["lore-workspace-v3", "4b29887124e7622ce603b77189cacd4d1f14a59f6c94f219246b8a8430814512"],
 ] as const)("the %s checksum of a fixed payload never changes", async (format, checksum) => {
   const archive = payload(format);
   await expect(workspaceArchiveChecksum(archive, format)).resolves.toBe(checksum);
@@ -68,5 +73,12 @@ test("v2 orders keys by UTF-16 code unit, so it disagrees with v1 on mixed-case 
   await expect(workspaceArchiveChecksum(archive, "lore-workspace-v2")).resolves.not.toBe(
     await workspaceArchiveChecksum(archive, "lore-workspace-v1"),
   );
-  expect(WORKSPACE_ARCHIVE_FORMAT).toBe("lore-workspace-v2");
+});
+
+test("v3 serializes as v2 does; only its payload adds titles", async () => {
+  const archive = payload("lore-workspace-v3");
+  await expect(workspaceArchiveChecksum(archive, "lore-workspace-v3")).resolves.toBe(
+    await workspaceArchiveChecksum(archive, "lore-workspace-v2"),
+  );
+  expect(WORKSPACE_ARCHIVE_FORMAT).toBe("lore-workspace-v3");
 });

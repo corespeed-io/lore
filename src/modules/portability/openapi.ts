@@ -3,7 +3,9 @@ import {
   humanSecurity,
   jsonResponse,
   linkMetadataSchema,
+  memoryGlossSchema,
   memoryScopeSchema,
+  memoryTitleSchema,
   metadataSchema,
   requestBody,
   timestampProperties,
@@ -64,6 +66,16 @@ export const portabilitySchemas = {
       id: { type: "string", format: "uuid" },
       ownerUserId: { type: "string", format: "uuid" },
       scope: memoryScopeSchema,
+      title: {
+        ...memoryTitleSchema,
+        description:
+          "Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a title.",
+      },
+      gloss: {
+        ...memoryGlossSchema,
+        description:
+          "Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a gloss.",
+      },
       content: {
         type: "string",
         minLength: 1,

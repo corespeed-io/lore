@@ -367,18 +367,43 @@ whoever owns it.
   Forgetting either side cascades. Its foreign keys are added agents, users,
   observations, memories, the order Agent deletion locks them, so it cannot deadlock
   with request paths. It keeps `compatible_from = 9`: older instances never name it.
+  `0015_memory_titles_and_glosses.sql` (transactional, 5s `lock_timeout`) adds
+  `memories.title` and `memories.gloss` and their Proposal counterparts
+  (`proposed_title`/`changes_title`, `proposed_gloss`/`changes_gloss`) with NOT VALID
+  CHECKs (`memories_title_check` and `memories_gloss_check` restate
+  `validateMemoryTitle` and `validateMemoryGloss`), rebuilds `memory_proposals_check1`
+  so a title-only or gloss-only update is a Proposal, adds
+  `lore.memory_name_text(title, gloss)` (IMMUTABLE, `lore_app` only), and replaces
+  `lore.append_memory_event` (both among `changed_fields`),
+  `lore.protect_memory_proposal_review` (immutability and receipt match),
+  `lore.lexical_candidates` (four name channels, same signature), and
+  `lore.portable_core_capabilities()` (`memoryTitles`, `memoryGlosses`, and both
+  bounds). It adds a 17-argument `lore.submit_memory_proposal` and keeps the
+  13-argument one for older instances. `0016_backfill_memory_titles.sql` copies each
+  string `metadata.title`, trimmed with JavaScript's `trim` set, into an empty title
+  when it obeys the rule, advances that Memory's version (not `updated_at`), moves its
+  waiting embedding jobs to the new version so a claim does not cancel them, and
+  validates the CHECKs; nothing is copied into a gloss. `0017_index_memory_names_concurrently.sql`
+  (`transaction:false`) builds the Workspace-leading name GINs over
+  `lore.memory_name_text(title, gloss)`. All three keep `compatible_from = 9`: an
+  older instance writes neither field, keeps both on update, and fuses the name
+  channels it now receives; the review guard refuses its acceptance of a Proposal
+  that sets either. `tests/server/memory-title-upgrade.test.ts` upgrades a
+  revision-14 database with data and runs a revision-14 application's statements
+  against it.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
   that could silently carry over).
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
-  CHECK bounds, and every `lore.portable_core_capabilities()` limit. Capabilities
+  CHECK bounds, the title and gloss CHECKs (equal to their validators on every BMP
+  character), and every `lore.portable_core_capabilities()` limit. Capabilities
   are served from `DEPLOYMENT_LIMITS` (`src/modules/operations/limits.ts`), which
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 14) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 17) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -397,7 +422,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (14), and
+  `tests/integration/api.test.ts` pin the current revision (17), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -439,6 +464,21 @@ whoever owns it.
   Route longer raw
   documents to bounded `document_fragment` Observations in a document Episode;
   never auto-split them into canonical Memories;
+- `packages/lore-core/src/memory-input.ts` owns the Memory title rule
+  (`validateMemoryTitle`, `MEMORY_TITLE_LIMITS`): optional; 1 to 256 code points;
+  at least one character outside the whitespace `String.prototype.trim` removes; no
+  C0 or C1 control, DEL, or U+2028/U+2029, so a title is one line; stored as
+  written. `memories_title_check` and `memory_proposals_proposed_title_check`
+  restate it exactly. HTTP trims a title as it trims content. A title is never
+  chunked or embedded, so changing one queues no embedding job; lexical search reads
+  it directly. `metadata.title` is ordinary metadata (0016 copied it once). A gloss
+  (`validateMemoryGloss`, `MEMORY_GLOSS_LIMITS`) is the same one-line rule under a
+  512-code-point bound: an English rendering of content in another language, with
+  its key terms, which the writing agent supplies (the MCP write tools ask for one
+  whenever the content is not English) so English keyword search finds the Memory
+  without the dense channel. Lore never generates one and cannot check its language;
+  a deployment-side translation would be an opt-in extension, like any automatic
+  rewriting;
 - `packages/lore-core/src/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
   non-overlapping, maximum 1,200-code-point chunks that exactly reconstruct the
   canonical Memory while preferring paragraph, Markdown, sentence, line, and
@@ -567,7 +607,11 @@ whoever owns it.
   Workspace remains process/header context, and repository paths stay server-only.
   The original question determines the route. Optional bounded `memoryQuery` and
   `codeQuery` are agent-planned channel queries, must pass the same authorization
-  filters, and must be echoed in the receipt for reproducibility.
+  filters, and must be echoed in the receipt for reproducibility. Optional
+  `memoryTranslations` (at most 3) carry the Memory query in other languages and run
+  only when the packet searches Memory. The receipt does not echo them: the caller
+  sent them as written, and three 10,000-character echoes would crowd Code evidence
+  out of MCP's 128,000-character output.
   `planRetrievalGrounding` (`retrieval-grounding-v5`) is the pure host-side
   required/auto/off gate over the original question plus a three-state
   `repositoryContext` (`exact`, `configured`, `none`). When it returns
@@ -820,13 +864,18 @@ archive and Graph node timestamps stay millisecond and are not cursors.
   permanent format that golden-value tests pin, one per archive format; it
   deliberately does not share request-replay hashing, which may change at any
   deploy. Change it only with a new archive format. Export writes
-  `lore-workspace-v2`, whose checksum orders object keys by UTF-16 code unit, the
-  same in every runtime; import also accepts `lore-workspace-v1`, whose checksum
-  orders them with the default-locale `localeCompare`, and verifies each archive in
-  the format its manifest names (`WORKSPACE_ARCHIVE_FORMATS`, published as the
-  manifest's `format` enum and `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`).
-  A release before schema revision 9 imports only v1 and refuses a v2 archive, so the
-  target of a Workspace move must be upgraded first (docs/operations.md).
+  `lore-workspace-v3`, which orders object keys by UTF-16 code unit, the same in
+  every runtime, as `lore-workspace-v2` does, and gives every Memory a `title` and a
+  `gloss`, null for none; import also accepts v2 and `lore-workspace-v1`, whose checksum orders
+  keys with the default-locale `localeCompare`, and verifies each archive in the
+  format its manifest names (`WORKSPACE_ARCHIVE_FORMATS`, published as the manifest's
+  `format` enum and `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`). A v3 Memory
+  must state both and a v1 or v2 Memory must carry neither
+  (`TITLED_WORKSPACE_ARCHIVE_FORMATS`): Zod would drop an unknown field while the
+  checksum covers it, so an older importer would lose it silently. A release before
+  schema revision 15 refuses a v3 archive, and one before revision 9 also a v2
+  archive, so the target of a Workspace move must be upgraded first
+  (docs/operations.md).
 
 ### Current gaps
 
@@ -1015,7 +1064,7 @@ generic upstream adapter to support the historical component structure.
     shows its marks too, decided 2026-09-29), and Unicode tag characters show as
     markers such as `⟨U+202E⟩` (`revealHidden`, `markdown.ts`, re-exported by
     `presentation.ts`): in the body, titles, Graph labels, and snippets, raw or as
-    entities, and in Show source, `metadata.title` (`memoryConfiguredTitle`), type
+    entities, and in Show source, the Memory's title (`memoryConfiguredTitle`), type
     and source labels (`metadataLabel`, at most 96 characters; the values stay as
     written as chip, filter, and legend keys), and the Proposal review screen's
     content, metadata, and Observation text, which show text as written. Code
@@ -1055,9 +1104,17 @@ generic upstream adapter to support the historical component structure.
     or 96 characters, so a span that crosses that cut shows as written. A Graph read
     of 5,000 labels written as dense markup (`![![…`) costs about 0.6 s the first
     time a page reads them, where ordinary labels cost 10–18 ms; that was accepted
-    (2026-09-29) rather than a second parser. Memory detail shows a configured
-    `metadata.title` whole (`memoryDetailTitle`, memoized per Memory) and lists it,
-    the type, and the source as written under Properties.
+    (2026-09-29) rather than a second parser. A Memory's `title` reads its words as
+    a line of the body would (`plainInline`), so a title written with Markdown, as
+    agents often write them, shows the same words wherever it appears; it is at most
+    256 characters on one line, so only a first-line title can reach the 300-character
+    cut. Memory detail shows the title whole (`memoryDetailTitle`, memoized per
+    Memory) and lists it, the English gloss, the type, and the source as written
+    under Properties. Browse and search rows show the gloss as written, one muted line
+    under the title (`search-row-gloss`, cut by CSS); search highlights query words in
+    it. The UI reads only `title`; `metadata.title` is ordinary metadata
+    since revision 16. The editor sends a title and gloss trimmed, or null to remove
+    one, and asks for a gloss when the content is not in English.
   - `memoryBody` (`presentation.ts`) drops a first line the title shows only when it is a heading, or a line that opens with a bold or 【…】 run, with no other markup and no longer than the title shows it; a bold or 【…】 line must also be followed by a line that opens a block of its own, while a heading always ends at its line. Otherwise the title repeats rather than risk losing text. Its patterns are linear, which `presentation.test.ts` measures on hostile input.
 
 ## Graph and Memory Links
@@ -1266,6 +1323,13 @@ Index loops. Keep local Ollama at one unless measured.
   work must use this boundary instead of silently persisting generated content.
   Proposal content expires after 30 days, and hard-deleting a target or accepted
   Memory removes its associated proposals and replay bodies immediately.
+  A Proposal stores a title and a gloss as changes, not complete values:
+  `changes_title`/`proposed_title` and `changes_gloss`/`proposed_gloss`. A create
+  always states both (`proposedTitle`, `proposedGloss`, null for none); an update
+  states one only when it sets (or, with null, removes) the target's, and the wire
+  omits it otherwise. A Proposal stored before revision 15 has both flags false, so
+  it keeps the target's. The review guard holds the accepted Memory to each proposed
+  value for a create, and for an update that changes it.
   Accepting an update locks the target Memory before the Proposal, the same order
   as forget's BEFORE DELETE trigger; keep it. Submitting an update holds its target
   `FOR KEY SHARE` until commit, because the target has no foreign key to take that
@@ -1393,7 +1457,35 @@ Index loops. Keep local Ollama at one unless measured.
   reference would fetch them again. What remains is scoring every chunk that matches
   two relaxed terms, which a query of words in a third of the Workspace makes about
   16k chunks (~0.4 s). The
-  semantic channel still runs on the tables under RLS (a separate follow-up);
+  semantic channel still runs on the tables under RLS (a separate follow-up).
+  Since revision 15 the function also runs four name channels over a Memory's title
+  and English gloss, `lore.memory_name_text(title, gloss)` (`name_simple`,
+  `name_english`, `name_relaxed_english`, `name_cjk`), the content channels' rules
+  applied to that text, served by 0017's Workspace-leading GINs on the same
+  expressions. Names belong to the whole Memory, so a name match answers the
+  Memory's first chunk (ordinal 0), which the engine fuses like any other candidate;
+  the reference channels in `@corespeed/lore-core/testing` carry them too, over
+  `concat_ws(' ', title, gloss)`. A gloss is how an English query reaches a Memory in
+  another language when the dense channel is off or misses it; keyword matching
+  still needs the gloss to use the query's words (`rollback` is not `roll back`).
+  Names are not embedded: the dense channel and the reranker passage read chunks
+  only, and feeding them into either is an embedding-protocol or retrieval change
+  that needs a new revision and a versioned evaluation. No external benchmark carries
+  titles or glosses, so the name channels leave every recorded score unchanged.
+  A search may also carry translations: the same question in other languages, at most
+  `MEMORY_SEARCH_LIMITS.maximumTranslations` (3), each trimmed and bounded as the
+  query is (`memorySearchTranslations`). The caller supplies them; Lore never
+  translates. Memory search and Episode evidence search run each translation as one
+  more query after the original and before planner rewrites, through every lexical
+  and dense channel, and fuse all of them with the same RRF; the planner, feedback
+  rounds, and the reranker read only the original query, and translations do not
+  count against `queryPlannerMaxQueries`. A translation reaches every Memory, a Memory
+  without a gloss included, and an agent writes one far more reliably than it
+  summarizes content into a gloss, so MCP's search tools ask the agent to send one
+  whenever the Workspace may hold another language; a gloss still serves a query
+  that carries none, such as English typed into the UI. HTTP takes them as repeated
+  `translation` parameters beside `q` (refused without `q`), as `translations` in an
+  Episode evidence search body, and as `memoryTranslations` in a context packet;
 - provider adapters and benchmark readers/judges prefer official OpenAI, Google Gen AI,
   Ollama, Cohere, and Voyage SDKs with their default transport. Use SDK-native timeout
   and retry configuration; do not wrap their fetch. Direct optional fetch injection
@@ -1573,7 +1665,27 @@ Benchmark is part of the product quality system even without AutoDream.
   comparisons.
 - `evaluation/suites/retrieval-v1.json` is the end-to-end retrieval fixture
   (suite version 2 adds `cjk`, `cjk-mixed`, and `cjk-no-answer` categories plus a
-  Bob-private Chinese tripwire aimed at the CJK substring channel). Run
+  Bob-private Chinese tripwire aimed at the CJK substring channel; version 3 adds six
+  `cross-lingual` cases and a `cross-lingual-no-answer` case, and gives each
+  cross-lingual case `translations`, which only the `lexical+translations` and
+  `hybrid+translations@<threshold>` variants search; the `+wrong-translations`
+  variants give every case, no-answer cases included, the translations of the next
+  case that has some and expects other Memories; every other variant scores the
+  query alone). On 2026-10-20 with Ollama `qwen3-embedding:0.6b`, no reranker or
+  planner, the 8 cross-lingual cases scored Recall@5 0 lexically and 1.0 with
+  translations; hybrid at the default 0.5 threshold scored Recall@1 0.75 and
+  Recall@5 1.0 with or without them, and at 0.35–0.45 translations raised Recall@1
+  from 0.50–0.62 to 0.75–1.0, with no-answer accuracy unchanged. The two cases still
+  second at 0.5 (`freeze-en`, `release-zh`) each rank the other's Memory, a
+  same-language close distractor, first. Wrong translations (2026-10-21) left every
+  positive case's Recall@5 unchanged, since RRF breaks ties toward the original
+  query, but each one is a second question whose answer comes back: no-answer
+  accuracy fell from 0.89–1.0 to 0, and hybrid@0.5 Recall@1 from 0.808 to 0.769.
+  This is the worst case, a translation that means another question the Workspace
+  answers; a word-choice slip mostly matches nothing. Query-to-translation cosine
+  does not separate them on this model (own 0.62–0.89, wrong up to 0.72), so search
+  has no agreement check; a reranker with `LORE_RERANK_MIN_SCORE` reads only the
+  original question and is the guard. Run
   `bun run benchmark:retrieval` only with `BENCHMARK_DATABASE_URL` pointing to a
   disposable migrated database whose name contains `bench` or `benchmark`; the
   runner resets tenant data, writes through the native Memory module, embeds through

@@ -70,6 +70,8 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     ownerUserId: "30000000-0000-4000-8000-000000000001",
     createdByAgentId: null,
     scope: "shared",
+    title: null,
+    gloss: null,
     content: "Lore remembers safely.",
     metadata: {},
     version: 3,
@@ -1058,6 +1060,57 @@ describe("client bounds from LORE_CONTRACT", () => {
       /^query must contain 1 to 10000 characters$/,
     ],
     [
+      "Memory search translations",
+      (client) =>
+        workspace(client).searchMemories({
+          query: "q",
+          translations: Array.from({ length: LIMITS.memorySearchTranslations }, () => "t"),
+        }),
+      (client) =>
+        workspace(client).searchMemories({
+          query: "q",
+          translations: Array.from({ length: LIMITS.memorySearchTranslations + 1 }, () => "t"),
+        }),
+      /^translations may hold at most 3 queries$/,
+    ],
+    [
+      "Memory search translation",
+      (client) =>
+        workspace(client).searchMemories({
+          query: "q",
+          translations: ["t".repeat(LIMITS.memorySearchQueryLength)],
+        }),
+      (client) =>
+        workspace(client).searchMemories({
+          query: "q",
+          translations: ["t".repeat(LIMITS.memorySearchQueryLength + 1)],
+        }),
+      /^translations must hold queries of 1 to 10000 characters$/,
+    ],
+    [
+      "context Memory translations",
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          memoryTranslations: Array.from({ length: LIMITS.memorySearchTranslations }, () => "t"),
+        }),
+      (client) =>
+        workspace(client).retrieveContext({
+          query: "why",
+          memoryTranslations: Array.from(
+            { length: LIMITS.memorySearchTranslations + 1 },
+            () => "t",
+          ),
+        }),
+      /^memoryTranslations may hold at most 3 queries$/,
+    ],
+    [
+      "Episode evidence translations",
+      (client) => workspace(client).searchEpisodeEvidence({ query: "q", translations: ["t"] }),
+      (client) => workspace(client).searchEpisodeEvidence({ query: "q", translations: ["  "] }),
+      /^translations must hold queries of 1 to 10000 characters$/,
+    ],
+    [
       "Code search results",
       (client) =>
         workspace(client).searchCode({ ...code, query: "guard", limit: LIMITS.codeSearchResults }),
@@ -1289,6 +1342,31 @@ describe("client bounds from LORE_CONTRACT", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
+
+  test("each search sends its translations trimmed, and none when it has none", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+    const client = new LoreClient({ baseUrl: "http://127.0.0.1:3000", fetch: fetchMock });
+    await workspace(client).searchMemories({
+      query: "failed deploy",
+      translations: ["  部署失败  ", "échec du déploiement"],
+    });
+    await workspace(client).searchMemories({ query: "failed deploy" });
+    await workspace(client)
+      .retrieveContext({ query: "why", memoryTranslations: [" 为什么 "] })
+      .catch(() => undefined);
+    await workspace(client).searchEpisodeEvidence({ query: "why", translations: [" 为什么 "] });
+
+    const urls = fetchMock.mock.calls.map(([url]) => new URL(String(url)));
+    expect(urls[0]?.searchParams.getAll("translation")).toEqual([
+      "部署失败",
+      "échec du déploiement",
+    ]);
+    expect(urls[1]?.searchParams.has("translation")).toBe(false);
+    const body = (call: number) =>
+      JSON.parse(String(fetchMock.mock.calls[call]?.[1]?.body)) as Record<string, unknown>;
+    expect(body(2)).toMatchObject({ memoryTranslations: ["为什么"] });
+    expect(body(3)).toMatchObject({ translations: ["为什么"] });
+  });
 
   test("defaults come from the contract too", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => Response.json({}));

@@ -117,6 +117,7 @@ test("the chain sends each transaction:false migration one statement at a time a
     "0008": { statements: 10, revision: 8 },
     "0011": { statements: 4, revision: 11 },
     "0013": { statements: 8, revision: 13 },
+    "0017": { statements: 6, revision: 17 },
   };
   const versions: string[] = [];
   for (const migration of await migrationFiles()) {

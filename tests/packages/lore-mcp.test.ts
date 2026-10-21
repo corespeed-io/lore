@@ -59,6 +59,8 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     ownerUserId: "30000000-0000-4000-8000-000000000001",
     createdByAgentId: "40000000-0000-4000-8000-000000000001",
     scope: "private",
+    title: null,
+    gloss: null,
     content: "Only authorized content",
     metadata: { source: "test" },
     version: 2,
@@ -307,6 +309,8 @@ function maximalContext(options: { pathologicalEnvelope: boolean }): RetrievedCo
     memories: Array.from({ length: 10 }, (_, ordinal) => ({
       id: uuid("85000000", ordinal),
       scope: "shared" as const,
+      title: null,
+      gloss: null,
       updatedAt: "2026-08-09T00:00:00.000Z",
       score: 0.9,
       evidence: "authorized-evidence-".repeat(1_000),
@@ -459,6 +463,8 @@ describe("Lore external MCP adapter", () => {
         {
           id: MEMORY_ID,
           scope: "private",
+          title: null,
+          gloss: null,
           updatedAt: memory().updatedAt,
           score: 0.9,
           evidence: "The guard was introduced for tenant isolation.",
@@ -965,6 +971,67 @@ describe("Lore external MCP adapter", () => {
     expect(memories.listMemories).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
   });
 
+  test("the search tools pass translations through and refuse more than the contract allows", async () => {
+    const memories = fakeMemories();
+    const context = fakeContext();
+    const client = await connect(memories, fakeCode(), context);
+    const translations = Array.from({ length: 4 }, (_, index) => `译文 ${index}`);
+
+    await client.callTool({
+      name: "lore_search",
+      arguments: { query: "failed deploy", translations: ["  部署失败  "] },
+    });
+    expect(memories.searchMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "failed deploy", translations: ["部署失败"] }),
+    );
+    await client.callTool({
+      name: "lore_search_evidence",
+      arguments: { query: "failed deploy", translations: ["部署失败"] },
+    });
+    expect(memories.searchEpisodeEvidence).toHaveBeenCalledWith(
+      expect.objectContaining({ translations: ["部署失败"] }),
+    );
+    await client.callTool({
+      name: "lore_retrieve_context",
+      arguments: { query: "failed deploy", memoryTranslations: ["部署失败"] },
+    });
+    expect(context.retrieveContext).toHaveBeenCalledWith(
+      expect.objectContaining({ memoryTranslations: ["部署失败"] }),
+    );
+
+    for (const [name, field] of [
+      ["lore_search", "translations"],
+      ["lore_search_evidence", "translations"],
+      ["lore_retrieve_context", "memoryTranslations"],
+    ] as const) {
+      const refused = await client.callTool({
+        name,
+        arguments: { query: "failed deploy", [field]: translations },
+      });
+      expect(refused.isError).toBe(true);
+      const blank = await client.callTool({
+        name,
+        arguments: { query: "failed deploy", [field]: ["   "] },
+      });
+      expect(blank.isError).toBe(true);
+    }
+    expect(memories.searchMemories).toHaveBeenCalledOnce();
+    expect(memories.searchEpisodeEvidence).toHaveBeenCalledOnce();
+    expect(context.retrieveContext).toHaveBeenCalledOnce();
+  });
+
+  test("the search tools tell the agent to send translations", async () => {
+    const client = await connect(fakeMemories());
+    const { tools } = await client.listTools();
+    for (const name of ["lore_search", "lore_search_evidence", "lore_retrieve_context"]) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.description).toContain("another language than the query");
+      expect(tool?.inputSchema.properties).toHaveProperty(
+        name === "lore_retrieve_context" ? "memoryTranslations" : "translations",
+      );
+    }
+  });
+
   test("lore_search refuses a metadata filter past the query-string bound", async () => {
     const memories = fakeMemories();
     const client = await connect(memories);
@@ -980,6 +1047,76 @@ describe("Lore external MCP adapter", () => {
     expect(memories.searchMemories).not.toHaveBeenCalled();
     expect((await search(10_000)).isError).not.toBe(true);
     expect(memories.searchMemories).toHaveBeenCalledOnce();
+  });
+
+  test("passes a title through remember and update, and returns it with every Memory", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.remember).mockResolvedValue(memory({ title: "Kept note" }));
+    vi.mocked(memories.updateMemory).mockResolvedValue(memory({ title: null, version: 3 }));
+    const client = await connect(memories);
+
+    const remembered = await client.callTool({
+      name: "lore_remember",
+      arguments: { content: "Only authorized content", title: "  Kept note  " },
+    });
+    // The client trims, as the server does.
+    expect(memories.remember).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Kept note" }),
+      expect.anything(),
+    );
+    expect(remembered.structuredContent).toMatchObject({ memory: { title: "Kept note" } });
+
+    const updated = await client.callTool({
+      name: "lore_update",
+      arguments: { memoryId: MEMORY_ID, version: 2, title: null },
+    });
+    expect(memories.updateMemory).toHaveBeenCalledWith(
+      MEMORY_ID,
+      expect.objectContaining({ title: null }),
+      expect.anything(),
+    );
+    expect(updated.structuredContent).toMatchObject({ memory: { title: null, version: 3 } });
+
+    const refused = await client.callTool({
+      name: "lore_remember",
+      arguments: { content: "Only authorized content", title: "x".repeat(257) },
+    });
+    expect(refused.isError).toBe(true);
+    expect(memories.remember).toHaveBeenCalledOnce();
+  });
+
+  test("asks for an English gloss on non-English content and passes it through", async () => {
+    const memories = fakeMemories();
+    vi.mocked(memories.remember).mockResolvedValue(
+      memory({ content: "港口的铁链在黄昏升起。", gloss: "The harbour chain is raised at dusk" }),
+    );
+    const client = await connect(memories);
+    const { tools } = await client.listTools();
+    for (const name of ["lore_remember", "lore_update", "lore_propose"]) {
+      expect(tools.find((tool) => tool.name === name)?.description, name).toContain(
+        "When the content is not in English, also send gloss",
+      );
+    }
+
+    const remembered = await client.callTool({
+      name: "lore_remember",
+      arguments: {
+        content: "港口的铁链在黄昏升起。",
+        gloss: " The harbour chain is raised at dusk ",
+      },
+    });
+    expect(memories.remember).toHaveBeenCalledWith(
+      expect.objectContaining({ gloss: "The harbour chain is raised at dusk" }),
+      expect.anything(),
+    );
+    expect(remembered.structuredContent).toMatchObject({
+      memory: { gloss: "The harbour chain is raised at dusk" },
+    });
+    const refused = await client.callTool({
+      name: "lore_remember",
+      arguments: { content: "港口", gloss: "x".repeat(513) },
+    });
+    expect(refused.isError).toBe(true);
   });
 
   test("rejects document-sized Memory content before calling Lore", async () => {

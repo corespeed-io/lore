@@ -100,6 +100,15 @@ export function MemoryProposalsView({
     () =>
       selected && {
         content: revealHidden(selected.proposedContent),
+        // Absent when an update keeps the target's title; null for none.
+        title:
+          selected.proposedTitle === undefined || selected.proposedTitle === null
+            ? selected.proposedTitle
+            : revealHidden(selected.proposedTitle),
+        gloss:
+          selected.proposedGloss === undefined || selected.proposedGloss === null
+            ? selected.proposedGloss
+            : revealHidden(selected.proposedGloss),
         metadata: metadataSource(selected.proposedMetadata),
       },
     [selected],
@@ -276,7 +285,9 @@ export function MemoryProposalsView({
                       <span>{proposal.kind === "create" ? "New Memory" : "Update"}</span>
                       <time dateTime={proposal.createdAt}>{utcDate(proposal.createdAt)} UTC</time>
                     </span>
-                    <strong>{excerpt(proposal.proposedContent, 112)}</strong>
+                    <strong>
+                      {excerpt(proposal.proposedTitle ?? proposal.proposedContent, 112)}
+                    </strong>
                     <span className="proposal-row-foot">
                       {submitter(proposal)} · {proposal.proposedScope}
                     </span>
@@ -378,6 +389,26 @@ export function MemoryProposalsView({
                 <section className="proposal-content-block proposal-current-content">
                   <h3>Current content</h3>
                   <div>{targetText}</div>
+                </section>
+              )}
+
+              {proposedText && proposedText.title !== undefined && (
+                <section className="proposal-content-block">
+                  <h3>Proposed title</h3>
+                  <div>
+                    {proposedText.title ??
+                      (selected.kind === "update" ? "Remove the title" : "No title")}
+                  </div>
+                </section>
+              )}
+
+              {proposedText && proposedText.gloss !== undefined && (
+                <section className="proposal-content-block">
+                  <h3>Proposed English gloss</h3>
+                  <div>
+                    {proposedText.gloss ??
+                      (selected.kind === "update" ? "Remove the gloss" : "No gloss")}
+                  </div>
                 </section>
               )}
 

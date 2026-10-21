@@ -69,6 +69,7 @@ const GRANT_MAP: Readonly<Record<string, readonly string[]>> = {
   "lore.list_workspaces()": ["lore_app"],
   "lore.lock_current_maintenance_memory()": ["lore_maintenance"],
   "lore.lock_reviewable_proposal_observations(uuid,uuid)": ["lore_app"],
+  "lore.memory_name_text(text,text)": ["lore_app"],
   "lore.portable_core_capabilities()": ["lore_app", "lore_maintenance"],
   "lore.protect_memory_code_evidence_anchor()": ["lore_app"],
   "lore.protect_memory_identity()": ["lore_app"],
@@ -90,6 +91,8 @@ const GRANT_MAP: Readonly<Record<string, readonly string[]>> = {
   "lore.scrub_replays_of_deleted_memory()": [],
   "lore.scrub_replays_of_deleted_proposal()": [],
   "lore.submit_memory_proposal(uuid,uuid,text,uuid,memory_proposal_kind,uuid,integer,text,memory_scope,jsonb,boolean,boolean,boolean)":
+    ["lore_app"],
+  "lore.submit_memory_proposal(uuid,uuid,text,uuid,memory_proposal_kind,uuid,integer,text,memory_scope,jsonb,boolean,boolean,boolean,text,boolean,text,boolean)":
     ["lore_app"],
   "lore.validate_code_dependency_edge_payload()": [],
   "lore.validate_memory_proposal_target()": [],

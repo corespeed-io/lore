@@ -12,6 +12,8 @@ import {
   memoryIdParameter,
   memoryScopeSchema,
   requestBody,
+  SEARCH_TRANSLATIONS_DESCRIPTION,
+  searchTranslationsSchema,
   workspaceHeader,
 } from "@/server/openapi/shared";
 import { METADATA_FILTER_MAXIMUM_LENGTH } from "./input";
@@ -29,6 +31,14 @@ export const memoriesPaths = {
           name: "q",
           in: "query",
           schema: { type: "string", maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength },
+        },
+        {
+          name: "translation",
+          in: "query",
+          description: `${SEARCH_TRANSLATIONS_DESCRIPTION} Repeat it for each language; it requires q.`,
+          style: "form",
+          explode: true,
+          schema: searchTranslationsSchema,
         },
         {
           name: "limit",

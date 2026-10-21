@@ -1745,6 +1745,15 @@ body {
   margin-top: 3px;
 }
 
+.search-row-gloss {
+  color: var(--mute);
+  font-size: 13px;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .search-row-snip {
   color: var(--body);
   font-size: 13px;
@@ -4095,6 +4104,7 @@ a.ext {
 }
 
 .sidebar-workspace select,
+.memory-editor input,
 .workspace-dialog input,
 .workspace-onboarding-form input {
   width: 100%;
@@ -4110,6 +4120,7 @@ a.ext {
 }
 
 .sidebar-workspace select:focus,
+.memory-editor input:focus,
 .workspace-dialog input:focus,
 .workspace-onboarding-form input:focus,
 .memory-editor textarea:focus {

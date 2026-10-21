@@ -65,9 +65,26 @@ evidence, not Memory.
 _Avoid_: Page, document, gbrain page
 
 **Memory Title**:
-A Memory's explicit, human-readable name, separate from its body content.
-Titles may be changed or shared by multiple Memories without changing their identities.
+A Memory's optional, explicit, human-readable name: one line of plain text, separate
+from its body content. Titles may be changed, removed, or shared by multiple Memories
+without changing their identities. Search matches a title, but it is never chunked or
+embedded. A Memory without one shows its first line instead; `metadata.title` is
+ordinary metadata.
 _Avoid_: Unique name, slug, Memory Reference, first-line preview
+
+**Memory Gloss**:
+An optional one-line English rendering of a Memory whose content is in another
+language, with its meaning and key terms, so English keyword search finds it. The
+writing agent or human supplies it; Lore never translates. Like a title, it is
+searched but never chunked, embedded, or shown in place of the content.
+_Avoid_: Translation, summary, alias
+
+**Search Translation**:
+The same search question in another language, which the caller sends beside the
+query. Lore searches each one beside the query and fuses them into one ranking, so a
+search finds Memories and evidence written in that language. The caller supplies
+it; Lore never translates. It belongs to one search and is never stored.
+_Avoid_: Gloss, query rewrite, planned query
 
 **Memory Chunk**:
 A rebuildable, revision-tagged, non-overlapping retrieval partition of one Memory.

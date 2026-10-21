@@ -10,9 +10,13 @@ import {
 } from "@/modules/code/openapi";
 import {
   jsonResponse,
+  memoryGlossSchema,
   memoryScopeSchema,
+  memoryTitleSchema,
   metadataSchema,
   requestBody,
+  SEARCH_TRANSLATIONS_DESCRIPTION,
+  searchTranslationsSchema,
   workspaceHeader,
 } from "@/server/openapi/shared";
 import {
@@ -58,6 +62,10 @@ export const contextSchemas = {
     properties: {
       query: memoryQuerySchema,
       memoryQuery: memoryQuerySchema,
+      memoryTranslations: {
+        ...searchTranslationsSchema,
+        description: `The Memory query in other languages. ${SEARCH_TRANSLATIONS_DESCRIPTION}`,
+      },
       codeQuery: codeQuerySchema,
       repositoryKey: repositoryKeySchema,
       commitOid: commitOidSchema,
@@ -112,10 +120,12 @@ export const contextSchemas = {
   RetrievedMemoryContext: {
     type: "object",
     additionalProperties: false,
-    required: ["id", "scope", "updatedAt", "score", "evidence"],
+    required: ["id", "scope", "title", "gloss", "updatedAt", "score", "evidence"],
     properties: {
       id: { type: "string", format: "uuid" },
       scope: memoryScopeSchema,
+      title: memoryTitleSchema,
+      gloss: memoryGlossSchema,
       updatedAt: { type: "string", format: "date-time" },
       score: { type: "number" },
       rerankScore: { type: "number", minimum: 0, maximum: 1 },

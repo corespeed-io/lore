@@ -44,11 +44,12 @@ and bounded response reading; CLI/MCP operators may set the same value with
 Ordinary success responses are capped at 128 MiB and error responses at 64 KiB.
 Workspace exports read complete archives under the server's record-count limits,
 without the ordinary success-response byte cap; the configured timeout still applies.
-Export writes the `lore-workspace-v2` archive format, and import accepts every
-format in `LORE_CONTRACT.vocabularies.workspaceArchiveFormats` (`lore-workspace-v1`
-and `lore-workspace-v2`). A deployment older than schema revision 9 refuses a v2
-archive, so upgrade the target before moving a Workspace to it
-([operations guide](operations.md#workspace-export-and-import)).
+Export writes the `lore-workspace-v3` archive format, which carries each Memory's
+title, and import accepts every format in
+`LORE_CONTRACT.vocabularies.workspaceArchiveFormats` (`lore-workspace-v1`,
+`lore-workspace-v2`, and `lore-workspace-v3`). A deployment older than schema
+revision 15 refuses a v3 archive, so upgrade the target before moving a Workspace to
+it ([operations guide](operations.md#workspace-export-and-import)).
 
 The frontend follows `SWR hook → domain client → TypeScript SDK → HTTP API`.
 SWR owns cached remote state and mutations. Domain clients retain UI defaults;
@@ -117,7 +118,15 @@ const episode = await memories.recordEpisode(
 
 const created = await memories.remember({
   content: "The rollout starts Monday.",
+  title: "Rollout start",
   scope: "shared",
+});
+
+// Content in another language carries an English gloss, so English search finds it.
+await memories.remember({
+  content: "部署失败后先回滚，再排查。",
+  title: "失败部署的处理",
+  gloss: "Roll back (rollback) a failed deploy first, then investigate",
 });
 
 await memories.proposeMemory(
@@ -140,6 +149,34 @@ const dependencies = await memories.queryCodeDependencies({
   limit: 50,
 });
 ```
+
+A Memory's `title` is optional: one line of 1 to
+`LORE_CONTRACT.limits.memoryTitleCharacters` (256) characters, trimmed by the server,
+separate from its content, changeable, and not unique. A `gloss` is optional too:
+when the content is not in English, one line of up to
+`LORE_CONTRACT.limits.memoryGlossCharacters` (512) characters of English with its
+meaning and key terms. Lore does not generate glosses; the writer supplies them.
+`updateMemory` with `title: null` or `gloss: null` removes one. Search matches
+titles and glosses through lexical name channels of their own that answer the
+Memory's first chunk, so an English query finds a glossed Memory even when no
+embedding provider is configured.
+
+A search can also carry `translations`: the same question in other languages, at
+most `LORE_CONTRACT.limits.memorySearchTranslations` (3). Lore searches each beside
+the query and returns one ranking, so the search finds Memories in those languages
+whether or not they have a gloss. The caller supplies them; Lore never translates.
+
+```ts
+const results = await memories.searchMemories({
+  query: "what do we do after a failed deploy",
+  translations: ["部署失败后怎么处理"],
+});
+```
+
+HTTP takes them as repeated `translation` parameters beside `q`
+(`GET /api/v1/memories?q=failed+deploy&translation=部署失败`).
+`searchEpisodeEvidence` takes `translations` too, and `retrieveContext` takes
+`memoryTranslations` for its Memory query.
 
 The Workspace client also provides `listEpisodes`, `recordEpisode`, `getEpisode`,
 bounded `getObservations`, `searchEpisodeEvidence`, `indexEpisodeEvidence`, and `forgetEpisode`, plus `listMemoryProposals`,
@@ -350,7 +387,9 @@ bun --no-env-file packages/cli/dist/bin.js memory list --limit 25
 printf %s "release date" | bun --no-env-file packages/cli/dist/bin.js memory search --stdin
 bun --no-env-file packages/cli/dist/bin.js memory get MEMORY_UUID
 printf %s "fact" | bun --no-env-file packages/cli/dist/bin.js memory remember --stdin \
-  --scope private --idempotency-key fact-1
+  --scope private --title "Release fact" --idempotency-key fact-1
+printf %s "发布已批准" | bun --no-env-file packages/cli/dist/bin.js memory remember --stdin \
+  --gloss "Release approved" --idempotency-key fact-2
 printf %s "suggested fact" | bun --no-env-file packages/cli/dist/bin.js memory propose create \
   --stdin --scope private \
   --code-evidence CODE_ARTIFACT_UUID:implements --idempotency-key proposal-1
@@ -367,6 +406,7 @@ bun --no-env-file packages/cli/dist/bin.js memory propose update MEMORY_UUID --v
   --idempotency-key proposal-update-1
 printf %s "new fact" | bun --no-env-file packages/cli/dist/bin.js memory update MEMORY_UUID \
   --version 2 --stdin --idempotency-key fact-update-1
+bun --no-env-file packages/cli/dist/bin.js memory update MEMORY_UUID --version 3 --no-title
 bun --no-env-file packages/cli/dist/bin.js memory forget MEMORY_UUID --version 3 \
   --idempotency-key fact-forget-1
 bun --no-env-file packages/cli/dist/bin.js memory link SOURCE_UUID TARGET_UUID \
@@ -381,6 +421,10 @@ Commands emit JSON to stdout. Diagnostics go to stderr; API failures exit `1` an
 configuration/usage failures exit `2`. Credentials are environment-only. Use
 `--stdin` for private query/content so it does not enter shell history or the process
 list; `--metadata JSON` remains an argv convenience and should not carry secrets.
+`--title TEXT` names a Memory or Proposal, and `--gloss TEXT` adds its English gloss;
+on `memory update` and `memory propose update`, `--no-title` and `--no-gloss` remove
+them instead. On `memory search` and `episode search`, repeat `--translation TEXT`
+(at most 3) to search the same question in other languages.
 Reuse one `--idempotency-key` when retrying an unknown mutation outcome.
 
 ## External MCP adapter
@@ -395,15 +439,21 @@ bun --no-env-file packages/mcp/dist/bin.js
 
 It exposes:
 
-- `lore_list`, `lore_search`, and `lore_get` as read-only Memory tools;
+- `lore_list`, `lore_search`, and `lore_get` as read-only Memory tools; `lore_search`,
+  `lore_search_evidence`, and `lore_retrieve_context` tell the agent to send the
+  question in each other language the Workspace may hold (`translations`, or
+  `memoryTranslations` for a context packet);
 - `lore_search_evidence` as separate read-only retrieval of original Observation excerpts;
 - `lore_index_evidence` to build one Episode's lexical index, idempotently;
 - read-only `lore_read_evidence` to read the Observations that given Memories cite,
   `lore_cite_evidence` to cite them, and destructive `lore_uncite_evidence`;
 - `lore_observe` to durably record a bounded, non-canonical Episode;
-- `lore_remember` as a non-destructive mutation tool;
+- `lore_remember` as a non-destructive mutation tool; it and `lore_update` and
+  `lore_propose` tell the agent to send an English `gloss` whenever the content is
+  not in English;
 - `lore_propose` as a non-destructive submission for explicit human review;
-- `lore_update` as destructive because it may replace content, metadata, or visibility;
+- `lore_update` as destructive because it may replace content, title, gloss,
+  metadata, or visibility (`title: null` or `gloss: null` removes one);
 - `lore_forget` as an explicitly destructive tool;
 - `lore_link` as a destructive, idempotent Memory Link write by natural key
   (destructive because it replaces an existing Link's weight and metadata), and
@@ -430,7 +480,8 @@ together. `route=auto` applies Lore's versioned deterministic route policy, whil
 an agent that already knows the question needs both stores may request
 `route=both`. Optional `memoryQuery` and `codeQuery` let the calling agent supply
 channel-specific search terms without changing the original routing question;
-the receipt records the exact queries used. The server performs authorized Memory
+the receipt records the exact queries used. Optional `memoryTranslations` carry the
+Memory query in other languages; the receipt does not repeat them. The server performs authorized Memory
 retrieval, exact-revision Code retrieval, and side-effect-free citation assessment
 in one request. For a routed change question, `joint-memory-code-v2` also compares
 bounded direct dependencies for up to five resolved citations, with at most 25

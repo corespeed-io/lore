@@ -68,6 +68,8 @@ export const CORE_SCHEMA_CONTRACT = {
           "owner_user_id",
           "created_by_agent_id",
           "scope",
+          "title",
+          "gloss",
           "content",
           "metadata",
           "version",
@@ -82,6 +84,8 @@ export const CORE_SCHEMA_CONTRACT = {
           "scope",
           "content",
           "metadata",
+          "title",
+          "gloss",
         ],
       },
       memory_chunks: {

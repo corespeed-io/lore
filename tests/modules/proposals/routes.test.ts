@@ -420,7 +420,7 @@ test("the Proposal rules the service owns answer HTTP as 400 invalid_request", a
   expect(unchanged.status).toBe(400);
   await expect(unchanged.json()).resolves.toEqual({
     code: "invalid_request",
-    error: "An update proposal must change content, scope, or metadata",
+    error: "An update proposal must change content, scope, title, gloss, or metadata",
   });
   const evidenceId = (index: number) =>
     `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
